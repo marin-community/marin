@@ -4,7 +4,9 @@
 """Build source-blind semantic labels for the fixed Luxical evaluation set."""
 
 import argparse
+import base64
 import dataclasses
+import gzip
 import hashlib
 import json
 import logging
@@ -49,6 +51,8 @@ DEFAULT_BUCKET_MAXIMUM = 50
 REQUEST_TIMEOUT = 3 * 3600
 MAX_ATTEMPTS = 3
 OTHER_BUCKET_ID = "OTHER_UNCLEAR"
+CLAUDE_REVIEW_SIZE = 20
+CLAUDE_REVIEW_MARKER = "CLAUDE_REVIEW_PACKAGE="
 JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 
 
@@ -478,6 +482,52 @@ def assign_with_checkpoints(
     return assignments
 
 
+def review_indices(assignments: list[Assignment], review_size: int) -> list[int]:
+    """Select a bucket-stratified review sample with low-confidence cases."""
+    if review_size > len(assignments):
+        raise ValueError("The review size exceeds the assignment count")
+    by_bucket: dict[str, list[Assignment]] = {}
+    for assignment in assignments:
+        by_bucket.setdefault(assignment.primary_bucket_id, []).append(assignment)
+
+    selected = []
+    for bucket_id in sorted(by_bucket, key=stable_order):
+        rows = by_bucket[bucket_id]
+        rows.sort(key=lambda row: (row.confidence, stable_order(str(row.sample_index))))
+        selected.append(rows[0].sample_index)
+        if len(selected) == review_size:
+            return selected
+
+    selected_set = set(selected)
+    remaining = sorted(
+        (row for row in assignments if row.sample_index not in selected_set),
+        key=lambda row: stable_order(str(row.sample_index)),
+    )
+    selected.extend(row.sample_index for row in remaining[: review_size - len(selected)])
+    return selected
+
+
+def claude_review_package(
+    documents: list[SampleDocument],
+    assignments: list[Assignment],
+    buckets: list[Bucket],
+    review_size: int = CLAUDE_REVIEW_SIZE,
+) -> str:
+    """Return a compressed source-blind package for local Claude review."""
+    indices = review_indices(assignments, review_size)
+    documents_by_index = {document.sample_index: document for document in documents}
+    assignments_by_index = {assignment.sample_index: assignment for assignment in assignments}
+    package = {
+        "taxonomy": [asdict(bucket) for bucket in buckets],
+        "documents": [{"sample_index": index, "text": documents_by_index[index].text} for index in indices],
+        "glm_assignments": [asdict(assignments_by_index[index]) for index in indices],
+        "selection": "one_lowest_confidence_document_per_stable_bucket_then_stable_hash",
+        "source_metadata_in_package": False,
+    }
+    compressed = gzip.compress(json.dumps(package, ensure_ascii=False, sort_keys=True).encode())
+    return base64.b64encode(compressed).decode()
+
+
 def run_pipeline(
     run_id: str,
     output_root: StoragePath,
@@ -562,6 +612,7 @@ def run_pipeline(
         }
         write_json(str(run_root / "summary.json"), summary)
         logger.info("GLM_SEMANTIC_LABELS=%s", json.dumps(summary, sort_keys=True))
+        logger.info("%s%s", CLAUDE_REVIEW_MARKER, claude_review_package(documents, assignments, buckets))
     finally:
         server_job.terminate()
 

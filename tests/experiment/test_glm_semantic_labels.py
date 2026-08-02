@@ -10,7 +10,14 @@ import pytest
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
-from glm_semantic_labels import OTHER_BUCKET_ID, parse_buckets, parse_json_object, source_quotas  # noqa: E402
+from glm_semantic_labels import (  # noqa: E402
+    OTHER_BUCKET_ID,
+    Assignment,
+    parse_buckets,
+    parse_json_object,
+    review_indices,
+    source_quotas,
+)
 
 
 def test_source_quotas_are_balanced_and_exact() -> None:
@@ -33,3 +40,14 @@ def test_parse_buckets_rejects_duplicate_identifiers() -> None:
 
     with pytest.raises(ValueError, match="duplicate"):
         parse_buckets({"buckets": [row, row]})
+
+
+def test_review_indices_select_low_confidence_across_buckets() -> None:
+    assignments = [
+        Assignment(index, f"BUCKET_{index % 3}", [], "English", "article", confidence, "reason")
+        for index, confidence in enumerate((0.9, 0.8, 0.7, 0.1, 0.2, 0.3))
+    ]
+
+    selected = review_indices(assignments, 3)
+
+    assert set(selected) == {3, 4, 5}
