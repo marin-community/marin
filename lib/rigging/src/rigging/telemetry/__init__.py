@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -65,6 +65,91 @@ class TelemetryStatus:
     rejected_records: int
     last_success_time_seconds: float | None
     oldest_queued_record_age_seconds: float
+
+
+@dataclass(frozen=True)
+class MetricSnapshot:
+    """One externally collected metric value with explicit source semantics."""
+
+    name: str
+    value: float
+    unit: str
+    attributes: Mapping[str, str]
+    source_kind: str
+    source_temporality: str
+
+
+@dataclass(frozen=True)
+class MetricPublishResult:
+    """Bounded admission result for one metric snapshot publication."""
+
+    configured: bool
+    input_records: int
+    enqueued_records: int
+    limited_records: int
+    lost_records: int
+
+
+class MetricSnapshotPublisher:
+    """Publish bounded batches of externally collected metric snapshots."""
+
+    def __init__(
+        self,
+        *,
+        max_records: int,
+        attributes: Mapping[str, str] | None = None,
+    ) -> None:
+        if max_records <= 0:
+            raise ValueError("max_records must be positive")
+        common_attributes = dict(attributes or {})
+        serialization.validate_attributes(common_attributes)
+        self._max_records = max_records
+        self._attributes = common_attributes
+
+    def publish(self, snapshots: Sequence[MetricSnapshot]) -> MetricPublishResult:
+        """Validate and enqueue at most ``max_records`` snapshots without blocking."""
+        input_records = len(snapshots)
+        runtime = _runtime
+        if runtime is None:
+            return MetricPublishResult(False, input_records, 0, 0, 0)
+
+        selected = snapshots[: self._max_records]
+        prepared: list[tuple[MetricSnapshot, dict[str, str]]] = []
+        for snapshot in selected:
+            if not isinstance(snapshot, MetricSnapshot):
+                raise TypeError("snapshots must contain MetricSnapshot values")
+            serialization.validate_string(snapshot.name, "metric snapshot name")
+            if snapshot.unit:
+                serialization.validate_string(snapshot.unit, "metric snapshot unit")
+            serialization.validate_string(snapshot.source_kind, "metric snapshot source kind")
+            if snapshot.source_temporality not in {CURRENT_SNAPSHOT, CUMULATIVE_SNAPSHOT}:
+                raise ValueError("source_temporality must be current_snapshot or cumulative_snapshot")
+            if not math.isfinite(float(snapshot.value)):
+                raise ValueError("metric snapshot values must be finite")
+            attributes = {
+                **snapshot.attributes,
+                **self._attributes,
+                **snapshot_attributes(snapshot.source_kind, snapshot.source_temporality),
+            }
+            serialization.validate_attributes(attributes)
+            prepared.append((snapshot, attributes))
+
+        enqueued = 0
+        for snapshot, attributes in prepared:
+            enqueued += _emit(
+                "gauge",
+                snapshot.name,
+                value=snapshot.value,
+                unit=snapshot.unit,
+                attributes=attributes,
+            )
+        return MetricPublishResult(
+            configured=True,
+            input_records=input_records,
+            enqueued_records=enqueued,
+            limited_records=max(0, input_records - len(selected)),
+            lost_records=len(selected) - enqueued,
+        )
 
 
 @dataclass(frozen=True)
@@ -211,17 +296,17 @@ class _Runtime:
         self._thread = threading.Thread(target=self._run, name="rigging-telemetry", daemon=True)
         self._thread.start()
 
-    def emit(self, record: bytes) -> None:
+    def emit(self, record: bytes) -> bool:
         with self._condition:
             if self._stop or len(record) + self._empty_envelope_size() > self.config.max_batch_bytes:
                 self._lost_records += 1
-                return
+                return False
             if (
                 self._resident_records >= self.config.max_queue_records
                 or self._resident_bytes + len(record) > self.config.max_queue_bytes
             ):
                 self._lost_records += 1
-                return
+                return False
             queued = _QueuedRecord(record, time.monotonic())
             self._records.append(queued)
             if self._oldest_queued_at is None:
@@ -229,6 +314,7 @@ class _Runtime:
             self._resident_records += 1
             self._resident_bytes += len(record)
             self._condition.notify()
+            return True
 
     def status(self) -> TelemetryStatus:
         with self._condition:
@@ -531,10 +617,10 @@ def _emit(
     body: serialization.EventBody | None = None,
     unit: str = "",
     attributes: Mapping[str, str] | None = None,
-) -> None:
+) -> bool:
     runtime = _runtime
     if runtime is None:
-        return
+        return False
     try:
         serialization.validate_string(name, "name")
         if unit:
@@ -559,10 +645,11 @@ def _emit(
                 raise ValueError("metric value must be finite")
             record["unit"] = unit
             record["value"] = numeric
-        runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
+        return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
     except Exception:
         with runtime._condition:
             runtime._lost_records += 1
+        return False
 
 
 def _valid_ack(response: _Response, batch_id: str) -> bool:

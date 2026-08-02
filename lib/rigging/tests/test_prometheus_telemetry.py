@@ -1,12 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import pytest
+import requests
+from prometheus_client.core import Metric as PrometheusMetric
 from rigging import telemetry
-from rigging.telemetry.prometheus import ForwardedPrometheusSample, PrometheusForwarder
+from rigging.telemetry.prometheus import (
+    PrometheusCollector,
+    PrometheusProcessor,
+    PrometheusScrapeError,
+    PrometheusScraper,
+    prefixed_metric_snapshots,
+)
 from rigging.testing import RecordingTelemetryTransport
 
 _SCRAPE = """
@@ -22,13 +29,26 @@ vllm:request_duration_seconds_count 4
 process_cpu_seconds_total 9
 """
 
-_RAY_SCRAPE = """
-# TYPE ray_tasks gauge
-ray_tasks{State="RUNNING",JobId="job-1",WorkerId="worker-1"} 2
-ray_tasks{State="RUNNING",JobId="job-1",WorkerId="worker-2"} 3
-# TYPE ray_tasks_internal gauge
-ray_tasks_internal{State="RUNNING",JobId="job-1"} 99
-"""
+
+class _PrometheusResponse:
+    status_code = 200
+    encoding = "utf-8"
+
+    def __init__(self, body: str, *, content_length: int | None = None) -> None:
+        self._body = body.encode()
+        self.headers = {"content-length": str(len(self._body) if content_length is None else content_length)}
+        self.body_read = False
+
+    def __enter__(self) -> "_PrometheusResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def iter_content(self, *, chunk_size: int) -> Iterator[bytes]:
+        self.body_read = True
+        for start in range(0, len(self._body), chunk_size):
+            yield self._body[start : start + chunk_size]
 
 
 @pytest.fixture(autouse=True)
@@ -45,96 +65,64 @@ def _transport(monkeypatch: pytest.MonkeyPatch) -> RecordingTelemetryTransport:
     return transport
 
 
-def _forwarder(body: str | None) -> PrometheusForwarder:
-    return PrometheusForwarder(
-        "http://vllm/metrics",
-        metric_prefix="vllm:",
+def _collector(
+    processor: PrometheusProcessor,
+    *,
+    max_records: int = 128,
+) -> PrometheusCollector:
+    return PrometheusCollector(
         metric_source="vllm",
-        fetch=lambda _url: body,
+        scraper=PrometheusScraper("http://vllm/metrics"),
+        processor=processor,
+        publisher=telemetry.MetricSnapshotPublisher(
+            max_records=max_records,
+            attributes={"metric_source": "vllm"},
+        ),
     )
 
 
-def _ray_task_transform(families) -> tuple[ForwardedPrometheusSample, ...]:
-    tasks_by_attributes: defaultdict[tuple[tuple[str, str], ...], float] = defaultdict(float)
-    for family in families:
-        if family.name != "ray_tasks":
-            continue
-        for sample in family.samples:
-            attributes = {
-                "ray_job_id": sample.labels["JobId"],
-                "task_state": sample.labels["State"].lower(),
-            }
-            tasks_by_attributes[tuple(sorted(attributes.items()))] += float(sample.value)
-    return tuple(
-        ForwardedPrometheusSample(
-            name="tasks",
-            value=value,
-            unit="{task}",
-            attributes=dict(attributes),
-            source_kind="gauge",
-            source_temporality=telemetry.CURRENT_SNAPSHOT,
-        )
-        for attributes, value in tasks_by_attributes.items()
-    )
-
-
-def test_filtered_snapshots_preserve_prometheus_temporality(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prometheus_pipeline_preserves_prefixed_snapshot_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
-    labels = ",".join(f'label_{index}="x"' for index in range(62))
-    scrape = _SCRAPE + f"\n# TYPE vllm:oversized gauge\nvllm:oversized{{{labels}}} 1\n"
+    monkeypatch.setattr(
+        "rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: _PrometheusResponse(_SCRAPE)
+    )
 
-    _forwarder(scrape).poll_once()
-    transport.record("request_duration_seconds_sum", {})
+    _collector(lambda families: prefixed_metric_snapshots(families, metric_prefix="vllm:")).poll_once()
 
-    by_name = {record["name"]: record for record in transport.records}
-    assert by_name["generation_tokens_total"]["attributes"] == {
+    generation = transport.record("generation_tokens_total", {"model_name": "test"})
+    assert generation["value"] == 42
+    assert generation["attributes"] == {
         "metric_source": "vllm",
         "model_name": "test",
         "source_kind": "counter",
         "source_temporality": "cumulative_snapshot",
     }
-    assert by_name["num_requests_running"]["attributes"]["source_temporality"] == "current_snapshot"
-    assert by_name["request_duration_seconds"]["attributes"]["source_temporality"] == "current_snapshot"
-    assert by_name["request_duration_seconds_count"]["attributes"]["source_temporality"] == "cumulative_snapshot"
-    assert by_name["request_duration_seconds_sum"]["attributes"]["source_temporality"] == "cumulative_snapshot"
-    assert "process_cpu_seconds_total" not in by_name
-    assert "oversized" not in by_name
-    assert "prometheus_forwarded_samples" not in by_name
-    assert telemetry.runtime_status().lost_records == 1
-    assert by_name["prometheus_source_available"]["value"] == 1
+    assert (
+        transport.record("num_requests_running", {"model_name": "test"})["attributes"]["source_temporality"]
+        == "current_snapshot"
+    )
+    assert (
+        transport.record("request_duration_seconds", {"quantile": "0.5"})["attributes"]["source_temporality"]
+        == "current_snapshot"
+    )
+    assert (
+        transport.record("request_duration_seconds_count", {})["attributes"]["source_temporality"]
+        == "cumulative_snapshot"
+    )
+    transport.wait_for(5)
+    assert not [record for record in transport.records if record["name"] == "process_cpu_seconds_total"]
+    assert transport.record("prometheus_source_available", {"metric_source": "vllm"})["value"] == 1
 
 
-def test_transform_uses_exact_family_selection_and_aggregates_after_label_projection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_metric_snapshot_publisher_caps_processor_output(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
-    PrometheusForwarder(
-        "http://ray/metrics",
-        metric_source="ray",
-        transform=_ray_task_transform,
-        max_forwarded_samples=128,
-        fetch=lambda _url: _RAY_SCRAPE,
-    ).poll_once()
+    monkeypatch.setattr(
+        "rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: _PrometheusResponse(_SCRAPE)
+    )
 
-    task = transport.record("tasks", {"ray_job_id": "job-1", "task_state": "running"})
-    assert task["value"] == 5
-    assert task["unit"] == "{task}"
-    assert task["attributes"] == {
-        "metric_source": "ray",
-        "ray_job_id": "job-1",
-        "source_kind": "gauge",
-        "source_temporality": "current_snapshot",
-        "task_state": "running",
-    }
-    assert len([record for record in transport.records if record["name"] == "tasks"]) == 1
-
-
-def test_transform_output_cap_reports_dropped_samples(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = _transport(monkeypatch)
-
-    def transform(_families) -> tuple[ForwardedPrometheusSample, ...]:
+    def processor(_families: tuple[PrometheusMetric, ...]) -> Sequence[telemetry.MetricSnapshot]:
         return tuple(
-            ForwardedPrometheusSample(
+            telemetry.MetricSnapshot(
                 name="bounded_metric",
                 value=index,
                 unit="1",
@@ -145,93 +133,68 @@ def test_transform_output_cap_reports_dropped_samples(monkeypatch: pytest.Monkey
             for index in range(4)
         )
 
-    PrometheusForwarder(
-        "http://ray/metrics",
-        metric_source="ray",
-        transform=transform,
-        max_forwarded_samples=2,
-        fetch=lambda _url: _RAY_SCRAPE,
-    ).poll_once()
+    _collector(processor, max_records=2).poll_once()
 
-    forwarded = transport.record("prometheus_forwarded_samples", {"metric_source": "ray"})
-    dropped = transport.record("prometheus_dropped_samples", {"metric_source": "ray"})
-    assert forwarded["value"] == 2
-    assert dropped["value"] == 2
-    assert dropped["attributes"]["drop_reason"] == "sample_limit"
-    forwarded_indices = sorted(
-        record["attributes"]["index"] for record in transport.records if record["name"] == "bounded_metric"
+    assert transport.record("prometheus_enqueued_samples", {"metric_source": "vllm"})["value"] == 2
+    assert (
+        transport.record(
+            "prometheus_dropped_samples",
+            {"metric_source": "vllm", "drop_reason": "sample_limit"},
+        )["value"]
+        == 2
     )
-    assert forwarded_indices == [
-        "0",
-        "1",
-    ]
+    transport.wait_for(2)
+    bounded_records = (record for record in transport.records if record["name"] == "bounded_metric")
+    indices = sorted(record["attributes"]["index"] for record in bounded_records)
+    assert indices == ["0", "1"]
 
 
-def test_transform_failure_is_isolated_and_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_processor_failure_does_not_hide_successful_scrape(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
+    monkeypatch.setattr(
+        "rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: _PrometheusResponse(_SCRAPE)
+    )
 
-    def transform(_families) -> tuple[ForwardedPrometheusSample, ...]:
+    def processor(_families: tuple[PrometheusMetric, ...]) -> Sequence[telemetry.MetricSnapshot]:
         raise RuntimeError("policy failed")
 
-    forwarder = PrometheusForwarder(
-        "http://ray/metrics",
-        metric_source="ray",
-        transform=transform,
-        max_forwarded_samples=128,
-        fetch=lambda _url: _RAY_SCRAPE,
+    _collector(processor).poll_once()
+
+    assert transport.record("prometheus_source_available", {"metric_source": "vllm"})["value"] == 1
+    assert (
+        transport.record(
+            "prometheus_stage_failures",
+            {"metric_source": "vllm", "stage": "process"},
+        )["value"]
+        == 1
     )
-    forwarder.poll_once()
-
-    source = transport.record("prometheus_source_available", {"metric_source": "ray"})
-    failures = transport.record("prometheus_transform_failures", {"metric_source": "ray"})
-    assert source["value"] == 0
-    assert failures["value"] == 1
-    assert not [record for record in transport.records if record["name"] == "tasks"]
+    assert not [record for record in transport.records if record["name"] == "generation_tokens_total"]
 
 
-def test_failed_scrape_skips_source_metrics_but_reports_exporter_health(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scrape_failure_is_reported_separately(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
 
-    _forwarder(None).poll_once()
-    health = transport.record("queue_depth", {"queue_kind": "telemetry_export"})
-    source = transport.record("prometheus_source_available", {"metric_source": "vllm"})
+    def unavailable(*_args, **_kwargs):
+        raise requests.ConnectionError("unavailable")
 
-    assert health["attributes"]["source_temporality"] == "current_snapshot"
-    assert source["value"] == 0
-    assert source["attributes"]["source_temporality"] == "current_snapshot"
-    assert [record["name"] for record in transport.records if record["attributes"].get("metric_source") == "vllm"] == [
-        "prometheus_source_available"
-    ]
+    monkeypatch.setattr("rigging.telemetry.prometheus.requests.get", unavailable)
+    _collector(lambda families: prefixed_metric_snapshots(families, metric_prefix="vllm:")).poll_once()
 
-
-def test_oversized_scrape_is_rejected_and_observable(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = _transport(monkeypatch)
-
-    class OversizedResponse:
-        status_code = 200
-        encoding = "utf-8"
-
-        def __init__(self) -> None:
-            self.headers = {"content-length": str((16 << 20) + 1)}
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def iter_content(self, *, chunk_size: int):
-            raise AssertionError(f"oversized response body was read with {chunk_size=}")
-
-    monkeypatch.setattr(
-        "rigging.telemetry.prometheus.requests.get",
-        lambda *_args, **_kwargs: OversizedResponse(),
+    assert transport.record("prometheus_source_available", {"metric_source": "vllm"})["value"] == 0
+    assert (
+        transport.record(
+            "prometheus_stage_failures",
+            {"metric_source": "vllm", "stage": "scrape"},
+        )["value"]
+        == 1
     )
-    PrometheusForwarder(
-        "http://vllm/metrics",
-        metric_prefix="vllm:",
-        metric_source="vllm",
-    ).poll_once()
 
-    source = transport.record("prometheus_source_available", {"metric_source": "vllm"})
-    assert source["value"] == 0
+
+def test_scraper_rejects_oversized_response_before_reading_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _PrometheusResponse(_SCRAPE, content_length=(16 << 20) + 1)
+    monkeypatch.setattr("rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(PrometheusScrapeError):
+        PrometheusScraper("http://vllm/metrics").scrape()
+
+    assert not response.body_read
