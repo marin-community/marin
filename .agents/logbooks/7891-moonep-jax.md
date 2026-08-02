@@ -410,3 +410,21 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Config: Match MNEP-019 with an 80% main pool, but reduce the MoonEP collective overlap limit from four to three.
 - Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
 - Stop criteria: Stop on the first retry, memory error, transport error, non-finite loss, or dropped assignment.
+
+### 2026-08-02 16:20 UTC - MNEP-020 proves the two-slice rack path
+
+- Snapshot: `95cc400df`.
+- Result: All 16 workers completed three combined MoonEP and global QB steps on attempt zero.
+- Runtime: The child finished in 10 minutes and 10 seconds, including setup and compilation. No worker retried or reported a transport error.
+- Memory: An 80% main pool and at most three in-flight collectives removed the cross-slice all-to-all OOM.
+- Gate: Iris proves complete rack execution. Final loss, drop count, and MFU extraction waits for the delayed Finelog tail.
+- Next action: Capture one no-HLO profile step, then use the trace and steady-state metrics for the first optimization.
+
+### 2026-08-02 16:21 UTC - MNEP-021 compact profile contract
+
+- Goal: Capture one representative XPlane step for the correct two-slice MoonEP and global QB path.
+- Run ID: `mnep-021-two-slice-profile-5-20260802-1621`.
+- Config: Match MNEP-020 for five steps. Start the profile at step three, capture one step, and omit HLO protobuf data.
+- Gate: Require attempt-zero completion, a written XPlane artifact, finite loss, zero dropped assignments, and no transport error.
+- Stop criteria: Stop on the first retry, profile barrier timeout, memory error, transport error, non-finite loss, or dropped assignment.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-021-two-slice-profile-5-20260802-1621-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-021-two-slice-profile-5-20260802-1621 --num-steps 5 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --profile-start-step 3 --profile-num-steps 1 --version 2026.08.02 --run`.
