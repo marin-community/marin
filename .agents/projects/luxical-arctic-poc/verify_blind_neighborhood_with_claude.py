@@ -21,6 +21,7 @@ from glm_semantic_labels import parse_json_object
 CHOICES = {"A", "B", "TIE"}
 BOOTSTRAP_SAMPLES = 20_000
 SEED = 42
+MAX_REVIEW_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -171,43 +172,65 @@ def claude_decisions(
     model_usage_batches = list(saved.model_usage_batches)
     cost_usd = saved.cost_usd
     for start in range(len(decisions), len(items), batch_size):
-        remaining_budget = max_budget_usd - cost_usd
-        if remaining_budget <= 0:
-            raise RuntimeError(f"Claude review reached its ${max_budget_usd:.2f} budget")
-        result = subprocess.run(
-            [
-                "claude",
-                "-p",
-                "--model",
-                model,
-                "--output-format",
-                "json",
-                "--max-budget-usd",
-                str(remaining_budget),
-                "--no-session-persistence",
-                "--safe-mode",
-            ],
-            input=claude_prompt(items[start : start + batch_size]),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        batch = parse_claude_envelope(result.stdout, model)
-        if result.returncode != 0:
-            raise RuntimeError(f"Claude exited with code {result.returncode}")
         batch_package = package | {"items": package["items"][start : start + batch_size]}
-        validate_decisions(batch_package, batch.decisions)
-        decisions.extend(batch.decisions)
-        model_usage_batches.extend(batch.model_usage_batches)
-        cost_usd += batch.cost_usd
-        if checkpoint_path is not None:
-            write_review_checkpoint(
-                checkpoint_path,
-                package,
-                model,
-                batch_size,
-                ClaudeNeighborhoodReview(decisions, model_usage_batches, cost_usd),
+        batch_items = items[start : start + batch_size]
+        prompt = claude_prompt(batch_items)
+        for attempt in range(MAX_REVIEW_ATTEMPTS):
+            remaining_budget = max_budget_usd - cost_usd
+            if remaining_budget <= 0:
+                raise RuntimeError(f"Claude review reached its ${max_budget_usd:.2f} budget")
+            result = subprocess.run(
+                [
+                    "claude",
+                    "-p",
+                    "--model",
+                    model,
+                    "--output-format",
+                    "json",
+                    "--max-budget-usd",
+                    str(remaining_budget),
+                    "--no-session-persistence",
+                    "--safe-mode",
+                ],
+                input=prompt,
+                check=False,
+                capture_output=True,
+                text=True,
             )
+            batch = parse_claude_envelope(result.stdout, model)
+            if result.returncode != 0:
+                raise RuntimeError(f"Claude exited with code {result.returncode}")
+            model_usage_batches.extend(batch.model_usage_batches)
+            cost_usd += batch.cost_usd
+            try:
+                validate_decisions(batch_package, batch.decisions)
+                decisions.extend(batch.decisions)
+                if checkpoint_path is not None:
+                    write_review_checkpoint(
+                        checkpoint_path,
+                        package,
+                        model,
+                        batch_size,
+                        ClaudeNeighborhoodReview(decisions, model_usage_batches, cost_usd),
+                    )
+                break
+            except ValueError as error:
+                if checkpoint_path is not None:
+                    write_review_checkpoint(
+                        checkpoint_path,
+                        package,
+                        model,
+                        batch_size,
+                        ClaudeNeighborhoodReview(decisions, model_usage_batches, cost_usd),
+                    )
+                if attempt + 1 == MAX_REVIEW_ATTEMPTS:
+                    raise
+                prompt = (
+                    f"{claude_prompt(batch_items)}\n\n"
+                    f"Your prior JSON failed validation: {error}\n"
+                    f"Prior decisions:\n{json.dumps(batch.decisions, ensure_ascii=False)}\n"
+                    "Return the corrected complete decisions JSON for this batch."
+                )
     return ClaudeNeighborhoodReview(decisions, model_usage_batches, cost_usd)
 
 

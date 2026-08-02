@@ -12,6 +12,7 @@ import pytest
 PROJECT = Path(__file__).parents[2] / ".agents/projects/luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
+import verify_blind_neighborhood_with_claude as verifier  # noqa: E402
 from export_blind_neighborhood_review import REVIEW_CHUNK_MARKER  # noqa: E402
 from verify_blind_neighborhood_with_claude import (  # noqa: E402
     ClaudeNeighborhoodReview,
@@ -84,6 +85,46 @@ def test_review_checkpoint_round_trip_and_input_binding(tmp_path: Path) -> None:
     changed = review_package | {"items": [review_package["items"][0] | {"query": "changed"}, review_package["items"][1]]}
     with pytest.raises(ValueError, match="different review inputs"):
         load_review_checkpoint(checkpoint, changed, "claude-opus-5", 10)
+
+
+def test_claude_decisions_corrects_an_incomplete_batch(monkeypatch: pytest.MonkeyPatch) -> None:
+    review_package = package()
+    first = {
+        "sample_index": 1,
+        "choice": "A",
+        "query_language": "en",
+        "code_central": True,
+        "rationale": "x",
+    }
+    second = {
+        "sample_index": 2,
+        "choice": "B",
+        "query_language": "fr",
+        "code_central": False,
+        "rationale": "y",
+    }
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append(kwargs["input"])
+        decisions = [first] if len(calls) == 1 else [first, second]
+        output = json.dumps(
+            {
+                "is_error": False,
+                "result": json.dumps({"decisions": decisions}),
+                "modelUsage": {"claude-opus-5": {"inputTokens": 10}},
+                "total_cost_usd": 0.25,
+            }
+        )
+        return verifier.subprocess.CompletedProcess(args[0], 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(verifier.subprocess, "run", run)
+
+    review = verifier.claude_decisions(review_package, "claude-opus-5", batch_size=10, max_budget_usd=2)
+
+    assert review.decisions == [first, second]
+    assert review.cost_usd == 0.5
+    assert "sample indices differ" in calls[1]
 
 
 def test_comparison_scores_randomized_student_sides_and_content_groups() -> None:
