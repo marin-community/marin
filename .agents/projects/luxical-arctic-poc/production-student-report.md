@@ -2,6 +2,13 @@
 
 Status: evaluation in progress
 
+## TL;DR
+
+The 3M student runs 3.00349 times as fast as Luxical-One on CPU. Its vectors
+pass all health gates. The student fails the held-out semantic gates and the
+model-hidden neighborhood review. The largest failure is on non-English text,
+where the neighborhood score is 0.19355. The nested 10M rung is in preparation.
+
 ## Decision rule
 
 Do not approve a production student until every required gate passes on fixed
@@ -21,10 +28,10 @@ an approved production model.
 | Global geometry | Effective-rank fraction at least 0.25 | 0.33326 on the semantic screen | Pass |
 | Exact CPU speed | At least 0.85 times Luxical-One | 3.00349 times Luxical-One | Pass |
 | Coarse semantic screen | No metric more than 0.02 below the best tested teacher | Passed all eight fixed metrics | Pass |
-| Label reliability | Independent review gates for a frozen hierarchy | Curated compact passed representative Claude gates; low-confidence tail needs adjudication | Open |
-| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | Waiting for hierarchical labels | Open |
-| Blind neighborhood review | Student is not worse than the best teacher | Not run | Open |
-| Held-out robustness | All large semantic groups pass | Not run | Open |
+| Label reliability | Independent review gates for a frozen hierarchy | Tail adjudication changed each global metric by at most 0.00458 and changed no gate decision | Pass |
+| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | Parent macro-F1, form macro-F1, and leaf cluster NMI fail | Fail |
+| Blind neighborhood review | Student is not worse than the best teacher | Score 0.4475; 95% interval [0.3800, 0.5150] | Fail |
+| Held-out robustness | All large semantic groups pass | Parent, form, and leaf large-group gates fail | Fail |
 | Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
 | Release artifact | Pinned model, tokenizer, loader, and production smoke | Not built | Open |
 
@@ -70,15 +77,38 @@ rule from the original GLM output. It changes no bucket ID or pilot assignment.
 On 100 representative documents, Claude Opus 5 reached 81% exact parent
 agreement, 98% any-parent overlap, and 85% exact form agreement. These results
 pass the fixed gates. On the 50 lowest-confidence documents, exact parent and
-form agreement fell to 38% and 58%. The final held-out labels must therefore
-adjudicate the low-confidence tail before embedding metrics are approved.
+form agreement fell to 38% and 58%.
+
+The held-out evaluation used Claude labels for the lowest-confidence 5 percent.
+Claude reviewed 500 documents. The exact parent agreement was 40.2 percent.
+The any-parent overlap was 73.8 percent. The exact form agreement was 55.2
+percent.
 
 Use the lowest-confidence 5 percent for this adjudication. This is the same
 fraction as the failed 50-document pilot stress sample. Run the embedding gates
 once with the raw GLM labels and once with the Claude labels for this tail. No
 fixed global student metric can change by more than 0.02. The full gate decision
 and the large-group gate decision cannot change. A larger change means that
-label noise controls the result.
+label noise controls the result. The largest change was 0.00458. All full-gate
+and large-group decisions stayed unchanged. Thus, label noise does not control
+the 3M result.
+
+## Held-out 3M result
+
+The 3M student is not collapsed. All 10,000 vectors are finite. The unique
+fraction at four decimals is 0.9997. The effective-rank fraction is 0.35219.
+The total normalized variance is 0.84226.
+
+The student does not preserve enough semantic information. The raw-label
+parent macro-F1 is 0.44498, compared with 0.47415 for the best teacher. The
+form macro-F1 is 0.37281, compared with 0.41156. The leaf cluster NMI is
+0.40660, compared with 0.42961. The adjudicated labels keep each failure.
+
+The large-group tests show losses in several important groups. These groups
+include software, code form, technical documentation, reference text,
+instructions, administrative records, and narrative text. The exact set
+depends on the hierarchy level. The vectors do not collapse. The failure is
+semantic loss.
 
 ## Required embedding gates
 
@@ -120,6 +150,15 @@ The student passes when its win count plus half of its tie count is at least
 for code, multilingual text, and standard text separately. Any group with
 fewer than 30 queries is descriptive and cannot pass a release gate.
 
+Claude Opus 5 completed the model-hidden review on 200 queries. The student had
+87 wins, 5 ties, and 108 losses. Its score was 0.4475. The paired 95-percent
+interval was [0.3800, 0.5150]. Thus, the overall gate failed.
+
+The code group had 48 queries and a score of 0.55208. Its lower interval bound
+was 0.41667, so the code gate failed. The non-English group had 31 queries and
+a score of 0.19355. The other-text group had 121 queries and a score of
+0.47107. All three group gates failed.
+
 ## Release gates
 
 - Repeat the exact CPU benchmark from a pinned release artifact. The median
@@ -145,15 +184,23 @@ fewer than 30 queries is descriptive and cannot pass a release gate.
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-full-full-3m.json`
 - Coarse semantic report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/embedding-screen-v2/report.json`
+- Raw held-out report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/raw-v1/embedding-screen-v1/report.json`
+- Adjudicated held-out report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/adjudicated-v1/embedding-screen-v1/report.json`
+- Label-sensitivity report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/adjudicated-v1/label-sensitivity-v1/report.json`
+- Blind neighborhood report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/adjudicated-v1/blind-neighborhood-review-v1/claude-opus-5-report.json`
+  (SHA-256 `d4f8c4b7b679540b367cb4d9f02d7e77151b79bea036e50a841faa1bf1ca394f`)
 
 ## Open decision
 
-Approve the current 3M candidate only if it passes the accepted hierarchy,
-10,000-document, blind-review, robustness, and release gates. If it fails a
-semantic quality gate, train a nested 3M, 10M, and 30M ladder with the same
-architecture and loss. Stop the ladder when two adjacent rungs improve the
-failed metric by less than 0.005. Change the teacher or objective only when the
-teacher itself passes the failed evaluation and scale does not close the gap.
+Reject the current 3M candidate. Train the nested 10M rung with the same
+architecture, loss, tokenizer map, and Arctic teacher. Train the 30M rung only
+if 10M does not pass. Stop the ladder when two adjacent rungs improve the failed
+metric by less than 0.005. Change the teacher or objective only when the teacher
+passes the failed evaluation and scale does not close the gap.
 
 The disk-backed staged loader passed its 3M canary with 1,623,203,840 bytes of
 peak RSS. It scanned every row and saw all 146 sources. This is a 79.1 percent
