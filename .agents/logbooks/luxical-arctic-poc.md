@@ -1400,3 +1400,21 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - A 16-H100 gang is not a smaller placement request than the active
   eight-B200 gang. Keep the B200 request queued unless the scheduler rejects
   it or a different model-serving plan is proven first.
+
+### Bounded fast-student training input
+
+- The optional 10M and 30M ladder now has a disk-backed input layout. It
+  writes source-interleaved NumPy memory maps instead of retaining all IDs,
+  teacher vectors, and source IDs in host memory.
+- Staging interleaves 4,096-row source chunks. Each epoch shuffles 65,536-row
+  blocks and shuffles rows inside each block. This keeps contrastive batches
+  mixed across sources without random reads across the full dataset.
+- The loader rejects a source quota above 262,144 rows. During training, it
+  keeps at most one source slice or one epoch block active as array data.
+- The original materialized layout remains available and keeps the exact old
+  global permutation sequence.
+- A canary records measured peak RSS, full batch coverage, source coverage,
+  a batch digest, and the calculated memory limits. The live 3M canary is the
+  remaining gate before a larger rung is permitted.
+- Forty-three focused training, hierarchy, label, metric, and review tests
+  pass.

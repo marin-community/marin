@@ -11,6 +11,7 @@ import math
 import tempfile
 import time
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,13 @@ import numpy as np
 import optax
 import pyarrow.parquet as pq
 from build_manifest import allocate_balanced_quotas
-from fast_student import FastStudent
+from fast_student import MAX_TOKENS, FastStudent
+from fast_student_training_data import (
+    MaterializedTrainingRows,
+    SourceTrainingRows,
+    StagedTrainingRows,
+    stage_training_rows,
+)
 from ladder_config import MANIFEST_ROOT, SEED, read_json, write_json
 from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
@@ -38,7 +45,7 @@ from experiments.datakit.cluster.quality.fast_transformer.model import FastEmbed
 
 PREPARED_MANIFEST_URL = f"{MANIFEST_ROOT}/fast-student/prepared-3m/manifest.json"
 OUTPUT_ROOT = f"{MANIFEST_ROOT}/fast-student"
-RUNG_TARGETS = {"64k": 65_536, "750k": 750_000, "3m": 3_000_000}
+RUNG_TARGETS = {"64k": 65_536, "750k": 750_000, "3m": 3_000_000, "10m": 10_000_000, "30m": 30_000_000}
 BATCH_SIZE = 4_096
 EPOCHS = 3
 LEARNING_RATE = 5e-4
@@ -55,6 +62,9 @@ SOURCE_GEOMETRY_WEIGHTS = {
 }
 TEACHER_QUANTIZATION_LIMIT = 0.3
 AUDIT_ROWS = 2_048
+STAGING_CHUNK_ROWS = BATCH_SIZE
+TRAINING_BLOCK_ROWS = 16 * BATCH_SIZE
+MAXIMUM_SOURCE_ROWS_IN_MEMORY = 262_144
 RESULT_FILE = Path("/tmp/luxical-fast-student-train")
 
 
@@ -66,6 +76,13 @@ class TeacherSpec:
     source_root: str | None
     audit_url: str | None
     artifact_suffix: str | None
+
+
+class TrainingLayout(StrEnum):
+    """Select the host-memory layout for training rows."""
+
+    MATERIALIZED = "materialized"
+    STAGED = "staged"
 
 
 TEACHERS = {
@@ -156,6 +173,57 @@ def load_training_arrays(
     return all_ids, all_teacher, all_source_ids, quotas
 
 
+def staged_sources(
+    prepared: dict[str, Any],
+    quotas: dict[str, int],
+    teacher_spec: TeacherSpec,
+) -> list[SourceTrainingRows]:
+    """Return ordered source slices for disk staging."""
+    sources = []
+    for source_id, (source, result) in enumerate(sorted(prepared["sources"].items())):
+        teacher_url = None
+        if teacher_spec.source_root is not None:
+            teacher_url = f"{teacher_spec.source_root}/{Path(result['output_url']).name}"
+        sources.append(
+            SourceTrainingRows(
+                source=source,
+                source_id=source_id,
+                prepared_url=result["output_url"],
+                teacher_url=teacher_url,
+                rows=quotas[source],
+            )
+        )
+    return sources
+
+
+def training_rows(
+    prepared: dict[str, Any],
+    target: int,
+    teacher_spec: TeacherSpec,
+    layout: TrainingLayout,
+    staging_directory: Path,
+) -> tuple[MaterializedTrainingRows | StagedTrainingRows, dict[str, int]]:
+    """Load the original arrays or stage bounded disk-backed arrays."""
+    if layout == TrainingLayout.MATERIALIZED:
+        ids, teacher, source_ids, quotas = load_training_arrays(prepared, target, teacher_spec)
+        return MaterializedTrainingRows(ids, teacher, source_ids), quotas
+    capacities = {source: int(result["rows"]) for source, result in prepared["sources"].items()}
+    quotas = allocate_balanced_quotas(capacities, target)
+    staged = stage_training_rows(
+        staged_sources(prepared, quotas, teacher_spec),
+        staging_directory,
+        id_width=MAX_TOKENS,
+        teacher_dimension=teacher_spec.dimension,
+        teacher_quantization_limit=TEACHER_QUANTIZATION_LIMIT,
+        chunk_rows=STAGING_CHUNK_ROWS,
+        maximum_source_rows=MAXIMUM_SOURCE_ROWS_IN_MEMORY,
+        seed=SEED,
+    )
+    if staged.rows != target:
+        raise ValueError(f"Staged {staged.rows} rows; expected {target}")
+    return staged, quotas
+
+
 def embedding_audit(model: FastEmbeddingTransformer, ids: np.ndarray) -> dict[str, float]:
     """Measure finite, uniqueness, variance, and concentration checks."""
     vectors = predict_embeddings(model, ids[:AUDIT_ROWS], batch_size=AUDIT_ROWS)
@@ -224,9 +292,7 @@ def weight_decay_mask(model: FastEmbeddingTransformer, projection: jax.Array | N
 
 def train(
     model: FastEmbeddingTransformer,
-    ids: np.ndarray,
-    teacher: np.ndarray,
-    source_ids: np.ndarray,
+    rows: MaterializedTrainingRows | StagedTrainingRows,
     source_geometry_weight: float,
     output_root: str,
     teacher_dimension: int,
@@ -235,9 +301,7 @@ def train(
     device_count, replicated, batch_sharding = data_parallel_shardings()
     if BATCH_SIZE % device_count:
         raise ValueError(f"Batch size {BATCH_SIZE} is not divisible by {device_count} devices")
-    if len(source_ids) != len(ids):
-        raise ValueError(f"Source rows {len(source_ids)} do not match input rows {len(ids)}")
-    steps_per_epoch = math.ceil(len(ids) / BATCH_SIZE)
+    steps_per_epoch = math.ceil(rows.rows / BATCH_SIZE)
     total_steps = steps_per_epoch * EPOCHS
     schedule = optax.warmup_cosine_decay_schedule(
         init_value=LEARNING_RATE * 0.05,
@@ -292,25 +356,20 @@ def train(
         )
         return eqx.apply_updates(current_parameters, updates), next_optimizer_state, loss, components
 
-    rng = np.random.default_rng(SEED)
     key = jax.random.PRNGKey(SEED + 1)
+    audit_ids = rows.audit_ids(AUDIT_ROWS)
     history = []
     global_step = 0
     started = time.perf_counter()
     for epoch in range(EPOCHS):
-        permutation = rng.permutation(len(ids))
-        padded_rows = steps_per_epoch * BATCH_SIZE - len(permutation)
-        if padded_rows:
-            permutation = np.concatenate([permutation, permutation[:padded_rows]])
         epoch_losses = []
         epoch_distillation_losses = []
         epoch_source_geometry_losses = []
-        for batch_index in range(steps_per_epoch):
-            selected = permutation[batch_index * BATCH_SIZE : (batch_index + 1) * BATCH_SIZE]
+        for batch in rows.epoch_batches(epoch, BATCH_SIZE, TRAINING_BLOCK_ROWS, SEED):
             key, step_key = jax.random.split(key)
-            batch_ids = jax.device_put(jnp.asarray(ids[selected]), batch_sharding)
-            batch_teacher = jax.device_put(jnp.asarray(teacher[selected]), batch_sharding)
-            batch_source_ids = jax.device_put(jnp.asarray(source_ids[selected]), batch_sharding)
+            batch_ids = jax.device_put(jnp.asarray(batch.ids), batch_sharding)
+            batch_teacher = jax.device_put(jnp.asarray(batch.teacher), batch_sharding)
+            batch_source_ids = jax.device_put(jnp.asarray(batch.source_ids), batch_sharding)
             parameters, optimizer_state, loss, components = step(
                 parameters,
                 optimizer_state,
@@ -330,8 +389,10 @@ def train(
             global_step += 1
             if global_step == 1 or global_step % 10 == 0:
                 logger.info("Epoch %d step %d/%d loss %.8f", epoch + 1, global_step, total_steps, loss_value)
+        if len(epoch_losses) != steps_per_epoch:
+            raise ValueError(f"Epoch {epoch + 1} returned {len(epoch_losses)} batches; expected {steps_per_epoch}")
         model, projection = parameters
-        audit = embedding_audit(model, ids)
+        audit = embedding_audit(model, audit_ids)
         if (
             audit["finite_fraction"] != 1.0
             or audit["unique_fraction_6dp"] < 0.99
@@ -377,6 +438,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", choices=("full", "slim"), required=True)
     parser.add_argument("--treatment", choices=tuple(SOURCE_GEOMETRY_WEIGHTS), default="baseline")
     parser.add_argument("--teacher", choices=tuple(TEACHERS), required=True)
+    parser.add_argument("--training-layout", choices=tuple(TrainingLayout), type=TrainingLayout, required=True)
+    parser.add_argument("--prepared-manifest-url", default=PREPARED_MANIFEST_URL)
     return parser.parse_args()
 
 
@@ -396,7 +459,7 @@ def main() -> None:
     if jax.default_backend() != "gpu":
         raise ValueError(f"Fast student training requires a GPU backend, got {jax.default_backend()}")
     target = RUNG_TARGETS[arguments.rung]
-    prepared = read_json(PREPARED_MANIFEST_URL)
+    prepared = read_json(arguments.prepared_manifest_url)
     teacher_spec = TEACHERS[arguments.teacher]
     if teacher_spec.audit_url is not None:
         audit = read_json(teacher_spec.audit_url)
@@ -409,29 +472,37 @@ def main() -> None:
     if arguments.treatment != "baseline" and teacher_spec.dimension != 256:
         raise ValueError("Source-geometry treatments require equal student and teacher dimensions")
     raw_to_compact = load_numpy(prepared["raw_to_compact_url"])
-    ids, teacher, source_ids, quotas = load_training_arrays(prepared, target, teacher_spec)
-    student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
-    artifact_name = training_name(arguments.config, arguments.treatment, teacher_spec)
-    source_geometry_weight = SOURCE_GEOMETRY_WEIGHTS[arguments.treatment]
-    output_root = f"{OUTPUT_ROOT}/{artifact_name}/{arguments.rung}"
-    model, projection, history = train(
-        student.model,
-        ids,
-        teacher,
-        source_ids,
-        source_geometry_weight,
-        output_root,
-        teacher_spec.dimension,
-    )
+    with tempfile.TemporaryDirectory(prefix="luxical-fast-student-training-") as staging_directory:
+        rows, quotas = training_rows(
+            prepared,
+            target,
+            teacher_spec,
+            arguments.training_layout,
+            Path(staging_directory),
+        )
+        memory_report = rows.memory_report(TRAINING_BLOCK_ROWS)
+        student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
+        artifact_name = training_name(arguments.config, arguments.treatment, teacher_spec)
+        source_geometry_weight = SOURCE_GEOMETRY_WEIGHTS[arguments.treatment]
+        output_root = f"{OUTPUT_ROOT}/{artifact_name}/{arguments.rung}"
+        model, projection, history = train(
+            student.model,
+            rows,
+            source_geometry_weight,
+            output_root,
+            teacher_spec.dimension,
+        )
     report = {
         "rung": arguments.rung,
         "config_name": arguments.config,
         "training_name": artifact_name,
         "treatment": arguments.treatment,
         "teacher": {"name": arguments.teacher, **asdict(teacher_spec)},
+        "training_layout": arguments.training_layout,
+        "training_memory": memory_report,
         "training_rows": target,
         "source_quotas": quotas,
-        "prepared_manifest_url": PREPARED_MANIFEST_URL,
+        "prepared_manifest_url": arguments.prepared_manifest_url,
         "prepared_manifest_sha256": prepared["manifest_sha256"],
         "raw_to_compact_url": prepared["raw_to_compact_url"],
         "raw_to_compact_sha256": prepared["raw_to_compact_sha256"],
