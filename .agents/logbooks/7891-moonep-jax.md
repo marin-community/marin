@@ -290,3 +290,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Performance: Median MFU was 6.6395957732540705% across two measured steps. The final duration was 38.981918029952794 seconds.
 - Profile gap: Grug skips callback hooks for completed steps zero and one. The requested step-one window did not start.
 - Decision: Require profile windows to start at step three or later, then repeat five steps with a step-three profile window.
+
+### 2026-08-02 14:21 UTC - One-process MoonEP passes the four-GPU parity gate
+
+- Layout: The Iris supervisor ran four JAX processes with one GB200 device for each process.
+- Runtime: The fixed XLA build used the NCCL LSA and GIN device kernel.
+- Skew: Every token selected experts zero and one, which were both owned by process zero.
+- Result: All four processes matched the dense output and the input, `w13`, and `w2` gradients.
+- Capacity: The run reported zero dropped assignments.
+- Snapshot: `mnep-014-one-proc-device-smoke-3-20260802-1402` at `eac3ee03760b3fa056a5eb0e2660444d9872f5df`.
+- Rack gate: MNEP-014 is waiting for one complete NVL72 with this process layout.
