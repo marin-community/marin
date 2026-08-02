@@ -411,6 +411,11 @@ def _pod_name_candidates(task_id: JobName, attempt_id: int, attempt_uid: str, *,
     return [current] if legacy == current else [current, legacy]
 
 
+def _task_hashes(pods: list[dict]) -> set[str]:
+    """The task hashes labelling *pods*. A hash is shared by every attempt of a task."""
+    return {h for pod in pods if (h := pod.get("metadata", {}).get("labels", {}).get(_LABEL_TASK_HASH))}
+
+
 def _lookup_pod(
     pods_by_name: dict[str, dict], task_id: JobName, attempt_id: int, attempt_uid: str, *, allow_legacy: bool
 ) -> tuple[str, dict | None]:
@@ -2502,19 +2507,6 @@ class K8sTaskProvider:
 
         return updates
 
-    def _allow_legacy_pod_name(self, entry: RunningTaskEntry) -> bool:
-        """The pre-uid name is a candidate only for attempts this process did not dispatch."""
-        return (entry.task_id.to_wire(), entry.attempt_id) not in self._dispatched_attempts
-
-    def _entry_pod_candidates(self, entry: RunningTaskEntry) -> list[str]:
-        """Pod names a running entry may be under, current scheme first."""
-        return _pod_name_candidates(
-            entry.task_id,
-            entry.attempt_id,
-            entry.attempt_uid,
-            allow_legacy=self._allow_legacy_pod_name(entry),
-        )
-
     def _lookup_entry_pod(self, pods_by_name: dict[str, dict], entry: RunningTaskEntry) -> tuple[str, dict | None]:
         """Resolve a running entry to its pod, allowing the pre-uid name only when this
         process did not dispatch the attempt."""
@@ -2523,7 +2515,7 @@ class K8sTaskProvider:
             entry.task_id,
             entry.attempt_id,
             entry.attempt_uid,
-            allow_legacy=self._allow_legacy_pod_name(entry),
+            allow_legacy=(entry.task_id.to_wire(), entry.attempt_id) not in self._dispatched_attempts,
         )
 
     def _live_pod_name(self, target: TaskTarget) -> str:
@@ -2867,19 +2859,19 @@ class K8sTaskProvider:
         if self._gc_emitter is None:
             self._gc_emitter = PeriodicEmitter(self._gc_once, interval=_GC_INTERVAL_SECONDS, name="terminal-gc")
 
-    def _gc_once(self) -> None:
-        """One GC pass, against active pods this thread reads itself.
+    def _list_active_pods(self) -> list[dict]:
+        """List managed pods in a non-terminal phase — the set a sweep must protect."""
+        return self.kubectl.list_json(
+            K8sResource.PODS,
+            labels=_MANAGED_POD_LABELS,
+            field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
+        )
 
-        Reading them here rather than taking sync's snapshot keeps the protection for
-        tasks with active retry attempts accurate however long the pass runs.
-        """
+    def _gc_once(self) -> None:
+        """One GC pass, against active pods this thread reads itself rather than a
+        snapshot handed over by a sync cycle that may have run much earlier."""
         try:
-            active_pods = self.kubectl.list_json(
-                K8sResource.PODS,
-                labels=_MANAGED_POD_LABELS,
-                field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
-            )
-            self._gc_terminal_resources(active_pods)
+            self._gc_terminal_resources(self._list_active_pods())
         except Exception:
             # PeriodicEmitter logs a bare warning naming the thread. #7881 was GC
             # silently ceasing to work, so name it and keep the traceback.
@@ -2898,22 +2890,16 @@ class K8sTaskProvider:
         cutoff = now - _GC_MAX_AGE_SECONDS
         gang_cutoff = now - _GANG_GC_MAX_AGE_SECONDS
 
-        # Collect task hashes that still have active (Pending/Running) pods.
-        # These must NOT have their configmaps/PDBs deleted, even if an older
-        # attempt of the same task is terminal — task_hash is shared across attempts.
-        active_hashes: set[str] = set()
+        # Task hashes that still have active (Pending/Running) pods must NOT have their
+        # configmaps/PDBs deleted, even if an older attempt of the same task is
+        # terminal — task_hash is shared across attempts.
+        active_hashes = _task_hashes(active_pods)
         # Pod-groups with live (Pending/Running) members share one Kueue
         # Workload across the gang; releasing it would evict the running
         # siblings, so the gang sweep must skip those groups entirely.
-        active_gang_groups: set[str] = set()
-        for pod in active_pods:
-            labels = pod.get("metadata", {}).get("labels", {})
-            h = labels.get(_LABEL_TASK_HASH)
-            if h:
-                active_hashes.add(h)
-            g = labels.get(_KUEUE_POD_GROUP_NAME)
-            if g:
-                active_gang_groups.add(g)
+        active_gang_groups = {
+            g for pod in active_pods if (g := pod.get("metadata", {}).get("labels", {}).get(_KUEUE_POD_GROUP_NAME))
+        }
 
         # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
         #    since last GC, by task_hash label selector.
@@ -2993,7 +2979,15 @@ class K8sTaskProvider:
 
         if old_pod_names:
             self.kubectl.delete_many(K8sResource.PODS, old_pod_names, wait=False)
-        safe_hashes = old_task_hashes - active_hashes
+        # Re-read the active set instead of reusing the one from the top of the pass.
+        # Every delete above is a round trip, so the snapshot is stale by the whole
+        # sweep by now, and a task that started a new attempt in that window would not
+        # appear in it — deleting the ConfigMap and PDB it shares by task_hash would
+        # break the starting pod. The gang sweep above runs before the bulk deletes,
+        # so it still reads a fresh snapshot.
+        safe_hashes: set[str] = set()
+        if old_task_hashes:
+            safe_hashes = old_task_hashes - _task_hashes(self._list_active_pods())
         for task_hash in safe_hashes:
             labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
             self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
@@ -3064,17 +3058,18 @@ class K8sTaskProvider:
         # holds up to a full retention window of pods. setdefault keeps the active
         # entry if a name somehow appears in both.
         #
-        # Only an entry's FIRST candidate settles it. _lookup_pod prefers that
-        # current-scheme name, so a match on it is final, while a match on the pre-uid
-        # name is not — the preferred pod could still be further into the scan, and
-        # stopping there would resolve the attempt to a previous incarnation's pod.
+        # Only the name _lookup_entry_pod returns for a miss settles an entry: that is
+        # its preferred candidate, and _lookup_pod prefers it, so a match there is
+        # final. A match on the pre-uid name is not — the preferred pod could still be
+        # further into the scan, and stopping would resolve the attempt to a previous
+        # incarnation's pod.
         settled_by: dict[str, RunningTaskEntry] = {}
         unresolved: set[RunningTaskEntry] = set()
         for entry in running:
-            if self._lookup_entry_pod(pods_by_name, entry)[1] is not None:
-                continue
-            unresolved.add(entry)
-            settled_by[self._entry_pod_candidates(entry)[0]] = entry
+            name, pod = self._lookup_entry_pod(pods_by_name, entry)
+            if pod is None:
+                unresolved.add(entry)
+                settled_by[name] = entry
         if unresolved:
             for pod in self._iter_terminal_pods():
                 name = pod.get("metadata", {}).get("name", "")
