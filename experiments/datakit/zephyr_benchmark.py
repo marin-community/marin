@@ -13,23 +13,47 @@ Example::
         --sample-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
         --sources all --run-tag zephyr-100b-v1 \
         --pool-workers 60 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
+        --last-stage fuzzy \
         --max-concurrent 4 --dedup-max-parallelism 4096
 """
 
 import argparse
 import logging
 from dataclasses import replace
+from enum import StrEnum
 
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
     PoolConfig,
+    ZephyrDatakitSteps,
     sample_sources,
     zephyr_datakit_steps,
 )
+
+
+class LastStage(StrEnum):
+    """Last stage included in a benchmark run."""
+
+    EXACT = "exact"
+    TOKENIZE = "tokenize"
+    MINHASH = "minhash"
+    FUZZY = "fuzzy"
+
+
+def _steps_through(steps: ZephyrDatakitSteps, last_stage: LastStage) -> list[StepSpec]:
+    selected = [steps.exact_dedup]
+    if last_stage in {LastStage.TOKENIZE, LastStage.MINHASH, LastStage.FUZZY}:
+        selected.extend(steps.tokenize.values())
+    if last_stage in {LastStage.MINHASH, LastStage.FUZZY}:
+        selected.extend(steps.minhash.values())
+    if last_stage is LastStage.FUZZY:
+        selected.append(steps.fuzzy_dedup)
+    return selected
 
 
 def main() -> None:
@@ -41,6 +65,7 @@ def main() -> None:
     parser.add_argument("--pool-cpu", required=True, type=float)
     parser.add_argument("--pool-ram", required=True)
     parser.add_argument("--pool-disk", required=True)
+    parser.add_argument("--last-stage", required=True, type=LastStage, choices=list(LastStage))
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
     args = parser.parse_args()
@@ -54,7 +79,8 @@ def main() -> None:
         pool=PoolConfig(n_workers=args.pool_workers, worker=worker),
         dedup_max_parallelism=args.dedup_max_parallelism,
     )
-    StepRunner().run(zephyr_datakit_steps(sources, scale).all_steps, max_concurrent=args.max_concurrent)
+    steps = zephyr_datakit_steps(sources, scale)
+    StepRunner().run(_steps_through(steps, args.last_stage), max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":
