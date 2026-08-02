@@ -928,3 +928,38 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Fix: Add `--xla_gpu_experimental_enable_nccl_symmetric_buffers=true` to the MoonEP XLA defaults.
 - Local gate: All 37 MoonEP tests pass.
 - Next gate: Use the current diagnostic PJRT at EP64. The expected value mismatch proves that XLA selected the device path and completed symmetric-memory lookup.
+
+### 2026-08-02 22:32 UTC - MNEP-046 proves direct-path selection
+
+- Run ID: `mnep-046-ragged-enable-symmetric-20260802-2229`.
+- Snapshot: `mnep-046-enable-symmetric-buffers-20260802-2228` at `5ff74aba4`.
+- Result: NCCL created a 188 GB symmetric virtual-address window for the 64-rank communicator.
+- Result: XLA entered the direct device path, completed both symmetric-memory lookups, and returned before the diagnostic kernel.
+- Gate: The probe reported the expected 189 sampled value mismatches and no CUDA fault.
+- Interpretation: The earlier fallback fault did not test XLA's new device kernel. The missing symmetric-buffer flag caused the fallback.
+- Echo milestone: `#1873`.
+- Next gate: Run the clean XLA `5d53e1e` and NCCL 2.30.7 wheel with the corrected flags.
+
+### 2026-08-02 22:33 UTC - MNEP-047 clean direct-device probe contract
+
+- Goal: Verify a balanced ragged all-to-all through clean XLA on all 64 GPUs of one NVL72.
+- Run ID: `mnep-047-ragged-clean-direct-20260802-2233`.
+- Runtime: JAX `f9f6bbace`, XLA `5d53e1e`, NCCL 2.30.7, and no XLA source patch.
+- Shape: 64 rows for each rank, 32 bfloat16 elements for each row, and one row for each peer.
+- Gate: Require attempt-zero completion, checksum `6048`, zero sampled mismatches, and no transport error.
+
+### 2026-08-02 23:03 UTC - MNEP-047 proves clean EP64 transport correctness
+
+- Result: The clean XLA and NCCL 2.30.7 child completed on attempt zero in 1 minute and 50 seconds.
+- Correctness: Checksum `6048`, zero sampled mismatches, and no transport error.
+- Kernel time: The compiled 64-rank probe completed in 8.607078 seconds.
+- Interpretation: The runtime flag fix is sufficient for the balanced direct-device transport probe. No XLA source patch is required for this gate.
+- Next gate: Run three full MoonEP and global QB training steps through the same clean direct path.
+
+### 2026-08-02 23:03 UTC - MNEP-048 full-program direct smoke contract
+
+- Goal: Execute three full MoonEP and global QB training steps through the clean EP64 direct path.
+- Run ID: `mnep-048-clean-direct-smoke-3-20260802-2303`.
+- Runtime: JAX `f9f6bbace`, XLA `5d53e1e`, NCCL 2.30.7, an 84% main pool, and four in-flight collectives.
+- Config: Global histogram QB with 1,000 bins, 128-token MoonEP padding, and QuACK grouped GEMM.
+- Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
