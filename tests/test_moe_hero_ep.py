@@ -19,13 +19,31 @@ from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, train
 from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild
-from experiments.grug.moe_hero_ep.quantile_balancing import histogram_quantile_bias
+from experiments.grug.moe_hero_ep.quantile_balancing import histogram_quantile_bias, quantile_balancing_routes
 
 
 def _exact_required_bias_quantile(required_bias: np.ndarray, *, top_k: int) -> np.ndarray:
     target_rank = (required_bias.shape[0] * top_k + required_bias.shape[1] - 1) // required_bias.shape[1]
     target = np.sort(required_bias, axis=0)[target_rank - 1]
     return target - target.mean()
+
+
+def test_qb_routing_uses_sigmoid_scores_for_bias_and_cutoff():
+    router_logits = jnp.array([[10.0, 9.0, 0.0]], dtype=jnp.float32)
+    current_bias = jnp.array([0.0, 0.5, -0.25], dtype=jnp.float32)
+
+    router_scores, selected_experts, cutoff = quantile_balancing_routes(
+        router_logits,
+        current_bias,
+        top_k=1,
+    )
+
+    np.testing.assert_array_equal(np.asarray(selected_experts), np.array([[1]], dtype=np.int32))
+    raw_logit_route = jax.lax.top_k(router_logits + current_bias, 2)[1][:, :1]
+    np.testing.assert_array_equal(np.asarray(raw_logit_route), np.array([[0]], dtype=np.int32))
+    required_bias = np.asarray(cutoff - router_scores)
+    assert np.all(required_bias >= float(jnp.min(current_bias)) - 1.0)
+    assert np.all(required_bias <= float(jnp.max(current_bias)) + 1.0)
 
 
 def test_histogram_qb_matches_pooled_quantile_within_one_bin():

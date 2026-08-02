@@ -17,6 +17,27 @@ class QuantileBalancingMethod(StrEnum):
     GLOBAL_HISTOGRAM = "global_histogram"
 
 
+def quantile_balancing_routes(
+    router_logits: Float[Array, "T E"],
+    current_bias: Float[Array, " E"],
+    *,
+    top_k: int,
+) -> tuple[Float[Array, "T E"], Int[Array, "T K"], Float[Array, "T 1"]]:
+    """Apply sigmoid-score Top-(k+1) routing and return its QB cutoff."""
+    if router_logits.ndim != 2:
+        raise ValueError(f"router_logits must have shape [tokens, experts], got {router_logits.shape}")
+    expected_bias_shape = (router_logits.shape[1],)
+    if current_bias.shape != expected_bias_shape:
+        raise ValueError(f"current_bias must have shape {expected_bias_shape}, got {current_bias.shape}")
+    if top_k <= 0 or top_k >= router_logits.shape[1]:
+        raise ValueError(f"top_k must be in [1, {router_logits.shape[1] - 1}], got {top_k}")
+
+    router_scores = jax.nn.sigmoid(router_logits.astype(jnp.float32))
+    current_bias = jax.lax.stop_gradient(current_bias.astype(jnp.float32))
+    top_scores, top_experts = jax.lax.top_k(router_scores + current_bias, top_k + 1)
+    return router_scores, top_experts[:, :-1], top_scores[:, -1:]
+
+
 def _histogram_bias_target(
     histogram: Int[Array, "E B"],
     current_bias: Float[Array, " E"],

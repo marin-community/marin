@@ -56,6 +56,7 @@ from transformers import PretrainedConfig as HfConfig
 from experiments.grug.moe_hero_ep.quantile_balancing import (
     QuantileBalancingMethod,
     histogram_quantile_bias,
+    quantile_balancing_routes,
 )
 
 _GATED_NORM_RANK = 128
@@ -769,15 +770,14 @@ class MoEMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
-        # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1]
-        # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
-        combine_weights_f = jax.nn.sigmoid(unbiased_topk)
+        router_scores, selected_experts, qb_alpha = quantile_balancing_routes(
+            router_logits,
+            self.router_bias,
+            top_k=self.cfg.num_experts_per_token,
+        )
+        # Bias controls selection only. Mixture weights use the unbiased sigmoid scores.
+        combine_weights_f = jnp.take_along_axis(router_scores, selected_experts, axis=-1)
         # Renormalize K combine weights to sum to ``_ROUTING_RENORM_SUM`` (baked in).
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
@@ -791,7 +791,7 @@ class MoEMLP(eqx.Module):
         )
         mesh = get_abstract_mesh()
         if self.cfg.qb_method == QuantileBalancingMethod.LOCAL_EXACT:
-            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            s_minus_alpha = reshard(router_scores - qb_alpha, P(_BATCH_AXES, None))
             num_devices = 1
             for axis_name in _BATCH_AXES:
                 num_devices *= mesh.shape[axis_name]
@@ -810,7 +810,7 @@ class MoEMLP(eqx.Module):
                 out_specs=P(),
             )(s_minus_alpha)
         elif self.cfg.qb_method == QuantileBalancingMethod.GLOBAL_HISTOGRAM:
-            required_bias = reshard(qb_alpha - router_logits, P(_BATCH_AXES, None))
+            required_bias = reshard(qb_alpha - router_scores, P(_BATCH_AXES, None))
             current_bias = reshard(self.router_bias, P(None))
 
             def _global_histogram_qb(required, bias):

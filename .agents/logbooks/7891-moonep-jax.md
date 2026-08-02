@@ -300,3 +300,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Capacity: The run reported zero dropped assignments.
 - Snapshot: `mnep-014-one-proc-device-smoke-3-20260802-1402` at `eac3ee03760b3fa056a5eb0e2660444d9872f5df`.
 - Rack gate: MNEP-014 is waiting for one complete NVL72 with this process layout.
+
+### 2026-08-02 14:29 UTC - Report audit fixes the QB score domain
+
+- Report rule: QB selects Top-(k+1) from `sigmoid(router_logits) + bias`.
+- Report bound: The required bias is in `[min(bias) - 1, max(bias) + 1]` because the scores are in `(0, 1)`.
+- Gap: The first histogram implementation used raw router logits for selection, cutoffs, and margins.
+- Fix: Use sigmoid scores for these three operations. Keep the bias out of the mixture weights and router gradients.
+- Gate: A crafted large-logit case now selects the sigmoid-score route and keeps every required bias in the report's range.
+- Action: Replace the queued MNEP-014 rack run with a corrected snapshot after the code gate passes.
