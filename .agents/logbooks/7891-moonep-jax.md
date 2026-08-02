@@ -376,3 +376,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Transport: Standard collectives connect two 32-GPU slices. The NCCL LSA and GIN kernel operates only inside each slice.
 - Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-018-two-slice-device-smoke-3-20260802-1530-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-018-two-slice-device-smoke-3-20260802-1530 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
 - Stop criteria: Stop on the first retry, setup error, transport error, non-finite loss, or dropped assignment.
+
+### 2026-08-02 15:50 UTC - MNEP-018 needs more cross-slice collective headroom
+
+- Result: Both task-zero attempts compiled the complete train step, then failed before step zero in the cross-slice NCCL all-to-all.
+- Error: Every local GPU reported `NCCL WARN Cuda failure 2 'out of memory'`. JAX reported the failure in `jit_train_step`.
+- Isolation: Other tasks only lost the task-zero coordination service. No direct peer-memory or ragged device-kernel fault appeared.
+- Interpretation: The two-slice rewrite reached its standard cross-slice transport. The 84% JAX pool leaves enough space for the host-ragged collective arena, but not this additional all-to-all.
+- Action: Stop the retry and test an 80% pool. This pool is about 152.5 GiB and remains above the measured 146.43 GiB program schedule.
+
+### 2026-08-02 15:52 UTC - MNEP-019 memory-window smoke contract
+
+- Goal: Execute three combined MoonEP and global QB steps through the two-slice transport with enough cross-slice collective headroom.
+- Run ID: `mnep-019-two-slice-mem80-smoke-3-20260802-1552`.
+- Config: Match MNEP-018, but reduce the JAX main pool from 84% to 80%.
+- Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
+- Stop criteria: Stop on the first retry, compiler OOM, collective OOM, transport error, non-finite loss, or dropped assignment.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-019-two-slice-mem80-smoke-3-20260802-1552-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-019-two-slice-mem80-smoke-3-20260802-1552 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.

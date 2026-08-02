@@ -57,8 +57,9 @@ HERO_EP_RUNTIME_ENV = {
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 MOONEP_RUNTIME_ENV = {
-    # Keep enough HBM outside the main pool for the 15 GiB collective arena.
-    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.84",
+    # The 146.43 GiB program must share HBM with the collective arena and the
+    # two-slice decomposer's cross-slice all-to-all buffers.
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.80",
 }
 MOONEP_FAST_INTERCONNECT_SLICE_SIZE = 32
 _XLA_FLAG_DEFAULTS = (
