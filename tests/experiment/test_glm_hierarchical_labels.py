@@ -78,6 +78,19 @@ def test_validate_hierarchy_rejects_precedence_rule_with_unknown_bucket() -> Non
         validate_hierarchy(value, variant)
 
 
+def test_validate_hierarchy_rejects_non_fallback_leaf_under_fallback_parent() -> None:
+    value, variant = hierarchy()
+    value = Hierarchy(
+        value.parents,
+        [*value.leaves, LeafBucket("FORMS", OTHER_BUCKET_ID, "Forms", "Forms", [], [])],
+        value.precedence_rules,
+    )
+    variant = Variant("test", 2, 2, 3, 3)
+
+    with pytest.raises(ValueError, match=r"fallback parent has non-fallback leaves.*FORMS"):
+        validate_hierarchy(value, variant)
+
+
 def test_build_hierarchy_gives_validation_error_to_retry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     value, variant = hierarchy()
     invalid = asdict(Hierarchy(value.parents, value.leaves, ["Classify forms under FORMS_TEMPLATES."]))

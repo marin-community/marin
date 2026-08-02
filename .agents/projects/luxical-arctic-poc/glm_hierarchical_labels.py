@@ -263,6 +263,13 @@ def validate_hierarchy(hierarchy: Hierarchy, variant: Variant) -> None:
     fallback_leaf = next(leaf for leaf in hierarchy.leaves if leaf.bucket_id == OTHER_BUCKET_ID)
     if fallback_leaf.parent_id != OTHER_BUCKET_ID:
         raise ValueError("The fallback leaf has the wrong parent")
+    non_fallback_children = [
+        leaf.bucket_id
+        for leaf in hierarchy.leaves
+        if leaf.parent_id == OTHER_BUCKET_ID and leaf.bucket_id != OTHER_BUCKET_ID
+    ]
+    if non_fallback_children:
+        raise ValueError(f"The fallback parent has non-fallback leaves: {sorted(non_fallback_children)}")
 
 
 def build_hierarchy(vllm_url: str, records: list[dict[str, Any]], variant: Variant, root: StoragePath) -> Hierarchy:
