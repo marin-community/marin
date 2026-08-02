@@ -8,12 +8,11 @@ self-describing account of what model was evaluated on what hardware, whether it
 per-task metrics it produced. The record is the source of truth; evaldash builds its query index from
 these object-store records. Runs use an ``evals`` prefix in the platform-local object store.
 
-This module is import-light on purpose -- stdlib plus fsspec and Pydantic only, no marin/levanter/iris
-imports -- so it can be vendored verbatim into a standalone dashboard image that only reads records back.
+This module is import-light on purpose -- the filesystem layer plus Pydantic, with no
+marin/levanter/iris imports -- so it can be vendored into the dashboard image that reads records back.
 """
 
 import logging
-import posixpath
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -22,6 +21,7 @@ from enum import StrEnum
 import fsspec
 from fsspec.core import url_to_fs
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from rigging.filesystem import prefix_join
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ class EvalRunRecord(BaseModel):
 
 def record_path(prefix: str, run_id: str) -> str:
     """The ``record.json`` object path for ``run_id`` under ``prefix``."""
-    return f"{prefix.rstrip('/')}/{run_id}/{RECORD_FILE}"
+    return prefix_join(prefix_join(prefix, run_id), RECORD_FILE)
 
 
 def write_record(record: EvalRunRecord, prefix: str) -> str:
@@ -295,7 +295,7 @@ def scan_records(prefix: str, cached: Mapping[str, EvalRunRecord] | None = None)
 
     # Object-store globs recurse into result payloads. List only immediate run directories.
     top_level = _directory_children(fs, root)
-    flat_urls = [fs.unstrip_protocol(posixpath.join(directory, RECORD_FILE)) for directory in top_level]
+    flat_urls = [prefix_join(fs.unstrip_protocol(directory), RECORD_FILE) for directory in top_level]
     for url, result in zip(flat_urls, _read_candidates(flat_urls, cached), strict=True):
         if result.record is not None:
             records.append(result.record)
