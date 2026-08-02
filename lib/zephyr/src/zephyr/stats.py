@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 ZEPHYR_STAGE_STATS_NAMESPACE = "zephyr.stage"
 ZEPHYR_WORKER_STATS_NAMESPACE = "zephyr.worker"
+MAX_METRIC_STAGE_SERIES = 256
 
 ZEPHYR_STAGE_ITEM_COUNT_KEY = "zephyr/item_count"
 """Counter key for items processed"""
@@ -133,6 +134,27 @@ class ZephyrWorkerStat:
     mem_current_bytes: int
     mem_avg_bytes: int
     mem_peak_bytes: int
+
+
+@dataclass(frozen=True)
+class PipelineMetricPoint:
+    """One time-series point for the coordinator dashboard."""
+
+    timestamp_ms: int
+    stage: str
+    item_rate: float
+    byte_rate: float
+    cpu_cores: float
+    memory_bytes: int
+    active_shards: int
+
+
+@dataclass(frozen=True)
+class PipelineMetricsResult:
+    """Dashboard points and a user-visible data-source warning."""
+
+    points: tuple[PipelineMetricPoint, ...]
+    warning: str = ""
 
 
 class StatsWriter:
@@ -264,7 +286,87 @@ class StatsWriter:
         except Exception:
             logger.warning("Failed to write worker stat to finelog", exc_info=True)
 
+    def query_pipeline_metrics(self, execution_id: str, max_points: int) -> PipelineMetricsResult:
+        """Return bounded 15-second pipeline metrics from worker samples."""
+        if self._log_client is None:
+            return PipelineMetricsResult((), "Finelog is not available for this coordinator.")
+
+        escaped_execution_id = execution_id.replace("'", "''")
+        sql = f"""
+WITH recent_bins AS (
+  SELECT DISTINCT date_bin(INTERVAL '15 seconds', ts) AS time_bin
+  FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}"
+  WHERE execution_id = '{escaped_execution_id}'
+    AND status = '{ZephyrWorkerStatStatus.RUNNING}'
+  ORDER BY 1 DESC
+  LIMIT {max_points}
+), per_shard AS (
+  SELECT date_bin(INTERVAL '15 seconds', samples.ts) AS time_bin,
+         samples.stage_name,
+         samples.shard_idx,
+         avg(samples.item_rate) AS item_rate,
+         avg(samples.byte_rate) AS byte_rate,
+         avg(samples.cpu_current_pct) / 100.0 AS cpu_cores,
+         avg(samples.mem_current_bytes) AS memory_bytes
+  FROM "{ZEPHYR_WORKER_STATS_NAMESPACE}" AS samples
+  INNER JOIN recent_bins
+    ON date_bin(INTERVAL '15 seconds', samples.ts) = recent_bins.time_bin
+  WHERE samples.execution_id = '{escaped_execution_id}'
+    AND samples.status = '{ZephyrWorkerStatStatus.RUNNING}'
+  GROUP BY 1, 2, 3
+)
+SELECT time_bin,
+       stage_name,
+       sum(item_rate) AS item_rate,
+       sum(byte_rate) AS byte_rate,
+       sum(cpu_cores) AS cpu_cores,
+       sum(memory_bytes) AS memory_bytes,
+       count(*) AS active_shards
+FROM per_shard
+GROUP BY 1, 2
+ORDER BY 1 DESC, 2
+""".strip()
+        try:
+            rows = self._log_client.query(sql, max_rows=max_points * MAX_METRIC_STAGE_SERIES).to_pylist()
+        except Exception:
+            logger.warning("Failed to query Zephyr pipeline metrics", exc_info=True)
+            return PipelineMetricsResult((), "Finelog metrics are temporarily unavailable.")
+
+        points = [
+            PipelineMetricPoint(
+                timestamp_ms=_timestamp_ms(row["time_bin"]),
+                stage=str(row["stage_name"]),
+                item_rate=float(row["item_rate"] or 0),
+                byte_rate=float(row["byte_rate"] or 0),
+                cpu_cores=float(row["cpu_cores"] or 0),
+                memory_bytes=int(row["memory_bytes"] or 0),
+                active_shards=int(row["active_shards"] or 0),
+            )
+            for row in rows
+        ]
+        return PipelineMetricsResult(_complete_metric_bins(points, max_points))
+
     def close(self) -> None:
         if self._log_client is not None:
             with suppress(Exception):
                 self._log_client.close()
+
+
+def _timestamp_ms(value: datetime) -> int:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return int(value.timestamp() * 1000)
+
+
+def _complete_metric_bins(points: list[PipelineMetricPoint], max_points: int) -> tuple[PipelineMetricPoint, ...]:
+    by_timestamp: dict[int, list[PipelineMetricPoint]] = {}
+    for point in points:
+        by_timestamp.setdefault(point.timestamp_ms, []).append(point)
+
+    selected: list[PipelineMetricPoint] = []
+    for timestamp in sorted(by_timestamp, reverse=True):
+        time_bin = by_timestamp[timestamp]
+        if selected and len(selected) + len(time_bin) > max_points:
+            break
+        selected.extend(time_bin)
+    return tuple(sorted(selected, key=lambda point: (point.timestamp_ms, point.stage)))

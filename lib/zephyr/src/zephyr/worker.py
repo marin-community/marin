@@ -7,10 +7,12 @@ import logging
 import threading
 import time
 import traceback
+from collections import defaultdict
 from collections.abc import Callable
 from contextlib import suppress
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
+from iris.cluster.client.job_info import get_job_info
 from rigging.timing import ExponentialBackoff, RateLimiter
 
 from zephyr.coordinator import CoordinatorUnreachable, PullStatus, PullTask
@@ -49,11 +51,11 @@ class ZephyrWorker:
         self._coordinator = coordinator_handle
         self._stage_runner_factory = stage_runner_factory
         self._shutdown_event = threading.Event()
-        self._counter_generation: int = 0
-        self._last_reported_counters: dict[str, CounterEntry] = {}
+        self._counter_generations: dict[str, int] = defaultdict(int)
+        self._last_reported_counters: dict[str, dict[str, CounterEntry]] = {}
         # Runners and sub-IDs for currently active slots — written by _stage_manager,
         # read (snapshotted) by heartbeat thread.
-        self._active_runners: list[StageRunner] = []
+        self._active_runners: list[tuple[str, StageRunner]] = []
         self._active_task_count: int = 0
         self._current_stage_name: str = ""
 
@@ -75,6 +77,8 @@ class ZephyrWorker:
         self._host_shutdown_event = self._actor_ctx.shutdown_event
         self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
         self._actor_handle = self._actor_ctx.handle
+        job_info = get_job_info()
+        self._task_id = job_info.task_id.to_wire() if job_info is not None else ""
 
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
@@ -100,7 +104,11 @@ class ZephyrWorker:
         """
         logger.info("[%s] Poll loop starting", self._worker_id)
         try:
-            self._coordinator.register_worker.remote(self._worker_id, self._actor_handle).result(timeout=30.0)
+            self._coordinator.register_worker.remote(
+                self._worker_id,
+                self._actor_handle,
+                self._task_id,
+            ).result(timeout=30.0)
         except Exception:
             logger.error("[%s] Failed to register with coordinator", self._worker_id, exc_info=True)
             self._shutdown_event.set()
@@ -168,7 +176,7 @@ class ZephyrWorker:
 
             runner = self._stage_runner_factory()
             with self._resources_lock:
-                self._active_runners.append(runner)
+                self._active_runners.append((work.execution_id, runner))
             self._active_task_count += 1
             self._current_stage_name = work.task.stage_name
 
@@ -205,14 +213,14 @@ class ZephyrWorker:
             result, task_counters = self._execute_shard(task, work.chunk_prefix, work.execution_id, runner)
             logger.info("[%s] Shard %d done in %.2fs", self._worker_id, task.shard_idx, time.monotonic() - task_start)
             # Block until coordinator records result — prevents _in_flight races.
-            self._counter_generation += 1
+            counter_generation = self._next_counter_generation(work.execution_id)
             self._coordinator.report_result.remote(
                 self._worker_id,
                 work.execution_id,
                 task.shard_idx,
                 work.attempt,
                 result,
-                CounterSnapshot(counters=dict(task_counters), generation=self._counter_generation),
+                CounterSnapshot(counters=dict(task_counters), generation=counter_generation),
                 work.stage_generation,
             ).result()
         except Exception:
@@ -228,8 +236,9 @@ class ZephyrWorker:
         finally:
             with self._resources_lock:
                 self._available = self._available + task.cost
-                if runner in self._active_runners:
-                    self._active_runners.remove(runner)
+                active_runner = (work.execution_id, runner)
+                if active_runner in self._active_runners:
+                    self._active_runners.remove(active_runner)
             self._active_task_count = max(0, self._active_task_count - 1)
             self._task_completed_event.set()
 
@@ -238,7 +247,12 @@ class ZephyrWorker:
 
         def build_md() -> tuple[str, str]:
             stage = self._current_stage_name
-            stage_values = {k: e.value for k, e in self._last_reported_counters.items() if e.stage == stage}
+            stage_values = {
+                name: entry.value
+                for counters in self._last_reported_counters.values()
+                for name, entry in counters.items()
+                if entry.stage == stage
+            }
             throughput = _stage_throughput(stage_values, 1.0) if stage else None
             if throughput is not None:
                 logger.info("[%s] [%s] throughput: %s", self._worker_id, stage, throughput)
@@ -246,16 +260,36 @@ class ZephyrWorker:
 
         _push_iris_task_status(self._iris_status_limiter, build_md)
 
-    def _heartbeat_counter_snapshot(self) -> CounterSnapshot | None:
-        """Aggregate live counters from all active runners; return None if unchanged."""
+    def _next_counter_generation(self, execution_id: str) -> int:
         with self._resources_lock:
-            runners = list(self._active_runners)
-        current, _ = merge_counter_entries((name, entry) for r in runners for name, entry in r.live_counters().items())
-        if current == self._last_reported_counters:
-            return None
-        self._last_reported_counters = current
-        self._counter_generation += 1
-        return CounterSnapshot(counters=current, generation=self._counter_generation)
+            self._counter_generations[execution_id] += 1
+            return self._counter_generations[execution_id]
+
+    def _heartbeat_counter_snapshots(self) -> dict[str, CounterSnapshot] | None:
+        """Return changed live counters, grouped by pipeline execution."""
+        with self._resources_lock:
+            active_runners = list(self._active_runners)
+
+        runners_by_execution: dict[str, list[StageRunner]] = defaultdict(list)
+        for execution_id, runner in active_runners:
+            runners_by_execution[execution_id].append(runner)
+
+        snapshots: dict[str, CounterSnapshot] = {}
+        execution_ids = runners_by_execution.keys() | self._last_reported_counters.keys()
+        for execution_id in execution_ids:
+            current, _ = merge_counter_entries(
+                (name, entry)
+                for runner in runners_by_execution.get(execution_id, [])
+                for name, entry in runner.live_counters().items()
+            )
+            if current == self._last_reported_counters.get(execution_id, {}):
+                continue
+            self._last_reported_counters[execution_id] = current
+            snapshots[execution_id] = CounterSnapshot(
+                counters=current,
+                generation=self._next_counter_generation(execution_id),
+            )
+        return snapshots or None
 
     def _heartbeat_loop(
         self, coordinator: ActorHandle, interval: float = 5.0, max_consecutive_failures: int = 5
@@ -265,8 +299,8 @@ class ZephyrWorker:
         consecutive_failures = 0
         while not self._shutdown_event.is_set():
             try:
-                snapshot = self._heartbeat_counter_snapshot()
-                coordinator.heartbeat.remote(self._worker_id, snapshot).result()
+                snapshots = self._heartbeat_counter_snapshots()
+                coordinator.heartbeat.remote(self._worker_id, snapshots).result()
                 heartbeat_count += 1
                 consecutive_failures = 0
                 if heartbeat_count % 10 == 1:

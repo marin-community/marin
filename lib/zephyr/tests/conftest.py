@@ -25,6 +25,7 @@ from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
 from zephyr.coordinator import ZephyrCoordinator, _PipelineExecution
 from zephyr.execution import ZephyrContext
+from zephyr.plan import PhysicalPlan
 from zephyr.readers import load_file
 from zephyr.stage_io import ShardTask, ZephyrTaskResources
 
@@ -156,6 +157,8 @@ def start_test_stage(
     coordinator: ZephyrCoordinator,
     tasks: list[ShardTask],
     *,
+    plan: PhysicalPlan | None = None,
+    pipeline_name: str = "test",
     stage_name: str = "test",
     is_last_stage: bool = False,
     execution_id: str = _TEST_EXECUTION_ID,
@@ -166,7 +169,13 @@ def start_test_stage(
     This mirrors the run_pipeline registration step
     and returns the execution state for assertions.
     """
-    run = _PipelineExecution(execution_id=execution_id, map_cost=_TEST_TASK_COST, reduce_cost=_TEST_TASK_COST)
+    run = _PipelineExecution(
+        execution_id=execution_id,
+        map_cost=_TEST_TASK_COST,
+        reduce_cost=_TEST_TASK_COST,
+        plan=plan,
+        pipeline_name=pipeline_name,
+    )
     coordinator._executions[execution_id] = run
     coordinator._start_stage(run, stage_name, 0, tasks, is_last_stage=is_last_stage)
     return run

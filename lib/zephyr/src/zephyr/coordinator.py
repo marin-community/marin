@@ -10,19 +10,34 @@ import sys
 import threading
 import time
 from collections import Counter, defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import cloudpickle
 from fray.actor import ActorHandle, current_actor
+from iris.cluster.client.job_info import get_job_info
 from rigging import telemetry
 from rigging.filesystem import StoragePath
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
+from starlette.types import ASGIApp
 
+from zephyr.dashboard import (
+    DEFAULT_COUNTER_LIMIT,
+    DEFAULT_WORKER_LIMIT,
+    MAX_COUNTER_LIMIT,
+    MAX_WORKER_LIMIT,
+    bounded_limit,
+    counter_value,
+    create_dashboard_application,
+    pipeline_plan,
+    source_node_id,
+    stage_node_id,
+)
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
+from zephyr.rpc import dashboard_pb2
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
@@ -32,7 +47,13 @@ from zephyr.stage_io import (
     _ensure_picklable_exception,
     _stage_throughput,
 )
-from zephyr.stats import StatsWriter, ZephyrWorkerStatStatus, _push_iris_task_status
+from zephyr.stats import (
+    ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY,
+    ZEPHYR_WORKER_MEM_CURRENT_KEY,
+    StatsWriter,
+    ZephyrWorkerStatStatus,
+    _push_iris_task_status,
+)
 from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, merge_counter_entries
 from zephyr.writers import ensure_parent_dir
 
@@ -45,6 +66,10 @@ MAX_CONCURRENT_PIPELINES = 16
 ZEPHYR_PROGRESS_TIME_METRIC = "progress_time_seconds"
 
 _SNAPSHOT_ATTRIBUTES = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 class ShardFailureKind(enum.StrEnum):
@@ -141,6 +166,10 @@ class _PipelineExecution:
     # pipelines with different resource needs can share one worker pool.
     map_cost: ZephyrTaskResources
     reduce_cost: ZephyrTaskResources
+    plan: PhysicalPlan | None = None
+    pipeline_name: str = ""
+    started_at_ms: int = 0
+    finished_at_ms: int = 0
     task_queue: deque[ShardTask] = field(default_factory=deque)
     results: dict[int, TaskResult] = field(default_factory=dict)
     stage_name: str = ""
@@ -223,6 +252,7 @@ class _PipelineExecution:
         before dropping the execution. Callers hold the coordinator lock.
         """
         self.done = True
+        self.finished_at_ms = _now_ms()
         self.storage_cleanup_safe = storage_cleanup_safe
         self.task_queue.clear()
         self.in_flight.clear()
@@ -251,6 +281,16 @@ class _PipelineExecution:
             if stage is None or entry_stage == stage
         )
         return {k: e for k, e in merged.items() if k not in conflicted}
+
+
+@dataclass(frozen=True)
+class _DashboardWorkerSnapshot:
+    worker_id: str
+    task_id: str
+    state: str
+    last_seen_age_seconds: float
+    assignments: tuple[tuple[str, int], ...]
+    counters: CounterSnapshot
 
 
 def _aggregate_counter_snapshots(
@@ -297,11 +337,13 @@ class ZephyrCoordinator:
         max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
         drain_idle_workers: bool = False,
         max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES,
+        expected_workers: int = 0,
     ) -> None:
         # Pipeline executions keyed by execution_id, insertion-ordered. All
         # per-pipeline state lives in the _PipelineExecution values.
         self._executions: dict[str, _PipelineExecution] = {}
         self._worker_resources = worker_resources
+        self._expected_workers = expected_workers
         # Set by a pool that will not receive more pipelines. Such a pool can
         # hand SHUTDOWN to workers that go idle during the last stage's tail,
         # releasing cluster capacity while stragglers finish. A standing pool
@@ -325,8 +367,9 @@ class ZephyrCoordinator:
         # Per-worker in-flight counter snapshots. Each snapshot carries a
         # monotonic generation so the coordinator can discard stale or
         # out-of-order heartbeats.
-        self._worker_counters: dict[str, CounterSnapshot] = {}
+        self._worker_counters: dict[tuple[str, str], CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
+        self._worker_task_ids: dict[str, str] = {}
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
@@ -339,8 +382,11 @@ class ZephyrCoordinator:
         actor_ctx = current_actor()
         self._name = f"{actor_ctx.group_name}"
         self._host_shutdown_event = actor_ctx.shutdown_event
+        job_info = get_job_info()
+        self._coordinator_task_id = job_info.task_id.to_wire() if job_info is not None else ""
 
         self._stats_writer = StatsWriter.connect()
+        self._web_application = create_dashboard_application(self)
         self._result_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="zephyr-result")
 
         logger.info("Coordinator initialized")
@@ -350,11 +396,316 @@ class ZephyrCoordinator:
         )
         self._coordinator_thread.start()
 
+    @property
+    def web_application(self) -> ASGIApp:
+        """Return the dashboard app that shares the actor endpoint."""
+        return self._web_application
+
+    def _dashboard_run_locked(self, execution_id: str) -> _PipelineExecution | None:
+        if execution_id:
+            return self._executions.get(execution_id)
+        return next((run for run in reversed(self._executions.values()) if not run.done), None)
+
+    def _dashboard_phase_locked(self, run: _PipelineExecution) -> int:
+        if run.fatal_error is not None or run.terminal_error is not None:
+            return dashboard_pb2.PIPELINE_PHASE_FAILED
+        if run.done:
+            return dashboard_pb2.PIPELINE_PHASE_SUCCEEDED
+        if not self._worker_states:
+            return dashboard_pb2.PIPELINE_PHASE_WAITING_FOR_WORKERS
+        return dashboard_pb2.PIPELINE_PHASE_RUNNING
+
+    def _dashboard_pipelines_response(self) -> dashboard_pb2.ListPipelinesResponse:
+        with self._lock:
+            active = [run for run in self._executions.values() if not run.done]
+            summaries = [
+                dashboard_pb2.PipelineSummary(
+                    execution_id=run.execution_id,
+                    pipeline_name=run.pipeline_name or run.execution_id,
+                    phase=self._dashboard_phase_locked(run),
+                    current_stage=run.stage_name,
+                    completed_shards=run.completed_shards,
+                    total_shards=run.total_shards,
+                    started_at_ms=run.started_at_ms,
+                    fatal_error=run.fatal_error or (str(run.terminal_error) if run.terminal_error is not None else ""),
+                )
+                for run in reversed(active)
+            ]
+        return dashboard_pb2.ListPipelinesResponse(pipelines=summaries)
+
+    def _dashboard_plan_response(self, execution_id: str) -> dashboard_pb2.GetPlanResponse:
+        with self._lock:
+            run = self._dashboard_run_locked(execution_id)
+            if run is None or run.plan is None:
+                return dashboard_pb2.GetPlanResponse(execution_id=execution_id)
+            plan = run.plan
+            pipeline_name = run.pipeline_name
+            selected_execution_id = run.execution_id
+        return pipeline_plan(
+            plan,
+            pipeline_name=pipeline_name or selected_execution_id,
+            pipeline_id=0,
+            execution_id=selected_execution_id,
+        )
+
+    def _worker_counter_snapshot_locked(self, worker_id: str) -> CounterSnapshot:
+        merged, conflicted = merge_counter_entries(
+            (name, entry)
+            for (snapshot_worker_id, _), snapshot in self._worker_counters.items()
+            if snapshot_worker_id == worker_id
+            for name, entry in snapshot.counters.items()
+        )
+        return CounterSnapshot(
+            counters={name: entry for name, entry in merged.items() if name not in conflicted},
+            generation=0,
+        )
+
+    def _dashboard_status_response(self, execution_id: str) -> dashboard_pb2.GetStatusResponse:
+        with self._lock:
+            run = self._dashboard_run_locked(execution_id)
+            if run is None:
+                return dashboard_pb2.GetStatusResponse(execution_id=execution_id)
+
+            worker_states = Counter(state.value for state in self._worker_states.values())
+            worker_snapshots = [
+                snapshot
+                for (worker_id, snapshot_execution_id), snapshot in self._worker_counters.items()
+                if worker_id in self._worker_states and snapshot_execution_id == run.execution_id
+            ]
+            cpu_percent = sum(
+                float(snapshot.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value)
+                for snapshot in worker_snapshots
+            )
+            memory_bytes = sum(
+                int(snapshot.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value)
+                for snapshot in worker_snapshots
+            )
+            active_workers = worker_states.get(WorkerState.ACTIVE.value, 0)
+            cpu_capacity = active_workers * self._worker_resources.cpu
+            memory_capacity = active_workers * self._worker_resources.memory
+            safe_plan = (
+                pipeline_plan(
+                    run.plan,
+                    pipeline_name=run.pipeline_name or run.execution_id,
+                    pipeline_id=0,
+                    execution_id=run.execution_id,
+                )
+                if run.plan is not None
+                else dashboard_pb2.GetPlanResponse()
+            )
+            nodes_by_id = {node.node_id: node for node in safe_plan.nodes}
+            node_statuses: list[dashboard_pb2.PlanNodeStatus] = []
+            phase = self._dashboard_phase_locked(run)
+            for node in safe_plan.nodes:
+                if node.stage_type == "SOURCE":
+                    state = dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED
+                else:
+                    parent = nodes_by_id.get(node.parent_node_id)
+                    stage_index = parent.stage_index if parent is not None else node.stage_index
+                    if stage_index < run.current_stage_index or run.done:
+                        state = dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED
+                    elif stage_index > run.current_stage_index or not run.stage_name:
+                        state = dashboard_pb2.PLAN_NODE_STATE_PENDING
+                    elif phase == dashboard_pb2.PIPELINE_PHASE_FAILED:
+                        state = dashboard_pb2.PLAN_NODE_STATE_FAILED
+                    elif run.total_shards > 0 and run.completed_shards >= run.total_shards:
+                        state = dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED
+                    else:
+                        state = dashboard_pb2.PLAN_NODE_STATE_RUNNING
+                node_statuses.append(
+                    dashboard_pb2.PlanNodeStatus(
+                        node_id=node.node_id,
+                        state=state,
+                        started_at_ms=run.started_at_ms if state != dashboard_pb2.PLAN_NODE_STATE_PENDING else 0,
+                        finished_at_ms=(
+                            run.finished_at_ms
+                            if state in {dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED, dashboard_pb2.PLAN_NODE_STATE_FAILED}
+                            else 0
+                        ),
+                    )
+                )
+
+            current_node_id = (
+                stage_node_id("main", run.current_stage_index) if run.stage_name else source_node_id("main")
+            )
+            return dashboard_pb2.GetStatusResponse(
+                execution_id=run.execution_id,
+                phase=phase,
+                current_node_id=current_node_id,
+                current_stage=run.stage_name,
+                current_stage_index=run.current_stage_index,
+                total_stages=len(run.plan.stages) if run.plan is not None else 0,
+                completed_shards=run.completed_shards,
+                total_shards=run.total_shards,
+                in_flight_shards=len(run.in_flight),
+                queued_shards=len(run.task_queue),
+                retries=run.retries,
+                started_at_ms=run.started_at_ms,
+                finished_at_ms=run.finished_at_ms,
+                fatal_error=run.fatal_error or (str(run.terminal_error) if run.terminal_error is not None else ""),
+                coordinator_task_id=self._coordinator_task_id,
+                expected_workers=self._expected_workers,
+                worker_states=[
+                    dashboard_pb2.WorkerStateCount(state=state, count=count)
+                    for state, count in sorted(worker_states.items())
+                ],
+                resources=dashboard_pb2.ResourceUsage(
+                    cpu_cores=cpu_percent / 100,
+                    cpu_capacity_cores=cpu_capacity,
+                    cpu_utilization=(cpu_percent / 100 / cpu_capacity) if cpu_capacity else 0,
+                    memory_bytes=memory_bytes,
+                    memory_capacity_bytes=memory_capacity,
+                    memory_utilization=(memory_bytes / memory_capacity) if memory_capacity else 0,
+                ),
+                node_statuses=node_statuses,
+            )
+
+    def _dashboard_metrics_response(self, execution_id: str, max_points: int) -> dashboard_pb2.GetMetricsResponse:
+        with self._lock:
+            run = self._dashboard_run_locked(execution_id)
+            selected_execution_id = run.execution_id if run is not None else execution_id
+        if not selected_execution_id:
+            return dashboard_pb2.GetMetricsResponse(warning="No active pipeline is selected.")
+        result = self._stats_writer.query_pipeline_metrics(selected_execution_id, max_points)
+        return dashboard_pb2.GetMetricsResponse(
+            points=[
+                dashboard_pb2.MetricPoint(
+                    timestamp_ms=point.timestamp_ms,
+                    stage=point.stage,
+                    item_rate=point.item_rate,
+                    byte_rate=point.byte_rate,
+                    cpu_cores=point.cpu_cores,
+                    memory_bytes=point.memory_bytes,
+                    active_shards=point.active_shards,
+                )
+                for point in result.points
+            ],
+            warning=result.warning,
+        )
+
+    def _dashboard_counter_entries(self, execution_id: str) -> list[tuple[str, CounterEntry]]:
+        with self._lock:
+            run = self._dashboard_run_locked(execution_id)
+            if run is None:
+                return []
+            entries = [(name, replace(entry)) for (_, name, _), entry in run.completed_totals.items()]
+            entries.extend(
+                (name, replace(entry))
+                for (worker_id, snapshot_execution_id), snapshot in self._worker_counters.items()
+                if worker_id in self._worker_states and snapshot_execution_id == run.execution_id
+                for name, entry in snapshot.counters.items()
+            )
+
+        by_stage: dict[str | None, list[tuple[str, CounterEntry]]] = defaultdict(list)
+        for name, entry in entries:
+            by_stage[entry.stage].append((name, entry))
+        result: list[tuple[str, CounterEntry]] = []
+        for stage, stage_entries in by_stage.items():
+            merged, conflicted = merge_counter_entries(stage_entries)
+            result.extend(
+                (name, replace(entry, stage=stage)) for name, entry in merged.items() if name not in conflicted
+            )
+        return result
+
+    def _dashboard_counters_response(
+        self, request: dashboard_pb2.ListCountersRequest
+    ) -> dashboard_pb2.ListCountersResponse:
+        search = request.search.casefold()
+        entries = [
+            (name, entry)
+            for name, entry in self._dashboard_counter_entries(request.execution_id)
+            if (not request.stage or entry.stage == request.stage)
+            and (not search or search in name.casefold() or search in (entry.stage or "").casefold())
+        ]
+        sort_keys: dict[str, Callable[[tuple[str, CounterEntry]], object]] = {
+            "name": lambda item: item[0].casefold(),
+            "stage": lambda item: (item[1].stage or "").casefold(),
+            "value": lambda item: item[1].value,
+            "aggregation": lambda item: item[1].aggregation.value,
+            "observations": lambda item: item[1].count,
+        }
+        entries.sort(key=sort_keys.get(request.sort_field, sort_keys["name"]), reverse=request.sort_descending)
+        total = len(entries)
+        offset = max(request.offset, 0)
+        limit = bounded_limit(request.limit, DEFAULT_COUNTER_LIMIT, MAX_COUNTER_LIMIT)
+        return dashboard_pb2.ListCountersResponse(
+            counters=[counter_value(name, entry) for name, entry in entries[offset : offset + limit]],
+            total=total,
+        )
+
+    def _dashboard_workers_response(
+        self, request: dashboard_pb2.ListWorkersRequest
+    ) -> dashboard_pb2.ListWorkersResponse:
+        now = time.monotonic()
+        with self._lock:
+            assignments_by_worker: dict[str, list[tuple[str, int]]] = defaultdict(list)
+            for run in self._executions.values():
+                if run.done:
+                    continue
+                for shard, entry in run.in_flight.items():
+                    assignments_by_worker[entry.worker_id].append((run.execution_id, shard))
+            snapshots = [
+                _DashboardWorkerSnapshot(
+                    worker_id=worker_id,
+                    task_id=self._worker_task_ids.get(worker_id, ""),
+                    state=state.value,
+                    last_seen_age_seconds=max(0, now - self._last_seen.get(worker_id, now)),
+                    assignments=tuple(sorted(assignments_by_worker[worker_id])),
+                    counters=self._worker_counter_snapshot_locked(worker_id),
+                )
+                for worker_id, state in self._worker_states.items()
+            ]
+
+        search = request.search.casefold()
+        snapshots = [
+            snapshot
+            for snapshot in snapshots
+            if not search
+            or search in snapshot.worker_id.casefold()
+            or search in snapshot.task_id.casefold()
+            or search in snapshot.state.casefold()
+            or any(search in execution_id.casefold() for execution_id, _ in snapshot.assignments)
+        ]
+        sort_keys: dict[str, Callable[[_DashboardWorkerSnapshot], object]] = {
+            "worker_id": lambda snapshot: snapshot.worker_id.casefold(),
+            "state": lambda snapshot: snapshot.state,
+            "last_seen": lambda snapshot: snapshot.last_seen_age_seconds,
+            "cpu": (
+                lambda snapshot: snapshot.counters.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value
+            ),
+            "memory": (
+                lambda snapshot: snapshot.counters.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value
+            ),
+            "active_shards": lambda snapshot: len(snapshot.assignments),
+        }
+        snapshots.sort(key=sort_keys.get(request.sort_field, sort_keys["worker_id"]), reverse=request.sort_descending)
+        total = len(snapshots)
+        offset = max(request.offset, 0)
+        limit = bounded_limit(request.limit, DEFAULT_WORKER_LIMIT, MAX_WORKER_LIMIT)
+        workers = [
+            dashboard_pb2.WorkerStatus(
+                worker_id=snapshot.worker_id,
+                task_id=snapshot.task_id,
+                state=snapshot.state,
+                last_seen_age_seconds=snapshot.last_seen_age_seconds,
+                assignments=[
+                    dashboard_pb2.WorkerAssignment(execution_id=execution_id, shard=shard)
+                    for execution_id, shard in snapshot.assignments
+                ],
+                cpu_percent=float(
+                    snapshot.counters.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value
+                ),
+                memory_bytes=int(snapshot.counters.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value),
+            )
+            for snapshot in snapshots[offset : offset + limit]
+        ]
+        return dashboard_pb2.ListWorkersResponse(workers=workers, total=total)
+
     def set_worker_group(self, worker_group: Any) -> None:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
         self._worker_group = worker_group
 
-    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> None:
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle, task_id: str = "") -> None:
         """Called by workers when they come online to register with coordinator.
 
         Handles re-registration from reconstructed workers (e.g. after node
@@ -366,6 +717,7 @@ class ZephyrCoordinator:
             if worker_id in self._worker_handles:
                 logger.info("Worker %s re-registering (likely reconstructed), updating handle", worker_id)
                 self._worker_handles[worker_id] = worker_handle
+                self._worker_task_ids[worker_id] = task_id
                 self._worker_states[worker_id] = WorkerState.ACTIVE
                 self._last_seen[worker_id] = time.monotonic()
                 # NOTE: if there was a task assigned to the worker, there's a race condition between marking
@@ -374,6 +726,7 @@ class ZephyrCoordinator:
                 self._maybe_requeue_worker_tasks(worker_id)
             else:
                 self._worker_handles[worker_id] = worker_handle
+                self._worker_task_ids[worker_id] = task_id
                 self._worker_states[worker_id] = WorkerState.ACTIVE
                 self._last_seen[worker_id] = time.monotonic()
                 logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
@@ -384,6 +737,9 @@ class ZephyrCoordinator:
             self._worker_handles.pop(worker_id, None)
             self._worker_states.pop(worker_id, None)
             self._last_seen.pop(worker_id, None)
+            self._worker_task_ids.pop(worker_id, None)
+            for key in [key for key in self._worker_counters if key[0] == worker_id]:
+                self._worker_counters.pop(key)
 
     def _coordinator_loop(self) -> None:
         """Background loop for heartbeat checking and worker job monitoring."""
@@ -523,7 +879,11 @@ class ZephyrCoordinator:
                     run.stage_monotonic_start,
                     [
                         CounterSnapshot(counters=run.merged_counters(), generation=0),
-                        *self._worker_counters.values(),
+                        *(
+                            snapshot
+                            for (_, execution_id), snapshot in self._worker_counters.items()
+                            if execution_id == run.execution_id
+                        ),
                     ],
                 )
                 for run in self._executions.values()
@@ -548,9 +908,7 @@ class ZephyrCoordinator:
 
             # Map-only stages do not yield through ``_wrap_stage_stats`` and never
             # populate these counters. Drop the items/bytes_processed segment for
-            # those stages. In-flight snapshots are stage-filtered, not
-            # execution-filtered. Two concurrent pipelines that run an
-            # identically-labelled stage share the live segment (log-only).
+            # those stages.
             elapsed = time.monotonic() - (stage_start or time.monotonic())
             throughput = _stage_throughput(_aggregate_counter_snapshots(snaps, stage_name), elapsed)
             if throughput is not None:
@@ -594,9 +952,10 @@ class ZephyrCoordinator:
 
         # Zero counters but keep the generation watermark so late heartbeats
         # from the old task are rejected.
-        existing = self._worker_counters.get(worker_id)
+        counter_key = (worker_id, run.execution_id)
+        existing = self._worker_counters.get(counter_key)
         if existing is not None:
-            self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+            self._worker_counters[counter_key] = CounterSnapshot.empty(existing.generation)
 
         if entry is None:
             return
@@ -819,9 +1178,9 @@ class ZephyrCoordinator:
                     shard_idx,
                 )
                 # The task runner is complete. Drop its stale in-flight
-                # snapshot so it stops polluting cross-pipeline totals until
+                # snapshot so it stops changing the execution totals until
                 # the worker's next heartbeat lands.
-                self._clear_worker_inflight_counters(worker_id, counter_snapshot.generation)
+                self._clear_worker_inflight_counters(worker_id, execution_id, counter_snapshot.generation)
                 return
 
             current_attempt = run.task_attempts.get(shard_idx, 0)
@@ -857,19 +1216,20 @@ class ZephyrCoordinator:
             run.fold_counters(counter_snapshot)
             # Zero the in-flight counters but keep the generation watermark
             # so late heartbeats from this task are rejected.
-            self._clear_worker_inflight_counters(worker_id, counter_snapshot.generation)
+            self._clear_worker_inflight_counters(worker_id, execution_id, counter_snapshot.generation)
             run.stage_done.set()
 
-    def _clear_worker_inflight_counters(self, worker_id: str, generation: int) -> None:
+    def _clear_worker_inflight_counters(self, worker_id: str, execution_id: str, generation: int) -> None:
         """Zero a worker's in-flight snapshot, keeping the generation watermark.
 
         Called when a task's runner is done, so late heartbeats from that task
         (strictly-lower generation) are rejected and the finished task's live
-        counters stop being folded into cross-pipeline totals. Lock must be held.
+        counters stop being folded into execution totals. Lock must be held.
         """
-        existing = self._worker_counters.get(worker_id)
+        counter_key = (worker_id, execution_id)
+        existing = self._worker_counters.get(counter_key)
         watermark = max(generation, existing.generation) if existing is not None else generation
-        self._worker_counters[worker_id] = CounterSnapshot.empty(watermark)
+        self._worker_counters[counter_key] = CounterSnapshot.empty(watermark)
 
     def report_error(
         self,
@@ -894,9 +1254,10 @@ class ZephyrCoordinator:
                 )
                 # Drop the finished task's stale in-flight snapshot. No incoming
                 # generation here, so just re-stamp the existing watermark.
-                existing = self._worker_counters.get(worker_id)
+                counter_key = (worker_id, execution_id)
+                existing = self._worker_counters.get(counter_key)
                 if existing is not None:
-                    self._worker_counters[worker_id] = CounterSnapshot.empty(existing.generation)
+                    self._worker_counters[counter_key] = CounterSnapshot.empty(existing.generation)
                 return
 
             if not self._is_current_stage(run, stage_generation, shard_idx):
@@ -913,13 +1274,14 @@ class ZephyrCoordinator:
             self._assert_in_flight_consistent(run, worker_id, shard_idx)
             self._record_shard_failure(run, shard_idx, worker_id, ShardFailureKind.TASK, error_info)
 
-    def heartbeat(self, worker_id: str, counter_snapshot: CounterSnapshot | None = None) -> None:
-        self._last_seen[worker_id] = time.monotonic()
-        if counter_snapshot is not None:
-            with self._lock:
-                existing = self._worker_counters.get(worker_id)
+    def heartbeat(self, worker_id: str, counter_snapshots: dict[str, CounterSnapshot] | None = None) -> None:
+        with self._lock:
+            self._last_seen[worker_id] = time.monotonic()
+            for execution_id, counter_snapshot in (counter_snapshots or {}).items():
+                counter_key = (worker_id, execution_id)
+                existing = self._worker_counters.get(counter_key)
                 if existing is None or counter_snapshot.generation > existing.generation:
-                    self._worker_counters[worker_id] = counter_snapshot
+                    self._worker_counters[counter_key] = counter_snapshot
 
     def get_status(self) -> JobStatus:
         """Aggregate status across all active executions plus worker health."""
@@ -968,10 +1330,12 @@ class ZephyrCoordinator:
         """
         with self._lock:
             if worker_id is not None:
-                snap = self._worker_counters.get(worker_id)
-                if snap is None:
-                    return {}
-                return {k: e.value for k, e in snap.counters.items() if stage is None or e.stage == stage}
+                worker_snapshots = [
+                    snapshot
+                    for (snapshot_worker_id, _), snapshot in self._worker_counters.items()
+                    if snapshot_worker_id == worker_id
+                ]
+                return _aggregate_counter_snapshots(worker_snapshots, stage)
 
             all_snaps = [
                 CounterSnapshot(counters=run.merged_counters(), generation=0) for run in self._executions.values()
@@ -1081,6 +1445,7 @@ class ZephyrCoordinator:
         self,
         plan: PhysicalPlan,
         execution_id: str,
+        pipeline_name: str,
         map_cost: ZephyrTaskResources,
         reduce_cost: ZephyrTaskResources,
     ) -> None:
@@ -1117,6 +1482,9 @@ class ZephyrCoordinator:
                     execution_id=execution_id,
                     map_cost=map_cost,
                     reduce_cost=reduce_cost,
+                    plan=plan,
+                    pipeline_name=pipeline_name,
+                    started_at_ms=_now_ms(),
                 )
                 self._executions[execution_id] = run
                 owns_execution = True
@@ -1195,6 +1563,8 @@ class ZephyrCoordinator:
             if not run.done:
                 raise RuntimeError(f"Execution {execution_id} is still active")
             self._executions.pop(execution_id, None)
+            for key in [key for key in self._worker_counters if key[1] == execution_id]:
+                self._worker_counters.pop(key)
 
         if run.storage_cleanup_safe:
             _cleanup_execution(self._chunk_prefix, execution_id)
