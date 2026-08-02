@@ -13,6 +13,8 @@ Example::
         --sample-prefix s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f \
         --sources all --run-tag zephyr-100b-v1 \
         --pool-workers 60 --pool-cpu 16 --pool-ram 160g --pool-disk 32g \
+        --task-cpu 1 --task-ram 10g --task-disk 2g \
+        --chunk-storage-prefix s3://bucket/tmp/ttl=7d/zephyr-100b-v1/chunks \
         --max-concurrent 4 --dedup-max-parallelism 4096
 """
 
@@ -23,6 +25,8 @@ from dataclasses import replace
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
 from rigging.log_setup import configure_logging
+from zephyr.execution import ZephyrContext
+from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.reference_pipeline import (
     SMOKE_SCALE,
@@ -41,6 +45,10 @@ def main() -> None:
     parser.add_argument("--pool-cpu", required=True, type=float)
     parser.add_argument("--pool-ram", required=True)
     parser.add_argument("--pool-disk", required=True)
+    parser.add_argument("--task-cpu", required=True, type=float)
+    parser.add_argument("--task-ram", required=True)
+    parser.add_argument("--task-disk", required=True)
+    parser.add_argument("--chunk-storage-prefix", required=True)
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
     args = parser.parse_args()
@@ -48,13 +56,22 @@ def main() -> None:
     configure_logging(logging.INFO)
     selected_sources = None if args.sources == "all" else [name.strip() for name in args.sources.split(",")]
     sources = sample_sources(args.sample_prefix, selected_sources, args.run_tag)
-    worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
+    pool_worker = ResourceConfig(cpu=args.pool_cpu, ram=args.pool_ram, disk=args.pool_disk)
+    task = ResourceConfig(cpu=args.task_cpu, ram=args.task_ram, disk=args.task_disk)
     scale = replace(
         SMOKE_SCALE,
-        pool=PoolConfig(n_workers=args.pool_workers, worker=worker),
+        pool=PoolConfig(n_workers=args.pool_workers, worker=task),
         dedup_max_parallelism=args.dedup_max_parallelism,
     )
-    StepRunner().run(zephyr_datakit_steps(sources, scale).all_steps, max_concurrent=args.max_concurrent)
+    with ZephyrContext(
+        name="datakit-zephyr-benchmark",
+        resources=pool_worker,
+        max_workers=args.pool_workers,
+        chunk_storage_prefix=args.chunk_storage_prefix,
+        stage_runner_factory=SubprocessRunner,
+    ) as zephyr_context:
+        steps = zephyr_datakit_steps(sources, scale, zephyr_context)
+        StepRunner().run(steps.all_steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":
