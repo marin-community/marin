@@ -143,3 +143,18 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Config: MNEP-004 settings plus `XLA_PYTHON_CLIENT_MEM_FRACTION=0.92` and no task retries.
 - Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
 - Next action: Submit one rack request. Promote the memory setting to the 25-step run only if this smoke test passes.
+
+### 2026-08-02 11:07 UTC - MNEP-005 collective-pool OOM
+
+- Result: The program compiled and reached executable launch. All tasks then failed while XLA requested a separate 15.00 GiB collective pool.
+- Evidence: A 92% JAX preallocation used about 175.4 GiB on each GPU before execution. The remaining device memory could not hold the collective pool.
+- Interpretation: The compiler needs more than the default 75% program pool, but collectives need at least 15 GiB outside that pool.
+- Action: Stop the automatic child retry. Test an 84% fraction, which gives about 159 GiB to the program and about 30 GiB outside it.
+
+### 2026-08-02 11:07 UTC - MNEP-006 memory-window smoke contract
+
+- Goal: Compile and execute three combined steps with an 84% JAX memory fraction.
+- Run ID: `mnep-006-quack-mem84-smoke-3-20260802-1107`.
+- Config: MNEP-005 settings except `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84`.
+- Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
+- Next action: Promote 84% to a 25-step run only if MNEP-006 passes.
