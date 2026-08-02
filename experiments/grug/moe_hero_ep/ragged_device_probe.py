@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 PROBE_NODES = 16
 PROBE_GPUS_PER_NODE = 4
 PROBE_DEVICE_COUNT = PROBE_NODES * PROBE_GPUS_PER_NODE
+PROBE_WORKER_CPU = 32
+PROBE_WORKER_RAM = "256g"
+PROBE_WORKER_DISK = "256g"
 PROBE_ROWS_PER_RANK = 524_288
 PROBE_ROW_ELEMENTS = 5_120
 
@@ -136,9 +139,9 @@ def main(
     resources = ResourceConfig.with_gpu(
         "GB200",
         count=PROBE_GPUS_PER_NODE,
-        cpu=8,
-        ram="32g",
-        disk="128g",
+        cpu=PROBE_WORKER_CPU,
+        ram=PROBE_WORKER_RAM,
+        disk=PROBE_WORKER_DISK,
         replicas=PROBE_NODES,
     )
     build = MoonEPJaxWheelBuild(moonep_jax_wheel_build)

@@ -556,3 +556,27 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gate: Require attempt-zero completion, checksum `49545216`, zero sampled mismatches, and no transport error.
 - Stop criteria: Stop on any retry, memory error, transport error, or value mismatch.
 - Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 3600 --max-retries 0 --job-name mnep-025-ragged-5g-probe-20260802-1754-coord -- python -m experiments.grug.moe_hero_ep.ragged_device_probe --run-id mnep-025-ragged-5g-probe-20260802-1754 --rows-per-rank 524288 --row-elements 5120 --moonep-jax-wheel-build lsa-nccl-2307-20260802`.
+
+### 2026-08-02 18:01 UTC - MNEP-025 is inconclusive
+
+- Result: Task 0 received SIGKILL after 28.17 seconds. The other 15 tasks stopped through coscheduling.
+- Difference: This run did not report the CUDA illegal-address error from the training probes.
+- Interpretation: The 5 GiB shape can exceed a process or pod resource limit before it isolates the direct transport fault.
+- Next gate: Reduce each rank to 640 MiB while keeping every local and remote peer active.
+
+### 2026-08-02 18:01 UTC - MNEP-026 small balanced rack probe contract
+
+- Goal: Execute one balanced 640 MiB ragged all-to-all on one NVL72.
+- Run ID: `mnep-026-ragged-640m-probe-20260802-1801`.
+- Shape: Use 65,536 rows per rank, 5,120 bfloat16 elements per row, and 64 equal peer segments.
+- Gate: Require attempt-zero completion, checksum `6193152`, zero sampled mismatches, and no transport error.
+- Stop criteria: Stop on any memory error, transport error, or value mismatch.
+
+### 2026-08-02 18:04 UTC - MNEP-026 confirms a host resource fault
+
+- Result: Task 0 received SIGKILL during NCCL communicator setup after 26.7 seconds.
+- Evidence: A peer then reported that task 0 closed the bootstrap socket during `ncclCommInitRankConfig`.
+- Interpretation: The probe did not reach compilation or the direct transport kernel.
+- Cause: The probe requested 32 GiB of host memory. The training workers request 256 GiB.
+- Fix: Match the probe CPU, host memory, and disk requests to the training workers.
+- Next gate: Repeat the 640 MiB probe with the corrected worker resources.
