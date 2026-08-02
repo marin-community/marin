@@ -5,7 +5,6 @@
 
 import argparse
 import json
-import logging
 
 from glm_semantic_labels import (
     OUTPUT_ROOT,
@@ -17,8 +16,6 @@ from glm_semantic_labels import (
 )
 from ladder_config import read_json
 from rigging.filesystem import StoragePath
-
-logger = logging.getLogger(__name__)
 
 CLAUDE_REVIEW_CHUNK_MARKER = "CLAUDE_REVIEW_CHUNK="
 CLAUDE_REVIEW_CHUNK_SIZE = 8_000
@@ -42,11 +39,11 @@ def export_review(run_id: str, output_root: StoragePath) -> None:
         package[start : start + CLAUDE_REVIEW_CHUNK_SIZE] for start in range(0, len(package), CLAUDE_REVIEW_CHUNK_SIZE)
     ]
     for index, chunk in enumerate(chunks):
-        logger.info("%s%04d/%04d:%s", CLAUDE_REVIEW_CHUNK_MARKER, index, len(chunks), chunk)
-    logger.info("GLM_SEMANTIC_SUMMARY=%s", json.dumps(summary, sort_keys=True))
-    logger.info(
-        "GLM_CLAUDE_REVIEW_EXPORT=%s",
-        json.dumps({"run_id": run_id, "documents": len(documents), "assignments": len(assignments)}, sort_keys=True),
+        print(f"{CLAUDE_REVIEW_CHUNK_MARKER}{index:04d}/{len(chunks):04d}:{chunk}")
+    print(f"GLM_SEMANTIC_SUMMARY={json.dumps(summary, sort_keys=True)}")
+    print(
+        "GLM_CLAUDE_REVIEW_EXPORT="
+        + json.dumps({"run_id": run_id, "documents": len(documents), "assignments": len(assignments)}, sort_keys=True)
     )
 
 
@@ -56,7 +53,6 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-root", default=OUTPUT_ROOT)
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
     export_review(args.run_id, StoragePath(args.output_root))
 
 
