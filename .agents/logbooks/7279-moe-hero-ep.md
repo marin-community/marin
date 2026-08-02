@@ -507,3 +507,12 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - GPU allocation: All 16 tasks run with four GB200 GPUs each; no task is pending or complete.
 - Logs: The first 15-minute scan has no matched loss failure, exception, OOM, dead-node, or resource error.
 - Decision: Keep the one admitted job and use the normal monitor cadence.
+
+### 2026-08-02 04:06 UTC - MHEP-006 receiver-ECHO is not selected
+
+- Completion: The coordinator and all 16 GPU tasks succeeded with exit 0, zero failures, and zero preemptions. The run completed all 25 steps. Each GPU task ran for about 9 minutes.
+- Performance: Median MFU is 18.2099%, mean MFU is 18.2159%, p10 MFU is 18.1404%, and p90 MFU is 18.2876% over 24 samples. The last sample is 18.2194% MFU, 295,250 tokens/s, and 14.2059 seconds.
+- MHEP-004 change: Median MFU falls by 5.9132 percentage points, or 24.5% relative. Last-sample throughput falls by 24.0%.
+- Training: Final loss is 6.0874. Final MoE drop fraction falls from 9.6786% to 4.4110%, a reduction of 5.2676 percentage points.
+- Code cost: Receiver-ECHO adds 561 net backend and public-dispatch lines, plus 151 net test lines.
+- Decision: Do not select receiver-ECHO. Its routing improvement does not justify the MFU and code costs. The gap is large and stable across the 24 MFU samples, so XProf is not necessary for this selection decision. Keep MHEP-004 as the selected stack before the next isolated feature.
