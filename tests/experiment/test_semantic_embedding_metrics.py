@@ -9,7 +9,20 @@ import numpy as np
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
-from semantic_embedding_metrics import cosine_order_fidelity, semantic_metrics, student_gates  # noqa: E402
+from semantic_embedding_metrics import (  # noqa: E402
+    cosine_order_fidelity,
+    semantic_metrics,
+    stored_vector_rows,
+    student_gates,
+)
+
+
+def test_stored_vector_rows_allow_duplicate_hashes() -> None:
+    assert stored_vector_rows(
+        raw_hashes=["duplicate", "duplicate", "other"],
+        eval_ranks=[3, 8, 12],
+        requested_rows=[(8, "duplicate"), (12, "other")],
+    ) == [1, 2]
 
 
 def test_semantic_metrics_find_coherent_neighbors_and_clusters() -> None:

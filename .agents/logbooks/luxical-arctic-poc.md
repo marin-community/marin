@@ -1285,3 +1285,10 @@ Also reject it for non-finite vectors, repeated vectors, low effective rank, or 
 
 A pass only permits the next evaluation stage. It does not establish production quality.
 The next stage needs a smaller hierarchy, representative independent review, held-out labels, and a new paired speed test.
+
+### Screen run 001
+
+- Job `/rav/lux-semantic-embedding-screen-b200-001` failed before metric calculation.
+- The loader used document hashes as unique row keys. One source contains duplicate document hashes.
+- Evaluation rank is the stable unique row key. The correction aligns by evaluation rank and checks the document hash.
+- A regression test covers duplicate hashes with different evaluation ranks.

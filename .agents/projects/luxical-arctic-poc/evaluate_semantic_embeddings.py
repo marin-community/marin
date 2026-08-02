@@ -42,7 +42,13 @@ from glm_semantic_labels import Assignment, Bucket, SampleDocument, read_jsonl
 from huggingface_hub import hf_hub_download
 from luxical.embedder import Embedder
 from rigging.filesystem import StoragePath, atomic_rename
-from semantic_embedding_metrics import cosine_order_fidelity, normalize_embeddings, semantic_metrics, student_gates
+from semantic_embedding_metrics import (
+    cosine_order_fidelity,
+    normalize_embeddings,
+    semantic_metrics,
+    stored_vector_rows,
+    student_gates,
+)
 
 GLM_RUN_ROOT = StoragePath(
     "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/"
@@ -94,20 +100,15 @@ def select_stored_vectors(
     dimension: int,
     vector_function: Callable[[pa.Table, int], np.ndarray],
 ) -> dict[int, np.ndarray]:
-    """Select stored vectors by raw document hash."""
+    """Select stored vectors by evaluation rank and validate their hashes."""
     hashes = table["raw_sha256"].to_pylist()
-    row_by_hash = {value: index for index, value in enumerate(hashes)}
-    if len(row_by_hash) != len(hashes):
-        raise ValueError("A stored embedding table has duplicate document hashes")
+    rows = stored_vector_rows(
+        hashes,
+        table["eval_rank"].to_pylist(),
+        [(document.eval_rank, document.raw_sha256) for document in documents],
+    )
     matrix = vector_function(table, dimension)
-    output = {}
-    for document in documents:
-        try:
-            row = row_by_hash[document.raw_sha256]
-        except KeyError as error:
-            raise ValueError(f"Stored embeddings do not contain sample {document.sample_index}") from error
-        output[document.sample_index] = matrix[row]
-    return output
+    return {document.sample_index: matrix[row] for document, row in zip(documents, rows, strict=True)}
 
 
 def arctic_vectors(manifest: dict[str, Any], documents: list[SampleDocument]) -> np.ndarray:
@@ -117,7 +118,11 @@ def arctic_vectors(manifest: dict[str, Any], documents: list[SampleDocument]) ->
         logger.info("Loading Arctic source %d/%d: %s", index, len(manifest["sources"]), source)
         output_url = teacher_output_url(manifest["sources"][source]["output_url"])
         filesystem, path = fsspec.core.url_to_fs(output_url)
-        table = pq.read_table(path, filesystem=filesystem, columns=["raw_sha256", "split", "embedding"])
+        table = pq.read_table(
+            path,
+            filesystem=filesystem,
+            columns=["raw_sha256", "split", "eval_rank", "embedding"],
+        )
         table = table.filter(pc.equal(table["split"], "eval")).drop(["split"])
         selected.update(
             select_stored_vectors(

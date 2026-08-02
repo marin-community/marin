@@ -12,6 +12,29 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import f1_score, normalized_mutual_info_score
 
 
+def stored_vector_rows(
+    raw_hashes: list[str],
+    eval_ranks: list[int],
+    requested_rows: list[tuple[int, str]],
+) -> list[int]:
+    """Return stored row indices aligned by evaluation rank and checked by hash."""
+    if len(raw_hashes) != len(eval_ranks):
+        raise ValueError("Stored hash and evaluation-rank counts differ")
+    row_by_rank = {rank: index for index, rank in enumerate(eval_ranks)}
+    if len(row_by_rank) != len(eval_ranks):
+        raise ValueError("A stored embedding table has duplicate evaluation ranks")
+    selected = []
+    for eval_rank, expected_hash in requested_rows:
+        try:
+            row = row_by_rank[eval_rank]
+        except KeyError as error:
+            raise ValueError(f"Stored embeddings do not contain evaluation rank {eval_rank}") from error
+        if raw_hashes[row] != expected_hash:
+            raise ValueError(f"Stored hash differs at evaluation rank {eval_rank}")
+        selected.append(row)
+    return selected
+
+
 def normalize_embeddings(vectors: np.ndarray) -> np.ndarray:
     """Return finite row-normalized embeddings."""
     if vectors.ndim != 2 or len(vectors) < 2:
