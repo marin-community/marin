@@ -59,6 +59,7 @@ test = [
     "pytest-asyncio",
     "pytest-xdist",
     "pytest-timeout",
+    "python-docx==1.2.0",
     # for scaling law plotting tests
     "plotly",
 ]
@@ -191,8 +192,10 @@ dedup = [
 ]
 
 datakit = [
+    "docling==2.99.0",
     "luxical",
     "huggingface-hub",
+    "lingua-language-detector==2.2.0",
     "faiss-cpu",
     "scikit-learn",
     "scipy",

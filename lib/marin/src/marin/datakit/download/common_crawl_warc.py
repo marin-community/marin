@@ -22,7 +22,7 @@ from warcio.exceptions import ArchiveLoadFailed
 from marin.datakit.download.http_session import build_retrying_session
 
 COMMON_CRAWL_DATA_URL = "https://data.commoncrawl.org"
-_USER_AGENT = "marin-common-crawl-ingress/1.0"
+COMMON_CRAWL_USER_AGENT = "marin-common-crawl-ingress/1.0"
 _DOWNLOAD_CHUNK_BYTES = 1 << 20
 _RETRY_STATUS = (403, 429, 500, 502, 503, 504)
 _RETRY_TOTAL = 10
@@ -228,7 +228,7 @@ class CommonCrawlClient:
         try:
             with self._session.get(
                 url,
-                headers={"Range": f"bytes={start}-{end}", "user-agent": _USER_AGENT},
+                headers={"Range": f"bytes={start}-{end}", "user-agent": COMMON_CRAWL_USER_AGENT},
                 stream=True,
                 timeout=self._request_timeout,
             ) as response:
@@ -375,7 +375,7 @@ def common_crawl_index_partitions(
     try:
         with active_session.get(
             paths_manifest_url,
-            headers={"user-agent": _USER_AGENT},
+            headers={"user-agent": COMMON_CRAWL_USER_AGENT},
             stream=True,
             timeout=request_timeout,
         ) as response:
