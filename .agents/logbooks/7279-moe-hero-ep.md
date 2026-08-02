@@ -516,3 +516,27 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Training: Final loss is 6.0874. Final MoE drop fraction falls from 9.6786% to 4.4110%, a reduction of 5.2676 percentage points.
 - Code cost: Receiver-ECHO adds 561 net backend and public-dispatch lines, plus 151 net test lines.
 - Decision: Do not select receiver-ECHO. Its routing improvement does not justify the MFU and code costs. The gap is large and stable across the 24 MFU samples, so XProf is not necessary for this selection decision. Keep MHEP-004 as the selected stack before the next isolated feature.
+
+### 2026-08-02 04:16 UTC - MHEP-007 three-choice spill local gate passed
+
+- Code snapshot: `93ac949988943d4cce999c40d82cc21c764701c7`; gate configuration: `f0ce49c8a33a63284f9ef45dfc33de12b526ee11`.
+- Change: Fixed-capacity overflow gets three attempts on lower-ranked experts selected by the same token. An accepted spill uses the candidate expert and its router weight. The implementation is an explicit `fixed_all_to_all_spill` backend, with no environment switch.
+- Scope: Spill adds 106 net backend and public-dispatch lines, plus 101 net test lines. Token transport, capacity 1.0, gather adjoints, model, optimizer, batch, mesh, data, attention, and runtime settings stay unchanged from MHEP-004.
+- Tests: Exact planner checks verify increased accepted work, unique capacity slots, the candidate expert, and its weight. The end-to-end fixed backend check verifies output values plus input and router-weight gradients. The abstract EP path lowers. The Grug MoE and EP hero suites pass with 23 tests, 6 skips, and 2 tests excluded by the repository marker policy. Changed-file pre-commit and Pyrefly pass.
+- Dry run: The plan resolves 25 steps, batch 1024, EP64, capacity 1.0, three spill attempts, and 16 workers with four GB200 GPUs each.
+
+### 2026-08-02 04:16 UTC - MHEP-007 launch contract ready
+
+- Hypothesis: Three same-token spill attempts reduce the MHEP-004 final drop fraction of 9.6786% with a small cost from its 24.1231% median MFU.
+- Run ID: `mhep-007-spill-25-20260802-0416`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mhep-007-spill-25-20260802-0416-coord -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch --run-id mhep-007-spill-25-20260802-0416 --num-steps 25 --version 2026.08.02 --run`.
+- Code snapshot: `f0ce49c8a33a63284f9ef45dfc33de12b526ee11`; the clean launch commit will include this log entry.
+- Output identity: `s3://marin-us-east-02a/marin/grug/mhep-007-spill-25-20260802-0416/2026.08.02`.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-007-spill-25-20260802-0416`, project `marin_moe`, group `moe-hero-ep`, resume `allow`, and offline mode.
+- Initialization: None.
+- Final step: 25.
+- Checkpoint policy: No checkpoints. This gate writes metrics only.
+- DRI and babysitter: `rav`; `rav/codex` owns the monitor.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Commit this contract, submit the coordinator once, and monitor it to a terminal state.
