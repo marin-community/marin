@@ -311,13 +311,32 @@ def test_run_grug_selects_collective_overlap_limit(
     )
 
 
-def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup():
+@pytest.mark.parametrize(
+    ("wheel_build", "expected_prefix", "expected_pjrt_sha256"),
+    [
+        (
+            MoonEPJaxWheelBuild.LSA_20260802,
+            "jax-f9f6bbace-xla-5d53e1e-20260802",
+            "fd2724cd9f128ea1a0d1f74029ce6fcdaf7915db1a351b088316cc821ac2408d",
+        ),
+        (
+            MoonEPJaxWheelBuild.LSA_NCCL_2307_20260802,
+            "jax-f9f6bbace-xla-5d53e1e-nccl2307-20260802",
+            "a1bb00b9ed594e7d1b85251bce63660bb85c5f7a661d618af677cee481a4572a",
+        ),
+    ],
+)
+def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(
+    wheel_build: MoonEPJaxWheelBuild,
+    expected_prefix: str,
+    expected_pjrt_sha256: str,
+):
     config = SimpleNamespace(
         model=SimpleNamespace(moe_implementation="moonep_jax"),
         trainer=SimpleNamespace(trainer=SimpleNamespace(id="fixed-jax-test")),
         resources=ResourceConfig.with_gpu("GB200", count=4, cpu=32, ram="256g", disk="256g"),
         processes_per_task=1,
-        moonep_jax_wheel_build=MoonEPJaxWheelBuild.LSA_20260802,
+        moonep_jax_wheel_build=wheel_build,
         moonep_transport=train.MoonEPTransport.TWO_SLICE,
     )
 
@@ -332,6 +351,8 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup():
     assert "--extra gpu" in scripts[0]
     assert "fsspec.core.url_to_fs" in scripts[1]
     assert "--no-deps --reinstall" in scripts[1]
+    assert expected_prefix in scripts[1]
+    assert expected_pjrt_sha256 in scripts[1]
     assert "40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d" in scripts[1]
     assert "03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4" in scripts[1]
     assert "staging CUDA toolchain" in scripts[2]

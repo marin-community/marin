@@ -459,3 +459,25 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
 - Stop criteria: Stop on the first retry, memory error, transport error, non-finite loss, or dropped assignment.
 - Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-022-direct-nccl2307-smoke-3-20260802-1657-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-022-direct-nccl2307-smoke-3-20260802-1657 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --moonep-transport direct_device --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
+
+### 2026-08-02 17:07 UTC - MNEP-022 rules out the NCCL runtime-only fix
+
+- Snapshot: `mnep-022-direct-nccl2307-smoke-3-20260802-1657` at `3e38281e4`.
+- Setup: All 16 workers used fixed XLA `5d53e1e` and NCCL 2.30.7 on one NVL72.
+- Failure: Task 10 and all four local GPU threads failed before step zero.
+- Error: CUDA reported an illegal address while XLA recorded an asynchronous completion event.
+- Stack: The failure passed through `AsyncExecution`, `AsyncStartThunk`, and `WhileThunk`.
+- Result: A runtime-only update to NCCL 2.30.7 did not make XLA's direct EP64 device kernel correct for the 5 GiB hero buffers.
+- Build check: The fixed JAX/XLA wheels used NCCL 2.29.7 headers. The local four-GPU gate did not use multi-node GIN.
+- Source check: NCCL 2.30.7 changes GIN structures and resource-sharing fields, so the runtime-only test did not test the new device API.
+- Action: Stop the parent when Iris started attempt one.
+- Decision: Rebuild the fixed JAX/XLA wheels against NCCL 2.30.7, then repeat local and rack correctness gates before a source patch.
+
+### 2026-08-02 17:18 UTC - Fixed XLA rebuild uses NCCL 2.30.7 headers
+
+- Source: JAX `f9f6bbace` and XLA `5d53e1e` with CUDA 13.0, cuDNN 9.12, NCCL 2.30.7, and `sm_100`.
+- Build: The PJRT target recompiled both ragged all-to-all CUDA sources and completed successfully.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-20260802`.
+- PJRT SHA-256: `a1bb00b9ed594e7d1b85251bce63660bb85c5f7a661d618af677cee481a4572a`.
+- Host wheels: The JAX, jaxlib, and CUDA plugin hashes match the prior source-identical build.
+- Next gate: Install this complete wheel set and repeat full-owner-skew parity on four local GPUs.
