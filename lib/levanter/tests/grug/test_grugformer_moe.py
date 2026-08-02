@@ -19,7 +19,11 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
-from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
+from levanter.grug._moe.ep_fixed_all_to_all import (
+    _assign_with_spill,
+    _moe_mlp_ep_fixed_a2a_local,
+    _moe_mlp_ep_fixed_a2a_spill_local,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -442,7 +446,10 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all", "fixed_all_to_all", "echo_receiver"])
+@pytest.mark.parametrize(
+    "implementation",
+    ["ring", "ragged_all_to_all", "fixed_all_to_all", "fixed_all_to_all_spill", "echo_receiver"],
+)
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
@@ -580,6 +587,100 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
             atol=1e-5,
         )
     assert int(dropped) == 4
+
+
+def test_spill_preserves_capacity_and_uses_candidate_weight():
+    selected_experts = jnp.array(
+        [
+            [0, 1],
+            [0, 1],
+            [0, 2],
+        ],
+        dtype=jnp.int32,
+    )
+    combine_weights = jnp.array(
+        [
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [0.7, 0.3],
+        ],
+        dtype=jnp.float32,
+    )
+    capacity = 2
+
+    _, _, _, baseline_keep = _assign_with_spill(
+        selected_experts,
+        combine_weights,
+        num_experts=3,
+        capacity=capacity,
+        attempts=0,
+    )
+    target, slot, routed_weights, keep = _assign_with_spill(
+        selected_experts,
+        combine_weights,
+        num_experts=3,
+        capacity=capacity,
+        attempts=1,
+    )
+
+    assert int(baseline_keep.sum()) == 5
+    assert int(keep.sum()) == 6
+    assert int(target[4]) == 2
+    assert float(routed_weights[4]) == pytest.approx(0.3)
+    occupied_slots = np.asarray(target[keep] * capacity + slot[keep])
+    assert len(np.unique(occupied_slots)) == int(keep.sum())
+    assert int(slot[keep].min()) >= 0
+    assert int(slot[keep].max()) < capacity
+
+
+def test_fixed_all_to_all_spill_uses_candidate_expert_value_and_gradients():
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    x = jnp.ones((3, 1), dtype=jnp.float32)
+    selected_experts = jnp.array([[0, 1], [0, 1], [0, 2]], dtype=jnp.int32)
+    combine_weights = jnp.array([[0.9, 0.1], [0.8, 0.2], [0.7, 0.3]], dtype=jnp.float32)
+    expert_scale = jnp.array([1.0, 10.0, 100.0], dtype=jnp.float32)[:, None, None]
+    w_up_gate = jnp.concatenate([expert_scale, jnp.ones_like(expert_scale)], axis=2)
+    w_down = jnp.ones((3, 1, 1), dtype=jnp.float32)
+
+    def spill_a2a(x, combine_weights):
+        return _moe_mlp_ep_fixed_a2a_spill_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=lambda value: value,
+            num_experts=3,
+            capacity_factor=1.0,
+        )
+
+    sharded_spill_a2a = jax.shard_map(
+        spill_a2a,
+        mesh=mesh,
+        in_specs=(P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+    with jax.set_mesh(mesh):
+        actual, dropped = sharded_spill_a2a(x, combine_weights)
+        x_gradient, weight_gradient = jax.grad(
+            lambda x, combine_weights: jnp.sum(sharded_spill_a2a(x, combine_weights)[0]),
+            argnums=(0, 1),
+        )(x, combine_weights)
+
+    np.testing.assert_allclose(np.asarray(actual), np.array([[1.9], [2.8], [60.0]]), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(x_gradient), np.array([[3.8], [5.6], [120.0]]), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(weight_gradient),
+        np.array([[1.0, 10.0], [1.0, 10.0], [0.0, 200.0]]),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    assert int(dropped) == 0
 
 
 @pytest.mark.slow
