@@ -1492,3 +1492,38 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Nine focused hierarchy tests pass. Job
   `/rav/lux-glm52-hierarchy-direct-b200-005` was submitted at interactive
   priority with the exact-size prompt.
+- The exact-size prompt produced 15 total parents and 34 leaves in 5,253
+  generation tokens. It removed the repeated output-length and 37-parent
+  failures.
+- The balanced taxonomy is rejected. It mapped code to technical forums, legal
+  text to public notices, news to non-fiction books, and API manuals to
+  tutorials. It also placed government, health, forms, and events below the
+  fallback parent.
+- Hierarchy validation now permits only the fallback leaf below the fallback
+  parent. Ten focused hierarchy tests pass.
+- The balanced run labeled all 1,000 documents and wrote its summary. The head
+  task succeeded, but the worker task reported expected Ray shutdown as a
+  failure. The worker launcher now treats head shutdown as authoritative. Four
+  focused direct-launch tests pass.
+- The compact taxonomy was curated into run
+  `hierarchy-1000-20260802-002`. The only change removes the invalid
+  `FORMS_TEMPLATES` precedence rule. Document form is already a separate label,
+  and the domain prompt forbids form-based domains. The original artifact was
+  not changed.
+- The curated compact pilot retains 1.5 percent fallback use, a 25 percent
+  largest parent, and full use of all 12 parents and 23 leaves.
+- Claude Opus 5 reviewed 100 representative documents and 50 lowest-confidence
+  documents. The representative sample has 81 percent exact parent agreement,
+  98 percent any-parent overlap, 76 percent exact leaf agreement, 96 percent
+  any-leaf overlap, and 85 percent exact form agreement. It passes the fixed
+  parent, overlap, and form gates.
+- The lowest-confidence sample has 38 percent exact parent agreement, 74
+  percent any-parent overlap, and 58 percent exact form agreement. This is a
+  boundary-label failure. Adjudicate the low-confidence tail of the held-out
+  set before using it for final embedding metrics.
+- The accepted Claude review cost $7.4280115. Its full report SHA-256 is
+  `5de28b7ce065cfc44cc65e013949f92968f1b3196e740d93c11e15acf29d6751`.
+  Report artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/claude-review-v1/report.json`.
+- Held-out job `/rav/lux-glm52-heldout-10k-b200-001` was submitted with the
+  curated compact taxonomy for exactly 10,000 new documents.
