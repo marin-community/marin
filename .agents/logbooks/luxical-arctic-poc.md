@@ -1482,3 +1482,13 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Corrected job `/rav/lux-glm52-hierarchy-direct-b200-004` runs only the
   balanced variant. Both four-device replicas were admitted at interactive
   priority. The compact checkpoints remain unchanged.
+- The corrective feedback path ran through all three checked requests, but GLM
+  returned the same 37-parent hierarchy each time. No balanced taxonomy was
+  saved.
+- The hierarchy prompt now requests exactly 14 non-fallback parents and 34
+  non-fallback leaves. It limits definitions to 20 words, include and exclude
+  arrays to two short values, and precedence rules to 12. This removes the
+  ambiguous ranges and the long response that caused repeated JSON retries.
+- Nine focused hierarchy tests pass. Job
+  `/rav/lux-glm52-hierarchy-direct-b200-005` was submitted at interactive
+  priority with the exact-size prompt.
