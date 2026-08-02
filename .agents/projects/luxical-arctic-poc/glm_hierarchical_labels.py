@@ -441,12 +441,14 @@ def label_hierarchies(
     logger.info("GLM_HIERARCHICAL_LABELS=%s", json.dumps(output, sort_keys=True))
 
 
-def run(run_id: str, variants: list[Variant], batch_size: int, concurrency: int) -> None:
-    """Run labeling within one shared federated GLM server job."""
-    ctx = iris_ctx()
-    if ctx is None or ctx.client is None:
-        raise RuntimeError("The hierarchy pipeline must run inside an Iris job")
-    launch = Glm52LaunchConfig(
+def hierarchy_launch_config(
+    run_id: str,
+    variants: list[Variant],
+    batch_size: int,
+    concurrency: int,
+) -> Glm52LaunchConfig:
+    """Return the GLM server and bounded hierarchy-label client config."""
+    return Glm52LaunchConfig(
         vllm_endpoint=f"glm52-hierarchy-{run_id}",
         ray_endpoint=f"glm52-hierarchy-ray-{run_id}",
         server=ServerConfig(max_model_len=DEFAULT_MAX_MODEL_LEN, max_num_seqs=DEFAULT_MAX_NUM_SEQS),
@@ -459,6 +461,14 @@ def run(run_id: str, variants: list[Variant], batch_size: int, concurrency: int)
             concurrency=concurrency,
         ),
     )
+
+
+def run(run_id: str, variants: list[Variant], batch_size: int, concurrency: int) -> None:
+    """Run labeling within one shared federated GLM server job."""
+    ctx = iris_ctx()
+    if ctx is None or ctx.client is None:
+        raise RuntimeError("The hierarchy pipeline must run inside an Iris job")
+    launch = hierarchy_launch_config(run_id, variants, batch_size, concurrency)
     server_job = submit_glm52(ctx, launch)
     server_job.wait(timeout=float("inf"), raise_on_failure=True)
 

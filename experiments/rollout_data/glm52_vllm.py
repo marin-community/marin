@@ -205,10 +205,10 @@ def _serve_ray_head(
     ray_command: list[str],
     environment: dict[str, str],
     launch: Glm52LaunchConfig,
+    ray_port: int,
+    http_port: int,
 ) -> None:
     weights = prepare_model_cache()
-    ray_port = _reserve_port(host, ctx.get_port(RAY_PORT))
-    http_port = _reserve_port(host, ctx.get_port(HTTP_PORT))
     ray_address = f"{host}:{ray_port}"
     subprocess.run(
         [
@@ -264,7 +264,8 @@ def _serve_ray_worker(host: str, launch: Glm52LaunchConfig, ray_command: list[st
     )
 
 
-def _serve_glm52(launch: Glm52LaunchConfig) -> None:
+def serve_glm52(launch: Glm52LaunchConfig, ray_port: int, http_port: int) -> None:
+    """Serve GLM-5.2 on the current Iris gang with explicit task ports."""
     info = get_job_info()
     ctx = iris_ctx()
     if info is None or ctx is None:
@@ -277,9 +278,25 @@ def _serve_glm52(launch: Glm52LaunchConfig) -> None:
     environment["VLLM_HOST_IP"] = host
     environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
     if info.task_index == 0:
-        _serve_ray_head(ctx, host, vllm_command, ray_command, environment, launch)
+        _serve_ray_head(
+            ctx,
+            host,
+            vllm_command,
+            ray_command,
+            environment,
+            launch,
+            _reserve_port(host, ray_port),
+            _reserve_port(host, http_port),
+        )
         return
     _serve_ray_worker(host, launch, ray_command, environment)
+
+
+def _serve_glm52(launch: Glm52LaunchConfig) -> None:
+    ctx = iris_ctx()
+    if ctx is None:
+        raise RuntimeError("GLM-5.2 serving must run inside an Iris task")
+    serve_glm52(launch, ctx.get_port(RAY_PORT), ctx.get_port(HTTP_PORT))
 
 
 def submit_glm52(ctx, launch: Glm52LaunchConfig):

@@ -16,6 +16,7 @@ from glm_hierarchical_labels import (  # noqa: E402
     LeafBucket,
     Variant,
     assign_document,
+    hierarchy_launch_config,
     validate_hierarchy,
 )
 from glm_semantic_labels import OTHER_BUCKET_ID, Bucket, SampleDocument  # noqa: E402
@@ -87,3 +88,12 @@ def test_run_waits_for_queued_server_without_client_timeout(monkeypatch: pytest.
     hierarchical_labels.run("run", [], batch_size=50, concurrency=1)
 
     assert waits == [(float("inf"), True)]
+
+
+def test_hierarchy_launch_config_keeps_callback_in_server_head() -> None:
+    _, variant = hierarchy()
+
+    launch = hierarchy_launch_config("run", [variant], batch_size=10, concurrency=2)
+
+    assert launch.client is not None
+    assert launch.priority_band == hierarchical_labels.job_pb2.PRIORITY_BAND_INTERACTIVE
