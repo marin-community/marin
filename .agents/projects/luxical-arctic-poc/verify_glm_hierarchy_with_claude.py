@@ -22,7 +22,7 @@ REVIEW_CHUNK_MARKER = "GLM_HIERARCHY_REVIEW_CHUNK="
 @dataclass(frozen=True)
 class ClaudeReview:
     assignments: list[dict[str, Any]]
-    model_usage: dict[str, Any]
+    model_usage_batches: list[dict[str, Any]]
     cost_usd: float
 
 
@@ -110,7 +110,7 @@ def parse_claude_envelope(output: str, model: str) -> ClaudeReview:
     rows = payload["assignments"]
     if not isinstance(rows, list):
         raise ValueError("Claude did not return an assignments array")
-    return ClaudeReview(rows, model_usage, float(envelope["total_cost_usd"]))
+    return ClaudeReview(rows, [model_usage], float(envelope["total_cost_usd"]))
 
 
 def claude_assignments(
@@ -122,7 +122,7 @@ def claude_assignments(
     """Ask a pinned Claude model for blinded assignments in bounded batches."""
     documents = package["documents"]
     assignments = []
-    model_usage = {}
+    model_usage_batches = []
     cost_usd = 0.0
     for start in range(0, len(documents), batch_size):
         remaining_budget = max_budget_usd - cost_usd
@@ -150,9 +150,9 @@ def claude_assignments(
         if result.returncode != 0:
             raise RuntimeError(f"Claude exited with code {result.returncode}")
         assignments.extend(batch.assignments)
-        model_usage.update(batch.model_usage)
+        model_usage_batches.extend(batch.model_usage_batches)
         cost_usd += batch.cost_usd
-    return ClaudeReview(assignments, model_usage, cost_usd)
+    return ClaudeReview(assignments, model_usage_batches, cost_usd)
 
 
 def wilson_interval(successes: int, count: int, z: float = 1.959963984540054) -> tuple[float, float]:
@@ -285,7 +285,7 @@ def main() -> None:
     review = claude_assignments(package, args.claude_model, args.batch_size, args.max_budget_usd)
     result = comparison(package, review.assignments)
     result["claude_model"] = args.claude_model
-    result["claude_model_usage"] = review.model_usage
+    result["claude_model_usage_batches"] = review.model_usage_batches
     result["claude_cost_usd"] = review.cost_usd
     result["claude_assignments"] = review.assignments
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

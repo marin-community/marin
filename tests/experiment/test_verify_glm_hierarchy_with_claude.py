@@ -144,7 +144,7 @@ def test_parse_claude_envelope_records_exact_model_and_cost() -> None:
     review = parse_claude_envelope(output, "claude-opus-5")
 
     assert review.assignments == [{"sample_index": 1}]
-    assert review.model_usage == {"claude-opus-5": {"inputTokens": 10}}
+    assert review.model_usage_batches == [{"claude-opus-5": {"inputTokens": 10}}]
     assert review.cost_usd == 0.25
 
 

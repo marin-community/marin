@@ -24,7 +24,7 @@ SEED = 42
 @dataclass(frozen=True)
 class ClaudeNeighborhoodReview:
     decisions: list[dict[str, Any]]
-    model_usage: dict[str, Any]
+    model_usage_batches: list[dict[str, Any]]
     cost_usd: float
 
 
@@ -97,7 +97,7 @@ def parse_claude_envelope(output: str, model: str) -> ClaudeNeighborhoodReview:
     decisions = payload["decisions"]
     if not isinstance(decisions, list):
         raise ValueError("Claude did not return a decisions array")
-    return ClaudeNeighborhoodReview(decisions, model_usage, float(envelope["total_cost_usd"]))
+    return ClaudeNeighborhoodReview(decisions, [model_usage], float(envelope["total_cost_usd"]))
 
 
 def claude_decisions(
@@ -109,7 +109,7 @@ def claude_decisions(
     """Ask one pinned Claude model for bounded blind comparisons."""
     items = public_items(package["items"])
     decisions = []
-    model_usage = {}
+    model_usage_batches = []
     cost_usd = 0.0
     for start in range(0, len(items), batch_size):
         remaining_budget = max_budget_usd - cost_usd
@@ -137,9 +137,9 @@ def claude_decisions(
         if result.returncode != 0:
             raise RuntimeError(f"Claude exited with code {result.returncode}")
         decisions.extend(batch.decisions)
-        model_usage.update(batch.model_usage)
+        model_usage_batches.extend(batch.model_usage_batches)
         cost_usd += batch.cost_usd
-    return ClaudeNeighborhoodReview(decisions, model_usage, cost_usd)
+    return ClaudeNeighborhoodReview(decisions, model_usage_batches, cost_usd)
 
 
 def validate_decisions(package: dict[str, Any], decisions: list[dict[str, Any]]) -> None:
@@ -246,7 +246,7 @@ def main() -> None:
     review = claude_decisions(package, args.claude_model, args.batch_size, args.max_budget_usd)
     result = comparison(package, review.decisions)
     result["claude_model"] = args.claude_model
-    result["claude_model_usage"] = review.model_usage
+    result["claude_model_usage_batches"] = review.model_usage_batches
     result["claude_cost_usd"] = review.cost_usd
     result["reference_model"] = package["reference_model"]
     result["student_model"] = package["student_model"]
