@@ -450,3 +450,11 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - DRI and babysitter: `rav`; `rav/codex` owns the monitor.
 - Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
 - Next action: Commit this contract, submit the coordinator, and monitor it to a terminal state.
+
+### 2026-08-02 02:49 UTC - MHEP-005 submitted
+
+- Job: `/rav/mhep-005-capacity-25-20260802-0248-coord`.
+- Launch commit: `b9997cd24`; code snapshot `bccd8eb809`; clean tree.
+- Source bundle: Iris workspace bundle, 9.4 MB. The submit output did not report a content ID.
+- Status: A08 has the federated request. The coordinator waits on the peer, with zero reported failures or preemptions.
+- Next action: Keep this one request and monitor it through the 25-step GPU gate.
