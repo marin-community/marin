@@ -15,7 +15,7 @@ from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, launch, train
 from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild
 from experiments.grug.moe_hero_ep.quantile_balancing import histogram_quantile_bias
 
@@ -208,6 +208,17 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup():
     assert "40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d" in scripts[1]
     assert "03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4" in scripts[1]
     assert "staging CUDA toolchain" in scripts[2]
+
+
+def test_profile_window_uses_one_process_and_keeps_hlo_metadata():
+    profiler = launch._hero_profiler_config(start_step=1, num_steps=2)
+    assert profiler.enabled
+    assert profiler.start_step == 1
+    assert profiler.num_steps == 2
+    assert profiler.process_index == 0
+    assert profiler.profile_options.host_tracer_level == 1
+    assert profiler.profile_options.python_tracer_level == 0
+    assert profiler.profile_options.enable_hlo_proto
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():

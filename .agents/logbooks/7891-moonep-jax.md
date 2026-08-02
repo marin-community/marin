@@ -268,3 +268,15 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Setup: `--moonep-jax-wheel-build lsa-20260802` keeps standard GPU setup, checks all hashes, and restores CUDA 13 libraries.
 - Setup gate: A clean generated task environment installed the fixed build and found four GB200 GPUs.
 - Next action: Submit MNEP-011 for three combined EP64 steps on one NVL72 rack.
+
+### 2026-08-02 13:14 UTC - MNEP-011 reaches the experimental peer-memory kernel
+
+- Run ID: `mnep-011-fixed-xla-smoke-3-20260802-1307`.
+- Snapshot: `mnep-011-fixed-xla-smoke-3-20260802-1307` at `849e4f4c36de7d8e0ed10c948b522612e146227a`.
+- Setup: All 16 workers installed the four checked wheels and reported NCCL 2.29.7.
+- Progress: The full training program compiled and reached the fused loss before executable launch.
+- Failure: Task 10 exited 133 before step zero with `CUDA_ERROR_CONTAINED` from invalid peer GPU memory access.
+- Placement: The workers used the `DH1-393-US-EAST-08A` NVLink domain on one physical rack.
+- Action: Stop the parent as soon as Iris assigned attempt one.
+- Interpretation: The XLA LSA-size fix is present, but its experimental direct peer-memory kernel is not correct for this EP64 program.
+- Next action: Profile the correct standard NCCL path, then replace its largest transport cost with a bounded static collective.

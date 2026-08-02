@@ -9,7 +9,7 @@ import os
 import click
 import jmp
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.grug.grug_moe import MoeImplementation, MoonEPConfig, MoonEPGroupedGemm, resolve_moe_implementation
@@ -52,6 +52,22 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
     )
 
 
+def _hero_profiler_config(start_step: int | None, num_steps: int) -> ProfilerConfig:
+    if start_step is None:
+        return ProfilerConfig(enabled=False)
+    return ProfilerConfig(
+        enabled=True,
+        start_step=start_step,
+        num_steps=num_steps,
+        process_index=0,
+        profile_options=ProfileOptionsConfig(
+            host_tracer_level=1,
+            python_tracer_level=0,
+            enable_hlo_proto=True,
+        ),
+    )
+
+
 class HeroThroughputResult(Artifact):
     """Metrics-only result of the rack-scale throughput hero run.
 
@@ -71,6 +87,8 @@ def build_hero_run(
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
     moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None,
+    profile_start_step: int | None = None,
+    profile_num_steps: int = 2,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the one-rack EP64 hero throughput run."""
@@ -78,6 +96,10 @@ def build_hero_run(
         raise ValueError("run_id must not be empty")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    if profile_num_steps <= 0:
+        raise ValueError(f"profile_num_steps must be positive, got {profile_num_steps}")
+    if profile_start_step is not None and profile_start_step + profile_num_steps > num_steps:
+        raise ValueError("the profile window must fit within the training run")
     if moonep_jax_wheel_build is not None and moe_implementation != "moonep_jax":
         raise ValueError("a MoonEP JAX wheel build requires the moonep_jax implementation")
 
@@ -129,7 +151,7 @@ def build_hero_run(
             seed=0,
             train_batch_size=HERO_EP_BATCH_SIZE,
             num_train_steps=num_steps,
-            profiler=ProfilerConfig(enabled=False),
+            profiler=_hero_profiler_config(profile_start_step, profile_num_steps),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
@@ -226,6 +248,19 @@ def build_hero_run(
     default=None,
     help="Fixed JAX wheel build for MoonEP rack runs.",
 )
+@click.option(
+    "--profile-start-step",
+    type=click.IntRange(min=0),
+    default=None,
+    help="First training step in the one-process XPlane profile window.",
+)
+@click.option(
+    "--profile-num-steps",
+    type=click.IntRange(min=1),
+    default=2,
+    show_default=True,
+    help="Number of training steps in the profile window.",
+)
 @build_options
 def main(
     run_id: str,
@@ -236,6 +271,8 @@ def main(
     qb_method: str,
     qb_histogram_bins: int,
     moonep_jax_wheel_build: str | None,
+    profile_start_step: int | None,
+    profile_num_steps: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -248,6 +285,8 @@ def main(
         moonep_jax_wheel_build=(
             MoonEPJaxWheelBuild(moonep_jax_wheel_build) if moonep_jax_wheel_build is not None else None
         ),
+        profile_start_step=profile_start_step,
+        profile_num_steps=profile_num_steps,
     )
 
 
