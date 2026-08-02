@@ -173,3 +173,23 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Config: MNEP-006 settings plus `XLA_FLAGS=--xla_gpu_memory_limit_slop_factor=106`.
 - Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
 - Next action: Promote both memory settings to a 25-step run only if MNEP-007 passes.
+
+### 2026-08-02 11:28 UTC - MNEP-007 NCCL device-communicator failure
+
+- Result: The full train step compiled without the prior scheduler warning.
+- Failure: All workers then exited 139 in `ncclDevCommCreate` before step zero.
+- Source check: JAX 0.11.0 pins XLA `131bf41acb4650e4391a640c3f1859c1c86ad74b`.
+- Source check: This XLA revision requests one device communicator for its NCCL-backed ragged all-to-all barrier.
+- Interpretation: The 84% allocator split and 106% scheduler factor solved the two HBM limits.
+- Interpretation: NCCL 2.28.9 cannot create the new device communicator on this NVL72.
+- Action: Stop the automatic retry and disable only the NCCL-backed ragged barrier.
+- Fallback: XLA then uses its standard NCCL ragged all-to-all across the multi-host EP64 group.
+
+### 2026-08-02 11:28 UTC - MNEP-008 host-NCCL smoke contract
+
+- Goal: Compile and execute three combined steps without the NCCL device communicator.
+- Run ID: `mnep-008-quack-host-nccl-smoke-3-20260802-1128`.
+- Config: EP64, batch 1024, sequence 4096, 256 experts, top-8, and global histogram QB with 1,000 bins.
+- Runtime: Use an 84% main pool, a 106% scheduler factor, and the standard NCCL ragged path.
+- Stop criteria: Stop on any task failure, non-finite loss, transport error, or incomplete step 3.
+- Next action: Promote these settings to a 25-step run only if MNEP-008 passes.

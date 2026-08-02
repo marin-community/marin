@@ -151,10 +151,14 @@ def test_histogram_qb_reduces_shard_histograms_before_quantile():
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):
     explicit_overlap = "--xla_gpu_experimental_parallel_collective_overlap_limit=2"
-    monkeypatch.setenv("XLA_FLAGS", explicit_overlap)
+    explicit_slop = "--xla_gpu_memory_limit_slop_factor=108"
+    monkeypatch.setenv("XLA_FLAGS", f"{explicit_overlap} {explicit_slop}")
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
+    for name in train.MOONEP_RUNTIME_ENV:
+        monkeypatch.delenv(name, raising=False)
     config = SimpleNamespace(
+        model=SimpleNamespace(moe_implementation="moonep_jax"),
         trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
         resources=object(),
         processes_per_task=1,
@@ -166,9 +170,14 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     flags = os.environ["XLA_FLAGS"].split()
     assert explicit_overlap in flags
     assert "--xla_gpu_experimental_parallel_collective_overlap_limit=4" not in flags
+    assert explicit_slop in flags
+    assert "--xla_gpu_memory_limit_slop_factor=106" not in flags
     assert "--xla_gpu_enable_latency_hiding_scheduler=true" in flags
+    assert "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false" in flags
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
     for name, value in train.HERO_EP_RUNTIME_ENV.items():
+        assert os.environ[name] == value
+    for name, value in train.MOONEP_RUNTIME_ENV.items():
         assert os.environ[name] == value
 
 

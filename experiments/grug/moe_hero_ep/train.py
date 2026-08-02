@@ -30,6 +30,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
+from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
@@ -54,19 +55,37 @@ HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
+MOONEP_RUNTIME_ENV = {
+    # Keep enough HBM outside the main pool for the 15 GiB collective arena.
+    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.84",
+}
 _XLA_FLAG_DEFAULTS = (
     "--xla_gpu_experimental_parallel_collective_overlap_limit=4",
     "--xla_gpu_enable_latency_hiding_scheduler=true",
+)
+_MOONEP_XLA_FLAG_DEFAULTS = (
+    # The full EP64 program needs 146.43 GiB before rematerialization.
+    "--xla_gpu_memory_limit_slop_factor=106",
+    # JAX 0.11.0 uses an NCCL device communicator for this barrier. NCCL 2.28.9
+    # crashes while it copies the communicator requirements on one NVL72.
+    "--xla_gpu_experimental_ragged_all_to_all_use_barrier_with_nccl=false",
 )
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
-def _apply_hero_ep_runtime_defaults() -> None:
+def _apply_hero_ep_runtime_defaults(moe_implementation: MoeImplementation | None) -> None:
     os.environ.update(HERO_EP_RUNTIME_ENV)
+    if moe_implementation == "moonep_jax":
+        for name, value in MOONEP_RUNTIME_ENV.items():
+            os.environ.setdefault(name, value)
+
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    flag_defaults = (*_XLA_FLAG_DEFAULTS, XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)
+    flag_defaults = list(_XLA_FLAG_DEFAULTS)
+    if moe_implementation == "moonep_jax":
+        flag_defaults.extend(_MOONEP_XLA_FLAG_DEFAULTS)
+    flag_defaults.append(XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
@@ -642,7 +661,7 @@ def run_grug(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
-    _apply_hero_ep_runtime_defaults()
+    _apply_hero_ep_runtime_defaults(config.model.moe_implementation)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
