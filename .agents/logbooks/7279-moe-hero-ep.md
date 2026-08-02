@@ -458,3 +458,11 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Source bundle: Iris workspace bundle, 9.4 MB. The submit output did not report a content ID.
 - Status: A08 has the federated request. The coordinator waits on the peer, with zero reported failures or preemptions.
 - Next action: Keep this one request and monitor it through the 25-step GPU gate.
+
+### 2026-08-02 03:10 UTC - MHEP-005 larger capacity passes with a high cost
+
+- Completion: The root coordinator and all 16 GPU tasks succeeded with exit 0, zero failures, and zero preemptions. The run completed all 25 steps.
+- Performance: Median MFU is 23.1277%, mean MFU is 23.2566%, p10 MFU is 22.5028%, and p90 MFU is 24.2065% over 24 samples. The last sample is 23.0215% MFU, 373,068 tokens/s, and 11.2427 seconds.
+- MHEP-004 change: Median MFU falls by 0.9954 percentage points, or 4.1% relative. Last-sample throughput falls by 4.0%.
+- Training: Final loss is 6.0879. Final MoE drop fraction falls from 9.6786% to 7.2507%, a reduction of 2.4279 percentage points.
+- Decision: Capacity 1.0625 alone does not reduce drops enough to justify its MFU cost. MHEP-006 will keep capacity 1.0625 and add only the source-backed three-choice spill rule. If spill does not give a large drop reduction with a small added cost, select the MHEP-004 stack for the 200-step gate.
