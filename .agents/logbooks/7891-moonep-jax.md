@@ -702,3 +702,27 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Interpretation: MNEP-032 used stock NCCL and did not test the full-MNNVL LSA patch.
 - Fix: Run CUDA library restoration before the fixed JAX and NCCL artifact installation.
 - Next gate: Repeat the same EP64 probe and verify the patched NCCL version and LSA log record.
+
+### 2026-08-02 19:27 UTC - MNEP-033 rejects the full-MNNVL LSA extension
+
+- Run ID: `mnep-033-ragged-full-mnnvl-lsa-20260802-1914`.
+- Snapshot: `mnep-033-ragged-full-mnnvl-lsa-20260802-1914` at `758d562cc`.
+- Result: The corrected setup installed the patched NCCL runtime after the CUDA setup.
+- Result: Task 10 failed with the same CUDA illegal address. Iris stopped the other 15 tasks through coscheduling.
+- Interpretation: Extending the LSA team to all 64 ranks is not valid for this communicator.
+- Decision: Keep NCCL's four-rank LSA team and repair XLA's hybrid GIN path.
+- Next gate: Test GIN barriers without memory fences, as used by NVIDIA's NCCL 2.30.7 hybrid example.
+
+### 2026-08-02 19:35 UTC - XLA source audit changes the next hypothesis
+
+- Source: Fetch OpenXLA main at `92f13a5889` and compare it with pinned XLA `5d53e1e40cd`.
+- Result: No later XLA commit changes the device ragged all-to-all kernel or thunk.
+- Result: NCCL 2.30.7 defines `ncclGinFenceLevel::Relaxed` as an alias for `None`. A fence-name build has no semantic change.
+- Finding: XLA allows 64 CTAs for this kernel. NVIDIA's NCCL 2.30.7 GIN all-to-all example uses 16 CTAs.
+- Finding: An OpenXLA PR 41903 review also flags 64 CTAs as unusually large compared with NCCL EP.
+- Patch: Cap the device kernel and its reserved world barriers at 16 CTAs.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0003-cap-device-kernel-at-16-ctas.patch`.
+- PJRT SHA-256: `6a87208443b820f2e37c6e4517d22d7b9d1f143b224b1c6d91550d9cae604b2e`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-hybrid-cta16-20260802`.
+- Local gate: The four-GPU 640 MiB probe passed in 3.553119 seconds with checksum `294912` and zero mismatches.
+- Next gate: Repeat the 4 KiB EP64 probe on one NVL72.

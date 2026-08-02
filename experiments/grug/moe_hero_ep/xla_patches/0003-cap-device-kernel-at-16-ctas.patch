@@ -1,0 +1,15 @@
+diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+--- a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
++++ b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+@@ -250,8 +250,9 @@ class RaggedAllToAllThunk : public CollectiveThunk {
+ 
+   const RaggedAllToAllConfig config_;
+ 
+-  // Upper bound on the device-kernel launch grid and the number of barrier
+-  static constexpr int32_t kMaxDeviceKernelCtaCount = 64;
++  // Match the documented NCCL GIN all-to-all grid. Each CTA uses one world
++  // barrier, so larger grids create more cross-rank barrier traffic.
++  static constexpr int32_t kMaxDeviceKernelCtaCount = 16;
+   // Floor on the launch grid so small shapes still get some parallelism.
+   static constexpr int32_t kMinDeviceKernelCtaCount = 8;
+   // Target number of CTAs per (peer, update) copy unit before the grid
