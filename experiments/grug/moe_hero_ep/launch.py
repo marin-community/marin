@@ -94,6 +94,7 @@ def build_hero_run(
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     worker_cpu: int = HERO_WORKER_CPU,
     worker_ram_gb: int = HERO_WORKER_RAM_GB,
+    finite_diagnostics: bool = False,
     profile_start_step: int | None = None,
     profile_num_steps: int = 2,
     version: str | None = None,
@@ -145,6 +146,7 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=False,
+        finite_diagnostics=finite_diagnostics,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
         replica_axis_size=1,
         sharding_dump_path=None,
@@ -295,6 +297,11 @@ def build_hero_run(
     help="RAM in GiB for each rack worker.",
 )
 @click.option(
+    "--finite-diagnostics/--no-finite-diagnostics",
+    default=False,
+    help="Scan each training boundary for non-finite values.",
+)
+@click.option(
     "--profile-start-step",
     type=click.IntRange(min=MIN_HERO_PROFILE_START_STEP),
     default=None,
@@ -321,6 +328,7 @@ def main(
     processes_per_task: int,
     worker_cpu: int,
     worker_ram_gb: int,
+    finite_diagnostics: bool,
     profile_start_step: int | None,
     profile_num_steps: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -339,6 +347,7 @@ def main(
         processes_per_task=processes_per_task,
         worker_cpu=worker_cpu,
         worker_ram_gb=worker_ram_gb,
+        finite_diagnostics=finite_diagnostics,
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
     )

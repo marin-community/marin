@@ -513,6 +513,19 @@ def test_hero_transport_reaches_training_config():
     assert config.moonep_transport == train.MoonEPTransport.DIRECT_DEVICE
 
 
+def test_hero_finite_diagnostics_reach_training_config():
+    step = launch.build_hero_run(
+        run_id="finite-diagnostics",
+        num_steps=3,
+        finite_diagnostics=True,
+        version="dev",
+    )
+
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.finite_diagnostics
+
+
 @pytest.mark.parametrize(
     ("worker_cpu", "worker_ram_gb", "message"),
     [

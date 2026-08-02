@@ -151,6 +151,9 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    # Scan training values after each step to locate the first non-finite boundary.
+    # This is expensive and must stay disabled for throughput measurements.
+    finite_diagnostics: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -415,6 +418,13 @@ def _drop_metrics(
     }
 
 
+def _tree_all_finite(tree) -> jax.Array:
+    finite_leaves = [
+        jnp.all(jnp.isfinite(leaf)) for leaf in jax.tree_util.tree_leaves(tree) if eqx.is_inexact_array(leaf)
+    ]
+    return functools.reduce(jnp.logical_and, finite_leaves, jnp.array(True))
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -423,6 +433,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
+    finite_diagnostics: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -462,6 +473,20 @@ def _make_train_step(
         )
         updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
         params = optax.apply_updates(qb_params, updates)
+
+        if finite_diagnostics:
+            metrics.update(
+                {
+                    "diagnostics/params_input_finite": _tree_all_finite(state.params),
+                    "diagnostics/qb_bias_input_finite": _tree_all_finite(state.pending_qb_betas),
+                    "diagnostics/qb_params_finite": _tree_all_finite(qb_params),
+                    "diagnostics/qb_bias_output_finite": _tree_all_finite(metrics["qb_beta_per_layer"]),
+                    "diagnostics/loss_finite": jnp.isfinite(loss),
+                    "diagnostics/grads_finite": _tree_all_finite(grads),
+                    "diagnostics/updates_finite": _tree_all_finite(updates),
+                    "diagnostics/params_output_finite": _tree_all_finite(params),
+                }
+            )
 
         if ema_beta is None:
             ema_params = None
@@ -525,6 +550,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
         offload_opt_state=config.trainer.offload_opt_state,
+        finite_diagnostics=config.trainer.finite_diagnostics,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -657,6 +683,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
+
+                finite_metrics = {key: value for key, value in metrics.items() if key.startswith("diagnostics/")}
+                if finite_metrics:
+                    jax.block_until_ready(finite_metrics)
+                    finite_metrics_host = {key: bool(value) for key, value in finite_metrics.items()}
+                    logger.info("Finite diagnostics at completed step %d: %s", int(state.step), finite_metrics_host)
 
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
