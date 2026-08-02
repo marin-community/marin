@@ -1310,6 +1310,15 @@ The next stage needs a smaller hierarchy, representative independent review, hel
 - Artifact: `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/embedding-screen-v2/report.json`.
 - This result advances the student to hierarchical-label evaluation. It does not establish production quality.
 
+### Exact trained-artifact CPU speed
+
+- Job `/rav/lux-trained-fast-student-cpu-speed-b200-002` succeeded in 1 minute 55.96 seconds with zero failures and zero preemptions.
+- The paired test used 20,000 fixed evaluation documents, five alternating repeats, eight CPU threads, and the CPU JAX backend.
+- The exact 3M student reached a median 18,492.61 documents per second. Pinned Luxical-One reached 6,157.05 documents per second.
+- The exact student-to-Luxical ratio is 3.00349. It passes the 0.85 target ratio with wide margin.
+- The tested model SHA-256 is `8735a4b49de0f7925904b0301516a2c8a5f9651bc2b605e4d27a80bca3f8ac3a`. The tokenizer-map SHA-256 is `50c92752d5a1d408234b8eee58c1c0f6179f603253caabe4fcd3a06f990710f0`.
+- Artifact: `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-full-full-3m.json`.
+
 ## 2026-08-02: Hierarchical semantic labels
 
 ### Hypothesis
