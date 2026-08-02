@@ -11,7 +11,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
-import levanter.callbacks as callbacks
 import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
@@ -21,6 +20,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
+from levanter import callbacks
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.data.dataset import AsyncDataset
@@ -38,9 +38,15 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.coupon_clipping.config import build_growth_source_model_config
+from experiments.grug.coupon_clipping.model import GrugModelConfig, Transformer
+from experiments.grug.depth_growth import (
+    DepthGrowthConfig,
+    load_and_grow_grug_depth_state,
+    validate_depth_growth_data_offset,
+)
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -93,10 +99,16 @@ class GrugRunConfig:
     data: LmDataConfig
     resources: ResourceConfig
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
+    optimizer_num_train_steps: int | None = None
+    """LR schedule horizon when it differs from the bounded runtime, as in throughput pilots."""
+    depth_growth: DepthGrowthConfig | None = None
+    """Full-state shallow checkpoint transition; own-run checkpoints still take precedence."""
+    random_layer_dropout_count: int | None = None
+    """Execute this many uniformly sampled layers per update without residual rescaling."""
     trainer: GrugTrainerConfig = field(default_factory=GrugTrainerConfig)
     eval: GrugEvalConfig | None = field(default_factory=GrugEvalConfig)
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
-    # via the iris.hooks.multigpu_main supervisor instead of one process per node.
+    # via the iris.runtime.multigpu supervisor instead of one process per node.
     processes_per_task: int = 1
 
 
@@ -199,12 +211,14 @@ def build_tagged_evaluator(
 def _compute_flops(
     *,
     model_config: GrugModelConfig,
+    active_layers_per_step: int | None = None,
 ) -> tuple[float, dict[str, float]]:
+    executed_layers = model_config.num_layers if active_layers_per_step is None else active_layers_per_step
     flops_per_token = lm_flops_per_token(
         hidden_dim=model_config.hidden_dim,
         intermediate_dim=model_config.intermediate_dim,
         shared_intermediate_dim=model_config.shared_expert_intermediate_dim,
-        num_layers=model_config.num_layers,
+        num_layers=executed_layers,
         num_kv_heads=model_config.num_kv_heads,
         num_heads=model_config.num_heads,
         seq_len=model_config.max_seq_len,
@@ -219,6 +233,8 @@ def _compute_flops(
     flops_summary: dict[str, float] = {
         "throughput/flops_per_token_analytic": flops_per_token,
         "throughput/flops_per_example_analytic": flops_per_example,
+        "throughput/executed_layers": executed_layers,
+        "throughput/stored_layers": model_config.num_layers,
     }
 
     return flops_per_example, flops_summary
@@ -257,11 +273,18 @@ class GrugTrainState:
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
     if model.blocks is None:
-        # Scan mode: stacked_blocks.mlp.router_bias is [num_layers, num_experts]; set it in one
-        # vectorized assignment (per-layer mean over experts, matching the unrolled path).
+        assert model.stacked_block_segments is not None
+        # Scan mode: split the full [num_layers, num_experts] bias array across the
+        # fixed segments, preserving the same per-layer centering as the unrolled path.
         new_bias = -qb_betas
         new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
-        return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
+        new_segments = []
+        first_layer = 0
+        for segment in model.stacked_block_segments:
+            segment_bias = new_bias[first_layer : first_layer + segment.num_layers]
+            new_segments.append(eqx.tree_at(lambda stacked: stacked.stacked.mlp.router_bias, segment, segment_bias))
+            first_layer += segment.num_layers
+        return eqx.tree_at(lambda t: t.stacked_block_segments, model, tuple(new_segments))
     new_blocks = list(model.blocks)
     moe_idx = 0
     for i, block in enumerate(model.blocks):
@@ -284,7 +307,7 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    # In scan mode ``blocks`` is None (layers live in ``stacked_blocks``); every grug layer is MoE.
+    # In scan mode ``blocks`` is None (layers live in ``stacked_block_segments``); every layer is MoE.
     if params.blocks is not None:
         num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     else:
@@ -298,14 +321,101 @@ def initial_state(
     )
 
 
+def _random_active_layer_indices(
+    step: jax.Array,
+    *,
+    num_layers: int,
+    active_layer_count: int,
+    seed: int,
+) -> jax.Array:
+    layer_key = jax.random.fold_in(jax.random.PRNGKey(seed), step)
+    return jnp.sort(
+        jax.random.choice(
+            layer_key,
+            num_layers,
+            shape=(active_layer_count,),
+            replace=False,
+        )
+    )
+
+
+def _updated_qb_betas(
+    previous_qb_betas: jax.Array,
+    current_qb_betas: jax.Array,
+    active_layer_indices: jax.Array | None,
+) -> jax.Array:
+    if active_layer_indices is None:
+        return current_qb_betas
+    return previous_qb_betas.at[active_layer_indices].set(current_qb_betas)
+
+
+def _select_active_layer_state(
+    path: tuple[object, ...],
+    active_value: object,
+    inactive_value: object,
+    *,
+    active_layer_indices: jax.Array,
+    num_layers: int,
+) -> object:
+    path_string = jax.tree_util.keystr(path)
+    if "stacked_block_segments" not in path_string:
+        return active_value
+    if not isinstance(active_value, jax.Array) or not isinstance(inactive_value, jax.Array):
+        return active_value
+    if active_value.shape != inactive_value.shape or active_value.ndim == 0 or active_value.shape[0] != num_layers:
+        return active_value
+    active_mask = jnp.zeros((num_layers,), dtype=jnp.bool_).at[active_layer_indices].set(True)
+    active_mask = jnp.reshape(active_mask, (num_layers,) + (1,) * (active_value.ndim - 1))
+    return jnp.where(active_mask, active_value, inactive_value)
+
+
+def _freeze_inactive_layer_updates(
+    updates: optax.Updates,
+    previous_opt_state: optax.OptState,
+    next_opt_state: optax.OptState,
+    *,
+    active_layer_indices: jax.Array,
+    num_layers: int,
+) -> tuple[optax.Updates, optax.OptState]:
+    updates = jax.tree_util.tree_map_with_path(
+        lambda path, update: _select_active_layer_state(
+            path,
+            update,
+            jnp.zeros_like(update) if isinstance(update, jax.Array) else update,
+            active_layer_indices=active_layer_indices,
+            num_layers=num_layers,
+        ),
+        updates,
+    )
+    next_opt_state = jax.tree_util.tree_map_with_path(
+        lambda path, previous, next_value: _select_active_layer_state(
+            path,
+            next_value,
+            previous,
+            active_layer_indices=active_layer_indices,
+            num_layers=num_layers,
+        ),
+        previous_opt_state,
+        next_opt_state,
+    )
+    return updates, next_opt_state
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     *,
     z_loss_weight: float,
     ema_beta: float | None,
+    num_layers: int = 6,
+    random_layer_dropout_count: int | None = None,
+    random_layer_dropout_seed: int = 0,
     watch_config: WatchConfig | None = None,
 ):
+    if random_layer_dropout_count is not None and not 1 <= random_layer_dropout_count < num_layers:
+        raise ValueError(
+            f"random_layer_dropout_count must be between 1 and {num_layers - 1}, got {random_layer_dropout_count}"
+        )
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -326,20 +436,41 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        active_layer_indices = None
+        if random_layer_dropout_count is not None:
+            active_layer_indices = _random_active_layer_indices(
+                state.step,
+                num_layers=num_layers,
+                active_layer_count=random_layer_dropout_count,
+                seed=random_layer_dropout_seed,
+            )
+
         def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
-            return compute_params.next_token_loss(
+            return compute_params.next_token_loss_with_router_metrics(
                 batch.tokens,
                 batch.loss_weight,
                 mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
-                return_router_metrics=True,
+                active_layer_indices=active_layer_indices,
             )
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
-        metrics = {"train/loss": loss, **summarized_metrics}
+        metrics = {
+            "train/loss": loss,
+            "train/valid_target_fraction": jnp.mean(batch.loss_weight > 0),
+            **summarized_metrics,
+        }
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+        if active_layer_indices is not None:
+            updates, opt_state = _freeze_inactive_layer_updates(
+                updates,
+                state.opt_state,
+                opt_state,
+                active_layer_indices=active_layer_indices,
+                num_layers=num_layers,
+            )
         params = optax.apply_updates(qb_params, updates)
 
         if ema_beta is None:
@@ -352,6 +483,18 @@ def _make_train_step(
                 qb_ema_params,
                 params,
             )
+            if active_layer_indices is not None:
+                ema_params = jax.tree_util.tree_map_with_path(
+                    lambda path, previous, next_value: _select_active_layer_state(
+                        path,
+                        next_value,
+                        previous,
+                        active_layer_indices=active_layer_indices,
+                        num_layers=num_layers,
+                    ),
+                    qb_ema_params,
+                    ema_params,
+                )
 
         watch_stats = None
         if watch_config is not None and compute_watch:
@@ -368,13 +511,22 @@ def _make_train_step(
                 model_tree_type=type(state.params),
             )
 
+        pending_qb_betas = _updated_qb_betas(
+            state.pending_qb_betas,
+            metrics["qb_beta_per_layer"],
+            active_layer_indices,
+        )
+        if active_layer_indices is not None:
+            metrics["train/layer_dropout/active_layers"] = jnp.asarray(random_layer_dropout_count)
+            metrics["train/layer_dropout/mean_layer_index"] = jnp.mean(active_layer_indices)
+
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
             params=params,
             opt_state=opt_state,
             ema_params=ema_params,
-            pending_qb_betas=metrics["qb_beta_per_layer"],
+            pending_qb_betas=pending_qb_betas,
         )
 
         return next_state, metrics, watch_stats
@@ -384,6 +536,11 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    if config.random_layer_dropout_count is not None:
+        if config.model.block_storage != "array_stacked":
+            raise ValueError("random layer dropout requires array-stacked blocks")
+        if len(config.model.resolved_block_segment_lengths) != 1:
+            raise ValueError("random layer dropout requires one homogeneous block segment")
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -392,13 +549,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
 
-    optimizer = config.optimizer.build(trainer.num_train_steps)
+    optimizer = config.optimizer.build(config.optimizer_num_train_steps or trainer.num_train_steps)
     watch_config = trainer.watch
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
+        num_layers=config.model.num_layers,
+        random_layer_dropout_count=config.random_layer_dropout_count,
+        random_layer_dropout_seed=trainer.seed,
         watch_config=watch_config if watch_config.is_enabled else None,
     )
 
@@ -449,13 +609,50 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
-        if trainer.initialize_from is not None:
-            state = init_weights_only_from_checkpoint(
+        if config.depth_growth is not None and int(state.step) == 0:
+            if trainer.initialize_from is None:
+                raise ValueError("depth_growth requires trainer.initialize_from to name the shallow checkpoint")
+            if config.optimizer_num_train_steps is None:
+                raise ValueError("depth_growth requires an explicit optimizer_num_train_steps schedule horizon")
+            if config.model.num_layers != config.depth_growth.target_layers:
+                raise ValueError(
+                    f"target model has {config.model.num_layers} layers, expected {config.depth_growth.target_layers}"
+                )
+
+            source_model_config = build_growth_source_model_config(config.model, config.depth_growth)
+
+            @jax.jit
+            def _init_source_state(model_rng):
+                return initial_state(
+                    source_model_config,
+                    optimizer=optimizer,
+                    mp=trainer.mp,
+                    key=model_rng,
+                    ema_beta=config.trainer.ema_beta,
+                )
+
+            source_state_exemplar = _init_source_state(model_key)
+            state, growth_report = load_and_grow_grug_depth_state(
+                source_state_exemplar,
                 state,
                 trainer.initialize_from,
+                config=config.depth_growth,
                 mesh=mesh,
                 allow_partial=trainer.allow_partial_checkpoint,
-                additional_weight_fields=("pending_qb_betas",),
+            )
+            actual_data_offset = int(batch_schedule.global_data_offset_by_step(int(state.step)))
+            validate_depth_growth_data_offset(config.depth_growth, actual_data_offset=actual_data_offset)
+            logger.info("Completed shallow-to-deep state transition: %s", growth_report)
+            levanter.tracker.log_summary(
+                {
+                    "depth_growth/source_layers": config.depth_growth.source_layers,
+                    "depth_growth/target_layers": config.depth_growth.target_layers,
+                    "depth_growth/width_expansion_factor": config.depth_growth.width_expansion_factor,
+                    "depth_growth/new_layer_initialization": config.depth_growth.new_layer_initialization.value,
+                    "depth_growth/transition_step": growth_report.step,
+                    "depth_growth/data_offset": actual_data_offset,
+                    "depth_growth/reset_optimizer_leaves": growth_report.reset_optimizer_leaves,
+                }
             )
         dump_grug_state_sharding_run_artifact(
             state,
@@ -466,7 +663,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
 
-        flops_per_example, flops_summary = _compute_flops(model_config=config.model)
+        flops_per_example, flops_summary = _compute_flops(
+            model_config=config.model,
+            active_layers_per_step=config.random_layer_dropout_count,
+        )
         levanter.tracker.log_summary(flops_summary)
 
         eval_cfg = config.eval
@@ -500,10 +700,11 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks.add_hook(callbacks.log_step_info(trainer.num_train_steps), every=log_every)
         if profiler_enabled:
             state_callbacks.add_hook(
-                profiler_cfg.build(
+                callbacks.profile(
                     str(trainer.log_dir / run_id / "profiler"),
-                    run_id=run_id,
-                    num_steps=profiler_num_steps,
+                    profiler_cfg.start_step,
+                    profiler_num_steps,
+                    profiler_cfg.perfetto_link,
                 ),
                 every=1,
             )
@@ -525,7 +726,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         last_loss: float | jax.Array = 0.0
         last_step_duration = 0.0
 
-        # Main optimization loop.
         try:
             while int(state.step) < trainer.num_train_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
@@ -555,16 +755,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                        if key.startswith(("train/router/", "moe_bias/"))
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
-                    if "train/cross_entropy_loss" in metrics:
-                        levanter.tracker.log(
-                            {"train/cross_entropy_loss": metrics["train/cross_entropy_loss"]},
-                            step=step,
-                        )
+                    scalar_train_metrics = {
+                        key: metrics[key]
+                        for key in ("train/cross_entropy_loss", "train/valid_target_fraction")
+                        if key in metrics
+                    }
+                    if scalar_train_metrics:
+                        levanter.tracker.log(scalar_train_metrics, step=step)
 
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)

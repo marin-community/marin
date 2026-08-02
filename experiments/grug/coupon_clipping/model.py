@@ -1,10 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MoE grug variant model.
+"""Segmented shared-expert MoE model for the coupon-clipping experiment.
 
 Architecture: QB-routed MoE with GatedNorm, XSA, sigmoid combine weights.
 No load-balancing loss; router z-loss only. All layers are MoE (no dense layers).
+
+The transformer blocks are split into fixed scan segments. Each segment can use a
+different shared-expert width, while every experiment arm keeps the same segment
+boundaries and therefore the same scan topology.
 """
 
 import dataclasses
@@ -74,6 +78,7 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+BlockStorage = Literal["unrolled", "array_stacked"]
 
 
 def _batch_spec() -> P:
@@ -85,15 +90,7 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
-    """Replica-local embedding lookup.
-
-    The naive ``token_embed.at[token_ids].get(out_sharding=...)`` emits an all-to-all to lay the
-    gathered rows onto the batch-sharded token axis; because that axis spans ``replica_dcn`` it runs
-    cross-rack and its NCCL first-call rendezvous wedges at 8+ racks. Instead, run the gather under a
-    ``shard_map`` over the batch axes so each shard looks up its own tokens in its (fully replicated)
-    copy of the table -- a purely local op, no collective. Relies on ``Pembed_vocab`` replicating the
-    table across all devices; output hidden is replicated, matching the downstream FFN/attention.
-    """
+    """Look up token embeddings independently within each batch shard."""
 
     def _local(te: jax.Array, ids: jax.Array) -> jax.Array:
         return te[ids]
@@ -134,8 +131,8 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
-    Only shape/size knobs live here. All layers are MoE.
+    GatedNorm, XSA, and QB routing are fixed. Shape and execution-policy fields
+    configure an all-MoE transformer.
     """
 
     vocab_size: int
@@ -169,12 +166,17 @@ class GrugModelConfig:
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
     backward skips re-running expert dispatch and its EP collectives."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
-    use_array_stacked_blocks: bool = False
-    """Stack all transformer blocks into a single ``ArrayStacked[Block]`` and run them
-    through one ``jax.lax.scan``. Collapses the per-layer subgraphs into one scan body so
-    compile time and per-layer overhead stop scaling with ``num_layers``. Requires
-    ``disable_pko=True`` (PKO reads a per-layer flag at trace time, not scan-expressible).
-    The default (False) keeps the unrolled per-layer loop with identical numerics."""
+    block_storage: BlockStorage = "unrolled"
+    """Representation used for transformer blocks during execution."""
+    block_segment_lengths: tuple[int, ...] | None = None
+    """Layer counts for independently scanned block segments.
+
+    ``None`` resolves to one segment containing every layer. Pyramid experiment
+    arms specify the same four segments explicitly so scan boundaries are held
+    constant across controls and treatments.
+    """
+    block_segment_shared_expert_intermediate_dims: tuple[int, ...] | None = None
+    """Shared-expert intermediate width for each block segment."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -192,7 +194,58 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        segment_lengths = self.resolved_block_segment_lengths
+        segment_widths = self.resolved_block_segment_shared_expert_intermediate_dims
+        if len(segment_lengths) != len(segment_widths):
+            raise ValueError("block segment lengths and shared-expert widths must have equal length")
+        if any(length <= 0 for length in segment_lengths):
+            raise ValueError("block segment lengths must be positive")
+        if sum(segment_lengths) != self.num_layers:
+            raise ValueError(
+                f"block segment lengths must sum to num_layers={self.num_layers}; got {sum(segment_lengths)}"
+            )
+        if any(width < 0 for width in segment_widths):
+            raise ValueError("block segment shared-expert widths must be non-negative")
+        total_shared_width = sum(length * width for length, width in zip(segment_lengths, segment_widths, strict=True))
+        expected_shared_width = self.num_layers * self.shared_expert_intermediate_dim
+        if total_shared_width != expected_shared_width:
+            raise ValueError(
+                "block segment shared-expert widths must preserve the configured per-layer average: "
+                f"got total {total_shared_width}, expected {expected_shared_width}"
+            )
         resolve_moe_implementation(self.moe_implementation)
+
+    @property
+    def resolved_block_segment_lengths(self) -> tuple[int, ...]:
+        if self.block_segment_lengths is None:
+            return (self.num_layers,)
+        return self.block_segment_lengths
+
+    @property
+    def resolved_block_segment_shared_expert_intermediate_dims(self) -> tuple[int, ...]:
+        if self.block_segment_shared_expert_intermediate_dims is None:
+            if self.block_segment_lengths is not None:
+                raise ValueError(
+                    "block_segment_shared_expert_intermediate_dims must be set when block_segment_lengths is set"
+                )
+            return (self.shared_expert_intermediate_dim,)
+        if self.block_segment_lengths is None:
+            raise ValueError(
+                "block_segment_lengths must be set when block_segment_shared_expert_intermediate_dims is set"
+            )
+        return self.block_segment_shared_expert_intermediate_dims
+
+    @property
+    def shared_expert_intermediate_dims_by_layer(self) -> tuple[int, ...]:
+        return tuple(
+            width
+            for length, width in zip(
+                self.resolved_block_segment_lengths,
+                self.resolved_block_segment_shared_expert_intermediate_dims,
+                strict=True,
+            )
+            for _ in range(length)
+        )
 
     @property
     def Embed(self) -> Axis:
@@ -243,6 +296,10 @@ class GrugModelConfig:
                     5632,
                 )
             ),
+            block_segment_lengths=_hf_config_attr(hf_config, ("block_segment_lengths",)),
+            block_segment_shared_expert_intermediate_dims=_hf_config_attr(
+                hf_config, ("block_segment_shared_expert_intermediate_dims",)
+            ),
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
@@ -258,33 +315,41 @@ class GrugModelConfig:
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: dict[str, Any] | None = None) -> GrugMoeHfConfig:
-        # One name per field: core fields take the universal transformers spelling, MoE fields the
-        # most common public spelling, and grug-specific extras keep their bare names. from_hf_config
-        # stays tolerant of the older spellings so existing artifacts keep loading.
         config = {
             "architectures": [GRUG_MOE_ARCHITECTURE],
             "vocab_size": vocab_size,
-            # core — universal transformers names
+            "hidden_dim": self.hidden_dim,
             "hidden_size": self.hidden_dim,
+            "intermediate_dim": self.intermediate_dim,
+            "intermediate_size": self.intermediate_dim,
+            "moe_intermediate_size": self.intermediate_dim,
+            "shared_expert_intermediate_dim": self.shared_expert_intermediate_dim,
+            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
+            "block_segment_lengths": self.resolved_block_segment_lengths,
+            "block_segment_shared_expert_intermediate_dims": self.resolved_block_segment_shared_expert_intermediate_dims,
+            "num_experts": self.num_experts,
+            "num_local_experts": self.num_experts,
+            "num_experts_per_token": self.num_experts_per_token,
+            "num_experts_per_tok": self.num_experts_per_token,
+            "num_layers": self.num_layers,
             "num_hidden_layers": self.num_layers,
+            "num_heads": self.num_heads,
             "num_attention_heads": self.num_heads,
+            "num_kv_heads": self.num_kv_heads,
             "num_key_value_heads": self.num_kv_heads,
             "head_dim": self.inferred_head_dim,
+            "max_seq_len": self.max_seq_len,
             "max_position_embeddings": self.max_seq_len,
             "sliding_window": self.sliding_window,
+            "layer_norm_eps": self.layer_norm_eps,
             "rms_norm_eps": self.layer_norm_eps,
+            "initializer_std": self.initializer_std,
             "initializer_range": self.initializer_std,
-            "rope_theta": self.rope.theta,
-            "tie_word_embeddings": False,
-            # MoE — most common public spelling per field
-            "num_experts": self.num_experts,
-            "num_experts_per_tok": self.num_experts_per_token,
-            "moe_intermediate_size": self.intermediate_dim,
-            "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
-            # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "grugmoe_attention_mode": "production",
             GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY: GRUG_MOE_ARTIFACT_SCHEMA_VERSION,
+            "rope_theta": self.rope.theta,
+            "tie_word_embeddings": False,
         }
         if config_overrides is not None:
             config.update(config_overrides)
@@ -685,13 +750,16 @@ class Block(eqx.Module):
     shared: DenseMLP | None
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(
+        cfg: GrugModelConfig,
+        shared_expert_intermediate_dim: int,
+        *,
+        key: PRNGKeyArray,
+    ) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         shared = None
-        if cfg.shared_expert_intermediate_dim > 0:
-            shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
-            )
+        if shared_expert_intermediate_dim > 0:
+            shared = DenseMLP.init(cfg.hidden_dim, shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key)
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
@@ -721,9 +789,7 @@ class Block(eqx.Module):
 
 
 def _long_layer_schedule(num_layers: int) -> jax.Array:
-    """Bool[num_layers] mask marking the 'long' (full causal) layers: every 4th layer
-    plus the last one. Rides into the ``lax.scan`` body as a per-layer scan input so the
-    scan can pick the sliding-window vs full mask at runtime."""
+    """Mark every fourth layer and the final layer as full-causal."""
     idx = jnp.arange(num_layers)
     return ((idx % 4) == 3) | (idx == num_layers - 1)
 
@@ -733,10 +799,10 @@ class Transformer(eqx.Module):
     embed_norm: RMSNorm
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
-    # Exactly one is populated: ``blocks`` (unrolled per-layer) or ``stacked_blocks``
-    # (homogeneous lax.scan), selected by ``cfg.use_array_stacked_blocks``.
+    # Exactly one is populated: ``blocks`` (unrolled per-layer) or
+    # ``stacked_block_segments`` (one homogeneous lax.scan per configured segment).
     blocks: tuple[Block, ...] | None
-    stacked_blocks: ArrayStacked[Block] | None
+    stacked_block_segments: tuple[ArrayStacked[Block], ...] | None
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -761,9 +827,9 @@ class Transformer(eqx.Module):
                 raise ValueError("config must not be provided when initializing directly from GrugModelConfig")
             cfg = cfg_or_vocab
 
-        if cfg.use_array_stacked_blocks and not cfg.disable_pko:
+        if cfg.block_storage == "array_stacked" and not cfg.disable_pko:
             raise ValueError(
-                "use_array_stacked_blocks=True requires disable_pko=True because "
+                "block_storage='array_stacked' requires disable_pko=True because "
                 "the attention path reads use_pko at trace time (not scan-expressible)."
             )
 
@@ -774,13 +840,30 @@ class Transformer(eqx.Module):
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
 
         blocks: tuple[Block, ...] | None
-        stacked_blocks: ArrayStacked[Block] | None
-        if cfg.use_array_stacked_blocks:
+        stacked_block_segments: tuple[ArrayStacked[Block], ...] | None
+        if cfg.block_storage == "array_stacked":
             blocks = None
-            stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg, key=jnp.stack(block_keys))
+            stacked_segments = []
+            first_layer = 0
+            for segment_length, shared_width in zip(
+                cfg.resolved_block_segment_lengths,
+                cfg.resolved_block_segment_shared_expert_intermediate_dims,
+                strict=True,
+            ):
+                segment_keys = jnp.stack(block_keys[first_layer : first_layer + segment_length])
+                stacked_segments.append(ArrayStacked.init(segment_length, Block)(cfg, shared_width, key=segment_keys))
+                first_layer += segment_length
+            stacked_block_segments = tuple(stacked_segments)
         else:
-            blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
-            stacked_blocks = None
+            blocks = tuple(
+                Block.init(cfg, shared_width, key=block_key)
+                for shared_width, block_key in zip(
+                    cfg.shared_expert_intermediate_dims_by_layer,
+                    block_keys,
+                    strict=True,
+                )
+            )
+            stacked_block_segments = None
 
         return Transformer(
             token_embed=token_embed,
@@ -788,7 +871,7 @@ class Transformer(eqx.Module):
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
-            stacked_blocks=stacked_blocks,
+            stacked_block_segments=stacked_block_segments,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -803,6 +886,8 @@ class Transformer(eqx.Module):
         self,
         token_ids: Int[Array, "B S"],
         mask: AttentionMask | jax.Array | None = None,
+        *,
+        active_layer_indices: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         if mask is None:
             mask = AttentionMask.causal()
@@ -828,6 +913,8 @@ class Transformer(eqx.Module):
             remat_policy = None
 
         if self.blocks is not None:
+            if active_layer_indices is not None:
+                raise ValueError("active_layer_indices requires array-stacked blocks")
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
@@ -849,10 +936,11 @@ class Transformer(eqx.Module):
                 "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
             }
         else:
-            assert self.stacked_blocks is not None
-            # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
-            # short/long choice rides in as a Bool[num_layers] scan input. PKO is never used here
-            # (scan requires disable_pko=True).
+            assert self.stacked_block_segments is not None
+            # Every arm uses the same segment boundaries. Within each segment, one compiled Block
+            # body is scanned over layers with a homogeneous shared-expert width. The per-layer
+            # short/long choice rides in as a Bool[segment_layers] scan input. PKO is never used
+            # here (scan requires disable_pko=True).
             mask_schedule = _long_layer_schedule(cfg.num_layers)
             # Precompute the FA4 per-token metadata for both the full-causal (long) and
             # sliding-window (short) layers OUTSIDE the scan, then select per layer with a
@@ -883,16 +971,56 @@ class Transformer(eqx.Module):
                 disable_rope = use_long if cfg.disable_long_rope else False
                 return eqx.filter_checkpoint(layer, policy=remat_policy)(carry_hidden, layer_mask, False, disable_rope)
 
-            hidden, stacked_router_stats = jax.lax.scan(
-                _scan_layers, hidden, xs=(self.stacked_blocks.stacked, mask_schedule)
-            )
+            segment_router_stats = []
+            if active_layer_indices is None:
+                first_layer = 0
+                for stacked_segment in self.stacked_block_segments:
+                    segment_length = stacked_segment.num_layers
+                    hidden, stacked_router_stats = jax.lax.scan(
+                        _scan_layers,
+                        hidden,
+                        xs=(stacked_segment.stacked, mask_schedule[first_layer : first_layer + segment_length]),
+                    )
+                    segment_router_stats.append(stacked_router_stats)
+                    first_layer += segment_length
+            else:
+                if len(self.stacked_block_segments) != 1:
+                    raise ValueError("active_layer_indices requires one homogeneous block segment")
+                if active_layer_indices.ndim != 1:
+                    raise ValueError("active_layer_indices must be a rank-one array")
+                stacked_segment = self.stacked_block_segments[0]
+
+                def _scan_selected_layers(
+                    carry_hidden: Float[Array, "B S D"],
+                    scan_inputs: tuple[jax.Array, jax.Array],
+                ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+                    layer_index, layer_use_long_mask = scan_inputs
+                    layer = stacked_segment.get_layer(layer_index)
+                    return _scan_layers(carry_hidden, (layer, layer_use_long_mask))
+
+                hidden, stacked_router_stats = jax.lax.scan(
+                    _scan_selected_layers,
+                    hidden,
+                    xs=(active_layer_indices, jnp.take(mask_schedule, active_layer_indices)),
+                )
+                segment_router_stats.append(stacked_router_stats)
             router_metrics = {
-                "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
-                "routing_counts_per_layer": stacked_router_stats["routing_counts"],
-                "load_balancing_loss_per_layer": stacked_router_stats["load_balancing_loss"],
-                "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
-                "qb_beta_per_layer": stacked_router_stats["qb_beta"],
-                "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+                "routing_entropy_per_layer": jnp.concatenate(
+                    [stats["routing_entropy"] for stats in segment_router_stats], axis=0
+                ),
+                "routing_counts_per_layer": jnp.concatenate(
+                    [stats["routing_counts"] for stats in segment_router_stats], axis=0
+                ),
+                "load_balancing_loss_per_layer": jnp.concatenate(
+                    [stats["load_balancing_loss"] for stats in segment_router_stats], axis=0
+                ),
+                "router_z_loss_per_layer": jnp.concatenate(
+                    [stats["router_z_loss"] for stats in segment_router_stats], axis=0
+                ),
+                "qb_beta_per_layer": jnp.concatenate([stats["qb_beta"] for stats in segment_router_stats], axis=0),
+                "capacity_overflow_per_layer": jnp.concatenate(
+                    [stats["capacity_overflow"] for stats in segment_router_stats], axis=0
+                ),
             }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
@@ -919,9 +1047,50 @@ class Transformer(eqx.Module):
         reduction: str = "mean",
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype = jnp.float32,
-        return_router_metrics: bool = False,
-    ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
-        hidden, router_metrics = self(token_ids, mask=mask)
+    ) -> jax.Array:
+        loss, _ = self._next_token_loss_with_router_metrics(
+            token_ids,
+            loss_weight,
+            mask=mask,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+        )
+        return loss
+
+    def next_token_loss_with_router_metrics(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None = None,
+        reduction: str = "mean",
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype = jnp.float32,
+        active_layer_indices: jax.Array | None = None,
+    ) -> tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+        return self._next_token_loss_with_router_metrics(
+            token_ids,
+            loss_weight,
+            mask=mask,
+            reduction=reduction,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            active_layer_indices=active_layer_indices,
+        )
+
+    def _next_token_loss_with_router_metrics(
+        self,
+        token_ids: Int[Array, "B S"],
+        loss_weight: Float[Array, "B S"],
+        *,
+        mask: AttentionMask | jax.Array | None,
+        reduction: str,
+        logsumexp_weight: float | None,
+        loss_dtype: jnp.dtype,
+        active_layer_indices: jax.Array | None = None,
+    ) -> tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
+        hidden, router_metrics = self(token_ids, mask=mask, active_layer_indices=active_layer_indices)
         labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
@@ -939,12 +1108,10 @@ class Transformer(eqx.Module):
         rzl = jnp.sum(router_metrics["router_z_loss_per_layer"]) / num_moe_layers
         aux_loss = self.config.router_z_loss_coef * rzl
         loss = cross_entropy_loss + aux_loss if reduction != "none" else cross_entropy_loss
-        if return_router_metrics:
-            summarized_metrics = _summarize_router_metrics(router_metrics)
-            summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
-            summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
-            return loss, summarized_metrics
-        return loss
+        summarized_metrics = _summarize_router_metrics(router_metrics)
+        summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
+        summarized_metrics["train/router/aux_loss_weighted"] = aux_loss
+        return loss, summarized_metrics
 
 
 def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
@@ -990,7 +1157,17 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
         "lm_head.weight": _linear_inference_tensor(model.output_proj),
     }
 
-    for layer_index, block in enumerate(model.blocks):
+    if model.blocks is not None:
+        blocks = model.blocks
+    else:
+        assert model.stacked_block_segments is not None
+        blocks = tuple(
+            segment.get_layer(layer_index)
+            for segment in model.stacked_block_segments
+            for layer_index in range(segment.num_layers)
+        )
+
+    for layer_index, block in enumerate(blocks):
         layer_prefix = f"model.layers.{layer_index}"
         tensors.update(
             {

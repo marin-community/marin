@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import equinox as eqx
 import jax
-from jax import shard_map
+from jax import core, shard_map
 from jax import numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.sharding import get_abstract_mesh, reshard
@@ -186,6 +186,19 @@ def _active_batch_axes(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> t
     return tuple(axis for axis in _BATCH_AXES if axis in mesh.shape)
 
 
+def _q_batch_axes(q: jax.Array, mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> tuple[str, ...]:
+    """Return the active mesh axes that shard ``q``'s batch dimension."""
+    sharding = jax.typeof(q).sharding if isinstance(q, core.Tracer) else getattr(q, "sharding", None)
+    spec = getattr(sharding, "spec", None)
+    if spec and spec[0] is not None:
+        head = spec[0]
+        axes = tuple(head) if isinstance(head, tuple) else (head,)
+        axes = tuple(axis for axis in axes if axis in mesh.shape)
+        if axes:
+            return axes
+    return _active_batch_axes(mesh)
+
+
 def _head_axis(mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh) -> str | None:
     if "model" not in mesh.shape:
         return None
@@ -226,7 +239,7 @@ def _fa4_cute_attention_forward_sharded(
             kernel_config=kernel_config,
         )
 
-    batch_axes = _active_batch_axes(mesh)
+    batch_axes = _q_batch_axes(q, mesh)
     if not batch_axes:
         return fa4_cute_attention_forward(
             q,

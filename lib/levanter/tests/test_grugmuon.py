@@ -36,7 +36,7 @@ def test_grug_scale_with_muon_orthogonalizes_matrix_trailing_dims():
     assert jnp.array_equal(new_updates["vector"], updates["vector"])
 
 
-def test_grug_muon_mask_routes_stacked_expert_weights_to_muon():
+def test_grug_muon_mask_routes_matrix_weights_by_role():
     params = {
         "embed": jnp.ones((16, 8), dtype=jnp.float32),
         "router": jnp.ones((8, 4), dtype=jnp.float32),
@@ -51,7 +51,7 @@ def test_grug_muon_mask_routes_stacked_expert_weights_to_muon():
     mask = GrugMuonConfig().create_mask(params)
 
     assert mask["embed"] == "adamw"
-    assert mask["router"] == "muon"
+    assert mask["router"] == "adamw"
     assert mask["moe"]["w_up_gate"] == "muon"
     assert mask["moe"]["w_gate_up"] == "muon"
     assert mask["moe"]["w_down"] == "muon"

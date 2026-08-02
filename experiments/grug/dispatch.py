@@ -46,7 +46,16 @@ def dispatch_grug_training_run(
     max_retries_failure: int = 3,
     processes_per_task: int = 1,
 ) -> None:
-    """Submit a grug train entrypoint through Fray and wait for completion."""
+    """Submit a grug train entrypoint through Fray and wait for completion.
+
+    ``GRUG_RUN_INLINE=1`` runs the entrypoint in-process instead of submitting a Fray job.
+    Use it when already inside an allocated node (e.g. a federated GB200 job) so the run
+    uses the current node's GPUs directly rather than queuing for a second allocation.
+    """
+    if os.environ.get("GRUG_RUN_INLINE") == "1":
+        logger.info("GRUG_RUN_INLINE=1: running grug training inline (no Fray dispatch)")
+        local_entrypoint(config)
+        return
     safe_run_id = _safe_job_suffix(run_id)
     env_vars = resolve_training_env(base_env=_forwarded_env_vars(), resources=resources)
     request = JobRequest(

@@ -43,6 +43,14 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### coupon-clipping
+- Path: `experiments/grug/coupon_clipping/`
+- Origin: moe
+- Introduced: 9a83fe899c
+- Status: active
+- Purpose: test shared-capacity placement and shallow-to-deep growth on 16 GB200 GPUs.
+- Issue: https://github.com/marin-community/marin/issues/7836
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834
