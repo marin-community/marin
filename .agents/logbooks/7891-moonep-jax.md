@@ -76,3 +76,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Result: Created issue #7891. The MoonEP clone and report are present and verified.
 - Interpretation: No open MoonEP issue or competing branch was found.
 - Next action: Add the global histogram QB reference and behavior tests.
+
+### 2026-08-02 09:19 UTC - Global histogram QB reference
+
+- Hypothesis: A 1,000-bin pooled histogram removes the error from averaging per-rank quantiles.
+- Commit Hash: `b3a4e0b65`.
+- Command: `uv run pytest tests/test_moe_hero_ep.py tests/test_grug_variant_contracts.py -q`.
+- Config: Global histogram range `[min(bias)-1, max(bias)+1]` with one integer reduction per layer.
+- Result: Pooled quantile, local-average counterexample, and two-device reduction checks pass. Pyrefly reports zero errors.
+- Interpretation: The implementation matches the report algorithm within one bin width and preserves the local estimator as a control.
+- Next action: Implement the MoonEP allocation planner and compare it with the independent reference.
