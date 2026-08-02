@@ -1,14 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The canonical eval-run record and its object-store layouts.
+"""The canonical eval-run record and its object-store layout.
 
 One eval launch writes one ``record.json`` under ``{prefix}/{run_id}/record.json``: the durable,
 self-describing account of what model was evaluated on what hardware, whether it succeeded, and the
 per-task metrics it produced. The record is the source of truth; evaldash builds its query index from
-these object-store records. New runs use an ``evals`` prefix. Evaldash also reads the former
-``eval-metadata/runs`` prefixes and the bounded artifact layout produced before pipeline evals adopted
-the shared output root.
+these object-store records. Runs use an ``evals`` prefix in the platform-local object store.
 
 This module is import-light on purpose -- stdlib plus fsspec and Pydantic only, no marin/levanter/iris
 imports -- so it can be vendored verbatim into a standalone dashboard image that only reads records back.
@@ -32,8 +30,6 @@ DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/evals"
 # credentials but no GCP ones. The dashboard's ingest scans both prefixes. Access from outside
 # the cluster needs `rigging.filesystem.s3_compat.configure_coreweave_s3()` first.
 CW_RECORDS_PREFIX = "s3://marin-us-east-02a/marin/evals"
-LEGACY_DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/runs"
-LEGACY_CW_RECORDS_PREFIX = "s3://marin-us-east-02a/marin/eval-metadata/runs"
 RECORD_FILE = "record.json"
 _MAX_RECORD_READERS = 16
 
@@ -247,7 +243,6 @@ class RecordParseFailure:
 class _RecordRead:
     record: EvalRunRecord | None = None
     failure: RecordParseFailure | None = None
-    missing: bool = False
 
 
 @dataclass(frozen=True)
@@ -275,7 +270,7 @@ def _read_candidates(urls: list[str], cached: Mapping[str, EvalRunRecord]) -> li
         try:
             return _RecordRead(record=read_record(url))
         except FileNotFoundError:
-            return _RecordRead(missing=True)
+            return _RecordRead()
         except Exception as exc:
             logger.warning("skipping unparseable eval record at %s", url, exc_info=True)
             return _RecordRead(failure=RecordParseFailure(path=url, error=f"{type(exc).__name__}: {exc}"))
@@ -287,8 +282,7 @@ def _read_candidates(urls: list[str], cached: Mapping[str, EvalRunRecord]) -> li
 def scan_records(prefix: str, cached: Mapping[str, EvalRunRecord] | None = None) -> RecordScan:
     """Return current records under ``prefix`` and a cache for the next scan.
 
-    Every root supports the flat ``{prefix}/{run_id}/record.json`` layout. Roots named ``evals`` also
-    include ``{prefix}/{model}/{evals}/{version}/{run_id}/record.json``.
+    Records use the flat ``{prefix}/{run_id}/record.json`` layout.
 
     Valid paths in ``cached`` are reused. New records and prior parse failures are read, and deleted
     paths are absent from the returned cache.
@@ -299,27 +293,15 @@ def scan_records(prefix: str, cached: Mapping[str, EvalRunRecord] | None = None)
     failures: list[RecordParseFailure] = []
     records_by_path: dict[str, EvalRunRecord] = {}
 
-    def collect(urls: list[str], results: list[_RecordRead]) -> None:
-        for url, result in zip(urls, results, strict=True):
-            if result.record is not None:
-                records.append(result.record)
-                records_by_path[url] = result.record
-            if result.failure is not None:
-                failures.append(result.failure)
-
-    # Object-store globs recurse into result payloads. Walk only the two supported record layouts.
+    # Object-store globs recurse into result payloads. List only immediate run directories.
     top_level = _directory_children(fs, root)
     flat_urls = [fs.unstrip_protocol(posixpath.join(directory, RECORD_FILE)) for directory in top_level]
-    flat_reads = _read_candidates(flat_urls, cached)
-    collect(flat_urls, flat_reads)
-
-    if prefix.rstrip("/").endswith("/evals"):
-        artifact_roots = [directory for directory, result in zip(top_level, flat_reads, strict=True) if result.missing]
-        artifact_runs = artifact_roots
-        for _ in range(3):
-            artifact_runs = [child for parent in artifact_runs for child in _directory_children(fs, parent)]
-        artifact_urls = [fs.unstrip_protocol(posixpath.join(directory, RECORD_FILE)) for directory in artifact_runs]
-        collect(artifact_urls, _read_candidates(artifact_urls, cached))
+    for url, result in zip(flat_urls, _read_candidates(flat_urls, cached), strict=True):
+        if result.record is not None:
+            records.append(result.record)
+            records_by_path[url] = result.record
+        if result.failure is not None:
+            failures.append(result.failure)
     return RecordScan(records=tuple(records), failures=tuple(failures), records_by_path=records_by_path)
 
 

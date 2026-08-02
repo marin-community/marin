@@ -138,16 +138,16 @@ def test_read_records_collects_parse_failures_without_dropping_good_ones(tmp_pat
     assert "ValidationError" in failures[0].error
 
 
-def test_read_records_discovers_flat_and_artifact_eval_layouts(tmp_path):
+def test_read_records_only_discovers_flat_eval_layout(tmp_path):
     evals = tmp_path / "evals"
     flat = _RECORD.model_copy(update={"run_id": "flat-run"})
-    artifact = _RECORD.model_copy(update={"run_id": "artifact-run"})
+    nested = _RECORD.model_copy(update={"run_id": "nested-run"})
     write_record(flat, str(evals))
-    write_record(artifact, str(evals / "model" / "suite" / "version"))
+    write_record(nested, str(evals / "model" / "suite" / "version"))
 
     records, failures = read_records(str(evals))
 
-    assert {record.run_id for record in records} == {"flat-run", "artifact-run"}
+    assert [record.run_id for record in records] == ["flat-run"]
     assert failures == []
 
 

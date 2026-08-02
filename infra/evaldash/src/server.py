@@ -3,9 +3,8 @@
 
 """Eval-results dashboard server (Starlette + uvicorn).
 
-Serves a bundled Vue SPA plus a small JSON API over the eval run records. New records live under the
-GCS or CoreWeave ``evals`` output root. Records in the legacy ``eval-metadata/runs`` roots remain
-readable and are indexed into CloudSQL Postgres.
+Serves a bundled Vue SPA plus a small JSON API over eval run records under the GCS or CoreWeave
+``evals`` output root.
 
 A background task ingests the records on startup and every ``EVALDASH_INGEST_INTERVAL`` seconds
 (default 300). Reads are served through a ``RecordStore`` selected by ``EVALDASH_STORE``: the
@@ -53,8 +52,6 @@ import uvicorn
 from marin.evaluation.records import (
     CW_RECORDS_PREFIX,
     DEFAULT_RECORDS_PREFIX,
-    LEGACY_CW_RECORDS_PREFIX,
-    LEGACY_DEFAULT_RECORDS_PREFIX,
     EvalRunRecord,
     RecordParseFailure,
     scan_records,
@@ -84,14 +81,7 @@ RECORDS_PREFIXES = tuple(
     part.strip()
     for part in os.environ.get(
         "RECORDS_PREFIXES",
-        ",".join(
-            (
-                DEFAULT_RECORDS_PREFIX,
-                CW_RECORDS_PREFIX,
-                LEGACY_DEFAULT_RECORDS_PREFIX,
-                LEGACY_CW_RECORDS_PREFIX,
-            )
-        ),
+        ",".join((DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX)),
     ).split(",")
     if part.strip()
 )

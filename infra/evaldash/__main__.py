@@ -23,12 +23,7 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
-from marin.evaluation.records import (
-    CW_RECORDS_PREFIX,
-    DEFAULT_RECORDS_PREFIX,
-    LEGACY_CW_RECORDS_PREFIX,
-    LEGACY_DEFAULT_RECORDS_PREFIX,
-)
+from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
@@ -41,16 +36,8 @@ CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 # admin API + the runtime SA's roles/cloudsql.client grant, so no VPC path is needed.
 CLOUDSQL_INSTANCE = "hai-gcp-models:us-central1:marin-metadata"
 
-# New eval outputs plus the legacy roots retained for existing runs. CoreWeave workers have no GCP
-# credentials, so GPU runs write to the CW-local S3 store.
-RECORDS_PREFIXES = ",".join(
-    (
-        DEFAULT_RECORDS_PREFIX,
-        CW_RECORDS_PREFIX,
-        LEGACY_DEFAULT_RECORDS_PREFIX,
-        LEGACY_CW_RECORDS_PREFIX,
-    )
-)
+# CoreWeave workers have no GCP credentials, so GPU runs write to the CW-local S3 store.
+RECORDS_PREFIXES = ",".join((DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX))
 EVAL_DB_NAME = "evals"
 EVAL_DB_USER = "evals"
 
