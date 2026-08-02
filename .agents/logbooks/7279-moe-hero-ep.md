@@ -564,3 +564,27 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Training: Final loss is 6.1049. Final MoE drop fraction falls from 9.6786% to 5.8806%, a reduction of 3.7980 percentage points.
 - Code cost: Spill adds 106 net backend and public-dispatch lines, plus 101 net test lines.
 - Decision: Do not select spill. It is a throughput tie but does not exceed MHEP-004 median MFU and adds code. The selection rule prefers the highest MFU with the least code. Remove receiver-ECHO and spill from the final diff, restore MHEP-004, and run its final 200-step gate. XProf is not necessary for this selection decision.
+
+### 2026-08-02 04:44 UTC - MHEP-008 selected stack local gate passed
+
+- Code snapshot: `e2b10a535d7fd7319b5b659d5bbdf45f3b85da8a`.
+- Selection: MHEP-004 has the highest 25-step median MFU, 24.1231%, and the least code among the final candidates. MHEP-006 receiver-ECHO and MHEP-007 spill remain in commit and experiment history but are removed from the final file state.
+- Exact state: The Levanter MoE implementation and tests match the MHEP-004 result commit `c1112127e`. The hero uses fixed all-to-all, gather dispatch, structured gather adjoints, and capacity 1.0.
+- Tests: The selected Grug MoE and EP hero suites pass with 19 tests, 6 skips, and 1 test excluded by the repository marker policy. Changed-file pre-commit and Pyrefly pass.
+- Dry run: The plan resolves 200 steps, batch 1024, EP64, fixed all-to-all at capacity 1.0, and 16 workers with four GB200 GPUs each. The 200-step compute heuristic sets MuonH LR 0.0485937, Adam LR 0.0112139, beta2 0.9684911, and epsilon 1.36839e-16.
+
+### 2026-08-02 04:44 UTC - MHEP-008 final gate launch contract ready
+
+- Goal: Verify the selected minimal stack for 200 training steps with finite loss and stable throughput.
+- Run ID: `mhep-008-final-200-20260802-0444`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mhep-008-final-200-20260802-0444-coord -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch --run-id mhep-008-final-200-20260802-0444 --num-steps 200 --version 2026.08.02 --run`.
+- Code snapshot: `e2b10a535d7fd7319b5b659d5bbdf45f3b85da8a`; the clean launch commit will include this log entry.
+- Output identity: `s3://marin-us-east-02a/marin/grug/mhep-008-final-200-20260802-0444/2026.08.02`.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-008-final-200-20260802-0444`, project `marin_moe`, group `moe-hero-ep`, resume `allow`, and offline mode.
+- Initialization: None.
+- Final step: 200.
+- Checkpoint policy: No checkpoints. This final throughput gate writes metrics only.
+- DRI and babysitter: `rav`; `rav/codex` owns the monitor at the normal 570-second cadence after the first 120-second check.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, sustained loss above 1.5 times the expected trend for 10 steps, or incomplete step 200.
+- Next action: Commit this contract, submit the coordinator once, and monitor it to a terminal state.
