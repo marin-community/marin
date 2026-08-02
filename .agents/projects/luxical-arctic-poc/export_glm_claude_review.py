@@ -8,7 +8,6 @@ import json
 import logging
 
 from glm_semantic_labels import (
-    CLAUDE_REVIEW_MARKER,
     OUTPUT_ROOT,
     Assignment,
     Bucket,
@@ -20,6 +19,9 @@ from ladder_config import read_json
 from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
+
+CLAUDE_REVIEW_CHUNK_MARKER = "CLAUDE_REVIEW_CHUNK="
+CLAUDE_REVIEW_CHUNK_SIZE = 8_000
 
 
 def export_review(run_id: str, output_root: StoragePath) -> None:
@@ -35,7 +37,12 @@ def export_review(run_id: str, output_root: StoragePath) -> None:
     assignments = [Assignment(**row) for path in assignment_paths for row in read_jsonl(path)]
     if len(documents) != summary["sample_size"] or len(assignments) != summary["assignment_count"]:
         raise ValueError("The completed run counts do not match its review inputs")
-    logger.info("%s%s", CLAUDE_REVIEW_MARKER, claude_review_package(documents, assignments, buckets))
+    package = claude_review_package(documents, assignments, buckets)
+    chunks = [
+        package[start : start + CLAUDE_REVIEW_CHUNK_SIZE] for start in range(0, len(package), CLAUDE_REVIEW_CHUNK_SIZE)
+    ]
+    for index, chunk in enumerate(chunks):
+        logger.info("%s%04d/%04d:%s", CLAUDE_REVIEW_CHUNK_MARKER, index, len(chunks), chunk)
     logger.info(
         "GLM_CLAUDE_REVIEW_EXPORT=%s",
         json.dumps({"run_id": run_id, "documents": len(documents), "assignments": len(assignments)}, sort_keys=True),

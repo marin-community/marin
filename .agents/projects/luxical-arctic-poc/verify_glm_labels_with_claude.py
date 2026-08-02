@@ -10,7 +10,40 @@ import json
 import subprocess
 from typing import Any
 
+from export_glm_claude_review import CLAUDE_REVIEW_CHUNK_MARKER
 from glm_semantic_labels import CLAUDE_REVIEW_MARKER, parse_json_object
+
+
+def review_package_from_logs(logs: str) -> dict[str, Any]:
+    """Read one review package from complete or chunked log records."""
+    marker_lines = [
+        line.partition(CLAUDE_REVIEW_MARKER)[2] for line in logs.splitlines() if CLAUDE_REVIEW_MARKER in line
+    ]
+    if len(marker_lines) == 1:
+        encoded = marker_lines[0]
+    else:
+        chunks: dict[int, str] = {}
+        expected_count = None
+        for line in logs.splitlines():
+            if CLAUDE_REVIEW_CHUNK_MARKER not in line:
+                continue
+            record = line.partition(CLAUDE_REVIEW_CHUNK_MARKER)[2]
+            header, separator, chunk = record.partition(":")
+            if not separator:
+                raise ValueError("A Claude review chunk has no separator")
+            index_text, separator, count_text = header.partition("/")
+            if not separator:
+                raise ValueError("A Claude review chunk has no count")
+            index = int(index_text)
+            count = int(count_text)
+            if expected_count is not None and count != expected_count:
+                raise ValueError("Claude review chunk counts differ")
+            expected_count = count
+            chunks[index] = chunk
+        if expected_count is None or set(chunks) != set(range(expected_count)):
+            raise ValueError(f"Expected one Claude review package, found {len(marker_lines)}")
+        encoded = "".join(chunks[index] for index in range(expected_count))
+    return json.loads(gzip.decompress(base64.b64decode(encoded)))
 
 
 def review_package(cluster: str, job_id: str) -> dict[str, Any]:
@@ -21,12 +54,7 @@ def review_package(cluster: str, job_id: str) -> dict[str, Any]:
         capture_output=True,
         text=True,
     )
-    marker_lines = [
-        line.partition(CLAUDE_REVIEW_MARKER)[2] for line in result.stdout.splitlines() if CLAUDE_REVIEW_MARKER in line
-    ]
-    if len(marker_lines) != 1:
-        raise ValueError(f"Expected one Claude review package, found {len(marker_lines)}")
-    return json.loads(gzip.decompress(base64.b64decode(marker_lines[0])))
+    return review_package_from_logs(result.stdout)
 
 
 def claude_prompt(package: dict[str, Any]) -> str:

@@ -1,13 +1,31 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import gzip
+import json
 import sys
 from pathlib import Path
 
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
-from verify_glm_labels_with_claude import comparison  # noqa: E402
+from export_glm_claude_review import CLAUDE_REVIEW_CHUNK_MARKER  # noqa: E402
+from verify_glm_labels_with_claude import comparison, review_package_from_logs  # noqa: E402
+
+
+def test_review_package_from_chunked_logs() -> None:
+    package = {"taxonomy": [{"bucket_id": "CODE"}], "documents": []}
+    encoded = base64.b64encode(gzip.compress(json.dumps(package).encode())).decode()
+    split = len(encoded) // 2
+    logs = "\n".join(
+        [
+            f"task prefix {CLAUDE_REVIEW_CHUNK_MARKER}0001/0002:{encoded[split:]}",
+            f"task prefix {CLAUDE_REVIEW_CHUNK_MARKER}0000/0002:{encoded[:split]}",
+        ]
+    )
+
+    assert review_package_from_logs(logs) == package
 
 
 def test_comparison_measures_blinded_label_agreement() -> None:
