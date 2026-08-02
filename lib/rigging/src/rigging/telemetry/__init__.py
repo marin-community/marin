@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -65,89 +65,6 @@ class TelemetryStatus:
     rejected_records: int
     last_success_time_seconds: float | None
     oldest_queued_record_age_seconds: float
-
-
-@dataclass(frozen=True)
-class MetricSnapshot:
-    """One externally collected metric value with explicit source semantics."""
-
-    name: str
-    value: float
-    unit: str
-    attributes: Mapping[str, str]
-    source_kind: str
-    source_temporality: str
-
-
-@dataclass(frozen=True)
-class MetricPublishResult:
-    """Bounded admission result for one metric snapshot publication.
-
-    ``sample_limit_dropped_records`` never reached telemetry admission.
-    ``telemetry_lost_records`` reached admission but could not enter the queue.
-    """
-
-    configured: bool
-    enqueued_records: int
-    sample_limit_dropped_records: int
-    telemetry_lost_records: int
-
-
-class MetricSnapshotPublisher:
-    """Publish bounded batches of externally collected metric snapshots."""
-
-    def __init__(
-        self,
-        *,
-        max_records: int,
-        attributes: Mapping[str, str] | None = None,
-    ) -> None:
-        if max_records <= 0:
-            raise ValueError("max_records must be positive")
-        common_attributes = dict(attributes or {})
-        serialization.validate_attributes(common_attributes)
-        self._max_records = max_records
-        self._attributes = common_attributes
-
-    def publish(self, snapshots: Sequence[MetricSnapshot]) -> MetricPublishResult:
-        """Validate and enqueue at most ``max_records`` snapshots without blocking."""
-        input_records = len(snapshots)
-        runtime = _runtime
-        if runtime is None:
-            return MetricPublishResult(False, 0, 0, 0)
-
-        selected = snapshots[: self._max_records]
-        enqueued = 0
-        for snapshot in selected:
-            try:
-                if not isinstance(snapshot, MetricSnapshot):
-                    raise TypeError("snapshots must contain MetricSnapshot values")
-                if snapshot.source_temporality not in {CURRENT_SNAPSHOT, CUMULATIVE_SNAPSHOT}:
-                    raise ValueError("source_temporality must be current_snapshot or cumulative_snapshot")
-                attributes = {
-                    **snapshot.attributes,
-                    **self._attributes,
-                    **snapshot_attributes(snapshot.source_kind, snapshot.source_temporality),
-                }
-            except Exception:
-                # One malformed external series must not suppress the rest of the bounded snapshot batch.
-                with runtime._condition:
-                    runtime._lost_records += 1
-                continue
-            enqueued += _emit_to_runtime(
-                runtime,
-                "gauge",
-                snapshot.name,
-                value=snapshot.value,
-                unit=snapshot.unit,
-                attributes=attributes,
-            )
-        return MetricPublishResult(
-            configured=True,
-            enqueued_records=enqueued,
-            sample_limit_dropped_records=max(0, input_records - len(selected)),
-            telemetry_lost_records=len(selected) - enqueued,
-        )
 
 
 @dataclass(frozen=True)
@@ -314,6 +231,11 @@ class _Runtime:
             self._resident_bytes += len(record)
             self._condition.notify()
             return True
+
+    def count_lost(self, records: int = 1) -> None:
+        """Count records that could not be validated or queued for export."""
+        with self._condition:
+            self._lost_records += records
 
     def status(self) -> TelemetryStatus:
         with self._condition:
@@ -660,8 +582,7 @@ def _emit_to_runtime(
             record["value"] = numeric
         return runtime.emit(serialization.json_bytes_bounded(record, runtime.max_record_bytes()))
     except Exception:
-        with runtime._condition:
-            runtime._lost_records += 1
+        runtime.count_lost()
         return False
 
 

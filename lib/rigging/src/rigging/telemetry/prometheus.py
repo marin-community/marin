@@ -14,6 +14,7 @@ from prometheus_client.core import Metric as PrometheusMetric
 from prometheus_client.parser import text_string_to_metric_families
 
 from rigging import telemetry
+from rigging.telemetry import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ DEFAULT_SCRAPE_TIMEOUT = 5.0
 DEFAULT_POLL_INTERVAL = 15.0
 DEFAULT_MAX_SCRAPE_BYTES = 16 << 20
 
-type PrometheusProcessor = Callable[[tuple[PrometheusMetric, ...]], Sequence[telemetry.MetricSnapshot]]
+type PrometheusProcessor = Callable[[tuple[PrometheusMetric, ...]], Sequence[metrics.MetricSnapshot]]
 
 
 class _PrometheusStage(StrEnum):
@@ -55,51 +56,45 @@ class PrometheusScraper:
         self._max_bytes = max_bytes
 
     def scrape(self) -> tuple[PrometheusMetric, ...]:
-        """Return all parsed metric families or raise ``PrometheusScrapeError``."""
-        try:
-            with requests.get(self._metrics_url, timeout=self._timeout, stream=True) as response:
-                if response.status_code != 200:
-                    raise PrometheusScrapeError(
-                        f"Prometheus scrape returned HTTP {response.status_code} for {self._metrics_url}"
-                    )
-                try:
-                    content_length = int(response.headers.get("content-length", "0"))
-                except ValueError as error:
-                    raise PrometheusScrapeError(
-                        f"Prometheus scrape returned an invalid content length for {self._metrics_url}"
-                    ) from error
-                if content_length > self._max_bytes:
+        """Return all parsed metric families.
+
+        Raises ``PrometheusScrapeError`` for the size and status policies this
+        scraper enforces. Transport and parse failures propagate with their own
+        types so callers see the underlying error rather than a wrapped one.
+        """
+        with requests.get(self._metrics_url, timeout=self._timeout, stream=True) as response:
+            if response.status_code != 200:
+                raise PrometheusScrapeError(
+                    f"Prometheus scrape returned HTTP {response.status_code} for {self._metrics_url}"
+                )
+            declared_length = response.headers.get("content-length")
+            if declared_length is not None and int(declared_length) > self._max_bytes:
+                raise PrometheusScrapeError(
+                    f"Prometheus scrape exceeded {self._max_bytes} bytes for {self._metrics_url}"
+                )
+            chunks: list[bytes] = []
+            size = 0
+            for chunk in response.iter_content(chunk_size=64 << 10):
+                size += len(chunk)
+                if size > self._max_bytes:
                     raise PrometheusScrapeError(
                         f"Prometheus scrape exceeded {self._max_bytes} bytes for {self._metrics_url}"
                     )
-                chunks: list[bytes] = []
-                size = 0
-                for chunk in response.iter_content(chunk_size=64 << 10):
-                    size += len(chunk)
-                    if size > self._max_bytes:
-                        raise PrometheusScrapeError(
-                            f"Prometheus scrape exceeded {self._max_bytes} bytes for {self._metrics_url}"
-                        )
-                    chunks.append(chunk)
-        except requests.RequestException as error:
-            raise PrometheusScrapeError(f"Prometheus scrape failed for {self._metrics_url}") from error
+                chunks.append(chunk)
+            body = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
 
-        body = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
-        try:
-            return tuple(text_string_to_metric_families(body))
-        except Exception as error:
-            raise PrometheusScrapeError(f"Prometheus scrape could not be parsed for {self._metrics_url}") from error
+        return tuple(text_string_to_metric_families(body))
 
 
 def prefixed_metric_snapshots(
     families: tuple[PrometheusMetric, ...],
     *,
     metric_prefix: str,
-) -> tuple[telemetry.MetricSnapshot, ...]:
+) -> tuple[metrics.MetricSnapshot, ...]:
     """Preserve Prometheus series whose family names match ``metric_prefix``."""
     if not metric_prefix:
         raise ValueError("metric_prefix must not be empty")
-    snapshots: list[telemetry.MetricSnapshot] = []
+    snapshots: list[metrics.MetricSnapshot] = []
     for family in families:
         if not family.name.startswith(metric_prefix):
             continue
@@ -108,7 +103,7 @@ def prefixed_metric_snapshots(
                 family.type == "summary" and sample.name.endswith(("_count", "_sum"))
             )
             snapshots.append(
-                telemetry.MetricSnapshot(
+                metrics.MetricSnapshot(
                     name=sample.name.removeprefix(metric_prefix),
                     value=float(sample.value),
                     unit=family.unit,
@@ -129,7 +124,7 @@ class PrometheusCollector:
         metric_source: str,
         scraper: PrometheusScraper,
         processor: PrometheusProcessor,
-        publisher: telemetry.MetricSnapshotPublisher,
+        publisher: metrics.MetricSnapshotPublisher,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
     ) -> None:
         if not metric_source:
@@ -150,38 +145,41 @@ class PrometheusCollector:
         self._thread.start()
 
     def poll_once(self) -> None:
-        """Run one scrape, process, and publication cycle with stage isolation."""
+        """Run one scrape, process, and publication cycle, isolating the failed stage.
+
+        This runs on the daemon poll loop, so a stage failure is logged with its
+        traceback and recorded against that stage rather than propagated: letting
+        it escape would kill the collector thread and silently end forwarding.
+        The stage cursor attributes the failure so the loss surfaces as a health
+        metric instead of vanishing.
+        """
+        stage = _PrometheusStage.SCRAPE
         try:
             families = self._scraper.scrape()
-        except Exception:
-            self._stage_failed(_PrometheusStage.SCRAPE)
-            self._record_health(source_available=False)
-            return
-
-        try:
+            stage = _PrometheusStage.PROCESS
             snapshots = self._processor(families)
-        except Exception:
-            self._stage_failed(_PrometheusStage.PROCESS)
-            self._record_health(source_available=True)
-            return
-
-        try:
+            stage = _PrometheusStage.PUBLISH
             result = self._publisher.publish(snapshots)
         except Exception:
-            self._stage_failed(_PrometheusStage.PUBLISH)
-            self._record_health(source_available=True)
+            self._stage_failed(stage)
+            self._record_health(source_available=stage is not _PrometheusStage.SCRAPE)
             return
         self._record_health(source_available=True, result=result)
 
     def _stage_failed(self, stage: _PrometheusStage) -> None:
         self._stage_failures[stage] += 1
-        logger.warning("Prometheus %s stage failed for %s", stage, self._metric_source, exc_info=True)
+        logger.warning(
+            "Prometheus %s stage failed for %s; forwarding continues",
+            stage,
+            self._metric_source,
+            exc_info=True,
+        )
 
     def _record_health(
         self,
         *,
         source_available: bool,
-        result: telemetry.MetricPublishResult | None = None,
+        result: metrics.MetricPublishResult | None = None,
     ) -> None:
         current = {
             "metric_source": self._metric_source,

@@ -22,6 +22,7 @@ import requests
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
 from rigging.filesystem import marin_prefix
+from rigging.telemetry.metrics import MetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
@@ -940,7 +941,7 @@ def _start_vllm_native_server(
         metric_source=_VLLM_METRICS_SERVICE,
         scraper=PrometheusScraper(metrics_url),
         processor=functools.partial(prefixed_metric_snapshots, metric_prefix=_VLLM_METRIC_PREFIX),
-        publisher=telemetry.MetricSnapshotPublisher(
+        publisher=MetricSnapshotPublisher(
             max_records=_MAX_VLLM_METRIC_SNAPSHOTS,
             attributes={"metric_source": _VLLM_METRICS_SERVICE},
         ),

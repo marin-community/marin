@@ -7,6 +7,7 @@ import pytest
 import requests
 from prometheus_client.core import Metric as PrometheusMetric
 from rigging import telemetry
+from rigging.telemetry import metrics
 from rigging.telemetry.prometheus import (
     DEFAULT_MAX_SCRAPE_BYTES,
     PrometheusCollector,
@@ -75,7 +76,7 @@ def _collector(
         metric_source="vllm",
         scraper=PrometheusScraper("http://vllm/metrics"),
         processor=processor,
-        publisher=telemetry.MetricSnapshotPublisher(
+        publisher=metrics.MetricSnapshotPublisher(
             max_records=max_records,
             attributes={"metric_source": "vllm"},
         ),
@@ -125,9 +126,9 @@ def test_metric_snapshot_publisher_caps_processor_output(monkeypatch: pytest.Mon
         "rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: _PrometheusResponse(_SCRAPE)
     )
 
-    def processor(_families: tuple[PrometheusMetric, ...]) -> Sequence[telemetry.MetricSnapshot]:
+    def processor(_families: tuple[PrometheusMetric, ...]) -> Sequence[metrics.MetricSnapshot]:
         return tuple(
-            telemetry.MetricSnapshot(
+            metrics.MetricSnapshot(
                 name="bounded_metric",
                 value=index,
                 unit="1",
@@ -160,7 +161,7 @@ def test_processor_failure_does_not_hide_successful_scrape(monkeypatch: pytest.M
         "rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: _PrometheusResponse(_SCRAPE)
     )
 
-    def processor(_families: tuple[PrometheusMetric, ...]) -> Sequence[telemetry.MetricSnapshot]:
+    def processor(_families: tuple[PrometheusMetric, ...]) -> Sequence[metrics.MetricSnapshot]:
         raise RuntimeError("policy failed")
 
     _collector(processor).poll_once()
@@ -193,6 +194,16 @@ def test_scrape_failure_is_reported_separately(monkeypatch: pytest.MonkeyPatch) 
         )["value"]
         == 1
     )
+
+
+def test_scraper_propagates_transport_error_unwrapped(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable(*_args, **_kwargs):
+        raise requests.ConnectionError("unavailable")
+
+    monkeypatch.setattr("rigging.telemetry.prometheus.requests.get", unavailable)
+
+    with pytest.raises(requests.ConnectionError):
+        PrometheusScraper("http://vllm/metrics").scrape()
 
 
 def test_scraper_rejects_oversized_response_before_reading_body(monkeypatch: pytest.MonkeyPatch) -> None:
