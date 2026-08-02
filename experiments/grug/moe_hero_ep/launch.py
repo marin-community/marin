@@ -31,6 +31,7 @@ from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
 DEFAULT_WANDB_PROJECT = "marin_moe"
+MIN_HERO_PROFILE_START_STEP = 3
 HERO_EP_BATCH_SIZE = 1024
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
@@ -98,6 +99,8 @@ def build_hero_run(
         raise ValueError(f"num_steps must be positive, got {num_steps}")
     if profile_num_steps <= 0:
         raise ValueError(f"profile_num_steps must be positive, got {profile_num_steps}")
+    if profile_start_step is not None and profile_start_step < MIN_HERO_PROFILE_START_STEP:
+        raise ValueError(f"profile_start_step must be at least {MIN_HERO_PROFILE_START_STEP}")
     if profile_start_step is not None and profile_start_step + profile_num_steps > num_steps:
         raise ValueError("the profile window must fit within the training run")
     if moonep_jax_wheel_build is not None and moe_implementation != "moonep_jax":
@@ -250,7 +253,7 @@ def build_hero_run(
 )
 @click.option(
     "--profile-start-step",
-    type=click.IntRange(min=0),
+    type=click.IntRange(min=MIN_HERO_PROFILE_START_STEP),
     default=None,
     help="First training step in the one-process XPlane profile window.",
 )

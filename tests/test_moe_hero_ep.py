@@ -11,6 +11,7 @@ from unittest.mock import patch
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from fray.cluster import ResourceConfig
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
@@ -211,14 +212,23 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup():
 
 
 def test_profile_window_uses_one_process_and_keeps_hlo_metadata():
-    profiler = launch._hero_profiler_config(start_step=1, num_steps=2)
+    profiler = launch._hero_profiler_config(start_step=3, num_steps=2)
     assert profiler.enabled
-    assert profiler.start_step == 1
+    assert profiler.start_step == 3
     assert profiler.num_steps == 2
     assert profiler.process_index == 0
     assert profiler.profile_options.host_tracer_level == 1
     assert profiler.profile_options.python_tracer_level == 0
     assert profiler.profile_options.enable_hlo_proto
+
+
+def test_profile_window_rejects_steps_skipped_by_callback_runner():
+    with pytest.raises(ValueError, match="profile_start_step must be at least 3"):
+        launch.build_hero_run(
+            run_id="early-profile-window",
+            num_steps=5,
+            profile_start_step=2,
+        )
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():

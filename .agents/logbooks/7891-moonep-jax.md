@@ -280,3 +280,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Action: Stop the parent as soon as Iris assigned attempt one.
 - Interpretation: The XLA LSA-size fix is present, but its experimental direct peer-memory kernel is not correct for this EP64 program.
 - Next action: Profile the correct standard NCCL path, then replace its largest transport cost with a bounded static collective.
+
+### 2026-08-02 13:39 UTC - MNEP-012 proves the correct rack path
+
+- Run ID: `mnep-012-host-nccl-profile-3-20260802-1325`.
+- Snapshot: `mnep-012-host-nccl-profile-3-20260802-1325` at `c57925bb3bd1cc95aaa9ba4fa6f45993a789a171`.
+- Result: All 16 workers completed three combined steps on attempt zero.
+- Correctness: Loss was 9.40749740600586, with zero dropped assignments and no transport error.
+- Performance: Median MFU was 6.6395957732540705% across two measured steps. The final duration was 38.981918029952794 seconds.
+- Profile gap: Grug skips callback hooks for completed steps zero and one. The requested step-one window did not start.
+- Decision: Require profile windows to start at step three or later, then repeat five steps with a step-three profile window.
