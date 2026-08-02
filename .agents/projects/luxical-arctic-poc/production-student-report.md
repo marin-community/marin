@@ -25,6 +25,7 @@ an approved production model.
 | Fine semantic coherence | Parent, leaf, and form gates on accepted labels | Waiting for hierarchical labels | Open |
 | Blind neighborhood review | Student is not worse than the best teacher | Not run | Open |
 | Held-out robustness | All large semantic groups pass | Not run | Open |
+| Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
 | Release artifact | Pinned model, tokenizer, loader, and production smoke | Not built | Open |
 
 The exact paired CPU test used 20,000 fixed documents, five alternating timed
@@ -139,9 +140,11 @@ architecture and loss. Stop the ladder when two adjacent rungs improve the
 failed metric by less than 0.005. Change the teacher or objective only when the
 teacher itself passes the failed evaluation and scale does not close the gap.
 
-Do not start a rung above 3M with the current materialized training loader.
-First add a sharded or streaming loader and prove bounded peak host memory on a
-small run. The present loader can require tens of GiB at larger rungs.
+The disk-backed staged loader passed its 3M canary with 1,623,203,840 bytes of
+peak RSS. It scanned every row and saw all 146 sources. This is a 79.1 percent
+peak-RSS reduction from the first mapped-page implementation. A 10M or 30M
+rung is now permitted only when the 3M candidate fails a semantic gate and the
+required prepared rows and teacher vectors exist.
 
 The Arctic teacher embeds three head, middle, and tail windows. Short documents
 can repeat the same text, and medium documents can have overlapping windows.

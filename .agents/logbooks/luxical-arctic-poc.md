@@ -1424,4 +1424,22 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   prove that a 30M run is bounded.
 - The corrected loader flushes and releases mapped pages with
   `MADV_DONTNEED` after each staged source and each epoch block. A second 3M
-  canary must show a materially lower peak before the loader gate passes.
+  canary reduced peak RSS to 1,623,203,840 bytes. This is a 79.1 percent
+  reduction from the first canary.
+- The corrected canary scanned all 3,000,000 rows and saw all 146 sources. All
+  finite-value, shape, batch-coverage, source-coverage, layout, and 8 GiB peak
+  RSS gates passed.
+- Corrected canary artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/loader-canary/prepared-3m-20260802-002.json`.
+- The bounded-input gate now passes. A larger rung is permitted only when the
+  3M student fails a semantic gate and the required prepared rows and teacher
+  vectors exist.
+
+### GLM hierarchy run
+
+- The first direct eight-device attempt loaded the pinned GLM-5.2-FP8 model
+  and reached final CUDA-graph autotuning.
+- The scheduler preempted the attempt to admit another workload. Iris then
+  rescheduled both replicas as one unit. This was not a model, data, or schema
+  failure, and the attempt produced no hierarchy labels.
+- The replacement attempt started at 10:45 UTC and remains active.
