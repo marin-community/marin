@@ -24,6 +24,7 @@ MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel fixed-capacity all-to-all backend.
+    "fixed_all_to_all_spill",  # Fixed all-to-all with three same-token spill attempts.
     "echo_receiver",  # Receiver-balanced EP backend with portable grouped GEMMs.
     "echo_receiver_cute",  # Receiver-balanced EP backend with QuACK grouped GEMMs.
     "deepep",  # Expert-parallel DeepEP intranode dispatch/combine backend.
@@ -36,6 +37,7 @@ _EP_MOE_IMPLEMENTATIONS = (
     "ring",
     "ragged_all_to_all",
     "fixed_all_to_all",
+    "fixed_all_to_all_spill",
     "echo_receiver",
     "echo_receiver_cute",
     "deepep",
