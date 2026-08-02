@@ -339,3 +339,28 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Baseline change: Median MFU improves by 4.3121 percentage points, or 28.8% relative, from the ragged MHEP-001 value of 14.9614%. Last-sample throughput improves by 21.3%.
 - Routing: The offline summary reports 9.672% final MoE drops. This is 7.262 percentage points above the ragged final value at the same capacity factor 1.0.
 - Decision: Keep fixed-capacity all-to-all because its MFU gain is large. MHEP-003 will change only dispatch construction from repeated bf16 activation scatter to int32 source scatter plus activation gather. This does not address capacity loss; it isolates the next source-backed performance feature before a routing-capacity change.
+
+### 2026-08-02 01:38 UTC - MHEP-003 local gate passed
+
+- Code snapshot: `c5f1bd1e2`.
+- Change: Fixed dispatch now scatters int32 assignment-source indices and gathers each activation row into the send buffer. It no longer repeats top-k activations or scatters full bf16 rows.
+- Scope: The change adds 12 net lines to the backend. Routing, capacity factor, all-to-all shape, combine, model, optimizer, batch, mesh, and runtime settings stay unchanged.
+- Tests: The full Grug MoE backend file passed with 15 tests and 6 skips. The explicit four-device value-and-gradient test passed. The four EP hero tests passed when run alone. Changed-file pre-commit checks and Pyrefly passed.
+- Test note: The first EP hero run shared the host with three JAX suites and its unrelated Newton-Schulz subprocess hit the 60-second test limit. The isolated rerun passed all four tests in 18.54 seconds.
+- Dry run: The plan resolves fixed all-to-all with gather-dispatch tags, 25 steps, batch 1024, EP64, and 16 workers with four GB200 GPUs each.
+
+### 2026-08-02 01:38 UTC - MHEP-003 launch contract ready
+
+- Hypothesis: Gather dispatch improves the MHEP-002 fixed-capacity median MFU of 19.2735% without changing output values, gradients, or routing loss.
+- Run ID: `mhep-003-gather-25-20260802-0138`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mhep-003-gather-25-20260802-0138-coord -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch --run-id mhep-003-gather-25-20260802-0138 --num-steps 25 --version 2026.08.02 --run`.
+- Code snapshot: `c5f1bd1e2`; the clean launch commit will include this log entry.
+- Output identity: `s3://marin-us-east-02a/marin/grug/mhep-003-gather-25-20260802-0138/2026.08.02`.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-003-gather-25-20260802-0138`, project `marin_moe`, group `moe-hero-ep`, resume `allow`, and offline mode.
+- Initialization: None.
+- Final step: 25.
+- Checkpoint policy: No checkpoints. This gate writes metrics only.
+- DRI and babysitter: `rav`; `rav/codex` owns the monitor.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Commit this contract, submit the coordinator, and monitor it to a terminal state.
