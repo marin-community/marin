@@ -42,8 +42,8 @@ from experiments.datakit.reference_pipeline import (
 )
 
 
-class LastStage(StrEnum):
-    """Last stage included in a benchmark run."""
+class BenchmarkStage(StrEnum):
+    """Stage boundary for a benchmark run."""
 
     EXACT = "exact"
     TOKENIZE = "tokenize"
@@ -51,15 +51,26 @@ class LastStage(StrEnum):
     FUZZY = "fuzzy"
 
 
-def _steps_through(steps: ZephyrDatakitSteps, last_stage: LastStage) -> list[StepSpec]:
-    selected = [steps.exact_dedup]
-    if last_stage in {LastStage.TOKENIZE, LastStage.MINHASH, LastStage.FUZZY}:
-        selected.extend(steps.tokenize.values())
-    if last_stage in {LastStage.MINHASH, LastStage.FUZZY}:
-        selected.extend(steps.minhash.values())
-    if last_stage is LastStage.FUZZY:
-        selected.append(steps.fuzzy_dedup)
-    return selected
+_STAGE_ORDER = tuple(BenchmarkStage)
+
+
+def _steps_between(
+    steps: ZephyrDatakitSteps,
+    first_stage: BenchmarkStage,
+    last_stage: BenchmarkStage,
+) -> list[StepSpec]:
+    first_index = _STAGE_ORDER.index(first_stage)
+    last_index = _STAGE_ORDER.index(last_stage)
+    if first_index > last_index:
+        raise ValueError(f"first stage {first_stage} follows last stage {last_stage}")
+
+    stage_steps = {
+        BenchmarkStage.EXACT: [steps.exact_dedup],
+        BenchmarkStage.TOKENIZE: list(steps.tokenize.values()),
+        BenchmarkStage.MINHASH: list(steps.minhash.values()),
+        BenchmarkStage.FUZZY: [steps.fuzzy_dedup],
+    }
+    return [step for stage in _STAGE_ORDER[first_index : last_index + 1] for step in stage_steps[stage]]
 
 
 def _route_outputs(steps: ZephyrDatakitSteps, output_prefix: str) -> ZephyrDatakitSteps:
@@ -90,7 +101,8 @@ def main() -> None:
     parser.add_argument("--task-disk", required=True)
     parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--chunk-storage-prefix", required=True)
-    parser.add_argument("--last-stage", required=True, type=LastStage, choices=list(LastStage))
+    parser.add_argument("--first-stage", required=True, type=BenchmarkStage, choices=list(BenchmarkStage))
+    parser.add_argument("--last-stage", required=True, type=BenchmarkStage, choices=list(BenchmarkStage))
     parser.add_argument("--max-concurrent", required=True, type=int)
     parser.add_argument("--dedup-max-parallelism", required=True, type=int)
     args = parser.parse_args()
@@ -121,7 +133,10 @@ def main() -> None:
         stage_runner_factory=SubprocessRunner,
     ) as zephyr_context:
         steps = _route_outputs(zephyr_datakit_steps(sources, scale, zephyr_context), args.output_prefix)
-        StepRunner().run(_steps_through(steps, args.last_stage), max_concurrent=args.max_concurrent)
+        StepRunner().run(
+            _steps_between(steps, args.first_stage, args.last_stage),
+            max_concurrent=args.max_concurrent,
+        )
 
 
 if __name__ == "__main__":
