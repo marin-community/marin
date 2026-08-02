@@ -36,6 +36,7 @@ from rigging.filesystem import StoragePath
 from experiments.rollout_data.glm52_vllm import (
     MODEL,
     MODEL_REVISION,
+    TENSOR_PARALLEL_SIZE,
     Glm52LaunchConfig,
     ServerConfig,
     submit_glm52,
@@ -452,6 +453,7 @@ def hierarchy_launch_config(
         vllm_endpoint=f"glm52-hierarchy-{run_id}",
         ray_endpoint=f"glm52-hierarchy-ray-{run_id}",
         server=ServerConfig(max_model_len=DEFAULT_MAX_MODEL_LEN, max_num_seqs=DEFAULT_MAX_NUM_SEQS),
+        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
         priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         client=partial(
             label_hierarchies,

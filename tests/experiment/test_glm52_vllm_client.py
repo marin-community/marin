@@ -43,6 +43,7 @@ def test_run_vllm_calls_registered_client_and_stops_server(monkeypatch) -> None:
         "endpoint",
         "ray",
         ServerConfig(max_model_len=1_024, max_num_seqs=1),
+        tensor_parallel_size=8,
         client=urls.append,
     )
 

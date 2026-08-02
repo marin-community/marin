@@ -21,7 +21,7 @@ def test_serve_glm52_passes_explicit_ports_to_head(monkeypatch) -> None:
     monkeypatch.setattr(glm52_vllm, "_network_interface", lambda *args: "eth0")
     monkeypatch.setattr(glm52_vllm, "_reserve_port", lambda host, port: port)
     monkeypatch.setattr(glm52_vllm, "_serve_ray_head", lambda *args: calls.append(args[-2:]))
-    launch = Glm52LaunchConfig("http", "ray", ServerConfig(1_024, 1))
+    launch = Glm52LaunchConfig("http", "ray", ServerConfig(1_024, 1), tensor_parallel_size=8)
 
     glm52_vllm.serve_glm52(launch, 6_379, 8_000)
 

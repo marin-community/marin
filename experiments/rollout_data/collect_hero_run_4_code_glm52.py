@@ -23,6 +23,7 @@ from experiments.rollout_data.glm52_vllm import (
     MODEL,
     MODEL_CACHE_TTL_DAYS,
     MODEL_REVISION,
+    TENSOR_PARALLEL_SIZE,
     Glm52LaunchConfig,
     ServerConfig,
     prepare_model_cache,
@@ -597,7 +598,10 @@ def run(
     endpoint_suffix = f"{collection.run_id}-s{collection.shard_index}"
     vllm_endpoint = f"{VLLM_ENDPOINT}-{endpoint_suffix}"
     ray_endpoint = f"{RAY_ENDPOINT}-{endpoint_suffix}"
-    vllm_job = submit_glm52(ctx, Glm52LaunchConfig(vllm_endpoint, ray_endpoint, server))
+    vllm_job = submit_glm52(
+        ctx,
+        Glm52LaunchConfig(vllm_endpoint, ray_endpoint, server, tensor_parallel_size=TENSOR_PARALLEL_SIZE),
+    )
     try:
         vllm_url = wait_for_endpoint_url(vllm_endpoint, vllm_job)
         logger.info("GLM-5.2 ready; writing responses to %s", collection.output_path)

@@ -49,6 +49,7 @@ class Glm52LaunchConfig:
     vllm_endpoint: str
     ray_endpoint: str
     server: ServerConfig
+    tensor_parallel_size: int
     priority_band: int = job_pb2.PRIORITY_BAND_BATCH
     client: Callable[[str], None] | None = None
 
@@ -158,7 +159,7 @@ def _run_vllm(
             "--port",
             str(http_port),
             "--tensor-parallel-size",
-            str(TENSOR_PARALLEL_SIZE),
+            str(launch.tensor_parallel_size),
             "--distributed-executor-backend",
             "ray",
             "--enable-expert-parallel",
@@ -234,12 +235,12 @@ def _serve_ray_head(
                     text=True,
                     capture_output=True,
                 )
-                return status.returncode == 0 and f"/{TENSOR_PARALLEL_SIZE}.0 GPU" in status.stdout
+                return status.returncode == 0 and f"/{launch.tensor_parallel_size}.0 GPU" in status.stdout
 
             ExponentialBackoff(initial=10, maximum=10, jitter=0).wait_until_or_raise(
                 ray_ready,
                 timeout=Duration.from_seconds(900),
-                error_message=f"Ray cluster did not register all {TENSOR_PARALLEL_SIZE} GB200 GPUs",
+                error_message=f"Ray cluster did not register all {launch.tensor_parallel_size} GB200 GPUs",
             )
             _run_vllm(ctx, host, http_port, ray_address, vllm_command, environment, weights, launch)
         finally:
@@ -300,6 +301,8 @@ def _serve_glm52(launch: Glm52LaunchConfig) -> None:
 
 
 def submit_glm52(ctx, launch: Glm52LaunchConfig):
+    if launch.tensor_parallel_size != TENSOR_PARALLEL_SIZE:
+        raise ValueError(f"Nested GLM jobs require tensor parallel size {TENSOR_PARALLEL_SIZE}")
     return ctx.client.submit(
         entrypoint=Entrypoint.from_callable(_serve_glm52, launch),
         name="vllm",
