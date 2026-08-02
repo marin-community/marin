@@ -89,8 +89,8 @@ gpu = [
   "jax-cuda13-pjrt==0.11.1.dev20260731; sys_platform == 'linux'",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
-  # JAX 0.11 ragged all-to-all needs the versioned device API in NCCL 2.29.7.
-  "nvidia-nccl-cu13==2.29.7; sys_platform == 'linux'",
+  # NCCL 2.30.7 fixes GIN device-communicator state used by direct MoonEP transport.
+  "nvidia-nccl-cu13==2.30.7; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
   "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",

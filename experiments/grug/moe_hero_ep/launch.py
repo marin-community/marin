@@ -26,7 +26,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild
 from experiments.grug.moe_hero_ep.quantile_balancing import QuantileBalancingMethod
-from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, MoonEPTransport, run_grug
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -90,6 +90,7 @@ def build_hero_run(
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
     moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None,
+    moonep_transport: MoonEPTransport = MoonEPTransport.TWO_SLICE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     worker_cpu: int = HERO_WORKER_CPU,
     worker_ram_gb: int = HERO_WORKER_RAM_GB,
@@ -135,6 +136,7 @@ def build_hero_run(
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
     qb_tag = f"qb-{model.qb_method.value.replace('_', '-')}"
+    transport_tag = f"transport-{moonep_transport.value.replace('_', '-')}"
     experiment_tag = "MNEP" if run_id.upper().startswith("MNEP") else "MHEP"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
@@ -178,6 +180,7 @@ def build_hero_run(
                     backend_tag,
                     capacity_tag,
                     qb_tag,
+                    transport_tag,
                     "gb200",
                     experiment_tag,
                 ],
@@ -199,6 +202,7 @@ def build_hero_run(
             eval=None,
             processes_per_task=processes_per_task,
             moonep_jax_wheel_build=moonep_jax_wheel_build,
+            moonep_transport=moonep_transport,
         )
 
     return ArtifactStep(
@@ -263,6 +267,13 @@ def build_hero_run(
     help="Fixed JAX wheel build for MoonEP rack runs.",
 )
 @click.option(
+    "--moonep-transport",
+    type=click.Choice([transport.value for transport in MoonEPTransport]),
+    default=MoonEPTransport.TWO_SLICE.value,
+    show_default=True,
+    help="XLA transport for MoonEP ragged collectives.",
+)
+@click.option(
     "--processes-per-task",
     type=click.IntRange(min=1, max=HERO_GPUS_PER_NODE),
     default=HERO_PROCESSES_PER_TASK,
@@ -306,6 +317,7 @@ def main(
     qb_method: str,
     qb_histogram_bins: int,
     moonep_jax_wheel_build: str | None,
+    moonep_transport: str,
     processes_per_task: int,
     worker_cpu: int,
     worker_ram_gb: int,
@@ -323,6 +335,7 @@ def main(
         moonep_jax_wheel_build=(
             MoonEPJaxWheelBuild(moonep_jax_wheel_build) if moonep_jax_wheel_build is not None else None
         ),
+        moonep_transport=MoonEPTransport(moonep_transport),
         processes_per_task=processes_per_task,
         worker_cpu=worker_cpu,
         worker_ram_gb=worker_ram_gb,

@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -56,46 +57,77 @@ HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
-MOONEP_RUNTIME_ENV = {
-    # The 146.43 GiB program must share HBM with the collective arena and the
-    # two-slice decomposer's cross-slice all-to-all buffers.
-    "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.80",
-}
 MOONEP_FAST_INTERCONNECT_SLICE_SIZE = 32
 HERO_EP_COLLECTIVE_OVERLAP_LIMIT = 4
-MOONEP_COLLECTIVE_OVERLAP_LIMIT = 3
+MOONEP_TWO_SLICE_COLLECTIVE_OVERLAP_LIMIT = 3
+MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT = 4
 _XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
-_MOONEP_XLA_FLAG_DEFAULTS = (
+_MOONEP_COMMON_XLA_FLAG_DEFAULTS = (
     # The full EP64 program needs 146.43 GiB before rematerialization.
     "--xla_gpu_memory_limit_slop_factor=106",
+    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
+)
+_MOONEP_TWO_SLICE_XLA_FLAG_DEFAULTS = (
     # Decompose EP64 into two standard cross-slice collectives and two local
-    # ragged collectives. The direct EP64 device kernel causes an illegal access.
+    # ragged collectives.
     "--xla_gpu_unsupported_enable_ragged_all_to_all_multi_host_decomposer=true",
     f"--xla_gpu_unsupported_override_fast_interconnect_slice_size={MOONEP_FAST_INTERCONNECT_SLICE_SIZE}",
-    # Use the NCCL LSA/GIN kernel only inside each 32-GPU slice.
-    "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true",
 )
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
-def _apply_hero_ep_runtime_defaults(moe_implementation: MoeImplementation | None) -> None:
+class MoonEPTransport(StrEnum):
+    """XLA transport used for MoonEP ragged collectives."""
+
+    TWO_SLICE = "two_slice"
+    DIRECT_DEVICE = "direct_device"
+
+
+@dataclass(frozen=True)
+class _MoonEPTransportRuntime:
+    memory_fraction: str
+    collective_overlap_limit: int
+    xla_flags: tuple[str, ...]
+
+
+_MOONEP_TRANSPORT_RUNTIMES = {
+    MoonEPTransport.TWO_SLICE: _MoonEPTransportRuntime(
+        # The decomposer needs room for two 10 GiB cross-slice buffers.
+        memory_fraction="0.80",
+        collective_overlap_limit=MOONEP_TWO_SLICE_COLLECTIVE_OVERLAP_LIMIT,
+        xla_flags=_MOONEP_TWO_SLICE_XLA_FLAG_DEFAULTS,
+    ),
+    MoonEPTransport.DIRECT_DEVICE: _MoonEPTransportRuntime(
+        memory_fraction="0.84",
+        collective_overlap_limit=MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT,
+        xla_flags=(),
+    ),
+}
+
+
+def _apply_hero_ep_runtime_defaults(
+    moe_implementation: MoeImplementation | None,
+    moonep_transport: MoonEPTransport,
+) -> None:
     os.environ.update(HERO_EP_RUNTIME_ENV)
     if moe_implementation == "moonep_jax":
-        for name, value in MOONEP_RUNTIME_ENV.items():
-            os.environ.setdefault(name, value)
+        moonep_runtime = _MOONEP_TRANSPORT_RUNTIMES[moonep_transport]
+        os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", moonep_runtime.memory_fraction)
+        overlap_limit = moonep_runtime.collective_overlap_limit
+    else:
+        moonep_runtime = None
+        overlap_limit = HERO_EP_COLLECTIVE_OVERLAP_LIMIT
 
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    overlap_limit = (
-        MOONEP_COLLECTIVE_OVERLAP_LIMIT if moe_implementation == "moonep_jax" else HERO_EP_COLLECTIVE_OVERLAP_LIMIT
-    )
     flag_defaults = [
         f"--xla_gpu_experimental_parallel_collective_overlap_limit={overlap_limit}",
         *_XLA_FLAG_DEFAULTS,
     ]
-    if moe_implementation == "moonep_jax":
-        flag_defaults.extend(_MOONEP_XLA_FLAG_DEFAULTS)
+    if moonep_runtime is not None:
+        flag_defaults.extend(_MOONEP_COMMON_XLA_FLAG_DEFAULTS)
+        flag_defaults.extend(moonep_runtime.xla_flags)
     flag_defaults.append(XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
@@ -154,6 +186,7 @@ class GrugRunConfig:
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
     moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None
+    moonep_transport: MoonEPTransport = MoonEPTransport.TWO_SLICE
 
 
 def build_train_dataset(
@@ -673,7 +706,7 @@ def run_grug(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
-    _apply_hero_ep_runtime_defaults(config.model.moe_implementation)
+    _apply_hero_ep_runtime_defaults(config.model.moe_implementation, config.moonep_transport)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
@@ -689,6 +722,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "MoonEPTransport",
     "initial_state",
     "run_grug",
 ]

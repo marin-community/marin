@@ -428,3 +428,24 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gate: Require attempt-zero completion, a written XPlane artifact, finite loss, zero dropped assignments, and no transport error.
 - Stop criteria: Stop on the first retry, profile barrier timeout, memory error, transport error, non-finite loss, or dropped assignment.
 - Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-021-two-slice-profile-5-20260802-1621-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-021-two-slice-profile-5-20260802-1621 --num-steps 5 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --profile-start-step 3 --profile-num-steps 1 --version 2026.08.02 --run`.
+
+### 2026-08-02 16:50 UTC - MNEP-020 exact correctness and throughput result
+
+- Result: All 16 workers completed three combined steps on attempt zero.
+- Correctness: Final loss was 9.981470108032227, with zero dropped assignments.
+- Performance: Median MFU was 3.1512622180758267% across two measured steps.
+- Performance: Throughput was 51,066.91275525412 tokens per second. Final step time was 82.13349454081617 seconds.
+- Gap: The fallback is 6.9 times below the required 21.7% median MFU.
+
+### 2026-08-02 16:50 UTC - MNEP-021 profile isolates transport cost
+
+- Result: All 16 workers completed five combined steps on attempt zero.
+- Correctness: Final loss was 8.176630973815918, with zero dropped assignments.
+- Performance: The final unprofiled step reached 2.9958644336442806% MFU and 48,548.65671981346 tokens per second.
+- Artifact: `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mnep-021-two-slice-profile-5-20260802-1621/plugins/profile/steps-3-to-4`.
+- Profile: The local ragged kernel used 10.645 seconds across 80 calls on the traced process.
+- Profile: The transport barrier used 3.294 seconds across 400 calls.
+- Profile: Cross-slice all-gather used 3.548 seconds across 548 calls.
+- Interpretation: Transport and its barriers dominate the correct fallback path.
+- Decision: Test XLA's direct EP64 device path with NCCL 2.30.7 before source changes.
+- Local gate: NCCL 2.30.7 passed four-GPU output and gradient parity in 108.50 seconds.

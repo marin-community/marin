@@ -210,14 +210,14 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     monkeypatch.setenv("XLA_FLAGS", f"{explicit_overlap} {explicit_slop}")
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
-    for name in train.MOONEP_RUNTIME_ENV:
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
     config = SimpleNamespace(
         model=SimpleNamespace(moe_implementation="moonep_jax"),
         trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
         resources=object(),
         processes_per_task=1,
         moonep_jax_wheel_build=None,
+        moonep_transport=train.MoonEPTransport.TWO_SLICE,
     )
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -226,7 +226,8 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     flags = os.environ["XLA_FLAGS"].split()
     assert explicit_overlap in flags
     assert (
-        f"--xla_gpu_experimental_parallel_collective_overlap_limit={train.MOONEP_COLLECTIVE_OVERLAP_LIMIT}" not in flags
+        f"--xla_gpu_experimental_parallel_collective_overlap_limit="
+        f"{train.MOONEP_TWO_SLICE_COLLECTIVE_OVERLAP_LIMIT}" not in flags
     )
     assert explicit_slop in flags
     assert "--xla_gpu_memory_limit_slop_factor=106" not in flags
@@ -241,18 +242,57 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
     for name, value in train.HERO_EP_RUNTIME_ENV.items():
         assert os.environ[name] == value
-    for name, value in train.MOONEP_RUNTIME_ENV.items():
-        assert os.environ[name] == value
+    assert os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] == "0.80"
+
+
+def test_run_grug_selects_direct_device_transport(monkeypatch):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_MEM_FRACTION", raising=False)
+    config = SimpleNamespace(
+        model=SimpleNamespace(moe_implementation="moonep_jax"),
+        trainer=SimpleNamespace(trainer=SimpleNamespace(id="direct-device-test")),
+        resources=object(),
+        processes_per_task=1,
+        moonep_jax_wheel_build=None,
+        moonep_transport=train.MoonEPTransport.DIRECT_DEVICE,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert (
+        f"--xla_gpu_experimental_parallel_collective_overlap_limit="
+        f"{train.MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT}" in flags
+    )
+    assert "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=true" in flags
+    assert "--xla_gpu_unsupported_enable_ragged_all_to_all_multi_host_decomposer=true" not in flags
+    assert not any(flag.startswith("--xla_gpu_unsupported_override_fast_interconnect_slice_size") for flag in flags)
+    assert os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] == "0.84"
 
 
 @pytest.mark.parametrize(
-    ("moe_implementation", "expected_limit"),
+    ("moe_implementation", "moonep_transport", "expected_limit"),
     [
-        ("fixed_all_to_all", train.HERO_EP_COLLECTIVE_OVERLAP_LIMIT),
-        ("moonep_jax", train.MOONEP_COLLECTIVE_OVERLAP_LIMIT),
+        ("fixed_all_to_all", train.MoonEPTransport.TWO_SLICE, train.HERO_EP_COLLECTIVE_OVERLAP_LIMIT),
+        (
+            "moonep_jax",
+            train.MoonEPTransport.TWO_SLICE,
+            train.MOONEP_TWO_SLICE_COLLECTIVE_OVERLAP_LIMIT,
+        ),
+        (
+            "moonep_jax",
+            train.MoonEPTransport.DIRECT_DEVICE,
+            train.MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT,
+        ),
     ],
 )
-def test_run_grug_selects_collective_overlap_limit(monkeypatch, moe_implementation: str, expected_limit: int):
+def test_run_grug_selects_collective_overlap_limit(
+    monkeypatch,
+    moe_implementation: str,
+    moonep_transport: train.MoonEPTransport,
+    expected_limit: int,
+):
     monkeypatch.delenv("XLA_FLAGS", raising=False)
     config = SimpleNamespace(
         model=SimpleNamespace(moe_implementation=moe_implementation),
@@ -260,6 +300,7 @@ def test_run_grug_selects_collective_overlap_limit(monkeypatch, moe_implementati
         resources=object(),
         processes_per_task=1,
         moonep_jax_wheel_build=None,
+        moonep_transport=moonep_transport,
     )
 
     with patch.object(train, "dispatch_grug_training_run"):
@@ -277,6 +318,7 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup():
         resources=ResourceConfig.with_gpu("GB200", count=4, cpu=32, ram="256g", disk="256g"),
         processes_per_task=1,
         moonep_jax_wheel_build=MoonEPJaxWheelBuild.LSA_20260802,
+        moonep_transport=train.MoonEPTransport.TWO_SLICE,
     )
 
     with patch.object(train, "dispatch_grug_training_run") as dispatch:
@@ -335,6 +377,20 @@ def test_hero_process_count_reaches_training_config():
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.processes_per_task == 4
+
+
+def test_hero_transport_reaches_training_config():
+    step = launch.build_hero_run(
+        run_id="direct-device-transport",
+        num_steps=3,
+        moe_implementation="moonep_jax",
+        moonep_transport=train.MoonEPTransport.DIRECT_DEVICE,
+        version="dev",
+    )
+
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.moonep_transport == train.MoonEPTransport.DIRECT_DEVICE
 
 
 @pytest.mark.parametrize(
