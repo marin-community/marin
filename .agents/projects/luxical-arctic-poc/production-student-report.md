@@ -21,7 +21,7 @@ an approved production model.
 | Global geometry | Effective-rank fraction at least 0.25 | 0.33326 on the semantic screen | Pass |
 | Exact CPU speed | At least 0.85 times Luxical-One | 3.00349 times Luxical-One | Pass |
 | Coarse semantic screen | No metric more than 0.02 below the best tested teacher | Passed all eight fixed metrics | Pass |
-| Label reliability | Independent review gates for a frozen hierarchy | Compact pilot passed concentration gates but has one invalid rule ID; balanced retry is active | Open |
+| Label reliability | Independent review gates for a frozen hierarchy | Curated compact passed representative Claude gates; low-confidence tail needs adjudication | Open |
 | Fine semantic coherence | Parent, leaf, and form gates on accepted labels | Waiting for hierarchical labels | Open |
 | Blind neighborhood review | Student is not worse than the best teacher | Not run | Open |
 | Held-out robustness | All large semantic groups pass | Not run | Open |
@@ -64,6 +64,14 @@ An accepted hierarchy must meet all of these gates:
 
 Reject a hierarchy if primary-parent agreement is below 70%. Review and revise
 the taxonomy when the result is from 70% through 79%.
+
+The curated compact hierarchy removes one invalid document-form precedence
+rule from the original GLM output. It changes no bucket ID or pilot assignment.
+On 100 representative documents, Claude Opus 5 reached 81% exact parent
+agreement, 98% any-parent overlap, and 85% exact form agreement. These results
+pass the fixed gates. On the 50 lowest-confidence documents, exact parent and
+form agreement fell to 38% and 58%. The final held-out labels must therefore
+adjudicate the low-confidence tail before embedding metrics are approved.
 
 ## Required embedding gates
 
