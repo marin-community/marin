@@ -44,6 +44,8 @@ from marin.datakit.download.common_crawl_warc import (
 from marin.execution.remote import RemoteCallable
 from zephyr.dataset import ShardInfo
 
+from experiments.datakit.common_crawl_docx_sample import sample_report_markdown, stratified_partition_slice
+
 CRAWL_ID = "CC-MAIN-2026-30"
 RECORD_ID = "<urn:uuid:019f8700-d21d-78d8-8eb1-99eaa22579da>"
 URL = "https://example.com/report.docx"
@@ -341,6 +343,11 @@ class _Client:
         return self.result
 
 
+@dataclass(frozen=True)
+class _Outcome:
+    counters: dict[str, int]
+
+
 def _process(client: _Client, payload: bytes) -> dict[str, object] | None:
     return process_docx_candidate(
         client,
@@ -456,12 +463,56 @@ def test_extraction_step_binds_step_runner_output_path_first(monkeypatch: pytest
     assert isinstance(extraction.fn, RemoteCallable)
     executed = False
 
-    def record_execution(self: object, pipeline: object) -> None:
+    def record_execution(self: object, pipeline: object) -> _Outcome:
         nonlocal executed
         executed = True
+        return _Outcome(counters={})
 
     monkeypatch.setattr("marin.datakit.download.common_crawl_docx.ZephyrContext.execute", record_execution)
 
     extraction.fn.fn(str(tmp_path))
 
     assert executed
+
+
+def test_stratified_partition_slice_spans_manifest() -> None:
+    partitions = tuple(f"part-{index}" for index in range(10))
+
+    assert stratified_partition_slice(partitions, 4) == ("part-0", "part-3", "part-6", "part-9")
+
+
+def test_sample_report_shows_per_reason_yield_and_bounded_examples() -> None:
+    source = CommonCrawlDocxSource(
+        crawl_id=CRAWL_ID,
+        index_kind=CommonCrawlIndexKind.MAIN,
+        paths_manifest_url="https://example.com/index.paths.gz",
+    )
+    candidates = [
+        {"selection_reason": DocxSelectionReason.DECLARED_MIME.value},
+        {"selection_reason": DocxSelectionReason.DECLARED_MIME.value},
+        {"selection_reason": DocxSelectionReason.URL_SUFFIX.value},
+    ]
+    extracted = [
+        {
+            "selection_reason": DocxSelectionReason.DECLARED_MIME.value,
+            "url": URL,
+            "language": "en",
+            "word_count": 4,
+            "table_count": 1,
+            "text": "A short extracted document.",
+        }
+    ]
+
+    markdown, examples = sample_report_markdown(
+        source=source,
+        candidate_rows=candidates,
+        extracted_rows=extracted,
+        normalized_rows=extracted,
+        extraction_counters={"common_crawl_docx/invalid_files": 2},
+        examples_per_reason=1,
+    )
+
+    assert "| `declared_mime` | 2 | 1 | 50.0% |" in markdown
+    assert "| `url_suffix` | 1 | 0 | 0.0% |" in markdown
+    assert "`invalid_files`: 2" in markdown
+    assert examples[0]["excerpt"] == "A short extracted document."

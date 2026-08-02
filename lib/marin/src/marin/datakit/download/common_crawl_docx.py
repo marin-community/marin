@@ -16,6 +16,7 @@ import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
 from fray.types import ResourceConfig
+from pydantic import BaseModel
 from rigging.filesystem import prefix_join
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
@@ -294,6 +295,13 @@ class CommonCrawlDocxSource:
                 raise ValueError(f"{field_name} must be positive")
 
 
+class CommonCrawlDocxStageResult(BaseModel):
+    """Output location and aggregate Zephyr counters for one pipeline stage."""
+
+    data_dir: str
+    counters: dict[str, int | float]
+
+
 @cache
 def _docling_converter() -> Any:
     from docling.datamodel.base_models import InputFormat  # noqa: PLC0415
@@ -471,7 +479,7 @@ def discover_partition_records(index_partition: str, *, source: CommonCrawlDocxS
         yield candidate_record(candidate)
 
 
-def discover_common_crawl_docx(output_path: str, source: CommonCrawlDocxSource) -> None:
+def discover_common_crawl_docx(output_path: str, source: CommonCrawlDocxSource) -> CommonCrawlDocxStageResult:
     """Write a reusable candidate manifest for one Common Crawl index."""
     partitions = common_crawl_index_partitions(source.paths_manifest_url, crawl_id=source.crawl_id)
     pipeline = (
@@ -483,11 +491,15 @@ def discover_common_crawl_docx(output_path: str, source: CommonCrawlDocxSource) 
             skip_existing=True,
         )
     )
-    ZephyrContext(
+    outcome = ZephyrContext(
         name=f"common-crawl-docx-discovery-{source.crawl_id.lower()}",
         resources=ResourceConfig(cpu=1, ram="8g"),
         max_workers=min(source.max_workers, len(partitions)),
     ).execute(pipeline)
+    return CommonCrawlDocxStageResult(
+        data_dir=prefix_join(output_path, "candidates"),
+        counters=dict(outcome.counters),
+    )
 
 
 def validate_docx(payload: bytes, *, maximum_entries: int, maximum_uncompressed_bytes: int) -> None:
@@ -665,7 +677,7 @@ def extract_common_crawl_docx(
     *,
     extractor: DocxTextExtractor,
     language_detector: LanguageDetector,
-) -> None:
+) -> CommonCrawlDocxStageResult:
     """Extract a previously materialized Common Crawl DOCX candidate manifest."""
     pipeline = (
         Dataset.from_files(prefix_join(candidate_path, "candidates/*.parquet"))
@@ -678,11 +690,15 @@ def extract_common_crawl_docx(
             skip_existing=True,
         )
     )
-    ZephyrContext(
+    outcome = ZephyrContext(
         name=f"common-crawl-docx-extraction-{source.crawl_id.lower()}",
         resources=ResourceConfig(cpu=2, ram="16g"),
         max_workers=source.max_workers,
     ).execute(pipeline)
+    return CommonCrawlDocxStageResult(
+        data_dir=prefix_join(output_path, "data"),
+        counters=dict(outcome.counters),
+    )
 
 
 def common_crawl_docx_steps(
