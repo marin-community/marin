@@ -265,3 +265,12 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Evidence: All workers reported the same progress and finite loss. No OOM, non-finite value, traceback, failure, or preemption appeared in the logs.
 - Telemetry caveat: A direct Finelog query is not available in this shell because its cached IAP credentials have expired. The final offline W&B artifact is the fallback metric source.
 - Next action: Monitor all tasks to a terminal state, then extract steady-step metrics from the saved artifact.
+
+### 2026-08-02 00:21 UTC - MHEP-001 GPU gate completed; coordinator timed out later
+
+- GPU result: The child job succeeded on all 16 workers with exit 0, zero failures, and zero preemptions. Each worker used four GB200 GPUs. Iris reports an 8-minute 16-second task duration.
+- Pipeline result: Marin recorded the training step as succeeded at 00:15:09 UTC. JAX coordination-service connection warnings appeared only during worker teardown after rank 0 exited.
+- Harness result: The outer coordinator failed about five minutes later with `Execution timeout exceeded`. Its 5,400-second execution window started when the coordinator began and included the child GPU admission wait.
+- Interpretation: The training gate completed. The outer failure does not indicate a model, optimizer, distributed-training, or GPU-task failure.
+- Decision: Use a 21,600-second outer coordinator timeout for later gates so a long child queue wait cannot hide a successful result.
+- Next action: Read `tracker_metrics.jsonl` through an A08 CPU task and verify final step and steady-step metrics before the fixed-capacity feature gate.
