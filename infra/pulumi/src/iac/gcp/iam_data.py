@@ -1029,6 +1029,9 @@ PROJECT_GRANTS: tuple[GcpRoleGrant, ...] = (
             GcpEncryptedMember(
                 ciphertext="CiQAKk3j6aM1cvMrBEbJ2ePmiYdFSsHrbI6/1GyeR6klqc8zNqwSQgCdtF6iwzsEl6d0eglJ/ciU1+CzdBfAAjgVXoR4PqZ65bW6xflRbssZGs8mAUedfmcOJbQSpnGhXsPo0bJy7TvjrA=="
             ),
+            GcpEncryptedMember(
+                ciphertext="CiQAKk3j6WTOaBWqKx0KfpHhkzUIWR4HvHjgp5zjRwQlmDi2QtkSOQCdtF6iVwF52Hs9NH/AqTmCM+rXjavdgLGuhrQLU2WqArwfsut9tW79dnGES0snmNZsn+q5mDXRzA=="
+            ),
         ),
     ),
     GcpRoleGrant(
