@@ -14,7 +14,7 @@ Read first:
 
 - `infra/pulumi/README.md` — the marin-iac stacks, the KMS key, and the
   `pulumi up` prerequisites.
-- `infra/pulumi/src/iac/gcp/iam_data.py` docstring — why human `user:` principals
+- `infra/pulumi/src/iac/gcp/iam_data.yaml` header — why human `user:` principals
   are encrypted and this file is public.
 
 ## Two grant surfaces
@@ -25,9 +25,10 @@ touch both.
 1. **Project / resource GCP IAM** — a role on the `hai-gcp-models` project, the
    KMS key, a Secret Manager secret, a GCS bucket, an Artifact Registry repo, or
    a service account (who may impersonate it). Lives in
-   `infra/pulumi/src/iac/gcp/iam_data.py`, applied by the **`marin`** stack in
-   `infra/pulumi`. Human `user:<email>` principals are `GcpEncryptedMember`
-   ciphertext; service accounts, groups, and domains stay plain strings.
+   `infra/pulumi/src/iac/gcp/iam_data.yaml`, applied by the **`marin`** stack in
+   `infra/pulumi`. Each human `user:<email>` principal is KMS-encrypted once in
+   the `principals` registry; grants reference its opaque `human-NNN` ID.
+   Service accounts, groups, and domains stay plain strings.
 
 2. **IAP access to a Cloud Run web service** — admitting a person to
    `evaldash.oa.dev`, Grafana, or a similar IAP-gated site. Lives in that
@@ -55,7 +56,7 @@ You need, per grant:
   follow-up removal PR unless the requester asks for an expiry.
 
 Translate a capability into the narrowest role that satisfies it. Reuse a role
-already present in `iam_data.py` for the same resource class before reaching for
+already present in `iam_data.yaml` for the same resource class before reaching for
 a broader built-in role. If the request is vague or over-broad, ask for
 specifics instead of guessing — an IAM grant is hard to walk back once applied.
 
@@ -70,35 +71,51 @@ When invoked to respond to an issue rather than a local prompt:
 - If the request is complete, build the change and open a PR (below), then
   comment on the issue linking the PR.
 
-## Encrypt the principal
+## Register and grant the principal
 
-For every personal email going into `iam_data.py`, get its ciphertext:
+For project-level roles, update the principal registry and every requested role
+in one command:
 
 ```bash
 uv run --package marin-iac --extra deploy \
-  python infra/pulumi/iam_principal.py encrypt alice@openathena.ai
+  python infra/pulumi/iam_principal.py grant alice@openathena.ai \
+    --project-role roles/logging.viewer \
+    --project-role roles/monitoring.viewer
 ```
 
-It prints a ready-to-paste `GcpEncryptedMember(ciphertext="..."),` line.
-Encryption needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac
-key (the same access `pulumi up` needs). Never write a personal email in
-plaintext into `iam_data.py`, a commit message, or the PR body — the repo is
-public. IAP `viewers` emails in `Pulumi.<service>.yaml` are the documented
-exception and stay plaintext.
+The command decrypts existing registry entries locally to find and reuse the
+person's opaque ID. It encrypts and registers the email once when the person is
+new, then writes deterministic YAML. Encryption and lookup need
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac key (the same
+access `pulumi up` needs).
+
+For a KMS key, secret, bucket, Artifact Registry repository, or service-account
+grant, register the principal first:
+
+```bash
+uv run --package marin-iac --extra deploy \
+  python infra/pulumi/iam_principal.py register alice@openathena.ai
+```
+
+The command prints the existing or new `human-NNN` ID. Add
+`principal: human-NNN` to the requested resource grant. Never write a personal
+email in plaintext into `iam_data.yaml`, a commit message, or the PR body — the
+repo is public. IAP `viewers` emails in `Pulumi.<service>.yaml` are the
+documented exception and stay plaintext.
 
 ## Make the edit
 
-**Project / resource IAM** — add the principal to `iam_data.py`:
+**Project / resource IAM** — update `iam_data.yaml`:
 
-- Find the `GcpRoleGrant` for the target role and resource, or add one. Project
-  roles go in `PROJECT_GRANTS`; a bucket/secret/repo/service-account grant goes
-  under that resource's entry in `BUCKETS` / `SECRETS` /
-  `ARTIFACT_REPOSITORIES` / `SERVICE_ACCOUNTS` (add the resource entry if it is
+- Find the grant for the target role and resource, or add one. Project
+  roles go in `project_grants`; a bucket/secret/repo/service-account grant goes
+  under that resource's entry in `buckets` / `secrets` /
+  `artifact_repositories` / `service_accounts` (add the resource entry if it is
   not there yet).
-- Add your `GcpEncryptedMember(...)` (or plain member string, for automation) to
-  that grant's `members` tuple. Keep the same ciphertext for a person who
-  already appears elsewhere — reuse their existing `GcpEncryptedMember` verbatim
-  rather than re-encrypting, so the diff stays minimal.
+- Project-role requests are already complete after `iam_principal.py grant`.
+  For other resource grants, add the registered `principal: human-NNN`
+  reference. Add a plain member string for service accounts, groups, domains,
+  workload identities, or other automation.
 
 **IAP viewer** — add the email to `viewers` in the service's
 `infra/<service>/Pulumi.marin-<service>.yaml`. Quote a `*@domain` wildcard (YAML
@@ -116,7 +133,7 @@ reads a leading `*` as an alias).
   `[iac] Grant eval-bucket read to a new operator`, never the email. The body
   states the resource, the role, and the one-line justification — **no personal
   emails**. Note in the body that a reviewer should run `review-grant`, then
-  `pulumi up` on the affected stack(s): `marin` for `iam_data.py`,
+  `pulumi up` on the affected stack(s): `marin` for `iam_data.yaml`,
   `marin-<service>` for a `viewers` change.
 - Assign the PR to the grant approvers so one of them picks up `review-grant`:
 

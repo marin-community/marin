@@ -2,44 +2,43 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Round-trip iam_data.py's encrypted `user:<email>` members through a local JSON file, for
-offline audit and small edits (fixing a typo, rotating a person out) without hand-decrypting
-KMS ciphertext.
+"""Round-trip encrypted IAM principals through a local JSON audit file.
 
-    uv run --package marin-iac --extra deploy python infra/pulumi/iam_audit.py decrypt --out /tmp/iam_members.json
+    uv run --package marin-iac --extra deploy python infra/pulumi/iam_audit.py \
+      decrypt --out /tmp/iam_members.json
     # review, or edit an "email" field, then:
-    uv run --package marin-iac --extra deploy python infra/pulumi/iam_audit.py encrypt --in /tmp/iam_members.json
+    uv run --package marin-iac --extra deploy python infra/pulumi/iam_audit.py \
+      encrypt --in /tmp/iam_members.json
 
-The JSON file holds real email addresses in plaintext — keep it out of the repo and delete it
-once you're done. `encrypt` only rotates existing entries, matched by their original ciphertext;
-adding or removing a member still needs a direct edit to iam_data.py, matching that file's own
-docstring guidance for structural changes.
+The JSON file holds real email addresses in plaintext. Keep it out of the repo
+and delete it when the audit is complete.
 """
 
 import argparse
 import json
-import re
 from collections.abc import Iterator
 from pathlib import Path
 
 from google.cloud import kms_v1
 from iac.gcp import iam_data
 from iac.gcp.iam import GcpEncryptedMember, GcpRoleGrant
+from iac.gcp.iam_config import (
+    IAM_DATA_PATH,
+    GcpPrincipal,
+    load_iam_config,
+    replace_principals,
+    write_iam_config,
+)
 from iac.gcp.iam_kms import PROJECT, crypto_key_id, decrypt_member, encrypt_email
 
-IAM_DATA_PATH = Path(__file__).resolve().parent / "src" / "iac" / "gcp" / "iam_data.py"
-
-_CIPHERTEXT_RE = re.compile(r'GcpEncryptedMember\(\s*ciphertext="([^"]+)"\s*\)')
-
 _NONDETERMINISM_WARNING = (
-    "NOTE: GCP KMS encryption is non-deterministic — re-encrypting produces different "
-    "ciphertext for every entry, even ones whose email you didn't change, so the resulting "
-    "diff in iam_data.py won't be limited to the member(s) you actually edited."
+    "NOTE: GCP KMS encryption is non-deterministic. Re-encrypting changes the "
+    "ciphertext line for every audited principal, even when its email is unchanged."
 )
 
 
 def _iter_grants() -> Iterator[tuple[str, str, GcpRoleGrant]]:
-    """Yield (container, resource, grant) for every GcpRoleGrant iam_data.py declares."""
+    """Yield (container, resource, grant) for every declared role grant."""
     for grant in iam_data.PROJECT_GRANTS:
         yield "PROJECT_GRANTS", PROJECT, grant
     for grant in iam_data.KMS_GRANTS:
@@ -59,79 +58,78 @@ def _iter_grants() -> Iterator[tuple[str, str, GcpRoleGrant]]:
 
 
 def decrypt(out_path: Path) -> None:
-    """One record per unique ciphertext (i.e. per person, not per grant) — the same person's
-    ciphertext is reused verbatim everywhere they're granted access, so grouping this way is
-    both a more useful audit view and what makes `encrypt` unambiguous: rotating a person's
-    email replaces every occurrence of their old ciphertext in one pass."""
+    """Write one audit record per opaque principal ID."""
     print(_NONDETERMINISM_WARNING)
 
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id()
-    by_ciphertext: dict[str, dict] = {}
+    principal_ids = {principal.ciphertext: principal.principal_id for principal in iam_data.CONFIG.principals}
+    records = {
+        principal.principal_id: {
+            "principal_id": principal.principal_id,
+            "ciphertext": principal.ciphertext,
+            "email": decrypt_member(client, key_id, principal.ciphertext),
+            "grants": [],
+        }
+        for principal in iam_data.CONFIG.principals
+    }
     for container, resource, grant in _iter_grants():
         for member in grant.members:
             if not isinstance(member, GcpEncryptedMember):
                 continue
-            record = by_ciphertext.get(member.ciphertext)
-            if record is None:
-                record = {
-                    "ciphertext": member.ciphertext,
-                    "email": decrypt_member(client, key_id, member.ciphertext),
-                    "grants": [],
-                }
-                by_ciphertext[member.ciphertext] = record
-            record["grants"].append({"container": container, "resource": resource, "role": grant.role})
+            records[principal_ids[member.ciphertext]]["grants"].append(
+                {"container": container, "resource": resource, "role": grant.role}
+            )
 
-    records = sorted(by_ciphertext.values(), key=lambda r: r["email"])
-    for record in records:
-        record["grants"].sort(key=lambda g: (g["container"], g["resource"], g["role"]))
-    out_path.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {len(records)} decrypted members ({sum(len(r['grants']) for r in records)} grants) to {out_path}")
+    ordered_records = sorted(records.values(), key=lambda record: record["email"])
+    for record in ordered_records:
+        record["grants"].sort(key=lambda grant: (grant["container"], grant["resource"], grant["role"]))
+    out_path.write_text(json.dumps(ordered_records, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"wrote {len(ordered_records)} decrypted principals "
+        f"({sum(len(record['grants']) for record in ordered_records)} grants) to {out_path}"
+    )
 
 
 def encrypt(in_path: Path) -> None:
+    """Re-encrypt every principal from an audit file back into the YAML registry."""
     print(_NONDETERMINISM_WARNING)
 
     records = json.loads(in_path.read_text(encoding="utf-8"))
+    config = load_iam_config()
+    file_ids = {principal.principal_id for principal in config.principals}
+    record_ids = {record["principal_id"] for record in records}
+    if missing := file_ids - record_ids:
+        raise SystemExit(f"{len(missing)} principal(s) in {IAM_DATA_PATH} are missing from {in_path}")
+    if unknown := record_ids - file_ids:
+        raise SystemExit(f"{len(unknown)} principal(s) in {in_path} are missing from {IAM_DATA_PATH}")
+
+    emails = {record["principal_id"]: record["email"] for record in records}
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id()
-    text = IAM_DATA_PATH.read_text(encoding="utf-8")
-
-    file_ciphertexts = set(_CIPHERTEXT_RE.findall(text))
-    seen = set()
-    for record in records:
-        old_ciphertext = record["ciphertext"]
-        if old_ciphertext not in file_ciphertexts:
-            raise SystemExit(
-                f"ciphertext for {record['email']} not found in {IAM_DATA_PATH} — adding a new "
-                "member isn't supported by this tool, edit iam_data.py directly"
-            )
-        seen.add(old_ciphertext)
-
-        email = record["email"]
-        assert email.startswith("user:"), f"expected a user:<email> principal, got {email!r}"
-        new_ciphertext = encrypt_email(client, key_id, email.removeprefix("user:"))
-        text = text.replace(old_ciphertext, new_ciphertext)
-
-    missing = file_ciphertexts - seen
-    if missing:
-        raise SystemExit(
-            f"{len(missing)} member(s) in {IAM_DATA_PATH} are missing from {in_path} — removing a "
-            "member isn't supported by this tool, edit iam_data.py directly"
+    principals = tuple(
+        GcpPrincipal(
+            principal_id=principal.principal_id,
+            ciphertext=encrypt_email(
+                client,
+                key_id,
+                emails[principal.principal_id].removeprefix("user:"),
+            ),
         )
-
-    IAM_DATA_PATH.write_text(text, encoding="utf-8")
-    print(f"re-encrypted {len(records)} members into {IAM_DATA_PATH}")
+        for principal in config.principals
+    )
+    write_iam_config(replace_principals(config, principals))
+    print(f"re-encrypted {len(principals)} principals into {IAM_DATA_PATH}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    decrypt_parser = subparsers.add_parser("decrypt", help="Decrypt iam_data.py's encrypted members to a JSON file.")
+    decrypt_parser = subparsers.add_parser("decrypt", help="Decrypt IAM principals to a local JSON audit file.")
     decrypt_parser.add_argument("--out", type=Path, required=True)
 
-    encrypt_parser = subparsers.add_parser("encrypt", help="Re-encrypt a JSON file's members back into iam_data.py.")
+    encrypt_parser = subparsers.add_parser("encrypt", help="Re-encrypt a JSON audit file into the IAM YAML.")
     encrypt_parser.add_argument("--in", dest="in_path", type=Path, required=True)
 
     args = parser.parse_args()

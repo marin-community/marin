@@ -2,24 +2,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Encrypt or decrypt one `user:<email>` principal against the marin-iac KMS key.
+"""Grant project roles or decrypt changed IAM principals.
 
-Adding a grant needs the ciphertext for a new person's email; reviewing a grant PR needs the
-plaintext behind the encrypted members in the diff. This does both, one principal at a time:
+    # Add one person to existing or new project-level role grants.
+    uv run --package marin-iac --extra deploy \
+      python infra/pulumi/iam_principal.py grant alice@openathena.ai \
+      --project-role roles/logging.viewer \
+      --project-role roles/monitoring.viewer
 
-    # Adding a grant: turn a new person's email into the snippet to paste into iam_data.py.
-    uv run --package marin-iac --extra deploy python infra/pulumi/iam_principal.py encrypt alice@openathena.ai
+    # Reveal the people behind principal references changed by a grant PR.
+    git diff origin/main...HEAD -- infra/pulumi/src/iac/gcp/iam_data.yaml \
+      | uv run --package marin-iac --extra deploy \
+          python infra/pulumi/iam_principal.py decrypt --diff
 
-    # Reviewing a grant PR: reveal the real email(s) behind changed GcpEncryptedMember lines.
-    git diff origin/main...HEAD -- infra/pulumi/src/iac/gcp/iam_data.py \
-      | uv run --package marin-iac --extra deploy python infra/pulumi/iam_principal.py decrypt --diff
-
-`decrypt` also accepts bare ciphertext strings as positional arguments. Both operations need
-`roles/cloudkms.cryptoKeyEncrypterDecrypter` (encrypt) or `.cryptoKeyDecrypter` (decrypt) on
-the key — the same access `pulumi up`/`preview` already requires (see infra/pulumi/README.md).
-
-GCP KMS encryption is non-deterministic: encrypting the same email twice yields different
-ciphertext.
+Both operations use the marin-iac KMS key. Plaintext emails remain local.
 """
 
 import argparse
@@ -27,26 +23,57 @@ import re
 import sys
 
 from google.cloud import kms_v1
+from iac.gcp import iam_data
+from iac.gcp.iam_config import (
+    IAM_DATA_PATH,
+    grant_project_roles,
+    load_iam_config,
+    register_principal,
+    write_iam_config,
+)
 from iac.gcp.iam_kms import crypto_key_id, decrypt_member, encrypt_email
 
-# A GcpEncryptedMember spans two lines in source (the wrapper and the `ciphertext="..."` arg),
-# and a unified diff prefixes each line independently, so match the ciphertext token alone
-# rather than the whole `GcpEncryptedMember(...)` wrapper, which a diff line can't carry.
-_CIPHERTEXT_RE = re.compile(r'ciphertext="([^"]+)"')
+_PRINCIPAL_REF_RE = re.compile(r"^[+-]\s*-\s+principal:\s+(human-\d+)\s*$")
+_PRINCIPAL_RECORD_RE = re.compile(r"^[+-]\s*(human-\d+):\s+(\S+)\s*$")
 
 
-def encrypt(emails: list[str]) -> None:
-    """Print the GcpEncryptedMember snippet for each new email, ready to paste into iam_data.py."""
+def grant(email: str, project_roles: tuple[str, ...]) -> None:
+    """Update project role grants for one encrypted human principal."""
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id()
-    for email in emails:
-        plaintext = email.removeprefix("user:").strip()
-        assert "@" in plaintext, f"expected an email, got {email!r}"
-        ciphertext = encrypt_email(client, key_id, plaintext)
-        print(f'GcpEncryptedMember(ciphertext="{ciphertext}"),')
+    config = load_iam_config()
+    updated = grant_project_roles(
+        config,
+        email,
+        project_roles,
+        decrypt_ciphertext=lambda ciphertext: decrypt_member(client, key_id, ciphertext),
+        encrypt_email=lambda plaintext: encrypt_email(client, key_id, plaintext),
+    )
+    if updated == config:
+        print("all requested grants already exist")
+        return
+    write_iam_config(updated)
+    print(f"updated {IAM_DATA_PATH} with {len(project_roles)} project role grant(s)")
+
+
+def register(email: str) -> None:
+    """Register one encrypted human principal and print its opaque ID."""
+    client = kms_v1.KeyManagementServiceClient()
+    key_id = crypto_key_id()
+    config = load_iam_config()
+    registration = register_principal(
+        config,
+        email,
+        decrypt_ciphertext=lambda ciphertext: decrypt_member(client, key_id, ciphertext),
+        encrypt_email=lambda plaintext: encrypt_email(client, key_id, plaintext),
+    )
+    if registration.created:
+        write_iam_config(registration.config)
+    print(registration.principal.principal_id)
 
 
 def decrypt_ciphertexts(ciphertexts: list[str]) -> None:
+    """Print plaintext principals for explicit ciphertext arguments."""
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id()
     for ciphertext in ciphertexts:
@@ -54,39 +81,74 @@ def decrypt_ciphertexts(ciphertexts: list[str]) -> None:
 
 
 def decrypt_diff() -> None:
-    """Annotate a unified diff on stdin: for every added/removed line that carries a
-    GcpEncryptedMember ciphertext, print the +/- marker and the decrypted principal, so a
-    reviewer sees the real grant instead of opaque ciphertext."""
+    """Annotate changed YAML principal references without printing unchanged people."""
+    lines = sys.stdin.readlines()
+    current_ciphertexts = {principal.principal_id: principal.ciphertext for principal in iam_data.CONFIG.principals}
+    changed_records: dict[tuple[str, str], str] = {}
+    changed_references: list[tuple[str, str]] = []
+    for line in lines:
+        if line.startswith(("+++", "---")):
+            continue
+        if match := _PRINCIPAL_RECORD_RE.match(line):
+            changed_records[(line[0], match.group(1))] = match.group(2)
+            continue
+        if match := _PRINCIPAL_REF_RE.match(line):
+            changed_references.append((line[0], match.group(1)))
+
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id()
     printed = 0
-    for line in sys.stdin:
-        if not (line.startswith("+") or line.startswith("-")) or line.startswith(("+++", "---")):
-            continue
-        match = _CIPHERTEXT_RE.search(line)
-        if match is None:
-            continue
-        principal = decrypt_member(client, key_id, match.group(1))
-        print(f"{line[0]} {principal}")
+    referenced_ids = {principal_id for _, principal_id in changed_references}
+    for marker, principal_id in changed_references:
+        ciphertext = changed_records.get((marker, principal_id))
+        if ciphertext is None:
+            ciphertext = current_ciphertexts.get(principal_id)
+        if ciphertext is None:
+            opposite_marker = "-" if marker == "+" else "+"
+            ciphertext = changed_records.get((opposite_marker, principal_id))
+        if ciphertext is None:
+            raise SystemExit(f"cannot resolve changed principal {principal_id}")
+        print(f"{marker} {decrypt_member(client, key_id, ciphertext)}")
         printed += 1
+
+    for (marker, principal_id), ciphertext in changed_records.items():
+        if principal_id in referenced_ids:
+            continue
+        print(f"{marker} {decrypt_member(client, key_id, ciphertext)}")
+        printed += 1
+
     if printed == 0:
-        print("no changed GcpEncryptedMember lines in the diff", file=sys.stderr)
+        print("no changed IAM principals in the diff", file=sys.stderr)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    encrypt_parser = subparsers.add_parser("encrypt", help="Encrypt new email(s) into GcpEncryptedMember snippets.")
-    encrypt_parser.add_argument("emails", nargs="+")
+    grant_parser = subparsers.add_parser("grant", help="Grant one encrypted person one or more project roles.")
+    grant_parser.add_argument("email")
+    grant_parser.add_argument(
+        "--project-role",
+        dest="project_roles",
+        action="append",
+        required=True,
+        help="Project role to grant; repeat for multiple roles.",
+    )
 
-    decrypt_parser = subparsers.add_parser("decrypt", help="Decrypt ciphertext(s), or annotate a diff with --diff.")
+    register_parser = subparsers.add_parser(
+        "register", help="Register one person and print the reusable opaque principal ID."
+    )
+    register_parser.add_argument("email")
+
+    decrypt_parser = subparsers.add_parser("decrypt", help="Decrypt ciphertexts or annotate a YAML diff.")
     decrypt_parser.add_argument("ciphertexts", nargs="*")
-    decrypt_parser.add_argument("--diff", action="store_true", help="Read a unified diff from stdin and annotate it.")
+    decrypt_parser.add_argument("--diff", action="store_true", help="Read a unified YAML diff from stdin.")
 
     args = parser.parse_args()
-    if args.command == "encrypt":
-        encrypt(args.emails)
+    if args.command == "grant":
+        grant(args.email, tuple(args.project_roles))
+    elif args.command == "register":
+        register(args.email)
     elif args.diff:
         if args.ciphertexts:
             parser.error("pass either --diff (stdin) or positional ciphertexts, not both")

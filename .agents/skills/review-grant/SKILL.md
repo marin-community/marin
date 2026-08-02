@@ -1,13 +1,14 @@
 ---
 name: review-grant
-description: Review a marin-iac user-grant PR by decrypting the changed principals into the real emails and grants, confirm with the user, then approve, merge, and drive pulumi up. Use when reviewing a PR that edits iam_data.py or a service's IAP viewers.
+description: Review a marin-iac user-grant PR by decrypting the changed principals into the real emails and grants, confirm with the user, then approve, merge, and drive pulumi up. Use when reviewing a PR that edits iam_data.yaml or a service's IAP viewers.
 ---
 
 # Skill: Review a user grant
 
-A grant PR (usually from the `add-grant` skill) is unreadable on its face: the
-human principals in `iam_data.py` are KMS ciphertext. This skill reveals the real
-grant, gets an explicit human confirmation, then lands it and applies it.
+A grant PR (usually from the `add-grant` skill) uses opaque `human-NNN`
+references whose emails are KMS ciphertext in `iam_data.yaml`. This skill
+reveals the real grant, gets an explicit human confirmation, then lands it and
+applies it.
 
 Read first:
 
@@ -27,27 +28,28 @@ gh pr checkout <n>          # pull the branch into the worktree
 git fetch origin main
 ```
 
-Confirm the diff only touches grant surfaces — `infra/pulumi/src/iac/gcp/iam_data.py`
+Confirm the diff only touches grant surfaces — `infra/pulumi/src/iac/gcp/iam_data.yaml`
 and/or a `infra/<service>/Pulumi.marin-<service>.yaml` `viewers` list. If it
 changes anything else (code, other Pulumi resources), stop and review it as an
 ordinary PR, not a grant.
 
 ## 2. Decrypt the changed principals
 
-For the `iam_data.py` changes, turn the ciphertext diff into real emails:
+For the `iam_data.yaml` changes, turn the opaque principal references into real
+emails:
 
 ```bash
-git diff origin/main...HEAD -- infra/pulumi/src/iac/gcp/iam_data.py \
+git diff origin/main...HEAD -- infra/pulumi/src/iac/gcp/iam_data.yaml \
   | uv run --package marin-iac --extra deploy \
       python infra/pulumi/iam_principal.py decrypt --diff
 ```
 
 Each output line is `+ user:<email>` (added) or `- user:<email>` (removed). Map
-each back to the role and resource it sits under in the diff — the decryptor
-shows the principal, you read the surrounding `GcpRoleGrant.role` and container
-(`PROJECT_GRANTS`, a specific bucket/secret/repo/service account) from the diff
-hunk. For a `viewers` change, the emails are already plaintext in the YAML diff;
-read them directly.
+each back to the role and resource it sits under in the diff. The decryptor
+shows the principal; read the surrounding `role` and container
+(`project_grants`, a specific bucket/secret/repository/service account) from the
+diff hunk. For a `viewers` change, the emails are already plaintext in the YAML
+diff; read them directly.
 
 ## 3. Present the grant and get confirmation
 
@@ -85,7 +87,7 @@ runs against the committed state.
 The change is not live until `pulumi up` runs — CI never applies. Identify the
 affected stack(s) from the diff:
 
-- `iam_data.py` → the **`marin`** stack in `infra/pulumi`.
+- `iam_data.yaml` → the **`marin`** stack in `infra/pulumi`.
 - a `viewers` change → that service's stack, e.g. **`marin-evaldash`** in
   `infra/evaldash` or **`marin-grafana`** in `infra/grafana`.
 

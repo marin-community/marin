@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared KMS helpers for the iam_data.py encrypted-member tooling (`iam_audit.py`,
+"""Shared KMS helpers for the IAM YAML principal tooling (`iam_audit.py`,
 `iam_principal.py`). Both encrypt/decrypt `user:<email>` principals against the marin-iac key;
 this is the one place the project, key path, and base64 framing live."""
 
