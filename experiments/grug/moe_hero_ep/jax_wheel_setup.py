@@ -29,6 +29,7 @@ class MoonEPJaxWheelBuild(StrEnum):
     LSA_NCCL_2307_NOOP_LSA_HOST_20260802 = "lsa-nccl-2307-noop-lsa-host-20260802"
     LSA_NCCL_2307_NOOP_RUN_COLLECTIVE_20260802 = "lsa-nccl-2307-noop-run-collective-20260802"
     LSA_NCCL_2307_NOOP_AFTER_DEVICE_COMM_20260802 = "lsa-nccl-2307-noop-after-device-comm-20260802"
+    LSA_NCCL_2307_NOOP_BEFORE_DEVICE_COMM_20260802 = "lsa-nccl-2307-noop-before-device-comm-20260802"
     LSA_NCCL_2307_FULL_MNNVL_20260802 = "lsa-nccl-2307-full-mnnvl-20260802"
 
 
@@ -317,6 +318,28 @@ _LSA_NCCL_2307_NOOP_AFTER_DEVICE_COMM_20260802 = _WheelSet(
     ),
 )
 
+_LSA_NCCL_2307_NOOP_BEFORE_DEVICE_COMM_20260802 = _WheelSet(
+    prefix=f"{_WHEEL_ARTIFACT_ROOT}/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-before-device-comm-20260802",
+    wheels=(
+        _WheelArtifact(
+            filename="jax-0.11.1.dev20260802+f9f6bbace-py3-none-any.whl",
+            sha256="40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d",
+        ),
+        _WheelArtifact(
+            filename="jax_cuda13_pjrt-0.11.1.dev0+selfbuilt-py3-none-manylinux_2_27_aarch64.whl",
+            sha256="b3c2d632c70628d026af8bc87f09d48c405b03a57dcba69880327b66ecd748d2",
+        ),
+        _WheelArtifact(
+            filename="jax_cuda13_plugin-0.11.1.dev0+selfbuilt-cp312-cp312-manylinux_2_27_aarch64.whl",
+            sha256="d04ee6bdc956979fa0c43ed95bfdba7bc4f665ceceb34531ef792cff742ddf95",
+        ),
+        _WheelArtifact(
+            filename="jaxlib-0.11.1.dev0+selfbuilt-cp312-cp312-manylinux_2_27_aarch64.whl",
+            sha256="03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4",
+        ),
+    ),
+)
+
 _LSA_NCCL_2307_FULL_MNNVL_20260802 = _WheelSet(
     prefix=_LSA_NCCL_2307_HYBRID_WEAK_20260802.prefix,
     wheels=_LSA_NCCL_2307_HYBRID_WEAK_20260802.wheels,
@@ -356,6 +379,8 @@ def _wheel_set(build: MoonEPJaxWheelBuild) -> _WheelSet:
         return _LSA_NCCL_2307_NOOP_RUN_COLLECTIVE_20260802
     if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_NOOP_AFTER_DEVICE_COMM_20260802:
         return _LSA_NCCL_2307_NOOP_AFTER_DEVICE_COMM_20260802
+    if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_NOOP_BEFORE_DEVICE_COMM_20260802:
+        return _LSA_NCCL_2307_NOOP_BEFORE_DEVICE_COMM_20260802
     if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_FULL_MNNVL_20260802:
         return _LSA_NCCL_2307_FULL_MNNVL_20260802
     raise ValueError(f"unknown MoonEP JAX wheel build: {build}")

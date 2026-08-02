@@ -847,3 +847,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `4b1ddc5011aa44126ff711c4efe2fe889ef43d380e31609e560437cc6cbee0cd`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-after-device-comm-20260802`.
 - Expected rack result: The collective completes and the probe reports sampled value mismatches.
+
+### 2026-08-02 21:54 UTC - MNEP-041 isolates a smaller host path
+
+- Run ID: `mnep-041-ragged-noop-after-device-comm-20260802-2048`.
+- Snapshot: `mnep-041-ragged-noop-after-device-comm-20260802-2048` at `8c7f23d9f`.
+- Result: Task 10 failed with the same CUDA illegal address after 27 seconds.
+- Result: The device kernel did not start.
+- Interpretation: The fault occurs before the return after `GetDeviceComm`.
+- Next gate: Return before `GetDeviceComm`, but after all prior host checks.
+
+### 2026-08-02 21:55 UTC - Return-before-device-communicator XLA build
+
+- Patch: Complete buffer and symmetric-memory lookup, then return before `GetDeviceComm`.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0011-return-before-device-communicator-lookup.patch`.
+- PJRT SHA-256: `b3c2d632c70628d026af8bc87f09d48c405b03a57dcba69880327b66ecd748d2`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-before-device-comm-20260802`.
+- Expected rack result: The collective completes and the probe reports sampled value mismatches.
