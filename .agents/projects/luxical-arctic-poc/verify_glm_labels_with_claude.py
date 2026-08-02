@@ -8,6 +8,7 @@ import base64
 import gzip
 import json
 import subprocess
+import sys
 from typing import Any
 
 from export_glm_claude_review import CLAUDE_REVIEW_CHUNK_MARKER
@@ -142,9 +143,15 @@ def main() -> None:
     """Run the blinded Claude review."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--cluster", default="marin")
-    parser.add_argument("--job-id", required=True)
+    package_source = parser.add_mutually_exclusive_group(required=True)
+    package_source.add_argument("--job-id")
+    package_source.add_argument("--logs-stdin", action="store_true")
     args = parser.parse_args()
-    package = review_package(args.cluster, args.job_id)
+    if args.logs_stdin:
+        package = review_package_from_logs(sys.stdin.read())
+    else:
+        assert args.job_id is not None
+        package = review_package(args.cluster, args.job_id)
     result = comparison(package, claude_assignments(package))
     print(f"CLAUDE_LABEL_REVIEW={json.dumps(result, ensure_ascii=False, sort_keys=True)}")
 
