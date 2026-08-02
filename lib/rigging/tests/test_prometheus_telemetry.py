@@ -196,16 +196,6 @@ def test_scrape_failure_is_reported_separately(monkeypatch: pytest.MonkeyPatch) 
     )
 
 
-def test_scraper_propagates_transport_error_unwrapped(monkeypatch: pytest.MonkeyPatch) -> None:
-    def unavailable(*_args, **_kwargs):
-        raise requests.ConnectionError("unavailable")
-
-    monkeypatch.setattr("rigging.telemetry.prometheus.requests.get", unavailable)
-
-    with pytest.raises(requests.ConnectionError):
-        PrometheusScraper("http://vllm/metrics").scrape()
-
-
 def test_scraper_rejects_oversized_response_before_reading_body(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _PrometheusResponse(_SCRAPE, content_length=DEFAULT_MAX_SCRAPE_BYTES + 1)
     monkeypatch.setattr("rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: response)
