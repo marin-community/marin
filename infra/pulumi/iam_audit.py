@@ -17,7 +17,6 @@ docstring guidance for structural changes.
 """
 
 import argparse
-import base64
 import json
 import re
 from collections.abc import Iterator
@@ -26,10 +25,7 @@ from pathlib import Path
 from google.cloud import kms_v1
 from iac.gcp import iam_data
 from iac.gcp.iam import GcpEncryptedMember, GcpRoleGrant
-
-# Matches lib/iris/config/marin.yaml's provisioning.gcp.project. iam_data.KMS_LOCATION/
-# KMS_KEY_RING/KMS_KEY only cover the key ring/key within it, not the project it lives under.
-PROJECT = "hai-gcp-models"
+from iac.gcp.iam_kms import PROJECT, crypto_key_id, decrypt_member, encrypt_email
 
 IAM_DATA_PATH = Path(__file__).resolve().parent / "src" / "iac" / "gcp" / "iam_data.py"
 
@@ -42,19 +38,12 @@ _NONDETERMINISM_WARNING = (
 )
 
 
-def _crypto_key_id() -> str:
-    return (
-        f"projects/{PROJECT}/locations/{iam_data.KMS_LOCATION}/keyRings/{iam_data.KMS_KEY_RING}/"
-        f"cryptoKeys/{iam_data.KMS_KEY}"
-    )
-
-
 def _iter_grants() -> Iterator[tuple[str, str, GcpRoleGrant]]:
     """Yield (container, resource, grant) for every GcpRoleGrant iam_data.py declares."""
     for grant in iam_data.PROJECT_GRANTS:
         yield "PROJECT_GRANTS", PROJECT, grant
     for grant in iam_data.KMS_GRANTS:
-        yield "KMS_GRANTS", _crypto_key_id(), grant
+        yield "KMS_GRANTS", crypto_key_id(), grant
     for secret in iam_data.SECRETS:
         for grant in secret.grants:
             yield "SECRETS", secret.secret, grant
@@ -77,7 +66,7 @@ def decrypt(out_path: Path) -> None:
     print(_NONDETERMINISM_WARNING)
 
     client = kms_v1.KeyManagementServiceClient()
-    crypto_key_id = _crypto_key_id()
+    key_id = crypto_key_id()
     by_ciphertext: dict[str, dict] = {}
     for container, resource, grant in _iter_grants():
         for member in grant.members:
@@ -85,10 +74,9 @@ def decrypt(out_path: Path) -> None:
                 continue
             record = by_ciphertext.get(member.ciphertext)
             if record is None:
-                response = client.decrypt(name=crypto_key_id, ciphertext=base64.b64decode(member.ciphertext))
                 record = {
                     "ciphertext": member.ciphertext,
-                    "email": f"user:{response.plaintext.decode('utf-8')}",
+                    "email": decrypt_member(client, key_id, member.ciphertext),
                     "grants": [],
                 }
                 by_ciphertext[member.ciphertext] = record
@@ -106,7 +94,7 @@ def encrypt(in_path: Path) -> None:
 
     records = json.loads(in_path.read_text(encoding="utf-8"))
     client = kms_v1.KeyManagementServiceClient()
-    crypto_key_id = _crypto_key_id()
+    key_id = crypto_key_id()
     text = IAM_DATA_PATH.read_text(encoding="utf-8")
 
     file_ciphertexts = set(_CIPHERTEXT_RE.findall(text))
@@ -122,8 +110,7 @@ def encrypt(in_path: Path) -> None:
 
         email = record["email"]
         assert email.startswith("user:"), f"expected a user:<email> principal, got {email!r}"
-        response = client.encrypt(name=crypto_key_id, plaintext=email.removeprefix("user:").encode("utf-8"))
-        new_ciphertext = base64.b64encode(response.ciphertext).decode("ascii")
+        new_ciphertext = encrypt_email(client, key_id, email.removeprefix("user:"))
         text = text.replace(old_ciphertext, new_ciphertext)
 
     missing = file_ciphertexts - seen
