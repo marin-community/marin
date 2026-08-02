@@ -15,6 +15,65 @@ from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_INPUT, _CHECKPOINT_MO
 from levanter.grug.sharding import _batch_axes
 
 
+@jax.custom_vjp
+def _dispatch_gather(
+    x_local: Float[Array, "Tlocal H"],
+    token_sources: Int[Array, " send"],
+    linear_indices: Int[Array, " assignments"],
+    keep: Array,
+) -> Float[Array, "send H"]:
+    """Gather token rows into the fixed-capacity send buffer."""
+    hidden_dim = x_local.shape[1]
+    padded_x = jnp.concatenate([x_local, jnp.zeros((1, hidden_dim), x_local.dtype)], axis=0)
+    return padded_x[token_sources]
+
+
+def _dispatch_gather_fwd(x_local, token_sources, linear_indices, keep):
+    send_x = _dispatch_gather(x_local, token_sources, linear_indices, keep)
+    return send_x, (linear_indices, keep, x_local.shape[0])
+
+
+def _dispatch_gather_bwd(residual, cotangent):
+    linear_indices, keep, tokens_per_shard = residual
+    send_size, hidden_dim = cotangent.shape
+    topk = linear_indices.shape[0] // tokens_per_shard
+    grad_rows = cotangent[jnp.minimum(linear_indices, send_size - 1)]
+    grad_rows = jnp.where(keep[:, None], grad_rows, 0).astype(jnp.float32)
+    grad_rows = grad_rows.reshape(tokens_per_shard, topk, hidden_dim)
+    return grad_rows.sum(axis=1).astype(cotangent.dtype), None, None, None
+
+
+_dispatch_gather.defvjp(_dispatch_gather_fwd, _dispatch_gather_bwd)
+
+
+@jax.custom_vjp
+def _combine_gather(
+    send_output: Float[Array, "send H"],
+    gather_indices: Int[Array, " assignments"],
+    keep: Array,
+    assignment_sources: Int[Array, " send"],
+) -> Float[Array, "assignments H"]:
+    """Gather expert outputs from send slots into assignment order."""
+    return jnp.where(keep[:, None], send_output[gather_indices], 0)
+
+
+def _combine_gather_fwd(send_output, gather_indices, keep, assignment_sources):
+    gathered = _combine_gather(send_output, gather_indices, keep, assignment_sources)
+    return gathered, (assignment_sources,)
+
+
+def _combine_gather_bwd(residual, cotangent):
+    (assignment_sources,) = residual
+    assignments_per_shard = cotangent.shape[0]
+    valid = assignment_sources < assignments_per_shard
+    sources = jnp.minimum(assignment_sources, assignments_per_shard - 1)
+    d_send_output = jnp.where(valid[:, None], cotangent[sources], 0).astype(cotangent.dtype)
+    return d_send_output, None, None, None
+
+
+_combine_gather.defvjp(_combine_gather_fwd, _combine_gather_bwd)
+
+
 def _moe_mlp_ep_fixed_a2a_local(
     x_local: Float[Array, "Tlocal H"],
     selected_experts_local: Int[Array, "Tlocal K"],
@@ -68,8 +127,7 @@ def _moe_mlp_ep_fixed_a2a_local(
             assignment_sources // topk,
             tokens_per_shard,
         )
-        padded_x = jnp.concatenate([x_local, jnp.zeros((1, hidden_dim), dtype=x_local.dtype)], axis=0)
-        send_x = padded_x[token_sources]
+        send_x = _dispatch_gather(x_local, token_sources, linear_indices, keep)
         send_x = send_x.reshape(local_experts, expert_shards, capacity, hidden_dim)
 
     moe_dim = moe_w2_local.shape[1]
@@ -103,8 +161,8 @@ def _moe_mlp_ep_fixed_a2a_local(
         send_output = jnp.stack(output_parts, axis=0)
         send_output = tree_checkpoint_name(send_output, _CHECKPOINT_MOE_OUTPUT)
         send_output = send_output.reshape(send_size, hidden_dim)
-        gathered = send_output[jnp.minimum(linear_indices, send_size - 1)]
-        gathered = jnp.where(keep[:, None], gathered, 0)
+        gather_indices = jnp.minimum(linear_indices, send_size - 1)
+        gathered = _combine_gather(send_output, gather_indices, keep, assignment_sources)
         gathered = gathered.reshape(tokens_per_shard, topk, hidden_dim)
         out_local = jnp.einsum(
             "tkh,tk->th",

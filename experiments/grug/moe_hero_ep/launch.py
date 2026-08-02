@@ -100,7 +100,17 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
-                tags=["grug", "moe", "hero", "ep", "fixed-a2a", "gather-dispatch", "gb200", "MHEP"],
+                tags=[
+                    "grug",
+                    "moe",
+                    "hero",
+                    "ep",
+                    "fixed-a2a",
+                    "gather-dispatch",
+                    "custom-adjoint",
+                    "gb200",
+                    "MHEP",
+                ],
                 group="moe-hero-ep",
                 name=run_id,
                 replicate_path=ctx.output_path,
