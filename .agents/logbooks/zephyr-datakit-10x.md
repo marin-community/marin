@@ -179,3 +179,14 @@ author: Marin
 - Full Zephyr suite: 347 passed, 4 deselected, 1 expected failure, and `test_sorted_merge_join_inner_basic_integration[iris]` timed out at the suite-wide 60-second limit. The exact Iris-backed test passed alone in 42.32s; the changed local writer/Dataset path is not involved in the join.
 - Advisory review: Applied immutable benchmark configuration, a shared score threshold/result marker, a named corpus-digest result, concrete byte-count types, split parent/child entry points, and shorter internal docstrings. Kept row and RecordBatch accumulation separate because schema widening plus Python conversion and exact batch-schema enforcement have different contracts; sharing their small flush block would add callback indirection and couple those semantics.
 - Next action: commit the targeted review cleanup, push the branch, and open the first milestone PR.
+
+### 2026-08-02 - Z10X-010 federated medium-scale harness
+
+- Hypothesis: A fixed 64-slot CoreWeave comparison can separate the representation gain from actor-job packing effects while preserving fast iteration.
+- Commit Hash: working tree based on `e87bd2a2f`
+- Federation probe: `uv run iris --config lib/iris/config/marin.yaml job run --target-cluster cw-us-east-02a --job-name zephyr-10x-federation-probe --cpu 0.1 --memory 1GB --disk 1GB --priority batch --no-preemptible --no-sync -- python -c ...`
+- Probe result: `/loom/zephyr-10x-federation-probe` succeeded through the Marin controller. The peer job resolved `MARIN_PREFIX=s3://marin-us-east-02a/marin`, confirming that benchmark inputs and outputs can stay in the selected CoreWeave region.
+- Harness config: stage one pinned 100K-row FineWeb-Edu Parquet object inside `cw-us-east-02a`, then present it as 64 Zephyr input shards. Run `row:4`, `batch:4`, and `batch:1` sequentially: 16 actor jobs with four subprocess slots for the matched representation A/B, plus 64 single-slot actor jobs for the packing comparison. Each arm uses 64 total CPU slots, 4 GiB RAM and 1 GiB disk per task slot, non-preemptible worker resources, and inherited batch priority.
+- Gates: all 64 output footers contribute to file, row, byte, and schema checks; a fixed-4,096-row logical digest of a representative shard verifies values and order across arms. Zephyr `cpu_time_total` and memory statistics from Finelog are the primary performance signals; the harness wall time is context only.
+- Caveat: Reusing the same pinned real-data object avoids a large staging copy and is valid for map/filter/write CPU measurement, but it does not represent source-key diversity and must not be used for deduplication-ratio or shuffle-skew conclusions.
+- Next action: validate the distributed path with a two-shard federated smoke, then launch the 64-shard A/B through the same Marin federation route.
