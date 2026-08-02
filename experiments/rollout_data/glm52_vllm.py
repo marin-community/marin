@@ -206,6 +206,7 @@ def _serve_ray_head(
     ray_command: list[str],
     environment: dict[str, str],
     launch: Glm52LaunchConfig,
+    ray_endpoint: str,
     ray_port: int,
     http_port: int,
 ) -> None:
@@ -225,7 +226,7 @@ def _serve_ray_head(
         check=True,
         env=environment,
     )
-    with ctx.registry.registered(launch.ray_endpoint, ray_address):
+    with ctx.registry.registered(ray_endpoint, ray_address):
         try:
 
             def ray_ready() -> bool:
@@ -247,8 +248,13 @@ def _serve_ray_head(
             subprocess.run([*ray_command, "stop", "--force"], env=environment, check=False)
 
 
-def _serve_ray_worker(host: str, launch: Glm52LaunchConfig, ray_command: list[str], environment: dict[str, str]) -> None:
-    ray_address = wait_for_endpoint_url(launch.ray_endpoint, timeout=ENDPOINT_TIMEOUT)
+def _serve_ray_worker(
+    host: str,
+    ray_endpoint: str,
+    ray_command: list[str],
+    environment: dict[str, str],
+) -> None:
+    ray_address = wait_for_endpoint_url(ray_endpoint, timeout=ENDPOINT_TIMEOUT)
     subprocess.run(
         [
             *ray_command,
@@ -278,6 +284,7 @@ def serve_glm52(launch: Glm52LaunchConfig, ray_port: int, http_port: int) -> Non
     environment["CUDA_HOME"] = _cuda_home(vllm_command, environment)
     environment["VLLM_HOST_IP"] = host
     environment["GLOO_SOCKET_IFNAME"] = _network_interface(host)
+    ray_endpoint = f"{launch.ray_endpoint}-attempt-{info.attempt_id}"
     if info.task_index == 0:
         _serve_ray_head(
             ctx,
@@ -286,11 +293,12 @@ def serve_glm52(launch: Glm52LaunchConfig, ray_port: int, http_port: int) -> Non
             ray_command,
             environment,
             launch,
+            ray_endpoint,
             _reserve_port(host, ray_port),
             _reserve_port(host, http_port),
         )
         return
-    _serve_ray_worker(host, launch, ray_command, environment)
+    _serve_ray_worker(host, ray_endpoint, ray_command, environment)
 
 
 def _serve_glm52(launch: Glm52LaunchConfig) -> None:
