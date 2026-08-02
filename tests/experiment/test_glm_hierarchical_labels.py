@@ -19,6 +19,7 @@ from glm_hierarchical_labels import (  # noqa: E402
     assign_document,
     build_hierarchy,
     hierarchy_launch_config,
+    hierarchy_prompt,
     validate_hierarchy,
 )
 from glm_semantic_labels import OTHER_BUCKET_ID, Bucket, SampleDocument  # noqa: E402
@@ -43,6 +44,18 @@ def test_validate_hierarchy_accepts_linked_parent_and_leaf_ids() -> None:
     value, variant = hierarchy()
 
     validate_hierarchy(value, variant)
+
+
+def test_hierarchy_prompt_uses_exact_bounded_array_sizes() -> None:
+    variant = Variant("balanced", 12, 16, 28, 40)
+
+    prompt = hierarchy_prompt([], variant)
+
+    assert "exactly 14 non-fallback parent" in prompt
+    assert "parents array must contain exactly 15 objects" in prompt
+    assert "exactly 34 non-fallback leaf" in prompt
+    assert "leaves array must contain exactly 35 objects" in prompt
+    assert "definition must have at most 20 words" in prompt
 
 
 def test_validate_hierarchy_rejects_leaf_with_unknown_parent() -> None:

@@ -175,18 +175,24 @@ def representative_records(
 
 def hierarchy_prompt(records: list[dict[str, Any]], variant: Variant) -> str:
     """Return the source-blind hierarchy request."""
+    parent_target = (variant.parent_minimum + variant.parent_maximum) // 2
+    leaf_target = (variant.leaf_minimum + variant.leaf_maximum) // 2
     return f"""Create a hierarchy of semantic domains for the document summary below.
-Create {variant.parent_minimum} through {variant.parent_maximum} non-fallback parent domains.
-Create {variant.leaf_minimum} through {variant.leaf_maximum} non-fallback leaf domains.
+Create exactly {parent_target} non-fallback parent domains.
+The parents array must contain exactly {parent_target + 1} objects, including the {OTHER_BUCKET_ID} parent.
+Create exactly {leaf_target} non-fallback leaf domains.
+The leaves array must contain exactly {leaf_target + 1} objects, including the {OTHER_BUCKET_ID} leaf.
 Each leaf must have exactly one parent. Each non-fallback parent must have at least one leaf.
+Do not create one parent for each leaf.
 Domains must describe subject matter or central purpose.
 Do not use language, source, publisher, quality, or document form.
 Make parent domains broad and mutually distinct. Make sibling leaves distinct.
 Add one {OTHER_BUCKET_ID} parent and one {OTHER_BUCKET_ID} leaf below it.
-Provide ordered precedence rules that select the central purpose when a document covers more than one domain.
+Use at most 12 ordered precedence rules that select the central purpose when a document covers more than one domain.
 Return one JSON object with parents, leaves, and precedence_rules arrays.
 Each parent has bucket_id, name, definition, include, and exclude.
 Each leaf has the same fields plus parent_id. Use stable uppercase IDs.
+Each definition must have at most 20 words. Each include and exclude array must contain exactly two short strings.
 Pilot summary:
 {json.dumps(records, ensure_ascii=False)}"""
 
@@ -226,9 +232,15 @@ def validate_hierarchy(hierarchy: Hierarchy, variant: Variant) -> None:
     non_fallback_parents = [value for value in parent_ids if value != OTHER_BUCKET_ID]
     non_fallback_leaves = [value for value in leaf_ids if value != OTHER_BUCKET_ID]
     if not variant.parent_minimum <= len(non_fallback_parents) <= variant.parent_maximum:
-        raise ValueError(f"The hierarchy has {len(non_fallback_parents)} non-fallback parents")
+        raise ValueError(
+            f"The hierarchy has {len(non_fallback_parents)} non-fallback parents; "
+            f"expected {variant.parent_minimum} through {variant.parent_maximum}"
+        )
     if not variant.leaf_minimum <= len(non_fallback_leaves) <= variant.leaf_maximum:
-        raise ValueError(f"The hierarchy has {len(non_fallback_leaves)} non-fallback leaves")
+        raise ValueError(
+            f"The hierarchy has {len(non_fallback_leaves)} non-fallback leaves; "
+            f"expected {variant.leaf_minimum} through {variant.leaf_maximum}"
+        )
     if parent_ids.count(OTHER_BUCKET_ID) != 1 or leaf_ids.count(OTHER_BUCKET_ID) != 1:
         raise ValueError("The hierarchy needs one fallback parent and leaf")
     if not hierarchy.precedence_rules:
