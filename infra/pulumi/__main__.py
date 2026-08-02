@@ -32,9 +32,9 @@ from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
-from iac.gcp import iam_data
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
 from iac.gcp.iam import GcpIam, GcpIamArgs
+from iac.gcp.iam_config import load_iam_config
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
 from iac.nodepools import derive_nodepools
 from rigging.secrets import resolve_secret_spec
@@ -183,6 +183,7 @@ def _build_gcp(cluster: str, *, adopt: bool) -> None:
     provisioning = load_provisioning(cluster)
     assert provisioning.gcp is not None  # guaranteed by load_provisioning
     gcp_provisioning = provisioning.gcp
+    iam_config = load_iam_config()
 
     gcp_provider = gcp.Provider("gcp", project=gcp_provisioning.project)
     GcpStaticAddresses(
@@ -207,17 +208,17 @@ def _build_gcp(cluster: str, *, adopt: bool) -> None:
         "iam",
         GcpIamArgs(
             project=gcp_provisioning.project,
-            kms_location=iam_data.KMS_LOCATION,
-            kms_key_ring=iam_data.KMS_KEY_RING,
-            kms_key=iam_data.KMS_KEY,
-            custom_roles=iam_data.CUSTOM_ROLES,
-            owned_service_accounts=iam_data.OWNED_SERVICE_ACCOUNTS,
-            project_grants=iam_data.PROJECT_GRANTS,
-            kms_grants=iam_data.KMS_GRANTS,
-            secrets=iam_data.SECRETS,
-            buckets=iam_data.BUCKETS,
-            artifact_repositories=iam_data.ARTIFACT_REPOSITORIES,
-            service_accounts=iam_data.SERVICE_ACCOUNTS,
+            kms_location=iam_config.kms_location,
+            kms_key_ring=iam_config.kms_key_ring,
+            kms_key=iam_config.kms_key,
+            custom_roles=iam_config.custom_roles,
+            owned_service_accounts=iam_config.owned_service_accounts,
+            project_grants=iam_config.project_grants,
+            kms_grants=iam_config.kms_grants,
+            secrets=iam_config.secrets,
+            buckets=iam_config.buckets,
+            artifact_repositories=iam_config.artifact_repositories,
+            service_accounts=iam_config.service_accounts,
             adopt=adopt,
         ),
         gcp_provider=gcp_provider,

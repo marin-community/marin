@@ -23,9 +23,9 @@ import re
 import sys
 
 from google.cloud import kms_v1
-from iac.gcp import iam_data
 from iac.gcp.iam_config import (
     IAM_DATA_PATH,
+    PRINCIPAL_ID_PATTERN,
     grant_project_roles,
     load_iam_config,
     register_principal,
@@ -33,8 +33,8 @@ from iac.gcp.iam_config import (
 )
 from iac.gcp.iam_kms import crypto_key_id, decrypt_member, encrypt_email
 
-_PRINCIPAL_REF_RE = re.compile(r"^[+-]\s*-\s+principal:\s+(human-\d+)\s*$")
-_PRINCIPAL_RECORD_RE = re.compile(r"^[+-]\s*(human-\d+):\s+(\S+)\s*$")
+_PRINCIPAL_REF_RE = re.compile(rf"^[+-]\s*-\s+principal:\s+({PRINCIPAL_ID_PATTERN})\s*$")
+_PRINCIPAL_RECORD_RE = re.compile(rf"^[+-]\s*({PRINCIPAL_ID_PATTERN}):\s+(\S+)\s*$")
 
 
 def grant(email: str, project_roles: tuple[str, ...]) -> None:
@@ -83,7 +83,8 @@ def decrypt_ciphertexts(ciphertexts: list[str]) -> None:
 def decrypt_diff() -> None:
     """Annotate changed YAML principal references without printing unchanged people."""
     lines = sys.stdin.readlines()
-    current_ciphertexts = {principal.principal_id: principal.ciphertext for principal in iam_data.CONFIG.principals}
+    config = load_iam_config()
+    current_ciphertexts = {principal.principal_id: principal.ciphertext for principal in config.principals}
     changed_records: dict[tuple[str, str], str] = {}
     changed_references: list[tuple[str, str]] = []
     for line in lines:

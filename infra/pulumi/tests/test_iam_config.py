@@ -143,6 +143,31 @@ def test_load_iam_config_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
         load_iam_config(path)
 
 
+def test_load_iam_config_rejects_unknown_schema_fields(tmp_path: Path) -> None:
+    path = tmp_path / "iam_data.yaml"
+    write_iam_config(_config(), path)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["unexpected"] = True
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"unknown field.*unexpected"):
+        load_iam_config(path)
+
+
+def test_load_iam_config_rejects_noncanonical_principal_id(tmp_path: Path) -> None:
+    path = tmp_path / "iam_data.yaml"
+    write_iam_config(
+        _config(principals=(GcpPrincipal(principal_id="human-001", ciphertext="ciphertext"),)),
+        path,
+    )
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["principals"] = {"human-1": "ciphertext"}
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="expected human-NNN"):
+        load_iam_config(path)
+
+
 def test_checked_in_iam_yaml_is_canonical(tmp_path: Path) -> None:
     output_path = tmp_path / "iam_data.yaml"
     write_iam_config(load_iam_config(), output_path)

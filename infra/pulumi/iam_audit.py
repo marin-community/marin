@@ -17,13 +17,14 @@ and delete it when the audit is complete.
 import argparse
 import json
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from google.cloud import kms_v1
-from iac.gcp import iam_data
 from iac.gcp.iam import GcpEncryptedMember, GcpRoleGrant
 from iac.gcp.iam_config import (
     IAM_DATA_PATH,
+    GcpIamConfig,
     GcpPrincipal,
     load_iam_config,
     replace_principals,
@@ -37,57 +38,143 @@ _NONDETERMINISM_WARNING = (
 )
 
 
-def _iter_grants() -> Iterator[tuple[str, str, GcpRoleGrant]]:
+@dataclass(frozen=True, order=True)
+class AuditGrant:
+    """One resource grant attached to a decrypted audit principal."""
+
+    container: str
+    resource: str
+    role: str
+
+    def json_object(self) -> dict[str, str]:
+        return {
+            "container": self.container,
+            "resource": self.resource,
+            "role": self.role,
+        }
+
+    @classmethod
+    def from_json_object(cls, value: object, path: str) -> "AuditGrant":
+        fields = _json_fields(value, path, frozenset({"container", "resource", "role"}))
+        return cls(
+            container=_json_string(fields["container"], f"{path}.container"),
+            resource=_json_string(fields["resource"], f"{path}.resource"),
+            role=_json_string(fields["role"], f"{path}.role"),
+        )
+
+
+@dataclass(frozen=True)
+class AuditPrincipal:
+    """One decrypted principal and all grants that reference it."""
+
+    principal_id: str
+    email: str
+    grants: tuple[AuditGrant, ...]
+
+    def json_object(self) -> dict[str, object]:
+        return {
+            "principal_id": self.principal_id,
+            "email": self.email,
+            "grants": [grant.json_object() for grant in self.grants],
+        }
+
+    @classmethod
+    def from_json_object(cls, value: object, path: str) -> "AuditPrincipal":
+        fields = _json_fields(value, path, frozenset({"principal_id", "email", "grants"}))
+        raw_grants = fields["grants"]
+        if not isinstance(raw_grants, list):
+            raise ValueError(f"{path}.grants must be a list")
+        return cls(
+            principal_id=_json_string(fields["principal_id"], f"{path}.principal_id"),
+            email=_json_string(fields["email"], f"{path}.email"),
+            grants=tuple(
+                AuditGrant.from_json_object(grant, f"{path}.grants[{index}]") for index, grant in enumerate(raw_grants)
+            ),
+        )
+
+
+def _json_fields(value: object, path: str, required: frozenset[str]) -> dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{path} must be an object")
+    missing = required - value.keys()
+    unknown = value.keys() - required
+    if missing:
+        raise ValueError(f"{path} is missing field(s): {', '.join(sorted(missing))}")
+    if unknown:
+        raise ValueError(f"{path} has unknown field(s): {', '.join(sorted(unknown))}")
+    return value
+
+
+def _json_string(value: object, path: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{path} must be a string")
+    return value
+
+
+def _audit_principals(path: Path) -> tuple[AuditPrincipal, ...]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError(f"{path} must contain a JSON list")
+    return tuple(AuditPrincipal.from_json_object(record, f"{path}[{index}]") for index, record in enumerate(raw))
+
+
+def _iter_grants(config: GcpIamConfig) -> Iterator[tuple[str, str, GcpRoleGrant]]:
     """Yield (container, resource, grant) for every declared role grant."""
-    for grant in iam_data.PROJECT_GRANTS:
-        yield "PROJECT_GRANTS", PROJECT, grant
-    for grant in iam_data.KMS_GRANTS:
-        yield "KMS_GRANTS", crypto_key_id(), grant
-    for secret in iam_data.SECRETS:
+    for grant in config.project_grants:
+        yield "project_grants", PROJECT, grant
+    for grant in config.kms_grants:
+        yield "kms_grants", crypto_key_id(), grant
+    for secret in config.secrets:
         for grant in secret.grants:
-            yield "SECRETS", secret.secret, grant
-    for bucket in iam_data.BUCKETS:
+            yield "secrets", secret.secret, grant
+    for bucket in config.buckets:
         for grant in bucket.grants:
-            yield "BUCKETS", bucket.bucket, grant
-    for repo in iam_data.ARTIFACT_REPOSITORIES:
+            yield "buckets", bucket.bucket, grant
+    for repo in config.artifact_repositories:
         for grant in repo.grants:
-            yield "ARTIFACT_REPOSITORIES", f"{repo.location}/{repo.repository}", grant
-    for account in iam_data.SERVICE_ACCOUNTS:
+            yield "artifact_repositories", f"{repo.location}/{repo.repository}", grant
+    for account in config.service_accounts:
         for grant in account.grants:
-            yield "SERVICE_ACCOUNTS", account.email, grant
+            yield "service_accounts", account.email, grant
 
 
 def decrypt(out_path: Path) -> None:
     """Write one audit record per opaque principal ID."""
     print(_NONDETERMINISM_WARNING)
 
+    config = load_iam_config()
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id()
-    principal_ids = {principal.ciphertext: principal.principal_id for principal in iam_data.CONFIG.principals}
-    records = {
-        principal.principal_id: {
-            "principal_id": principal.principal_id,
-            "ciphertext": principal.ciphertext,
-            "email": decrypt_member(client, key_id, principal.ciphertext),
-            "grants": [],
-        }
-        for principal in iam_data.CONFIG.principals
-    }
-    for container, resource, grant in _iter_grants():
+    principal_ids = {principal.ciphertext: principal.principal_id for principal in config.principals}
+    grants_by_id: dict[str, list[AuditGrant]] = {principal.principal_id: [] for principal in config.principals}
+    for container, resource, grant in _iter_grants(config):
         for member in grant.members:
             if not isinstance(member, GcpEncryptedMember):
                 continue
-            records[principal_ids[member.ciphertext]]["grants"].append(
-                {"container": container, "resource": resource, "role": grant.role}
+            grants_by_id[principal_ids[member.ciphertext]].append(
+                AuditGrant(container=container, resource=resource, role=grant.role)
             )
 
-    ordered_records = sorted(records.values(), key=lambda record: record["email"])
-    for record in ordered_records:
-        record["grants"].sort(key=lambda grant: (grant["container"], grant["resource"], grant["role"]))
-    out_path.write_text(json.dumps(ordered_records, indent=2) + "\n", encoding="utf-8")
+    records = tuple(
+        sorted(
+            (
+                AuditPrincipal(
+                    principal_id=principal.principal_id,
+                    email=decrypt_member(client, key_id, principal.ciphertext),
+                    grants=tuple(sorted(grants_by_id[principal.principal_id])),
+                )
+                for principal in config.principals
+            ),
+            key=lambda record: record.email,
+        )
+    )
+    out_path.write_text(
+        json.dumps([record.json_object() for record in records], indent=2) + "\n",
+        encoding="utf-8",
+    )
     print(
-        f"wrote {len(ordered_records)} decrypted principals "
-        f"({sum(len(record['grants']) for record in ordered_records)} grants) to {out_path}"
+        f"wrote {len(records)} decrypted principals "
+        f"({sum(len(record.grants) for record in records)} grants) to {out_path}"
     )
 
 
@@ -95,16 +182,18 @@ def encrypt(in_path: Path) -> None:
     """Re-encrypt every principal from an audit file back into the YAML registry."""
     print(_NONDETERMINISM_WARNING)
 
-    records = json.loads(in_path.read_text(encoding="utf-8"))
+    records = _audit_principals(in_path)
     config = load_iam_config()
     file_ids = {principal.principal_id for principal in config.principals}
-    record_ids = {record["principal_id"] for record in records}
+    record_ids = {record.principal_id for record in records}
+    if len(record_ids) != len(records):
+        raise SystemExit(f"{in_path} contains duplicate principal IDs")
     if missing := file_ids - record_ids:
         raise SystemExit(f"{len(missing)} principal(s) in {IAM_DATA_PATH} are missing from {in_path}")
     if unknown := record_ids - file_ids:
         raise SystemExit(f"{len(unknown)} principal(s) in {in_path} are missing from {IAM_DATA_PATH}")
 
-    emails = {record["principal_id"]: record["email"] for record in records}
+    emails = {record.principal_id: record.email for record in records}
     client = kms_v1.KeyManagementServiceClient()
     key_id = crypto_key_id()
     principals = tuple(

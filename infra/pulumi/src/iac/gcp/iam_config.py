@@ -25,8 +25,10 @@ from iac.gcp.iam import (
 )
 
 IAM_DATA_PATH = Path(__file__).with_name("iam_data.yaml")
+PRINCIPAL_ID_PREFIX = "human-"
+PRINCIPAL_ID_PATTERN = rf"{PRINCIPAL_ID_PREFIX}\d{{3,}}"
 
-_PRINCIPAL_ID_RE = re.compile(r"human-(\d{3,})")
+_PRINCIPAL_ID_RE = re.compile(PRINCIPAL_ID_PATTERN)
 _SCHEMA_VERSION = 1
 _PLAIN_MEMBER_PREFIXES = (
     "domain:",
@@ -131,7 +133,7 @@ def _string(value: object, path: str) -> str:
 
 
 def _integer(value: object, path: str) -> int:
-    if type(value) is not int:
+    if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{path} must be an integer")
     return value
 
@@ -541,9 +543,9 @@ def replace_principals(config: GcpIamConfig, principals: tuple[GcpPrincipal, ...
 
 def _next_principal_id(principals: tuple[GcpPrincipal, ...]) -> str:
     numbers = [
-        int(match.group(1))
+        int(principal.principal_id.removeprefix(PRINCIPAL_ID_PREFIX))
         for principal in principals
-        if (match := _PRINCIPAL_ID_RE.fullmatch(principal.principal_id)) is not None
+        if _PRINCIPAL_ID_RE.fullmatch(principal.principal_id) is not None
     ]
     return f"human-{max(numbers, default=0) + 1:03d}"
 
