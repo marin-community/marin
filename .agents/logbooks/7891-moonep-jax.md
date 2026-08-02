@@ -449,3 +449,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Interpretation: Transport and its barriers dominate the correct fallback path.
 - Decision: Test XLA's direct EP64 device path with NCCL 2.30.7 before source changes.
 - Local gate: NCCL 2.30.7 passed four-GPU output and gradient parity in 108.50 seconds.
+
+### 2026-08-02 16:57 UTC - MNEP-022 direct-device smoke contract
+
+- Goal: Execute three combined MoonEP and global QB steps through the direct EP64 device kernel.
+- Run ID: `mnep-022-direct-nccl2307-smoke-3-20260802-1657`.
+- Runtime: Use fixed XLA `5d53e1e`, NCCL 2.30.7, an 84% main pool, and four in-flight collectives.
+- Config: Use 16 workers, four GB200 GPUs per worker, and one JAX process per worker.
+- Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
+- Stop criteria: Stop on the first retry, memory error, transport error, non-finite loss, or dropped assignment.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-022-direct-nccl2307-smoke-3-20260802-1657-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-022-direct-nccl2307-smoke-3-20260802-1657 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-20260802 --moonep-transport direct_device --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
