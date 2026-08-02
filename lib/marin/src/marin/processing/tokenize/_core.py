@@ -214,13 +214,13 @@ def tokenize_batches_with_id(
 
     for batch in batches:
         batch_count += 1
-        for record in processor(batch):
-            n_tokens = len(record.get("input_ids", []))
-            counters.pipeline.update_counter("tokenize/docs_out", 1)
-            counters.pipeline.update_counter("tokenize/tokens_out", n_tokens)
-            record_count += 1
-            token_count += n_tokens
-            yield record
+        records = processor(batch)
+        batch_token_count = sum(len(record.get("input_ids", [])) for record in records)
+        counters.pipeline.update_counter("tokenize/docs_out", len(records))
+        counters.pipeline.update_counter("tokenize/tokens_out", batch_token_count)
+        record_count += len(records)
+        token_count += batch_token_count
+        yield from records
         if batch_count % 10 == 0:
             elapsed = time.monotonic() - start_time
             tok_per_sec = token_count / elapsed if elapsed > 0 else 0
