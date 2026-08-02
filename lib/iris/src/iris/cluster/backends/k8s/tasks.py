@@ -2502,6 +2502,19 @@ class K8sTaskProvider:
 
         return updates
 
+    def _allow_legacy_pod_name(self, entry: RunningTaskEntry) -> bool:
+        """The pre-uid name is a candidate only for attempts this process did not dispatch."""
+        return (entry.task_id.to_wire(), entry.attempt_id) not in self._dispatched_attempts
+
+    def _entry_pod_candidates(self, entry: RunningTaskEntry) -> list[str]:
+        """Pod names a running entry may be under, current scheme first."""
+        return _pod_name_candidates(
+            entry.task_id,
+            entry.attempt_id,
+            entry.attempt_uid,
+            allow_legacy=self._allow_legacy_pod_name(entry),
+        )
+
     def _lookup_entry_pod(self, pods_by_name: dict[str, dict], entry: RunningTaskEntry) -> tuple[str, dict | None]:
         """Resolve a running entry to its pod, allowing the pre-uid name only when this
         process did not dispatch the attempt."""
@@ -2510,7 +2523,7 @@ class K8sTaskProvider:
             entry.task_id,
             entry.attempt_id,
             entry.attempt_uid,
-            allow_legacy=(entry.task_id.to_wire(), entry.attempt_id) not in self._dispatched_attempts,
+            allow_legacy=self._allow_legacy_pod_name(entry),
         )
 
     def _live_pod_name(self, target: TaskTarget) -> str:
@@ -3044,13 +3057,33 @@ class K8sTaskProvider:
         updates: list[TaskUpdate] = []
 
         # Resolve running tasks whose pod has left the active list (completed or
-        # vanished) with one bulk terminal-pods list instead of a per-pod GET
-        # each. Lazy: only fetched on cycles where at least one pod is missing,
-        # so steady-state cycles add no call. setdefault keeps the active entry
-        # if a name somehow appears in both.
-        if any(self._lookup_entry_pod(pods_by_name, entry)[1] is None for entry in running):
+        # vanished) by scanning terminal pods, instead of a per-pod GET each. Only
+        # scanned on cycles where at least one pod is missing, so steady-state cycles
+        # add no call, and the scan stops as soon as every missing attempt is
+        # accounted for: this runs on the control loop, and the terminal collection
+        # holds up to a full retention window of pods. setdefault keeps the active
+        # entry if a name somehow appears in both.
+        #
+        # Only an entry's FIRST candidate settles it. _lookup_pod prefers that
+        # current-scheme name, so a match on it is final, while a match on the pre-uid
+        # name is not — the preferred pod could still be further into the scan, and
+        # stopping there would resolve the attempt to a previous incarnation's pod.
+        settled_by: dict[str, RunningTaskEntry] = {}
+        unresolved: set[RunningTaskEntry] = set()
+        for entry in running:
+            if self._lookup_entry_pod(pods_by_name, entry)[1] is not None:
+                continue
+            unresolved.add(entry)
+            settled_by[self._entry_pod_candidates(entry)[0]] = entry
+        if unresolved:
             for pod in self._iter_terminal_pods():
-                pods_by_name.setdefault(pod.get("metadata", {}).get("name", ""), pod)
+                name = pod.get("metadata", {}).get("name", "")
+                pods_by_name.setdefault(name, pod)
+                settled = settled_by.get(name)
+                if settled is not None:
+                    unresolved.discard(settled)
+                    if not unresolved:
+                        break
 
         # (task_id_wire, attempt_id) -> pod_name. Resource samples are
         # appended directly to iris.task by the collector; the controller no

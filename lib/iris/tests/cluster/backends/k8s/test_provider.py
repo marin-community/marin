@@ -315,6 +315,52 @@ def test_sync_finds_pod_dispatched_before_pod_names_embedded_uid(provider, k8s):
         assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
 
+class _CountingK8sService:
+    """InMemoryK8sService that counts the items iter_json actually yields."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.items_read = 0
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def iter_json(self, *args, **kwargs):
+        for item in self._inner.iter_json(*args, **kwargs):
+            self.items_read += 1
+            yield item
+
+
+def test_poll_stops_scanning_terminal_pods_once_attempts_resolve(k8s, task_stats_table):
+    """Resolving a finished pod must not read the whole terminal backlog.
+
+    This scan is on the control loop, and the terminal collection holds up to a full
+    retention window of pods, so reading all of them on every tick where a pod
+    completes is the shape of read that wedged #7881.
+    """
+    counting = _CountingK8sService(k8s)
+    provider = K8sTaskProvider(
+        kubectl=counting,
+        pods=pod_config(),
+        task_stats_table=task_stats_table,
+        cluster_scan_interval=0.0,
+    )
+    task_id = JobName.from_wire("/job/0")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    populate_pod(k8s, _pod_name(task_id, 0), "Succeeded", exit_code=0)
+    for i in range(200):
+        populate_pod(k8s, f"unrelated-terminal-{i:04d}", "Succeeded", exit_code=0)
+
+    try:
+        result = provider.sync(make_batch(running_tasks=[entry]))
+    finally:
+        provider.close()
+
+    assert len(result) == 1
+    assert result[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
+    assert counting.items_read == 1, "scan must stop at the pod that settles the attempt"
+
+
 def test_lookup_pod_prefers_uid_name_when_both_are_present(provider, k8s):
     """With both names in the pod set, the uid-named pod wins.
 
