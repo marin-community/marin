@@ -11,6 +11,7 @@ sys.path.insert(0, str(PROJECT))
 
 from semantic_embedding_metrics import (  # noqa: E402
     cosine_order_fidelity,
+    sampled_pairs,
     semantic_metrics,
     stored_vector_rows,
     student_gates,
@@ -56,6 +57,10 @@ def test_semantic_metrics_find_coherent_neighbors_and_clusters() -> None:
     assert metrics["cluster_purity"] == 1.0
     assert metrics["cross_group_neighbor_any_label_fraction"] == 1.0
     assert metrics["neighbor_same_group_fraction"] == 2 / 3
+    assert metrics["nearest_primary_per_label"] == {
+        "A": {"support": 3, "f1": 1.0},
+        "B": {"support": 3, "f1": 1.0},
+    }
     assert np.all(primary[neighbors[:, 0]] == primary)
 
 
@@ -64,6 +69,17 @@ def test_cosine_order_fidelity_is_one_for_rotated_vectors() -> None:
     rotation = np.asarray([[0.0, -1.0], [1.0, 0.0]])
 
     assert cosine_order_fidelity(vectors @ rotation, vectors) == 1.0
+
+
+def test_sampled_pairs_are_stable_unique_and_bounded() -> None:
+    left, right = sampled_pairs(row_count=1_000, maximum=2_000, seed=42)
+    repeated_left, repeated_right = sampled_pairs(row_count=1_000, maximum=2_000, seed=42)
+
+    assert len(left) == 2_000
+    assert np.all(left < right)
+    assert len(set(zip(left, right, strict=True))) == 2_000
+    np.testing.assert_array_equal(left, repeated_left)
+    np.testing.assert_array_equal(right, repeated_right)
 
 
 def test_student_gates_compare_semantics_health_and_speed() -> None:

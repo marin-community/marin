@@ -99,7 +99,7 @@ def label_neighborhood_metrics(
     neighbors: np.ndarray,
     primary_labels: np.ndarray,
     label_sets: list[frozenset[str]],
-) -> dict[str, float]:
+) -> dict[str, object]:
     """Return semantic label agreement for one neighbor matrix."""
     any_matches = []
     jaccards = []
@@ -119,7 +119,39 @@ def label_neighborhood_metrics(
         "nearest_primary_macro_f1": float(
             f1_score(primary_labels, primary_labels[neighbors[:, 0]], average="macro", zero_division=0)
         ),
+        "nearest_primary_per_label": per_label_f1(primary_labels, primary_labels[neighbors[:, 0]]),
     }
+
+
+def per_label_f1(expected: np.ndarray, predicted: np.ndarray) -> dict[str, dict[str, float | int]]:
+    """Return support and one-vs-rest F1 for each primary label."""
+    labels = np.unique(expected)
+    scores = f1_score(expected, predicted, labels=labels, average=None, zero_division=0)
+    return {
+        str(label): {"support": int(np.sum(expected == label)), "f1": float(score)}
+        for label, score in zip(labels, scores, strict=True)
+    }
+
+
+def sampled_pairs(row_count: int, maximum: int | None, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return all pairs or a stable uniform sample of unordered row pairs."""
+    pair_count = row_count * (row_count - 1) // 2
+    if maximum is None or pair_count <= maximum:
+        return np.triu_indices(row_count, k=1)
+    if maximum < 1:
+        raise ValueError("The maximum pair count must be positive")
+    random = np.random.default_rng(seed)
+    pairs = np.empty((0, 2), dtype=np.int64)
+    while len(pairs) < maximum:
+        remaining = maximum - len(pairs)
+        left = random.integers(0, row_count, size=remaining * 2)
+        right = random.integers(0, row_count, size=remaining * 2)
+        unequal = left != right
+        batch = np.column_stack((np.minimum(left[unequal], right[unequal]), np.maximum(left[unequal], right[unequal])))
+        pairs = np.unique(np.concatenate((pairs, batch)), axis=0)
+    if len(pairs) > maximum:
+        pairs = pairs[random.choice(len(pairs), size=maximum, replace=False)]
+    return pairs[:, 0], pairs[:, 1]
 
 
 def semantic_metrics(
@@ -130,6 +162,7 @@ def semantic_metrics(
     cluster_count: int,
     seed: int,
     exclusion_groups: np.ndarray | None = None,
+    maximum_pair_count: int | None = None,
 ) -> tuple[dict[str, object], np.ndarray]:
     """Return semantic-coherence metrics and nearest-neighbor indices."""
     normalized = normalize_embeddings(vectors)
@@ -141,7 +174,7 @@ def semantic_metrics(
     clustering = KMeans(n_clusters=cluster_count, n_init=10, random_state=seed).fit_predict(normalized)
     cluster_counts = np.bincount(clustering, minlength=cluster_count)
     cluster_fractions = cluster_counts / len(clustering)
-    pair_left, pair_right = np.triu_indices(len(normalized), k=1)
+    pair_left, pair_right = sampled_pairs(len(normalized), maximum_pair_count, seed)
     pair_cosines = np.sum(normalized[pair_left] * normalized[pair_right], axis=1)
     rounded_unique = np.unique(np.round(normalized, decimals=4), axis=0).shape[0] / len(normalized)
     rank = effective_rank(normalized)
@@ -155,6 +188,7 @@ def semantic_metrics(
         "total_variance": float(np.var(normalized, axis=0).sum()),
         "pair_cosine_mean": float(pair_cosines.mean()),
         "pair_cosine_standard_deviation": float(pair_cosines.std()),
+        "pair_count": len(pair_left),
         "neighbor_count": neighbors.shape[1],
         **neighborhood,
         "cluster_count": cluster_count,
@@ -176,13 +210,18 @@ def semantic_metrics(
     return metrics, neighbors
 
 
-def cosine_order_fidelity(vectors: np.ndarray, reference: np.ndarray) -> float:
+def cosine_order_fidelity(
+    vectors: np.ndarray,
+    reference: np.ndarray,
+    maximum_pair_count: int | None = None,
+    seed: int = 0,
+) -> float:
     """Return Spearman fidelity for all pairwise cosine values."""
     normalized = normalize_embeddings(vectors)
     normalized_reference = normalize_embeddings(reference)
     if len(normalized) != len(normalized_reference):
         raise ValueError("Embedding and reference counts differ")
-    left, right = np.triu_indices(len(normalized), k=1)
+    left, right = sampled_pairs(len(normalized), maximum_pair_count, seed)
     values = np.sum(normalized[left] * normalized[right], axis=1)
     reference_values = np.sum(normalized_reference[left] * normalized_reference[right], axis=1)
     correlation = spearmanr(values, reference_values).statistic
