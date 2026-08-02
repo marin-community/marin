@@ -1,0 +1,13 @@
+version: v2
+modules:
+  - path: src/zephyr/rpc
+lint:
+  use:
+    - STANDARD
+  except:
+    # Keep generated Python modules flat under zephyr.rpc. The service returns
+    # the dashboard domain messages from that package.
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

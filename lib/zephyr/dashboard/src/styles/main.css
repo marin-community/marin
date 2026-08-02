@@ -1,0 +1,60 @@
+@import 'tailwindcss';
+@config '../../tailwind.config.ts';
+
+:root {
+  --c-surface: #f7f9fc;
+  --c-surface-raised: #ffffff;
+  --c-surface-sunken: #eef2f7;
+  --c-border: #dce2ea;
+  --c-text: #172033;
+  --c-text-secondary: #596579;
+  --c-text-muted: #8c96a8;
+  --c-accent: #2563eb;
+  --c-accent-hover: #1d4ed8;
+  --c-accent-subtle: #dbeafe;
+  --c-success: #16854b;
+  --c-success-bg: #dcfce7;
+  --c-warning: #b45309;
+  --c-warning-bg: #fef3c7;
+  --c-danger: #c82d4a;
+  --c-danger-bg: #ffe4e9;
+  color-scheme: light;
+}
+
+.dark {
+  --c-surface: #0c111b;
+  --c-surface-raised: #141b28;
+  --c-surface-sunken: #0a0f18;
+  --c-border: #2b3545;
+  --c-text: #edf2f8;
+  --c-text-secondary: #a8b2c2;
+  --c-text-muted: #6f7b8e;
+  --c-accent: #69a4ff;
+  --c-accent-hover: #9bc2ff;
+  --c-accent-subtle: #173b70;
+  --c-success: #68d391;
+  --c-success-bg: #163c2a;
+  --c-warning: #f6ad55;
+  --c-warning-bg: #4a3218;
+  --c-danger: #ff7b92;
+  --c-danger-bg: #4c1d2a;
+  color-scheme: dark;
+}
+
+html, body, #app { min-height: 100%; }
+button, a { transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease; }
+
+.card {
+  @apply rounded-xl border border-surface-border bg-surface-raised shadow-card;
+}
+
+.table-header {
+  @apply px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted;
+}
+
+.table-cell {
+  @apply border-t border-surface-border px-4 py-3 text-sm;
+}
+
+.plot text { fill: var(--c-text-secondary); }
+.plot .domain, .plot .tick line { stroke: var(--c-border); }

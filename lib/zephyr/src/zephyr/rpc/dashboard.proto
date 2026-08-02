@@ -1,0 +1,210 @@
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package zephyr.dashboard.v1;
+
+service CoordinatorDashboardService {
+  rpc ListPipelines(ListPipelinesRequest) returns (ListPipelinesResponse);
+  rpc GetPlan(GetPlanRequest) returns (GetPlanResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc GetMetrics(GetMetricsRequest) returns (GetMetricsResponse);
+  rpc ListCounters(ListCountersRequest) returns (ListCountersResponse);
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+}
+
+message ListPipelinesRequest {}
+
+message PipelineSummary {
+  string execution_id = 1;
+  string pipeline_name = 2;
+  PipelinePhase phase = 3;
+  string current_stage = 4;
+  int32 completed_shards = 5;
+  int32 total_shards = 6;
+  int64 started_at_ms = 7;
+  string fatal_error = 8;
+}
+
+message ListPipelinesResponse {
+  repeated PipelineSummary pipelines = 1;
+}
+
+message GetPlanRequest {
+  string execution_id = 1;
+}
+
+message GetStatusRequest {
+  string execution_id = 1;
+}
+
+enum PipelinePhase {
+  PIPELINE_PHASE_UNSPECIFIED = 0;
+  PIPELINE_PHASE_INITIALIZING = 1;
+  PIPELINE_PHASE_WAITING_FOR_WORKERS = 2;
+  PIPELINE_PHASE_RUNNING = 3;
+  PIPELINE_PHASE_SUCCEEDED = 4;
+  PIPELINE_PHASE_FAILED = 5;
+  PIPELINE_PHASE_STOPPING = 6;
+}
+
+enum PlanNodeState {
+  PLAN_NODE_STATE_UNSPECIFIED = 0;
+  PLAN_NODE_STATE_PENDING = 1;
+  PLAN_NODE_STATE_RUNNING = 2;
+  PLAN_NODE_STATE_SUCCEEDED = 3;
+  PLAN_NODE_STATE_FAILED = 4;
+}
+
+enum CounterAggregation {
+  COUNTER_AGGREGATION_UNSPECIFIED = 0;
+  COUNTER_AGGREGATION_SUM = 1;
+  COUNTER_AGGREGATION_AVERAGE = 2;
+  COUNTER_AGGREGATION_MAX = 3;
+  COUNTER_AGGREGATION_MIN = 4;
+}
+
+message PlanNode {
+  string node_id = 1;
+  string label = 2;
+  string stage_type = 3;
+  repeated string operation_types = 4;
+  int32 output_shards = 5;
+  int32 stage_index = 6;
+  string parent_node_id = 7;
+  bool auxiliary = 8;
+}
+
+message PlanEdge {
+  string source_node_id = 1;
+  string target_node_id = 2;
+  string label = 3;
+}
+
+message GetPlanResponse {
+  string pipeline_name = 1;
+  int32 pipeline_id = 2;
+  string execution_id = 3;
+  int64 source_item_count = 4;
+  int32 source_shard_count = 5;
+  repeated PlanNode nodes = 6;
+  repeated PlanEdge edges = 7;
+}
+
+message PlanNodeStatus {
+  string node_id = 1;
+  PlanNodeState state = 2;
+  int64 started_at_ms = 3;
+  int64 finished_at_ms = 4;
+}
+
+message WorkerStateCount {
+  string state = 1;
+  int32 count = 2;
+}
+
+message ResourceUsage {
+  double cpu_cores = 1;
+  double cpu_capacity_cores = 2;
+  double cpu_utilization = 3;
+  int64 memory_bytes = 4;
+  int64 memory_capacity_bytes = 5;
+  double memory_utilization = 6;
+}
+
+message GetStatusResponse {
+  PipelinePhase phase = 1;
+  string current_node_id = 2;
+  string current_stage = 3;
+  int32 current_stage_index = 4;
+  int32 total_stages = 5;
+  int32 completed_shards = 6;
+  int32 total_shards = 7;
+  int32 in_flight_shards = 8;
+  int32 queued_shards = 9;
+  int32 retries = 10;
+  int64 started_at_ms = 11;
+  int64 finished_at_ms = 12;
+  string fatal_error = 13;
+  string coordinator_task_id = 14;
+  int32 expected_workers = 15;
+  repeated WorkerStateCount worker_states = 16;
+  ResourceUsage resources = 17;
+  repeated PlanNodeStatus node_statuses = 18;
+  string execution_id = 19;
+}
+
+message GetMetricsRequest {
+  int32 max_points = 1;
+  string execution_id = 2;
+}
+
+message MetricPoint {
+  int64 timestamp_ms = 1;
+  string stage = 2;
+  double item_rate = 3;
+  double byte_rate = 4;
+  double cpu_cores = 5;
+  int64 memory_bytes = 6;
+  int32 active_shards = 7;
+}
+
+message GetMetricsResponse {
+  repeated MetricPoint points = 1;
+  string warning = 2;
+}
+
+message CounterValue {
+  string name = 1;
+  oneof value {
+    sint64 int_value = 2;
+    double double_value = 3;
+  }
+  CounterAggregation aggregation = 4;
+  string stage = 5;
+  int64 observations = 6;
+}
+
+message ListCountersRequest {
+  string stage = 1;
+  string search = 2;
+  string sort_field = 3;
+  bool sort_descending = 4;
+  int32 offset = 5;
+  int32 limit = 6;
+  string execution_id = 7;
+}
+
+message ListCountersResponse {
+  repeated CounterValue counters = 1;
+  int32 total = 2;
+}
+
+message ListWorkersRequest {
+  string search = 1;
+  string sort_field = 2;
+  bool sort_descending = 3;
+  int32 offset = 4;
+  int32 limit = 5;
+}
+
+message WorkerStatus {
+  string worker_id = 1;
+  string task_id = 2;
+  string state = 3;
+  double last_seen_age_seconds = 4;
+  repeated WorkerAssignment assignments = 5;
+  double cpu_percent = 6;
+  int64 memory_bytes = 7;
+}
+
+message WorkerAssignment {
+  string execution_id = 1;
+  int32 shard = 2;
+}
+
+message ListWorkersResponse {
+  repeated WorkerStatus workers = 1;
+  int32 total = 2;
+}
