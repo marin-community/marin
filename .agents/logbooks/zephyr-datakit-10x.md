@@ -170,3 +170,12 @@ author: Marin
 - Semantic gate: Both arms produced 432,000 rows with schema `id,text,score,text_chars` and digest `a572e6383444e3a88db93b311737f7f34743635dd3183af3affe6b0f7269f1b0` in every repetition.
 - Interpretation: The milestone delivers a stable 1.75–1.76x improvement for the representative map/filter/write stage, not 10x end-to-end. Batch wall times span only 2.8%, while one row outlier raises row variance; the median CPU result independently matches the wall-time uplift.
 - Next action: finish regression coverage, run required checks, snapshot the milestone in a PR, then define the first medium-scale tier-shaped A/B from this API.
+
+### 2026-08-02 - Z10X-009 first-milestone validation and review
+
+- Commit Hash: `79ad144d7`
+- Mechanical checks: `./infra/pre-commit.py --changed-files --fix` passed Ruff, Black, Pyrefly, license, AST, conflict, whitespace, and Markdown checks.
+- Focused tests: 102 writer/Dataset tests passed before commit; after advisory-review cleanup, 24 writer and batch-map tests passed and a one-repeat 10K benchmark preserved the pinned digest in both arms.
+- Full Zephyr suite: 347 passed, 4 deselected, 1 expected failure, and `test_sorted_merge_join_inner_basic_integration[iris]` timed out at the suite-wide 60-second limit. The exact Iris-backed test passed alone in 42.32s; the changed local writer/Dataset path is not involved in the join.
+- Advisory review: Applied immutable benchmark configuration, a shared score threshold/result marker, a named corpus-digest result, concrete byte-count types, split parent/child entry points, and shorter internal docstrings. Kept row and RecordBatch accumulation separate because schema widening plus Python conversion and exact batch-schema enforcement have different contracts; sharing their small flush block would add callback indirection and couple those semantics.
+- Next action: commit the targeted review cleanup, push the branch, and open the first milestone PR.

@@ -22,15 +22,16 @@ import hashlib
 import json
 import logging
 import math
-import os
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import click
@@ -54,9 +55,11 @@ _SOURCE_URL = (
 )
 _SOURCE_ROW_GROUPS = tuple(range(10))
 _BASE_ROWS = 10_000
-_COLUMNS = ["id", "text", "score"]
+_COLUMNS = ("id", "text", "score")
+_SCORE_THRESHOLD = 3.0
 _DIGEST_BATCH_ROWS = 4096
 _RSS_SAMPLE_INTERVAL = 0.005
+_RESULT_PREFIX = "RESULT: "
 
 _OUTPUT_SCHEMA = pa.schema(
     [
@@ -69,7 +72,7 @@ _OUTPUT_SCHEMA = pa.schema(
 
 
 def _keep_row(row: dict[str, Any]) -> bool:
-    return row["score"] >= 3.0
+    return row["score"] >= _SCORE_THRESHOLD
 
 
 def _enrich_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -85,7 +88,7 @@ def _enrich_row(row: dict[str, Any]) -> dict[str, Any]:
 def _row_pipeline(input_path: str, output_path: str) -> Dataset:
     return (
         Dataset.from_list([input_path])
-        .load_parquet(columns=_COLUMNS)
+        .load_parquet(columns=list(_COLUMNS))
         .filter(_keep_row)
         .map(_enrich_row)
         .write_parquet(output_path, schema=_OUTPUT_SCHEMA)
@@ -93,7 +96,7 @@ def _row_pipeline(input_path: str, output_path: str) -> Dataset:
 
 
 def _enrich_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
-    filtered = batch.filter(pc.greater_equal(batch.column("score"), 3.0))
+    filtered = batch.filter(pc.greater_equal(batch.column("score"), _SCORE_THRESHOLD))
     text_chars = pc.cast(pc.utf8_length(filtered.column("text")), pa.int64())
     return pa.RecordBatch.from_arrays(
         [
@@ -109,16 +112,25 @@ def _enrich_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
 def _batch_pipeline(input_path: str, output_path: str) -> Dataset:
     return (
         Dataset.from_list([input_path])
-        .load_parquet(columns=_COLUMNS, batch_mode=True)
+        .load_parquet(columns=list(_COLUMNS), batch_mode=True)
         .map_batches(_enrich_batch)
         .write_parquet(output_path, schema=_OUTPUT_SCHEMA)
     )
 
 
-_PIPELINES: dict[str, Callable[[str, str], Dataset]] = {
-    "row": _row_pipeline,
-    "batch": _batch_pipeline,
-}
+_PIPELINES: Mapping[str, Callable[[str, str], Dataset]] = MappingProxyType(
+    {
+        "row": _row_pipeline,
+        "batch": _batch_pipeline,
+    }
+)
+
+
+@dataclass(frozen=True)
+class CorpusDigest:
+    sha256: str
+    row_count: int
+    schema: pa.Schema
 
 
 def _rss_bytes() -> int:
@@ -144,7 +156,7 @@ def _peak_rss_sampler() -> Iterator[list[int]]:
         samples.append(_rss_bytes())
 
 
-def _semantic_digest(path: Path) -> tuple[str, int, pa.Schema]:
+def _corpus_digest(path: Path) -> CorpusDigest:
     """Hash fixed-size logical batches so digest ignores Parquet row-group layout."""
     parquet = pq.ParquetFile(path)
     digest = hashlib.sha256()
@@ -170,10 +182,10 @@ def _semantic_digest(path: Path) -> tuple[str, int, pa.Schema]:
 
     if pending_rows:
         consume(pending_rows)
-    return digest.hexdigest(), row_count, parquet.schema_arrow
+    return CorpusDigest(digest.hexdigest(), row_count, parquet.schema_arrow)
 
 
-def _write_base_corpus(path: Path) -> dict[str, Any]:
+def _write_base_corpus(path: Path) -> dict[str, int]:
     logger.info("Reading %d pinned FineWeb-Edu row groups from %s", len(_SOURCE_ROW_GROUPS), _SOURCE_URL)
     compressed_bytes = 0
     uncompressed_bytes = 0
@@ -188,8 +200,7 @@ def _write_base_corpus(path: Path) -> dict[str, Any]:
             for row_group_idx in _SOURCE_ROW_GROUPS:
                 metadata = parquet.metadata.row_group(row_group_idx)
                 compressed_bytes += sum(
-                    metadata.column(column_idx).total_compressed_size
-                    for column_idx in range(metadata.num_columns)
+                    metadata.column(column_idx).total_compressed_size for column_idx in range(metadata.num_columns)
                 )
                 uncompressed_bytes += metadata.total_byte_size
                 table = parquet.read_row_group(row_group_idx, columns=_COLUMNS)
@@ -231,7 +242,7 @@ def _corpus_path(cache_dir: Path, rows: int) -> Path:
     base_manifest_path = base_path.with_suffix(".manifest.json")
     if not base_path.exists():
         source_stats = _write_base_corpus(base_path)
-        digest, actual_rows, schema = _semantic_digest(base_path)
+        corpus_digest = _corpus_digest(base_path)
         base_manifest_path.write_text(
             json.dumps(
                 {
@@ -239,9 +250,9 @@ def _corpus_path(cache_dir: Path, rows: int) -> Path:
                     "source_commit": _SOURCE_COMMIT,
                     "source_row_groups": _SOURCE_ROW_GROUPS,
                     "columns": _COLUMNS,
-                    "rows": actual_rows,
-                    "schema": str(schema),
-                    "semantic_sha256": digest,
+                    "rows": corpus_digest.row_count,
+                    "schema": str(corpus_digest.schema),
+                    "semantic_sha256": corpus_digest.sha256,
                     **source_stats,
                 },
                 indent=2,
@@ -260,18 +271,18 @@ def _corpus_path(cache_dir: Path, rows: int) -> Path:
 
     logger.info("Building deterministic %s-row corpus from %s", f"{rows:,}", base_path)
     _write_scaled_corpus(base_path, output_path, rows)
-    digest, actual_rows, schema = _semantic_digest(output_path)
-    if actual_rows != rows:
-        raise RuntimeError(f"Expected {rows} generated rows, got {actual_rows}")
+    corpus_digest = _corpus_digest(output_path)
+    if corpus_digest.row_count != rows:
+        raise RuntimeError(f"Expected {rows} generated rows, got {corpus_digest.row_count}")
     manifest_path.write_text(
         json.dumps(
             {
                 "source_commit": _SOURCE_COMMIT,
                 "base_semantic_sha256": json.loads(base_manifest_path.read_text())["semantic_sha256"],
                 "id_suffix": ":repeat-{repetition:06d}",
-                "rows": actual_rows,
-                "schema": str(schema),
-                "semantic_sha256": digest,
+                "rows": corpus_digest.row_count,
+                "schema": str(corpus_digest.schema),
+                "semantic_sha256": corpus_digest.sha256,
             },
             indent=2,
         )
@@ -304,12 +315,12 @@ def _measure(mode: str, input_path: Path, output_path: Path, chunk_prefix: Path)
     wall_seconds = time.monotonic() - wall_start
     cpu_seconds = time.process_time() - cpu_start
 
-    digest, output_rows, output_schema = _semantic_digest(output_path)
+    output_digest = _corpus_digest(output_path)
     input_rows = pq.ParquetFile(input_path).metadata.num_rows
     return {
         "mode": mode,
         "input_rows": input_rows,
-        "output_rows": output_rows,
+        "output_rows": output_digest.row_count,
         "wall_seconds": wall_seconds,
         "cpu_seconds": cpu_seconds,
         "rows_per_second": input_rows / wall_seconds,
@@ -318,8 +329,8 @@ def _measure(mode: str, input_path: Path, output_path: Path, chunk_prefix: Path)
         "rss_growth_peak_bytes": max(rss_samples) - rss_before,
         "input_bytes": input_path.stat().st_size,
         "output_bytes": output_path.stat().st_size,
-        "output_schema": str(output_schema),
-        "output_semantic_sha256": digest,
+        "output_schema": str(output_digest.schema),
+        "output_semantic_sha256": output_digest.sha256,
         "counters": result.counters,
     }
 
@@ -341,9 +352,76 @@ def _run_child(script_path: Path, mode: str, input_path: Path, output_path: Path
     if process.returncode != 0:
         raise RuntimeError(f"Benchmark child failed for {mode}:\n{process.stderr}\n{process.stdout}")
     for line in reversed(process.stdout.splitlines()):
-        if line.startswith("RESULT: "):
-            return json.loads(line.removeprefix("RESULT: "))
+        if line.startswith(_RESULT_PREFIX):
+            return json.loads(line.removeprefix(_RESULT_PREFIX))
     raise RuntimeError(f"Benchmark child produced no result for {mode}:\n{process.stdout}")
+
+
+def _run_child_benchmark(
+    mode: str,
+    input_file: Path | None,
+    output_file: Path | None,
+    chunk_prefix: Path | None,
+) -> None:
+    if input_file is None or output_file is None or chunk_prefix is None:
+        raise click.UsageError("Child mode requires --input-file, --output-file, and --chunk-prefix")
+    result = _measure(mode, input_file, output_file, chunk_prefix)
+    print(_RESULT_PREFIX + json.dumps(result, sort_keys=True))
+
+
+def _run_parent_benchmark(rows: int, modes: str, repeat: int, cache_dir: Path, prepare_only: bool) -> None:
+    input_path = _corpus_path(cache_dir, rows)
+    logger.info("Corpus ready: %s (%s rows, %.2f GiB)", input_path, f"{rows:,}", input_path.stat().st_size / 2**30)
+    if prepare_only:
+        return
+
+    selected = [mode.strip() for mode in modes.split(",") if mode.strip()]
+    unknown = set(selected) - set(_PIPELINES)
+    if unknown:
+        raise click.BadParameter(
+            f"Unknown modes: {sorted(unknown)}; available: {sorted(_PIPELINES)}", param_hint="modes"
+        )
+    if repeat <= 0:
+        raise click.BadParameter("repeat must be positive", param_hint="repeat")
+
+    results: list[dict[str, Any]] = []
+    script_path = Path(__file__).resolve()
+    with tempfile.TemporaryDirectory(prefix="zephyr-chunk-benchmark-output-") as temp_dir:
+        temp_path = Path(temp_dir)
+        for repetition in range(repeat):
+            for mode in selected:
+                result = _run_child(
+                    script_path,
+                    mode,
+                    input_path,
+                    temp_path / f"{mode}-{repetition}.parquet",
+                    temp_path / f"chunks-{mode}-{repetition}",
+                )
+                result["repetition"] = repetition
+                results.append(result)
+                print(_RESULT_PREFIX + json.dumps(result, sort_keys=True))
+
+    digests = {result["output_semantic_sha256"] for result in results}
+    schemas = {result["output_schema"] for result in results}
+    row_counts = {result["output_rows"] for result in results}
+    if len(digests) != 1 or len(schemas) != 1 or len(row_counts) != 1:
+        raise RuntimeError("Benchmark modes disagree on output digest, schema, or row count")
+
+    summary = {
+        "rows": rows,
+        "repeat": repeat,
+        "modes": {
+            mode: {
+                "wall_seconds": [result["wall_seconds"] for result in results if result["mode"] == mode],
+                "cpu_seconds": [result["cpu_seconds"] for result in results if result["mode"] == mode],
+                "rss_growth_peak_bytes": [
+                    result["rss_growth_peak_bytes"] for result in results if result["mode"] == mode
+                ],
+            }
+            for mode in selected
+        },
+    }
+    print("SUMMARY: " + json.dumps(summary, sort_keys=True))
 
 
 @click.command()
@@ -374,61 +452,9 @@ def main(
 ) -> None:
     """Run the real-data chunk pipeline benchmark."""
     if child_mode is not None:
-        if input_file is None or output_file is None or chunk_prefix is None:
-            raise click.UsageError("Child mode requires --input-file, --output-file, and --chunk-prefix")
-        print("RESULT:", json.dumps(_measure(child_mode, input_file, output_file, chunk_prefix), sort_keys=True))
+        _run_child_benchmark(child_mode, input_file, output_file, chunk_prefix)
         return
-
-    input_path = _corpus_path(cache_dir, rows)
-    logger.info("Corpus ready: %s (%s rows, %.2f GiB)", input_path, f"{rows:,}", input_path.stat().st_size / 2**30)
-    if prepare_only:
-        return
-
-    selected = [mode.strip() for mode in modes.split(",") if mode.strip()]
-    unknown = set(selected) - set(_PIPELINES)
-    if unknown:
-        raise click.BadParameter(f"Unknown modes: {sorted(unknown)}; available: {sorted(_PIPELINES)}", param_hint="modes")
-    if repeat <= 0:
-        raise click.BadParameter("repeat must be positive", param_hint="repeat")
-
-    results: list[dict[str, Any]] = []
-    script_path = Path(__file__).resolve()
-    with tempfile.TemporaryDirectory(prefix="zephyr-chunk-benchmark-output-") as temp_dir:
-        temp_path = Path(temp_dir)
-        for repetition in range(repeat):
-            for mode in selected:
-                result = _run_child(
-                    script_path,
-                    mode,
-                    input_path,
-                    temp_path / f"{mode}-{repetition}.parquet",
-                    temp_path / f"chunks-{mode}-{repetition}",
-                )
-                result["repetition"] = repetition
-                results.append(result)
-                print("RESULT:", json.dumps(result, sort_keys=True))
-
-    digests = {result["output_semantic_sha256"] for result in results}
-    schemas = {result["output_schema"] for result in results}
-    row_counts = {result["output_rows"] for result in results}
-    if len(digests) != 1 or len(schemas) != 1 or len(row_counts) != 1:
-        raise RuntimeError("Benchmark modes disagree on output digest, schema, or row count")
-
-    summary = {
-        "rows": rows,
-        "repeat": repeat,
-        "modes": {
-            mode: {
-                "wall_seconds": [result["wall_seconds"] for result in results if result["mode"] == mode],
-                "cpu_seconds": [result["cpu_seconds"] for result in results if result["mode"] == mode],
-                "rss_growth_peak_bytes": [
-                    result["rss_growth_peak_bytes"] for result in results if result["mode"] == mode
-                ],
-            }
-            for mode in selected
-        },
-    }
-    print("SUMMARY:", json.dumps(summary, sort_keys=True))
+    _run_parent_benchmark(rows, modes, repeat, cache_dir, prepare_only)
 
 
 if __name__ == "__main__":

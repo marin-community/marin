@@ -211,7 +211,7 @@ def _accumulate_record_batch_tables(
     schema: pa.Schema | None,
     target_bytes: int,
 ) -> Iterable[pa.Table]:
-    """Group schema-stable RecordBatches into zero-copy Arrow tables."""
+    """Yield tables from a schema-stable stream of RecordBatches."""
     expected_schema = schema
     schema_origin = "explicitly provided by caller" if schema is not None else "inferred from first RecordBatch"
     chunks: list[pa.RecordBatch] = []

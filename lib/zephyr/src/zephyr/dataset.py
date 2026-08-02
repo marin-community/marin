@@ -147,8 +147,6 @@ class MapOp:
 
 @dataclass
 class MapBatchesOp:
-    """Map operation over Arrow RecordBatches."""
-
     fn: Callable[[RecordBatch], RecordBatch]
 
     def __repr__(self):
