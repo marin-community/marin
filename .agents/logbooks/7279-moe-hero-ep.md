@@ -419,3 +419,11 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Source bundle: Iris workspace bundle, 9.4 MB. The submit output did not report a content ID.
 - Status: The coordinator waits for A08 peer acceptance, with zero reported failures or preemptions.
 - Next action: Keep this one request and monitor it through the 25-step GPU gate.
+
+### 2026-08-02 02:45 UTC - MHEP-004 custom adjoints pass
+
+- Completion: The root coordinator and all 16 GPU tasks succeeded with exit 0, zero failures, and zero preemptions. The run completed all 25 steps.
+- Performance: Median MFU is 24.1231%, mean MFU is 24.1830%, p10 MFU is 23.7355%, and p90 MFU is 24.8348% over 24 samples. The last sample is 23.9739% MFU, 388,503 tokens/s, and 10.7961 seconds.
+- MHEP-003 change: Median MFU improves by 2.2465 percentage points, or 10.3% relative. Last-sample throughput improves by 7.8%.
+- Training: Final loss is 6.0858. Final MoE drop fraction is 9.6786%, within 0.038 percentage points of MHEP-003.
+- Decision: Keep the structured custom VJPs. MHEP-005 will change only the capacity factor from 1.0 to 1.0625. This tests the smallest configuration change that can reduce dropped assignments.
