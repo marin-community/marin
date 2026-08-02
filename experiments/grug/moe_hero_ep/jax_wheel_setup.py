@@ -24,6 +24,7 @@ class MoonEPJaxWheelBuild(StrEnum):
     LSA_NCCL_2307_HYBRID_CTA16_20260802 = "lsa-nccl-2307-hybrid-cta16-20260802"
     LSA_NCCL_2307_WORLD_GIN_20260802 = "lsa-nccl-2307-world-gin-20260802"
     LSA_NCCL_2307_BARRIER_ONLY_20260802 = "lsa-nccl-2307-barrier-only-20260802"
+    LSA_NCCL_2307_LSA_BARRIER_ONLY_20260802 = "lsa-nccl-2307-lsa-barrier-only-20260802"
     LSA_NCCL_2307_FULL_MNNVL_20260802 = "lsa-nccl-2307-full-mnnvl-20260802"
 
 
@@ -202,6 +203,28 @@ _LSA_NCCL_2307_BARRIER_ONLY_20260802 = _WheelSet(
     ),
 )
 
+_LSA_NCCL_2307_LSA_BARRIER_ONLY_20260802 = _WheelSet(
+    prefix=f"{_WHEEL_ARTIFACT_ROOT}/jax-f9f6bbace-xla-5d53e1e-nccl2307-lsa-barrier-only-20260802",
+    wheels=(
+        _WheelArtifact(
+            filename="jax-0.11.1.dev20260802+f9f6bbace-py3-none-any.whl",
+            sha256="40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d",
+        ),
+        _WheelArtifact(
+            filename="jax_cuda13_pjrt-0.11.1.dev0+selfbuilt-py3-none-manylinux_2_27_aarch64.whl",
+            sha256="2a9411320bbc9fc36ce21c60eb9a2825b3c54b2a6afcbb75cbfa0fb9ed3a1023",
+        ),
+        _WheelArtifact(
+            filename="jax_cuda13_plugin-0.11.1.dev0+selfbuilt-cp312-cp312-manylinux_2_27_aarch64.whl",
+            sha256="d04ee6bdc956979fa0c43ed95bfdba7bc4f665ceceb34531ef792cff742ddf95",
+        ),
+        _WheelArtifact(
+            filename="jaxlib-0.11.1.dev0+selfbuilt-cp312-cp312-manylinux_2_27_aarch64.whl",
+            sha256="03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4",
+        ),
+    ),
+)
+
 _LSA_NCCL_2307_FULL_MNNVL_20260802 = _WheelSet(
     prefix=_LSA_NCCL_2307_HYBRID_WEAK_20260802.prefix,
     wheels=_LSA_NCCL_2307_HYBRID_WEAK_20260802.wheels,
@@ -231,6 +254,8 @@ def _wheel_set(build: MoonEPJaxWheelBuild) -> _WheelSet:
         return _LSA_NCCL_2307_WORLD_GIN_20260802
     if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_BARRIER_ONLY_20260802:
         return _LSA_NCCL_2307_BARRIER_ONLY_20260802
+    if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_LSA_BARRIER_ONLY_20260802:
+        return _LSA_NCCL_2307_LSA_BARRIER_ONLY_20260802
     if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_FULL_MNNVL_20260802:
         return _LSA_NCCL_2307_FULL_MNNVL_20260802
     raise ValueError(f"unknown MoonEP JAX wheel build: {build}")

@@ -762,3 +762,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `d3e391455196736d8793e4a983c63ed1644fe90e8ce87e9f56635fa43c83196c`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-barrier-only-20260802`.
 - Expected rack result: The kernel completes and the probe reports sampled value mismatches.
+
+### 2026-08-02 20:15 UTC - MNEP-036 isolates the fault to barrier setup
+
+- Run ID: `mnep-036-ragged-barrier-only-20260802-2008`.
+- Snapshot: `mnep-036-ragged-barrier-only-20260802-2008` at `22add9a56`.
+- Result: Task 10 failed with the same CUDA illegal address.
+- Result: The diagnostic kernel did not run copies, puts, signal reads, signal waits, or GIN flushes.
+- Interpretation: The fault is in the world-GIN object or barrier path.
+- Next gate: Keep only the LSA barriers and remove the GIN object and world barrier.
+
+### 2026-08-02 20:17 UTC - LSA-barrier-only XLA diagnostic build
+
+- Patch: On a split LSA team, run only the entry and exit LSA barriers.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0006-use-only-lsa-barriers-for-isolation.patch`.
+- PJRT SHA-256: `2a9411320bbc9fc36ce21c60eb9a2825b3c54b2a6afcbb75cbfa0fb9ed3a1023`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-lsa-barrier-only-20260802`.
+- Expected rack result: The kernel completes and the probe reports sampled value mismatches.
