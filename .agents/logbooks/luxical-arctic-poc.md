@@ -1453,3 +1453,15 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   `/rav/lux-glm52-hierarchy-direct-b200-002` started at interactive priority.
   Direct process inspection confirmed that its worker uses its current head
   address and that both replicas joined the same Ray cluster.
+- The corrected job loaded GLM, completed all warmups, and built a valid compact
+  taxonomy with 12 parents, 23 leaves, and 13 precedence rules.
+- It saved 13 compact assignment checkpoints, or 650 documents, before one
+  document returned a primary leaf under the wrong parent on all three
+  attempts. This was a model-output validation failure. Saved checkpoints are
+  valid and reusable.
+- The old retry changed only the seed. The assignment client now appends the
+  exact validation error and invalid JSON to the next request. Nine focused
+  GLM and hierarchy tests pass.
+- Resume job `/rav/lux-glm52-hierarchy-direct-b200-003` was submitted at
+  interactive priority. It will restore the taxonomy and first 650 compact
+  labels.
