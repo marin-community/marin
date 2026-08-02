@@ -796,3 +796,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `458f3277349276d5a13a3c652d625339f34c8602ed5a230f9bea861e1005fa44`.
 - Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-kernel-20260802`.
 - Expected rack result: The kernel completes and the probe reports sampled value mismatches.
+
+### 2026-08-02 20:30 UTC - MNEP-038 moves the fault before device code
+
+- Run ID: `mnep-038-ragged-noop-kernel-20260802-2026`.
+- Snapshot: `mnep-038-ragged-noop-kernel-20260802-2026` at `383312217`.
+- Result: Task 10 failed with the same CUDA illegal address.
+- Result: The device kernel returned before it read the NCCL device communicator or any buffer.
+- Interpretation: XLA's host-side device communicator or symmetric-window setup causes the fault.
+- Next gate: Request only LSA device resources and keep the device kernel empty.
+
+### 2026-08-02 20:33 UTC - LSA-only host-resource XLA diagnostic build
+
+- Patch: Request only LSA device resources during clique preparation and execution.
+- Patch file: `experiments/grug/moe_hero_ep/xla_patches/0008-request-only-lsa-device-resources.patch`.
+- PJRT SHA-256: `c2b5461dfbfd53dfcebf76af16eb55736c02aa934020e81edc2477d59851f973`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-noop-lsa-host-20260802`.
+- Expected rack result: The kernel completes and the probe reports sampled value mismatches.

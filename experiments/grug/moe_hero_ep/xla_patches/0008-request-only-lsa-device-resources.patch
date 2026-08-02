@@ -1,0 +1,28 @@
+diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
+--- a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
++++ b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc
+@@ -796,9 +796,7 @@ absl::Status RaggedAllToAllThunk::RunCollective(
+         ASSIGN_OR_RETURN(
+             GpuDeviceCommunicator * dev_comm,
+             params.collective_cliques->GetDeviceComm(
+-                clique_key, state->rank,
+-                has_remote_peers ? DeviceKernelDevCommRequirements()
+-                                 : DeviceKernelLsaDevCommRequirements()));
++                clique_key, state->rank, DeviceKernelLsaDevCommRequirements()));
+ 
+         const int64_t num_updates_per_replica =
+             config_.num_total_updates / num_ranks;
+@@ -959,10 +957,10 @@ absl::Status RaggedAllToAllThunk::PrepareCollective(
+             clique_key, input_buf.source_buffer.slice.index()));
+ 
+     RETURN_IF_ERROR(device_groups().status());
+-    CollectiveCliqueRequests::CliqueRequirements gin_reqs;
+-    gin_reqs.dev_comm = DeviceKernelDevCommRequirements();
++    CollectiveCliqueRequests::CliqueRequirements lsa_reqs;
++    lsa_reqs.dev_comm = DeviceKernelLsaDevCommRequirements();
+     RETURN_IF_ERROR(params.collective_clique_requests->RequestClique(
+-        clique_key, *device_groups(), gin_reqs));
++        clique_key, *device_groups(), lsa_reqs));
+   }
+ 
+   return absl::OkStatus();
