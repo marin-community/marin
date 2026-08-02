@@ -6,6 +6,8 @@
 The benchmark starts from an existing normalized Datakit sample, so its measured
 pipeline does not include Hugging Face corpus download time. It runs global exact
 deduplication, per-source tokenization and MinHash, then cross-source fuzzy dedup.
+Every generated stage output is routed under a seven-day temporary prefix keyed by
+the required run tag.
 
 Example::
 
@@ -25,6 +27,7 @@ from enum import StrEnum
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
+from rigging.filesystem import marin_temp_bucket
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
@@ -34,6 +37,9 @@ from experiments.datakit.reference_pipeline import (
     sample_sources,
     zephyr_datakit_steps,
 )
+
+BENCHMARK_OUTPUT_TTL_DAYS = 7
+BENCHMARK_OUTPUT_PREFIX = "zephyr-benchmark"
 
 
 class LastStage(StrEnum):
@@ -54,6 +60,17 @@ def _steps_through(steps: ZephyrDatakitSteps, last_stage: LastStage) -> list[Ste
     if last_stage is LastStage.FUZZY:
         selected.append(steps.fuzzy_dedup)
     return selected
+
+
+def _route_outputs(steps: ZephyrDatakitSteps, output_prefix: str) -> ZephyrDatakitSteps:
+    tokenize = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.tokenize.items()}
+    minhash = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.minhash.items()}
+    return ZephyrDatakitSteps(
+        exact_dedup=replace(steps.exact_dedup, output_path_prefix=output_prefix),
+        tokenize=tokenize,
+        minhash=minhash,
+        fuzzy_dedup=replace(steps.fuzzy_dedup, output_path_prefix=output_prefix, deps=list(minhash.values())),
+    )
 
 
 def main() -> None:
@@ -79,7 +96,12 @@ def main() -> None:
         pool=PoolConfig(n_workers=args.pool_workers, worker=worker),
         dedup_max_parallelism=args.dedup_max_parallelism,
     )
-    steps = zephyr_datakit_steps(sources, scale)
+    output_prefix = marin_temp_bucket(
+        ttl_days=BENCHMARK_OUTPUT_TTL_DAYS,
+        prefix=f"{BENCHMARK_OUTPUT_PREFIX}/{args.run_tag}/outputs",
+        source_prefix=args.sample_prefix,
+    )
+    steps = _route_outputs(zephyr_datakit_steps(sources, scale), output_prefix)
     StepRunner().run(_steps_through(steps, args.last_stage), max_concurrent=args.max_concurrent)
 
 
