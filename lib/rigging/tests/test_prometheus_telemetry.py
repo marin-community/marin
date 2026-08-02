@@ -84,8 +84,10 @@ def _collector(
 
 def test_prometheus_pipeline_preserves_prefixed_snapshot_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _transport(monkeypatch)
+    oversized_labels = ",".join(f'label_{index}="x"' for index in range(62))
+    scrape = _SCRAPE + f"\n# TYPE vllm:oversized gauge\nvllm:oversized{{{oversized_labels}}} 1\n"
     monkeypatch.setattr(
-        "rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: _PrometheusResponse(_SCRAPE)
+        "rigging.telemetry.prometheus.requests.get", lambda *_args, **_kwargs: _PrometheusResponse(scrape)
     )
 
     _collector(lambda families: prefixed_metric_snapshots(families, metric_prefix="vllm:")).poll_once()
@@ -112,6 +114,8 @@ def test_prometheus_pipeline_preserves_prefixed_snapshot_semantics(monkeypatch: 
     )
     transport.wait_for(5)
     assert not [record for record in transport.records if record["name"] == "process_cpu_seconds_total"]
+    assert not [record for record in transport.records if record["name"] == "oversized"]
+    assert telemetry.runtime_status().lost_records == 1
     assert transport.record("prometheus_source_available", {"metric_source": "vllm"})["value"] == 1
 
 

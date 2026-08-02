@@ -117,28 +117,23 @@ class MetricSnapshotPublisher:
             return MetricPublishResult(False, 0, 0, 0)
 
         selected = snapshots[: self._max_records]
-        prepared: list[tuple[MetricSnapshot, dict[str, str]]] = []
-        for snapshot in selected:
-            if not isinstance(snapshot, MetricSnapshot):
-                raise TypeError("snapshots must contain MetricSnapshot values")
-            serialization.validate_string(snapshot.name, "metric snapshot name")
-            if snapshot.unit:
-                serialization.validate_string(snapshot.unit, "metric snapshot unit")
-            serialization.validate_string(snapshot.source_kind, "metric snapshot source kind")
-            if snapshot.source_temporality not in {CURRENT_SNAPSHOT, CUMULATIVE_SNAPSHOT}:
-                raise ValueError("source_temporality must be current_snapshot or cumulative_snapshot")
-            if not math.isfinite(float(snapshot.value)):
-                raise ValueError("metric snapshot values must be finite")
-            attributes = {
-                **snapshot.attributes,
-                **self._attributes,
-                **snapshot_attributes(snapshot.source_kind, snapshot.source_temporality),
-            }
-            serialization.validate_attributes(attributes)
-            prepared.append((snapshot, attributes))
-
         enqueued = 0
-        for snapshot, attributes in prepared:
+        for snapshot in selected:
+            try:
+                if not isinstance(snapshot, MetricSnapshot):
+                    raise TypeError("snapshots must contain MetricSnapshot values")
+                if snapshot.source_temporality not in {CURRENT_SNAPSHOT, CUMULATIVE_SNAPSHOT}:
+                    raise ValueError("source_temporality must be current_snapshot or cumulative_snapshot")
+                attributes = {
+                    **snapshot.attributes,
+                    **self._attributes,
+                    **snapshot_attributes(snapshot.source_kind, snapshot.source_temporality),
+                }
+            except Exception:
+                # One malformed external series must not suppress the rest of the bounded snapshot batch.
+                with runtime._condition:
+                    runtime._lost_records += 1
+                continue
             enqueued += _emit_to_runtime(
                 runtime,
                 "gauge",
