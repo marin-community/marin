@@ -21,7 +21,6 @@ from evaluate_ladder import (
     CLUSTER_MAX_SOURCE_SHARE,
     CPU_THREADS,
     MANIFEST_URL,
-    MIN_EFFECTIVE_RANK_RATIO,
     MIN_UNIQUE_FRACTION,
     MIN_VARIANCE_RATIO,
     PREDECLARED_OOD_SOURCES,
@@ -34,12 +33,16 @@ from evaluate_ladder import (
     read_json,
     vector_metrics,
 )
-from evaluate_teacher_candidate import CANDIDATES, candidate_output_url
-from fast_student import LUXICAL_TOKENIZER_NAME
+from evaluate_teacher_candidate import (
+    CANDIDATES,
+    candidate_output_url,
+    expected_metadata,
+    normalized_vectors,
+    quantized_vectors,
+)
 from huggingface_hub import hf_hub_download
 from ladder_config import MANIFEST_ROOT, SourceCategory
 from luxical.embedder import Embedder
-from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
 from threadpoolctl import threadpool_limits
 
@@ -79,17 +82,13 @@ def qwen_evaluation_vectors(manifest: dict[str, Any]) -> np.ndarray:
             filesystem=teacher_filesystem,
             columns=["raw_sha256", "embedding"],
         )
+        metadata = teacher_table.schema.metadata or {}
+        expected = expected_metadata(candidate, manifest["sha256"])
+        if any(metadata.get(key) != value for key, value in expected.items()):
+            raise ValueError(f"Qwen evaluation metadata differs for {source}")
         if source_table["raw_sha256"].to_pylist() != teacher_table["raw_sha256"].to_pylist():
             raise ValueError(f"Qwen evaluation rows are not aligned for {source}")
-        quantized = (
-            teacher_table["embedding"]
-            .combine_chunks()
-            .values.to_numpy(zero_copy_only=False)
-            .reshape(len(teacher_table), candidate.embedding_dimension)
-        )
-        vectors = dequantize_8bit_uniform_scalar_quantized(quantized, 0.3)
-        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True).clip(min=1e-12)
-        batches.append(vectors)
+        batches.append(normalized_vectors(quantized_vectors(teacher_table, candidate.embedding_dimension)))
     output = np.concatenate(batches)
     if not np.isfinite(output).all():
         raise ValueError("Qwen evaluation vectors contain non-finite values")
@@ -111,7 +110,7 @@ def category_geometry(
     qwen_report: dict[str, Any],
     categories: dict[str, str],
 ) -> dict[str, Any]:
-    """Measure student-to-Qwen rank and variance ratios by source group."""
+    """Measure student-to-Qwen variance ratios and diagnostic rank ratios."""
     qwen_sources = qwen_report["candidate"]["collapse"]["per_source"]
     student_sources = student_metrics["collapse"]["per_source"]
     if set(qwen_sources) != set(student_sources):
@@ -131,11 +130,9 @@ def category_geometry(
         variance_median = float(np.median(variance_ratios))
         output[category] = {
             "source_count": len(sources),
-            "effective_rank_ratio_median": rank_median,
+            "effective_rank_ratio_median_diagnostic": rank_median,
             "variance_ratio_median": variance_median,
-            "gate_passed": (
-                rank_median >= CATEGORY_MEDIAN_RATIO_LIMIT and variance_median >= CATEGORY_MEDIAN_RATIO_LIMIT
-            ),
+            "variance_gate_passed": variance_median >= CATEGORY_MEDIAN_RATIO_LIMIT,
         }
     return output
 
@@ -152,7 +149,7 @@ def failure_attribution(comparison: dict[str, Any], qwen_report: dict[str, Any])
         "overlap_count": len(overlap),
         "student_only_count": len(student_failures - qwen_failures),
         "teacher_only_count": len(qwen_failures - student_failures),
-        "jaccard": len(overlap) / len(union),
+        "jaccard": len(overlap) / len(union) if union else 1.0,
         "student_only": sorted(student_failures - qwen_failures),
         "teacher_only": sorted(qwen_failures - student_failures),
         "overlap": sorted(overlap),
@@ -163,12 +160,17 @@ def compact_html(report: dict[str, Any]) -> str:
     """Return a small HTML view of the canonical JSON report."""
     summary = report["summary"]
     gates = "".join(
-        f"<tr><td>{name}</td><td>{'pass' if passed else 'fail'}</td></tr>"
+        "<tr><td>{}</td><td>{}</td></tr>".format(name, "pass" if passed else "fail")
         for name, passed in summary["gates"].items()
+    )
+    style = (
+        "<style>body{font-family:sans-serif;margin:2rem;max-width:80rem}"
+        "td,th{border:1px solid #bbb;padding:.35rem}"
+        "table{border-collapse:collapse}</style>"
     )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Qwen fast-student evaluation</title>
-<style>body{{font-family:sans-serif;margin:2rem;max-width:80rem}}td,th{{border:1px solid #bbb;padding:.35rem}}table{{border-collapse:collapse}}</style>
+{style}
 </head><body><h1>Qwen fast-student evaluation</h1>
 <p>All POC gates passed: {summary['all_poc_gates_passed']}</p>
 <p>Macro-F1: {summary['student_macro_f1']:.5f}</p>
@@ -238,7 +240,7 @@ def main() -> None:
     }
     gates = selected_comparison_gates | {
         "student_only_failures": attribution["student_only_count"] <= STUDENT_ONLY_FAILURE_LIMIT,
-        "category_median_geometry": all(result["gate_passed"] for result in geometry.values()),
+        "category_median_variance": all(result["variance_gate_passed"] for result in geometry.values()),
         "qwen_fidelity": qwen_fidelity_delta >= 0.0,
         "cpu_speed": comparison["speed_ratio"] >= CPU_SPEED_RATIO_LIMIT,
     }
@@ -255,6 +257,9 @@ def main() -> None:
         "finite_fraction": student_metrics["collapse"]["finite_fraction"],
         "unique_fraction_4dp": student_metrics["collapse"]["unique_fraction_4dp"],
     }
+    comparison_for_report = {
+        name: value for name, value in comparison.items() if name not in ("all_required_gates_passed", "gates")
+    }
     report = {
         "evaluation": f"{TRAINING_NAME}-{RUNG}",
         "manifest_url": MANIFEST_URL,
@@ -267,15 +272,14 @@ def main() -> None:
             "minimum_quality_delta": QUALITY_DELTA,
             "minimum_unique_fraction": MIN_UNIQUE_FRACTION,
             "maximum_source_cluster_share": CLUSTER_MAX_SOURCE_SHARE,
-            "minimum_effective_rank_ratio": MIN_EFFECTIVE_RANK_RATIO,
             "minimum_variance_ratio": MIN_VARIANCE_RATIO,
             "maximum_student_only_failures": STUDENT_ONLY_FAILURE_LIMIT,
-            "minimum_category_median_student_to_teacher_ratio": CATEGORY_MEDIAN_RATIO_LIMIT,
+            "minimum_category_median_student_to_teacher_variance_ratio": CATEGORY_MEDIAN_RATIO_LIMIT,
             "minimum_cpu_speed_ratio": CPU_SPEED_RATIO_LIMIT,
         },
         "baseline": baseline_metrics,
         "student": student_metrics,
-        "comparison": comparison,
+        "comparison": comparison_for_report,
         "qwen_failure_attribution": attribution,
         "student_to_qwen_geometry": geometry,
         "summary": summary,

@@ -114,9 +114,9 @@ def projected_embedding_distillation_loss(
     direct_cosine_weight: float,
 ) -> Array:
     """Match cross-dimension geometry and align projected student vectors."""
-    expected_projection_shape = (student.shape[1], teacher.shape[1])
     if student.ndim != 2 or teacher.ndim != 2 or student.shape[0] != teacher.shape[0]:
         raise ValueError(f"Student rows {student.shape} do not match teacher rows {teacher.shape}")
+    expected_projection_shape = (student.shape[1], teacher.shape[1])
     if projection.shape != expected_projection_shape:
         raise ValueError(f"Projection shape {projection.shape} does not match {expected_projection_shape}")
     if direct_cosine_weight < 0:

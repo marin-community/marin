@@ -341,10 +341,31 @@ def test_embedding_transformer_takes_contrastive_gradient_step():
     assert not np.array_equal(np.asarray(updated.embedding_head), initial_head)
 
 
-def test_cross_dimension_distillation_updates_student_and_projection():
-    student = jr.normal(jr.PRNGKey(10), (8, 3))
-    teacher = jr.normal(jr.PRNGKey(11), (8, 5))
-    projection = jr.normal(jr.PRNGKey(12), (3, 5))
+def test_cross_dimension_distillation_matches_component_contract():
+    student = jnp.asarray([[1.0, 0.2], [0.1, 0.9], [-0.4, 0.7], [0.8, -0.3]])
+    teacher = jnp.asarray([[0.8, 0.1, 0.4], [0.0, 1.0, -0.2], [-0.3, 0.6, 0.9], [0.7, -0.1, 0.5]])
+    projection = jnp.asarray([[0.9, 0.2, -0.1], [-0.2, 0.7, 0.6]])
+    temperature = 2.5
+    direct_cosine_weight = 0.7
+
+    actual = projected_embedding_distillation_loss(
+        student,
+        teacher,
+        projection,
+        temperature,
+        direct_cosine_weight,
+    )
+    expected = contrastive_embedding_loss(student, teacher, temperature) + direct_cosine_weight * (
+        direct_cosine_embedding_loss(student @ projection, teacher)
+    )
+
+    assert float(actual) == pytest.approx(float(expected), abs=1e-7)
+
+
+def test_cross_dimension_distillation_gradient_step_reduces_loss():
+    student = jnp.asarray([[1.0, 0.2], [0.1, 0.9], [-0.4, 0.7], [0.8, -0.3]])
+    teacher = jnp.asarray([[0.8, 0.1, 0.4], [0.0, 1.0, -0.2], [-0.3, 0.6, 0.9], [0.7, -0.1, 0.5]])
+    projection = jnp.asarray([[0.9, 0.2, -0.1], [-0.2, 0.7, 0.6]])
 
     def loss_function(candidate_student, candidate_projection):
         return projected_embedding_distillation_loss(
@@ -356,16 +377,27 @@ def test_cross_dimension_distillation_updates_student_and_projection():
         )
 
     loss, gradients = jax.value_and_grad(loss_function, argnums=(0, 1))(student, projection)
+    updated_student = student - 0.01 * gradients[0]
+    updated_projection = projection - 0.01 * gradients[1]
+    updated_loss = loss_function(updated_student, updated_projection)
 
     assert np.isfinite(float(loss))
-    assert np.linalg.norm(np.asarray(gradients[0])) > 0
-    assert np.linalg.norm(np.asarray(gradients[1])) > 0
+    assert float(updated_loss) < float(loss)
 
 
-def test_cross_dimension_contrastive_loss_accepts_equal_geometry():
-    student = jnp.asarray([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
-    teacher = jnp.pad(student, ((0, 0), (0, 3)))
+def test_cross_dimension_distillation_rejects_wrong_projection_shape():
+    student = jnp.ones((4, 2))
+    teacher = jnp.ones((4, 3))
+    projection = jnp.ones((3, 2))
 
-    loss = contrastive_embedding_loss(student, teacher, temperature=3.0)
+    with pytest.raises(ValueError, match="Projection shape"):
+        projected_embedding_distillation_loss(student, teacher, projection, 3.0, 1.0)
 
-    assert float(loss) == pytest.approx(0.0, abs=1e-7)
+
+def test_cross_dimension_distillation_rejects_non_matrix_input():
+    student = jnp.ones((4,))
+    teacher = jnp.ones((4, 3))
+    projection = jnp.ones((2, 3))
+
+    with pytest.raises(ValueError, match="Student rows"):
+        projected_embedding_distillation_loss(student, teacher, projection, 3.0, 1.0)

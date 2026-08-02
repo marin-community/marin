@@ -3,7 +3,12 @@
 
 """Fixed configuration for the Arctic-distilled Luxical ladder."""
 
+import json
 from enum import StrEnum
+from typing import Any
+
+import fsspec
+from rigging.filesystem import atomic_rename
 
 SEED = 42
 OUTPUT_ROOT = "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder"
@@ -23,6 +28,20 @@ TEACHER_REVISION = "95c2741480856aa9666782eb4afe11959938017f"
 LARGE_TEACHER_ID = "Snowflake/snowflake-arctic-embed-l-v2.0"
 LARGE_TEACHER_REVISION = "ac6544c8a46e00af67e330e85a9028c66b8cfd9a"
 STACK_V3_OUTPUT_HASH = "32b6fa6f"
+
+
+def read_json(url: str) -> dict[str, Any]:
+    filesystem, path = fsspec.core.url_to_fs(url)
+    with filesystem.open(path) as file:
+        return json.load(file)
+
+
+def write_json(url: str, value: dict[str, Any]) -> None:
+    filesystem, path = fsspec.core.url_to_fs(url)
+    with atomic_rename(path, fs=filesystem) as temporary_path:
+        with filesystem.open(temporary_path, "w") as file:
+            json.dump(value, file, indent=2, sort_keys=True)
+
 
 PREDECLARED_OOD_SOURCES = frozenset(
     (

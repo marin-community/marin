@@ -1072,3 +1072,85 @@ uv run iris --cluster=marin job run --no-wait \
   Qwen fidelity must not decrease against Luxical-One. CPU speed must be at
   least 0.85 times Luxical-One.
 - Continue to 3M only if the 750K rung passes all POC gates.
+
+### Qwen cross-dimension student result
+
+- Commit `33d52e4d6` adds aligned 1,024-dimensional Qwen labels, a train-only
+  256-to-1,024 head, the 750K trainer, and the fixed evaluator.
+- Eight federated interactive H100 label jobs succeeded. Each job had zero
+  failures and zero preemptions. Their durations were 19.55 to 21.34 minutes.
+- The label audit found 750,000 aligned rows across 146 sources. All 1,024
+  teacher dimensions vary. The minimum source unique fraction is 0.92481.
+- The first CPU audit job failed before data checks because its environment had
+  no S3 credentials. The H100 audit succeeded in 1 minute 25.54 seconds.
+- The 750K training job succeeded in 1 minute 14.22 seconds. Loss decreased
+  from 0.97988 to 0.39807. Final effective rank is 25.35137.
+- Final student vectors are finite and fully unique at six decimals in the
+  training audit. Mean cosine is 0.96642, and cosine p99 is 0.99109.
+- The fixed evaluation job succeeded in 8 minutes 13.66 seconds. It used all
+  74,752 held-out documents.
+- Student macro-F1 is 0.58236. Its delta from Luxical-One is -0.03491. Code,
+  multilingual, and standard deltas are +0.02194, -0.03175, and -0.05512.
+- The student has 140 regular failures. All 46 Qwen failures remain, and the
+  student adds 94 failures.
+- Median student-to-Qwen effective-rank ratios are 0.14605 for code, 0.12351
+  for multilingual data, and 0.14135 for standard data.
+- Median variance ratios are 0.21543 for code, 0.17355 for multilingual data,
+  and 0.25840 for standard data. Each fixed limit is 0.50.
+- Qwen within-source Spearman is 0.84779. Its delta from Luxical-One is
+  +0.11207. The student keeps pair ordering but compresses pair distances.
+- The paired CPU speed ratio remains 2.59315. The deployed model has the same
+  256-dimensional output and 9,299,200 parameters.
+- The trained alignment head condition number is 6.79018, compared with
+  2.95179 at initialization. This supports anisotropic amplification through
+  the unconstrained head, but it does not prove sole causality.
+- Decision: do not scale this treatment to 3M rows. Test an orthonormal-row
+  head at 64K before any new 750K run.
+- Focused report:
+  `.agents/projects/luxical-arctic-poc/qwen-crossdim-student-report.md`.
+- Evaluation artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/fast-student/full-qwen3-06b-1024-crossdim/750k/report.json`.
+
+### Qwen cross-dimension peer review
+
+- Accepted: the experiment changed teacher identity and direct-cosine mapping
+  together. It does not isolate the cause. Run native 256-dimensional Qwen
+  training before an orthonormal-head treatment.
+- Accepted: effective-rank ratios are dimension-confounded for a 256d student
+  and 1,024d teacher. Keep them as diagnostics. Gate only dimension-free
+  variance ratios.
+- Accepted: the Arctic comparison has no 750K attribution artifact. Do not
+  compare Arctic and Qwen student-to-teacher ratio tables across rungs.
+- Accepted: the CPU speed result is inherited from the conservative paired
+  speed artifact. The current student did not get a new speed run.
+- Accepted: validate Qwen vector metadata, remove legacy gate booleans from the
+  report, and guard the empty failure-set result.
+- Accepted: validate embedding dimensions before indexing their shapes.
+- Accepted: exclude the scale-invariant alignment head from AdamW decay.
+- Accepted: use explicit teacher artifact suffixes to prevent output overlap.
+- Accepted: replace weak cross-dimension tests with numeric component,
+  loss-reduction, and invalid-shape behavior tests.
+- Accepted: move the new JSON storage helpers to `ladder_config.py`.
+- Retained: require explicit `--teacher` selection. The teacher is a critical
+  training input, and this repository does not add compatibility defaults.
+- Retained: keep concrete model and array upload helpers. A writer callback
+  would add indirection for two different serialization operations.
+- The required checks pass after these changes. The peer-review workflow does
+  not require a second review loop.
+
+### Qwen cross-dimension report migration
+
+- The corrected evaluator rerun reached all 146 fixed sources. Remote reads
+  then slowed to about 30 seconds per Qwen source. The job was stopped before
+  report generation because it would only repeat unchanged numerical work.
+- A small migration job updated the existing JSON and HTML reports. It renamed
+  the category gate, marked rank ratios as diagnostics, removed legacy gate
+  fields, and kept all measured values unchanged.
+- The first migration failed before data access because the script directory
+  was not on the Python module path. The second failed during setup because it
+  did not install the required training dependencies. Neither job read or
+  wrote the report.
+- Job `/rav/lux-qwen-fast-student-report-migrate-h100-004` succeeded in 58.8
+  seconds with zero failures and zero preemptions.
+- The stored report has no legacy comparison gates. Its category variance gate
+  remains false, and the overall POC result remains false.

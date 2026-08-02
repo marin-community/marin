@@ -23,7 +23,7 @@ import optax
 import pyarrow.parquet as pq
 from build_manifest import allocate_balanced_quotas
 from fast_student import FastStudent
-from ladder_config import MANIFEST_ROOT, SEED
+from ladder_config import MANIFEST_ROOT, SEED, read_json, write_json
 from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
 
@@ -62,47 +62,29 @@ RESULT_FILE = Path("/tmp/luxical-fast-student-train")
 class TeacherSpec:
     """Define one aligned training teacher."""
 
-    name: str
     dimension: int
-    quantization_limit: float
     source_root: str | None
     audit_url: str | None
+    artifact_suffix: str | None
 
 
 TEACHERS = {
     "arctic-medium-256": TeacherSpec(
-        name="arctic-medium-256",
         dimension=256,
-        quantization_limit=TEACHER_QUANTIZATION_LIMIT,
         source_root=None,
         audit_url=None,
+        artifact_suffix=None,
     ),
     "qwen3-embedding-0.6b-1024": TeacherSpec(
-        name="qwen3-embedding-0.6b-1024",
         dimension=1_024,
-        quantization_limit=TEACHER_QUANTIZATION_LIMIT,
         source_root=f"{MANIFEST_ROOT}/teacher-qwen3-embedding-0.6b-1024-train-750k-v1/sources",
         audit_url=f"{MANIFEST_ROOT}/teacher-qwen3-embedding-0.6b-1024-train-750k-v1/audit.json",
+        artifact_suffix="qwen3-06b-1024-crossdim",
     ),
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-
-def read_json(url: str) -> dict[str, Any]:
-    """Read one JSON object from private storage."""
-    filesystem, path = fsspec.core.url_to_fs(url)
-    with filesystem.open(path) as file:
-        return json.load(file)
-
-
-def write_json(url: str, value: dict[str, Any]) -> None:
-    """Write one JSON object atomically."""
-    filesystem, path = fsspec.core.url_to_fs(url)
-    with atomic_rename(path, fs=filesystem) as temporary_path:
-        with filesystem.open(temporary_path, "w") as file:
-            json.dump(value, file, indent=2, sort_keys=True)
 
 
 def load_numpy(url: str) -> np.ndarray:
@@ -154,7 +136,7 @@ def load_training_arrays(
         embeddings = teacher_table["embedding"].combine_chunks()
         id_chunks.append(ids.values.to_numpy(zero_copy_only=False).reshape(len(prepared_table), ids.type.list_size))
         quantized = embeddings.values.to_numpy(zero_copy_only=False).reshape(len(prepared_table), teacher_spec.dimension)
-        teacher_chunks.append(dequantize_8bit_uniform_scalar_quantized(quantized, teacher_spec.quantization_limit))
+        teacher_chunks.append(dequantize_8bit_uniform_scalar_quantized(quantized, TEACHER_QUANTIZATION_LIMIT))
         source_id_chunks.append(np.full(len(prepared_table), source_id, dtype=np.int32))
         logger.info(
             "Loaded source %d/%d: %s (%d rows)",
@@ -211,7 +193,6 @@ def upload_model(model: FastEmbeddingTransformer, url: str) -> str:
 
 
 def upload_array(values: np.ndarray, url: str) -> str:
-    """Serialize and upload one NumPy array atomically."""
     filesystem, path = fsspec.core.url_to_fs(url)
     with tempfile.TemporaryDirectory() as temporary_directory:
         local_path = Path(temporary_directory) / "array.npy"
@@ -228,6 +209,17 @@ def initial_projection(student_dimension: int, teacher_dimension: int) -> jax.Ar
         return None
     scale = math.sqrt(2.0 / (student_dimension + teacher_dimension))
     return jax.random.normal(jax.random.PRNGKey(SEED + 2), (student_dimension, teacher_dimension)) * scale
+
+
+def weight_decay_mask(model: FastEmbeddingTransformer, projection: jax.Array | None):
+    """Apply AdamW decay to model arrays, but not to the scale-invariant alignment head."""
+    filtered_model = eqx.filter(model, eqx.is_inexact_array)
+    model_mask = jax.tree.map(
+        lambda value: value is not None,
+        filtered_model,
+        is_leaf=lambda value: value is None,
+    )
+    return model_mask, False if projection is not None else None
 
 
 def train(
@@ -254,14 +246,14 @@ def train(
         decay_steps=total_steps,
         end_value=LEARNING_RATE * 0.05,
     )
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(GRADIENT_CLIP),
-        optax.adamw(schedule, weight_decay=WEIGHT_DECAY),
-    )
     model = jax.device_put(model, replicated)
     projection = initial_projection(model.output_dim, teacher_dimension)
     if projection is not None:
         projection = jax.device_put(projection, replicated)
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(GRADIENT_CLIP),
+        optax.adamw(schedule, weight_decay=WEIGHT_DECAY, mask=weight_decay_mask(model, projection)),
+    )
     parameters = (model, projection)
     optimizer_state = jax.device_put(optimizer.init(eqx.filter(parameters, eqx.is_inexact_array)), replicated)
 
@@ -388,11 +380,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def training_name(config_name: str, treatment: str, teacher_name: str) -> str:
+def training_name(config_name: str, treatment: str, teacher_spec: TeacherSpec) -> str:
     """Return the artifact name for one training configuration."""
     parts = [config_name]
-    if teacher_name != "arctic-medium-256":
-        parts.append("qwen3-06b-1024-crossdim")
+    if teacher_spec.artifact_suffix is not None:
+        parts.append(teacher_spec.artifact_suffix)
     if treatment != "baseline":
         parts.append(treatment)
     return "-".join(parts)
@@ -419,7 +411,7 @@ def main() -> None:
     raw_to_compact = load_numpy(prepared["raw_to_compact_url"])
     ids, teacher, source_ids, quotas = load_training_arrays(prepared, target, teacher_spec)
     student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
-    artifact_name = training_name(arguments.config, arguments.treatment, arguments.teacher)
+    artifact_name = training_name(arguments.config, arguments.treatment, teacher_spec)
     source_geometry_weight = SOURCE_GEOMETRY_WEIGHTS[arguments.treatment]
     output_root = f"{OUTPUT_ROOT}/{artifact_name}/{arguments.rung}"
     model, projection, history = train(
@@ -436,7 +428,7 @@ def main() -> None:
         "config_name": arguments.config,
         "training_name": artifact_name,
         "treatment": arguments.treatment,
-        "teacher": asdict(teacher_spec),
+        "teacher": {"name": arguments.teacher, **asdict(teacher_spec)},
         "training_rows": target,
         "source_quotas": quotas,
         "prepared_manifest_url": PREPARED_MANIFEST_URL,
@@ -468,7 +460,7 @@ def main() -> None:
         "config_name": arguments.config,
         "training_name": artifact_name,
         "treatment": arguments.treatment,
-        "teacher": teacher_spec.name,
+        "teacher": arguments.teacher,
         "training_rows": target,
         "report_url": report_url,
         "model_url": report["final_model_url"],
