@@ -643,3 +643,13 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - MHEP-004 change: Median MFU is 0.4262 percentage points lower than the 25-step selection gate. Final drop fraction is 2.2673 percentage points lower. The 200-step optimizer uses the recorded compute-scaled learning rates, so this is the required stability gate rather than another selection comparison.
 - Decision: The selected fixed all-to-all, gather-dispatch, custom-adjoint, capacity-1.0 stack passes the final gate. Receiver-ECHO and three-choice spill remain rejected. XProf is not necessary.
 - Next action: Complete branch review, required checks, and the pull request.
+
+### 2026-08-02 06:10 UTC - Final branch review passed
+
+- Peer review: The independent review returned 21 findings. Safe changes document fixed sender/expert capacity, remove dead checkpoint and profiler configuration, derive run tags, use one hardware-size source, remove an unused ragged flag, share one sharding helper, simplify the EP-only Newton-Schulz layout, prevent test environment leaks, shorten the Newton-Schulz subprocess, and move the four-device all-to-all value-and-gradient test into the default suite.
+- Backend rewrites: Do not replace sorting, padding, collective structure, or custom-VJP arguments after the measured gate. These are unproven HLO changes that need a new 25-step performance gate and are not correctness fixes.
+- Reshard finding: No change. The alleged second collective is inactive on the fixed hero mesh because `expert` is the only intra-rack axis with size greater than one.
+- Out-of-scope findings: No change to the FSDP hero files because they are not in the exact PR-7876 branch diff.
+- Logbook finding: No rewrite because this research logbook is append-only.
+- Tests: The default Grug MoE and EP hero suites pass with 20 tests and 6 skips. The set now includes the four-device fixed all-to-all forward and gradient test. The 200-step dry run still resolves EP64, capacity 1.0, fixed all-to-all, batch 1024, and the recorded optimizer values.
+- Checks: The full changed-file pre-commit and Pyrefly checks pass. The one required advisory rule-catalog review reports no findings.
