@@ -22,7 +22,7 @@ CLAUDE_REVIEW_CHUNK_SIZE = 8_000
 
 
 def export_review(run_id: str, output_root: StoragePath) -> None:
-    """Write a compressed source-blind review package to the private job log."""
+    """Write a compressed source-blind review package to standard output."""
     run_root = output_root / run_id
     summary = read_json(str(run_root / "summary.json"))
     if not summary.get("complete"):

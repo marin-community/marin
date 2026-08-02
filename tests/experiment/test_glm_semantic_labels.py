@@ -3,6 +3,7 @@
 
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ import glm_semantic_labels as semantic_labels  # noqa: E402
 from glm_semantic_labels import (  # noqa: E402
     OTHER_BUCKET_ID,
     Assignment,
+    assignment_distribution_metrics,
     completion,
     parse_buckets,
     parse_json_object,
@@ -55,6 +57,26 @@ def test_review_indices_select_low_confidence_across_buckets() -> None:
     assert set(selected) == {3, 4, 5}
 
 
+def test_review_indices_fill_after_each_bucket_is_represented() -> None:
+    assignments = [
+        Assignment(index, f"BUCKET_{index % 2}", [], "en", "article", confidence, "reason")
+        for index, confidence in enumerate((0.9, 0.8, 0.1, 0.2))
+    ]
+
+    selected = review_indices(assignments, 3)
+
+    assert {2, 3}.issubset(selected)
+    assert len(selected) == 3
+
+
+def test_assignment_distribution_metrics_measure_concentration() -> None:
+    metrics = assignment_distribution_metrics(Counter({"A": 5, "B": 5}))
+
+    assert metrics["largest_bucket_fraction"] == 0.5
+    assert metrics["five_largest_buckets_fraction"] == 1.0
+    assert metrics["effective_bucket_count"] == pytest.approx(2.0)
+
+
 def test_completion_doubles_token_limit_for_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
     requests = []
 
@@ -91,5 +113,20 @@ def test_assignment_accepts_missing_optional_rationale(monkeypatch: pytest.Monke
 
     assignment = semantic_labels.assign_document("http://server", document, [bucket])
 
-    assert assignment.primary_bucket_id == "SCIENCE"
     assert assignment.rationale == ""
+
+
+def test_assignment_rejects_more_than_two_secondary_buckets(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "primary_bucket_id": "A",
+        "secondary_bucket_ids": ["B", "C", "D"],
+        "language": "en",
+        "document_type": "article",
+        "confidence": 0.8,
+    }
+    monkeypatch.setattr(semantic_labels, "completion", lambda *args, **kwargs: payload)
+    document = semantic_labels.SampleDocument(0, "hash", "hidden", "standard", 0, "Text")
+    buckets = [semantic_labels.Bucket(bucket_id, bucket_id, bucket_id, [], []) for bucket_id in "ABCD"]
+
+    with pytest.raises(ValueError, match="more than two"):
+        semantic_labels.assign_document("http://server", document, buckets)

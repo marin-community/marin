@@ -10,6 +10,7 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import re
 import time
 from collections import Counter
@@ -52,7 +53,6 @@ REQUEST_TIMEOUT = 3 * 3600
 MAX_ATTEMPTS = 3
 OTHER_BUCKET_ID = "OTHER_UNCLEAR"
 CLAUDE_REVIEW_SIZE = 20
-CLAUDE_REVIEW_MARKER = "CLAUDE_REVIEW_PACKAGE="
 JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 
 
@@ -367,13 +367,15 @@ def assign_document(vllm_url: str, document: SampleDocument, buckets: list[Bucke
             secondary = [str(value) for value in payload["secondary_bucket_ids"]]
             if primary not in valid_ids or not set(secondary).issubset(valid_ids):
                 raise ValueError(f"Document {document.sample_index} has an unknown bucket ID")
+            if len(secondary) > 2:
+                raise ValueError(f"Document {document.sample_index} has more than two secondary buckets")
             confidence = float(payload["confidence"])
             if not 0 <= confidence <= 1:
                 raise ValueError(f"Document {document.sample_index} has confidence {confidence}")
             return Assignment(
                 sample_index=document.sample_index,
                 primary_bucket_id=primary,
-                secondary_bucket_ids=secondary[:2],
+                secondary_bucket_ids=secondary,
                 language=str(payload["language"]),
                 document_type=str(payload["document_type"]),
                 confidence=confidence,
@@ -436,6 +438,12 @@ def build_taxonomy(
     bucket_maximum: int,
 ) -> list[Bucket]:
     """Return a frozen taxonomy and keep the candidate batches."""
+    path = run_root / "taxonomy.json"
+    if path.exists():
+        buckets = parse_buckets(read_json(str(path)))
+        validate_final_buckets(buckets, bucket_minimum, bucket_maximum)
+        return buckets
+
     candidates = []
     batches = [
         descriptions[index : index + taxonomy_batch_size] for index in range(0, len(descriptions), taxonomy_batch_size)
@@ -450,11 +458,6 @@ def build_taxonomy(
         candidates.extend(batch_candidates)
         logger.info("Saved %d/%d taxonomy candidate batches", batch_index + 1, len(batches))
 
-    path = run_root / "taxonomy.json"
-    if path.exists():
-        buckets = parse_buckets(read_json(str(path)))
-        validate_final_buckets(buckets, bucket_minimum, bucket_maximum)
-        return buckets
     buckets = final_taxonomy(vllm_url, candidates, bucket_minimum, bucket_maximum)
     write_json(str(path), {"buckets": [asdict(bucket) for bucket in buckets]})
     return buckets
@@ -524,15 +527,33 @@ def claude_review_package(
     indices = review_indices(assignments, review_size)
     documents_by_index = {document.sample_index: document for document in documents}
     assignments_by_index = {assignment.sample_index: assignment for assignment in assignments}
+    represented_buckets = {assignments_by_index[index].primary_bucket_id for index in indices}
+    available_buckets = {assignment.primary_bucket_id for assignment in assignments}
     package = {
         "taxonomy": [asdict(bucket) for bucket in buckets],
         "documents": [{"sample_index": index, "text": documents_by_index[index].text} for index in indices],
         "glm_assignments": [asdict(assignments_by_index[index]) for index in indices],
-        "selection": "one_lowest_confidence_document_per_stable_bucket_then_stable_hash",
+        "selection": "lowest confidence per stable-hash-ordered primary bucket, then stable-hash fill",
+        "represented_primary_bucket_count": len(represented_buckets),
+        "available_primary_bucket_count": len(available_buckets),
+        "low_confidence_stress_sample": True,
         "source_metadata_in_package": False,
     }
     compressed = gzip.compress(json.dumps(package, ensure_ascii=False, sort_keys=True).encode())
     return base64.b64encode(compressed).decode()
+
+
+def assignment_distribution_metrics(counts: Counter[str]) -> dict[str, float]:
+    """Return concentration measures for primary-bucket counts."""
+    total = counts.total()
+    if total == 0:
+        raise ValueError("Cannot measure an empty assignment distribution")
+    fractions = [count / total for count in counts.values()]
+    return {
+        "largest_bucket_fraction": max(fractions),
+        "five_largest_buckets_fraction": sum(sorted(fractions, reverse=True)[:5]),
+        "effective_bucket_count": math.exp(-sum(fraction * math.log(fraction) for fraction in fractions)),
+    }
 
 
 def run_pipeline(
@@ -614,12 +635,12 @@ def run_pipeline(
             "primary_bucket_counts": dict(sorted(counts.items())),
             "other_fraction": counts[OTHER_BUCKET_ID] / len(assignments),
             "mean_confidence": sum(row.confidence for row in assignments) / len(assignments),
+            **assignment_distribution_metrics(counts),
             "elapsed_seconds": time.time() - started,
             "complete": True,
         }
         write_json(str(run_root / "summary.json"), summary)
         logger.info("GLM_SEMANTIC_LABELS=%s", json.dumps(summary, sort_keys=True))
-        logger.info("%s%s", CLAUDE_REVIEW_MARKER, claude_review_package(documents, assignments, buckets))
     finally:
         server_job.terminate()
 

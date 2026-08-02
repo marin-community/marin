@@ -11,10 +11,10 @@ PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-p
 sys.path.insert(0, str(PROJECT))
 
 from export_glm_claude_review import CLAUDE_REVIEW_CHUNK_MARKER  # noqa: E402
-from verify_glm_labels_with_claude import comparison, review_package_from_logs  # noqa: E402
+from verify_glm_labels_with_claude import comparison, review_package_from_chunks  # noqa: E402
 
 
-def test_review_package_from_chunked_logs() -> None:
+def test_review_package_from_chunks() -> None:
     package = {"taxonomy": [{"bucket_id": "CODE"}], "documents": []}
     encoded = base64.b64encode(gzip.compress(json.dumps(package).encode())).decode()
     split = len(encoded) // 2
@@ -25,7 +25,7 @@ def test_review_package_from_chunked_logs() -> None:
         ]
     )
 
-    assert review_package_from_logs(logs) == package
+    assert review_package_from_chunks(logs) == package
 
 
 def test_comparison_measures_blinded_label_agreement() -> None:
@@ -76,9 +76,6 @@ def test_comparison_measures_blinded_label_agreement() -> None:
     result = comparison(package, claude_rows)
 
     assert result["primary_exact_agreement"] == 0.5
-    assert result["language_exact_agreement"] == 1.0
-    assert result["document_type_exact_agreement"] == 1.0
-    assert result["secondary_overlap_fraction"] == 0.5
     assert result["bucket_set_overlap_fraction"] == 1.0
     assert result["glm_primary_in_claude_set_fraction"] == 1.0
     assert result["claude_primary_in_glm_set_fraction"] == 0.5

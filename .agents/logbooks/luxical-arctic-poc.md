@@ -1224,3 +1224,15 @@ The taxonomy can supply labels for a direct embedding quality test.
 - Two inspected disagreements showed valid competing primary labels. The main fault is overlapping bucket scope and missing primary-label precedence.
 - Do not train the student on these single primary labels. Revise the target as multi-label or hierarchical labels first.
 - Report: `.agents/projects/luxical-arctic-poc/glm-semantic-label-report.md`.
+
+### GLM pilot peer review
+
+- The Claude sample was a low-confidence stress sample from 20 of 38 buckets. It was not a representative sample.
+- Therefore, its 50 percent primary agreement cannot test the registered 70 percent population gate.
+- The review found that long documents use a 6,000-character start, middle, and end view. The stored sample cannot recover the truncation fraction.
+- The 30-bucket minimum can cause overlap. Test smaller vocabularies before adding only precedence rules.
+- The Claude CLI default model was not recorded. Pin it in the next review.
+- Accepted code fixes add reproducible concentration measures and complete secondary-label validation.
+- Accepted code fixes also restore a cached taxonomy before candidate work and remove raw review packages from durable job logs.
+- The direct task-output stream remains because the local Claude client cannot read the private object store.
+- Retry-loop and checkpoint-loop refactors remain separate cleanup. They do not change the stored pilot result.
