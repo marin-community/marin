@@ -466,3 +466,29 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - MHEP-004 change: Median MFU falls by 0.9954 percentage points, or 4.1% relative. Last-sample throughput falls by 4.0%.
 - Training: Final loss is 6.0879. Final MoE drop fraction falls from 9.6786% to 7.2507%, a reduction of 2.4279 percentage points.
 - Decision: Capacity 1.0625 alone does not reduce drops enough to justify its MFU cost. MHEP-006 will keep capacity 1.0625 and add only the source-backed three-choice spill rule. If spill does not give a large drop reduction with a small added cost, select the MHEP-004 stack for the 200-step gate.
+
+### 2026-08-02 03:39 UTC - MHEP-006 receiver-ECHO local gate passed
+
+- Sequence change: Evaluate receiver-ECHO before spill. Prior work in #7670 found 19.98% MFU and 1.32% drops for static receiver-ECHO on a related EP64 model, but the method has not run on this hero.
+- Code snapshot: `fa1f1b03e9dbea89fbf8d325475103f4b2199555`; gate configuration: `4b89ee8cbc487d4f7ba1a035b93b4d09a21e5c2f`.
+- Change: Keep each selected expert, retain work on its home rank up to receiver capacity, move overflow to spare receivers, and send sparse copies of the required expert weights. Fixed token all-to-all uses capacity 1.0. `echo_receiver_cute` uses the QuACK grouped expert kernel.
+- Scope: The backend and its public dispatch add 561 net code lines. Cross-shard tests add 151 net lines. Model, optimizer, batch, mesh, data, attention, and runtime settings stay unchanged from MHEP-004.
+- Tests: The four-device hot-expert test has zero drops and matches a dense selected-expert reference for the loss and gradients of inputs, combine weights, and both expert weight tensors at `rtol=atol=1e-5`. The abstract EP path lowers. The Grug MoE and EP hero suites pass with 20 tests, 6 skips, and 2 tests excluded by the repository marker policy. Changed-file pre-commit and Pyrefly pass.
+- Test limit: XLA CPU does not implement the sparse ragged all-to-all primitive. The four-device CPU test replaces only that collective with an all-gather reference. The A08 gate will use the real primitive and QuACK kernel.
+- Dry run: The plan resolves 25 steps, batch 1024, EP64, capacity 1.0, `echo_receiver_cute`, and 16 workers with four GB200 GPUs each.
+
+### 2026-08-02 03:39 UTC - MHEP-006 launch contract ready
+
+- Hypothesis: Receiver-ECHO reduces the MHEP-004 final drop fraction of 9.6786% while keeping median MFU near the MHEP-004 value of 24.1231%.
+- Run ID: `mhep-006-echo-receiver-25-20260802-0339`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name mhep-006-echo-receiver-25-20260802-0339-coord -e WANDB_MODE offline -- python -m experiments.grug.moe_hero_ep.launch --run-id mhep-006-echo-receiver-25-20260802-0339 --num-steps 25 --version 2026.08.02 --run`.
+- Code snapshot: `4b89ee8cbc487d4f7ba1a035b93b4d09a21e5c2f`; the clean launch commit will include this log entry.
+- Output identity: `s3://marin-us-east-02a/marin/grug/mhep-006-echo-receiver-25-20260802-0339/2026.08.02`.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-006-echo-receiver-25-20260802-0339`, project `marin_moe`, group `moe-hero-ep`, resume `allow`, and offline mode.
+- Initialization: None.
+- Final step: 25.
+- Checkpoint policy: No checkpoints. This gate writes metrics only.
+- DRI and babysitter: `rav`; `rav/codex` owns the monitor.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Commit this contract, submit the coordinator once, and monitor it to a terminal state.
