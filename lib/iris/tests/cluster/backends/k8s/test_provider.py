@@ -1160,10 +1160,13 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 
     provider._gc_terminal_resources(active_pods=[])
 
-    # Old resources deleted.
+    # Old pods deleted. Their CMs/PDBs are enqueued, not deleted inline, so the
+    # following pass is what clears them.
     assert k8s.get_json(K8sResource.PODS, "old-succeeded-pod") is None
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "old-succeeded-pod-wf") is None
     assert k8s.get_json(K8sResource.PODS, "old-failed-pod") is None
+
+    provider._gc_terminal_resources(active_pods=[])
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "old-succeeded-pod-wf") is None
 
     # Recent resources preserved.
     assert k8s.get_json(K8sResource.PODS, "recent-succeeded-pod") is not None
@@ -1283,11 +1286,12 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     }
     k8s.seed_resource(K8sResource.PDBS, "active-retry-pdb", pdb)
 
-    # The active retry's pod. Seeded, not synthesized: the sweep re-reads the active
-    # set before deleting CMs/PDBs, because its own pod deletes take long enough that
-    # a task can start a new attempt in the meantime.
+    # The active retry's pod, seeded so the passes below read it as active.
     populate_pod(k8s, "active-attempt-1", "Running", labels={_LABEL_TASK_HASH: shared_hash})
 
+    # Two passes: the first sweeps the terminal pod and enqueues its hash, the second
+    # is the one that would delete the CM/PDB if the active attempt did not hold them.
+    provider._gc_terminal_resources(active_pods=provider._list_active_pods())
     provider._gc_terminal_resources(active_pods=provider._list_active_pods())
 
     # Terminal pod is deleted (by name, not by hash).
@@ -1297,31 +1301,28 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     assert k8s.get_json(K8sResource.PDBS, "active-retry-pdb") is not None
 
 
-def test_gc_spares_an_attempt_that_starts_mid_pass(provider, k8s):
-    """An attempt that starts while the sweep is running keeps its configmap and PDB.
+def test_gc_defers_configmap_cleanup_for_age_swept_pods(provider, k8s):
+    """An age-swept task's CM/PDB cleanup is enqueued, never done in the same pass.
 
-    A pass deletes one pod per round trip, so by the time it reaches the CM/PDB step
-    the active set it read at the top can be minutes old. A task retried in that
-    window is absent from it, and its resources are shared across attempts by
-    task_hash, so trusting the stale set would break the starting pod.
+    The hashes come from the pods the pass just deleted, so they exist nowhere else:
+    cleaning up inline means anything that raises in between orphans those configmaps
+    and PDBs permanently, with no later pass able to rediscover them. Enqueuing puts
+    them in state that survives the pass and is retried.
     """
     now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    shared_hash = "shared_hash_67890"
-    labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: shared_hash}
+    task_hash = "sweptaabbccdd1122"
 
-    _seed_terminal_pod(k8s, "swept-attempt-0", "Succeeded", shared_hash, old_ts)
-    k8s.seed_resource(
-        K8sResource.CONFIGMAPS, "retried-cm", {"kind": "ConfigMap", "metadata": {"name": "retried-cm", "labels": labels}}
-    )
-    # The retry lands after the pass took its snapshot, which is why the pass is
-    # driven with an empty one here.
-    populate_pod(k8s, "retried-attempt-1", "Running", labels={_LABEL_TASK_HASH: shared_hash})
+    _seed_terminal_pod(k8s, "swept-pod", "Succeeded", task_hash, old_ts)
+    _seed_configmap(k8s, "swept-pod-wf", task_hash, old_ts)
 
     provider._gc_terminal_resources(active_pods=[])
 
-    assert k8s.get_json(K8sResource.PODS, "swept-attempt-0") is None
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "retried-cm") is not None
+    assert k8s.get_json(K8sResource.PODS, "swept-pod") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is not None, "cleanup must be deferred, not inline"
+
+    provider._gc_terminal_resources(active_pods=[])
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is None
 
 
 # ---------------------------------------------------------------------------
