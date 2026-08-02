@@ -500,3 +500,23 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
 - Stop criteria: Stop on the first retry, memory error, transport error, non-finite loss, or dropped assignment.
 - Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-023-direct-nccl2307-headers-smoke-3-20260802-1726-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-023-direct-nccl2307-headers-smoke-3-20260802-1726 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-nccl-2307-20260802 --moonep-transport direct_device --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
+
+### 2026-08-02 17:31 UTC - MNEP-023 still fails the concurrent direct path
+
+- Placement: All 16 workers used NVLink domain `DH1-129-US-EAST-08A` on one NVL72.
+- Failure: Task 10 attempt zero exited with `SIGTRAP` before step zero. The run wrote no training metrics.
+- Retry: Iris started attempt one for the worker group. Stop the parent under the test contract.
+- Result: Building the fixed device kernel against NCCL 2.30.7 did not remove the EP64 failure.
+- Source: Each direct multi-node kernel uses GIN signal index zero and CTA-indexed world barriers from one cached device communicator.
+- Hypothesis: Four concurrent collective launches reuse the same synchronization slots and can corrupt device progress.
+- Decision: Set the direct transport overlap limit to one, then repeat the same rack gate.
+
+### 2026-08-02 17:35 UTC - MNEP-024 serialized direct smoke contract
+
+- Goal: Execute three combined MoonEP and global QB steps through one direct EP64 device kernel at a time.
+- Run ID: `mnep-024-direct-serialized-smoke-3-20260802-1735`.
+- Snapshot: `mnep-024-direct-serialized-smoke-3-20260802-1735`.
+- Treatment: Match MNEP-023, but reduce the direct collective overlap limit from four to one.
+- Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
+- Stop criteria: Stop on the first retry, memory error, transport error, non-finite loss, or dropped assignment.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2 --memory 8GB --disk 32GB --timeout 21600 --max-retries 0 --job-name mnep-024-direct-serialized-smoke-3-20260802-1735-coord -e WANDB_MODE offline -e WANDB_PROJECT rav_moe -- python -m experiments.grug.moe_hero_ep.launch --run-id mnep-024-direct-serialized-smoke-3-20260802-1735 --num-steps 3 --moe-implementation moonep_jax --moonep-token-padding 128 --moonep-grouped-gemm quack --qb-method global_histogram --qb-histogram-bins 1000 --moonep-jax-wheel-build lsa-nccl-2307-20260802 --moonep-transport direct_device --processes-per-task 1 --worker-cpu 16 --worker-ram-gb 88 --version 2026.08.02 --run`.
