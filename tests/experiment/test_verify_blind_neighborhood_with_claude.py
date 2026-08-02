@@ -14,9 +14,12 @@ sys.path.insert(0, str(PROJECT))
 
 from export_blind_neighborhood_review import REVIEW_CHUNK_MARKER  # noqa: E402
 from verify_blind_neighborhood_with_claude import (  # noqa: E402
+    ClaudeNeighborhoodReview,
     comparison,
+    load_review_checkpoint,
     package_from_chunks,
     public_items,
+    write_review_checkpoint,
 )
 
 
@@ -64,6 +67,23 @@ def test_public_items_remove_hidden_model_and_label_truth() -> None:
     assert set(items[0]) == {"sample_index", "query", "set_a", "set_b"}
     assert "student" not in json.dumps(items)
     assert "glm_" not in json.dumps(items)
+
+
+def test_review_checkpoint_round_trip_and_input_binding(tmp_path: Path) -> None:
+    review_package = package()
+    checkpoint = tmp_path / "review.json"
+    decisions = [
+        {"sample_index": 1, "choice": "A", "query_language": "en", "code_central": True, "rationale": "x"},
+        {"sample_index": 2, "choice": "B", "query_language": "fr", "code_central": False, "rationale": "y"},
+    ]
+    review = ClaudeNeighborhoodReview(decisions, [{"claude-opus-5": {"inputTokens": 10}}], 0.25)
+
+    write_review_checkpoint(checkpoint, review_package, "claude-opus-5", 10, review)
+
+    assert load_review_checkpoint(checkpoint, review_package, "claude-opus-5", 10) == review
+    changed = review_package | {"items": [review_package["items"][0] | {"query": "changed"}, review_package["items"][1]]}
+    with pytest.raises(ValueError, match="different review inputs"):
+        load_review_checkpoint(checkpoint, changed, "claude-opus-5", 10)
 
 
 def test_comparison_scores_randomized_student_sides_and_content_groups() -> None:
