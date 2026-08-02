@@ -26,7 +26,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 import pulumi
 import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
-from iac.branch_guard import confirm_on_tty, current_git_branch, guard_pulumi_up
 from iac.config import CLOUDFLARE_TOKEN_SECRET, Provider, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
@@ -41,10 +40,6 @@ from iac.nodepools import derive_nodepools
 from rigging.secrets import resolve_secret_spec
 
 DEFAULT_NAMESPACE = "iris"
-
-# Stacks to update only from `main` after merging. A `pulumi up` from another branch prompts for
-# confirmation (soft guard, not a gate); `pulumi preview` is unaffected. Extend as stacks are added.
-MAIN_ONLY_STACKS = frozenset({"cw-rno2a", "cw-us-east-02a", "cw-us-east-08a", "cw-us-west-04a", "marin"})
 
 
 def _warn_if_no_persistent_signing_key(cluster: str, iris_config) -> None:
@@ -230,14 +225,6 @@ def _build_gcp(cluster: str, *, adopt: bool) -> None:
 
 
 def main() -> None:
-    guard_pulumi_up(
-        stack=pulumi.get_stack(),
-        branch=current_git_branch(),
-        is_preview=pulumi.runtime.is_dry_run(),
-        main_only_stacks=MAIN_ONLY_STACKS,
-        confirm=confirm_on_tty,
-        warn=pulumi.log.warn,
-    )
     config = pulumi.Config("marin-iac")
     cluster = config.require("cluster")
     # Adoption recon: `pulumi config set marin-iac:import true` stamps import_ on every

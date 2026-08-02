@@ -130,7 +130,17 @@ pulumi preview
 Read the diff before doing anything else. **No-change / update-in-place is safe. Any `replace`
 or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fleet. Stop and
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
-Once the preview is clean, `pulumi up`.
+Once the preview is clean, `./up.sh`.
+
+`./up.sh` wraps `pulumi up` (all arguments pass through). Production clusters and the shared
+`marin` GCP stack carry `marin-iac:main-only: "true"` in their `Pulumi.<stack>.yaml`; run against
+one of those from a branch other than `main` and the wrapper asks for confirmation before Pulumi
+starts, then proceeds or aborts on your answer. It is a soft guard, not a gate: with no terminal
+to ask on it warns and continues (so automation is not blocked), and a bare `pulumi up` skips it.
+Set the flag on further stacks that should be updated only from `main` after merging. The guard
+lives in the wrapper rather than the Pulumi program because `pulumi up` runs the program twice —
+preview then update — so an in-program prompt only appears after the diff is already on screen and
+cannot reach the operator's terminal.
 
 ### Adopting a new cluster
 
