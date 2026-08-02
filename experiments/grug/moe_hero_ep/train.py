@@ -715,6 +715,7 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        max_retries_failure=0,
         processes_per_task=config.processes_per_task,
         setup_scripts=moonep_jax_setup_scripts(config.moonep_jax_wheel_build, config.resources),
     )

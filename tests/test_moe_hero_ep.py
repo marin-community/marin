@@ -440,6 +440,7 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(
 
     scripts = dispatch.call_args.kwargs["setup_scripts"]
 
+    assert dispatch.call_args.kwargs["max_retries_failure"] == 0
     assert scripts is not None
     assert len(scripts) == 3
     assert "uv sync" in scripts[0]

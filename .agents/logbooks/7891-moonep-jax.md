@@ -963,3 +963,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Runtime: JAX `f9f6bbace`, XLA `5d53e1e`, NCCL 2.30.7, an 84% main pool, and four in-flight collectives.
 - Config: Global histogram QB with 1,000 bins, 128-token MoonEP padding, and QuACK grouped GEMM.
 - Gate: Require attempt-zero completion, finite loss, zero dropped assignments, and no transport error.
+
+### 2026-08-02 23:29 UTC - MNEP-048 fails deterministically at step two
+
+- Result: The child made three complete failed attempts because the common dispatch helper defaulted to three failure retries.
+- Failure: Every rank reported a `NaN` loss at step two on all three attempts.
+- Correction: The coordination-service connection errors followed rank exit and were not the root failure.
+- Action: Stop the fourth attempt and set `max_retries_failure=0` in the MoonEP training dispatch.
+- Interpretation: The balanced direct-transport probe is not a sufficient full-program correctness gate.
+- Next gate: Set the collective overlap limit to one. This tests whether concurrent direct kernels corrupt shared device-communicator state.
