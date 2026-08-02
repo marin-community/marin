@@ -9,7 +9,6 @@ import pytest
 from iris.cluster.backends.k8s.tasks import (
     _GANG_GC_MAX_AGE_SECONDS,
     _GC_MAX_AGE_SECONDS,
-    _GC_MAX_DELETES_PER_PASS,
     _KUEUE_MANAGED_FINALIZER,
     _KUEUE_POD_GROUP_NAME,
     _KUEUE_POD_GROUP_TOTAL,
@@ -1125,51 +1124,8 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
 
 
-def test_gc_bounds_deletes_per_pass(provider, k8s):
-    """Each pass deletes a bounded number of pods, and the backlog drains over passes.
-
-    Every delete is a serial API round trip, so an unbounded pass on a large backlog
-    runs for minutes (#7881).
-    """
-    now = datetime.now(UTC)
-    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    backlog = _GC_MAX_DELETES_PER_PASS + 10
-    for i in range(backlog):
-        _seed_terminal_pod(k8s, f"backlog-pod-{i}", "Succeeded", f"hash{i:016d}", old_ts)
-
-    provider._gc_terminal_resources(active_pods=[])
-    remaining = k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS)
-    assert len(remaining) == backlog - _GC_MAX_DELETES_PER_PASS
-
-    provider._gc_terminal_resources(active_pods=[])
-    assert k8s.list_json(K8sResource.PODS, labels=_MANAGED_POD_LABELS) == []
-
-
-def test_gc_collects_old_pods_behind_a_wall_of_recent_ones(provider, k8s):
-    """Pods too young to delete must not hide older ones from the sweep.
-
-    The per-pass bound applies to deletes, not to how far the scan reads. Bounding the
-    read instead would return the same prefix of undeletable pods every pass, and the
-    old pods behind it would never be examined — the accumulation GC exists to prevent.
-    """
-    now = datetime.now(UTC)
-    recent_ts = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Names sort ahead of the old pods, so any read-side cap would stop inside them.
-    for i in range(_GC_MAX_DELETES_PER_PASS + 100):
-        _seed_terminal_pod(k8s, f"aaa-recent-{i:04d}", "Succeeded", f"recent{i:010d}", recent_ts)
-    _seed_terminal_pod(k8s, "zzz-old-pod", "Succeeded", "oldhash0000000000", old_ts)
-
-    provider._gc_terminal_resources(active_pods=[])
-
-    assert k8s.get_json(K8sResource.PODS, "zzz-old-pod") is None
-    assert k8s.get_json(K8sResource.PODS, "aaa-recent-0000") is not None
-
-
 def test_gc_does_not_run_on_the_calling_thread(provider, k8s):
-    """A sync cycle hands GC its active-pod set and returns; it never sweeps inline.
+    """A sync cycle starts the GC thread and returns; it never sweeps inline.
 
     The sweep spends one API round trip per deleted resource, so running it inline
     stalled scheduling and reconciliation behind the whole backlog (#7881).
@@ -1178,11 +1134,11 @@ def test_gc_does_not_run_on_the_calling_thread(provider, k8s):
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
     _seed_terminal_pod(k8s, "gc-pod-1", "Succeeded", "aaaa111122223333", old_ts)
 
-    provider._maybe_gc_terminal_resources(active_pods=[])
+    provider._start_terminal_gc()
 
     assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is not None
 
-    # The pass the GC thread would run does delete it, against that same snapshot.
+    # The pass the GC thread would run does delete it.
     provider._gc_once()
     assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is None
 
@@ -1496,30 +1452,6 @@ def test_gc_sweeps_finalizer_wedged_gang_pod(provider, k8s):
     provider._gc_terminal_resources(active_pods=[])
 
     assert k8s.get_json(K8sResource.PODS, "wedged-gang-pod") is None
-    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
-
-
-def test_gc_sweeps_gang_pods_behind_a_full_age_budget(provider, k8s):
-    """An age-sweep backlog must not delay the gang sweep.
-
-    Gang pods pin idle GPU nodes, which is why they get the short retention. The
-    iterator yields every Succeeded pod before the first Failed one, so under a single
-    shared delete budget a Succeeded backlog would consume the whole pass and a crashed
-    gang would wait passes for its Workload to be released.
-    """
-    now = datetime.now(UTC)
-    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    for i in range(_GC_MAX_DELETES_PER_PASS + 100):
-        _seed_terminal_pod(k8s, f"old-succeeded-{i:04d}", "Succeeded", f"hash{i:016d}", old_ts)
-    group = "starved-gang-group"
-    _seed_gang_pod(k8s, "starved-gang-pod", group, age_ts)
-    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
-
-    provider._gc_terminal_resources(active_pods=[])
-
-    assert k8s.get_json(K8sResource.PODS, "starved-gang-pod") is None
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
 
 

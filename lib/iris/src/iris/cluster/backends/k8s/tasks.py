@@ -1249,18 +1249,6 @@ _GC_MAX_AGE_SECONDS = 3600  # 1 hour
 # cannot race exit-status collection.
 _GANG_GC_MAX_AGE_SECONDS = 60
 
-# Garbage collection: terminal pods deleted in one pass, counted separately for
-# the age sweep and the gang sweep. Each delete is a serial API round trip, so an
-# unbounded pass on a large backlog runs for minutes; the backlog drains at this
-# rate per _GC_INTERVAL_SECONDS instead.
-#
-# The gang sweep holds its own budget because it is the one with a deadline: gang
-# pods pin idle GPU nodes, which is why they get _GANG_GC_MAX_AGE_SECONDS instead
-# of the 1h retention. Under one shared budget an age-sweep backlog would spend
-# the whole pass before any gang pod was even read.
-_GC_MAX_DELETES_PER_PASS = 500
-_GC_MAX_GANG_DELETES_PER_PASS = 500
-
 # Blocker eviction: minimum interval between reconcile-driven eviction sweeps
 # of preempt_namespaces. Gang pods can stay SchedulingGated for many cycles
 # while Kueue retries admission; without this floor every reconcile would
@@ -2310,11 +2298,9 @@ class K8sTaskProvider:
     _cluster_state: ClusterState = field(default_factory=ClusterState, init=False, repr=False)
     _last_cluster_scan: float = field(default=0.0, init=False, repr=False)
     _last_preempt_time: float = field(default=0.0, init=False, repr=False)
-    # Terminal-resource GC runs on its own thread. _gc_lock guards the two pieces of
-    # state it shares with the control loop: the active-pod snapshot sync hands it,
-    # and the deferred-cleanup hash set both threads write.
+    # Terminal-resource GC runs on its own thread. _gc_lock guards the deferred-cleanup
+    # hash set, the one piece of state it shares with the control loop.
     _gc_emitter: PeriodicEmitter | None = field(default=None, init=False, repr=False)
-    _gc_active_pods: list[dict] = field(default_factory=list, init=False, repr=False)
     _gc_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _pending_gc_hashes: set[str] = field(default_factory=set, init=False, repr=False)
 
@@ -2512,7 +2498,7 @@ class K8sTaskProvider:
         node_pools = _fetch_node_pools(self.kubectl, self.pods.managed_label)
         self._cluster_state.update(managed_pods, nodes, workloads, node_pools)
 
-        self._maybe_gc_terminal_resources(managed_pods)
+        self._start_terminal_gc()
 
         return updates
 
@@ -2852,11 +2838,11 @@ class K8sTaskProvider:
         for name in pod_group_names:
             self.kubectl.delete(K8sResource.WORKLOADS, name, wait=False)
 
-    def _maybe_gc_terminal_resources(self, active_pods: list[dict]) -> None:
-        """Declare the current active-pod set for the background GC pass, which deletes
-        terminal (Succeeded/Failed) pods and their associated configmaps/PDBs older
-        than _GC_MAX_AGE_SECONDS, and sweeps terminal gang pods (with their Kueue
-        Workloads) on the shorter gang retention.
+    def _start_terminal_gc(self) -> None:
+        """Start the background GC thread, which deletes terminal (Succeeded/Failed)
+        pods and their associated configmaps/PDBs older than _GC_MAX_AGE_SECONDS, and
+        sweeps terminal gang pods (with their Kueue Workloads) on the shorter gang
+        retention.
 
         Without this, completed pods and their configmaps accumulate in etcd indefinitely
         since the sync loop's field selector excludes terminal pods from its queries.
@@ -2864,29 +2850,36 @@ class K8sTaskProvider:
         The pass costs one API round trip per deleted pod, so a backlog takes minutes
         of serial requests. It runs on its own thread — never the control loop — so a
         slow pass cannot stall scheduling or task-state reconciliation.
-
-        active_pods is the list of Pending/Running pods from the current sync cycle,
-        used to protect configmaps/PDBs for tasks that have active retry attempts.
         """
-        with self._gc_lock:
-            self._gc_active_pods = list(active_pods)
         if self._gc_emitter is None:
             self._gc_emitter = PeriodicEmitter(self._gc_once, interval=_GC_INTERVAL_SECONDS, name="terminal-gc")
 
     def _gc_once(self) -> None:
-        """One GC pass against the active-pod set of the latest sync cycle."""
-        with self._gc_lock:
-            active_pods = list(self._gc_active_pods)
-        self._gc_terminal_resources(active_pods)
+        """One GC pass, against active pods this thread reads itself.
+
+        Reading them here rather than taking sync's snapshot keeps the protection for
+        tasks with active retry attempts accurate however long the pass runs.
+        """
+        try:
+            active_pods = self.kubectl.list_json(
+                K8sResource.PODS,
+                labels=_MANAGED_POD_LABELS,
+                field_selector=_ACTIVE_PODS_FIELD_SELECTOR,
+            )
+            self._gc_terminal_resources(active_pods)
+        except Exception:
+            # PeriodicEmitter logs a bare warning naming the thread. #7881 was GC
+            # silently ceasing to work, so name it and keep the traceback.
+            logger.exception("GC pass failed; will retry next interval")
 
     def _gc_terminal_resources(self, active_pods: list[dict]) -> None:
         """One GC pass: deferred CM/PDB cleanup, the 1h terminal-pod sweep, and a
         short-retention sweep of terminal gang pods that strips the Kueue pod
         finalizer and deletes the pod-group Workloads they would otherwise pin.
 
-        Deletes at most _GC_MAX_DELETES_PER_PASS terminal pods, so one pass costs a
-        bounded number of API round trips and a larger backlog drains over successive
-        passes.
+        Runs on the GC thread, never the control loop, and reads the terminal pods
+        through a lazy paged iterator, so neither its duration nor the size of the
+        backlog it sweeps is anyone else's problem.
         """
         now = datetime.now(UTC).timestamp()
         cutoff = now - _GC_MAX_AGE_SECONDS
@@ -2923,6 +2916,10 @@ class K8sTaskProvider:
                 self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
                 self.kubectl.delete_by_labels(K8sResource.PDBS, labels, wait=False)
                 cleaned.add(task_hash)
+        except Exception:
+            # Isolated from the pod sweep below: a persistently failing CM/PDB delete
+            # must not be what stops terminal pods from ever being collected.
+            logger.exception("GC: CM/PDB cleanup failed after %d of %d hashes", len(cleaned), len(safe_pending))
         finally:
             with self._gc_lock:
                 self._pending_gc_hashes -= cleaned
@@ -2938,18 +2935,6 @@ class K8sTaskProvider:
         gang_pod_groups: set[str] = set()
         gang_task_hashes: set[str] = set()
         for pod in self._iter_terminal_pods():
-            # Budget the deletes, not the scan: every name collected here is one the
-            # sweep will delete, so stopping at the budget still shrinks the backlog
-            # by a full pass's worth. Truncating the scan instead would let a prefix
-            # of pods too young to delete hide older ones from every pass.
-            #
-            # The scan stops only once BOTH budgets are full. A full age budget must
-            # not end the scan: the iterator yields every Succeeded pod before the
-            # first Failed one, and pods arrive in etcd key order, so a gang pod —
-            # Failed is the normal outcome for a crashed gang — can sit arbitrarily
-            # far behind an age-sweep backlog.
-            if len(old_pod_names) >= _GC_MAX_DELETES_PER_PASS and len(gang_pod_names) >= _GC_MAX_GANG_DELETES_PER_PASS:
-                break
             meta = pod.get("metadata", {})
             created = meta.get("creationTimestamp", "")
             if not created:
@@ -2967,13 +2952,12 @@ class K8sTaskProvider:
             if pod_group and pod_group in active_gang_groups:
                 continue
             if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
-                if len(gang_pod_names) < _GC_MAX_GANG_DELETES_PER_PASS:
-                    gang_pod_names.append(meta["name"])
-                    gang_pod_groups.add(pod_group)
-                    if task_hash:
-                        gang_task_hashes.add(task_hash)
+                gang_pod_names.append(meta["name"])
+                gang_pod_groups.add(pod_group)
+                if task_hash:
+                    gang_task_hashes.add(task_hash)
                 continue
-            if ts < cutoff and len(old_pod_names) < _GC_MAX_DELETES_PER_PASS:
+            if ts < cutoff:
                 old_pod_names.append(meta["name"])
                 if task_hash:
                     old_task_hashes.add(task_hash)
@@ -3014,8 +2998,8 @@ class K8sTaskProvider:
     def _iter_terminal_pods(self) -> Iterator[dict]:
         """Yield managed pods in a terminal phase (Succeeded or Failed), page by page.
 
-        Lazy so the GC sweep can stop once it has its delete budget, without holding a
-        whole backlog of pod bodies or paying for pages it will not use.
+        Paged and lazy, so neither caller materializes a whole terminal backlog and a
+        caller that resolves what it needs early stops paying for the rest.
         """
         # Field selectors AND their comma-separated terms, so a single
         # status.phase==Succeeded,status.phase==Failed matches nothing (a pod is
@@ -3026,10 +3010,6 @@ class K8sTaskProvider:
                 labels=_MANAGED_POD_LABELS,
                 field_selector=f"status.phase={phase}",
             )
-
-    def _list_terminal_pods(self) -> list[dict]:
-        """Bulk-list managed pods in a terminal phase (Succeeded or Failed)."""
-        return list(self._iter_terminal_pods())
 
     def _poll_pods(
         self, running: list[RunningTaskEntry], cached_pods: list[dict], workloads: list[dict] | None = None
@@ -3069,7 +3049,7 @@ class K8sTaskProvider:
         # so steady-state cycles add no call. setdefault keeps the active entry
         # if a name somehow appears in both.
         if any(self._lookup_entry_pod(pods_by_name, entry)[1] is None for entry in running):
-            for pod in self._list_terminal_pods():
+            for pod in self._iter_terminal_pods():
                 pods_by_name.setdefault(pod.get("metadata", {}).get("name", ""), pod)
 
         # (task_id_wire, attempt_id) -> pod_name. Resource samples are

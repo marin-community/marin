@@ -673,7 +673,10 @@ class InMemoryK8sService:
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
+        namespace: str | None = None,
     ) -> Iterator[dict]:
+        # The fake holds one namespace, so an override resolves to the same store; it
+        # is accepted so the fake still stands in for cross-namespace reads.
         yield from self.list_json(resource, labels=labels, field_selector=field_selector)
 
     def list_json(

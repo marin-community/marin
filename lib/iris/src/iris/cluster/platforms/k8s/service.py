@@ -89,6 +89,7 @@ class K8sService(Protocol):
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
+        namespace: str | None = None,
     ) -> Iterator[dict]:
         """Yield matching resources one page at a time."""
         ...
@@ -453,18 +454,13 @@ class CloudK8sService:
             return
         selector = _label_selector(labels)
         logger.info("k8s: DELETE_BY_LABELS %s labels=%s", resource.plural, labels)
+        # iter_json and delete each raise KubectlError already, and delete tolerates
+        # NotFound, so there is nothing left here to translate.
         with slow_log(logger, f"delete_by_labels {resource.plural} -l {selector}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                for item in self.iter_json(resource, labels=labels):
-                    name = item.get("metadata", {}).get("name")
-                    if name:
-                        self.delete(resource, name, wait=wait)
-            except NotFoundError:
-                return
-            except ApiException as e:
-                raise KubectlError(
-                    f"delete_by_labels {resource.plural} -l {selector} failed ({e.status}): {e.reason}"
-                ) from e
+            for item in self.iter_json(resource, labels=labels):
+                name = item.get("metadata", {}).get("name")
+                if name:
+                    self.delete(resource, name, wait=wait)
 
     # -- cross-namespace pod operations ---------------------------------------
 
