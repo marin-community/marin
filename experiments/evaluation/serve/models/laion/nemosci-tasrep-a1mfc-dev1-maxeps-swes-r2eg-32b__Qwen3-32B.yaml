@@ -4,10 +4,10 @@ revision: 21d24f986dea15f54f4aa3d6bef3d18d5b00b156
 apply_chat_template: true
 resource_hint:
   gpu:
-    GB200: 2
+    GB200: 1
   memory: 128g
 serve:
-  tensor_parallel_size: 2
+  tensor_parallel_size: 1
   max_model_len: 32768
   tool_call_parser: hermes
   reasoning_parser: qwen3

@@ -4,10 +4,10 @@ revision: 0609e50dc2aa3f82d6ccf03285cfc667d89a0fc4
 apply_chat_template: true
 resource_hint:
   gpu:
-    GB200: 2
+    GB200: 1
   memory: 128g
 serve:
-  tensor_parallel_size: 2
+  tensor_parallel_size: 1
   max_model_len: 32768
   tool_call_parser: hermes
   reasoning_parser: qwen3
@@ -16,4 +16,3 @@ serve:
 agent:
   agent_kwargs:
     extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
-
