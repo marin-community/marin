@@ -548,3 +548,10 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Source bundle: Iris workspace bundle, 9.4 MB. The submit output did not report a content ID.
 - Status: A08 has the one federated request. No duplicate request was submitted.
 - Next action: Wait 120 seconds for immediate failure, then use the normal monitor cadence until the 25-step gate reaches a terminal state.
+
+### 2026-08-02 04:20 UTC - MHEP-007 admitted on A08
+
+- Coordinator and GPU child state: Running with zero failures and zero preemptions.
+- GPU allocation: All 16 tasks run with four GB200 GPUs each; no task is pending or complete.
+- Logs: The first 15-minute scan has no matched loss failure, exception, OOM, dead-node, or resource error.
+- Decision: Keep the one admitted job and use the normal monitor cadence.
