@@ -1369,3 +1369,13 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - A 96 GiB four-device retry reserved accelerator quota but could not find a node with the required host memory. It was stopped because its reservation could prevent the primary eight-device gang from admission.
 - The direct eight-device hierarchy run remains the only active accelerator request for this experiment.
 - `production-student-report.md` defines the remaining label, 10,000-document, blind-neighborhood, robustness, release, and peer-review gates. The exact CPU speed gate is already complete.
+
+### Production evaluation preparation
+
+- The accepted hierarchy will label exactly 10,000 new held-out documents. Selection starts from a nested 11,000-document source-balanced sample and removes every 1,000-document hierarchy-pilot row by source and evaluation rank.
+- The held-out embedding report uses the exact trained-artifact speed result. It gates parent, leaf, and form metrics against the best saved teacher.
+- Large label groups need at least 30 documents. Each such group can trail its best teacher by at most 0.03 cross-source nearest-label F1.
+- Pairwise geometry uses at most 1,000,000 deterministic document pairs. Exact neighbor search is computed once for each embedding and reused across label levels.
+- A 200-query blind review compares the student with the strongest saved teacher. Model names, GLM labels, and source metadata are hidden. Set order is deterministic and randomized for each query.
+- Claude will identify the visible query language and whether code is central. Code and non-English subgroup results therefore use document content instead of source names.
+- Twenty-six focused hierarchy, server, label, metric, and review tests pass.
