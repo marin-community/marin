@@ -610,3 +610,10 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Progress: The latest visible sample is step 15 of 200. Loss fell from 7.57 at step 9 to 6.90 at step 15.
 - Logs: No exception, OOM, dead-node, resource error, non-finite value, or retry is present.
 - Decision: Continue the same job at the normal monitor cadence.
+
+### 2026-08-02 05:08 UTC - MHEP-008 healthy through step 69
+
+- State: The coordinator and all 16 GPU tasks continue to run with zero failures and zero preemptions.
+- Progress: The latest visible sample is step 69 of 200 at about 11.5 seconds per step. Loss fell to 4.88.
+- Logs: No exception, OOM, dead-node, resource error, non-finite value, or retry is present.
+- Decision: Continue the same job at the normal monitor cadence.
