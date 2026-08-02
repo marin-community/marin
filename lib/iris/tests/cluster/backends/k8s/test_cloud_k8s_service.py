@@ -105,18 +105,18 @@ def test_iter_json_stops_fetching_when_abandoned():
     assert len(api.requests) == 1
 
 
-def test_delete_by_labels_is_one_collection_delete():
-    """The selector goes to the server, which deletes the matches.
+def test_delete_by_labels_deletes_each_match_by_name():
+    """Deletes go by name, never as a DELETE on the collection URL.
 
-    Listing the selector and deleting each match client-side costs one serial round
-    trip per resource, and GC sweeps many selectors back to back (#7881).
+    Kubernetes treats a collection DELETE as the `deletecollection` verb, which the
+    controller ClusterRole does not grant, so it would 403 at runtime.
     """
-    svc, api = _service_with_api([["a", "b", "c"]])
+    svc, api = _service_with_api([["a", "b"], ["c"]])
 
     svc.delete_by_labels(K8sResource.CONFIGMAPS, {"iris.task-hash": "abc"})
 
-    assert api.requests == []
-    assert [d.get("label_selector") for d in api.deletes] == ["iris.task-hash=abc"]
+    assert [d.get("name") for d in api.deletes] == ["a", "b", "c"]
+    assert all(d.get("label_selector") is None for d in api.deletes)
 
 
 # Test item_path construction for namespaced resources

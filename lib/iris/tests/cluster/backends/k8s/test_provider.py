@@ -1499,6 +1499,30 @@ def test_gc_sweeps_finalizer_wedged_gang_pod(provider, k8s):
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
 
 
+def test_gc_sweeps_gang_pods_behind_a_full_age_budget(provider, k8s):
+    """An age-sweep backlog must not delay the gang sweep.
+
+    Gang pods pin idle GPU nodes, which is why they get the short retention. The
+    iterator yields every Succeeded pod before the first Failed one, so under a single
+    shared delete budget a Succeeded backlog would consume the whole pass and a crashed
+    gang would wait passes for its Workload to be released.
+    """
+    now = datetime.now(UTC)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    age_ts = (now - timedelta(seconds=_GANG_GC_MAX_AGE_SECONDS + 60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    for i in range(_GC_MAX_DELETES_PER_PASS + 100):
+        _seed_terminal_pod(k8s, f"old-succeeded-{i:04d}", "Succeeded", f"hash{i:016d}", old_ts)
+    group = "starved-gang-group"
+    _seed_gang_pod(k8s, "starved-gang-pod", group, age_ts)
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider._gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "starved-gang-pod") is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+
+
 def test_gc_sweeps_crashed_gang_pods_on_short_retention(provider, k8s):
     """A Failed gang pod older than the gang retention (but younger than the 1h
     plain-pod retention) is swept along with its Workload; a non-gang Failed pod

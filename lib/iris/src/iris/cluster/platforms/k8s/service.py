@@ -364,6 +364,7 @@ class CloudK8sService:
         *,
         labels: dict[str, str] | None = None,
         field_selector: str | None = None,
+        namespace: str | None = None,
     ) -> Iterator[dict]:
         """Yield matching resources one page at a time.
 
@@ -371,9 +372,13 @@ class CloudK8sService:
         chunked body that no timeout bounds, because the per-recv socket timeout the
         client arms is reset by every arriving chunk. A caller that keeps only a few
         fields per item, or that stops early, never holds the whole collection.
+
+        ``namespace`` overrides the service's own namespace for cross-namespace reads.
         """
-        logger.info("k8s: LIST %s labels=%s field_selector=%s", resource.plural, labels, field_selector)
-        kwargs = self._ns_kwargs(resource)
+        logger.info(
+            "k8s: LIST %s labels=%s field_selector=%s namespace=%s", resource.plural, labels, field_selector, namespace
+        )
+        kwargs = {"namespace": namespace} if namespace else self._ns_kwargs(resource)
         if labels:
             kwargs["label_selector"] = _label_selector(labels)
         if field_selector:
@@ -439,21 +444,21 @@ class CloudK8sService:
     def delete_by_labels(self, resource: K8sResource, labels: dict[str, str], *, wait: bool = False) -> None:
         """Delete all resources matching the given label selector.
 
-        One collection delete, not a list plus a delete per item: the caller sweeps
-        many selectors in a row, and each extra round trip is serial latency it pays.
+        Lists the selector and deletes each match by name. A single DELETE on the
+        collection URL would be one request instead of N, but Kubernetes treats that as
+        the ``deletecollection`` verb, which the controller ClusterRole does not grant
+        (see CLUSTER_ROLE_RULES) — it would 403 at runtime.
         """
         if not labels:
             return
         selector = _label_selector(labels)
-        logger.info("k8s: DELETE_COLLECTION %s labels=%s", resource.plural, labels)
-        kwargs = self._ns_kwargs(resource)
-        kwargs["label_selector"] = selector
-        if not wait:
-            kwargs["propagation_policy"] = "Background"
-        kwargs.update(self._request_timeout_kwargs())
+        logger.info("k8s: DELETE_BY_LABELS %s labels=%s", resource.plural, labels)
         with slow_log(logger, f"delete_by_labels {resource.plural} -l {selector}", threshold_ms=_SLOW_THRESHOLD_MS):
             try:
-                self._resource_api(resource).delete(**kwargs)
+                for item in self.iter_json(resource, labels=labels):
+                    name = item.get("metadata", {}).get("name")
+                    if name:
+                        self.delete(resource, name, wait=wait)
             except NotFoundError:
                 return
             except ApiException as e:
@@ -464,17 +469,12 @@ class CloudK8sService:
     # -- cross-namespace pod operations ---------------------------------------
 
     def list_pods_in_namespace(self, namespace: str) -> list[dict]:
-        """List pods in an explicit namespace (not the service's own)."""
-        logger.info("k8s: LIST pods namespace=%s", namespace)
-        with slow_log(logger, f"list pods in {namespace}", threshold_ms=_SLOW_THRESHOLD_MS):
-            try:
-                result = self._resource_api(K8sResource.PODS).get(
-                    namespace=namespace,
-                    **self._request_timeout_kwargs(),
-                )
-                return [item.to_dict() for item in result.items]
-            except ApiException as e:
-                raise KubectlError(f"list pods in {namespace} failed ({e.status}): {e.reason}") from e
+        """List pods in an explicit namespace (not the service's own).
+
+        Chunked like every other list: this one runs on the control loop (blocker
+        eviction) against foreign tenant namespaces, which are larger than Iris's own.
+        """
+        return list(self.iter_json(K8sResource.PODS, namespace=namespace))
 
     def delete_pod_in_namespace(self, namespace: str, name: str) -> None:
         """Delete a pod in an explicit namespace, ignoring NotFound."""

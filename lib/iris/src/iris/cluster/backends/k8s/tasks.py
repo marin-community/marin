@@ -1249,10 +1249,17 @@ _GC_MAX_AGE_SECONDS = 3600  # 1 hour
 # cannot race exit-status collection.
 _GANG_GC_MAX_AGE_SECONDS = 60
 
-# Garbage collection: terminal pods deleted in one pass. Each delete is a serial
-# API round trip, so an unbounded pass on a large backlog runs for minutes; the
-# backlog drains at this rate per _GC_INTERVAL_SECONDS instead.
+# Garbage collection: terminal pods deleted in one pass, counted separately for
+# the age sweep and the gang sweep. Each delete is a serial API round trip, so an
+# unbounded pass on a large backlog runs for minutes; the backlog drains at this
+# rate per _GC_INTERVAL_SECONDS instead.
+#
+# The gang sweep holds its own budget because it is the one with a deadline: gang
+# pods pin idle GPU nodes, which is why they get _GANG_GC_MAX_AGE_SECONDS instead
+# of the 1h retention. Under one shared budget an age-sweep backlog would spend
+# the whole pass before any gang pod was even read.
 _GC_MAX_DELETES_PER_PASS = 500
+_GC_MAX_GANG_DELETES_PER_PASS = 500
 
 # Blocker eviction: minimum interval between reconcile-driven eviction sweeps
 # of preempt_namespaces. Gang pods can stay SchedulingGated for many cycles
@@ -2903,19 +2910,24 @@ class K8sTaskProvider:
                 active_gang_groups.add(g)
 
         # 1. Targeted cleanup: delete configmaps/PDBs for tasks that were killed
-        #    since last GC. Uses label-selector deletes (one kubectl call per hash)
-        #    instead of listing all resources and filtering client-side.
-        #    Only remove hashes we actually clean up; skipped hashes (still active)
-        #    stay in the set for the next GC cycle.
+        #    since last GC, by task_hash label selector.
+        #    Only discard hashes actually cleaned up: skipped hashes (still active)
+        #    and any the sweep did not reach stay in the set for the next GC cycle,
+        #    so a failed delete retries instead of leaking the resources forever.
         with self._gc_lock:
             safe_pending = self._pending_gc_hashes - active_hashes
-            self._pending_gc_hashes -= safe_pending
-        for task_hash in safe_pending:
-            labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
-            self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
-            self.kubectl.delete_by_labels(K8sResource.PDBS, labels, wait=False)
-        if safe_pending:
-            logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(safe_pending))
+        cleaned: set[str] = set()
+        try:
+            for task_hash in safe_pending:
+                labels = {**_MANAGED_POD_LABELS, _LABEL_TASK_HASH: task_hash}
+                self.kubectl.delete_by_labels(K8sResource.CONFIGMAPS, labels, wait=False)
+                self.kubectl.delete_by_labels(K8sResource.PDBS, labels, wait=False)
+                cleaned.add(task_hash)
+        finally:
+            with self._gc_lock:
+                self._pending_gc_hashes -= cleaned
+        if cleaned:
+            logger.info("GC: cleaned up CMs/PDBs for %d killed task hashes", len(cleaned))
 
         # 2. Age-based sweep: delete terminal pods older than the cutoff, and
         #    their associated configmaps/PDBs (by task_hash label-selector delete).
@@ -2930,7 +2942,13 @@ class K8sTaskProvider:
             # sweep will delete, so stopping at the budget still shrinks the backlog
             # by a full pass's worth. Truncating the scan instead would let a prefix
             # of pods too young to delete hide older ones from every pass.
-            if len(old_pod_names) + len(gang_pod_names) >= _GC_MAX_DELETES_PER_PASS:
+            #
+            # The scan stops only once BOTH budgets are full. A full age budget must
+            # not end the scan: the iterator yields every Succeeded pod before the
+            # first Failed one, and pods arrive in etcd key order, so a gang pod —
+            # Failed is the normal outcome for a crashed gang — can sit arbitrarily
+            # far behind an age-sweep backlog.
+            if len(old_pod_names) >= _GC_MAX_DELETES_PER_PASS and len(gang_pod_names) >= _GC_MAX_GANG_DELETES_PER_PASS:
                 break
             meta = pod.get("metadata", {})
             created = meta.get("creationTimestamp", "")
@@ -2949,12 +2967,13 @@ class K8sTaskProvider:
             if pod_group and pod_group in active_gang_groups:
                 continue
             if pod_group and (meta.get("deletionTimestamp") or ts < gang_cutoff):
-                gang_pod_names.append(meta["name"])
-                gang_pod_groups.add(pod_group)
-                if task_hash:
-                    gang_task_hashes.add(task_hash)
+                if len(gang_pod_names) < _GC_MAX_GANG_DELETES_PER_PASS:
+                    gang_pod_names.append(meta["name"])
+                    gang_pod_groups.add(pod_group)
+                    if task_hash:
+                        gang_task_hashes.add(task_hash)
                 continue
-            if ts < cutoff:
+            if ts < cutoff and len(old_pod_names) < _GC_MAX_DELETES_PER_PASS:
                 old_pod_names.append(meta["name"])
                 if task_hash:
                     old_task_hashes.add(task_hash)
