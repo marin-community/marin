@@ -9,8 +9,8 @@ from iac.gcp.iam_scan import (
     FindingKind,
     classify,
     declared_bindings,
+    declared_resources,
     fingerprint,
-    redact,
     render_markdown,
     service_agent_api,
 )
@@ -103,7 +103,7 @@ def test_declared_bindings_drops_encrypted_and_plain_human_members():
     secret = GcpSecretIam(secret="MY_SECRET", grants=(grant,))
     account = GcpServiceAccountIam(email="worker@hai-gcp-models.iam.gserviceaccount.com", grants=())
 
-    bindings = declared_bindings(
+    resources = declared_resources(
         PROJECT,
         "key",
         project_grants=(),
@@ -114,7 +114,9 @@ def test_declared_bindings_drops_encrypted_and_plain_human_members():
         service_accounts=(account,),
     )
 
-    assert bindings == {Binding(Container.SECRET, "MY_SECRET", "roles/secretmanager.secretAccessor", SA)}
+    assert declared_bindings(resources) == {
+        Binding(Container.SECRET, "MY_SECRET", "roles/secretmanager.secretAccessor", SA)
+    }
 
 
 def test_fingerprint_is_order_independent_and_content_sensitive():
@@ -125,11 +127,6 @@ def test_fingerprint_is_order_independent_and_content_sensitive():
 
     assert fingerprint(findings_ab) == fingerprint(findings_ba)
     assert fingerprint(findings_ab) != fingerprint([findings_ab[0]])
-
-
-def test_redact_masks_human_local_part_but_not_service_accounts():
-    assert redact("user:alice@stanford.edu") == "user:a***@stanford.edu"
-    assert redact(SA) == SA
 
 
 def test_render_markdown_embeds_marker_and_fingerprint():

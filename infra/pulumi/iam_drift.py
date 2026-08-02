@@ -8,12 +8,15 @@
     uv run --package marin-iac --extra deploy python infra/pulumi/iam_drift.py --run-url "$RUN_URL"
 
 Every grant iam_data.py declares is non-authoritative, so `pulumi preview` only detects drift on
-bindings already in Pulumi state. This re-enumerates the live IAM surface #7576 imported and
+bindings already in Pulumi state. This re-enumerates the live IAM surface iam_data.py declares and
 reports what diverges: undeclared bindings (including new service agents and hand-run grants),
 broad roles bound outside config, and service agents whose backing API looks disabled. Findings
 land on one sticky GitHub issue that updates in place and closes when the drift clears.
 
-See `iac.gcp.iam_scan` for what is and isn't in scope (human `user:` grants are not diffed).
+The scanned project is iam_data.py's own (`iac.gcp.iam_kms.PROJECT`); this scan is not
+parameterizable to another project, since the KMS key and declared grants it diffs against are
+that project's. See `iac.gcp.iam_scan` for what is and isn't in scope (human `user:` grants are
+not diffed).
 """
 
 import argparse
@@ -29,32 +32,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 from iac.gcp import iam_data
 from iac.gcp.iam_kms import PROJECT, crypto_key_id
 from iac.gcp.iam_live import GcpIamReader, IamReader, iter_resources
-from iac.gcp.iam_scan import Finding, classify, declared_bindings, fingerprint, render_markdown
+from iac.gcp.iam_scan import (
+    MARKER,
+    Finding,
+    classify,
+    declared_bindings,
+    declared_resources,
+    fingerprint,
+    render_markdown,
+)
 from iac.github.tracking_issue import sync_tracking_issue
 
 logger = logging.getLogger("iam_drift")
 
 DEFAULT_REPO = "marin-community/marin"
 LABEL = "iam-drift"
-MARKER = "<!-- marin-iam-drift -->"
 TITLE = "[iam-drift] GCP IAM drift outside Pulumi"
 
 
-def scan(reader: IamReader, project: str) -> list[Finding]:
+def scan(reader: IamReader) -> list[Finding]:
     """Enumerate the live IAM surface, diff it against iam_data.py, and return the findings."""
-    key_id = crypto_key_id()
-    resources = iter_resources(
-        project,
-        key_id,
-        secrets=iam_data.SECRETS,
-        buckets=iam_data.BUCKETS,
-        artifact_repositories=iam_data.ARTIFACT_REPOSITORIES,
-        service_accounts=iam_data.SERVICE_ACCOUNTS,
-    )
-    live = [binding for target in resources for binding in reader.bindings(target, project)]
-    declared = declared_bindings(
-        project,
-        key_id,
+    resources = declared_resources(
+        PROJECT,
+        crypto_key_id(),
         project_grants=iam_data.PROJECT_GRANTS,
         kms_grants=iam_data.KMS_GRANTS,
         secrets=iam_data.SECRETS,
@@ -62,8 +62,10 @@ def scan(reader: IamReader, project: str) -> list[Finding]:
         artifact_repositories=iam_data.ARTIFACT_REPOSITORIES,
         service_accounts=iam_data.SERVICE_ACCOUNTS,
     )
-    enabled_services = reader.enabled_services(project)
-    return classify(live, declared, project=project, enabled_services=enabled_services)
+    live = [binding for target in iter_resources(resources) for binding in reader.bindings(target, PROJECT)]
+    declared = declared_bindings(resources)
+    enabled_services = reader.enabled_services(PROJECT)
+    return classify(live, declared, project=PROJECT, enabled_services=enabled_services)
 
 
 def _resolved_comment(run_url: str | None) -> str:
@@ -84,7 +86,6 @@ def _changed_comment(findings: list[Finding], run_url: str | None) -> str:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--project", default=PROJECT, help="GCP project to scan.")
     parser.add_argument("--repo", default=DEFAULT_REPO, help="owner/name the tracking issue lives in.")
     parser.add_argument("--run-url", default=None, help="Link to this scan run, embedded in the issue.")
     parser.add_argument("--json", action="store_true", help="Print findings as JSON and exit without touching GitHub.")
@@ -96,14 +97,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = _parser().parse_args()
 
-    findings = scan(GcpIamReader(), args.project)
-    logger.info("found %d IAM drift finding(s) on %s", len(findings), args.project)
+    findings = scan(GcpIamReader())
+    logger.info("found %d IAM drift finding(s) on %s", len(findings), PROJECT)
 
     if args.json:
         print(json.dumps([dataclasses.asdict(f) for f in findings], indent=2, default=str))
         return
 
-    body = render_markdown(findings, project=args.project, run_url=args.run_url) if findings else None
+    body = render_markdown(findings, project=PROJECT, run_url=args.run_url) if findings else None
 
     if args.no_github:
         print(body if body is not None else "No IAM drift detected.")

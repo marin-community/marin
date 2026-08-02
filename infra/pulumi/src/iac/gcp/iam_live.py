@@ -17,8 +17,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import google.auth
+import requests
 from google.auth.transport.requests import AuthorizedSession
 
+from iac.gcp.iam import GcpRoleGrant
 from iac.gcp.iam_scan import Binding, Container
 
 logger = logging.getLogger(__name__)
@@ -36,26 +38,11 @@ class ResourceTarget:
 
 
 def iter_resources(
-    project: str,
-    crypto_key_id: str,
-    *,
-    secrets: Iterable,
-    buckets: Iterable,
-    artifact_repositories: Iterable,
-    service_accounts: Iterable,
+    resources: Iterable[tuple[Container, str, tuple[GcpRoleGrant, ...]]],
 ) -> Iterator[ResourceTarget]:
-    """Every resource the scan reads a live policy for, drawn from the declared config so the
-    scan covers exactly the surface #7576 imported."""
-    yield ResourceTarget(Container.PROJECT, project)
-    yield ResourceTarget(Container.KMS, crypto_key_id)
-    for secret in secrets:
-        yield ResourceTarget(Container.SECRET, secret.secret)
-    for bucket in buckets:
-        yield ResourceTarget(Container.BUCKET, bucket.bucket)
-    for repo in artifact_repositories:
-        yield ResourceTarget(Container.ARTIFACT_REPOSITORY, f"{repo.location}/{repo.repository}")
-    for account in service_accounts:
-        yield ResourceTarget(Container.SERVICE_ACCOUNT, account.email)
+    """The live-read target for each `iam_scan.declared_resources` entry. Sharing that one
+    derivation is what keeps a live `Binding.resource` identical to its declared counterpart."""
+    return (ResourceTarget(container, resource) for container, resource, _ in resources)
 
 
 class IamReader(Protocol):
@@ -117,10 +104,14 @@ class GcpIamReader:
         return response.json()
 
     def bindings(self, target: ResourceTarget, project: str) -> list[Binding]:
+        """The live bindings on one resource. An HTTP failure (a deleted resource, a missing
+        read grant) is logged and treated as no bindings so one bad resource can't abort the
+        weekly scan; the trade-off is that drift on an unreadable resource goes unreported until
+        the read succeeds. A parse error is a bug and propagates."""
         method, url = _policy_url(target, project)
         try:
             policy = self._get_json(method, url)
-        except Exception as error:
+        except requests.RequestException as error:
             logger.warning("skipping %s %s: %s", target.container, target.resource, error)
             return []
         return parse_policy_bindings(target, policy)
@@ -135,7 +126,7 @@ class GcpIamReader:
                 params["pageToken"] = page_token
             try:
                 data = self._get_json("GET", url, params=params)
-            except Exception as error:
+            except requests.RequestException as error:
                 logger.warning("serviceusage unavailable, skipping orphaned-agent check: %s", error)
                 return None
             for service in data.get("services", ()):

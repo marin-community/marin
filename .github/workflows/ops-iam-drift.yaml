@@ -56,5 +56,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           uv run --package marin-iac --extra deploy --frozen python infra/pulumi/iam_drift.py \
-            --project "$PULUMI_CI_PROJECT" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
