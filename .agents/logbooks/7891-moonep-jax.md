@@ -1233,3 +1233,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Correctness: Both static modes matched the dense output and the input, W13, and W2 gradients on four GB200 GPUs. The test took 140.28 seconds, including compilation.
 - Treatment: Run global bucketed QB with the static fixed schedule and capacity factor 1.1.
 - Gate: Require five finite steps on attempt zero. Measure median MFU and the exact reported assignment overflow before selecting the final capacity.
+
+### 2026-08-03 05:06 UTC - MNEP-069 rejects capacity factor 1.1
+
+- Result: All 16 workers completed five finite steps on attempt zero. The loss stayed finite.
+- Timing: Median MFU was `25.02%`, and the final step took `10.25` seconds.
+- Invalid result: The run dropped `1,182,560,647` expert assignments, or `73.42%` of all assignments.
+- Finding: One-step-late global QB did not keep sender-to-expert cells inside the 1.1 fixed capacity during this short optimizer schedule.
+- Decision: Do not count the `25.02%` result. Keep exact MoonEP and remove the repeated world barriers from the XLA GIN transport.
