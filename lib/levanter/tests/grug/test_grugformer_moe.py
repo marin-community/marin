@@ -869,7 +869,15 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
             MoonEPBucketSchedule.EAGER_DISPATCH,
             MoonEPTokenTransport.PADDED_ALL_TO_ALL,
             ((0, 2), (4, 6)) * 4,
-            id="exact-bounded-token-all-to-all",
+            id="exact-padded-token-all-to-all",
+        ),
+        pytest.param(
+            MoonEPMode.EXACT,
+            2,
+            MoonEPBucketSchedule.COMPUTE_OVERLAP,
+            MoonEPTokenTransport.PADDED_ALL_TO_ALL,
+            ((0, 2), (4, 6)) * 4,
+            id="exact-padded-two-buckets-overlap",
         ),
         pytest.param(
             MoonEPMode.QB_FIXED,

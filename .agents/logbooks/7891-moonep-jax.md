@@ -1917,3 +1917,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Action: Stop MNEP-103. The rack slot has more value for the padded transport measurement than for a confirmation profile.
 - Basis: The transport budget entry above already gives the numbers that this profile would confirm. The next decision does not depend on them.
 - Next: Do a four-GPU parity gate of the static padded transport, then run it on the rack as MNEP-104.
+
+### 2026-08-03 22:35 UTC - Static padded transport passes the four-GPU gate
+
+- Change: The padded token exchange is a static schedule with no runtime branch. Rows above capacity count as dropped assignments.
+- Bucket change: Each call now takes the bucket row bound and the bucket offsets, so a bucket schedule can overlap the transfer with expert compute.
+- Cases: The one-bucket padded case and the new two-bucket overlap padded case both matched the dense output and the input, W13, and W2 gradients on four GB200 GPUs.
+- Control: The three ragged cases (one bucket, two-bucket overlap, and QB-fixed) still pass.
+- Runtime: The five cases took `159.80 s` and `153.97 s` in two groups, including compilation.
+- Wheel: The development pod holds PJRT `bb72fa53`, not the MNEP-102 rack build `d781426a`. The padded path uses the standard all-to-all, and the XLA patches change only the ragged device kernel.
+- Next: Run five EP64 steps with the padded transport and a `1.5` capacity factor as MNEP-104.
