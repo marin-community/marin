@@ -45,8 +45,10 @@ def test_pipeline_metrics_keep_complete_recent_time_bins():
 
     query = log_client.query.call_args.args[0]
     assert "execution_id = 'exec''id'" in query
-    assert "LIMIT 2" in query
-    assert "LIMIT 258" in query
+    # The bin CTE caps distinct time bins at max_points; the outer select adds
+    # room for the per-stage fan-out within each bin.
+    assert "LIMIT 2\n), per_shard AS (" in query
+    assert query.endswith("LIMIT 258")
     assert log_client.query.call_args.kwargs == {"max_rows": 258}
     assert result.warning == ""
     assert [point.stage for point in result.points] == ["stage-a", "stage-b"]
