@@ -882,8 +882,18 @@ def _moe_mlp_ep_moonep_exact_local(
             compute_group_sizes = padded_group_sizes.at[-1].add(receiver_capacity - layout_size)
             # Each compute bucket overlaps one collective. Earlier buckets hide
             # the next dispatch; the final bucket hides the prior combine.
+            #
+            # A scheduling group pairs one GEMM with one annotated collective.
+            # Only the ragged path carries that annotation, so a padded
+            # transport would leave the GEMM alone in its group. MNEP-088 and
+            # MNEP-090 show that an unbalanced group stops compilation. The
+            # padded path is a standard collective, so the XLA latency-hiding
+            # scheduler can overlap it without an annotation.
             scheduling_group_id = None
-            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP:
+            if (
+                bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP
+                and token_transport != MoonEPTokenTransport.PADDED_ALL_TO_ALL
+            ):
                 if bucket + 1 < token_buckets:
                     scheduling_group_id = _MOONEP_DISPATCH_COMPUTE_GROUP_BASE + bucket
                 elif bucket > 0:
