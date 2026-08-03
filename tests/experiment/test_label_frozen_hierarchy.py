@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,8 @@ sys.path.insert(0, str(PROJECT))
 
 import label_frozen_hierarchy as frozen  # noqa: E402
 import label_frozen_hierarchy_training as training  # noqa: E402
-from glm_semantic_labels import SampleDocument  # noqa: E402
+from glm_semantic_labels import SampleDocument, write_jsonl  # noqa: E402
+from rigging.filesystem import StoragePath  # noqa: E402
 
 
 def document(index: int, source: str = "source") -> SampleDocument:
@@ -41,6 +43,51 @@ def test_documents_excluding_reject_missing_row(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(ValueError, match="missing 1 excluded rows"):
         frozen.documents_excluding({"sources": {}}, [document(0)], sample_size=1)
+
+
+def test_excluded_sample_documents_combine_disjoint_complete_samples(tmp_path: Path) -> None:
+    first = tmp_path / "first.jsonl.gz"
+    second = tmp_path / "second.jsonl.gz"
+    write_jsonl(StoragePath(str(first)), ({**asdict(document(1)), "sample_index": 0},))
+    write_jsonl(StoragePath(str(second)), ({**asdict(document(2)), "sample_index": 0},))
+
+    excluded = frozen.excluded_sample_documents([document(0)], [str(first), str(second)])
+
+    assert [row.eval_rank for row in excluded] == [0, 1, 2]
+
+
+def test_excluded_sample_documents_reject_overlapping_samples(tmp_path: Path) -> None:
+    sample = tmp_path / "sample.jsonl.gz"
+    write_jsonl(StoragePath(str(sample)), ({**asdict(document(0)), "sample_index": 0},))
+
+    with pytest.raises(ValueError, match="duplicate evaluation identities"):
+        frozen.excluded_sample_documents([document(0)], [str(sample)])
+
+
+def test_main_passes_all_excluded_samples_to_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    launches = []
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "label_frozen_hierarchy.py",
+            "--pilot-run-id",
+            "pilot",
+            "--variant",
+            "compact",
+            "--evaluation-run-id",
+            "release",
+            "--excluded-sample-url",
+            "first.jsonl.gz",
+            "--excluded-sample-url",
+            "second.jsonl.gz",
+        ],
+    )
+    monkeypatch.setattr(frozen, "serve_glm52", lambda launch, *_ports: launches.append(launch))
+
+    frozen.main()
+
+    assert launches[0].client.keywords["excluded_sample_urls"] == ["first.jsonl.gz", "second.jsonl.gz"]
 
 
 def test_projection_training_documents_exclude_pilot_and_fixed_evaluation(

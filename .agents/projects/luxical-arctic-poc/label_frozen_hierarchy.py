@@ -29,6 +29,7 @@ from glm_hierarchical_labels import (
 from glm_semantic_labels import SampleDocument, read_jsonl, select_sample, write_json, write_jsonl
 from iris.rpc import job_pb2
 from ladder_config import MANIFEST_ROOT, SEED, read_json
+from rigging.filesystem import StoragePath
 
 from experiments.rollout_data.glm52_vllm import MODEL, MODEL_REVISION, Glm52LaunchConfig, ServerConfig, serve_glm52
 
@@ -44,6 +45,24 @@ HTTP_PORT = 8_000
 def document_identity(document: SampleDocument) -> tuple[str, int]:
     """Return the stable identity of one evaluation row."""
     return document.source, document.eval_rank
+
+
+def excluded_sample_documents(
+    pilot_documents: list[SampleDocument],
+    excluded_sample_urls: list[str],
+) -> list[SampleDocument]:
+    """Return the pilot and all additional excluded sample documents."""
+    documents = list(pilot_documents)
+    for url in excluded_sample_urls:
+        rows = [SampleDocument(**row) for row in read_jsonl(StoragePath(url))]
+        rows.sort(key=lambda row: row.sample_index)
+        if [row.sample_index for row in rows] != list(range(len(rows))):
+            raise ValueError(f"The excluded sample is not complete: {url}")
+        documents.extend(rows)
+    identities = [document_identity(row) for row in documents]
+    if len(set(identities)) != len(identities):
+        raise ValueError("The excluded samples contain duplicate evaluation identities")
+    return documents
 
 
 def documents_excluding(
@@ -74,6 +93,7 @@ def label_frozen_hierarchy(
     evaluation_size: int,
     batch_size: int,
     concurrency: int,
+    excluded_sample_urls: list[str],
 ) -> None:
     """Apply one frozen hierarchy to a source-blind held-out sample."""
     pilot_root = SOURCE_RUN_ROOT / "hierarchies-v1" / pilot_run_id
@@ -83,8 +103,13 @@ def label_frozen_hierarchy(
     validate_hierarchy(hierarchy, variant)
 
     pilot_documents = [SampleDocument(**row) for row in read_jsonl(SOURCE_RUN_ROOT / "sample-private.jsonl.gz")]
+    excluded_documents = excluded_sample_documents(pilot_documents, excluded_sample_urls)
     manifest = read_json(MANIFEST_URL)
-    documents = documents_excluding(manifest, pilot_documents, evaluation_size)
+    documents = documents_excluding(manifest, excluded_documents, evaluation_size)
+    excluded_identity_text = json.dumps(
+        sorted(document_identity(row) for row in excluded_documents),
+        separators=(",", ":"),
+    )
 
     output_root = pilot_root / variant.name / evaluation_run_id
     write_jsonl(output_root / "sample-private.jsonl.gz", (asdict(document) for document in documents))
@@ -102,7 +127,10 @@ def label_frozen_hierarchy(
             "model_revision": MODEL_REVISION,
             "seed": SEED,
             "document_count": len(documents),
-            "sampling": "nested_source_balanced_then_remove_hierarchy_pilot",
+            "sampling": "nested_source_balanced_then_remove_all_excluded_samples",
+            "excluded_sample_urls": excluded_sample_urls,
+            "excluded_document_count": len(excluded_documents),
+            "excluded_identity_sha256": hashlib.sha256(excluded_identity_text.encode()).hexdigest(),
             "source_metadata_in_prompts": False,
             "assignment_input": "raw_document_view",
         },
@@ -140,6 +168,7 @@ def launch_config(
     tensor_parallel_size: int,
     max_model_len: int,
     max_num_seqs: int,
+    excluded_sample_urls: list[str],
 ) -> Glm52LaunchConfig:
     """Return the server config for held-out hierarchy labeling."""
     return Glm52LaunchConfig(
@@ -156,6 +185,7 @@ def launch_config(
             evaluation_size=evaluation_size,
             batch_size=batch_size,
             concurrency=concurrency,
+            excluded_sample_urls=excluded_sample_urls,
         ),
     )
 
@@ -172,6 +202,7 @@ def main() -> None:
     parser.add_argument("--tensor-parallel-size", type=int, default=DEFAULT_TENSOR_PARALLEL_SIZE)
     parser.add_argument("--max-model-len", type=int, default=DEFAULT_MAX_MODEL_LEN)
     parser.add_argument("--max-num-seqs", type=int, default=DEFAULT_MAX_NUM_SEQS)
+    parser.add_argument("--excluded-sample-url", action="append", default=[])
     args = parser.parse_args()
     numeric = (
         args.evaluation_size,
@@ -194,6 +225,7 @@ def main() -> None:
         args.tensor_parallel_size,
         args.max_model_len,
         args.max_num_seqs,
+        args.excluded_sample_url,
     )
     serve_glm52(launch, RAY_PORT, HTTP_PORT)
 
