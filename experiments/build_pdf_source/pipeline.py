@@ -9,13 +9,15 @@ is IP-locked to the marin egress and has no off-cluster user surface, so connect
 
     uv run iris --cluster=marin job run --target-cluster cw-us-east-08a \
         --job-name build-pdf-source \
+        --cpu 2 --memory 8GB --enable-extra-resources \
         -- python -m experiments.build_pdf_source.pipeline
 
-The entrypoint is only the ``StepRunner`` driver, so its default 0.1 CPU / 1 GB is right; every
-step submits its own Fray job with its own resources, and the fetch and classify steps each submit
-a Zephyr coordinator and worker fleet from there. ``-m`` is safe even though it loads this module as
-``__main__``: every callable that crosses to a Fray job lives in :mod:`plan`, :mod:`fetch` or
-:mod:`classify` and pickles by reference to its real module path.
+The entrypoint sizing follows the datakit reference pipeline's: the extraction steps submit their
+own Fray jobs, but the dedup and decontamination steps (:mod:`dedup`) run their Zephyr drivers --
+and, on a fresh prefix, the eval bloom build -- inside this process, so it needs a couple of CPUs
+and a few GB rather than the 0.1 CPU / 1 GB default. ``-m`` is safe even though it loads this
+module as ``__main__``: every callable that crosses to a Fray job lives in :mod:`plan`,
+:mod:`fetch` or :mod:`classify` and pickles by reference to its real module path.
 
 ``main`` refuses to run without ``MARIN_PREFIX``, which the *target* cluster's ``defaults.task_env``
 supplies (08a pins ``s3://marin-us-east-02a/marin``; the marin hub pins nothing, so a run that
@@ -37,6 +39,7 @@ from marin.execution.step_spec import StepSpec
 from rigging.log_setup import configure_logging
 
 from experiments.build_pdf_source.classify import classify_step, model_step
+from experiments.build_pdf_source.dedup import dedup_steps
 from experiments.build_pdf_source.extract import extract_step
 from experiments.build_pdf_source.extract_ocr import ocr_extract_step
 from experiments.build_pdf_source.fetch import fetch_step
@@ -57,20 +60,26 @@ def build_pdf_source_steps() -> list[StepSpec]:
     and ``ocr_extract_step`` runs the rest through a vision model on GPUs. Both emit
     :class:`~marin.datakit.normalize.NormalizedData` over the same shared columns, so the two halves
     of the source concatenate.
+
+    The dedup and decontamination steps (#7620) hang off both extraction routes and end in the
+    cleaned per-route datasets the training run consumes; see :mod:`dedup`.
     """
     plan = plan_step()
     fetch = fetch_step(plan)
     ocr_router = model_step()
     classify = classify_step(fetch, ocr_router)
     layout_model = layout_model_step(fetch)
+    text_extraction = extract_step(fetch, classify, layout_model)
+    ocr_extraction = ocr_extract_step(fetch, classify)
     return [
         plan,
         fetch,
         ocr_router,
         classify,
         layout_model,
-        extract_step(fetch, classify, layout_model),
-        ocr_extract_step(fetch, classify),
+        text_extraction,
+        ocr_extraction,
+        *dedup_steps(text_extraction, ocr_extraction),
     ]
 
 
