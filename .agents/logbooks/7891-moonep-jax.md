@@ -1908,3 +1908,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Exposed budget: Exposed transport must stay below `0.99 s`.
 - Conclusion: A fabric-rate transport alone gives about `20.5%` MFU and does not pass the gate. The work needs both a cheap transport and compute overlap.
 - Third lever: The two rematerialized families are one third of the traffic. MNEP-091 could not save the MoE state, but a smaller collective pool can make `save_moe` fit.
+
+### 2026-08-03 22:22 UTC - MNEP-103 does not receive the rack
+
+- Result: All 16 workers stayed in `SchedulingGated` for 36 minutes. Kueue workload `iris-pg-8bedba4345f94da7-0` never admitted the gang.
+- GPU use: No worker reached a GPU. The run gives no profile and no timing result.
+- Cause: The A08 GB200 capacity is contested. One example is the running job `/held/grug-a2b-step105149-copy7-20260803`.
+- Action: Stop MNEP-103. The rack slot has more value for the padded transport measurement than for a confirmation profile.
+- Basis: The transport budget entry above already gives the numbers that this profile would confirm. The next decision does not depend on them.
+- Next: Do a four-GPU parity gate of the static padded transport, then run it on the rack as MNEP-104.
