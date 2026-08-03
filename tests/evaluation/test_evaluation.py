@@ -492,3 +492,24 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     assert batch.records_prefix == "gs://marin-eval-metadata/evals"
     evaluation = batch.evaluations[0]
     assert evaluation.identity.output_dir == f"{batch.records_prefix}/{evaluation.identity.run_id}/results"
+
+
+def test_build_evaluation_batch_reuses_harbor_results_path(monkeypatch, tmp_path):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    policy = _write_harbor_config(tmp_path / "policy.yaml")
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=(),
+        harbor_configs=(HarborConfigSelection(name="policy", path=policy),),
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=None,
+        records_prefix="s3://eval-bucket/records",
+        cluster="marin",
+        resume_results_path="s3://eval-bucket/existing/results",
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert batch.evaluations[0].identity.output_dir == "s3://eval-bucket/existing/results"

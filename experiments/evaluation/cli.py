@@ -53,7 +53,8 @@ def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
             f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
             f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
             f"tasks={tasks}  "
-            f"records={batch.records_prefix}"
+            f"records={batch.records_prefix}  "
+            f"results={evaluation.identity.output_dir}"
         )
 
 
@@ -103,6 +104,11 @@ def cli() -> None:
     help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
+@click.option(
+    "--resume-results-path",
+    default=None,
+    help="Existing object-store results path for a single Harbor evaluation; retains scored trials.",
+)
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
@@ -122,6 +128,7 @@ def launch(
     limit: int | None,
     version: str | None,
     description: str | None,
+    resume_results_path: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
@@ -158,6 +165,7 @@ def launch(
         priority_band=job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{priority.upper()}"),
         version=version,
         description=description,
+        resume_results_path=resume_results_path,
     )
     try:
         batch = prepare_evaluation_batch(spec)

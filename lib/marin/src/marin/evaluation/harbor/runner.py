@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 _HARBOR_WORKDIR = Path("/tmp/harbor_workdir")
 # Harbor writes its job tree under ``output_dir/harbor_jobs/<job_name>/<trial>/`` as trials finish.
 _HARBOR_JOBS_SUBDIR = "harbor_jobs"
+_LEGACY_HARBOR_TRIALS_SUBDIR = "harbor_trials"
 # Trials normalize off independent per-trial reads on the remote job tree; fan them out so a
 # several-hundred-trial dataset is not a sequential round-trip per trial.
 _TRIAL_READ_WORKERS = 16
@@ -118,6 +120,39 @@ def _jobs_dir(output_dir: str) -> StoragePath:
 def _job_dir(output_dir: str, job_name: str) -> StoragePath:
     """The durable tree for one job: ``output_dir/harbor_jobs/<job_name>`` (Harbor appends the name)."""
     return _jobs_dir(output_dir) / job_name
+
+
+def _legacy_scored_trial_dirs(output_dir: str) -> list[StoragePath]:
+    """Return legacy trial directories whose verifier produced a score."""
+    legacy_trials = StoragePath.parse(output_dir) / _LEGACY_HARBOR_TRIALS_SUBDIR
+    scored_trials: list[StoragePath] = []
+    for result_file in (legacy_trials / "*/result.json").glob():
+        try:
+            result = json.loads(result_file.read_text())
+        except json.JSONDecodeError:
+            continue
+        if result.get("verifier_result") is not None:
+            scored_trials.append(result_file.parent)
+    return scored_trials
+
+
+def _migrate_legacy_scored_trials(output_dir: str, job_dir: StoragePath) -> None:
+    """Import scored trials from the pre-durable Harbor layout exactly once."""
+    if (job_dir / "config.json").exists():
+        return
+    trial_dirs = _legacy_scored_trial_dirs(output_dir)
+    if not trial_dirs:
+        return
+    staging_dir = _HARBOR_WORKDIR / job_dir.name / "legacy_resume"
+    for trial_dir in trial_dirs:
+        target_dir = job_dir / trial_dir.name
+        if (target_dir / "result.json").exists():
+            continue
+        local_dir = staging_dir / trial_dir.name
+        trial_dir.download_to(str(local_dir), recursive=True)
+        target_dir.upload_from(str(local_dir), recursive=True)
+        shutil.rmtree(local_dir)
+    logger.info("imported %d scored legacy Harbor trials into %s", len(trial_dirs), job_dir)
 
 
 def _read_trial(result_file: StoragePath) -> HarborTrial:
@@ -211,6 +246,7 @@ def _run_harbor_job(
     driver_env: Mapping[str, str],
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
+    _migrate_legacy_scored_trials(output_dir, job_dir)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
     run_harbor_driver(config, overlay, driver_env)
 

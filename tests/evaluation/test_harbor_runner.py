@@ -15,6 +15,8 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
     HarborTrial,
+    _job_dir,
+    _migrate_legacy_scored_trials,
     _read_trials,
     _sample_for,
     _write_samples,
@@ -276,6 +278,29 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
+
+
+@pytest.mark.parametrize("protocol", ["gs", "s3"])
+def test_legacy_harbor_resume_imports_only_scored_trials(protocol, tmp_path, monkeypatch):
+    _memory_remote(protocol, monkeypatch)
+    output_dir = f"{protocol}://eval-bucket-{tmp_path.name}/run"
+    legacy_trials = StoragePath(output_dir) / "harbor_trials"
+    scored = legacy_trials / "scored"
+    unscored = legacy_trials / "unscored"
+    (scored / "result.json").write_text(
+        json.dumps({"task_name": "scored", "verifier_result": {"rewards": {"reward": 1.0}}})
+    )
+    (scored / "agent" / "trajectory.json").write_text('{"steps": []}')
+    (unscored / "result.json").write_text(json.dumps({"task_name": "unscored", "exception_info": {}}))
+    (legacy_trials / "corrupt" / "result.json").write_text("not-json")
+
+    job_dir = _job_dir(output_dir, "resume-job")
+    _migrate_legacy_scored_trials(output_dir, job_dir)
+
+    assert (job_dir / "scored" / "result.json").exists()
+    assert (job_dir / "scored" / "agent" / "trajectory.json").exists()
+    assert not (job_dir / "unscored" / "result.json").exists()
+    assert not (job_dir / "corrupt" / "result.json").exists()
 
 
 def _harbor_executor(dataset: str) -> HarborExecutor:

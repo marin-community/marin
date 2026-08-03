@@ -180,6 +180,28 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
     }
 
 
+def test_resume_preparation_keeps_scored_trials_and_prunes_unscored(tmp_path):
+    jobs_dir = tmp_path / "jobs"
+    script = (
+        "import json; "
+        "from pathlib import Path; "
+        "from harbor_config import JobConfig; "
+        "from marin.evaluation.harbor.trial_driver import _prepare_resumed_job; "
+        f"config=JobConfig(job_name='resume', jobs_dir=Path({str(jobs_dir)!r})); "
+        "job_dir=config.jobs_dir / config.job_name; "
+        "scored=job_dir / 'scored'; scored.mkdir(parents=True); "
+        "(scored / 'result.json').write_text(json.dumps({'verifier_result': {'rewards': {'reward': 1.0}}})); "
+        "unscored=job_dir / 'unscored'; unscored.mkdir(); "
+        "(unscored / 'result.json').write_text(json.dumps({'exception_info': {'exception_type': 'DaytonaError'}})); "
+        "_prepare_resumed_job(config); "
+        "assert (scored / 'result.json').exists(); "
+        "assert not unscored.exists(); "
+        "assert (job_dir / 'config.json').exists()"
+    )
+
+    _external_python("-c", script)
+
+
 @pytest.mark.parametrize(
     "document",
     _INVALID_SOURCE_DOCUMENTS.values(),
