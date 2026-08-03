@@ -40,6 +40,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe import model as moe_model
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -377,6 +378,15 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
+
+    # Benchmark provenance: the A/B arm is chosen by an env var read at import time in
+    # this task's process, so record what it actually resolved to. bench_ep_fsdp.py
+    # refuses to report a comparison whose two arms logged the same groups.
+    logger.info(
+        "BENCH_FSDP_LAYOUT resolved fsdp=%s lm_head=%s",
+        moe_model._FSDP_AXES,
+        moe_model._LM_HEAD_AXES,
+    )
 
     run_id = trainer.id
     if run_id is None:

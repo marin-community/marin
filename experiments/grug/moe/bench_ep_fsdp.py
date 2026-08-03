@@ -44,6 +44,8 @@ _METRICS = {
     "drop_rate": "train/router/capacity_overflow_rate_mean",
 }
 _METRIC_LINE = re.compile(r"\{.*\}")
+# Emitted once per run by train.py, from inside the train task.
+_LAYOUT_LINE = re.compile(r"BENCH_FSDP_LAYOUT resolved fsdp=(\(.*?\)) lm_head=(\(.*?\))")
 
 
 def _run_env(args, arm: str, draw: int) -> dict[str, str]:
@@ -72,7 +74,14 @@ def submit(args) -> None:
             run_id = f"{args.run_prefix}-{arm}-{draw}"
             print(f"submitting {run_id}", flush=True)
             result = subprocess.run(
-                [sys.executable, "-m", "experiments.grug.moe.launch_cw_scale"],
+                [
+                    sys.executable,
+                    "-m",
+                    "experiments.grug.moe.launch_cw_scale",
+                    "--version",
+                    args.version,
+                    "--run",
+                ],
                 env=_run_env(args, arm, draw),
                 text=True,
                 capture_output=True,
@@ -104,6 +113,16 @@ def _metric_series(log_path: str) -> dict[str, list[tuple[int, float]]]:
     return series
 
 
+def _resolved_layout(log_path: str) -> str | None:
+    """The shard groups the train task actually used, as logged by train.py."""
+    with open(log_path) as handle:
+        for line in handle:
+            match = _LAYOUT_LINE.search(line)
+            if match:
+                return f"fsdp={match.group(1)} lm_head={match.group(2)}"
+    return None
+
+
 def _median_after_warmup(points: list[tuple[int, float]], warmup: int) -> float | None:
     values = [value for step, value in sorted(points) if step >= warmup]
     return statistics.median(values) if values else None
@@ -111,11 +130,19 @@ def _median_after_warmup(points: list[tuple[int, float]], warmup: int) -> float 
 
 def summarize(args) -> None:
     rows = {}
+    layouts: dict[str, set[str]] = {arm: set() for arm in _ARMS}
     for arm in _ARMS:
         per_draw = collections.defaultdict(list)
         for path in sorted(args.logs):
             if f"-{arm}-" not in os.path.basename(path):
                 continue
+            layout = _resolved_layout(path)
+            if layout is None:
+                raise SystemExit(
+                    f"{path}: no BENCH_FSDP_LAYOUT line. The train task never recorded which shard "
+                    "groups it used, so this run cannot be attributed to an arm."
+                )
+            layouts[arm].add(layout)
             series = _metric_series(path)
             for name, key in _METRICS.items():
                 value = _median_after_warmup(series.get(key, []), args.warmup)
@@ -123,6 +150,17 @@ def summarize(args) -> None:
                     per_draw[name].append(value)
         rows[arm] = per_draw
 
+    # SCALE_FSDP_LAYOUT is read in the train task, which does not inherit the
+    # submitter's shell. If forwarding regresses, both arms resolve to the default and
+    # the comparison silently measures nothing; refuse to print a result in that case.
+    if layouts["before"] == layouts["after"]:
+        raise SystemExit(
+            f"both arms ran the same shard groups ({layouts['before']}); "
+            "SCALE_FSDP_LAYOUT did not reach the train task, so there is no A/B to report"
+        )
+    for arm in _ARMS:
+        print(f"{arm} layout: {' | '.join(sorted(layouts[arm]))}")
+    print()
     print(f"{'metric':<22}{'before':>16}{'after':>16}{'delta':>16}")
     for name in _METRICS:
         before, after = rows["before"].get(name, []), rows["after"].get(name, [])
@@ -153,6 +191,7 @@ def main() -> None:
     run.add_argument("--steps", type=int, default=60)
     run.add_argument("--repeats", type=int, default=3)
     run.add_argument("--run-prefix", default="ep-fsdp-bench")
+    run.add_argument("--version", default="2026.08.03", help="artifact calendar version")
     run.set_defaults(func=submit)
 
     report = sub.add_parser("summarize", help="compare metric logs from both arms")

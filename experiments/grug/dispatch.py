@@ -22,7 +22,10 @@ ConfigT = TypeVar("ConfigT")
 # given (e.g. `iris job run -e XLA_FLAGS ...`) must be re-exported explicitly.
 # JAX_PLATFORMS is excluded: the dispatcher runs CPU-only and its value must
 # not leak onto accelerator tasks.
-_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_")
+# SCALE_FSDP_LAYOUT is the A/B arm switch for experiments/grug/moe/bench_ep_fsdp.py.
+# The model is built in the train task, not here, so without forwarding it both arms
+# would silently resolve to the default layout and the comparison would measure nothing.
+_FORWARDED_ENV_PREFIXES = ("XLA_", "LIBTPU_INIT_ARGS", "NCCL_", "JAX_", "SCALE_FSDP_LAYOUT")
 _FORWARDED_ENV_EXCLUDE = ("JAX_PLATFORMS",)
 
 
