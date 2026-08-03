@@ -18,6 +18,7 @@ from evaluate_semantic_embeddings import (
     MANIFEST_URL,
     NEIGHBOR_COUNT,
     SEMANTIC_REFERENCE_MODELS,
+    StudentRuntimeBundle,
     arctic_vectors,
     best_reference_metrics,
     candidate_vectors,
@@ -84,6 +85,7 @@ def validated_speed_ratio(
     student_config: str,
     student_training_name: str,
     student_rung: str,
+    student_runtime: StudentRuntimeBundle | None = None,
 ) -> float:
     """Return the ratio from a stable speed report for the exact model."""
     expected_identity = {
@@ -96,6 +98,11 @@ def validated_speed_ratio(
     }
     if any(speed_report.get(name) != value for name, value in expected_identity.items()):
         raise ValueError("The speed report does not identify the evaluated CPU model")
+    if student_runtime is not None and (
+        speed_report.get("runtime_bundle_root") != student_runtime.root
+        or speed_report.get("runtime_manifest_sha256") != student_runtime.manifest_sha256
+    ):
+        raise ValueError("The speed report does not identify the evaluated runtime bundle")
     if speed_report.get("baseline") != baseline_metadata:
         raise ValueError("The speed report does not identify the evaluated Luxical baseline")
     speed_training_report = speed_report.get("training_report")
@@ -166,6 +173,7 @@ def embedding_models(
     student_config: str,
     student_training_name: str,
     student_rung: str,
+    student_runtime: StudentRuntimeBundle | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, Any], dict[str, Any]]:
     """Load all saved student, baseline, and teacher vectors once."""
     manifest = read_json(MANIFEST_URL)
@@ -175,6 +183,7 @@ def embedding_models(
         student_config,
         student_training_name,
         student_rung,
+        student_runtime,
     )
     models["arctic_medium"] = arctic_vectors(manifest, documents)
     models["qwen3_embedding_0.6b"] = candidate_vectors("qwen3-embedding-0.6b", manifest, documents)
@@ -442,6 +451,8 @@ def main() -> None:
     parser.add_argument("--student-config", default="full")
     parser.add_argument("--student-training-name", default="full")
     parser.add_argument("--student-rung", default="3m")
+    parser.add_argument("--student-runtime-root")
+    parser.add_argument("--student-runtime-manifest-sha256")
     parser.add_argument("--speed-report-url", default=EXACT_SPEED_REPORT_URL)
     args = parser.parse_args()
     if args.maximum_pair_count < 1:
@@ -450,7 +461,13 @@ def main() -> None:
         parser.error("A held-out evaluation requires exactly one accepted hierarchy variant")
     if args.adjudication_review_url is not None and args.evaluation_run_id is None:
         parser.error("An adjudication review requires a held-out evaluation")
+    if (args.student_runtime_root is None) != (args.student_runtime_manifest_sha256 is None):
+        parser.error("A student runtime requires both its root and manifest digest")
     logging.basicConfig(level=logging.INFO)
+
+    student_runtime = None
+    if args.student_runtime_root is not None:
+        student_runtime = StudentRuntimeBundle(args.student_runtime_root, args.student_runtime_manifest_sha256)
 
     variant = args.variants[0]
     variant_root = OUTPUT_ROOT / args.run_id / variant
@@ -475,6 +492,7 @@ def main() -> None:
         args.student_config,
         args.student_training_name,
         args.student_rung,
+        student_runtime,
     )
     speed_report = read_json(args.speed_report_url)
     speed_ratio = validated_speed_ratio(
@@ -484,6 +502,7 @@ def main() -> None:
         args.student_config,
         args.student_training_name,
         args.student_rung,
+        student_runtime,
     )
     sources = np.asarray([row.source for row in documents])
     variants = {}
@@ -529,6 +548,8 @@ def main() -> None:
         "student_config": args.student_config,
         "student_training_name": args.student_training_name,
         "student_rung": args.student_rung,
+        "student_runtime_root": None if student_runtime is None else student_runtime.root,
+        "student_runtime_manifest_sha256": None if student_runtime is None else student_runtime.manifest_sha256,
         "student_cpu_speed_ratio": speed_ratio,
         "speed_report_url": args.speed_report_url,
         "maximum_pair_count": args.maximum_pair_count,

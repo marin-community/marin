@@ -21,6 +21,7 @@ from experiments.datakit.embeddings.fast_transformer.embedder import (
     MANIFEST_FILENAME,
     FastEmbeddingBundleManifest,
     FastEmbeddingModel,
+    FastEmbeddingRuntimeManifest,
     document_view,
     payload_sha256,
 )
@@ -81,6 +82,18 @@ def write_test_bundle(root: Path) -> str:
     return payload_sha256(manifest_payload)
 
 
+def write_test_runtime_bundle(root: Path) -> str:
+    """Replace the full test manifest with its pre-release runtime form."""
+    write_test_bundle(root)
+    full_manifest = FastEmbeddingBundleManifest.model_validate_json((root / MANIFEST_FILENAME).read_bytes())
+    runtime_values = full_manifest.model_dump()
+    runtime_values["version"] = "runtime-v1"
+    runtime_manifest = FastEmbeddingRuntimeManifest.model_validate(runtime_values)
+    runtime_payload = runtime_manifest.model_dump_json().encode()
+    (root / MANIFEST_FILENAME).write_bytes(runtime_payload)
+    return payload_sha256(runtime_payload)
+
+
 def test_fast_embedding_bundle_round_trip_returns_distinct_unit_vectors(tmp_path: Path) -> None:
     manifest_sha256 = write_test_bundle(tmp_path)
 
@@ -91,6 +104,18 @@ def test_fast_embedding_bundle_round_trip_returns_distinct_unit_vectors(tmp_path
     assert np.isfinite(vectors).all()
     assert np.linalg.norm(vectors, axis=1) == pytest.approx([1.0, 1.0], abs=1e-6)
     assert not np.allclose(vectors[0], vectors[1])
+
+
+def test_fast_embedding_runtime_bundle_uses_same_loader_before_release(tmp_path: Path) -> None:
+    manifest_sha256 = write_test_runtime_bundle(tmp_path)
+
+    embedder = FastEmbeddingModel.load_runtime(str(tmp_path), manifest_sha256)
+    vectors = embedder(["alpha beta", "gamma alpha"])
+
+    assert vectors.shape == (2, 6)
+    assert np.isfinite(vectors).all()
+    with pytest.raises(ValueError, match="version"):
+        FastEmbeddingModel.load(str(tmp_path), manifest_sha256)
 
 
 def test_fast_embedding_bundle_rejects_changed_model(tmp_path: Path) -> None:

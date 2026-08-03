@@ -10,7 +10,7 @@ import logging
 import tempfile
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +50,8 @@ from semantic_embedding_metrics import (
     student_gates,
 )
 
+from experiments.datakit.embeddings.fast_transformer.embedder import FastEmbeddingModel, payload_sha256
+
 GLM_RUN_ROOT = StoragePath(
     "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/"
     "evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001"
@@ -68,6 +70,14 @@ RESULT_FILE = Path("/tmp/luxical-semantic-embedding-screen")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class StudentRuntimeBundle:
+    """Identify one staged production-runtime bundle."""
+
+    root: str
+    manifest_sha256: str
 
 
 def semantic_sample() -> tuple[list[SampleDocument], list[Assignment], list[Bucket]]:
@@ -166,6 +176,7 @@ def local_model_vectors(
     student_config: str = "full",
     student_training_name: str = "full",
     student_rung: str = "3m",
+    student_runtime: StudentRuntimeBundle | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
     """Embed the semantic sample with the saved local-inference models."""
     if student_model in {"luxical_one", "fast_qwen_crossdim_750k", *SEMANTIC_REFERENCE_MODELS}:
@@ -179,7 +190,26 @@ def local_model_vectors(
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
         baseline = Embedder.load(baseline_path)
-        student, training_report = load_student(student_config, student_training_name, student_rung, directory)
+        if student_runtime is None:
+            student, training_report = load_student(student_config, student_training_name, student_rung, directory)
+        else:
+            student = FastEmbeddingModel.load_runtime(student_runtime.root, student_runtime.manifest_sha256)
+            training_payload = StoragePath(student.manifest.training_report_url).read_bytes()
+            if payload_sha256(training_payload) != student.manifest.training_report_sha256:
+                raise ValueError("The runtime training-report digest does not match")
+            training_report = json.loads(training_payload)
+            expected_identity = {
+                "config_name": student_config,
+                "training_name": student_training_name,
+                "rung": student_rung,
+                "final_model_sha256": student.manifest.model_sha256,
+            }
+            if any(training_report.get(name) != value for name, value in expected_identity.items()):
+                raise ValueError("The runtime does not identify the evaluated student")
+            training_report = training_report | {
+                "runtime_bundle_root": student_runtime.root,
+                "runtime_manifest_sha256": student_runtime.manifest_sha256,
+            }
         qwen_student, qwen_training_report = load_student("full", "full-qwen3-06b-1024-crossdim", "750k", directory)
         vectors = {
             "luxical_one": normalize_embeddings(baseline(texts, batch_size=4_096)),

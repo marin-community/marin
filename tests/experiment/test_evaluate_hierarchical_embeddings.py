@@ -18,6 +18,7 @@ from evaluate_hierarchical_embeddings import (  # noqa: E402
     strongest_reference_model,
     validated_speed_ratio,
 )
+from evaluate_semantic_embeddings import StudentRuntimeBundle  # noqa: E402
 from glm_hierarchical_labels import HierarchicalAssignment  # noqa: E402
 
 
@@ -214,6 +215,39 @@ def test_validated_speed_ratio_accepts_exact_stable_model() -> None:
     )
 
     assert ratio == 1.0
+
+
+def test_validated_speed_ratio_requires_the_evaluated_runtime() -> None:
+    report = speed_report() | {
+        "runtime_bundle_root": "memory://runtime",
+        "runtime_manifest_sha256": "a" * 64,
+    }
+    runtime = StudentRuntimeBundle("memory://runtime", "a" * 64)
+
+    assert (
+        validated_speed_ratio(
+            report,
+            {"final_model_sha256": "model-sha"},
+            {"repo": "luxical", "revision": "v3"},
+            "full",
+            "semantic",
+            "50k",
+            runtime,
+        )
+        == 1.0
+    )
+
+    report["runtime_manifest_sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="runtime bundle"):
+        validated_speed_ratio(
+            report,
+            {"final_model_sha256": "model-sha"},
+            {"repo": "luxical", "revision": "v3"},
+            "full",
+            "semantic",
+            "50k",
+            runtime,
+        )
 
 
 @pytest.mark.parametrize("fault", ["model_hash", "model_rung", "compute_dtype", "unstable"])

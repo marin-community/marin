@@ -2149,3 +2149,25 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Interpretation: The production graph can meet the CPU speed limit. Repeat the
   stable paired test on the final projected model because release evidence must
   identify its exact model hash.
+
+### LUX-RELEASE-004: Trust gates use the staged production runtime
+
+- Commit `f38d2844f` preserves exact base and fine-tuned model weights when a
+  model-mix endpoint is selected. The prior arithmetic changed a selected
+  endpoint by up to 1.2e-7.
+- The release publisher now checks the named private-validation gates and the
+  final `passed` value. It no longer treats nonempty metric fields as gate
+  results.
+- A new immutable runtime stage contains the model, tokenizer, token map,
+  document view, compute data types, training-report digest, and model digest.
+- The CPU benchmark and fixed semantic evaluation can now load that runtime
+  through the production loader.
+- The final publisher rejects evaluation or speed evidence from a different
+  runtime manifest. It also checks that the evaluated runtime fields equal the
+  final release runtime fields.
+- Twenty-eight focused loader, speed, semantic-evaluation, and publisher tests
+  pass. The required file checks pass.
+- At 2026-08-03 12:19 UTC, the live GLM-5.2 run had 28,000 complete assignments
+  with no missing range.
+- Next action: Complete 50,000 labels, train the projection, stage its runtime,
+  and run all release gates through that runtime.

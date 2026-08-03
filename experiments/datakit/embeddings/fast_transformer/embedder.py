@@ -5,7 +5,7 @@
 
 import hashlib
 import io
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 import equinox as eqx
@@ -31,10 +31,10 @@ MANIFEST_FILENAME = "manifest.json"
 SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
 
-class FastEmbeddingBundleManifest(BaseModel):
+class FastEmbeddingRuntimeManifest(BaseModel):
     """Pinned files and inference settings for one embedding model."""
 
-    version: Literal["v2"] = "v2"
+    version: Literal["runtime-v1"] = "runtime-v1"
     model_filename: str = Field(min_length=1)
     model_sha256: str = Field(pattern=SHA256_PATTERN)
     token_remap_filename: str = Field(min_length=1)
@@ -50,6 +50,12 @@ class FastEmbeddingBundleManifest(BaseModel):
     accelerator_compute_dtype: str = Field(min_length=1)
     training_report_url: str = Field(min_length=1)
     training_report_sha256: str = Field(pattern=SHA256_PATTERN)
+
+
+class FastEmbeddingBundleManifest(FastEmbeddingRuntimeManifest):
+    """Pinned runtime files and release evidence for one embedding model."""
+
+    version: Literal["v2"] = "v2"
     evaluation_report_url: str = Field(min_length=1)
     evaluation_report_sha256: str = Field(pattern=SHA256_PATTERN)
     speed_report_url: str = Field(min_length=1)
@@ -97,7 +103,15 @@ class FastEmbeddingModel:
     model: FastEmbeddingTransformer
     raw_to_compact: np.ndarray
     tokenizer: ArrowTokenizer
-    manifest: FastEmbeddingBundleManifest
+    manifest: FastEmbeddingRuntimeManifest
+
+    @classmethod
+    def load_runtime(cls, bundle_root: str, expected_manifest_sha256: str) -> "FastEmbeddingModel":
+        """Load a pinned runtime bundle before its release evidence exists."""
+        root = StoragePath(bundle_root)
+        manifest_payload = verified_payload(root, MANIFEST_FILENAME, expected_manifest_sha256)
+        manifest = FastEmbeddingRuntimeManifest.model_validate_json(manifest_payload)
+        return cls._from_manifest(root, manifest)
 
     @classmethod
     def load(cls, bundle_root: str, expected_manifest_sha256: str) -> "FastEmbeddingModel":
@@ -105,6 +119,15 @@ class FastEmbeddingModel:
         root = StoragePath(bundle_root)
         manifest_payload = verified_payload(root, MANIFEST_FILENAME, expected_manifest_sha256)
         manifest = FastEmbeddingBundleManifest.model_validate_json(manifest_payload)
+        return cls._from_manifest(root, manifest)
+
+    @classmethod
+    def _from_manifest(
+        cls,
+        root: StoragePath,
+        manifest: FastEmbeddingRuntimeManifest,
+    ) -> "FastEmbeddingModel":
+        """Load one model from an already validated runtime manifest."""
         if manifest.cpu_compute_dtype != CPU_COMPUTE_DTYPE_NAME:
             raise ValueError("The CPU compute data type does not match the bundle loader")
         if manifest.accelerator_compute_dtype != ACCELERATOR_COMPUTE_DTYPE_NAME:
@@ -151,3 +174,18 @@ class FastEmbeddingModel:
         if not np.isfinite(vectors).all():
             raise ValueError("The FastTransformer returned a non-finite embedding")
         return vectors
+
+    def metadata(self) -> dict[str, object]:
+        """Return the pinned runtime identity and input settings."""
+        return {
+            "tokenizer": self.manifest.tokenizer_name,
+            "output_dimension": self.manifest.output_dimension,
+            "tokens_per_document_window": self.manifest.config.max_tokens,
+            "windows_per_document": 1,
+            "source_windows_per_document": 3,
+            "characters_per_source_window": self.manifest.characters_per_region,
+            "cpu_compute_dtype": self.manifest.cpu_compute_dtype,
+            "accelerator_compute_dtype": self.manifest.accelerator_compute_dtype,
+            "config": asdict(self.manifest.config),
+            "final_model_sha256": self.manifest.model_sha256,
+        }

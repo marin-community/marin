@@ -104,8 +104,15 @@ def paired_rates(student: Any, baseline: Any, texts: list[str], batch_size: int)
     }
 
 
-def benchmark(config: str, teacher: str, rung: str, batch_size: int) -> dict[str, Any]:
-    """Load exact model artifacts and return a paired CPU report."""
+def benchmark_loaded_student(
+    student: Any,
+    training_report: dict[str, Any],
+    config: str,
+    teacher: str,
+    rung: str,
+    batch_size: int,
+) -> dict[str, Any]:
+    """Return a paired CPU report for one already loaded student."""
     cpu_affinity_count = set_cpu_limits()
     texts = evaluation_texts()
     baseline_path = hf_hub_download(
@@ -114,10 +121,8 @@ def benchmark(config: str, teacher: str, rung: str, batch_size: int) -> dict[str
         revision=BASELINE_REVISION,
     )
     baseline = Embedder.load(baseline_path)
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        student, training_report = load_student(config, teacher, rung, Path(temporary_directory))
-        rates = paired_rates(student, baseline, texts, batch_size)
-        metadata = student.metadata()
+    rates = paired_rates(student, baseline, texts, batch_size)
+    metadata = student.metadata()
     backend = jax.default_backend()
     compute_dtype = metadata["cpu_compute_dtype"] if backend == "cpu" else metadata["accelerator_compute_dtype"]
     return {
@@ -142,6 +147,13 @@ def benchmark(config: str, teacher: str, rung: str, batch_size: int) -> dict[str
         "cpu_affinity_count": cpu_affinity_count,
         **rates,
     }
+
+
+def benchmark(config: str, teacher: str, rung: str, batch_size: int) -> dict[str, Any]:
+    """Load exact model artifacts and return a paired CPU report."""
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        student, training_report = load_student(config, teacher, rung, Path(temporary_directory))
+        return benchmark_loaded_student(student, training_report, config, teacher, rung, batch_size)
 
 
 def main() -> None:

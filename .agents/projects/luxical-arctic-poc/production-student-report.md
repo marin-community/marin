@@ -38,7 +38,7 @@ is not an approved production model.
 | Held-out robustness | All large semantic groups pass | 12 pilot-projection group gates fail | Fail |
 | Fixed production buckets | Parent, leaf, and form NMI and purity pass for 40 buckets | Added for the 50,000-label model | Open |
 | Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
-| Release artifact | Pinned model, tokenizer, loader, and production smoke | Loader and evidence-bound publisher pass focused tests; final candidate bundle remains open | Open |
+| Release artifact | Pinned model, tokenizer, loader, and production smoke | A staged runtime now binds evaluation and speed to the production loader; final candidate bundle remains open | Open |
 
 The previous paired CPU test used 20,000 fixed documents, five alternating
 timed repeats, eight CPU threads, and the CPU JAX backend. The projected
@@ -295,8 +295,10 @@ the overall visible result.
   length, pooling method, normalization method, and backend compute data types.
 - Add a loader smoke test that checks shape, finite values, nonzero variance,
   and deterministic output for fixed documents.
-- Run the full trust report from the release artifact, not from an in-memory
-  training object.
+- Stage the exact model, tokenizer, token map, input view, and compute data
+  types in an immutable runtime bundle. Run the full trust report and CPU test
+  through that runtime. The release publisher must reject evidence from a
+  different runtime manifest.
 - Get an independent peer review of this report and its artifacts. Address each
   accepted finding before approval.
 
@@ -373,8 +375,9 @@ mean semantic gain. Complete the 50,000-label run before the final projection.
 
 Run the fixed 10,000-document evaluation once when the internal validation
 passes. Reject the model when one global gate or one large-group gate fails.
-Run the stable CPU test from the exact saved model. Start the 200-query blind
-review only after the visible and CPU gates pass.
+Stage the exact production runtime after training. Run the stable CPU test and
+the fixed evaluation through that runtime. Start the 200-query blind review
+only after the visible and CPU gates pass.
 
 If large-group failures remain, use the same labels for end-to-end
 FastTransformer training. Keep the 256-token production input and 256-number

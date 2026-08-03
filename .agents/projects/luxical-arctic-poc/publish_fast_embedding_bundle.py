@@ -27,6 +27,7 @@ from experiments.datakit.embeddings.fast_transformer.embedder import (
     MANIFEST_FILENAME,
     FastEmbeddingBundleManifest,
     FastEmbeddingModel,
+    FastEmbeddingRuntimeManifest,
     payload_sha256,
 )
 
@@ -70,6 +71,8 @@ def release_evidence_decision(
     rung: str,
     student_model: str,
     blind_package_sha256: str,
+    runtime_root: str,
+    runtime_manifest_sha256: str,
 ) -> dict[str, bool]:
     """Return the fixed release decisions for one exact student."""
     variant = evaluation_report["variants"]["compact"]
@@ -82,6 +85,8 @@ def release_evidence_decision(
         and evaluation_report["label_version"] == "adjudicated"
         and bool(evaluation_report["adjudication_review_url"])
         and evaluation_report["source_metadata_used_as_quality_target"] is False
+        and evaluation_report["student_runtime_root"] == runtime_root
+        and evaluation_report["student_runtime_manifest_sha256"] == runtime_manifest_sha256
         and evaluation_report["model_metadata"][student_model]["final_model_sha256"]
         == training_report["final_model_sha256"]
     )
@@ -92,6 +97,8 @@ def release_evidence_decision(
         and speed_report["config_name"] == config_name
         and speed_report["teacher"] == training_name
         and speed_report["rung"] == rung
+        and speed_report["runtime_bundle_root"] == runtime_root
+        and speed_report["runtime_manifest_sha256"] == runtime_manifest_sha256
         and speed_report["training_report"]["final_model_sha256"] == training_report["final_model_sha256"]
     )
     blind_identity = (
@@ -150,6 +157,8 @@ def main() -> None:
     parser.add_argument("--evaluation-report-url", required=True)
     parser.add_argument("--speed-report-url", required=True)
     parser.add_argument("--blind-review-report-url", required=True)
+    parser.add_argument("--runtime-root", required=True)
+    parser.add_argument("--runtime-manifest-sha256", required=True)
     parser.add_argument("--output-root", required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -172,6 +181,8 @@ def main() -> None:
         rung=args.rung,
         student_model=args.student_model,
         blind_package_sha256=blind_package_digest,
+        runtime_root=args.runtime_root,
+        runtime_manifest_sha256=args.runtime_manifest_sha256,
     )
     if not all(decision.values()):
         failed = sorted(name for name, passed in decision.items() if not passed)
@@ -211,6 +222,12 @@ def main() -> None:
         blind_review_package_url=blind_package_url,
         blind_review_package_sha256=blind_package_digest,
     )
+    runtime_student = FastEmbeddingModel.load_runtime(args.runtime_root, args.runtime_manifest_sha256)
+    runtime_values = manifest.model_dump(include=set(FastEmbeddingRuntimeManifest.model_fields))
+    runtime_values["version"] = "runtime-v1"
+    expected_runtime_manifest = FastEmbeddingRuntimeManifest.model_validate(runtime_values)
+    if runtime_student.manifest != expected_runtime_manifest:
+        raise ValueError("The evaluated runtime differs from the final release runtime")
     manifest_payload = manifest.model_dump_json(indent=2).encode()
     manifest_sha256 = payload_sha256(manifest_payload)
     output_root = StoragePath(args.output_root)
