@@ -1159,3 +1159,18 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Treatment: Capture completed step 3 from the exact MNEP-063 implementation. Disable host tracing and GPU event aggregation, and trace one GPU with 100,000 activity and callback events.
 - Isolation: Keep the supplied development tray idle for the complete EP64 run.
 - Gate: Require five finite steps, successful profile upload, and a kernel and collective time summary from the GPU timeline.
+
+### 2026-08-03 03:24 UTC - MNEP-064 finds serialized planner work
+
+- Result: All 16 workers completed five finite steps on attempt zero. Process zero uploaded the 3.4 MB XPlane and 0.6 MB trace to `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mnep-064-metadata-gpu-profile-5-20260803-0305`.
+- Capture limit: The trace retained 29,680 complete events from the first part of the profiled step. Later activity buffers were dropped after the 100,000-event limit, so the trace does not give a full-step percentage.
+- Finding: The retained section is dominated by repeated allocation-loop kernels. The same planner kernel names occur about 2,234 times before the capture limit. `_balance_owner_groups` runs its 66-step expert allocation loop once for each of 64 independent owner ranks.
+- Decision: Batch the 64 independent owner allocations and keep the same 66-step greedy sequence for each owner.
+
+### 2026-08-03 03:27 UTC - MNEP-065 batched planner contract
+
+- Treatment: Replace the serialized per-owner allocation loop with one batched loop over all owner ranks. The allocation result stays equal to the MoonEP reference.
+- Microbenchmark: On one GB200 GPU at the EP64 planner shape, median planner time fell from 53.53 ms to 1.61 ms, a 33.3x reduction.
+- Correctness: All five CPU planner reference tests passed. The four-GPU dense-reference output and input and weight gradient test passed in 115.30 seconds, including compilation.
+- Static checks: The required lint, formatting, license, syntax, and Pyrefly checks passed.
+- Rack gate: Require five finite steps on attempt zero, no dropped assignments, and a steady step time below the 43-second MNEP-063 result.

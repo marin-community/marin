@@ -71,41 +71,32 @@ def _balance_owner_groups(
 
     _, migration = jax.lax.fori_loop(0, num_ranks - 1, _select_receiver, (balance, migration))
 
-    def _allocate_owner(owner, current_allocation):
-        expert_start = owner * experts_per_rank
-        remaining = jax.lax.dynamic_slice_in_dim(
-            jnp.sum(current_allocation, axis=1, dtype=jnp.int32),
-            expert_start,
-            experts_per_rank,
-            axis=0,
-        )
-        quotas = migration[owner]
+    owner_ids = jnp.arange(num_ranks, dtype=jnp.int32)
+    remaining = jnp.sum(allocation, axis=1, dtype=jnp.int32).reshape(num_ranks, experts_per_rank)
 
-        def _move_expert(_iteration, state):
-            allocation_state, remaining_state, quota_state = state
-            receiver = jnp.argmax(quota_state)
-            local_expert = jnp.argmax(remaining_state)
-            quota = quota_state[receiver]
-            expert_count = remaining_state[local_expert]
-            active = jnp.logical_and(quota > 0, expert_count > 0)
-            take = jnp.where(active, jnp.minimum(quota, expert_count), 0)
-            expert = expert_start + local_expert
-            allocation_state = allocation_state.at[expert, receiver].add(take)
-            allocation_state = allocation_state.at[expert, owner].add(-take)
-            remaining_state = remaining_state.at[local_expert].add(-take)
-            quota_state = quota_state.at[receiver].add(-take)
-            return allocation_state, remaining_state, quota_state
+    def _move_experts(_iteration, state):
+        allocation_state, remaining_state, quota_state = state
+        receivers = jnp.argmax(quota_state, axis=1)
+        local_experts = jnp.argmax(remaining_state, axis=1)
+        quotas = quota_state[owner_ids, receivers]
+        expert_counts = remaining_state[owner_ids, local_experts]
+        active = jnp.logical_and(quotas > 0, expert_counts > 0)
+        take = jnp.where(active, jnp.minimum(quotas, expert_counts), 0)
+        experts = owner_ids * experts_per_rank + local_experts
+        allocation_state = allocation_state.at[experts, receivers].add(take)
+        allocation_state = allocation_state.at[experts, owner_ids].add(-take)
+        remaining_state = remaining_state.at[owner_ids, local_experts].add(-take)
+        quota_state = quota_state.at[owner_ids, receivers].add(-take)
+        return allocation_state, remaining_state, quota_state
 
-        max_moves = num_ranks + experts_per_rank - 2
-        current_allocation, _, _ = jax.lax.fori_loop(
-            0,
-            max_moves,
-            _move_expert,
-            (current_allocation, remaining, quotas),
-        )
-        return current_allocation
-
-    return jax.lax.fori_loop(0, num_ranks, _allocate_owner, allocation)
+    max_moves = num_ranks + experts_per_rank - 2
+    allocation, _, _ = jax.lax.fori_loop(
+        0,
+        max_moves,
+        _move_experts,
+        (allocation, remaining, migration),
+    )
+    return allocation
 
 
 def moon_ep_plan(
