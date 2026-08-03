@@ -106,9 +106,14 @@ def _job_name(dataset: str, identity: tuple[object, ...]) -> str:
     return f"harbor_{safe}_{digest}"
 
 
+def _jobs_dir(output_dir: str) -> StoragePath:
+    """The durable directory Harbor writes its jobs under: ``output_dir/harbor_jobs``."""
+    return StoragePath.parse(output_dir) / _HARBOR_JOBS_SUBDIR
+
+
 def _job_dir(output_dir: str, job_name: str) -> StoragePath:
-    """The durable Harbor job tree: ``output_dir/harbor_jobs/<job_name>``."""
-    return StoragePath.parse(output_dir) / _HARBOR_JOBS_SUBDIR / job_name
+    """The durable tree for one job: ``output_dir/harbor_jobs/<job_name>`` (Harbor appends the name)."""
+    return _jobs_dir(output_dir) / job_name
 
 
 def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
@@ -279,7 +284,7 @@ class HarborExecutor:
         )
         overlay = HarborRuntimeOverlay(
             job_name=job_name,
-            jobs_dir=str(StoragePath.parse(output_dir) / _HARBOR_JOBS_SUBDIR),
+            jobs_dir=str(_jobs_dir(output_dir)),
             dataset_path=str(dataset_path) if dataset_path is not None else None,
             endpoint_url=model.endpoint.base_url,
             served_model=model.endpoint.model,

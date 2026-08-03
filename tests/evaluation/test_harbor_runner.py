@@ -162,23 +162,22 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
 def test_completed_trial_is_durable_across_driver_termination_and_restored(protocol, tmp_path, monkeypatch):
-    """A trial that finishes before the driver dies is durable at the remote path and never reruns.
+    """A trial that finishes before the driver dies is durable at the remote path and restored intact.
 
-    This is the #7835 regression: Harbor writes each trial straight to the ``output_dir`` jobs tree,
-    so a driver killed before it returns leaves the completed trial on durable storage, and the next
-    run restores it without a clean full-job return or a post-run upload sweep.
+    Harbor writes each trial straight to the ``output_dir`` jobs tree, so a driver killed before it
+    returns leaves the completed trial on durable storage. A resumed run whose driver produces nothing
+    new must still report that trial, proving the runner reads it back from the durable path rather
+    than depending on a clean full-job return or a post-run upload sweep.
     """
     _memory_remote(protocol, monkeypatch)
     output_dir = f"{protocol}://eval-bucket-{tmp_path.name}/run"
     executor = _harbor_executor(f"resume-{tmp_path.name}")
 
     captured: dict = {}
-    reruns: list[str] = []
 
     def dying_driver(config, overlay, driver_env) -> None:
         captured["jobs_dir"] = overlay.jobs_dir
         captured["job_name"] = overlay.job_name
-        reruns.append("trial-one")
         trial = StoragePath(overlay.jobs_dir) / overlay.job_name / "trial-one"
         (trial / "result.json").write_text(
             json.dumps({"task_name": "trial-one", "verifier_result": {"rewards": {"reward": 1.0}}})
@@ -195,13 +194,13 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     assert durable.exists()
 
     def resumed_driver(config, overlay, driver_env) -> None:
-        # Harbor's own resume finds the durable trial and reruns nothing.
+        # Harbor's own resume finds the durable trial and writes nothing new this run.
         return None
 
     monkeypatch.setattr(runner, "run_harbor_driver", resumed_driver)
     outcome = executor(_running_model(), output_dir, {})
 
-    assert reruns == ["trial-one"]
+    # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
     assert StoragePath(f"{output_dir}/samples_harbor.parquet").exists()
