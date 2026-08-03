@@ -4,17 +4,19 @@
 """A/B the non-expert FSDP layout on real GPUs, through the ordinary training path.
 
 The `after` arm is this branch's layout, which shards attention, dense-MLP and LM-head
-weights over `("data", "expert")`. The `before` arm sets `SCALE_FSDP_LAYOUT=pre_ep`,
-which rebinds those groups to the single-axis ones the template used before expert
-parallelism, so both arms run from one commit and one image.
+weights over `("data", "expert")`. The `before` arm is the single-axis layout the template
+used before expert parallelism.
 
-`submit` launches `--repeats` draws per arm through `launch_cw_scale.py`. Repeats matter:
-placement across nodes moves MFU by a couple of points on this cluster, enough to swamp
-the effect being measured from a single pair.
+`submit` launches ONE job whose train task runs every arm in turn, driven by
+`SCALE_FSDP_SWEEP` (see `_run_grug_local`). One job rather than one per arm is not a
+convenience: on a busy cluster a 4-node gang waits far longer for admission than it spends
+training, and arms submitted separately land on different nodes, where placement alone
+moves MFU by a couple of points. A single reservation pins every arm to the same four
+nodes, so the repeats measure run-to-run noise instead of node assignment.
 
-`summarize` reads the JSON metric lines the runs emit and reports, per arm, the median
-over the post-warmup window of `throughput/mfu`, `throughput/tokens_per_second` and
-`train/router/capacity_overflow_rate_mean`, plus per-device parameter bytes.
+`summarize` splits one log into per-arm segments on the `BENCH_RUN` markers and reports,
+per arm, the median over the post-warmup window of `throughput/mfu`,
+`throughput/tokens_per_second` and `train/router/capacity_overflow_rate_mean`.
 
 The drop rate is a control, not a result: no commit on the PR branch touches routing or
 the capacity factor, so it has to stay flat. A moved drop rate means the run differed for
@@ -37,21 +39,25 @@ import subprocess
 import sys
 
 _ARMS = ("before", "after")
-_ARM_ENV = {"before": "pre_ep", "after": "ep"}
 _METRICS = {
     "mfu": "throughput/mfu",
     "tokens_per_second": "throughput/tokens_per_second",
     "drop_rate": "train/router/capacity_overflow_rate_mean",
 }
-_METRIC_LINE = re.compile(r"\{.*\}")
-# Emitted once per run by train.py, from inside the train task.
+_METRIC_LINE = re.compile(r"\{\"tracker\".*\}")
+# Emitted by the train task around each arm, and once inside it. Iris prefixes every log
+# line with the emitting task, and the four tasks interleave, so segments are tracked per
+# task rather than by position in the file.
+_TASK = re.compile(r"task=(\S+)")
+_RUN_BEGIN = re.compile(r"BENCH_RUN begin index=(\d+) arm=(\w+)")
 _LAYOUT_LINE = re.compile(r"BENCH_FSDP_LAYOUT resolved fsdp=(\(.*?\)) lm_head=(\(.*?\))")
 
 
-def _run_env(args, arm: str, draw: int) -> dict[str, str]:
+def submit(args) -> None:
+    sweep = ",".join(_ARMS * args.repeats)
     env = os.environ.copy()
     env.update(
-        SCALE_FSDP_LAYOUT=_ARM_ENV[arm],
+        SCALE_FSDP_SWEEP=sweep,
         SCALE_GPU_REPLICAS=str(args.nodes),
         SCALE_EXPERT_AXIS=str(args.expert),
         SCALE_REPLICA_AXIS="1",
@@ -63,115 +69,121 @@ def _run_env(args, arm: str, draw: int) -> dict[str, str]:
         SCALE_BATCH=str(args.batch),
         SCALE_STEPS=str(args.steps),
         SCALE_TRACKER="json_logger",
-        RUN_ID=f"{args.run_prefix}-{arm}-{draw}",
+        RUN_ID=args.run_id,
     )
-    return env
+    print(f"submitting {args.run_id} with sweep [{sweep}]", flush=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "experiments.grug.moe.launch_cw_scale", "--version", args.version, "--run"],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    print(result.stdout[-2000:] or result.stderr[-2000:], flush=True)
+    if result.returncode != 0:
+        raise SystemExit(f"{args.run_id} failed to submit: {result.stderr[-4000:]}")
 
 
-def submit(args) -> None:
-    for draw in range(args.repeats):
-        for arm in _ARMS:
-            run_id = f"{args.run_prefix}-{arm}-{draw}"
-            print(f"submitting {run_id}", flush=True)
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "experiments.grug.moe.launch_cw_scale",
-                    "--version",
-                    args.version,
-                    "--run",
-                ],
-                env=_run_env(args, arm, draw),
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            print(result.stdout[-2000:] or result.stderr[-2000:], flush=True)
-            if result.returncode != 0:
-                raise SystemExit(f"{run_id} failed to submit: {result.stderr[-4000:]}")
-
-
-def _metric_series(log_path: str) -> dict[str, list[tuple[int, float]]]:
-    series: dict[str, list[tuple[int, float]]] = collections.defaultdict(list)
-    with open(log_path) as handle:
+def _segments(log_path: str) -> list[dict]:
+    """Split the interleaved task log into one record per arm run, in sweep order."""
+    segments: dict[int, dict] = {}
+    current: dict[str, int] = {}  # task -> segment index
+    with open(log_path, errors="replace") as handle:
         for line in handle:
-            match = _METRIC_LINE.search(line)
-            if not match:
+            task_match = _TASK.search(line)
+            task = task_match.group(1) if task_match else ""
+
+            begin = _RUN_BEGIN.search(line)
+            if begin:
+                index = int(begin.group(1))
+                current[task] = index
+                segments.setdefault(index, {"arm": begin.group(2), "layouts": set(), "series": {}})
+                continue
+
+            index = current.get(task)
+            if index is None:
+                continue
+            segment = segments[index]
+
+            layout = _LAYOUT_LINE.search(line)
+            if layout:
+                segment["layouts"].add(f"fsdp={layout.group(1)} lm_head={layout.group(2)}")
+                continue
+
+            metric_match = _METRIC_LINE.search(line)
+            if not metric_match:
                 continue
             try:
-                payload = json.loads(match.group(0))
+                payload = json.loads(metric_match.group(0))
             except json.JSONDecodeError:
                 continue
             step = payload.get("step")
-            if step is None:
+            # The json_logger nests values under "metrics" and keeps "step" beside it.
+            metrics = payload.get("metrics")
+            if step is None or not isinstance(metrics, dict):
                 continue
-            for key in _METRICS.values():
-                value = payload.get(key)
+            for name, key in _METRICS.items():
+                value = metrics.get(key)
                 if isinstance(value, int | float):
-                    series[key].append((int(step), float(value)))
-    return series
+                    # All four tasks log the same value for a step; keyed by step so the
+                    # repeats do not count once per task.
+                    segment["series"].setdefault(name, {})[int(step)] = float(value)
+    return [segments[index] for index in sorted(segments)]
 
 
-def _resolved_layout(log_path: str) -> str | None:
-    """The shard groups the train task actually used, as logged by train.py."""
-    with open(log_path) as handle:
-        for line in handle:
-            match = _LAYOUT_LINE.search(line)
-            if match:
-                return f"fsdp={match.group(1)} lm_head={match.group(2)}"
-    return None
-
-
-def _median_after_warmup(points: list[tuple[int, float]], warmup: int) -> float | None:
-    values = [value for step, value in sorted(points) if step >= warmup]
+def _median_after_warmup(series: dict[int, float], warmup: int) -> float | None:
+    values = [value for step, value in sorted(series.items()) if step >= warmup]
     return statistics.median(values) if values else None
 
 
 def summarize(args) -> None:
-    rows = {}
-    layouts: dict[str, set[str]] = {arm: set() for arm in _ARMS}
-    for arm in _ARMS:
-        per_draw = collections.defaultdict(list)
-        for path in sorted(args.logs):
-            if f"-{arm}-" not in os.path.basename(path):
-                continue
-            layout = _resolved_layout(path)
-            if layout is None:
-                raise SystemExit(
-                    f"{path}: no BENCH_FSDP_LAYOUT line. The train task never recorded which shard "
-                    "groups it used, so this run cannot be attributed to an arm."
-                )
-            layouts[arm].add(layout)
-            series = _metric_series(path)
-            for name, key in _METRICS.items():
-                value = _median_after_warmup(series.get(key, []), args.warmup)
-                if value is not None:
-                    per_draw[name].append(value)
-        rows[arm] = per_draw
+    segments = _segments(args.log)
+    if not segments:
+        raise SystemExit(f"{args.log}: no BENCH_RUN markers; this log holds no sweep to report")
 
-    # SCALE_FSDP_LAYOUT is read in the train task, which does not inherit the
-    # submitter's shell. If forwarding regresses, both arms resolve to the default and
-    # the comparison silently measures nothing; refuse to print a result in that case.
+    per_arm: dict[str, dict[str, list[float]]] = {arm: collections.defaultdict(list) for arm in _ARMS}
+    layouts: dict[str, set[str]] = {arm: set() for arm in _ARMS}
+    for index, segment in enumerate(segments):
+        arm = segment["arm"]
+        if not segment["layouts"]:
+            raise SystemExit(
+                f"{args.log}: run index={index} arm={arm} never logged BENCH_FSDP_LAYOUT, so the shard "
+                "groups it used are unknown and it cannot be attributed to an arm."
+            )
+        layouts[arm] |= segment["layouts"]
+        for name in _METRICS:
+            value = _median_after_warmup(segment["series"].get(name, {}), args.warmup)
+            if value is not None:
+                per_arm[arm][name].append(value)
+
+    # The arm is chosen inside the train task, which does not inherit the submitter's
+    # shell. If forwarding regresses, every arm resolves to the default and the comparison
+    # silently measures nothing; refuse to print a result in that case.
     if layouts["before"] == layouts["after"]:
         raise SystemExit(
             f"both arms ran the same shard groups ({layouts['before']}); "
-            "SCALE_FSDP_LAYOUT did not reach the train task, so there is no A/B to report"
+            "SCALE_FSDP_SWEEP did not reach the train task, so there is no A/B to report"
         )
+
+    expected = collections.Counter(segment["arm"] for segment in segments)
+    measured = {arm: len(per_arm[arm]["mfu"]) for arm in _ARMS}
     for arm in _ARMS:
+        if measured[arm] < expected[arm]:
+            print(f"warning: arm {arm} produced metrics for {measured[arm]} of {expected[arm]} runs")
         print(f"{arm} layout: {' | '.join(sorted(layouts[arm]))}")
     print()
-    print(f"{'metric':<22}{'before':>16}{'after':>16}{'delta':>16}")
+    print(f"{'metric':<22}{'before':>16}{'after':>16}{'delta':>16}{'ratio':>10}")
     for name in _METRICS:
-        before, after = rows["before"].get(name, []), rows["after"].get(name, [])
+        before, after = per_arm["before"].get(name, []), per_arm["after"].get(name, [])
         if not before or not after:
-            print(f"{name:<22}{'n/a':>16}{'n/a':>16}{'n/a':>16}")
+            print(f"{name:<22}{'n/a':>16}{'n/a':>16}{'n/a':>16}{'n/a':>10}")
             continue
         b, a = statistics.median(before), statistics.median(after)
-        delta = f"{a - b:+.4g}" if not math.isclose(b, 0.0) else "n/a"
-        print(f"{name:<22}{b:>16.6g}{a:>16.6g}{delta:>16}")
+        delta = f"{a - b:+.4g}"
+        ratio = "n/a" if math.isclose(b, 0.0) else f"{a / b:.4f}"
+        print(f"{name:<22}{b:>16.6g}{a:>16.6g}{delta:>16}{ratio:>10}")
     for arm in _ARMS:
-        draws = {name: [round(v, 6) for v in vals] for name, vals in rows[arm].items()}
+        draws = {name: [round(v, 6) for v in values] for name, values in per_arm[arm].items()}
         print(f"\n{arm} per-draw: {json.dumps(draws)}")
 
 
@@ -179,23 +191,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("submit", help="launch both arms on the CoreWeave H100 cluster")
+    run = sub.add_parser("submit", help="launch the sweep on the CoreWeave H100 cluster")
     run.add_argument("--nodes", type=int, default=4, help="8 H100 per node")
     run.add_argument("--expert", type=int, default=8)
     run.add_argument("--hidden-dim", type=int, default=3072)
-    run.add_argument("--num-layers", type=int, default=48)
+    run.add_argument("--num-layers", type=int, default=12)
     run.add_argument("--num-experts", type=int, default=128)
     run.add_argument("--top-k", type=int, default=4)
     run.add_argument("--seq-len", type=int, default=2048)
-    run.add_argument("--batch", type=int, default=256)
-    run.add_argument("--steps", type=int, default=60)
-    run.add_argument("--repeats", type=int, default=3)
-    run.add_argument("--run-prefix", default="ep-fsdp-bench")
+    run.add_argument("--batch", type=int, default=64)
+    run.add_argument("--steps", type=int, default=80)
+    run.add_argument("--repeats", type=int, default=3, help="paired before/after draws")
+    run.add_argument("--run-id", default="ep-fsdp-sweep")
     run.add_argument("--version", default="2026.08.03", help="artifact calendar version")
     run.set_defaults(func=submit)
 
-    report = sub.add_parser("summarize", help="compare metric logs from both arms")
-    report.add_argument("logs", nargs="+", help="log files named <prefix>-<arm>-<draw>*")
+    report = sub.add_parser("summarize", help="compare the arms in one sweep log")
+    report.add_argument("log", help="the sweep job's log")
     report.add_argument("--warmup", type=int, default=20, help="ignore steps below this")
     report.set_defaults(func=summarize)
 

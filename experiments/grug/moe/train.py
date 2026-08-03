@@ -3,7 +3,9 @@
 
 import dataclasses
 import functools
+import gc
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -373,15 +375,54 @@ def _make_train_step(
     return train_step
 
 
+# FSDP shard groups per A/B arm, keyed by the names SCALE_FSDP_SWEEP accepts. `after` is
+# this branch's layout; `before` is the single-axis one the template used pre-EP.
+_SWEEP_ARM_AXES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "before": (("data",), ("replica_dcn", "data")),
+    "after": (("data", "expert"), ("replica_dcn", "data", "expert")),
+}
+
+
 def _run_grug_local(config: GrugRunConfig) -> None:
-    """Entry point for the grug template training loop."""
+    """Entry point for the grug template training loop.
+
+    With ``SCALE_FSDP_SWEEP`` set to a comma-separated list of arm names, run the loop
+    once per arm inside this one task, rebinding the shard groups between runs. Admission
+    on a busy cluster costs far more wall-clock than the runs themselves, and holding a
+    single reservation also pins every arm to the same nodes, which removes the placement
+    variance that repeated submissions would otherwise average over.
+    """
+    sweep = [arm.strip() for arm in os.environ.get("SCALE_FSDP_SWEEP", "").split(",") if arm.strip()]
+    if not sweep:
+        _run_grug_once(config)
+        return
+
+    unknown = sorted(set(sweep) - set(_SWEEP_ARM_AXES))
+    if unknown:
+        raise ValueError(f"SCALE_FSDP_SWEEP names unknown arms {unknown}; known arms are {sorted(_SWEEP_ARM_AXES)}")
+
+    for index, arm in enumerate(sweep):
+        moe_model._FSDP_AXES, moe_model._LM_HEAD_AXES = _SWEEP_ARM_AXES[arm]
+        logger.info("BENCH_RUN begin index=%d arm=%s", index, arm)
+        try:
+            _run_grug_once(config)
+        except Exception:
+            # One arm dying (an OOM on the memory-heavier layout, say) must not discard the
+            # arms already measured or the reservation the rest of the sweep still needs.
+            # The failure is logged and summarize() reports the arm as missing.
+            logger.exception("BENCH_RUN failed index=%d arm=%s", index, arm)
+        logger.info("BENCH_RUN end index=%d arm=%s", index, arm)
+        gc.collect()
+
+
+def _run_grug_once(config: GrugRunConfig) -> None:
+    """Run the grug template training loop once, with the shard groups currently bound."""
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
 
-    # Benchmark provenance: the A/B arm is chosen by an env var read at import time in
-    # this task's process, so record what it actually resolved to. bench_ep_fsdp.py
-    # refuses to report a comparison whose two arms logged the same groups.
+    # Benchmark provenance: record the groups the model was actually built with, so
+    # bench_ep_fsdp.py can refuse to report a comparison whose arms did not differ.
     logger.info(
         "BENCH_FSDP_LAYOUT resolved fsdp=%s lm_head=%s",
         moe_model._FSDP_AXES,
