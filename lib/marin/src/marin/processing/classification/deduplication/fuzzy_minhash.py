@@ -150,6 +150,7 @@ def compute_minhash_attrs(
     max_workers: int | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> MinHashAttrData:
     """Compute MinHash bucket attributes for *source* and persist as Parquet.
 
@@ -181,6 +182,7 @@ def compute_minhash_attrs(
             single-CPU, proportional RAM/disk share of ``worker_resources``,
             with at most 16 shares per worker.
         reduce_task_resources: ResourceConfig for reduce-stage tasks.
+        zephyr_context: Optional shared Zephyr context.
 
     Returns:
         :class:`MinHashAttrData` describing the attr directory and counters.
@@ -222,13 +224,11 @@ def compute_minhash_attrs(
     ctx_kwargs: dict = {
         "name": "minhash-attrs",
         "resources": resources,
-        "map_task_resources": map_task_resources,
     }
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    if reduce_task_resources is not None:
-        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
-    ctx = ZephyrContext(**ctx_kwargs)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    map_resources = map_task_resources or resources
 
     # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
@@ -242,7 +242,12 @@ def compute_minhash_attrs(
         .map_batches(lambda batch, p=params: _minhash_batch(batch, p))
         .write_parquet(_output_path, skip_existing=True)
     )
-    outcome = ctx.execute(pipeline, verbose=True)
+    outcome = ctx.execute(
+        pipeline,
+        verbose=True,
+        map_task_resources=map_resources,
+        reduce_task_resources=reduce_task_resources,
+    )
 
     return MinHashAttrData(
         params=params,

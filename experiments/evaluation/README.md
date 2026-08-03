@@ -54,7 +54,7 @@ useful after a change to the contract in `marin.evaluation.samples` (the parquet
 regenerated in place; the source jsonl is untouched):
 
 ```bash
-uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin-eval-metadata/runs
+uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin-eval-metadata/evals
 ```
 
 ## Records and the dashboard index
@@ -80,9 +80,10 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 ## Evals in pipelines
 
 `pipeline.py` exposes the same run as an `ArtifactStep`: `eval_step("qwen3-1.7b", "smoke",
-version="2026.07.19")` is a lazy, versioned handle whose records land at the step's artifact path.
-The step submits the same CPU orchestrator used by the CLI and waits for it. The slice override is a
-runtime arg, so changing it does not change the artifact identity.
+version="2026.07.19")` is a lazy, versioned handle. The step submits the same CPU orchestrator used by
+the CLI and writes eval outputs to the launcher's shared `evals` root; its artifact path contains the
+pipeline cache record. The slice override is a runtime arg, so changing it does not change the artifact
+identity.
 
 ## Agentic benchmarks (Harbor)
 

@@ -315,6 +315,52 @@ def test_sync_finds_pod_dispatched_before_pod_names_embedded_uid(provider, k8s):
         assert result[0].new_state == job_pb2.TASK_STATE_RUNNING
 
 
+class _CountingK8sService:
+    """InMemoryK8sService that counts the items iter_json actually yields."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.items_read = 0
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def iter_json(self, *args, **kwargs):
+        for item in self._inner.iter_json(*args, **kwargs):
+            self.items_read += 1
+            yield item
+
+
+def test_poll_stops_scanning_terminal_pods_once_attempts_resolve(k8s, task_stats_table):
+    """Resolving a finished pod must not read the whole terminal backlog.
+
+    This scan is on the control loop, and the terminal collection holds up to a full
+    retention window of pods, so reading all of them on every tick where a pod
+    completes is the shape of read that wedged #7881.
+    """
+    counting = _CountingK8sService(k8s)
+    provider = K8sTaskProvider(
+        kubectl=counting,
+        pods=pod_config(),
+        task_stats_table=task_stats_table,
+        cluster_scan_interval=0.0,
+    )
+    task_id = JobName.from_wire("/job/0")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    populate_pod(k8s, _pod_name(task_id, 0), "Succeeded", exit_code=0)
+    for i in range(200):
+        populate_pod(k8s, f"unrelated-terminal-{i:04d}", "Succeeded", exit_code=0)
+
+    try:
+        result = provider.sync(make_batch(running_tasks=[entry]))
+    finally:
+        provider.close()
+
+    assert len(result) == 1
+    assert result[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
+    assert counting.items_read == 1, "scan must stop at the pod that settles the attempt"
+
+
 def test_lookup_pod_prefers_uid_name_when_both_are_present(provider, k8s):
     """With both names in the pod set, the uid-named pod wins.
 
@@ -1114,29 +1160,36 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
 
     provider._gc_terminal_resources(active_pods=[])
 
-    # Old resources deleted.
+    # Old pods deleted. Their CMs/PDBs are enqueued, not deleted inline, so the
+    # following pass is what clears them.
     assert k8s.get_json(K8sResource.PODS, "old-succeeded-pod") is None
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "old-succeeded-pod-wf") is None
     assert k8s.get_json(K8sResource.PODS, "old-failed-pod") is None
+
+    provider._gc_terminal_resources(active_pods=[])
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "old-succeeded-pod-wf") is None
 
     # Recent resources preserved.
     assert k8s.get_json(K8sResource.PODS, "recent-succeeded-pod") is not None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
 
 
-def test_gc_respects_interval(provider, k8s):
-    """_maybe_gc_terminal_resources should only run every _GC_INTERVAL_SECONDS."""
+def test_gc_does_not_run_on_the_calling_thread(provider, k8s):
+    """A sync cycle starts the GC thread and returns; it never sweeps inline.
 
+    The sweep spends one API round trip per deleted resource, so running it inline
+    stalled scheduling and reconciliation behind the whole backlog (#7881).
+    """
     now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # Trigger GC once to set _last_gc_time to now.
-    provider._maybe_gc_terminal_resources(active_pods=[])
-
-    # Seed an old pod. An immediate second call should NOT trigger GC (interval not elapsed).
     _seed_terminal_pod(k8s, "gc-pod-1", "Succeeded", "aaaa111122223333", old_ts)
-    provider._maybe_gc_terminal_resources(active_pods=[])
-    assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is not None  # Still exists — interval gate held
+
+    provider._start_terminal_gc()
+
+    assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is not None
+
+    # The pass the GC thread would run does delete it.
+    provider._gc_once()
+    assert k8s.get_json(K8sResource.PODS, "gc-pod-1") is None
 
 
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):
@@ -1233,19 +1286,43 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
     }
     k8s.seed_resource(K8sResource.PDBS, "active-retry-pdb", pdb)
 
-    # Simulate the active pod (from the sync loop's managed_pods list).
-    active_pod = {
-        "metadata": {"name": "active-attempt-1", "labels": {_LABEL_TASK_HASH: shared_hash}},
-        "status": {"phase": "Running"},
-    }
+    # The active retry's pod, seeded so the passes below read it as active.
+    populate_pod(k8s, "active-attempt-1", "Running", labels={_LABEL_TASK_HASH: shared_hash})
 
-    provider._gc_terminal_resources(active_pods=[active_pod])
+    # Two passes: the first sweeps the terminal pod and enqueues its hash, the second
+    # is the one that would delete the CM/PDB if the active attempt did not hold them.
+    provider._gc_terminal_resources(active_pods=provider._list_active_pods())
+    provider._gc_terminal_resources(active_pods=provider._list_active_pods())
 
     # Terminal pod is deleted (by name, not by hash).
     assert k8s.get_json(K8sResource.PODS, "old-attempt-0") is None
     # But configmap and PDB are preserved because the hash is still active.
     assert k8s.get_json(K8sResource.CONFIGMAPS, "active-retry-cm") is not None
     assert k8s.get_json(K8sResource.PDBS, "active-retry-pdb") is not None
+
+
+def test_gc_defers_configmap_cleanup_for_age_swept_pods(provider, k8s):
+    """An age-swept task's CM/PDB cleanup is enqueued, never done in the same pass.
+
+    The hashes come from the pods the pass just deleted, so they exist nowhere else:
+    cleaning up inline means anything that raises in between orphans those configmaps
+    and PDBs permanently, with no later pass able to rediscover them. Enqueuing puts
+    them in state that survives the pass and is retried.
+    """
+    now = datetime.now(UTC)
+    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    task_hash = "sweptaabbccdd1122"
+
+    _seed_terminal_pod(k8s, "swept-pod", "Succeeded", task_hash, old_ts)
+    _seed_configmap(k8s, "swept-pod-wf", task_hash, old_ts)
+
+    provider._gc_terminal_resources(active_pods=[])
+
+    assert k8s.get_json(K8sResource.PODS, "swept-pod") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is not None, "cleanup must be deferred, not inline"
+
+    provider._gc_terminal_resources(active_pods=[])
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is None
 
 
 # ---------------------------------------------------------------------------

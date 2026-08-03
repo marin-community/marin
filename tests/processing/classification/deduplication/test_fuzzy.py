@@ -100,11 +100,12 @@ def test_minhash_attrs_default_and_explicit_task_packing(tmp_path, monkeypatch):
     source = NormalizedData(main_output_dir=str(source_dir), dup_output_dir=str(tmp_path / "duplicates"), counters={})
     monkeypatch.setenv("MARIN_PREFIX", str(tmp_path))
 
-    contexts = []
+    task_resources = []
 
-    def capture_context(context, _pipeline, *, verbose):
+    def capture_context(context, _pipeline, *, verbose, map_task_resources, reduce_task_resources):
         assert verbose
-        contexts.append(context)
+        assert reduce_task_resources is None
+        task_resources.append(map_task_resources)
         return SimpleNamespace(counters={})
 
     monkeypatch.setattr(
@@ -129,12 +130,9 @@ def test_minhash_attrs_default_and_explicit_task_packing(tmp_path, monkeypatch):
         worker_resources=ResourceConfig(cpu=64, ram="64g", disk="16g"),
     )
 
-    assert contexts[0].min_tasks_per_worker == 4
-    assert contexts[0].map_task_resources == ResourceConfig(cpu=1, ram="4g", disk="1g")
-    assert contexts[1].min_tasks_per_worker == 2
-    assert contexts[1].map_task_resources is explicit_task_resources
-    assert contexts[2].min_tasks_per_worker == 16
-    assert contexts[2].map_task_resources == ResourceConfig(cpu=1, ram="4g", disk="1g")
+    assert task_resources[0] == ResourceConfig(cpu=1, ram="4g", disk="1g")
+    assert task_resources[1] is explicit_task_resources
+    assert task_resources[2] == ResourceConfig(cpu=1, ram="4g", disk="1g")
 
 
 def test_minhash_attrs_co_partitioned_with_source(fox_corpus, monkeypatch):
