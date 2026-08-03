@@ -60,6 +60,8 @@ class FastEmbeddingBundleManifest(FastEmbeddingRuntimeManifest):
     evaluation_report_sha256: str = Field(pattern=SHA256_PATTERN)
     speed_report_url: str = Field(min_length=1)
     speed_report_sha256: str = Field(pattern=SHA256_PATTERN)
+    accelerator_speed_report_url: str = Field(min_length=1)
+    accelerator_speed_report_sha256: str = Field(pattern=SHA256_PATTERN)
     blind_review_report_url: str = Field(min_length=1)
     blind_review_report_sha256: str = Field(pattern=SHA256_PATTERN)
     blind_review_package_url: str = Field(min_length=1)

@@ -12,7 +12,7 @@ sys.path.insert(0, str(PROJECT))
 from publish_fast_embedding_bundle import release_evidence_decision  # noqa: E402
 
 
-def release_reports() -> tuple[dict, dict, dict, dict]:
+def release_reports() -> tuple[dict, dict, dict, dict, dict]:
     training = {
         "final_model_sha256": "model-sha",
         "validation_decision": {
@@ -56,6 +56,19 @@ def release_reports() -> tuple[dict, dict, dict, dict]:
         "measurement_valid": True,
         "student_to_baseline_ratio": 0.85,
     }
+    accelerator_speed = {
+        "mode": "accelerator",
+        "jax_backend": "gpu",
+        "compute_dtype": "bfloat16",
+        "config_name": "full",
+        "teacher": "semantic",
+        "rung": "50k",
+        "runtime_bundle_root": "memory://runtime",
+        "runtime_manifest_sha256": "runtime-sha",
+        "training_report": {"final_model_sha256": "model-sha"},
+        "measurement_valid": True,
+        "student_documents_per_second": 10_000.0,
+    }
     blind = {
         "student_model": "student",
         "claude_model": "claude-opus-5",
@@ -65,7 +78,7 @@ def release_reports() -> tuple[dict, dict, dict, dict]:
         "non_english": {"release_gate_passed": True},
         "other": {"release_gate_passed": True},
     }
-    return training, evaluation, speed, blind
+    return training, evaluation, speed, accelerator_speed, blind
 
 
 def decision(*reports: dict) -> dict[str, bool]:
@@ -95,7 +108,9 @@ def test_release_evidence_accepts_one_exact_student_that_passes_all_gates() -> N
         (2, ("measurement_valid",)),
         (2, ("runtime_manifest_sha256",)),
         (2, ("compute_dtype",)),
-        (3, ("non_english", "release_gate_passed")),
+        (3, ("measurement_valid",)),
+        (3, ("runtime_manifest_sha256",)),
+        (4, ("non_english", "release_gate_passed")),
     ],
 )
 def test_release_evidence_rejects_failed_training_bucket_speed_or_blind_gate(

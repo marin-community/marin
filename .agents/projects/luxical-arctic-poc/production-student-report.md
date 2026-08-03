@@ -31,6 +31,7 @@ is not an approved production model.
 | Non-constant output | At least 99% unique vectors | At least 99% for the pilot projection | Pass |
 | Global geometry | Effective-rank fraction at least 0.25 | 0.39314 for the pilot projection | Pass |
 | Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | The base graph reached 0.94729 with float32 CPU math. The final projected artifact still needs the exact test | Open |
+| Accelerator speed | Stable exact-runtime throughput for capacity planning | The exact benchmark is ready. The final projected artifact still needs the measurement | Open |
 | Coarse semantic screen | No metric more than 0.02 below the best tested teacher | Every global pilot-projection metric passes | Pass |
 | Label reliability | Independent review gates for a frozen hierarchy | Tail adjudication changed each global metric by at most 0.00458 and changed no gate decision | Pass |
 | Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The pilot projection passes every global level | Pass |
@@ -54,6 +55,12 @@ Luxical-One median was 3,115.60 documents per second. The ratio was 0.94729.
 All five rates for each model stayed within 6% of their median. This result
 removes the known graph-speed risk. It does not replace the required test of
 the final projected model hash.
+
+The staged production-runtime path passed a real-model smoke on the pilot
+projection. The minimum research-to-runtime cosine was 0.99999988 across eight
+code, multilingual, structured, scientific, business, and instruction texts.
+All runtime vectors were finite and distinct. The final bundle binds both the
+stable CPU report and the stable accelerator report to this runtime manifest.
 
 The coarse 1,000-document screen found coherent recipe, literature, code, and
 molecule neighborhoods. It also found weak government-statistics and

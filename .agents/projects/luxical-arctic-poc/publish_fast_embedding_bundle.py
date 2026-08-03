@@ -64,6 +64,7 @@ def release_evidence_decision(
     training_report: dict[str, Any],
     evaluation_report: dict[str, Any],
     speed_report: dict[str, Any],
+    accelerator_speed_report: dict[str, Any],
     blind_review_report: dict[str, Any],
     *,
     config_name: str,
@@ -101,6 +102,17 @@ def release_evidence_decision(
         and speed_report["runtime_manifest_sha256"] == runtime_manifest_sha256
         and speed_report["training_report"]["final_model_sha256"] == training_report["final_model_sha256"]
     )
+    accelerator_speed_identity = (
+        accelerator_speed_report["mode"] == "accelerator"
+        and accelerator_speed_report["jax_backend"] in {"gpu", "tpu"}
+        and accelerator_speed_report["compute_dtype"] == ACCELERATOR_COMPUTE_DTYPE_NAME
+        and accelerator_speed_report["config_name"] == config_name
+        and accelerator_speed_report["teacher"] == training_name
+        and accelerator_speed_report["rung"] == rung
+        and accelerator_speed_report["runtime_bundle_root"] == runtime_root
+        and accelerator_speed_report["runtime_manifest_sha256"] == runtime_manifest_sha256
+        and accelerator_speed_report["training_report"]["final_model_sha256"] == training_report["final_model_sha256"]
+    )
     blind_identity = (
         blind_review_report["student_model"] == student_model
         and blind_review_report["claude_model"] == BLIND_REVIEW_MODEL
@@ -123,6 +135,12 @@ def release_evidence_decision(
         "speed_identity": speed_identity,
         "speed_stability": speed_report["measurement_valid"] is True,
         "cpu_speed": float(speed_report["student_to_baseline_ratio"]) >= MINIMUM_CPU_SPEED_RATIO,
+        "accelerator_speed_identity": accelerator_speed_identity,
+        "accelerator_speed_stability": accelerator_speed_report["measurement_valid"] is True,
+        "accelerator_speed_finite": (
+            np.isfinite(accelerator_speed_report["student_documents_per_second"])
+            and float(accelerator_speed_report["student_documents_per_second"]) > 0
+        ),
         "blind_identity": blind_identity,
         "blind_overall": bool(blind_review_report["overall"]["release_gate_passed"]),
         "blind_code": bool(blind_review_report["code"]["release_gate_passed"]),
@@ -156,6 +174,7 @@ def main() -> None:
     parser.add_argument("--student-model", required=True)
     parser.add_argument("--evaluation-report-url", required=True)
     parser.add_argument("--speed-report-url", required=True)
+    parser.add_argument("--accelerator-speed-report-url", required=True)
     parser.add_argument("--blind-review-report-url", required=True)
     parser.add_argument("--runtime-root", required=True)
     parser.add_argument("--runtime-manifest-sha256", required=True)
@@ -167,6 +186,7 @@ def main() -> None:
     training_report, training_payload = read_json_artifact(training_report_url)
     evaluation_report, evaluation_payload = read_json_artifact(args.evaluation_report_url)
     speed_report, speed_payload = read_json_artifact(args.speed_report_url)
+    accelerator_speed_report, accelerator_speed_payload = read_json_artifact(args.accelerator_speed_report_url)
     blind_review_report, blind_review_payload = read_json_artifact(args.blind_review_report_url)
     blind_package_url = evaluation_report["blind_neighborhood_package_url"]
     blind_package = json.loads(StoragePath(blind_package_url).read_text(compression="gzip"))
@@ -175,6 +195,7 @@ def main() -> None:
         training_report,
         evaluation_report,
         speed_report,
+        accelerator_speed_report,
         blind_review_report,
         config_name=args.config,
         training_name=args.training_name,
@@ -217,6 +238,8 @@ def main() -> None:
         evaluation_report_sha256=payload_sha256(evaluation_payload),
         speed_report_url=args.speed_report_url,
         speed_report_sha256=payload_sha256(speed_payload),
+        accelerator_speed_report_url=args.accelerator_speed_report_url,
+        accelerator_speed_report_sha256=payload_sha256(accelerator_speed_payload),
         blind_review_report_url=args.blind_review_report_url,
         blind_review_report_sha256=payload_sha256(blind_review_payload),
         blind_review_package_url=blind_package_url,

@@ -2167,6 +2167,11 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - The final publisher rejects evaluation or speed evidence from a different
   runtime manifest. It also checks that the evaluated runtime fields equal the
   final release runtime fields.
+- A real pilot-projection stage passed with minimum research-to-runtime cosine
+  0.99999988. All eight smoke vectors were finite and distinct.
+- The final manifest also requires a stable accelerator report from the exact
+  runtime. This report is for capacity planning; the CPU-to-Luxical ratio stays
+  the approval speed gate.
 - Twenty-eight focused loader, speed, semantic-evaluation, and publisher tests
   pass. The required file checks pass.
 - At 2026-08-03 12:19 UTC, the live GLM-5.2 run had 28,000 complete assignments

@@ -72,6 +72,8 @@ def write_test_bundle(root: Path) -> str:
         evaluation_report_sha256="1" * 64,
         speed_report_url="memory://speed.json",
         speed_report_sha256="2" * 64,
+        accelerator_speed_report_url="memory://accelerator-speed.json",
+        accelerator_speed_report_sha256="5" * 64,
         blind_review_report_url="memory://blind-review.json",
         blind_review_report_sha256="3" * 64,
         blind_review_package_url="memory://blind-package.json.gz",
