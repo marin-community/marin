@@ -21,17 +21,18 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.flop_utils import lm_flops_per_token
 
 from experiments.grug.moe.launch import GRUG_MOE_TRIAL_MODEL
-from experiments.grug.moe.model import GrugModelConfig, Transformer, long_layer_flags
+from experiments.grug.moe.model import _LONG_LAYER_EVERY, GrugModelConfig, Transformer, long_layer_flags
 from experiments.grug.moe.train import _compute_flops as moe_compute_flops
 
 
-def test_moe_long_layers_are_every_fourth_plus_the_last():
-    assert long_layer_flags(11) == (False,) * 3 + (True,) + (False,) * 3 + (True,) + (False,) * 2 + (True,)
-
-
-def test_moe_last_layer_is_always_long():
+def test_moe_long_layers_are_strided_with_the_last_always_long():
+    """Long layers land on a regular stride, and the final layer is long wherever the stride
+    falls. Both come from ``_LONG_LAYER_EVERY``, so retuning the stride does not need an edit
+    here -- only the pinned FLOPs/token below, which is where such a change should show up.
+    """
     for num_layers in range(1, 33):
-        assert long_layer_flags(num_layers)[-1] is True
+        expected = sorted({*range(_LONG_LAYER_EVERY - 1, num_layers, _LONG_LAYER_EVERY), num_layers - 1})
+        assert [i for i, is_long in enumerate(long_layer_flags(num_layers)) if is_long] == expected
 
 
 def test_moe_forward_windows_only_the_short_layers():
