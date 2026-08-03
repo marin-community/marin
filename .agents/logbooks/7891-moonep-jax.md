@@ -1122,3 +1122,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Comparison: MNEP-059's median was 41 seconds. Approximate MFU fell from 6.3% to 4.1%.
 - Cause: The packed metadata changed the BF16 token row from 5,120 to 5,122 elements. This breaks the aligned transport row used by the direct device kernel.
 - Decision: Reject and revert packed rows. Keep the 5,120-element token payload and reconstruct expert IDs from the global plan instead.
+
+### 2026-08-03 02:43 UTC - MNEP-062 GPU profile contract
+
+- Run ID: `mnep-062-gpu-profile-5-20260803-0243`.
+- Snapshot: `mnep-062-gpu-profile-20260803-0243` at `759ec0c0e`.
+- Treatment: Restore the aligned baseline transport. Capture one GPU step with host tracing and GPU event aggregation disabled.
+- Limits: Keep one GPU, 100,000 activity events, 100,000 callback events, and the 600-second profile barrier.
+- Gate: Require five finite steps, successful profile upload, and a kernel and collective time summary from the GPU timeline.
