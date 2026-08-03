@@ -226,6 +226,33 @@ def _assignment_destinations(
     return jnp.minimum(destinations, num_ranks - 1), errors
 
 
+def _received_expert_ids(
+    all_expert_counts: Int[Array, "R E"],
+    plan: MoonEPPlan,
+    rank: Int[Array, ""],
+    *,
+    total_assignments: int,
+) -> Int[Array, " N"]:
+    source_ends = jnp.cumsum(all_expert_counts, axis=0, dtype=jnp.int32)
+    source_starts = source_ends - all_expert_counts
+    destination_ends = plan.cumulative_allocation[:, rank]
+    destination_starts = destination_ends - plan.allocation[:, rank]
+    # Each count is the overlap of one source interval and this destination's interval.
+    counts_by_source_expert = jnp.maximum(
+        jnp.minimum(source_ends, destination_ends[None, :]) - jnp.maximum(source_starts, destination_starts[None, :]),
+        0,
+    )
+    expert_ids = jnp.tile(
+        jnp.arange(all_expert_counts.shape[1], dtype=jnp.int32),
+        all_expert_counts.shape[0],
+    )
+    return jnp.repeat(
+        expert_ids,
+        counts_by_source_expert.reshape(-1),
+        total_repeat_length=total_assignments,
+    )
+
+
 def _exchange_remote_weights_impl(
     local_weights: jax.Array,
     experts_to_copy: Int[Array, "R B"],
@@ -370,7 +397,7 @@ def _moe_mlp_ep_moonep_local(
     destinations, destination_errors = _assignment_destinations(flat_experts, all_expert_counts, plan, rank)
 
     with jax.named_scope("moonep_dispatch"):
-        send_order = jnp.argsort(destinations, stable=True)
+        send_order = jnp.argsort(destinations * num_experts + flat_experts, stable=True)
         inverse_send_order = jnp.argsort(send_order)
         send_token_sources = send_order // top_k
         send_x = _dispatch_gather(
@@ -379,7 +406,6 @@ def _moe_mlp_ep_moonep_local(
             inverse_send_order,
             jnp.ones((assignments_per_rank,), dtype=jnp.bool_),
         )
-        send_experts = flat_experts[send_order]
         local_send_sizes = jnp.bincount(destinations, length=num_ranks).astype(jnp.int32)
         send_matrix = jax.lax.all_gather(local_send_sizes, "expert")
         input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(send_matrix, rank)
@@ -392,14 +418,11 @@ def _moe_mlp_ep_moonep_local(
             recv_sizes,
             axis_name="expert",
         )
-        received_experts = jax.lax.ragged_all_to_all(
-            send_experts,
-            jnp.zeros((assignments_per_rank,), dtype=jnp.int32),
-            input_offsets,
-            send_sizes,
-            output_offsets,
-            recv_sizes,
-            axis_name="expert",
+        received_experts = _received_expert_ids(
+            all_expert_counts,
+            plan,
+            rank,
+            total_assignments=assignments_per_rank,
         )
 
         local_start = rank * local_experts
