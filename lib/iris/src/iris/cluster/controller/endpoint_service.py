@@ -150,9 +150,10 @@ class EndpointServiceImpl:
             if self._system_endpoints.get(name) == address:
                 return
             self._system_endpoints[name] = address
+        mapping = self._system_proxy_mapping(name, address)
         self._publish_proxy_delta(
-            upserts=(self._system_proxy_mapping(name, address),),
-            deletes=(),
+            upserts=(mapping,) if mapping is not None else (),
+            deletes=() if mapping is not None else (f"system:{name}",),
         )
 
     def subscribe_proxy_updates(self, listener: Callable[[ProxyMappingDelta | ProxyRegistryReset], None]) -> None:
@@ -167,7 +168,11 @@ class EndpointServiceImpl:
             system_endpoints = tuple(self._system_endpoints.items())
             task_endpoints = tuple(self._db.caches[EndpointsProjection].all())
         mappings = tuple(mapping for row in task_endpoints if (mapping := self._task_proxy_mapping(row)) is not None)
-        mappings += tuple(self._system_proxy_mapping(name, address) for name, address in system_endpoints)
+        mappings += tuple(
+            mapping
+            for name, address in system_endpoints
+            if (mapping := self._system_proxy_mapping(name, address)) is not None
+        )
         return ProxyRegistrySnapshot(generation=generation, endpoints=mappings)
 
     def _endpoint_mutated(self, mutation: EndpointDelta | EndpointReset) -> None:
@@ -230,7 +235,9 @@ class EndpointServiceImpl:
         )
 
     @staticmethod
-    def _system_proxy_mapping(name: str, address: str) -> ProxyEndpointMapping:
+    def _system_proxy_mapping(name: str, address: str) -> ProxyEndpointMapping | None:
+        if not _proxyable_address(address):
+            return None
         return ProxyEndpointMapping(
             endpoint_id=f"system:{name}",
             name=name,

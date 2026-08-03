@@ -80,6 +80,10 @@ _CONTROLLER_ARCH = "amd64"
 # queued behind a reconcile tick under heavy load.
 _CONTROLLER_PROBE_TIMEOUT_SECONDS = 10
 _CONTROLLER_PROBE_FAILURE_THRESHOLD = 6
+# Node agents are independently recoverable and briefly unavailable during an
+# image change. A percentage budget keeps large clusters from taking one pod at
+# a time while bounding the number of nodes without fresh telemetry.
+_NODE_AGENT_MAX_UNAVAILABLE = "10%"
 # Secret holding the controller's own credentials, projected into the controller
 # container alone. Held apart from iris-task-env, which every task pod also mounts:
 # a task must never be able to mint its cluster's tokens.
@@ -310,6 +314,10 @@ def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
         "metadata": {"name": _NODE_AGENT_NAME, "namespace": namespace},
         "spec": {
             "selector": {"matchLabels": {"app": _NODE_AGENT_NAME}},
+            "updateStrategy": {
+                "type": "RollingUpdate",
+                "rollingUpdate": {"maxUnavailable": _NODE_AGENT_MAX_UNAVAILABLE},
+            },
             "template": {
                 "metadata": {"labels": {"app": _NODE_AGENT_NAME}},
                 "spec": {

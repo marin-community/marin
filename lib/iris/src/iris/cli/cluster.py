@@ -8,6 +8,7 @@ controller VM management, VM operations via controller RPC, and the dashboard tu
 """
 
 import json
+import re
 import signal
 import subprocess
 import threading
@@ -65,6 +66,8 @@ from iris.time_proto import timestamp_from_proto
 
 AMD64_IMAGE_PLATFORM = "linux/amd64"
 KUBERNETES_IMAGE_PLATFORMS = "linux/amd64,linux/arm64"
+DOCKER_TAG_PATTERN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
+DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -312,6 +315,69 @@ def _build_and_pin_deploy_images(
         click.echo("Built image tags:")
         for name, tag in built.items():
             click.echo(f"  {name}: {tag}")
+
+
+def _resolve_prebuilt_image(image: str) -> str:
+    """Validate a Kubernetes image manifest and return its digest-pinned reference."""
+    result = subprocess.run(
+        ["docker", "buildx", "imagetools", "inspect", image, "--format", "{{json .Manifest}}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "manifest inspection failed"
+        raise click.ClickException(f"Cannot inspect prebuilt image {image}: {detail}")
+    try:
+        manifest = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise click.ClickException(f"Cannot parse manifest for prebuilt image {image}: {e}") from e
+
+    platforms = {
+        f"{item.get('platform', {}).get('os')}/{item.get('platform', {}).get('architecture')}"
+        for item in manifest.get("manifests", ())
+    }
+    required_platforms = set(KUBERNETES_IMAGE_PLATFORMS.split(","))
+    missing = sorted(required_platforms - platforms)
+    if missing:
+        raise click.ClickException(f"Prebuilt image {image} is missing platforms: {', '.join(missing)}")
+
+    digest = manifest.get("digest", "")
+    if DIGEST_PATTERN.fullmatch(digest) is None:
+        raise click.ClickException(f"Prebuilt image {image} has no valid manifest digest")
+    image_without_digest = image.split("@", 1)[0]
+    final_component = image_without_digest.rsplit("/", 1)[-1]
+    image_base = image_without_digest.rsplit(":", 1)[0] if ":" in final_component else image_without_digest
+    return f"{image_base}@{digest}"
+
+
+def _use_prebuilt_kubernetes_images(config, tag: str) -> str:
+    """Pin Kubernetes controller and task images to verified multiarch digests."""
+    if config.defaults.worker.runtime != KUBERNETES_WORKER_RUNTIME:
+        raise click.ClickException("--prebuilt-tag is only supported for Kubernetes clusters")
+    if tag == "latest" or DOCKER_TAG_PATTERN.fullmatch(tag) is None:
+        raise click.ClickException(f"Invalid immutable Docker tag for --prebuilt-tag: {tag!r}")
+
+    def _replace_tag(image: str, name: str) -> str:
+        if not image:
+            raise click.ClickException(f"{name} image is required with --prebuilt-tag")
+        image = image.split("@", 1)[0]
+        final_component = image.rsplit("/", 1)[-1]
+        image_base = image.rsplit(":", 1)[0] if ":" in final_component else image
+        return f"{image_base}:{tag}"
+
+    controller_tag = _replace_tag(config.controller.image, "controller")
+    task_tag = _replace_tag(
+        config.defaults.worker.default_task_image,
+        "default task",
+    )
+    controller_image = _resolve_prebuilt_image(controller_tag)
+    task_image = _resolve_prebuilt_image(task_tag)
+    config.controller.image = controller_image
+    config.defaults.worker.default_task_image = task_image
+    click.echo("Using verified prebuilt Kubernetes images (Docker build skipped):")
+    click.echo(f"  controller: {controller_tag} -> {config.controller.image}")
+    click.echo(f"  task: {task_tag} -> {config.defaults.worker.default_task_image}")
+    return config.controller.image
 
 
 # =============================================================================
@@ -1242,6 +1308,11 @@ def controller_checkpoint(ctx, stop: bool):
     show_default=True,
     help="Rust profile used to build native Iris components; fast skips LTO for dev rollouts.",
 )
+@click.option(
+    "--prebuilt-tag",
+    default=None,
+    help="Verify and digest-pin existing multiarch Kubernetes images with this tag; skip Docker builds.",
+)
 @click.pass_context
 def controller_restart(
     ctx,
@@ -1250,6 +1321,7 @@ def controller_restart(
     rollback: bool,
     task_image_platforms: str | None,
     cargo_profile: str,
+    prebuilt_tag: str | None,
 ):
     """Restart the controller in place, preserving state (remote platforms only).
 
@@ -1282,6 +1354,8 @@ def controller_restart(
     prior_record = read_rollout_record(remote_state_dir) if remote_state_dir else None
 
     if rollback:
+        if prebuilt_tag is not None:
+            raise click.ClickException("--prebuilt-tag cannot be combined with --rollback")
         _rollback_last_deploy(ctx, bundle, config, remote_state_dir, prior_record)
         return
 
@@ -1295,6 +1369,7 @@ def controller_restart(
             config,
             task_platforms=task_image_platforms,
             cargo_profile=cargo_profile,
+            prebuilt_tag=prebuilt_tag,
         )
         try:
             address = bundle.controller.start_controller(config)
@@ -1325,6 +1400,7 @@ def controller_restart(
         config,
         task_platforms=task_image_platforms,
         cargo_profile=cargo_profile,
+        prebuilt_tag=prebuilt_tag,
     )
     previous_image = prior_record.image if prior_record else None
 
@@ -1386,8 +1462,11 @@ def _build_forward_image(
     *,
     task_platforms: str | None = None,
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
+    prebuilt_tag: str | None = None,
 ) -> str:
     """Build deploy images from the working tree and return the controller image tag."""
+    if prebuilt_tag is not None:
+        return _use_prebuilt_kubernetes_images(config, prebuilt_tag)
     _build_and_pin_deploy_images(
         ctx,
         config,
