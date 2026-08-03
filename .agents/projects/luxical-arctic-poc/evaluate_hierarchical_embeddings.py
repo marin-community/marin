@@ -13,6 +13,7 @@ from typing import Any
 
 import fsspec
 import numpy as np
+from benchmark_trained_fast_student import rate_stability
 from evaluate_semantic_embeddings import (
     MANIFEST_URL,
     NEIGHBOR_COUNT,
@@ -71,6 +72,42 @@ def hierarchical_assignments(root: StoragePath, documents: list[SampleDocument])
     if [row.sample_index for row in assignments] != expected:
         raise ValueError(f"The hierarchy assignments at {root} are not complete and aligned")
     return assignments
+
+
+def validated_speed_ratio(
+    speed_report: dict[str, Any],
+    student_metadata: dict[str, Any],
+    baseline_metadata: dict[str, Any],
+    student_config: str,
+    student_training_name: str,
+    student_rung: str,
+) -> float:
+    """Return the ratio from a stable speed report for the exact model."""
+    expected_identity = {
+        "mode": "cpu",
+        "jax_backend": "cpu",
+        "config_name": student_config,
+        "teacher": student_training_name,
+        "rung": student_rung,
+    }
+    if any(speed_report.get(name) != value for name, value in expected_identity.items()):
+        raise ValueError("The speed report does not identify the evaluated CPU model")
+    if speed_report.get("baseline") != baseline_metadata:
+        raise ValueError("The speed report does not identify the evaluated Luxical baseline")
+    speed_training_report = speed_report.get("training_report")
+    if not isinstance(speed_training_report, dict):
+        raise ValueError("The speed report has no training report")
+    if speed_training_report.get("final_model_sha256") != student_metadata.get("final_model_sha256"):
+        raise ValueError("The speed report model hash differs from the evaluated model")
+    student_stability = rate_stability([float(value) for value in speed_report.get("student_rates", [])])
+    baseline_stability = rate_stability([float(value) for value in speed_report.get("baseline_rates", [])])
+    measurement_valid = bool(student_stability["passed"] and baseline_stability["passed"])
+    if speed_report.get("measurement_valid") is not True or not measurement_valid:
+        raise ValueError("The CPU speed measurement is not stable")
+    ratio = float(speed_report["student_to_baseline_ratio"])
+    if not np.isfinite(ratio) or ratio <= 0:
+        raise ValueError("The CPU speed ratio is not positive and finite")
+    return ratio
 
 
 def adjudicated_assignments(
@@ -394,7 +431,14 @@ def main() -> None:
         args.student_rung,
     )
     speed_report = read_json(args.speed_report_url)
-    speed_ratio = float(speed_report["student_to_baseline_ratio"])
+    speed_ratio = validated_speed_ratio(
+        speed_report,
+        metadata[args.student_model],
+        metadata["luxical_one"],
+        args.student_config,
+        args.student_training_name,
+        args.student_rung,
+    )
     sources = np.asarray([row.source for row in documents])
     variants = {}
     evaluation_assignments = None

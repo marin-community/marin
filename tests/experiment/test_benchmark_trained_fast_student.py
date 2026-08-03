@@ -22,23 +22,27 @@ class Model:
         return np.ones((len(texts), 2), dtype=np.float32)
 
 
-def test_paired_rates_alternate_model_order(monkeypatch) -> None:
-    calls = []
-    rates = {"student": 20.0, "baseline": 10.0}
+def test_paired_rates_reject_unstable_measurement(monkeypatch) -> None:
+    rates = {
+        "student": iter([20.0, 21.0, 19.0, 20.5, 19.5]),
+        "baseline": iter([1.0, 10.0, 10.0, 10.0, 10.0]),
+    }
 
     def timed_rate(model: Model, texts: list[str], batch_size: int) -> tuple[float, float]:
-        model.calls.append(model.name)
-        return len(texts) / rates[model.name], rates[model.name]
+        rate = next(rates[model.name])
+        return len(texts) / rate, rate
 
-    monkeypatch.setattr(benchmark_module, "SPEED_REPEATS", 2)
-    monkeypatch.setattr(benchmark_module, "SPEED_WARMUP_DOCUMENTS", 1)
+    monkeypatch.setattr(benchmark_module, "SPEED_REPEATS", 5)
     monkeypatch.setattr(benchmark_module, "timed_rate", timed_rate)
+    calls = []
     student = Model("student", calls)
     baseline = Model("baseline", calls)
 
     result = benchmark_module.paired_rates(student, baseline, ["a", "b"], batch_size=2)
 
-    assert calls == ["student", "baseline", "baseline", "student", "student", "baseline"]
     assert result["student_documents_per_second"] == 20.0
     assert result["baseline_documents_per_second"] == 10.0
     assert result["student_to_baseline_ratio"] == 2.0
+    assert result["student_stability"]["passed"]
+    assert not result["baseline_stability"]["passed"]
+    assert not result["measurement_valid"]

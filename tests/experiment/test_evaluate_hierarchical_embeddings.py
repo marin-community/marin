@@ -15,6 +15,7 @@ from evaluate_hierarchical_embeddings import (  # noqa: E402
     label_levels,
     neighborhood_review_indices,
     strongest_reference_model,
+    validated_speed_ratio,
 )
 from glm_hierarchical_labels import HierarchicalAssignment  # noqa: E402
 
@@ -157,3 +158,53 @@ def test_neighborhood_review_indices_include_code_then_stable_population() -> No
     assert len(selected) == 10
     assert len(set(selected)) == 10
     assert {0, 1, 2}.issubset(selected)
+
+
+def speed_report() -> dict:
+    return {
+        "mode": "cpu",
+        "jax_backend": "cpu",
+        "config_name": "full",
+        "teacher": "semantic",
+        "rung": "50k",
+        "baseline": {"repo": "luxical", "revision": "v3"},
+        "training_report": {"final_model_sha256": "model-sha"},
+        "student_rates": [100.0, 102.0, 98.0, 101.0, 99.0],
+        "baseline_rates": [100.0, 101.0, 99.0, 102.0, 98.0],
+        "student_to_baseline_ratio": 1.0,
+        "measurement_valid": True,
+    }
+
+
+def test_validated_speed_ratio_accepts_exact_stable_model() -> None:
+    ratio = validated_speed_ratio(
+        speed_report(),
+        {"final_model_sha256": "model-sha"},
+        {"repo": "luxical", "revision": "v3"},
+        "full",
+        "semantic",
+        "50k",
+    )
+
+    assert ratio == 1.0
+
+
+@pytest.mark.parametrize("fault", ["model_hash", "model_rung", "unstable"])
+def test_validated_speed_ratio_rejects_wrong_or_unstable_measurement(fault: str) -> None:
+    report = speed_report()
+    if fault == "model_hash":
+        report["training_report"]["final_model_sha256"] = "wrong-sha"
+    elif fault == "model_rung":
+        report["rung"] = "wrong-rung"
+    else:
+        report["baseline_rates"][0] = 1.0
+
+    with pytest.raises(ValueError):
+        validated_speed_ratio(
+            report,
+            {"final_model_sha256": "model-sha"},
+            {"repo": "luxical", "revision": "v3"},
+            "full",
+            "semantic",
+            "50k",
+        )
