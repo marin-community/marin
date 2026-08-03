@@ -1263,3 +1263,39 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Correctness: The probe raises an error for any sampled mismatch. All workers exited with code zero, so all sampled values matched.
 - Scheduling: The 8-CPU and 64-GiB worker request received a complete NVLink domain in less than one minute.
 - Decision: Use the sparse GIN wheel for a five-step exact MoonEP run with global histogram QB.
+
+### 2026-08-03 05:50 UTC - MNEP-071 exact sparse GIN contract
+
+- Run ID: `mnep-071-exact-sparse-gin-5-20260803-0550` at `dca3852a2`.
+- Treatment: Use exact MoonEP, global histogram QB with 1,000 bins, direct device transport, and the sparse GIN XLA wheel.
+- Evidence: Send tracker data to `marin-community/rav_moe`. Keep finite gradient diagnostics enabled.
+- Gate: Require five finite steps on attempt zero, no dropped expert assignments, and at least `21.7%` median MFU.
+
+### 2026-08-03 05:52 UTC - MNEP-071b lower-CPU training contract
+
+- MNEP-071 did not receive GPUs. Kueue excluded 130 of 205 nodes on the 32-CPU request, one node on RAM, and 74 nodes on GPU capacity.
+- Action: Stop MNEP-071 before GPU admission. Keep 256 GiB RAM and reduce the worker request to eight CPUs.
+- Run ID: `mnep-071b-exact-sparse-gin-5-20260803-0552` at `dca3852a2`.
+- Gate: Keep the MNEP-071 correctness and MFU requirements.
+
+### 2026-08-03 05:55 UTC - MNEP-071c lower-memory training contract
+
+- MNEP-071b removed the CPU constraint, but Kueue excluded 125 nodes on the 256-GiB RAM request.
+- Action: Stop MNEP-071b before GPU admission. Keep eight CPUs and reduce host RAM to 64 GiB.
+- Run ID: `mnep-071c-exact-sparse-gin-5-20260803-0555` at `dca3852a2`.
+- Gate: Keep the MNEP-071 correctness and MFU requirements. Treat any host out-of-memory error as a failed resource estimate.
+
+### 2026-08-03 06:01 UTC - MNEP-071c rejects 64 GiB host RAM
+
+- Result: All 16 workers started. Process zero received SIGKILL with exit 137 during XLA compilation, before step one.
+- Scope: The failure occurred before the sparse GIN transport ran. It does not give a transport result.
+- Decision: Retry with eight CPUs and 128 GiB host RAM. Keep the model, wheel, QB, and correctness gate unchanged.
+- Retry: `mnep-071d-exact-sparse-gin-5-20260803-0601` at `dca3852a2`.
+
+### 2026-08-03 06:09 UTC - MNEP-071d passes correctness but not MFU
+
+- Result: All 16 workers completed five finite steps on attempt zero. The run dropped no expert assignments, and the final loss was `8.1779`.
+- Throughput: Median MFU was `9.698%`, mean MFU was `9.663%`, and the final sampled step took `26.688` seconds. Throughput was `157,160.6` tokens per second.
+- Evidence: [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-071d-exact-sparse-gin-5-20260803-0601).
+- Comparison: The exact MNEP-067 baseline was about `9.6%` MFU. Sparse GIN did not remove the measured weight-transport cost.
+- Decision: Keep the transport correctness result. Capture a full GPU profile before the next XLA change.
