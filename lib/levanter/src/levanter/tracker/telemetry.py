@@ -256,7 +256,7 @@ class TelemetryConfig(TrackerConfig):
     """Configure direct telemetry and optional stalled-training termination."""
 
     training_stall_timeout: timedelta | None = None
-    """Hard-exit after this long without a new loss; disabled when unset."""
+    """After training begins, hard-exit after this long without a new loss; disabled when unset."""
 
     def init(self, run_id: Optional[str]) -> Tracker:
         runtime_telemetry.configure(

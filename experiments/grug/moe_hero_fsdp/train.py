@@ -93,6 +93,14 @@ class GrugTrainerConfig:
     sharding_dump_path: str | None = None
 
 
+def hero_grug_trainer_config(*, replica_axis_size: int) -> GrugTrainerConfig:
+    """Return the FSDP trainer settings shared by the GB200 hero runs."""
+    return GrugTrainerConfig(
+        offload_opt_state=True,
+        replica_axis_size=replica_axis_size,
+    )
+
+
 @dataclass(frozen=True)
 class GrugEvalConfig:
     """Perplexity eval settings for grug training."""

@@ -115,11 +115,12 @@ def build_checkpoint_benchmark_configs(
     *, num_train_steps: int, batch_size: int
 ) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
     """A 52.85B-total, approximately 1.71B-active MoE for checkpoint measurements."""
+    hidden_dim = 2048
     model = GrugModelConfig(
         vocab_size=128_256,
-        hidden_dim=2048,
-        intermediate_dim=2048,
-        shared_expert_intermediate_dim=2048,
+        hidden_dim=hidden_dim,
+        intermediate_dim=hidden_dim,
+        shared_expert_intermediate_dim=hidden_dim,
         num_shared_experts=1,
         num_experts=128,
         num_experts_per_token=1,
@@ -133,7 +134,7 @@ def build_checkpoint_benchmark_configs(
         sliding_window=512,
         global_every=4,
         capacity_factor=1.0,
-        initializer_std=0.5 / math.sqrt(2048),
+        initializer_std=0.5 / math.sqrt(hidden_dim),
         qk_mult=1.3,
         sconv=True,
         attention_implementation="gpu_fa4_cute",

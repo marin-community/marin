@@ -372,7 +372,7 @@ class CheckpointDebugConfig:
     log_interval: float = 60.0
     dump_stacks_after: float | None = None
     tracemalloc_frames: int | None = 25
-    """Python allocation stack depth. None disables tracemalloc for low-overhead timing runs."""
+    """Python allocation stack depth. None leaves global tracemalloc state unchanged."""
     top_allocations: int = 8
     force_gc_before_serialize: bool = True
     flush_logs: bool = True

@@ -10,7 +10,6 @@ tracing, then writes the disposable checkpoints to a one-day temporary bucket.
 """
 
 import dataclasses
-import os
 from datetime import timedelta
 
 import click
@@ -20,7 +19,6 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.tracker.telemetry import TelemetryConfig
-from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
@@ -28,7 +26,7 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem import marin_temp_bucket, prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_checkpoint_benchmark_configs
 from experiments.grug.moe_hero_fsdp.launch import (
@@ -40,11 +38,10 @@ from experiments.grug.moe_hero_fsdp.launch import (
     HERO_TRAINING_STALL_TIMEOUT,
     _slimpajama_6b_dataset,
 )
-from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, hero_grug_trainer_config, run_grug
 
 DEFAULT_BENCHMARK_STEPS = 12
 DEFAULT_CHECKPOINT_EVERY_STEPS = 8
-DEFAULT_WANDB_PROJECT = "marin_moe"
 CHECKPOINT_OUTPUT_TTL_DAYS = 1
 CHECKPOINT_DEBUG_INTERVAL = 5.0
 CHECKPOINT_STACK_DUMP_AFTER = timedelta(minutes=5).total_seconds()
@@ -77,17 +74,7 @@ def build_checkpoint_benchmark_run(
 
     batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_checkpoint_benchmark_configs(num_train_steps=num_steps, batch_size=batch_size)
-    wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
-    grug_trainer = GrugTrainerConfig(
-        data_seed=None,
-        log_every=1,
-        ema_beta=None,
-        z_loss_weight=1e-4,
-        offload_opt_state=True,
-        expert_axis_size=1,
-        replica_axis_size=dp_racks,
-        sharding_dump_path=None,
-    )
+    grug_trainer = hero_grug_trainer_config(replica_axis_size=dp_racks)
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=4,
@@ -102,7 +89,7 @@ def build_checkpoint_benchmark_run(
     slim = _slimpajama_6b_dataset()
     output_path = marin_temp_bucket(
         ttl_days=CHECKPOINT_OUTPUT_TTL_DAYS,
-        prefix=f"{step_name}/{version}",
+        prefix=prefix_join(step_name, version),
     )
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
@@ -113,24 +100,13 @@ def build_checkpoint_benchmark_run(
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
-            tracker=(
-                WandbConfig(
-                    entity="marin-community",
-                    project=wandb_project,
-                    tags=["grug", "moe", "checkpoint", "fsdp", "gb200"],
-                    group="moe-checkpoint-benchmark",
-                    name=run_id,
-                    mode="disabled",
-                    replicate_path=ctx.output_path,
-                ),
-                TelemetryConfig(training_stall_timeout=HERO_TRAINING_STALL_TIMEOUT),
-            ),
+            tracker=TelemetryConfig(training_stall_timeout=HERO_TRAINING_STALL_TIMEOUT),
             watch=WatchConfig(interval=20),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
             checkpointer=CheckpointerConfig(
-                base_path=f"{ctx.output_path}/checkpoints",
+                base_path=prefix_join(ctx.output_path, "checkpoints"),
                 temporary_base_path=None,
                 save_interval=None,
                 keep=[{"every": checkpoint_every_steps}],
@@ -170,7 +146,7 @@ def build_checkpoint_benchmark_run(
 
 
 @click.command()
-@click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
+@click.option("--run-id", required=True, help="Run identifier for artifact and telemetry names.")
 @click.option(
     "--dp-racks",
     type=click.IntRange(min=1),

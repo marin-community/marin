@@ -98,15 +98,7 @@ def build_kvstore_spec(path: str) -> dict:
 
 
 async def _transfer_shard_to_pageable_host(shard) -> np.ndarray:
-    """Stage a detached shard snapshot in pageable host memory.
-
-    On TPU, JAX's ``_transfer_shard_to_host`` stages every shard via ``device_put`` to
-    ``pinned_host`` memory. Pinned buffers come from the runtime's registered-host arena,
-    which is never returned to the OS, so host RAM ratchets up by one save's state on
-    every checkpoint. The extra pageable copy also detaches TensorStore's asynchronous
-    write from the JAX buffer. Without it, TensorStore retains the zero-copy NumPy view
-    and the next donated training step fails while the checkpoint commit is in flight.
-    """
+    """Return a detached pageable snapshot safe to retain during an asynchronous commit."""
     data = shard.data
     data.copy_to_host_async()
     # Yield so the remaining shards' copies can be enqueued before this one blocks.
