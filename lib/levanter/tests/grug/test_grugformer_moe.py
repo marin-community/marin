@@ -121,6 +121,31 @@ def test_padded_token_all_to_all_counts_the_rows_above_capacity():
     np.testing.assert_array_equal(np.asarray(small_overflow), np.ones(2, dtype=np.int32))
 
 
+def test_static_padded_token_all_to_all_reads_a_bucket_slice():
+    # Two ranks each hold a four-row buffer. The bucket sends the second half.
+    send_matrix = np.asarray([[1, 1], [1, 1]], dtype=np.int32)
+    input_starts = np.asarray([[2, 3], [2, 3]], dtype=np.int32)
+    values = np.arange(2 * 4 * 3, dtype=np.float32).reshape(2, 4, 3)
+    expected = np.zeros((2, 2, 3), dtype=np.float32)
+    for source in range(2):
+        for destination in range(2):
+            expected[destination, source] = values[source, input_starts[source, destination]]
+
+    def exchange(local_values, local_starts):
+        return _static_padded_token_all_to_all(
+            local_values,
+            jnp.asarray(send_matrix),
+            jax.lax.axis_index("expert"),
+            capacity=1,
+            num_rounds=1,
+            input_starts=local_starts,
+            output_rows=2,
+        )
+
+    actual = jax.vmap(exchange, axis_name="expert")(jnp.asarray(values), jnp.asarray(input_starts))
+    np.testing.assert_array_equal(np.asarray(actual), expected)
+
+
 def test_padded_token_all_to_all_matches_cross_shard_value_and_gradients_on_gpu():
     if jax.default_backend() != "gpu" or jax.device_count() != 4:
         pytest.skip("requires one four-GPU GB200 tray")

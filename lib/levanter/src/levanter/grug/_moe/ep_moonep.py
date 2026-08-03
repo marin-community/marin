@@ -296,13 +296,25 @@ def _static_padded_token_all_to_all(
     *,
     capacity: int,
     num_rounds: int,
+    input_starts: Int[Array, " R"] | None = None,
+    output_rows: int | None = None,
 ) -> jax.Array:
-    """Transfer compact peer messages through a fixed number of padded rounds."""
+    """Transfer compact peer messages through a fixed number of padded rounds.
+
+    ``input_starts`` gives the first row of each peer message inside ``values``.
+    A bucket schedule sends one slice of a larger buffer, so its offsets are not
+    the running sum of ``send_matrix``. ``output_rows`` sets the receive buffer
+    size, which is the bucket capacity rather than the full row count.
+    """
     num_ranks = send_matrix.shape[0]
     total_rows = values.shape[0]
+    received_rows = total_rows if output_rows is None else output_rows
     slots = jnp.arange(capacity, dtype=jnp.int32)[None, :]
     local_sizes = send_matrix[rank]
-    local_starts = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
+    if input_starts is None:
+        local_starts = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
+    else:
+        local_starts = input_starts
     received_sizes = send_matrix[:, rank]
     received_starts = jnp.cumsum(received_sizes, dtype=jnp.int32) - received_sizes
 
@@ -326,14 +338,15 @@ def _static_padded_token_all_to_all(
 
         output_indices = received_starts[:, None] + round_slots
         valid_outputs = round_slots < received_sizes[:, None]
-        output_indices = jnp.where(valid_outputs, output_indices, total_rows)
+        output_indices = jnp.where(valid_outputs, output_indices, received_rows)
         output = output.at[output_indices.reshape(-1)].set(
             received_blocks.reshape(num_ranks * capacity, *values.shape[1:]),
             mode="drop",
         )
         return output
 
-    return jax.lax.fori_loop(0, num_rounds, _exchange_round, jnp.zeros_like(values))
+    empty = jnp.zeros((received_rows, *values.shape[1:]), dtype=values.dtype)
+    return jax.lax.fori_loop(0, num_rounds, _exchange_round, empty)
 
 
 def _padded_token_all_to_all(
@@ -343,6 +356,9 @@ def _padded_token_all_to_all(
     *,
     capacity_factor: float,
     num_rounds: int,
+    message_rows: int | None = None,
+    input_starts: Int[Array, " R"] | None = None,
+    output_rows: int | None = None,
 ) -> tuple[jax.Array, Int[Array, ""]]:
     """Transfer peer messages through padded rounds and count the rows that do not fit.
 
@@ -350,9 +366,13 @@ def _padded_token_all_to_all(
     collective gives each branch its own collective pool, and MNEP-068 and
     MNEP-094 both produced non-finite gradients on the rack after such a
     choice. Rows above the fixed capacity are dropped and counted instead.
+
+    ``message_rows`` is the static row bound that one call transfers. A bucket
+    schedule transfers one slice of ``values``, so its capacity comes from the
+    bucket bound and not from the full buffer.
     """
     num_ranks = send_matrix.shape[0]
-    total_rows = values.shape[0]
+    total_rows = values.shape[0] if message_rows is None else message_rows
     capacity = max(math.ceil(capacity_factor * total_rows / num_ranks), 1)
     received = _static_padded_token_all_to_all(
         values,
@@ -360,6 +380,8 @@ def _padded_token_all_to_all(
         rank,
         capacity=capacity,
         num_rounds=num_rounds,
+        input_starts=input_starts,
+        output_rows=output_rows,
     )
     overflow = jnp.sum(jnp.maximum(send_matrix[:, rank] - capacity * num_rounds, 0), dtype=jnp.int32)
     return received, overflow
@@ -756,6 +778,9 @@ def _moe_mlp_ep_moonep_exact_local(
                     rank,
                     capacity_factor=token_capacity_factor,
                     num_rounds=token_rounds,
+                    message_rows=bucket_capacity,
+                    input_starts=input_offsets,
+                    output_rows=bucket_capacity,
                 )
                 token_overflow = token_overflow + dispatch_overflow
             elif bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket > 0:
@@ -898,6 +923,9 @@ def _moe_mlp_ep_moonep_exact_local(
                     rank,
                     capacity_factor=token_capacity_factor,
                     num_rounds=token_rounds,
+                    message_rows=bucket_capacity,
+                    input_starts=return_input_offsets,
+                    output_rows=bucket_capacity,
                 )
                 token_overflow = token_overflow + combine_overflow
             elif bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket + 2 == token_buckets:
