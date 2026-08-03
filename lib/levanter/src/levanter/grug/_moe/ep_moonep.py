@@ -305,8 +305,8 @@ def _static_padded_token_all_to_all(
     local_starts = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
     received_sizes = send_matrix[:, rank]
     received_starts = jnp.cumsum(received_sizes, dtype=jnp.int32) - received_sizes
-    output = jnp.zeros_like(values)
-    for round_index in range(num_rounds):
+
+    def _exchange_round(round_index: Int[Array, ""], output: jax.Array) -> jax.Array:
         round_start = round_index * capacity
         round_slots = round_start + slots
         input_indices = local_starts[:, None] + round_slots
@@ -331,7 +331,9 @@ def _static_padded_token_all_to_all(
             received_blocks.reshape(num_ranks * capacity, *values.shape[1:]),
             mode="drop",
         )
-    return output
+        return output
+
+    return jax.lax.fori_loop(0, num_rounds, _exchange_round, jnp.zeros_like(values))
 
 
 def _bounded_token_all_to_all(
