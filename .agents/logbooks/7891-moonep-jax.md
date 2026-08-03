@@ -1241,3 +1241,25 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Invalid result: The run dropped `1,182,560,647` expert assignments, or `73.42%` of all assignments.
 - Finding: One-step-late global QB did not keep sender-to-expert cells inside the 1.1 fixed capacity during this short optimizer schedule.
 - Decision: Do not count the `25.02%` result. Keep exact MoonEP and remove the repeated world barriers from the XLA GIN transport.
+
+### 2026-08-03 05:34 UTC - MNEP-070 sparse GIN transport contract
+
+- Run ID: `mnep-070-sparse-gin-probe-20260803-0534`.
+- Snapshot: `c57e4cc15`.
+- Treatment: Use one GIN ready signal and one strong completion signal for each nonempty remote update. Use LSA barriers for local peers.
+- Probe: Run one balanced direct-device ragged all-to-all across 64 GB200 GPUs with 64 rows per rank and 32 elements per row.
+- Gate: Require checksum `6048`, zero sampled mismatches, attempt zero, and completion on all 16 workers.
+
+### 2026-08-03 05:45 UTC - MNEP-070b lower-resource transport contract
+
+- MNEP-070 did not receive a rack. Kueue excluded 126 of 205 nodes on CPU capacity and 78 nodes on GPU capacity.
+- Action: Stop MNEP-070 before GPU admission. Reduce each probe worker from 32 CPUs, 256 GiB RAM, and 256 GiB disk to 8 CPUs, 64 GiB RAM, and 64 GiB disk.
+- Run ID: `mnep-070b-sparse-gin-probe-20260803-0545` at `e8ec1b033`.
+- Gate: Keep the same 64-GPU checksum, mismatch, and attempt-zero requirements.
+
+### 2026-08-03 05:47 UTC - MNEP-070b passes the rack transport gate
+
+- Result: All 16 workers succeeded on attempt zero. Each worker completed in 34 to 40 seconds, including environment setup and JAX startup.
+- Correctness: The probe raises an error for any sampled mismatch. All workers exited with code zero, so all sampled values matched.
+- Scheduling: The 8-CPU and 64-GiB worker request received a complete NVLink domain in less than one minute.
+- Decision: Use the sparse GIN wheel for a five-step exact MoonEP run with global histogram QB.
