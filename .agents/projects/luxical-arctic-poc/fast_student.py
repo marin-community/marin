@@ -39,6 +39,13 @@ SOURCE_WINDOWS_PER_DOCUMENT = 3
 CHARACTERS_PER_SOURCE_WINDOW = 256
 
 MODEL_CONFIGS: dict[str, dict[str, Any]] = {
+    "context512": {
+        "max_tokens": 512,
+        "embed_dim": 256,
+        "hidden_dim": 256,
+        "num_layers": 2,
+        "num_heads": 4,
+    },
     "large": {
         "embed_dim": 512,
         "hidden_dim": 512,
@@ -66,14 +73,15 @@ def fast_student_config(name: str, vocab_size: int = COMPACT_VOCAB_SIZE) -> Fast
         treatment = MODEL_CONFIGS[name]
     except KeyError as error:
         raise ValueError(f"Unknown fast-student config: {name}") from error
+    architecture = {key: value for key, value in treatment.items() if key != "max_tokens"}
     return FastTransformerConfig(
         vocab_size=vocab_size,
-        max_tokens=MAX_TOKENS,
+        max_tokens=int(treatment.get("max_tokens", MAX_TOKENS)),
         pool_window=POOL_WINDOW,
         pool_kind="meanmaxmin",
         dropout=0.1,
         final_pool="mean",
-        **treatment,
+        **architecture,
     )
 
 
@@ -113,36 +121,45 @@ def packed_document_ids(
     texts: list[str],
     raw_to_compact: np.ndarray,
     tokenizer_name: str = TOKENIZER_NAME,
+    max_tokens: int = MAX_TOKENS,
+    characters_per_source_window: int = CHARACTERS_PER_SOURCE_WINDOW,
 ) -> np.ndarray:
     """Tokenize head, middle, and tail windows into one fixed-width student input."""
     if raw_to_compact.ndim != 1:
         raise ValueError(f"Expected a one-dimensional token remap, got {raw_to_compact.shape}")
-    grouped_ids = raw_document_window_ids(texts, tokenizer_name)
+    grouped_ids = raw_document_window_ids(
+        texts,
+        tokenizer_name,
+        tokens_per_document_window=max_tokens,
+        characters_per_source_window=characters_per_source_window,
+    )
     return pack_remapped_windows(
         grouped_ids,
         raw_to_compact,
-        MAX_TOKENS,
-        TOKENS_PER_DOCUMENT_WINDOW,
+        max_tokens,
+        max_tokens,
     )
 
 
 def raw_document_window_ids(
     texts: list[str],
     tokenizer_name: str = TOKENIZER_NAME,
+    tokens_per_document_window: int = TOKENS_PER_DOCUMENT_WINDOW,
+    characters_per_source_window: int = CHARACTERS_PER_SOURCE_WINDOW,
 ) -> list[list[Sequence[int]]]:
     """Tokenize one bounded head, middle, and tail view per document."""
-    flat_windows = [fast_document_view(text) for text in texts]
+    flat_windows = [fast_document_view(text, characters_per_source_window) for text in texts]
     if tokenizer_name == LUXICAL_TOKENIZER_NAME:
         tokenizer, _ = luxical_tokenizer()
         token_lists = tokenizer.tokenize(pa.array(flat_windows), add_special_tokens=False)
-        raw_ids = [row[:TOKENS_PER_DOCUMENT_WINDOW] for row in token_lists.to_numpy(zero_copy_only=False)]
+        raw_ids = [row[:tokens_per_document_window] for row in token_lists.to_numpy(zero_copy_only=False)]
     else:
         tokenizer: Any = load_tokenizer(tokenizer_name)
         raw_ids = tokenizer(
             flat_windows,
             add_special_tokens=False,
             truncation=True,
-            max_length=TOKENS_PER_DOCUMENT_WINDOW,
+            max_length=tokens_per_document_window,
         )["input_ids"]
     grouped_ids = [
         raw_ids[start : start + WINDOWS_PER_DOCUMENT] for start in range(0, len(raw_ids), WINDOWS_PER_DOCUMENT)
@@ -150,17 +167,19 @@ def raw_document_window_ids(
     return grouped_ids
 
 
-def fast_document_view(text: str) -> str:
+def fast_document_view(text: str, characters_per_source_window: int = CHARACTERS_PER_SOURCE_WINDOW) -> str:
     """Return one short view that keeps characters from three document regions."""
-    if len(text) <= 3 * CHARACTERS_PER_SOURCE_WINDOW:
+    if characters_per_source_window < 1:
+        raise ValueError("The source-window character count must be positive")
+    if len(text) <= 3 * characters_per_source_window:
         return text
     head, middle, tail = teacher_windows_from_view(text)
-    middle_start = max(0, len(middle) // 2 - CHARACTERS_PER_SOURCE_WINDOW // 2)
+    middle_start = max(0, len(middle) // 2 - characters_per_source_window // 2)
     return "\n".join(
         (
-            head[:CHARACTERS_PER_SOURCE_WINDOW],
-            middle[middle_start : middle_start + CHARACTERS_PER_SOURCE_WINDOW],
-            tail[-CHARACTERS_PER_SOURCE_WINDOW:],
+            head[:characters_per_source_window],
+            middle[middle_start : middle_start + characters_per_source_window],
+            tail[-characters_per_source_window:],
         )
     )
 
@@ -192,11 +211,14 @@ class FastStudent:
 
     def __call__(self, texts: list[str], batch_size: int = 4_096) -> np.ndarray:
         outputs = []
+        max_tokens = self.model.backbone.config.max_tokens
         for start in range(0, len(texts), batch_size):
             ids = packed_document_ids(
                 texts[start : start + batch_size],
                 self.raw_to_compact,
                 self.tokenizer_name,
+                max_tokens=max_tokens,
+                characters_per_source_window=max_tokens,
             )
             outputs.append(predict_embeddings(self.model, ids, batch_size=batch_size))
         if not outputs:
@@ -207,12 +229,13 @@ class FastStudent:
         return vectors
 
     def metadata(self) -> dict[str, Any]:
+        max_tokens = self.model.backbone.config.max_tokens
         return {
             "tokenizer": self.tokenizer_name,
             "output_dimension": OUTPUT_DIMENSION,
-            "tokens_per_document_window": TOKENS_PER_DOCUMENT_WINDOW,
+            "tokens_per_document_window": max_tokens,
             "windows_per_document": WINDOWS_PER_DOCUMENT,
             "source_windows_per_document": SOURCE_WINDOWS_PER_DOCUMENT,
-            "characters_per_source_window": CHARACTERS_PER_SOURCE_WINDOW,
+            "characters_per_source_window": max_tokens,
             "config": asdict(self.model.backbone.config),
         }

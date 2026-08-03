@@ -20,7 +20,9 @@ from fast_student import (
     BASELINE_FILE,
     BASELINE_REPO,
     BASELINE_REVISION,
+    CHARACTERS_PER_SOURCE_WINDOW,
     COMPACT_VOCAB_SIZE,
+    MAX_TOKENS,
     TOKENIZER_NAME,
     packed_document_ids,
     raw_document_window_ids,
@@ -106,6 +108,9 @@ def prepare_source(
     source: str,
     manifest_output_url: str,
     raw_to_compact: np.ndarray,
+    output_root: str = OUTPUT_ROOT,
+    max_tokens: int = MAX_TOKENS,
+    characters_per_source_window: int = CHARACTERS_PER_SOURCE_WINDOW,
 ) -> dict[str, Any]:
     """Write aligned packed IDs and quantized teacher vectors for one source."""
     source_table = selected_training_table(manifest_output_url, ["raw_sha256", "train_rank", "text"])
@@ -121,7 +126,14 @@ def prepare_source(
     texts = source_table["text"].to_pylist()
     packed_chunks = []
     for start in range(0, len(texts), TOKENIZE_BATCH_SIZE):
-        packed_chunks.append(packed_document_ids(texts[start : start + TOKENIZE_BATCH_SIZE], raw_to_compact))
+        packed_chunks.append(
+            packed_document_ids(
+                texts[start : start + TOKENIZE_BATCH_SIZE],
+                raw_to_compact,
+                max_tokens=max_tokens,
+                characters_per_source_window=characters_per_source_window,
+            )
+        )
     packed = np.concatenate(packed_chunks)
     ids = pa.FixedSizeListArray.from_arrays(pa.array(packed.reshape(-1)), packed.shape[1])
     output_table = pa.table(
@@ -132,7 +144,7 @@ def prepare_source(
             "embedding": teacher_table["embedding"],
         }
     )
-    output_url = f"{OUTPUT_ROOT}/sources/{Path(manifest_output_url).name}"
+    output_url = f"{output_root}/sources/{Path(manifest_output_url).name}"
     output_filesystem, output_path = fsspec.core.url_to_fs(output_url)
     with tempfile.TemporaryDirectory() as temporary_directory:
         local_path = Path(temporary_directory) / "source.parquet"

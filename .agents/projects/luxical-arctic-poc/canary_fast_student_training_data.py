@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from fast_student import MAX_TOKENS
 from fast_student_training_data import StagedTrainingRows
 from ladder_config import MANIFEST_ROOT, read_json, write_json
 from train_fast_student import (
@@ -60,6 +61,7 @@ def main() -> None:
             teacher_spec,
             TrainingLayout.STAGED,
             Path(directory),
+            MAX_TOKENS,
         )
         if not isinstance(staged, StagedTrainingRows):
             raise TypeError(f"The canary received training layout {type(staged).__name__}")

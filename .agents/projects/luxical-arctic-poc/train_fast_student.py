@@ -23,7 +23,7 @@ import numpy as np
 import optax
 import pyarrow.parquet as pq
 from build_manifest import allocate_balanced_quotas
-from fast_student import MAX_TOKENS, MODEL_CONFIGS, FastStudent
+from fast_student import MODEL_CONFIGS, FastStudent
 from fast_student_training_data import (
     MaterializedTrainingRows,
     SourceTrainingRows,
@@ -202,17 +202,20 @@ def training_rows(
     teacher_spec: TeacherSpec,
     layout: TrainingLayout,
     staging_directory: Path,
+    id_width: int,
 ) -> tuple[MaterializedTrainingRows | StagedTrainingRows, dict[str, int]]:
     """Load the original arrays or stage bounded disk-backed arrays."""
     if layout == TrainingLayout.MATERIALIZED:
         ids, teacher, source_ids, quotas = load_training_arrays(prepared, target, teacher_spec)
+        if ids.shape[1] != id_width:
+            raise ValueError(f"Prepared ID width {ids.shape[1]} does not match model width {id_width}")
         return MaterializedTrainingRows(ids, teacher, source_ids), quotas
     capacities = {source: int(result["rows"]) for source, result in prepared["sources"].items()}
     quotas = allocate_balanced_quotas(capacities, target)
     staged = stage_training_rows(
         staged_sources(prepared, quotas, teacher_spec),
         staging_directory,
-        id_width=MAX_TOKENS,
+        id_width=id_width,
         teacher_dimension=teacher_spec.dimension,
         teacher_quantization_limit=TEACHER_QUANTIZATION_LIMIT,
         chunk_rows=STAGING_CHUNK_ROWS,
@@ -472,6 +475,8 @@ def main() -> None:
     if arguments.treatment != "baseline" and teacher_spec.dimension != 256:
         raise ValueError("Source-geometry treatments require equal student and teacher dimensions")
     raw_to_compact = load_numpy(prepared["raw_to_compact_url"])
+    student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
+    id_width = student.model.backbone.config.max_tokens
     with tempfile.TemporaryDirectory(prefix="luxical-fast-student-training-") as staging_directory:
         rows, quotas = training_rows(
             prepared,
@@ -479,9 +484,9 @@ def main() -> None:
             teacher_spec,
             arguments.training_layout,
             Path(staging_directory),
+            id_width,
         )
         memory_report = rows.memory_report(TRAINING_BLOCK_ROWS)
-        student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
         artifact_name = training_name(arguments.config, arguments.treatment, teacher_spec)
         source_geometry_weight = SOURCE_GEOMETRY_WEIGHTS[arguments.treatment]
         output_root = f"{OUTPUT_ROOT}/{artifact_name}/{arguments.rung}"
