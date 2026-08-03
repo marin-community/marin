@@ -1226,3 +1226,10 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Timing: The step interval was 28 seconds. This matches exact MoonEP, so the 1.1 fixed-capacity gate did not pass for the rack routes.
 - Cause: The stable exact MoonEP path became unstable only after it was placed in a runtime conditional with a different collective sequence. The four-GPU test did not find this multi-host fault.
 - Decision: Remove the runtime conditional. Keep exact MoonEP as a static mode, and measure a separate static fixed-capacity mode before selecting a no-drop capacity for the QB run.
+
+### 2026-08-03 04:57 UTC - MNEP-069 static capacity measurement contract
+
+- Change: Exact MoonEP and QB-fixed all-to-all are separate compile-time modes. No runtime branch contains different collective sequences.
+- Correctness: Both static modes matched the dense output and the input, W13, and W2 gradients on four GB200 GPUs. The test took 140.28 seconds, including compilation.
+- Treatment: Run global bucketed QB with the static fixed schedule and capacity factor 1.1.
+- Gate: Require five finite steps on attempt zero. Measure median MFU and the exact reported assignment overflow before selecting the final capacity.
