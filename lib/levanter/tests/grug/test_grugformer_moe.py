@@ -501,6 +501,27 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
 
 
 # ragged_all_to_all is omitted: XLA:CPU has no ragged-all-to-all thunk, so it cannot execute here.
+def _run_on_forced_cpu_devices(script: str, *, devices: int) -> None:
+    """Run ``script`` on a forced multi-device CPU backend and require it to assert.
+
+    Meshes taken from whatever the default backend offers collapse to one device on the
+    ordinary test run, which silently skips the multi-device behavior. The sentinel keeps
+    a script that exits 0 without reaching its assertions from passing.
+    """
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = f"--xla_force_host_platform_device_count={devices}"
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script) + '\nprint("__assertions_ran__")\n'],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "__assertions_ran__" in result.stdout, result.stdout
+
+
 def test_moe_ep_reshards_an_expert_less_incoming_batch():
     """An EP batch must arrive sharded over "expert" too, not just over "data".
 
@@ -509,10 +530,8 @@ def test_moe_ep_reshards_an_expert_less_incoming_batch():
     routed result is then wrong, not merely oversized. This needs a real multi-device
     mesh, so it forces one in a subprocess rather than skipping on the default backend.
     """
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
+    _run_on_forced_cpu_devices(
+        """
         import jax
         import numpy as np
         from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
@@ -553,18 +572,9 @@ def test_moe_ep_reshards_an_expert_less_incoming_batch():
                 out = routed(implementation, P("data", None))
             assert out.sharding.spec == P(("data", "expert")), (implementation, out.sharding.spec)
             np.testing.assert_allclose(np.asarray(out), np.asarray(expected), rtol=1e-5, atol=1e-5)
-        print("__assertions_ran__")
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        """,
+        devices=4,
     )
-
-    assert result.returncode == 0, result.stderr
-    assert "__assertions_ran__" in result.stdout, result.stdout
 
 
 def test_fixed_all_to_all_drops_assignments_over_capacity():
@@ -650,10 +660,8 @@ def test_fixed_all_to_all_drops_assignments_over_capacity():
 
 
 def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
-    script = """
+    _run_on_forced_cpu_devices(
+        """
         import jax
         import jax.numpy as jnp
         import numpy as np
@@ -731,16 +739,9 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
                 rtol=1e-5,
                 atol=1e-5,
             )
-    """
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+        """,
+        devices=4,
     )
-
-    assert result.returncode == 0, result.stderr
 
 
 def test_fixed_all_to_all_backward_has_no_scatter():

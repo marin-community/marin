@@ -68,8 +68,11 @@ _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 _FSDP_AXES: tuple[str, ...] = ("data", "expert")
 # The LM head also spans the cross-slice replica axis it had before EP.
 _LM_HEAD_AXES: tuple[str, ...] = ("replica_dcn", *_FSDP_AXES)
-# The groups these replace. A weight falls back to its pre-EP group whole rather than
-# to some smaller one, so widening can only ever add sharding, never remove it.
+# The groups these replace. Widening multiplies the divisibility requirement on the
+# sharded dim by the expert axis size, so a weight falls back to its pre-EP group whole
+# rather than to some smaller one: the spec, including any init error it raises, is then
+# exactly the pre-EP one. Widening can add sharding but never silently take it away, and
+# a geometry that could not shard before still fails instead of quietly replicating.
 _PRE_EP_FSDP_AXES: tuple[str, ...] = ("data",)
 _PRE_EP_LM_HEAD_AXES: tuple[str, ...] = ("replica_dcn", "data")
 
@@ -88,18 +91,7 @@ RematMode = Literal["recompute_all", "save_moe"]
 
 
 def _shard_axes(dim: int, widened: tuple[str, ...], pre_ep: tuple[str, ...]) -> tuple[str, ...] | str | None:
-    """``widened`` when its shard count divides ``dim``, otherwise ``pre_ep``.
-
-    Adding "expert" multiplies the divisibility requirement on ``dim`` by the expert
-    axis size, which would turn shapes that shard fine without it into a hard failure
-    at model init. The fallback is the whole pre-EP group rather than a smaller one:
-    when the wider group does not fit, the resulting spec -- and any init error it
-    raises -- is exactly what it was before expert parallelism, so widening can add
-    sharding but never silently take it away.
-
-    Axes absent from the mesh are dropped, which is how a non-EP mesh with no "expert"
-    axis still initializes.
-    """
+    """``widened`` when its shard count divides ``dim``, otherwise ``pre_ep``, minus absent axes."""
     mesh = get_abstract_mesh()
     present = lambda axes: tuple(axis for axis in axes if axis in mesh.shape)  # noqa: E731
     widened_shards = math.prod(int(mesh.shape[axis]) for axis in present(widened))
