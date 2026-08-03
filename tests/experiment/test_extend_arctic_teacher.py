@@ -12,14 +12,18 @@ PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-p
 sys.path.insert(0, str(PROJECT))
 
 from extend_arctic_teacher import (  # noqa: E402
+    BASE_MANIFEST_METADATA_KEY,
+    EXPANDED_MANIFEST_METADATA_KEY,
     MANIFEST_METADATA_KEY,
+    RUNG_METADATA_KEY,
     TEACHER_ID,
     TEACHER_ID_METADATA_KEY,
     TEACHER_REVISION,
     TEACHER_REVISION_METADATA_KEY,
     assigned_sources,
-    checked_base_embeddings,
-    validate_base_teacher_metadata,
+    checked_prefix_embeddings,
+    prefix_metadata,
+    validate_teacher_metadata,
 )
 
 
@@ -40,24 +44,24 @@ def teacher_table(hashes: list[str]) -> pa.Table:
     return table.append_column("embedding", embedding)
 
 
-def test_checked_base_embeddings_returns_exact_prefix() -> None:
+def test_checked_prefix_embeddings_returns_exact_prefix() -> None:
     hashes = ["a", "b", "c"]
     expanded = alignment_table([*hashes, "d"])
 
-    values = checked_base_embeddings(expanded, alignment_table(hashes), teacher_table(hashes))
+    values = checked_prefix_embeddings(expanded, alignment_table(hashes), teacher_table(hashes))
 
     assert values.shape == (3, 256)
     assert values.dtype == np.uint8
 
 
-def test_checked_base_embeddings_rejects_changed_prefix() -> None:
+def test_checked_prefix_embeddings_rejects_changed_prefix() -> None:
     with pytest.raises(ValueError, match="expanded prefix differs"):
-        checked_base_embeddings(
+        checked_prefix_embeddings(
             alignment_table(["a", "changed"]), alignment_table(["a", "b"]), teacher_table(["a", "b"])
         )
 
 
-def test_validate_base_teacher_metadata_requires_exact_inputs() -> None:
+def test_validate_teacher_metadata_requires_exact_inputs() -> None:
     table = teacher_table(["a"]).replace_schema_metadata(
         {
             MANIFEST_METADATA_KEY: b"base-sha",
@@ -66,9 +70,24 @@ def test_validate_base_teacher_metadata_requires_exact_inputs() -> None:
         }
     )
 
-    validate_base_teacher_metadata(table, "base-sha")
+    manifest = {"sha256": "base-sha"}
+    validate_teacher_metadata(table, prefix_metadata(manifest, None))
     with pytest.raises(ValueError, match="metadata differs"):
-        validate_base_teacher_metadata(table, "different-sha")
+        validate_teacher_metadata(table, prefix_metadata({"sha256": "different-sha"}, None))
+
+
+def test_prefix_metadata_identifies_expanded_rung() -> None:
+    manifest = {"sha256": "10m-sha", "base_manifest_sha256": "base-sha"}
+
+    metadata = prefix_metadata(manifest, "10m")
+
+    assert metadata == {
+        EXPANDED_MANIFEST_METADATA_KEY: b"10m-sha",
+        BASE_MANIFEST_METADATA_KEY: b"base-sha",
+        RUNG_METADATA_KEY: b"10m",
+        TEACHER_ID_METADATA_KEY: TEACHER_ID.encode(),
+        TEACHER_REVISION_METADATA_KEY: TEACHER_REVISION.encode(),
+    }
 
 
 def test_assigned_sources_is_complete_and_balanced() -> None:

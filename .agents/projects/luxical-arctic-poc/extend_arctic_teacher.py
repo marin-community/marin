@@ -76,39 +76,63 @@ def parquet_table(url: str) -> pa.Table:
     return pq.read_table(path, filesystem=filesystem)
 
 
-def checked_base_embeddings(
+def checked_prefix_embeddings(
     expanded: pa.Table,
-    base_source: pa.Table,
-    base_teacher: pa.Table,
+    prefix_source: pa.Table,
+    prefix_teacher: pa.Table,
 ) -> np.ndarray:
-    """Return aligned quantized base embeddings for the unchanged prefix."""
-    base_rows = len(base_source)
-    if len(base_teacher) != base_rows or len(expanded) < base_rows:
-        raise ValueError("The expanded, base, and teacher row counts do not align")
+    """Return aligned quantized embeddings for an unchanged prefix."""
+    prefix_rows = len(prefix_source)
+    if len(prefix_teacher) != prefix_rows or len(expanded) < prefix_rows:
+        raise ValueError("The expanded, prefix, and teacher row counts do not align")
     columns = ("raw_sha256", "eval_rank", "train_rank")
     for column in columns:
-        expected = base_source[column].to_pylist()
-        if expanded[column].slice(0, base_rows).to_pylist() != expected:
+        expected = prefix_source[column].to_pylist()
+        if expanded[column].slice(0, prefix_rows).to_pylist() != expected:
             raise ValueError(f"The expanded prefix differs in {column}")
-        if base_teacher[column].to_pylist() != expected:
-            raise ValueError(f"The base teacher differs in {column}")
-    embeddings = base_teacher["embedding"].combine_chunks()
-    values = embeddings.values.to_numpy(zero_copy_only=False).reshape(base_rows, EMBEDDING_DIMENSION)
+        if prefix_teacher[column].to_pylist() != expected:
+            raise ValueError(f"The prefix teacher differs in {column}")
+    embeddings = prefix_teacher["embedding"].combine_chunks()
+    values = embeddings.values.to_numpy(zero_copy_only=False).reshape(prefix_rows, EMBEDDING_DIMENSION)
     if values.dtype != np.uint8:
-        raise ValueError(f"The base teacher has dtype {values.dtype}; expected uint8")
+        raise ValueError(f"The prefix teacher has dtype {values.dtype}; expected uint8")
     return values
 
 
-def validate_base_teacher_metadata(table: pa.Table, base_manifest_sha256: str) -> None:
-    """Check that reused vectors identify the fixed teacher and base manifest."""
+def validate_teacher_metadata(table: pa.Table, expected: dict[bytes, bytes]) -> None:
+    """Check that reused vectors identify their exact teacher inputs."""
     metadata = table.schema.metadata or {}
-    expected = {
-        MANIFEST_METADATA_KEY: base_manifest_sha256.encode(),
-        TEACHER_ID_METADATA_KEY: TEACHER_ID.encode(),
-        TEACHER_REVISION_METADATA_KEY: TEACHER_REVISION.encode(),
-    }
     if any(metadata.get(key) != value for key, value in expected.items()):
-        raise ValueError("The base teacher metadata differs from the fixed teacher")
+        raise ValueError("The prefix teacher metadata differs from the fixed teacher inputs")
+
+
+def teacher_prefix(rung: str, base_manifest: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Return the largest completed teacher rung that is a prefix of the target."""
+    if rung == "10m":
+        return base_manifest, None
+    if rung != "30m":
+        raise ValueError(f"The teacher rung is not supported: {rung}")
+    prefix = read_json(f"{expanded_root('10m')}/manifest.json")
+    if prefix["base_manifest_sha256"] != base_manifest["sha256"]:
+        raise ValueError("The 10M prefix has a different base manifest")
+    if int(prefix["training_targets"]["10m"]) != 10_000_000:
+        raise ValueError("The 10M prefix has an incorrect training target")
+    return prefix, "10m"
+
+
+def prefix_metadata(prefix_manifest: dict[str, Any], prefix_rung: str | None) -> dict[bytes, bytes]:
+    """Return the required metadata for reusable prefix vectors."""
+    if prefix_rung is None:
+        return {
+            MANIFEST_METADATA_KEY: prefix_manifest["sha256"].encode(),
+            TEACHER_ID_METADATA_KEY: TEACHER_ID.encode(),
+            TEACHER_REVISION_METADATA_KEY: TEACHER_REVISION.encode(),
+        }
+    return expected_metadata(
+        prefix_manifest["sha256"],
+        prefix_manifest["base_manifest_sha256"],
+        prefix_rung,
+    )
 
 
 def expected_metadata(expanded_manifest_sha256: str, base_manifest_sha256: str, rung: str) -> dict[bytes, bytes]:
@@ -138,7 +162,7 @@ def reusable_output(url: str, rows: int, metadata: dict[bytes, bytes]) -> bool:
 
 
 def embed_extension(teacher: Any, table: pa.Table, start_row: int, source: str) -> np.ndarray:
-    """Embed and quantize the rows after the reused 3M prefix."""
+    """Embed and quantize the rows after the reused prefix."""
     texts = table["text"].slice(start_row).to_pylist()
     batches = []
     for start in range(0, len(texts), TABLE_BATCH_SIZE):
@@ -173,10 +197,12 @@ def embed_source(
     teacher: Any,
     expanded_manifest: dict[str, Any],
     base_manifest: dict[str, Any],
+    prefix_manifest: dict[str, Any],
+    prefix_rung: str | None,
     rung: str,
     source: str,
 ) -> dict[str, Any]:
-    """Reuse the fixed 3M vectors and embed one source extension."""
+    """Reuse the largest completed prefix and embed one source extension."""
     expanded_result = expanded_manifest["sources"][source]
     expected_rows = int(expanded_result["counts"][f"train_{rung}"]) + int(
         expanded_manifest["evaluation_rows_per_source"]
@@ -188,14 +214,18 @@ def embed_source(
         return {"output_url": output_url, "rows": expected_rows, "reused": True}
 
     expanded = selected_expanded_table(expanded_result["output_url"], rung)
-    base_result = base_manifest["sources"][source]
-    base_source = parquet_table(base_result["output_url"])
-    base_teacher_url = f"{BASE_TEACHER_ROOT}/sources/{Path(base_result['output_url']).name}"
-    base_teacher = parquet_table(base_teacher_url)
-    validate_base_teacher_metadata(base_teacher, base_manifest["sha256"])
-    base_quantized = checked_base_embeddings(expanded, base_source, base_teacher)
-    extension_quantized = embed_extension(teacher, expanded, len(base_source), source)
-    quantized = np.concatenate((base_quantized, extension_quantized))
+    prefix_result = prefix_manifest["sources"][source]
+    if prefix_rung is None:
+        prefix_source = parquet_table(prefix_result["output_url"])
+        prefix_teacher_url = f"{BASE_TEACHER_ROOT}/sources/{Path(prefix_result['output_url']).name}"
+    else:
+        prefix_source = selected_expanded_table(prefix_result["output_url"], prefix_rung)
+        prefix_teacher_url = f"{teacher_root(prefix_rung)}/sources/{Path(prefix_result['output_url']).name}"
+    prefix_teacher = parquet_table(prefix_teacher_url)
+    validate_teacher_metadata(prefix_teacher, prefix_metadata(prefix_manifest, prefix_rung))
+    prefix_quantized = checked_prefix_embeddings(expanded, prefix_source, prefix_teacher)
+    extension_quantized = embed_extension(teacher, expanded, len(prefix_source), source)
+    quantized = np.concatenate((prefix_quantized, extension_quantized))
     if len(quantized) != expected_rows:
         raise ValueError(f"Source {source} produced {len(quantized)} rows; expected {expected_rows}")
     write_teacher_table(output_url, expanded, quantized, metadata)
@@ -209,7 +239,8 @@ def embed_source(
         "output_url": output_url,
         "rows": expected_rows,
         "reused": False,
-        "reused_base_rows": len(base_source),
+        "prefix_rung": prefix_rung or "base",
+        "reused_prefix_rows": len(prefix_source),
         "embedded_extension_rows": len(extension_quantized),
         "extension_unique_quantized_fraction": unique_fraction,
         "extension_varying_dimensions": varying_dimensions,
@@ -240,10 +271,19 @@ def main() -> None:
     base_manifest = read_json(BASE_MANIFEST_URL)
     if expanded_manifest["base_manifest_sha256"] != base_manifest["sha256"]:
         raise ValueError("The expanded manifest has a different base manifest")
+    prefix_manifest, prefix_rung = teacher_prefix(arguments.rung, base_manifest)
     teacher = new_teacher()
     reports = {}
     for source in assigned_sources(expanded_manifest, arguments.rung, shard_index, num_shards):
-        reports[source] = embed_source(teacher, expanded_manifest, base_manifest, arguments.rung, source)
+        reports[source] = embed_source(
+            teacher,
+            expanded_manifest,
+            base_manifest,
+            prefix_manifest,
+            prefix_rung,
+            arguments.rung,
+            source,
+        )
     report = {
         "rung": arguments.rung,
         "teacher_id": TEACHER_ID,
@@ -252,6 +292,8 @@ def main() -> None:
         "expanded_manifest_sha256": expanded_manifest["sha256"],
         "base_manifest_url": BASE_MANIFEST_URL,
         "base_manifest_sha256": base_manifest["sha256"],
+        "prefix_manifest_sha256": prefix_manifest["sha256"],
+        "prefix_rung": prefix_rung or "base",
         "shard_index": shard_index,
         "num_shards": num_shards,
         "source_count": len(reports),
