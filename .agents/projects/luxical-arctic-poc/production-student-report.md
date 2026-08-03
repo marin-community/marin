@@ -38,7 +38,7 @@ is not an approved production model.
 | Held-out robustness | All large semantic groups pass | 12 pilot-projection group gates fail | Fail |
 | Fixed production buckets | Parent, leaf, and form NMI and purity pass for 40 buckets | Added for the 50,000-label model | Open |
 | Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
-| Release artifact | Pinned model, tokenizer, loader, and production smoke | Not built | Open |
+| Release artifact | Pinned model, tokenizer, loader, and production smoke | Digest-checked loader passes a synthetic bundle round trip; final bundle remains open | Open |
 
 The previous paired CPU test used 20,000 fixed documents, five alternating
 timed repeats, eight CPU threads, and the CPU JAX backend. The projected

@@ -2008,3 +2008,20 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Seventeen focused behavior tests pass in 20.49 seconds.
 - Pyrefly reports zero errors. The required pre-commit checks pass.
 - Decision: Require all six 40-bucket semantic gates for production approval.
+
+### LUX-RELEASE-001: Pinned production loader
+
+- Commit Hash: `13b521416`.
+- The production loader requires a caller-pinned manifest SHA-256.
+- The manifest pins the model, token remap, tokenizer state, model config,
+  training report, input view, and output dimension.
+- The loader verifies each file digest before it constructs the model.
+- A bundle round trip returns finite, distinct, unit-length vectors.
+- Changed model bytes fail the digest gate before model load.
+- Commit Hash: `ab5baca1e`.
+- The research wrapper now uses the production head, middle, and tail view.
+- This shared view also accepts raw documents with exactly 6,002 characters.
+- Eight focused tests pass. Pyrefly reports zero errors, and the required
+  pre-commit checks pass.
+- Next action: Publish the selected 50,000-label model in this bundle format and
+  do an exact research-to-production parity test.
