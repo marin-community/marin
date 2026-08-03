@@ -42,6 +42,20 @@ def test_retained_train_validation_indices_drop_low_confidence_and_do_not_overla
     assert cutoff == 0.2
 
 
+def test_retained_train_validation_indices_drop_exact_count_when_confidences_tie() -> None:
+    confidences = np.asarray([0.1] * 5 + [0.9] * 5)
+    leaves = ["A"] * 5 + ["B"] * 5
+
+    training, validation, _ = retained_train_validation_indices(
+        confidences,
+        leaves,
+        validation_fraction=0.2,
+        drop_fraction=0.2,
+    )
+
+    assert len(set(range(10)) - set(training) - set(validation)) == 2
+
+
 def test_supervised_contrastive_loss_prefers_cross_source_label_neighbors() -> None:
     labels = jnp.asarray([0, 1, 0, 1])
     sources = jnp.asarray([0, 0, 1, 1])

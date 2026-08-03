@@ -1845,3 +1845,26 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Next action: Keep the 30M Arctic base model. Train a small semantic projection
   on separate GLM hierarchy labels, anchor it to the base geometry, and fold it
   into the existing embedding head.
+
+### LUX-SEMANTIC-PROJECTION-001: Raw GLM projection result
+
+- Commit Hash: `9f095735e`.
+- Job: `/rav/lux-semantic-projection-pilot-1k-h100-001`.
+- The split dropped exactly 50 low-confidence rows. It used 760 training rows
+  and 190 validation rows.
+- Parent macro-F1 increased from 0.28632 to 0.32150. Form macro-F1 increased
+  from 0.28765 to 0.31939.
+- Leaf macro-F1 decreased from 0.20762 to 0.20037. The mean semantic increase
+  was 0.01989.
+- The effective-rank fraction decreased from 0.31188 to 0.17904. It failed the
+  fixed 0.25 gate.
+- Total variance was 0.90255. All vectors were finite and unique.
+- The minimum folded-head cosine was 0.99983. Thus, head folding kept the
+  learned projection without an extra inference operation.
+- Report artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/full-glm-semantic-projection/pilot-1k/training.json`.
+- Interpretation: The GLM signal improves parent and form semantics, but the
+  raw projection compresses too many vector dimensions. Do not use the fixed
+  10,000-document set for this failed candidate.
+- Next action: Use a fixed identity-mix ladder. Select the best pilot mix that
+  passes rank, variance, per-level, and semantic-mean gates.

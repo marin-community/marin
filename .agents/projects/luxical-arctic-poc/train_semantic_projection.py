@@ -34,7 +34,7 @@ from experiments.datakit.cluster.quality.fast_transformer.model import FastEmbed
 BASE_TRAINING_NAME = "full"
 BASE_RUNG = "30m"
 TRAINING_NAME = "full-glm-semantic-projection"
-RUNG = "pilot-1k"
+RUNG = "pilot-1k-mix-v2"
 HIERARCHY_RUN_ID = "hierarchy-1000-20260802-002"
 HIERARCHY_VARIANT = "compact"
 CONFIDENCE_DROP_FRACTION = 0.05
@@ -55,6 +55,7 @@ MAXIMUM_VALIDATION_LEVEL_LOSS = 0.01
 MINIMUM_EFFECTIVE_RANK_FRACTION = 0.25
 MINIMUM_TOTAL_VARIANCE = 0.50
 MINIMUM_FOLDED_COSINE = 0.999
+PROJECTION_MIX_ALPHAS = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
 RESULT_FILE = Path("/tmp/luxical-semantic-projection")
 
 logger = logging.getLogger(__name__)
@@ -217,9 +218,7 @@ def validation_decision(base: dict[str, Any], projected: dict[str, Any], folded_
         "no_level_regression": min(deltas.values()) >= -MAXIMUM_VALIDATION_LEVEL_LOSS,
         "finite": float(geometry["finite_fraction"]) == 1.0,
         "unique": float(geometry["unique_fraction_4dp"]) >= 0.99,
-        "effective_rank_fraction": (
-            float(geometry["effective_rank_fraction"]) >= MINIMUM_EFFECTIVE_RANK_FRACTION
-        ),
+        "effective_rank_fraction": float(geometry["effective_rank_fraction"]) >= MINIMUM_EFFECTIVE_RANK_FRACTION,
         "total_variance": float(geometry["total_variance"]) >= MINIMUM_TOTAL_VARIANCE,
         "folded_parity": folded_cosine_minimum >= MINIMUM_FOLDED_COSINE,
     }
@@ -241,6 +240,43 @@ def fold_embedding_projection(
         raise ValueError("The semantic projection shape does not match the embedding output")
     folded_head = model.embedding_head @ jnp.asarray(projection)
     return eqx.tree_at(lambda candidate: candidate.embedding_head, model, folded_head)
+
+
+def projection_mix(projection: np.ndarray, alpha: float) -> np.ndarray:
+    """Shrink one learned projection toward identity."""
+    if projection.ndim != 2 or projection.shape[0] != projection.shape[1]:
+        raise ValueError("The semantic projection must be square")
+    if not 0 <= alpha <= 1:
+        raise ValueError("The semantic projection mix must be from zero through one")
+    identity = np.eye(projection.shape[0], dtype=projection.dtype)
+    return identity + alpha * (projection - identity)
+
+
+def select_projection_mix(
+    base_vectors: np.ndarray,
+    raw_projection: np.ndarray,
+    validation_indices: np.ndarray,
+    validation_labels: SemanticLabels,
+    sources: np.ndarray,
+    base_validation: dict[str, Any],
+) -> tuple[float, np.ndarray, list[dict[str, Any]]]:
+    """Select the best pilot mix that passes the provisional gates."""
+    candidates = []
+    for alpha in PROJECTION_MIX_ALPHAS:
+        candidate_projection = projection_mix(raw_projection, alpha)
+        candidate_vectors = normalize_embeddings(base_vectors @ candidate_projection)
+        metrics = evaluation_metrics(
+            candidate_vectors[validation_indices],
+            validation_labels,
+            sources[validation_indices],
+        )
+        decision = validation_decision(base_validation, metrics, folded_cosine_minimum=1.0)
+        candidates.append({"alpha": alpha, "metrics": metrics, "provisional_decision": decision})
+    passed = [row for row in candidates if row["provisional_decision"]["passed"]]
+    selection_pool = passed if passed else candidates
+    selected = max(selection_pool, key=lambda row: row["provisional_decision"]["semantic_mean_delta"])
+    selected_alpha = float(selected["alpha"])
+    return selected_alpha, projection_mix(raw_projection, selected_alpha), candidates
 
 
 def fit_projection(
@@ -308,12 +344,11 @@ def main() -> None:
             leaf=labels.leaf[training_indices],
             form=labels.form[training_indices],
         )
-        projection, history = fit_projection(
+        raw_projection, history = fit_projection(
             base_vectors[training_indices],
             training_labels,
             sources[training_indices],
         )
-        projected_vectors = normalize_embeddings(base_vectors @ projection)
         validation_labels = SemanticLabels(
             parent=labels.parent[validation_indices],
             leaf=labels.leaf[validation_indices],
@@ -324,6 +359,15 @@ def main() -> None:
             validation_labels,
             sources[validation_indices],
         )
+        selected_alpha, projection, projection_mix_candidates = select_projection_mix(
+            base_vectors,
+            raw_projection,
+            validation_indices,
+            validation_labels,
+            sources,
+            base_validation,
+        )
+        projected_vectors = normalize_embeddings(base_vectors @ projection)
         folded_model = fold_embedding_projection(student.model, projection)
         folded_student = FastStudent(folded_model, student.raw_to_compact, student.tokenizer_name)
         folded_vectors = folded_student(texts)
@@ -341,8 +385,10 @@ def main() -> None:
         output_root = f"{TRAINING_ROOT}/{TRAINING_NAME}/{RUNG}"
         model_url = f"{output_root}/model.eqx"
         projection_url = f"{output_root}/projection.npy"
+        raw_projection_url = f"{output_root}/raw-projection.npy"
         model_sha256 = upload_model(folded_model, model_url)
         projection_sha256 = upload_array(projection, projection_url)
+        raw_projection_sha256 = upload_array(raw_projection, raw_projection_url)
     report = {
         "config_name": "full",
         "training_name": TRAINING_NAME,
@@ -360,6 +406,8 @@ def main() -> None:
         "final_model_sha256": model_sha256,
         "final_projection_url": projection_url,
         "final_projection_sha256": projection_sha256,
+        "raw_projection_url": raw_projection_url,
+        "raw_projection_sha256": raw_projection_sha256,
         "raw_to_compact_url": base_report["raw_to_compact_url"],
         "raw_to_compact_sha256": base_report["raw_to_compact_sha256"],
         "parameters": count_params(folded_model),
@@ -381,7 +429,10 @@ def main() -> None:
             "minimum_effective_rank_fraction": MINIMUM_EFFECTIVE_RANK_FRACTION,
             "minimum_total_variance": MINIMUM_TOTAL_VARIANCE,
             "minimum_folded_cosine": MINIMUM_FOLDED_COSINE,
+            "projection_mix_alphas": list(PROJECTION_MIX_ALPHAS),
         },
+        "selected_projection_alpha": selected_alpha,
+        "projection_mix_candidates": projection_mix_candidates,
         "base_validation": base_validation,
         "projected_validation": projected_validation,
         "validation_decision": decision,
@@ -398,6 +449,7 @@ def main() -> None:
         "base_validation": base_validation,
         "projected_validation": projected_validation,
         "validation_decision": decision,
+        "selected_projection_alpha": selected_alpha,
     }
     RESULT_FILE.write_text(json.dumps(summary, sort_keys=True))
     logger.info("GLM_SEMANTIC_PROJECTION=%s", json.dumps(summary, sort_keys=True))
