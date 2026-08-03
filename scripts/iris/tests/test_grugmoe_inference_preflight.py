@@ -8,6 +8,7 @@ import dataclasses
 import io
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +22,15 @@ from experiments.grug.moe.inference_preflight import (
     SNOWBALL_EXPORT,
     VLLM_SHA,
     deterministic_boundary_workload,
+)
+from experiments.grug.moe.rolling_benchmark import (
+    PlateauRequirements,
+    PlateauWindow,
+    frozen_cohort_slots,
+    histogram_quantile_delta,
+    parse_labeled_prometheus,
+    prometheus_value,
+    prometheus_values_by_label,
 )
 from scripts.iris.dev_gpu import CoreweaveTarget, DevGpuState, PodRef, Priority
 from scripts.iris.grugmoe_inference_preflight import (
@@ -101,6 +111,151 @@ def test_smoke_bounds_context_without_changing_model_config() -> None:
     joined = " ".join(args)
     assert "--max-model-len 2048" in joined
     assert case.max_model_len == 65_536
+
+
+def test_health_server_knobs_toggle_r3_and_batch_budget() -> None:
+    enabled = vllm_args(
+        CASES["exact-reference-ep16"],
+        model_dir="/model",
+        model_source="dummy",
+        leader_ip="10.0.0.1",
+        node_index=0,
+        smoke=False,
+        r3_enabled=True,
+        max_num_batched_tokens=4096,
+    )
+    disabled = vllm_args(
+        CASES["exact-reference-ep16"],
+        model_dir="/model",
+        model_source="dummy",
+        leader_ip="10.0.0.1",
+        node_index=0,
+        smoke=False,
+        r3_enabled=False,
+        max_num_batched_tokens=8192,
+    )
+
+    assert "--enable-return-routed-experts" in enabled
+    assert "--enable-return-routed-experts" not in disabled
+    assert enabled[enabled.index("--max-num-batched-tokens") + 1] == "4096"
+    assert disabled[disabled.index("--max-num-batched-tokens") + 1] == "8192"
+
+
+def test_health_cli_freezes_worker_settings_and_three_way_concurrency() -> None:
+    image = "example.invalid/task@sha256:" + "a" * 64
+    args = parse_args(
+        [
+            "submit",
+            "--case",
+            "exact-reference-ep16",
+            "--mode",
+            "health",
+            "--task-image",
+            image,
+            "--r3",
+            "off",
+            "--max-num-batched-tokens",
+            "4096",
+            "--max-num-seqs",
+            "96",
+            "--concurrency",
+            "48",
+            "--concurrency",
+            "72",
+            "--minimum-seconds",
+            "120",
+        ]
+    )
+    command = _unattended_worker_argv(
+        args,
+        case=CASES["exact-reference-ep16"],
+        run_id="unit",
+        image=image,
+        marin_commit="b" * 40,
+        coscheduling=grug_preflight.CoschedulingConfig(group_by="nvlink.domain"),
+    )
+
+    assert command[command.index("--r3") + 1] == "off"
+    assert command[command.index("--max-num-batched-tokens") + 1] == "4096"
+    assert command[command.index("--max-num-seqs") + 1] == "96"
+    assert [command[index + 1] for index, value in enumerate(command) if value == "--concurrency"] == ["48", "72"]
+
+
+def test_health_manifest_freezes_disjoint_warmup_inputs() -> None:
+    cohorts = ("short", "medium", "long")
+    workload = {
+        "schema_version": 2,
+        "kind": "unit",
+        "seed": 7,
+        "branches_per_root": 1,
+        "history_lengths": [3, 4, 5],
+        "append_tokens": 1,
+        "response_tokens": 2,
+        "final_lengths": [6, 7, 8],
+        "roots": [
+            {"root": index, "cohort": cohort, "prefix_token_ids": [250] * (index + 3)}
+            for index, cohort in enumerate(cohorts)
+        ],
+        "requests": [
+            {
+                "request_id": f"request-{index}",
+                "root": index,
+                "branch": 0,
+                "cohort": cohort,
+                "prefix_token_count": index + 3,
+                "append_token_count": 1,
+                "append_token_ids": [index + 3],
+                "max_tokens": 2,
+                "final_token_count": index + 6,
+            }
+            for index, cohort in enumerate(cohorts)
+        ],
+    }
+
+    manifest = grug_preflight._health_workload_manifest(workload, concurrencies=[3])
+
+    assert [record["token_count"] for record in manifest["warm_up"]] == [3, 4, 5]
+    assert [record["token_ids_sha256"] for record in manifest["warm_up"]] == [
+        grug_preflight._sha256_json(grug_preflight._health_warm_prompt(index, length))
+        for index, length in enumerate((3, 4, 5))
+    ]
+    assert all(record["disjoint_from_measured_roots"] for record in manifest["warm_up"])
+
+
+def test_health_repeatability_gates_only_identical_settings() -> None:
+    def arm(arm_id: str, concurrency: int, rate: float) -> dict[str, object]:
+        return {
+            "arm_id": arm_id,
+            "settings": {
+                "r3_enabled": True,
+                "target_concurrency": concurrency,
+                "max_num_batched_tokens": 8192,
+                "max_num_seqs": 48,
+            },
+            "headline": {"generation_tokens_per_second_per_gpu": rate},
+        }
+
+    passing = grug_preflight._health_repeatability([arm("a", 48, 100), arm("b", 48, 101)])
+    failing = grug_preflight._health_repeatability([arm("a", 48, 100), arm("b", 48, 103)])
+    calibration = grug_preflight._health_repeatability([arm("a", 48, 100), arm("b", 72, 103)])
+
+    assert passing == {
+        "applicable": True,
+        "comparisons": [
+            {
+                "left_arm": "a",
+                "right_arm": "b",
+                "left_generation_tokens_per_second_per_gpu": 100.0,
+                "right_generation_tokens_per_second_per_gpu": 101.0,
+                "delta_percent": pytest.approx(0.9950248756),
+                "limit_percent": 2.0,
+                "passed": True,
+            }
+        ],
+        "passed": True,
+    }
+    assert not failing["passed"]
+    assert calibration == {"applicable": False, "comparisons": [], "passed": True}
 
 
 def test_four_node_case_has_contiguous_rank_starts() -> None:
@@ -258,6 +413,749 @@ def test_completion_can_pin_a_data_parallel_rank(monkeypatch: pytest.MonkeyPatch
     assert observed["headers"] == {"X-data-parallel-rank": "2"}
 
 
+def test_timed_completion_freezes_seed_identity_and_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    class Response:
+        ok = True
+        content = b'{"choices":[{}]}'
+
+        def __init__(self) -> None:
+            self.headers = {"content-length": "16", "content-encoding": "identity"}
+
+    def post(url: str, **kwargs: object) -> Response:
+        observed.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setattr(grug_preflight.requests, "post", post)
+
+    _, timing = grug_preflight._timed_completion(
+        "http://server",
+        "model",
+        [1, 2, 3],
+        data_parallel_rank=7,
+        sampling_seed=123,
+        request_id="slot-7-attempt-9",
+    )
+
+    assert observed["headers"] == {
+        "X-data-parallel-rank": "7",
+        "X-Request-Id": "slot-7-attempt-9",
+    }
+    body = observed["json"]
+    assert isinstance(body, dict)
+    assert body["seed"] == 123
+    assert observed["stream"] is True
+    assert timing["response_bytes"] == len(Response.content)
+    assert timing["client_e2e_seconds"] >= timing["seconds_to_response_body"]
+    assert timing["response_body_transfer_seconds"] >= 0
+
+
+def test_labeled_prometheus_preserves_engines_and_window_histograms() -> None:
+    before = parse_labeled_prometheus(
+        """
+# TYPE vllm:generation_tokens counter
+vllm:generation_tokens_total{engine="0"} 100
+vllm:generation_tokens_total{engine="1"} 200
+vllm:num_requests_running{engine="0"} 2
+vllm:num_requests_running{engine="1"} 3
+vllm:time_to_first_token_seconds_bucket{engine="0",le="1.0"} 2
+vllm:time_to_first_token_seconds_bucket{engine="0",le="2.0"} 4
+vllm:time_to_first_token_seconds_bucket{engine="0",le="+Inf"} 4
+"""
+    )
+    after = parse_labeled_prometheus(
+        """
+vllm:generation_tokens_total{engine="0"} 110
+vllm:generation_tokens_total{engine="1"} 220
+vllm:num_requests_running{engine="0"} 4
+vllm:num_requests_running{engine="1"} 5
+vllm:time_to_first_token_seconds_bucket{engine="0",le="1.0"} 3
+vllm:time_to_first_token_seconds_bucket{engine="0",le="2.0"} 8
+vllm:time_to_first_token_seconds_bucket{engine="0",le="+Inf"} 8
+"""
+    )
+
+    assert prometheus_value(after, "vllm:generation_tokens") == 330
+    assert prometheus_values_by_label(after, "vllm:num_requests_running", label="engine") == {
+        "0": 4,
+        "1": 5,
+    }
+    assert histogram_quantile_delta(before, after, "vllm:time_to_first_token_seconds", 0.5) == pytest.approx(4 / 3)
+
+
+def test_r3_summary_checks_every_axis_and_cached_root_prefix() -> None:
+    case = CASES["exact-reference-ep16"]
+    root = np.zeros((2, case.num_hidden_layers, case.num_experts_per_tok), dtype=np.uint8)
+    routes = np.concatenate(
+        [root, np.ones((3, case.num_hidden_layers, case.num_experts_per_tok), dtype=np.uint8)], axis=0
+    )
+    encoded = io.BytesIO()
+    np.save(encoded, routes, allow_pickle=False)
+    payload = {"choices": [{"routed_experts": base64.b64encode(encoded.getvalue()).decode()}]}
+
+    summary, retained = grug_preflight._health_route_summary(
+        payload,
+        case=case,
+        expected_positions=5,
+        r3_enabled=True,
+        expected_prefix_routes=root,
+        keep_routes=True,
+    )
+
+    assert summary["shape"] == [5, 48, 4]
+    assert summary["root_prefix_positions_compared"] == 2
+    assert summary["all_expected_positions_layers_topk_aligned"]
+    assert sum(summary["expert_histogram"]) == routes.size
+    np.testing.assert_array_equal(retained, routes)
+
+    with pytest.raises(AssertionError, match="shape"):
+        grug_preflight._health_route_summary(
+            payload,
+            case=case,
+            expected_positions=6,
+            r3_enabled=True,
+        )
+
+
+def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    case = CASES["exact-reference-ep16"]
+    roots = [
+        {"root": root, "cohort": ("short", "medium", "long")[root // 6], "prefix_token_ids": [1]} for root in range(18)
+    ]
+    requests = []
+    for root in range(18):
+        for branch in range(8):
+            requests.append(
+                {
+                    "request_id": f"root-{root:02d}-branch-{branch:02d}",
+                    "root": root,
+                    "branch": branch,
+                    "cohort": ("short", "medium", "long")[root // 6],
+                    "prefix_token_count": 1,
+                    "append_token_count": 0,
+                    "append_token_ids": [],
+                    "max_tokens": 1,
+                    "final_token_count": 2,
+                }
+            )
+    workload = {
+        "history_lengths": [1, 1, 1],
+        "roots": roots,
+        "requests": requests,
+    }
+    lock = threading.Lock()
+    completed = 0
+
+    def completion(*_: object, max_tokens: int, request_id: str, **kwargs: object) -> dict[str, object]:
+        nonlocal completed
+        time.sleep(0.002)
+        with lock:
+            completed += 1
+        return {
+            "request_id": request_id,
+            "data_parallel_rank": kwargs["data_parallel_rank"],
+            "sampling_seed": kwargs["sampling_seed"],
+            "prompt_tokens": 1,
+            "completion_tokens": max_tokens,
+            "prompt_token_ids_sha256": "a" * 64,
+            "generated_token_ids_sha256": "b" * 64,
+            "final_prefix_token_ids_sha256": "c" * 64,
+            "sampled_token_logprobs": {
+                "count": max_tokens,
+                "minimum": -1.0,
+                "maximum": -1.0,
+                "sha256": "d" * 64,
+            },
+            "timing": {
+                "started_at_monotonic_seconds": time.monotonic() - 0.001,
+                "completed_at_monotonic_seconds": time.monotonic(),
+                "client_e2e_seconds": 0.001,
+                "response_bytes": 10,
+                "seconds_to_response_headers": 0.0004,
+                "response_body_transfer_seconds": 0.0005,
+                "seconds_to_decode": 0.0001,
+            },
+            "routes": {"enabled": False, "transport": "absent", "carrier_payload_bytes": 0},
+            "route_array": None,
+        }
+
+    def capture(
+        _: str,
+        *,
+        metrics_map: list[dict[str, object]],
+        arm_id: str,
+        phase: str,
+        **__: object,
+    ) -> grug_preflight.HealthMetricSnapshot:
+        # A metrics scrape is slower than several fake completions. The load
+        # controller must keep refilling slots while this function runs.
+        if phase == "plateau-open":
+            time.sleep(0.005)
+        with lock:
+            count = float(completed)
+        captured_at = time.monotonic()
+        time.sleep(0.005)
+        index = len(metrics_map)
+        totals = {metric: 0.0 for metric in grug_preflight.HEALTH_COUNTER_METRICS}
+        totals["vllm:generation_tokens"] = count
+        totals["vllm:prompt_tokens"] = count
+        totals["vllm:request_success"] = count
+        totals["vllm:prefix_cache_queries"] = count
+        totals["vllm:prefix_cache_hits"] = count
+        by_engine = {
+            metric: {str(engine): 3.0 for engine in range(case.data_parallel_size)}
+            for metric in grug_preflight.HEALTH_ENGINE_METRICS
+        }
+        samples = parse_labeled_prometheus(
+            "\n".join(
+                f'{metric}_bucket{{engine="0",le="{bound}"}} {count}'
+                for metric in grug_preflight.HEALTH_HISTOGRAM_METRICS
+                for bound in ("1.0", "+Inf")
+            )
+            + "\n"
+        )
+        metrics_map.append(
+            {
+                "index": index,
+                "path": f"metrics/raw-{index:06d}.prom",
+                "monotonic_seconds": captured_at,
+                "leader_log_bytes": 0,
+                "arm_id": arm_id,
+                "phase": phase,
+                "totals": totals,
+                "by_engine": by_engine,
+            }
+        )
+        return grug_preflight.HealthMetricSnapshot(
+            index,
+            f"metrics/raw-{index:06d}.prom",
+            captured_at,
+            samples,
+            totals,
+            by_engine,
+            0,
+        )
+
+    monkeypatch.setattr(grug_preflight, "_health_warm_up", lambda *args, **kwargs: [])
+    monkeypatch.setattr(grug_preflight, "_reset_health_prefix_cache", lambda _: {"status_code": 200})
+    monkeypatch.setattr(
+        grug_preflight,
+        "_populate_health_roots",
+        lambda *args, **kwargs: ({root: None for root in range(18)}, [{} for _ in range(18)]),
+    )
+    monkeypatch.setattr(grug_preflight, "_capture_health_metrics", capture)
+    monkeypatch.setattr(
+        grug_preflight,
+        "_wait_for_health_counter",
+        lambda base_url, **kwargs: capture(
+            base_url,
+            artifact_dir=kwargs["artifact_dir"],
+            metrics_map=kwargs["metrics_map"],
+            arm_id=kwargs["arm_id"],
+            phase="counter-sync",
+        ),
+    )
+    monkeypatch.setattr(grug_preflight, "_health_completion", completion)
+    monkeypatch.setattr(grug_preflight, "_health_kv_summary", lambda *args, **kwargs: {"passed": True})
+    events = grug_preflight.HealthEventWriter(tmp_path / "events.jsonl")
+    metrics_map: list[dict[str, object]] = []
+
+    arm = grug_preflight._run_rolling_health_arm(
+        "http://server",
+        "model",
+        workload,
+        case=case,
+        artifact_dir=tmp_path,
+        metrics_map=metrics_map,
+        events=events,
+        log_path=tmp_path / "server.log",
+        arm_id="fake",
+        target_concurrency=3,
+        minimum_seconds=0,
+        minimum_generated_tokens=0,
+        r3_enabled=False,
+        max_num_batched_tokens=8,
+        max_num_seqs=3,
+        metric_sample_seconds=0.001,
+    )
+    events.close()
+
+    assert arm["passed"]
+    assert arm["requests"]["plateau_successes"] >= 144
+    assert arm["requests"]["excluded_before_valid_plateau_successes"] > 0
+    assert arm["requests"]["drain_successes"] >= 3
+    assert (
+        arm["requests"]["whole_run_successes"]
+        == arm["requests"]["excluded_before_valid_plateau_successes"]
+        + arm["requests"]["plateau_successes"]
+        + arm["requests"]["drain_successes"]
+    )
+    assert arm["drain"]["excluded_from_plateau"]
+    assert arm["plateau"]["discarded_windows"] == []
+    assert arm["whole_run_token_reconciliation"]["passed"]
+    assert arm["requests"]["branch_coverage"] == {"expected": 144, "observed": 144, "passed": True}
+    assert arm["metrics"]["rolling_start"] != arm["metrics"]["boundary_start"]
+    boundary_start = next(
+        float(entry["monotonic_seconds"]) for entry in metrics_map if entry["path"] == arm["metrics"]["boundary_start"]
+    )
+    boundary_end = next(
+        float(entry["monotonic_seconds"]) for entry in metrics_map if entry["path"] == arm["metrics"]["boundary_end"]
+    )
+    event_records = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    completion_events = [record for record in event_records if record["event"] == "request_completed"]
+    assert (
+        sum(
+            boundary_start <= float(record["completed_at_monotonic_seconds"]) <= boundary_end
+            for record in completion_events
+        )
+        == arm["requests"]["plateau_successes"]
+    )
+
+
+def test_independent_reader_recomputes_aggregates_and_rejects_tampering(tmp_path: Path) -> None:
+    run_id = "readback-unit"
+
+    class MemoryFilesystem:
+        def __init__(self) -> None:
+            self.data: dict[str, bytes] = {}
+
+        def open(self, key: str, _: str) -> object:
+            filesystem = self
+
+            class Sink:
+                def __init__(self) -> None:
+                    self.buffer = io.BytesIO()
+
+                def __enter__(self) -> object:
+                    return self
+
+                def write(self, payload: bytes) -> int:
+                    return self.buffer.write(payload)
+
+                def __exit__(self, *_: object) -> None:
+                    filesystem.data[key] = self.buffer.getvalue()
+
+            return Sink()
+
+        def cat_file(self, key: str) -> bytes:
+            return self.data[key]
+
+        def find(self, prefix: str) -> list[str]:
+            return sorted(key for key in self.data if key.startswith(prefix))
+
+    def raw_metrics(generation: int, prompt: int, successes: int, observations: int) -> str:
+        lines = [
+            f'vllm:generation_tokens_total{{engine="0"}} {generation}',
+            f'vllm:prompt_tokens_total{{engine="0"}} {prompt}',
+            f'vllm:request_success_total{{engine="0",finished_reason="length"}} {successes}',
+            'vllm:num_preemptions_total{engine="0"} 0',
+            f'vllm:prefix_cache_queries_total{{engine="0"}} {generation}',
+            f'vllm:prefix_cache_hits_total{{engine="0"}} {generation}',
+        ]
+        for metric in grug_preflight.HEALTH_ENGINE_METRICS:
+            lines.extend(f'{metric}{{engine="{engine}"}} 1' for engine in range(16))
+        for metric in grug_preflight.HEALTH_HISTOGRAM_METRICS:
+            lines.extend(
+                [
+                    f'{metric}_bucket{{engine="0",le="1.0"}} {observations}',
+                    f'{metric}_bucket{{engine="0",le="+Inf"}} {observations}',
+                ]
+            )
+        return "\n".join(lines) + "\n"
+
+    raw_before = raw_metrics(100, 200, 0, 0)
+    raw_after = raw_metrics(295_012, 500_200, 144, 144)
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    (metrics_dir / "raw-000000.prom").write_text(raw_before)
+    (metrics_dir / "raw-000001.prom").write_text(raw_after)
+    metrics_map = []
+    for index, text in enumerate((raw_before, raw_after)):
+        parsed = parse_labeled_prometheus(text)
+        metrics_map.append(
+            {
+                "index": index,
+                "path": f"metrics/raw-{index:06d}.prom",
+                "monotonic_seconds": 120.0 * index,
+                "arm_id": "arm-00-c3",
+                "phase": "plateau-open" if index == 0 else "plateau-close",
+                "bytes": len(text.encode()),
+                "sha256": grug_preflight.hashlib.sha256(text.encode()).hexdigest(),
+                "totals": {
+                    metric: grug_preflight.prometheus_value(parsed, metric)
+                    for metric in grug_preflight.HEALTH_COUNTER_METRICS
+                },
+                "by_engine": {
+                    metric: grug_preflight.prometheus_values_by_label(parsed, metric, label="engine")
+                    for metric in grug_preflight.HEALTH_ENGINE_METRICS
+                },
+            }
+        )
+    kv_groups = [
+        {
+            "engine_idx": engine,
+            "active_requests": 1 if engine < 3 else 0,
+            "reserved_physical_bytes": 1_000,
+            "active_physical_bytes": 100 if engine < 3 else 0,
+            "active_payload_bytes": 80 if engine < 3 else 0,
+            "active_padded_bytes": 100 if engine < 3 else 0,
+            "role": "attention",
+            "kind": "sliding_window",
+            "active_blocks": 1 if engine < 3 else 0,
+        }
+        for engine in range(16)
+    ]
+    kv_text = f"test {grug_preflight.KV_LOG_MARKER}{json.dumps(kv_groups, separators=(',', ':'))}\n"
+    kv_path = metrics_dir / "arm-00-c3-kv.log"
+    kv_path.write_text(kv_text)
+    server_latency = {
+        metric: {"p50_seconds": 0.5, "p99_seconds": 0.99} for metric in grug_preflight.HEALTH_HISTOGRAM_METRICS
+    }
+    workload_manifest = grug_preflight._health_workload_manifest(
+        grug_preflight.deterministic_workload(),
+        concurrencies=[3],
+    )
+    final_prefix_provenance = [
+        {
+            "manifest_request_id": request["request_id"],
+            "prompt_token_ids_sha256": request["prompt_token_ids_sha256"],
+            "occurrences": 1,
+            "outcomes": [
+                {
+                    "generated_token_ids_sha256": grug_preflight._sha256_json([request["request_id"], "generated"]),
+                    "final_prefix_token_ids_sha256": grug_preflight._sha256_json([request["request_id"], "final"]),
+                    "occurrences": 1,
+                }
+            ],
+        }
+        for request in workload_manifest["requests"]
+    ]
+    event_records = [
+        {"event": event, "arm_id": "arm-00-c3"} for event in ("plateau_opened", "plateau_closed", "arm_completed")
+    ]
+    total_route_assignments = 0
+    total_route_npy_bytes = 0
+    total_route_base64_bytes = 0
+    total_response_bytes = 0
+    for index, entry in enumerate(final_prefix_provenance):
+        request = workload_manifest["requests"][index]
+        route_assignments = (int(request["final_token_count"]) - 1) * 48 * 4
+        route_npy_bytes = route_assignments + 128
+        route_base64_bytes = route_npy_bytes + 128
+        response_bytes = route_base64_bytes + 256
+        total_route_assignments += route_assignments
+        total_route_npy_bytes += route_npy_bytes
+        total_route_base64_bytes += route_base64_bytes
+        total_response_bytes += response_bytes
+        timing = {
+            "started_at_monotonic_seconds": index,
+            "completed_at_monotonic_seconds": (index + 1) * 120 / 145,
+            "client_e2e_seconds": 1.0,
+            "seconds_to_response_headers": 0.25,
+            "response_body_transfer_seconds": 0.5,
+            "seconds_to_decode": 0.25,
+            "response_bytes": response_bytes,
+        }
+        event_records.append(
+            {
+                "event": "request_completed",
+                "arm_id": "arm-00-c3",
+                "manifest_request_id": entry["manifest_request_id"],
+                "cohort": request["cohort"],
+                "completion_tokens": 2_048,
+                "completed_at_monotonic_seconds": timing["completed_at_monotonic_seconds"],
+                "client_e2e_seconds": timing["client_e2e_seconds"],
+                "response_bytes": response_bytes,
+                "timing": timing,
+                "prompt_token_ids_sha256": entry["prompt_token_ids_sha256"],
+                "generated_token_ids_sha256": entry["outcomes"][0]["generated_token_ids_sha256"],
+                "final_prefix_token_ids_sha256": entry["outcomes"][0]["final_prefix_token_ids_sha256"],
+                "sampled_token_logprobs_count": 2_048,
+                "sampled_token_logprobs_sha256": "d" * 64,
+                "route_sha256": "e" * 64,
+                "route_summary": {
+                    "enabled": True,
+                    "shape": [int(request["final_token_count"]) - 1, 48, 4],
+                    "dtype": "uint8",
+                    "minimum_expert": 0,
+                    "maximum_expert": 0,
+                    "all_expected_positions_layers_topk_aligned": True,
+                    "root_prefix_positions_compared": int(request["prefix_token_count"]),
+                    "root_prefix_aligned": True,
+                    "expert_histogram": [route_assignments, *([0] * 127)],
+                    "ep_rank_histogram": [route_assignments, *([0] * 15)],
+                    "route_sha256": "e" * 64,
+                    "carrier_array_bytes": route_assignments,
+                    "carrier_npy_bytes": route_npy_bytes,
+                    "carrier_base64_bytes": route_base64_bytes,
+                    "transport": "OpenAI completion JSON choice.routed_experts; base64-encoded NumPy .npy",
+                },
+            },
+        )
+    event_records.append({"event": "worker_completed"})
+    (tmp_path / "events.jsonl").write_text("\n".join(json.dumps(event) for event in event_records) + "\n")
+    arm = {
+        "arm_id": "arm-00-c3",
+        "passed": True,
+        "gates": {"all": True},
+        "settings": {
+            "r3_enabled": True,
+            "target_concurrency": 3,
+            "max_num_batched_tokens": 8192,
+            "max_num_seqs": 3,
+            "settings_drift": False,
+        },
+        "headline": {
+            "generation_tokens_per_second_per_gpu": 294_912 / 120 / 16,
+        },
+        "plateau": {
+            "elapsed_seconds": 120,
+            "generated_tokens": 294_912,
+            "processed_prompt_tokens": 500_000,
+            "target_concurrency": 3,
+            "minimum_required_in_flight": 3,
+            "in_flight": {
+                "samples": 2,
+                "min": 3,
+                "mean": 3.0,
+                "max": 3,
+                "at_close": 3,
+            },
+            "successful_requests": 144,
+            "failed_requests": 0,
+            "client_generated_tokens": 294_912,
+            "cohort_completions": {"long": 48, "medium": 48, "short": 48},
+            "manifest": {"expected": 144, "observed": 144, "passed": True},
+        },
+        "requests": {
+            "branch_coverage": {"observed": 144, "passed": True},
+            "whole_run_successes": 144,
+            "engine_success_counter_delta": 144,
+            "plateau_successes": 144,
+            "excluded_before_valid_plateau_successes": 0,
+            "drain_successes": 0,
+            "final_prefix_provenance": final_prefix_provenance,
+            "sampled_token_logprobs": {
+                "validated_requests": 144,
+                "validated_generated_tokens": 294_912,
+                "all_completion_tokens_covered": True,
+            },
+        },
+        "whole_run_token_reconciliation": {
+            "client_generated_tokens": 294_912,
+            "engine_generated_tokens": 294_912,
+            "delta": 0,
+            "passed": True,
+        },
+        "preemptions": 0,
+        "moe_routing": {
+            "r3_enabled": True,
+            "expert_histogram": [total_route_assignments, *([0] * 127)],
+            "ep_rank_histogram": [total_route_assignments, *([0] * 15)],
+            "ep_rank_load": {
+                "mean_assignments": total_route_assignments / 16,
+                "max_assignments": total_route_assignments,
+                "max_over_mean": 16.0,
+            },
+            "alignment_passed": True,
+            "carrier": {
+                "array_bytes": total_route_assignments,
+                "npy_bytes": total_route_npy_bytes,
+                "base64_bytes": total_route_base64_bytes,
+                "full_response_bytes": total_response_bytes,
+                "transport": "OpenAI completion JSON choice.routed_experts; base64-encoded NumPy .npy",
+            },
+        },
+        "metrics": {
+            "rolling_start": "metrics/raw-000000.prom",
+            "boundary_start": "metrics/raw-000000.prom",
+            "boundary_end": "metrics/raw-000001.prom",
+            "final_after_drain": "metrics/raw-000001.prom",
+            "counter_deltas": {
+                "vllm:generation_tokens": 294_912,
+                "vllm:prompt_tokens": 500_000,
+                "vllm:prompt_tokens_cached": 0,
+                "vllm:request_success": 144,
+                "vllm:num_preemptions": 0,
+                "vllm:prefix_cache_queries": 294_912,
+                "vllm:prefix_cache_hits": 294_912,
+            },
+            "prefix_cache": {
+                "query_tokens": 294_912,
+                "hit_tokens": 294_912,
+                "hit_ratio": 1.0,
+            },
+            "per_engine_plateau_series": grug_preflight._health_engine_series(
+                metrics_map,
+                first_index=0,
+                last_index=1,
+            ),
+        },
+        "latency": {
+            "client_e2e_seconds": grug_preflight._health_percentiles([1.0] * 144),
+            "client_e2e_seconds_by_cohort": {
+                cohort: grug_preflight._health_percentiles([1.0] * 48) for cohort in ("short", "medium", "long")
+            },
+            "server_histogram_window": server_latency,
+            "client_transport_window": {
+                "seconds_to_response_headers": grug_preflight._health_percentiles([0.25] * 144),
+                "response_body_transfer_seconds": grug_preflight._health_percentiles([0.5] * 144),
+                "seconds_to_decode": grug_preflight._health_percentiles([0.25] * 144),
+            },
+        },
+    }
+    arm["kv_cache"] = grug_preflight._health_kv_summary_from_text(
+        kv_text,
+        case=CASES["exact-reference-ep16"],
+        target_concurrency=3,
+    )
+    arm["kv_cache"]["source"] = {
+        "path": "metrics/arm-00-c3-kv.log",
+        "bytes": len(kv_text.encode()),
+        "sha256": grug_preflight.hashlib.sha256(kv_text.encode()).hexdigest(),
+        "boundary": "vLLM leader log bytes captured only during the accepted plateau",
+    }
+    placement = {
+        "passed": True,
+        "distinct_advertise_hosts": [f"10.0.0.{index}" for index in range(4)],
+        "required_coscheduling": grug_preflight.UNATTENDED_COSCHEDULING,
+        "topology_enforcement": "Kueue hard podset-required-topology",
+    }
+    image = "example.invalid/task@sha256:" + "a" * 64
+    marin_commit = "b" * 40
+    rank_commands = {
+        str(rank): grug_preflight.vllm_command(
+            grug_preflight.vllm_args(
+                CASES["exact-reference-ep16"],
+                model_dir="/tmp/model",
+                model_source="dummy",
+                leader_ip="10.0.0.0",
+                node_index=rank,
+                smoke=False,
+                r3_enabled=True,
+                max_num_batched_tokens=8192,
+                max_num_seqs=3,
+            )
+        )
+        for rank in range(4)
+    }
+    ranks = [
+        {
+            "rank": rank,
+            "gpu_inventory": [{"name": "NVIDIA GB200 NVL", "uuid": f"GPU-{rank}-{gpu}"} for gpu in range(4)],
+            "vllm_command": rank_commands[str(rank)],
+            "marin_commit": marin_commit,
+            "vllm_commit": grug_preflight.VLLM_SHA,
+            "task_image": image,
+            "coscheduling": grug_preflight.UNATTENDED_COSCHEDULING,
+        }
+        for rank in range(4)
+    ]
+    result = {
+        "run_id": run_id,
+        "case": "exact-reference-ep16",
+        "model": "exact-reference-ep16",
+        "status": "passed",
+        "passed": True,
+        "arms": [arm],
+        "repeatability": grug_preflight._health_repeatability([arm]),
+        "placement": placement,
+        "all_rank_health": {"passed": True, "ranks": ranks},
+    }
+    manifest = {
+        "experiment": "experiment-0",
+        "run_id": run_id,
+        "protocol": {
+            "minimum_plateau_seconds": 120,
+            "minimum_plateau_engine_generation_tokens": 250_000,
+            "minimum_in_flight_fraction": 0.95,
+            "drain_excluded": True,
+            "headline_counter": "vllm:generation_tokens",
+        },
+        "model_config": dataclasses.asdict(CASES["exact-reference-ep16"]),
+        "model_fixture": {
+            "source": "dummy",
+            "weight_dtype": "bfloat16",
+            "kv_cache_dtype": "bfloat16",
+            "seed": grug_preflight.DUMMY_SEED,
+        },
+        "server_settings": {
+            "pipeline_parallel_size": 1,
+            "tensor_parallel_size": 1,
+            "data_parallel_size": 16,
+            "expert_parallel_size": 16,
+            "max_num_batched_tokens": 8192,
+            "max_num_seqs": 3,
+            "r3_enabled": True,
+            "concurrencies": [3],
+            "prefix_caching": True,
+            "chunked_prefill": True,
+            "cuda_graphs": True,
+        },
+        "workload": workload_manifest,
+        "routing_fixture": {
+            "kind": "canonical seeded vLLM dummy routing",
+            "seed": grug_preflight.DUMMY_SEED,
+            "expert_placement": "linear contiguous experts per EP rank",
+            "capacity_factor": None,
+            "balanced_control": {"applicable": False},
+        },
+        "implementation_controls": {
+            "new_hot_path_family": False,
+            "no_op_control": {"applicable": False},
+        },
+        "r3": {
+            "enabled": True,
+            "carrier": "OpenAI completion JSON choice.routed_experts; base64-encoded NumPy .npy",
+            "expected_layers": 48,
+            "expected_top_k": 4,
+        },
+        "final_prefix_provenance": {"arm-00-c3": final_prefix_provenance},
+        "train_to_serve_parity": {"status": "inherited from reviewed exact-anchor preflight"},
+        "placement": placement,
+        "rank_commands": rank_commands,
+        "provenance": {
+            "marin_commit": marin_commit,
+            "marin_commit_url": f"https://github.com/marin-community/marin/commit/{marin_commit}",
+            "vllm_commit": grug_preflight.VLLM_SHA,
+            "vllm_commit_url": f"https://github.com/marin-community/vllm/commit/{grug_preflight.VLLM_SHA}",
+            "task_image": image,
+            "dependency_lock_sha256": "c" * 64,
+            "cluster_config": grug_preflight.DEFAULT_CLUSTER_CONFIG,
+            "iris_task_count": 4,
+            "iris_priority": "interactive",
+            "iris_coscheduling": grug_preflight.UNATTENDED_COSCHEDULING,
+            "iris_retry_policy": {
+                "max_retries_failure": 0,
+                "max_retries_preemption": 0,
+                "max_task_failures": 0,
+            },
+        },
+    }
+    filesystem = MemoryFilesystem()
+    grug_preflight._write_and_upload_health_artifacts(
+        filesystem,
+        artifact_dir=tmp_path,
+        artifact_prefix=f"{grug_preflight.HEALTH_ARTIFACT_ROOT}/{run_id}/",
+        result=result,
+        manifest=manifest,
+        metrics_map=metrics_map,
+    )
+
+    receipt = grug_preflight.readback_health_artifacts(filesystem, run_id=run_id)
+
+    assert receipt["passed"], json.dumps(receipt["checks"], indent=2)
+    root_key = grug_preflight._s3_key(f"{grug_preflight.HEALTH_ARTIFACT_ROOT}/{run_id}")
+    filesystem.data[f"{root_key}/metrics/raw-000001.prom"] += b"\n"
+    tampered = grug_preflight.readback_health_artifacts(filesystem, run_id=run_id)
+    assert not tampered["passed"]
+    assert not tampered["checks"]["claimed_file_hashes"]["passed"]
+
+
 def test_prefix_metric_wait_observes_delayed_request_stats(monkeypatch: pytest.MonkeyPatch) -> None:
     snapshots = iter(
         [
@@ -281,6 +1179,49 @@ def test_prefix_metric_wait_observes_delayed_request_stats(monkeypatch: pytest.M
     assert evidence["synchronized"]
     assert evidence["observed_delta"] == 18
     assert evidence["poll_attempts"] == 2
+
+
+def test_health_completion_requires_one_sampled_logprob_per_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "logprobs": {"token_logprobs": [-1.25, -0.75]},
+                "token_ids": [11, 12],
+            }
+        ],
+        "usage": {"completion_tokens": 2, "prompt_tokens": 2},
+    }
+    monkeypatch.setattr(grug_preflight, "_timed_completion", lambda *args, **kwargs: (payload, {"elapsed": 1.0}))
+
+    result = grug_preflight._health_completion(
+        "http://server",
+        "model",
+        [1, 2],
+        case=CASES["exact-reference-ep16"],
+        max_tokens=2,
+        data_parallel_rank=0,
+        request_id="request-0",
+        sampling_seed=7,
+        r3_enabled=False,
+    )
+
+    assert result["sampled_token_logprobs"]["count"] == 2
+    assert len(result["sampled_token_logprobs"]["sha256"]) == 64
+
+    payload["choices"][0]["logprobs"]["token_logprobs"] = [-1.25]
+    with pytest.raises(AssertionError, match="one finite sampled-token logprob"):
+        grug_preflight._health_completion(
+            "http://server",
+            "model",
+            [1, 2],
+            case=CASES["exact-reference-ep16"],
+            max_tokens=2,
+            data_parallel_rank=0,
+            request_id="request-1",
+            sampling_seed=8,
+            r3_enabled=False,
+        )
 
 
 def test_completion_evidence_keeps_routes_out_of_compact_result(tmp_path) -> None:
@@ -601,6 +1542,112 @@ def test_acceptance_components_require_ten_minutes_tokens_and_all_branches() -> 
     assert not failed["duration"]["passed"]
     assert not failed["token_count"]["passed"]
     assert not failed["repeatability"]["passed"]
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected_exit_code"),
+    [
+        ({"terminal_job_succeeded": True}, 0),
+        ({"terminal_job_succeeded": False}, 1),
+        ({"terminal_job_state": 5}, 1),
+    ],
+)
+def test_submit_wait_exit_code_requires_successful_terminal_iris_state(
+    monkeypatch: pytest.MonkeyPatch,
+    summary: dict[str, object],
+    expected_exit_code: int,
+) -> None:
+    """The waited CLI must not turn failed or incomplete Iris state into success."""
+    monkeypatch.setattr(grug_preflight, "submit_unattended", lambda _: summary)
+
+    exit_code = grug_preflight.main(
+        [
+            "submit",
+            "--case",
+            "exact-reference-ep16",
+            "--task-image",
+            "example.invalid/image@sha256:" + "a" * 64,
+            "--wait",
+        ]
+    )
+
+    assert exit_code == expected_exit_code
+
+
+def test_frozen_cohort_slots_keep_equal_load_and_cover_each_manifest() -> None:
+    requests = [
+        {"request_id": f"{cohort}-{index}", "cohort": cohort}
+        for cohort in ("short", "medium", "long")
+        for index in range(6)
+    ]
+
+    slots = frozen_cohort_slots(requests, target_concurrency=6)
+    observed = {cohort: set() for cohort in ("short", "medium", "long")}
+    for _ in range(3):
+        for slot in slots:
+            request = slot.next_request()
+            observed[slot.cohort].add(request["request_id"])
+
+    assert {cohort: sum(slot.cohort == cohort for slot in slots) for cohort in observed} == {
+        "short": 2,
+        "medium": 2,
+        "long": 2,
+    }
+    assert all(len(request_ids) == 6 for request_ids in observed.values())
+
+
+def test_plateau_discards_a_load_dip_and_closes_only_after_all_floors() -> None:
+    requirements = PlateauRequirements(
+        target_concurrency=20,
+        minimum_seconds=120,
+        minimum_generated_tokens=250_000,
+        required_request_ids=frozenset({"short", "medium", "long"}),
+    )
+    plateau = PlateauWindow(requirements)
+
+    assert (
+        plateau.observe_in_flight(
+            now=10,
+            in_flight=19,
+            generation_counter=1_000,
+            prompt_counter=2_000,
+        )
+        == "opened"
+    )
+    plateau.record_completion(request_id="short", cohort="short", completion_tokens=2_048, succeeded=True)
+    assert plateau.observe_in_flight(now=20, in_flight=18) == "discarded"
+
+    assert (
+        plateau.observe_in_flight(
+            now=30,
+            in_flight=20,
+            generation_counter=3_000,
+            prompt_counter=4_000,
+        )
+        == "opened"
+    )
+    for request_id in ("short", "medium", "long"):
+        plateau.record_completion(
+            request_id=request_id,
+            cohort=request_id,
+            completion_tokens=2_048,
+            succeeded=True,
+        )
+
+    assert not plateau.ready_to_close(now=150, in_flight=19, generation_counter=253_000)
+    assert plateau.ready_to_close(now=150, in_flight=20, generation_counter=253_000)
+    result = plateau.close(
+        now=150,
+        in_flight=20,
+        generation_counter=253_000,
+        prompt_counter=104_000,
+    )
+
+    assert result["elapsed_seconds"] == 120
+    assert result["generated_tokens"] == 250_000
+    assert result["in_flight"]["at_close"] == 20
+    assert result["manifest"] == {"expected": 3, "observed": 3, "passed": True}
+    assert result["discarded_windows"][0]["reason"] == "in_flight_below_95_percent"
 
 
 def test_load_arm_samples_live_counter_before_slow_request_completes(
