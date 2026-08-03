@@ -24,6 +24,7 @@ package initialization (which would trip a ``runpy`` re-execution warning).
 """
 
 import logging
+import math
 import os
 import re
 import signal
@@ -313,6 +314,7 @@ def _run_stage_with_ctx(
     task: ShardTask,
     chunk_prefix: str,
     execution_id: str,
+    external_sort_dir: str | None = None,
 ) -> TaskResult:
     """Run one ShardTask in the active worker context, writing stage output to disk.
 
@@ -329,7 +331,8 @@ def _run_stage_with_ctx(
     )
     output_stage_name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", task.stage_name).strip("-")
     stage_dir = f"{chunk_prefix}/{execution_id}/{output_stage_name}"
-    external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
+    if external_sort_dir is None:
+        external_sort_dir = f"{stage_dir}-external-sort/shard-{task.shard_idx:04d}"
     scatter_op = next((op for op in task.operations if isinstance(op, Scatter)), None)
     return _write_stage_output(
         _wrap_stage_stats(run_stage(stage_ctx, task.operations, external_sort_dir=external_sort_dir)),
@@ -423,11 +426,23 @@ class SubprocessRunner:
             # ``-u`` keeps the child's stdout/stderr unbuffered so any
             # faulthandler traceback reaches the parent's log before the
             # process dies.
-            proc = sp.run(
-                [sys.executable, "-u", "-m", "zephyr.shard_subprocess", task_file, result_file],
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-            )
+            child_env = os.environ.copy()
+            child_env["POLARS_MAX_THREADS"] = str(max(1, math.ceil(task.cost.cpu)))
+            with tempfile.TemporaryDirectory(prefix=f"zephyr-external-sort-{task.shard_idx:04d}-") as sort_dir:
+                proc = sp.run(
+                    [
+                        sys.executable,
+                        "-u",
+                        "-m",
+                        "zephyr.shard_subprocess",
+                        task_file,
+                        result_file,
+                        sort_dir,
+                    ],
+                    env=child_env,
+                    stdout=sys.stdout,
+                    stderr=sys.stderr,
+                )
 
             if proc.returncode != 0:
                 # Linux OOM-killer sends SIGKILL → returncode == -9. Distinguish
