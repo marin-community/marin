@@ -3341,6 +3341,41 @@ def _health_repeatability(arms: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _health_result_contract(
+    result: dict[str, Any],
+    manifest: dict[str, Any],
+    *,
+    recomputed_repeatability: dict[str, Any],
+    result_markdown: str,
+) -> dict[str, Any]:
+    """Check that the stored benchmark verdict matches the recomputed verdict."""
+    arms = result.get("arms", [])
+    expected_passed = (
+        result.get("error") is None
+        and result.get("all_rank_health", {}).get("passed") is True
+        and result.get("placement", {}).get("passed") is True
+        and all(arm.get("passed") is True for arm in arms)
+        and len(arms) == len(manifest["server_settings"]["concurrencies"])
+        and recomputed_repeatability.get("passed") is True
+    )
+    expected_status = "passed" if expected_passed else "failed"
+    expected_markdown_status = "PASS" if expected_passed else "FAIL"
+    return {
+        "passed": (
+            result.get("repeatability") == recomputed_repeatability
+            and result.get("passed") is expected_passed
+            and result.get("status") == expected_status
+            and manifest.get("result_aggregate_sha256") == _sha256_json(arms)
+            and result.get("run_id") in result_markdown
+            and f"Status: **{expected_markdown_status}**" in result_markdown
+        ),
+        "benchmark_passed": expected_passed,
+        "expected_status": expected_status,
+        "stored_passed": result.get("passed"),
+        "stored_status": result.get("status"),
+    }
+
+
 def _write_and_upload_health_artifacts(
     filesystem: Any,
     *,
@@ -4800,7 +4835,8 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
     }
     recomputed_repeatability = _health_repeatability(result.get("arms", []))
     checks["repeatability"] = {
-        "passed": result.get("repeatability") == recomputed_repeatability and recomputed_repeatability["passed"],
+        "passed": result.get("repeatability") == recomputed_repeatability,
+        "benchmark_passed": recomputed_repeatability["passed"],
         "recomputed": recomputed_repeatability,
     }
     event_names = [record.get("event") for record in event_records]
@@ -5255,15 +5291,13 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
         "arm_settings_match": arm_settings_match,
         "rank_provenance_matches": rank_provenance_matches,
     }
-    checks["result_contract"] = {
-        "passed": (
-            result.get("passed") is True
-            and result.get("status") == "passed"
-            and manifest.get("result_aggregate_sha256") == _sha256_json(result.get("arms", []))
-            and run_id in result_md_bytes.decode()
-            and "PASS" in result_md_bytes.decode()
-        )
-    }
+    result_contract = _health_result_contract(
+        result,
+        manifest,
+        recomputed_repeatability=recomputed_repeatability,
+        result_markdown=result_md_bytes.decode(),
+    )
+    checks["result_contract"] = result_contract
     passed = all(check.get("passed") is True for check in checks.values())
     return {
         "schema_version": 1,
@@ -5272,6 +5306,11 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
         "artifact_prefix": artifact_prefix,
         "read_at": datetime.now(UTC).isoformat(),
         "passed": passed,
+        "benchmark_health": {
+            "passed": result_contract["benchmark_passed"],
+            "status": result_contract["expected_status"],
+            "repeatability": recomputed_repeatability,
+        },
         "checks": checks,
         "source_object_sha256": {
             "manifest.json": hashlib.sha256(manifest_bytes).hexdigest(),

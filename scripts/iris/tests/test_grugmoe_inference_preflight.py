@@ -294,6 +294,50 @@ def test_health_repeatability_gates_only_identical_settings() -> None:
     assert calibration == {"applicable": False, "comparisons": [], "passed": True}
 
 
+def test_health_result_contract_accepts_consistent_failed_benchmark() -> None:
+    def arm(arm_id: str, rate: float) -> dict[str, object]:
+        return {
+            "arm_id": arm_id,
+            "passed": True,
+            "settings": {
+                "r3_enabled": True,
+                "target_concurrency": 144,
+                "max_num_batched_tokens": 16_384,
+                "max_num_seqs": 144,
+            },
+            "headline": {"generation_tokens_per_second_per_gpu": rate},
+        }
+
+    arms = [arm("arm-0", 227.8925), arm("arm-1", 244.0493)]
+    repeatability = grug_preflight._health_repeatability(arms)
+    result = {
+        "run_id": "failed-health-unit",
+        "error": None,
+        "all_rank_health": {"passed": True},
+        "placement": {"passed": True},
+        "arms": arms,
+        "repeatability": repeatability,
+        "passed": False,
+        "status": "failed",
+    }
+    manifest = {
+        "server_settings": {"concurrencies": [144, 144]},
+        "result_aggregate_sha256": grug_preflight._sha256_json(arms),
+    }
+
+    contract = grug_preflight._health_result_contract(
+        result,
+        manifest,
+        recomputed_repeatability=repeatability,
+        result_markdown="# Result\n\nRun: `failed-health-unit`\n\nStatus: **FAIL**\n",
+    )
+
+    assert not repeatability["passed"]
+    assert contract["passed"]
+    assert not contract["benchmark_passed"]
+    assert contract["expected_status"] == "failed"
+
+
 def test_four_node_case_has_contiguous_rank_starts() -> None:
     case = CASES["granular-ep16"]
     rank_starts = []
