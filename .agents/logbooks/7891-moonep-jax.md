@@ -1145,3 +1145,17 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Result: All 64 workers completed the first finite step. The run then stopped in the next direct collective while the four-GPU parity test used another tray in the same NVL72 rack.
 - Evidence: After the parity test ended, all workers remained active but the sampled rack GPUs had 0% use and about 171 GB allocated memory. No worker failure or retry occurred.
 - Decision: Stop MNEP-062. Do not run the development pod and an EP64 rack job at the same time. Run MNEP-063 next, then profile that exact implementation with exclusive rack use.
+
+### 2026-08-03 03:04 UTC - MNEP-063 passes correctness but not the throughput gate
+
+- Result: All 16 workers completed five finite steps on attempt zero. The final sampled losses were `8.78` and `8.17`, and the run dropped no expert assignments.
+- Timing: The four steady steps took 40, 44, 45, and 42 seconds. Their median was 43 seconds, which is about 6.0% MFU.
+- Comparison: MNEP-059 had a 41-second median and about 6.3% MFU. Removing the expert-ID collective did not give a measured improvement.
+- Decision: Keep the metadata-free design because it reduces work without changing the aligned token row. Use a GPU timeline to find the much larger cost.
+
+### 2026-08-03 03:05 UTC - MNEP-064 metadata-free GPU profile contract
+
+- Run ID: `mnep-064-metadata-gpu-profile-5-20260803-0305`.
+- Treatment: Capture completed step 3 from the exact MNEP-063 implementation. Disable host tracing and GPU event aggregation, and trace one GPU with 100,000 activity and callback events.
+- Isolation: Keep the supplied development tray idle for the complete EP64 run.
+- Gate: Require five finite steps, successful profile upload, and a kernel and collective time summary from the GPU timeline.
