@@ -97,6 +97,53 @@ def contrastive_embedding_loss(student: Array, teacher: Array, temperature: floa
     return temperature**2 * divergence.mean()
 
 
+def cross_source_teacher_neighbor_loss(
+    student: Array,
+    teacher: Array,
+    source_ids: Array,
+    positive_count: int,
+    temperature: float,
+) -> Array:
+    """Move each student vector toward the teacher's nearest cross-source rows."""
+    if student.ndim != 2 or teacher.ndim != 2 or student.shape[0] != teacher.shape[0]:
+        raise ValueError(f"Student rows {student.shape} do not match teacher rows {teacher.shape}")
+    if source_ids.shape != (student.shape[0],):
+        raise ValueError(f"Source shape {source_ids.shape} does not match embedding rows {student.shape[0]}")
+    if positive_count < 1 or positive_count >= student.shape[0]:
+        raise ValueError(f"Positive count {positive_count} is invalid for {student.shape[0]} rows")
+    if temperature <= 0:
+        raise ValueError(f"Temperature must be positive, got {temperature}")
+
+    student = student / jnp.maximum(jnp.linalg.norm(student, axis=1, keepdims=True), 1e-12)
+    teacher = teacher / jnp.maximum(jnp.linalg.norm(teacher, axis=1, keepdims=True), 1e-12)
+    cross_source = source_ids[:, None] != source_ids[None, :]
+    teacher_similarity = jnp.where(cross_source, teacher @ teacher.T, -jnp.inf)
+    _, positive_indices = jax.lax.top_k(teacher_similarity, positive_count)
+    student_logits = jnp.where(cross_source, student @ student.T / temperature, -jnp.inf)
+    student_log_probabilities = jax.nn.log_softmax(student_logits, axis=1)
+    positive_log_probabilities = jnp.take_along_axis(student_log_probabilities, positive_indices, axis=1)
+    return -positive_log_probabilities.mean()
+
+
+def embedding_spread_loss(student: Array, standard_deviation_target: float, covariance_weight: float) -> Array:
+    """Keep normalized student dimensions variable and weakly correlated."""
+    if student.ndim != 2 or student.shape[0] < 2:
+        raise ValueError(f"Expected at least two embedding rows, got {student.shape}")
+    if standard_deviation_target <= 0:
+        raise ValueError(f"Standard-deviation target must be positive, got {standard_deviation_target}")
+    if covariance_weight < 0:
+        raise ValueError(f"Covariance weight must be nonnegative, got {covariance_weight}")
+
+    student = student / jnp.maximum(jnp.linalg.norm(student, axis=1, keepdims=True), 1e-12)
+    centered = student - student.mean(axis=0, keepdims=True)
+    dimension_variance = jnp.sum(jnp.square(centered), axis=0) / (student.shape[0] - 1)
+    variance = jnp.mean(jax.nn.relu(standard_deviation_target - jnp.sqrt(dimension_variance + 1e-6)))
+    covariance = centered.T @ centered / (student.shape[0] - 1)
+    off_diagonal_covariance = _off_diagonal(covariance)
+    decorrelation = jnp.sum(jnp.square(off_diagonal_covariance)) / student.shape[1]
+    return variance + covariance_weight * decorrelation
+
+
 def direct_cosine_embedding_loss(student: Array, teacher: Array) -> Array:
     """Align each student vector with its matching teacher vector."""
     if student.shape != teacher.shape or student.ndim != 2:

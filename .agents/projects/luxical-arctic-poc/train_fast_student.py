@@ -35,7 +35,9 @@ from luxical.training import dequantize_8bit_uniform_scalar_quantized
 from rigging.filesystem import atomic_rename
 
 from experiments.datakit.cluster.quality.fast_transformer.embedding import (
+    cross_source_teacher_neighbor_loss,
     embedding_distillation_loss,
+    embedding_spread_loss,
     predict_embeddings,
     projected_embedding_distillation_loss,
     source_conditioned_geometry_loss,
@@ -54,12 +56,6 @@ WEIGHT_DECAY = 0.05
 GRADIENT_CLIP = 1.0
 LOSS_TEMPERATURE = 3.0
 DIRECT_COSINE_WEIGHT = 1.0
-SOURCE_GEOMETRY_WEIGHTS = {
-    "baseline": 0.0,
-    "source-geometry-w0.25": 0.25,
-    "source-geometry-w0.5": 0.5,
-    "source-geometry-w1": 1.0,
-}
 TEACHER_QUANTIZATION_LIMIT = 0.3
 AUDIT_ROWS = 2_048
 STAGING_CHUNK_ROWS = BATCH_SIZE
@@ -83,6 +79,81 @@ class TrainingLayout(StrEnum):
 
     MATERIALIZED = "materialized"
     STAGED = "staged"
+
+
+class DistillationObjective(StrEnum):
+    """Select the semantic signal for one student treatment."""
+
+    EMBEDDING_ALIGNMENT = "embedding-alignment"
+    CROSS_SOURCE_NEIGHBORS = "cross-source-neighbors"
+
+
+@dataclass(frozen=True)
+class TreatmentSpec:
+    """Define one fixed student training treatment."""
+
+    objective: DistillationObjective
+    direct_cosine_weight: float
+    source_geometry_weight: float
+    neighbor_positive_count: int
+    neighbor_temperature: float
+    spread_weight: float
+    spread_standard_deviation_target: float
+    spread_covariance_weight: float
+
+
+TREATMENTS = {
+    "baseline": TreatmentSpec(
+        objective=DistillationObjective.EMBEDDING_ALIGNMENT,
+        direct_cosine_weight=DIRECT_COSINE_WEIGHT,
+        source_geometry_weight=0.0,
+        neighbor_positive_count=0,
+        neighbor_temperature=0.0,
+        spread_weight=0.0,
+        spread_standard_deviation_target=0.0,
+        spread_covariance_weight=0.0,
+    ),
+    "source-geometry-w0.25": TreatmentSpec(
+        objective=DistillationObjective.EMBEDDING_ALIGNMENT,
+        direct_cosine_weight=DIRECT_COSINE_WEIGHT,
+        source_geometry_weight=0.25,
+        neighbor_positive_count=0,
+        neighbor_temperature=0.0,
+        spread_weight=0.0,
+        spread_standard_deviation_target=0.0,
+        spread_covariance_weight=0.0,
+    ),
+    "source-geometry-w0.5": TreatmentSpec(
+        objective=DistillationObjective.EMBEDDING_ALIGNMENT,
+        direct_cosine_weight=DIRECT_COSINE_WEIGHT,
+        source_geometry_weight=0.5,
+        neighbor_positive_count=0,
+        neighbor_temperature=0.0,
+        spread_weight=0.0,
+        spread_standard_deviation_target=0.0,
+        spread_covariance_weight=0.0,
+    ),
+    "source-geometry-w1": TreatmentSpec(
+        objective=DistillationObjective.EMBEDDING_ALIGNMENT,
+        direct_cosine_weight=DIRECT_COSINE_WEIGHT,
+        source_geometry_weight=1.0,
+        neighbor_positive_count=0,
+        neighbor_temperature=0.0,
+        spread_weight=0.0,
+        spread_standard_deviation_target=0.0,
+        spread_covariance_weight=0.0,
+    ),
+    "cross-source-neighbor-k4": TreatmentSpec(
+        objective=DistillationObjective.CROSS_SOURCE_NEIGHBORS,
+        direct_cosine_weight=0.0,
+        source_geometry_weight=0.0,
+        neighbor_positive_count=4,
+        neighbor_temperature=0.1,
+        spread_weight=1.0,
+        spread_standard_deviation_target=0.04,
+        spread_covariance_weight=0.1,
+    ),
+}
 
 
 TEACHERS = {
@@ -296,11 +367,11 @@ def weight_decay_mask(model: FastEmbeddingTransformer, projection: jax.Array | N
 def train(
     model: FastEmbeddingTransformer,
     rows: MaterializedTrainingRows | StagedTrainingRows,
-    source_geometry_weight: float,
+    treatment: TreatmentSpec,
     output_root: str,
     teacher_dimension: int,
 ) -> tuple[FastEmbeddingTransformer, jax.Array | None, list[dict[str, Any]]]:
-    """Train with the Luxical Gram-KL objective and save each epoch."""
+    """Train with one fixed semantic objective and save each epoch."""
     device_count, replicated, batch_sharding = data_parallel_shardings()
     if BATCH_SIZE % device_count:
         raise ValueError(f"Batch size {BATCH_SIZE} is not divisible by {device_count} devices")
@@ -314,7 +385,11 @@ def train(
         end_value=LEARNING_RATE * 0.05,
     )
     model = jax.device_put(model, replicated)
-    projection = initial_projection(model.output_dim, teacher_dimension)
+    projection = (
+        initial_projection(model.output_dim, teacher_dimension)
+        if treatment.objective == DistillationObjective.EMBEDDING_ALIGNMENT
+        else None
+    )
     if projection is not None:
         projection = jax.device_put(projection, replicated)
     optimizer = optax.chain(
@@ -329,27 +404,43 @@ def train(
         def loss_function(candidate_parameters):
             candidate_model, candidate_projection = candidate_parameters
             prediction = candidate_model(batch_ids, key=key, inference=False)
-            if candidate_projection is None:
-                distillation = embedding_distillation_loss(
-                    prediction,
-                    batch_teacher,
-                    LOSS_TEMPERATURE,
-                    DIRECT_COSINE_WEIGHT,
-                )
+            if treatment.objective == DistillationObjective.EMBEDDING_ALIGNMENT:
+                if candidate_projection is None:
+                    distillation = embedding_distillation_loss(
+                        prediction,
+                        batch_teacher,
+                        LOSS_TEMPERATURE,
+                        treatment.direct_cosine_weight,
+                    )
+                else:
+                    distillation = projected_embedding_distillation_loss(
+                        prediction,
+                        batch_teacher,
+                        candidate_projection,
+                        LOSS_TEMPERATURE,
+                        treatment.direct_cosine_weight,
+                    )
+                spread = jnp.asarray(0.0)
             else:
-                distillation = projected_embedding_distillation_loss(
+                distillation = cross_source_teacher_neighbor_loss(
                     prediction,
                     batch_teacher,
-                    candidate_projection,
-                    LOSS_TEMPERATURE,
-                    DIRECT_COSINE_WEIGHT,
+                    batch_source_ids,
+                    treatment.neighbor_positive_count,
+                    treatment.neighbor_temperature,
+                )
+                spread = embedding_spread_loss(
+                    prediction,
+                    treatment.spread_standard_deviation_target,
+                    treatment.spread_covariance_weight,
                 )
             source_geometry = (
                 source_conditioned_geometry_loss(prediction, batch_teacher, batch_source_ids)
-                if source_geometry_weight
+                if treatment.source_geometry_weight
                 else jnp.asarray(0.0)
             )
-            return distillation + source_geometry_weight * source_geometry, (distillation, source_geometry)
+            loss = distillation + treatment.spread_weight * spread + treatment.source_geometry_weight * source_geometry
+            return loss, (distillation, spread, source_geometry)
 
         (loss, components), gradients = eqx.filter_value_and_grad(loss_function, has_aux=True)(current_parameters)
         updates, next_optimizer_state = optimizer.update(
@@ -367,6 +458,7 @@ def train(
     for epoch in range(EPOCHS):
         epoch_losses = []
         epoch_distillation_losses = []
+        epoch_spread_losses = []
         epoch_source_geometry_losses = []
         for batch in rows.epoch_batches(epoch, BATCH_SIZE, TRAINING_BLOCK_ROWS, SEED):
             key, step_key = jax.random.split(key)
@@ -383,11 +475,13 @@ def train(
             )
             loss_value = float(loss)
             distillation_loss = float(components[0])
-            source_geometry_loss = float(components[1])
+            spread_loss = float(components[1])
+            source_geometry_loss = float(components[2])
             if not np.isfinite(loss_value):
                 raise ValueError(f"Training loss is non-finite at step {global_step + 1}")
             epoch_losses.append(loss_value)
             epoch_distillation_losses.append(distillation_loss)
+            epoch_spread_losses.append(spread_loss)
             epoch_source_geometry_losses.append(source_geometry_loss)
             global_step += 1
             if global_step == 1 or global_step % 10 == 0:
@@ -420,6 +514,8 @@ def train(
             "mean_loss": float(np.mean(epoch_losses)),
             "final_distillation_loss": epoch_distillation_losses[-1],
             "mean_distillation_loss": float(np.mean(epoch_distillation_losses)),
+            "final_spread_loss": epoch_spread_losses[-1],
+            "mean_spread_loss": float(np.mean(epoch_spread_losses)),
             "final_source_geometry_loss": epoch_source_geometry_losses[-1],
             "mean_source_geometry_loss": float(np.mean(epoch_source_geometry_losses)),
             "elapsed_seconds": time.perf_counter() - started,
@@ -439,7 +535,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=tuple(RUNG_TARGETS), required=True)
     parser.add_argument("--config", choices=tuple(MODEL_CONFIGS), required=True)
-    parser.add_argument("--treatment", choices=tuple(SOURCE_GEOMETRY_WEIGHTS), default="baseline")
+    parser.add_argument("--treatment", choices=tuple(TREATMENTS), default="baseline")
     parser.add_argument("--teacher", choices=tuple(TEACHERS), required=True)
     parser.add_argument("--training-layout", choices=tuple(TrainingLayout), type=TrainingLayout, required=True)
     parser.add_argument("--prepared-manifest-url", default=PREPARED_MANIFEST_URL)
@@ -464,6 +560,7 @@ def main() -> None:
     target = RUNG_TARGETS[arguments.rung]
     prepared = read_json(arguments.prepared_manifest_url)
     teacher_spec = TEACHERS[arguments.teacher]
+    treatment = TREATMENTS[arguments.treatment]
     if teacher_spec.audit_url is not None:
         audit = read_json(teacher_spec.audit_url)
         if audit["manifest_sha256"] != prepared["manifest_sha256"]:
@@ -472,7 +569,7 @@ def main() -> None:
             raise ValueError("The teacher audit has a different embedding dimension")
         if audit["row_count"] < target:
             raise ValueError(f"The teacher audit has {audit['row_count']} rows; requested {target}")
-    if arguments.treatment != "baseline" and teacher_spec.dimension != 256:
+    if treatment.source_geometry_weight and teacher_spec.dimension != 256:
         raise ValueError("Source-geometry treatments require equal student and teacher dimensions")
     raw_to_compact = load_numpy(prepared["raw_to_compact_url"])
     student = FastStudent.random(arguments.config, raw_to_compact, seed=SEED)
@@ -488,12 +585,11 @@ def main() -> None:
         )
         memory_report = rows.memory_report(TRAINING_BLOCK_ROWS)
         artifact_name = training_name(arguments.config, arguments.treatment, teacher_spec)
-        source_geometry_weight = SOURCE_GEOMETRY_WEIGHTS[arguments.treatment]
         output_root = f"{OUTPUT_ROOT}/{artifact_name}/{arguments.rung}"
         model, projection, history = train(
             student.model,
             rows,
-            source_geometry_weight,
+            treatment,
             output_root,
             teacher_spec.dimension,
         )
@@ -517,8 +613,9 @@ def main() -> None:
         "batch_size": BATCH_SIZE,
         "epochs": EPOCHS,
         "loss_temperature": LOSS_TEMPERATURE,
-        "direct_cosine_weight": DIRECT_COSINE_WEIGHT,
-        "source_geometry_weight": source_geometry_weight,
+        "treatment_spec": asdict(treatment),
+        "direct_cosine_weight": treatment.direct_cosine_weight,
+        "source_geometry_weight": treatment.source_geometry_weight,
         "learning_rate": LEARNING_RATE,
         "warmup_fraction": WARMUP_FRACTION,
         "weight_decay": WEIGHT_DECAY,

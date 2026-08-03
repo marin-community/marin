@@ -27,8 +27,10 @@ from experiments.datakit.cluster.quality.fast_transformer.artifact import BUCKET
 from experiments.datakit.cluster.quality.fast_transformer.calibrate import calibration_knots, fit_cutpoints
 from experiments.datakit.cluster.quality.fast_transformer.embedding import (
     contrastive_embedding_loss,
+    cross_source_teacher_neighbor_loss,
     direct_cosine_embedding_loss,
     embedding_distillation_loss,
+    embedding_spread_loss,
     pack_remapped_windows,
     predict_embeddings,
     projected_embedding_distillation_loss,
@@ -339,6 +341,35 @@ def test_embedding_transformer_takes_contrastive_gradient_step():
 
     assert np.isfinite(float(loss))
     assert not np.array_equal(np.asarray(updated.embedding_head), initial_head)
+
+
+def test_cross_source_teacher_neighbor_loss_prefers_matching_geometry():
+    teacher = jnp.asarray(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.9, 0.1],
+            [0.1, 0.9],
+        ]
+    )
+    source_ids = jnp.asarray([0, 0, 1, 1])
+    matching = teacher
+    reversed_cross_source_neighbors = teacher[jnp.asarray([0, 1, 3, 2])]
+
+    matching_loss = cross_source_teacher_neighbor_loss(matching, teacher, source_ids, 1, 0.1)
+    reversed_loss = cross_source_teacher_neighbor_loss(reversed_cross_source_neighbors, teacher, source_ids, 1, 0.1)
+
+    assert float(matching_loss) < float(reversed_loss)
+
+
+def test_embedding_spread_loss_rejects_constant_geometry():
+    collapsed = jnp.ones((8, 4))
+    varied = jnp.concatenate([jnp.eye(4), -jnp.eye(4)], axis=0)
+
+    collapsed_loss = embedding_spread_loss(collapsed, standard_deviation_target=0.04, covariance_weight=0.1)
+    varied_loss = embedding_spread_loss(varied, standard_deviation_target=0.04, covariance_weight=0.1)
+
+    assert float(varied_loss) < float(collapsed_loss)
 
 
 def test_cross_dimension_distillation_matches_component_contract():
