@@ -195,7 +195,7 @@ The Grafana token's built-in CoreWeave `read` role does not include
 resource name, `http:<finelog-service>:rpc`, and binds it to the Managed Auth usernames
 under `provisioning.coreweave.grafana_observer_rbac`. A 403 with
 `error_class=auth` means the cluster stack does not contain the current token username
-or its `finelog_service` value.
+or was not updated after the cluster's `finelog.config` changed.
 
 Apply the two new RBAC resources in each Finelog cluster before deploying a Grafana
 revision that uses the direct probe. Use targeted updates because an unrelated

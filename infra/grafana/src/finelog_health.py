@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared health model for the main finelog and its k8s mirrors."""
+"""Shared health model for GCE Finelog servers and Kubernetes mirrors."""
 
 from dataclasses import dataclass
 from enum import StrEnum

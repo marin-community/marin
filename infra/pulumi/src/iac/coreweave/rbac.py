@@ -26,6 +26,17 @@ GRAFANA_OBSERVER_ROLE = "marin-grafana-node-reader"
 GRAFANA_FINELOG_PROBER_ROLE = "marin-grafana-finelog-prober"
 
 
+def _user_subjects(usernames: tuple[str, ...]) -> list[dict]:
+    return [
+        {
+            "apiGroup": "rbac.authorization.k8s.io",
+            "kind": "User",
+            "name": username,
+        }
+        for username in usernames
+    ]
+
+
 @dataclass(frozen=True)
 class IrisRbacArgs:
     namespace: str  # from kubernetes_provider.namespace
@@ -121,14 +132,7 @@ def grafana_observer_manifests(usernames: tuple[str, ...]) -> tuple[dict, dict]:
             "kind": "ClusterRole",
             "name": GRAFANA_OBSERVER_ROLE,
         },
-        "subjects": [
-            {
-                "apiGroup": "rbac.authorization.k8s.io",
-                "kind": "User",
-                "name": username,
-            }
-            for username in usernames
-        ],
+        "subjects": _user_subjects(usernames),
     }
     return role, binding
 
@@ -159,14 +163,7 @@ def grafana_finelog_probe_manifests(
             "kind": "Role",
             "name": GRAFANA_FINELOG_PROBER_ROLE,
         },
-        "subjects": [
-            {
-                "apiGroup": "rbac.authorization.k8s.io",
-                "kind": "User",
-                "name": username,
-            }
-            for username in usernames
-        ],
+        "subjects": _user_subjects(usernames),
     }
     return role, binding
 

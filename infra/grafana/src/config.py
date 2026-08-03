@@ -92,8 +92,8 @@ class K8sClusterTarget:
     name: str  # iris cluster name, e.g. "cw-us-east-08a"
     api_server: str  # public CKS API server URL
     iris_namespace: str = "iris"
-    # None means this cluster intentionally has no standalone finelog mirror.
-    finelog_service: str | None = None
+    # None means this cluster intentionally has no Finelog deployment.
+    finelog_role: FinelogRole | None = None
 
 
 # All requests authenticate with the single org-wide CW read-role token from the
@@ -102,17 +102,17 @@ K8S_CLUSTERS: tuple[K8sClusterTarget, ...] = (
     K8sClusterTarget(
         "cw-us-east-02a",
         "https://208261-34513e48.k8s.us-east-02a.coreweave.com",
-        finelog_service="finelog-cw-use02a",
+        finelog_role=FinelogRole.MIRROR,
     ),
     K8sClusterTarget(
         "cw-us-east-08a",
         "https://208261-d2cd61ed.k8s.us-east-08a.coreweave.com",
-        finelog_service="finelog-cw-use08a",
+        finelog_role=FinelogRole.MIRROR,
     ),
     K8sClusterTarget(
         "cw-rno2a",
         "https://208261-6670debc.k8s.rno2a.coreweave.com",
-        finelog_service="finelog-cw-rno2a",
+        finelog_role=FinelogRole.MIRROR,
     ),
     K8sClusterTarget(
         "cw-us-west-04a",

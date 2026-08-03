@@ -5,6 +5,7 @@
 
 import httpx
 from config import BridgeConfig, K8sClusterTarget
+from finelog_health import FinelogRole
 from k8s_source import K8sSource
 
 KUEUE_DEPLOY = "/apis/apps/v1/namespaces/kueue-system/deployments/kueue-controller-manager"
@@ -12,7 +13,6 @@ IRIS_DEPLOY = "/apis/apps/v1/namespaces/iris/deployments/iris-controller"
 TRAEFIK_DEPLOY = "/apis/apps/v1/namespaces/traefik/deployments/traefik"
 CERT_DEPLOY = "/apis/apps/v1/namespaces/cert-manager/deployments/cert-manager"
 FINELOG_DEPLOYMENTS_PATH = "/apis/apps/v1/deployments"
-FINELOG_DEPLOY = "/apis/apps/v1/namespaces/iris/deployments/finelog-cw-a"
 FINELOG_PROXY = "/api/v1/namespaces/iris/services/http:finelog-cw-a:rpc/proxy/health"
 KUEUE_SLICES = "/apis/discovery.k8s.io/v1/namespaces/kueue-system/endpointslices"
 
@@ -149,7 +149,7 @@ def make_k8s_source(
     target: K8sClusterTarget | None = None,
 ) -> K8sSource:
     source = K8sSource(
-        target or K8sClusterTarget(name, "https://api.example", finelog_service="finelog-cw-a"),
+        target or K8sClusterTarget(name, "https://api.example", finelog_role=FinelogRole.MIRROR),
         token=token,
         timeout=5.0,
     )
@@ -169,7 +169,6 @@ def healthy_k8s_routes() -> dict:
         TRAEFIK_DEPLOY: deployment("traefik", "traefik"),
         CERT_DEPLOY: deployment("cert-manager", "cert-manager"),
         FINELOG_DEPLOYMENTS_PATH: [finelog_deployment],
-        FINELOG_DEPLOY: finelog_deployment,
         FINELOG_PROXY: "ok",
         "/api/v1/namespaces/kueue-system/pods": [pod("kueue-system", "kueue-controller-manager-abc")],
         "/api/v1/namespaces/iris/pods": [pod("iris", "iris-controller-abc")],

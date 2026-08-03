@@ -11,7 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 from cache import TtlCache
 from config import ClusterTarget
-from conftest import FINELOG_DEPLOY, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
+from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
 from finelog.errors import QueryResultTooLargeError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
@@ -481,7 +481,7 @@ def test_finelog_fleet_alert_marks_slow_and_unresponsive_servers():
         )
     )
     routes = healthy_k8s_routes()
-    routes[FINELOG_DEPLOY] = deployment("iris", "finelog-cw-a", ready=0, containers=("finelog",))
+    routes[FINELOG_DEPLOYMENTS_PATH] = [deployment("iris", "finelog-cw-a", ready=0, containers=("finelog",))]
     fleet = K8sFleet([make_k8s_source(k8s_api(routes))])
 
     assert finelog_alert_rows(finelog_fleet_health_rows({"marin": slow_hub}, fleet)) == [

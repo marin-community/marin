@@ -319,9 +319,11 @@ cluster in the org, no Secrets, no writes. The built-in role omits Nodes, so the
 CoreWeave Pulumi stacks bind each exact Managed Auth username to the nodes-only
 `marin-grafana-node-reader` role. On clusters with a standalone Finelog mirror, a
 namespace-scoped `marin-grafana-finelog-prober` Role also grants `get` on
-`services/proxy` for only `http:<finelog_service>:rpc`. The usernames and Finelog
-Service live under `provisioning.coreweave.grafana_observer_rbac` in each cluster
-config so both tokens can retain access during a rotation.
+`services/proxy` for only `http:<finelog-service>:rpc`. Pulumi derives that name from
+the cluster's existing `finelog.config`; the bridge discovers the same Deployment
+through the read-only Kubernetes API. The usernames live under
+`provisioning.coreweave.grafana_observer_rbac` so both tokens can retain access during
+a rotation.
 
 Rotation is overlap-safe:
 

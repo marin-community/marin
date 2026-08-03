@@ -43,7 +43,7 @@ from config import (
     WatchedComponent,
     WatchedWebhook,
 )
-from finelog_health import FinelogHealth, FinelogRole
+from finelog_health import FinelogHealth
 
 logger = logging.getLogger(__name__)
 
@@ -298,12 +298,10 @@ class K8sSource:
         raise AssertionError("unreachable")
 
     def _get(self, path: str, params: dict | None = None, *, none_on_404: bool = False) -> dict | None:
-        """GET one API path as JSON."""
         response = self._get_response(path, params, none_on_404=none_on_404)
         return None if response is None else response.json()
 
     def _get_text(self, path: str) -> str:
-        """GET one API path as text."""
         response = self._get_response(path)
         assert response is not None
         return response.text
@@ -417,25 +415,25 @@ class K8sSource:
 
     def finelog_health(self) -> FinelogHealth:
         """Probe the mirror's Service directly and attach its Deployment readiness."""
-        server = self._target.finelog_service
-        assert server is not None
-        namespace = self._target.iris_namespace
-        deployment = self._get(
-            f"/apis/apps/v1/namespaces/{namespace}/deployments/{server}",
-            none_on_404=True,
-        )
-        if deployment is None:
+        role = self._target.finelog_role
+        assert role is not None
+        deployments = self._finelog_deployments()
+        if len(deployments) != 1:
             return FinelogHealth(
                 cluster=self._target.name,
-                server=server,
-                role=FinelogRole.MIRROR,
+                server=_FINELOG_FALLBACK_SERVER,
+                role=role,
                 responsive=False,
                 ready=0,
                 desired=1,
                 latency_ms=None,
                 error_class="discovery",
-                error=f"Deployment {namespace}/{server} is missing",
+                error=f"expected one finelog Deployment, found {len(deployments)}",
             )
+        deployment = deployments[0]
+        metadata = deployment.get("metadata") or {}
+        server = metadata.get("name") or _FINELOG_FALLBACK_SERVER
+        namespace = metadata.get("namespace") or self._target.iris_namespace
         desired = (deployment.get("spec") or {}).get("replicas", 1)
         ready = (deployment.get("status") or {}).get("readyReplicas") or 0
         probe_path = f"/api/v1/namespaces/{namespace}/services/http:{server}:rpc/proxy/health"
@@ -446,7 +444,7 @@ class K8sSource:
             return FinelogHealth(
                 cluster=self._target.name,
                 server=server,
-                role=FinelogRole.MIRROR,
+                role=role,
                 responsive=False,
                 ready=ready,
                 desired=desired,
@@ -470,7 +468,7 @@ class K8sSource:
         return FinelogHealth(
             cluster=self._target.name,
             server=server,
-            role=FinelogRole.MIRROR,
+            role=role,
             responsive=responsive,
             ready=ready,
             desired=desired,
@@ -997,11 +995,13 @@ class K8sFleet:
         """One health row per k8s finelog mirror, including API failures."""
 
         def on_error(source: K8sSource, err: K8sError) -> list[FinelogHealth]:
+            role = source.target.finelog_role
+            assert role is not None
             return [
                 FinelogHealth(
                     cluster=source.target.name,
-                    server=source.target.finelog_service or _FINELOG_FALLBACK_SERVER,
-                    role=FinelogRole.MIRROR,
+                    server=_FINELOG_FALLBACK_SERVER,
+                    role=role,
                     responsive=False,
                     ready=0,
                     desired=1,
@@ -1014,14 +1014,14 @@ class K8sFleet:
         return self._collect(
             lambda source: [source.finelog_health()],
             on_error,
-            sources=tuple(source for source in self._sources if source.target.finelog_service is not None),
+            sources=tuple(source for source in self._sources if source.target.finelog_role is not None),
         )
 
     def finelog_pods(self) -> list[FinelogPodResult]:
         return self._collect(
             lambda source: source.finelog_pods(),
             lambda source, err: [FinelogPodError(source.target.name, str(err.error_class), str(err))],
-            sources=tuple(source for source in self._sources if source.target.finelog_service is not None),
+            sources=tuple(source for source in self._sources if source.target.finelog_role is not None),
         )
 
     def alert_gpu_rack_trays(self) -> list[dict]:
