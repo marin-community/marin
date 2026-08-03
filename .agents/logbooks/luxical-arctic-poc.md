@@ -1868,3 +1868,42 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   10,000-document set for this failed candidate.
 - Next action: Use a fixed identity-mix ladder. Select the best pilot mix that
   passes rank, variance, per-level, and semantic-mean gates.
+
+### LUX-SEMANTIC-PROJECTION-002: Rank-preserving GLM projection result
+
+- Commit Hash: `32db5127c`.
+- Pilot job: `/rav/lux-semantic-projection-mix-v2-h100-001`.
+- The fixed identity-mix ladder selected alpha 0.6. The validation
+  effective-rank fraction was 0.26271, above the 0.25 gate.
+- The validation mean semantic gain was 0.01247. Parent and leaf macro-F1
+  increased by 0.03535 and 0.00818. Form macro-F1 decreased by 0.00613, within
+  the fixed 0.01 limit.
+- The minimum folded-head cosine was 0.99999. The final model has 9,299,200
+  parameters and no additional inference operation.
+- The exact student CPU rates were stable from 6,589 through 6,836 documents
+  per second. The median was 6,729.92.
+- The Luxical-One rates varied from 367 through 4,735 documents per second.
+  Thus, the reported 16.77 paired ratio is not reliable evidence about the
+  baseline. The student rate agrees with prior FastTransformer tests.
+- On the fixed 10,000-document set, parent macro-F1 increased from 0.45021 to
+  0.49406. Leaf macro-F1 increased from 0.37371 to 0.40247. Form macro-F1
+  increased from 0.40299 to 0.42825.
+- Parent cluster NMI increased from 0.38913 to 0.45331. Leaf cluster NMI
+  increased from 0.40530 to 0.46006. Form cluster NMI increased from 0.28708
+  to 0.32904.
+- Every global semantic and vector-health gate passed. The held-out
+  effective-rank fraction was 0.39314, and total variance was 0.87190.
+- Twelve large-group gates failed, down from eighteen for the 30M base.
+- Parent failures were humanities and culture, and intellectual property.
+- Leaf failures were creative narrative, health and medical, humanities and
+  social, opinion and commentary, procurement requirements, technical
+  documentation, and technical patents.
+- Form failures were instruction, unclear text, and structured data.
+- Training report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/full-glm-semantic-projection/pilot-1k-mix-v2/training.json`.
+- Held-out report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_glm_projection_pilot_1k_mix_v2/adjudicated-v1/embedding-screen-v1/report.json`.
+- Interpretation: GLM supervision corrects the main semantic loss without a
+  runtime cost. The 760-row training set is too small for all large groups.
+- Next action: Create a separate 50,000-document GLM label set. Train the same
+  folded projection method, then run the fixed release gates once.
