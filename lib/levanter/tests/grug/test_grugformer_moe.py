@@ -500,6 +500,73 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
         assert lowered is not None
 
 
+# ragged_all_to_all is omitted: XLA:CPU has no ragged-all-to-all thunk, so it cannot execute here.
+def test_moe_ep_reshards_an_expert_less_incoming_batch():
+    """An EP batch must arrive sharded over "expert" too, not just over "data".
+
+    Every EP backend derives its per-shard token slice from x_local, so a batch sharded
+    over "data" alone hands each expert shard expert_axis_size times its own tokens. The
+    routed result is then wrong, not merely oversized. This needs a real multi-device
+    mesh, so it forces one in a subprocess rather than skipping on the default backend.
+    """
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import moe_mlp
+
+        assert jax.device_count() == 4
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 2, 1),
+            axis_names=("data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 3,
+        )
+        tokens, hidden_dim, intermediate_dim, num_experts, topk = 32, 8, 6, 4, 2
+        key = jax.random.key(28)
+        k_x, k_sel, k_logits, k_w13, k_w2 = jax.random.split(key, 5)
+        x = jax.random.normal(k_x, (tokens, hidden_dim))
+        selected_experts = jax.random.randint(k_sel, (tokens, topk), 0, num_experts, dtype=jax.numpy.int32)
+        combine_weights = jax.nn.softmax(jax.random.normal(k_logits, (tokens, topk)), axis=-1)
+        w_up_gate = jax.random.normal(k_w13, (num_experts, hidden_dim, 2 * intermediate_dim))
+        w_down = jax.random.normal(k_w2, (num_experts, intermediate_dim, hidden_dim))
+
+        def routed(implementation, batch_spec):
+            return moe_mlp(
+                jax.sharding.reshard(x, NamedSharding(mesh, batch_spec)),
+                jax.sharding.reshard(selected_experts, NamedSharding(mesh, batch_spec)),
+                jax.sharding.reshard(combine_weights, NamedSharding(mesh, batch_spec)),
+                jax.sharding.reshard(w_up_gate, NamedSharding(mesh, P("expert", None, None))),
+                jax.sharding.reshard(w_down, NamedSharding(mesh, P("expert", None, None))),
+                implementation=implementation,
+                mesh=mesh,
+                capacity_factor=1.0,
+            )
+
+        # ragged_all_to_all is omitted: XLA:CPU has no ragged-all-to-all thunk.
+        for implementation in ("ring", "fixed_all_to_all"):
+            with jax.set_mesh(mesh):
+                expected = routed(implementation, P(("data", "expert"), None))
+                out = routed(implementation, P("data", None))
+            assert out.sharding.spec == P(("data", "expert")), (implementation, out.sharding.spec)
+            np.testing.assert_allclose(np.asarray(out), np.asarray(expected), rtol=1e-5, atol=1e-5)
+        print("__assertions_ran__")
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "__assertions_ran__" in result.stdout, result.stdout
+
+
 def test_fixed_all_to_all_drops_assignments_over_capacity():
     mesh = Mesh(
         np.asarray([jax.devices()[0]]),
