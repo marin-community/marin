@@ -7,6 +7,7 @@ The allocation policy follows the MIT-licensed MoonEP planning reference at
 https://github.com/moonshotAI/moonep/tree/0f385f038fc33bec22e3bcf5a07a8a22693e754c.
 """
 
+import math
 from collections.abc import Callable
 from functools import partial
 from typing import NamedTuple
@@ -25,6 +26,7 @@ from levanter.grug._moe.common import (
     MoonEPBucketSchedule,
     MoonEPGroupedGemm,
     MoonEPMode,
+    MoonEPTokenTransport,
     split_moe_w13_output,
 )
 from levanter.grug._moe.ep_common import _shard_a2a_params
@@ -285,6 +287,64 @@ def _token_bucket_bounds(
     starts = send_matrix * bucket // num_buckets
     ends = send_matrix * (bucket + 1) // num_buckets
     return starts, ends
+
+
+def _bounded_token_all_to_all(
+    values: jax.Array,
+    send_matrix: Int[Array, "R R"],
+    rank: Int[Array, ""],
+    *,
+    capacity_factor: float,
+) -> jax.Array:
+    """Use a padded all-to-all when each peer message fits its fixed slot."""
+    num_ranks = send_matrix.shape[0]
+    total_rows = values.shape[0]
+    capacity = max(math.ceil(capacity_factor * total_rows / num_ranks), 1)
+
+    def _fixed_all_to_all(compact_values: jax.Array) -> jax.Array:
+        slots = jnp.arange(capacity, dtype=jnp.int32)[None, :]
+        local_sizes = send_matrix[rank]
+        local_starts = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
+        input_indices = local_starts[:, None] + slots
+        valid_inputs = slots < local_sizes[:, None]
+        padded_values = jnp.where(
+            valid_inputs[..., None],
+            compact_values[jnp.minimum(input_indices, total_rows - 1)],
+            0,
+        )
+        received_blocks = jax.lax.all_to_all(
+            padded_values.reshape(num_ranks * capacity, *compact_values.shape[1:]),
+            "expert",
+            split_axis=0,
+            concat_axis=0,
+            tiled=True,
+        ).reshape(num_ranks, capacity, *compact_values.shape[1:])
+
+        received_sizes = send_matrix[:, rank]
+        received_starts = jnp.cumsum(received_sizes, dtype=jnp.int32) - received_sizes
+        output_indices = received_starts[:, None] + slots
+        valid_outputs = slots < received_sizes[:, None]
+        output_indices = jnp.where(valid_outputs, output_indices, total_rows)
+        return (
+            jnp.zeros_like(compact_values)
+            .at[output_indices.reshape(-1)]
+            .set(received_blocks.reshape(num_ranks * capacity, *compact_values.shape[1:]), mode="drop")
+        )
+
+    def _ragged_all_to_all(compact_values: jax.Array) -> jax.Array:
+        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(send_matrix, rank)
+        return jax.lax.ragged_all_to_all(
+            compact_values,
+            jnp.zeros_like(compact_values),
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            axis_name="expert",
+        )
+
+    fixed_capacity_suffices = jnp.max(send_matrix) <= capacity
+    return jax.lax.cond(fixed_capacity_suffices, _fixed_all_to_all, _ragged_all_to_all, values)
 
 
 def _ordered_after(dependency: jax.Array, value: jax.Array) -> jax.Array:
@@ -593,7 +653,9 @@ def _moe_mlp_ep_moonep_exact_local(
     token_padding: int,
     token_buckets: int,
     bucket_schedule: MoonEPBucketSchedule,
+    token_transport: MoonEPTokenTransport,
     grouped_gemm: MoonEPGroupedGemm,
+    fixed_capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Run portable MoonEP with sparse expert copies and exact receiver loads."""
     if capacity_factor != 1.0:
@@ -657,7 +719,14 @@ def _moe_mlp_ep_moonep_exact_local(
             if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and dispatched_buckets:
                 input_offsets = _ordered_after(dispatched_buckets[-1].received_x[0, 0], input_offsets)
 
-            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket > 0:
+            if token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL:
+                received_x = _bounded_token_all_to_all(
+                    send_x,
+                    bucket_send_matrix,
+                    rank,
+                    capacity_factor=fixed_capacity_factor,
+                )
+            elif bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket > 0:
                 received_x = _scheduled_ragged_all_to_all(
                     send_x,
                     input_offsets,
@@ -790,7 +859,14 @@ def _moe_mlp_ep_moonep_exact_local(
                 rank,
             )
 
-            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket + 2 == token_buckets:
+            if token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL:
+                returned = _bounded_token_all_to_all(
+                    outputs_in_receive_order,
+                    bucket_send_matrix.T,
+                    rank,
+                    capacity_factor=fixed_capacity_factor,
+                )
+            elif bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket + 2 == token_buckets:
                 returned = _scheduled_ragged_all_to_all(
                     outputs_in_receive_order,
                     return_input_offsets,
@@ -863,6 +939,7 @@ def _moe_mlp_ep_moonep_local(
     token_padding: int,
     token_buckets: int,
     bucket_schedule: MoonEPBucketSchedule,
+    token_transport: MoonEPTokenTransport,
     grouped_gemm: MoonEPGroupedGemm,
     mode: MoonEPMode,
     fixed_capacity_factor: float,
@@ -894,6 +971,8 @@ def _moe_mlp_ep_moonep_local(
             token_padding=token_padding,
             token_buckets=token_buckets,
             bucket_schedule=bucket_schedule,
+            token_transport=token_transport,
             grouped_gemm=grouped_gemm,
+            fixed_capacity_factor=fixed_capacity_factor,
         )
     raise AssertionError(f"Unhandled MoonEP mode {mode!r}")

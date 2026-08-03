@@ -35,27 +35,11 @@ from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 _ACC = cutlass.Float32
 _FALLBACK_MAX_ACTIVE_CLUSTERS = 148
-_OVERLAP_RESERVED_CLUSTERS = 4
 _JAX_TO_CUTE = {
     jnp.dtype(jnp.bfloat16): cutlass.BFloat16,
     jnp.dtype(jnp.float16): cutlass.Float16,
     jnp.dtype(jnp.float32): cutlass.Float32,
 }
-
-
-def _max_active_clusters(cluster_mnk: tuple[int, int, int], scheduling_group_id: int | None) -> int:
-    cluster_size = cluster_mnk[0] * cluster_mnk[1]
-    if jax.default_backend() == "cpu":
-        max_active_clusters = _FALLBACK_MAX_ACTIVE_CLUSTERS
-    else:
-        max_active_clusters = get_max_active_clusters(cluster_size)
-    if scheduling_group_id is None:
-        return max_active_clusters
-
-    # The direct ragged all-to-all keeps a small set of remote GIN CTAs resident.
-    # Leave four complete QuACK cluster slots free so its persistent grid can
-    # start while those CTAs wait for remote completion.
-    return max(1, max_active_clusters - _OVERLAP_RESERVED_CLUSTERS)
 
 
 _scheduled_cutlass_call_p = core.Primitive("scheduled_cutlass_call")
@@ -211,7 +195,10 @@ def quack_gated_grouped_gemm(
     N2 = w_gate_up.shape[2]
     N = N2 // 2
     a_dtype = _cute_dtype(x_sort.dtype)
-    max_active_clusters = _max_active_clusters(cluster_mnk, scheduling_group_id)
+    if jax.default_backend() == "cpu":
+        max_active_clusters = _FALLBACK_MAX_ACTIVE_CLUSTERS
+    else:
+        max_active_clusters = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     launcher = _build_launcher(
         a_dtype=a_dtype,
         tile_mn=tile_mn,
@@ -289,7 +276,10 @@ def quack_grouped_gemm(
     N = w.shape[2] if b_major == "n" else w.shape[1]
     _bmode = (2, 1, 0) if b_major == "n" else (1, 2, 0)
     a_dtype = _cute_dtype(a.dtype)
-    mac = _max_active_clusters(cluster_mnk, scheduling_group_id)
+    if jax.default_backend() == "cpu":
+        mac = _FALLBACK_MAX_ACTIVE_CLUSTERS
+    else:
+        mac = get_max_active_clusters(cluster_mnk[0] * cluster_mnk[1])
     launcher = _build_plain_launcher(
         a_dtype=a_dtype, tile_mn=tile_mn, cluster_mnk=cluster_mnk, max_active_clusters=mac, max_swizzle=max_swizzle
     )

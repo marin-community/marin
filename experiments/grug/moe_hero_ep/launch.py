@@ -18,6 +18,7 @@ from levanter.grug.grug_moe import (
     MoonEPConfig,
     MoonEPGroupedGemm,
     MoonEPMode,
+    MoonEPTokenTransport,
     resolve_moe_implementation,
 )
 from levanter.tracker.wandb import WandbConfig
@@ -109,6 +110,7 @@ def build_hero_run(
     moonep_token_padding: int = 128,
     moonep_token_buckets: int = 1,
     moonep_bucket_schedule: MoonEPBucketSchedule = MoonEPBucketSchedule.EAGER_DISPATCH,
+    moonep_token_transport: MoonEPTokenTransport = MoonEPTokenTransport.RAGGED,
     moonep_grouped_gemm: MoonEPGroupedGemm = MoonEPGroupedGemm.QUACK,
     moonep_mode: MoonEPMode = MoonEPMode.EXACT,
     moonep_fixed_capacity_factor: float = 1.1,
@@ -153,6 +155,7 @@ def build_hero_run(
             grouped_gemm=moonep_grouped_gemm,
             mode=moonep_mode,
             fixed_capacity_factor=moonep_fixed_capacity_factor,
+            token_transport=moonep_token_transport,
         )
         if moe_implementation == "moonep_jax"
         else None
@@ -304,11 +307,18 @@ def build_hero_run(
     help="Order for token dispatch and expert compute.",
 )
 @click.option(
+    "--moonep-token-transport",
+    type=click.Choice([transport.value for transport in MoonEPTokenTransport]),
+    default=MoonEPTokenTransport.RAGGED.value,
+    show_default=True,
+    help="Collective for MoonEP token dispatch and combine.",
+)
+@click.option(
     "--moonep-fixed-capacity-factor",
     type=click.FloatRange(min=1.0),
     default=1.1,
     show_default=True,
-    help="No-drop fixed all-to-all capacity factor.",
+    help="Capacity factor for fixed expert cells and bounded token messages.",
 )
 @click.option(
     "--moonep-mode",
@@ -400,6 +410,7 @@ def main(
     moonep_token_padding: int,
     moonep_token_buckets: int,
     moonep_bucket_schedule: str,
+    moonep_token_transport: str,
     moonep_grouped_gemm: str,
     moonep_mode: str,
     moonep_fixed_capacity_factor: float,
@@ -422,6 +433,7 @@ def main(
         moonep_token_padding=moonep_token_padding,
         moonep_token_buckets=moonep_token_buckets,
         moonep_bucket_schedule=MoonEPBucketSchedule(moonep_bucket_schedule),
+        moonep_token_transport=MoonEPTokenTransport(moonep_token_transport),
         moonep_grouped_gemm=MoonEPGroupedGemm(moonep_grouped_gemm),
         moonep_mode=MoonEPMode(moonep_mode),
         moonep_fixed_capacity_factor=moonep_fixed_capacity_factor,

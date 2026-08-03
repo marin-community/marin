@@ -1683,3 +1683,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Isolated cost: At the rack expert shape (`M=262144`, `K=5120`, `N=1280`, eight local experts), the gated GEMM median changes from `4.154 ms` to `4.275 ms` (`2.9%`). The plain GEMM changes from `0.606 ms` to `0.630 ms` (`3.9%`).
 - Tests: The focused CPU suite passes all 49 tests.
 - Gate: Run five finite steps on one NVL72. If throughput improves, record a profile and confirm that the gated GEMM now overlaps ragged transport.
+
+### 2026-08-03 16:00 UTC - MNEP-094 rejects concurrent gated GEMM execution
+
+- Result: Step one had finite loss and gradients. Step two produced a NaN loss and non-finite gradients on all ranks, so the run stopped without a retry.
+- Timing: The step interval stayed near 26 seconds. Reserving eight SMs did not improve the full-step time.
+- Isolation: QuACK with 76, 72, and 68 two-SM cluster slots produced bit-equal finite gated-GEMM outputs at the rack expert shape when it ran alone.
+- Interpretation: The failure needs concurrent direct transport and gated-GEMM execution. It is not an isolated QuACK scheduler error.
+- Decision: Remove the cluster reservation. Keep the safe default-GEMM overlap and replace the exposed ragged token transfer with the bounded standard all-to-all path.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-094-reserve-clusters-5-20260803-1537-coord).
+
+### 2026-08-03 16:20 UTC - MNEP-095 bounded token transport contract
+
+- Treatment: Keep direct weight transport and replace token dispatch and combine with a bounded standard all-to-all.
+- Capacity: Give each peer message 1.25 times the mean size. Use exact ragged transport if a message exceeds this bound.
+- Basis: MNEP-066 passed output and gradient parity. It was neutral before direct weight transport removed the prior 14.12-second limit.
+- Gate: Require five finite steps on one NVL72, zero dropped assignments, and a median MFU above the 9.738% MNEP-092c result.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, or a dropped assignment.

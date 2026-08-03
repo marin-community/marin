@@ -28,6 +28,7 @@ from levanter.grug.grug_moe import (
     MoonEPConfig,
     MoonEPGroupedGemm,
     MoonEPMode,
+    MoonEPTokenTransport,
     MoeImplementation,
     _compact_by_keep_mask,
     _expand_from_keep_mask,
@@ -501,6 +502,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                         grouped_gemm=MoonEPGroupedGemm.XLA,
                         mode=MoonEPMode.EXACT,
                         fixed_capacity_factor=1.0,
+                        token_transport=MoonEPTokenTransport.RAGGED,
                     )
                     if implementation == "moonep_jax"
                     else None
@@ -693,12 +695,13 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
 
 
 @pytest.mark.parametrize(
-    ("mode", "token_buckets", "bucket_schedule", "selected_expert_rows"),
+    ("mode", "token_buckets", "bucket_schedule", "token_transport", "selected_expert_rows"),
     [
         pytest.param(
             MoonEPMode.EXACT,
             1,
             MoonEPBucketSchedule.EAGER_DISPATCH,
+            MoonEPTokenTransport.RAGGED,
             ((0, 1),) * 8,
             id="exact-one-bucket",
         ),
@@ -706,20 +709,30 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
             MoonEPMode.EXACT,
             2,
             MoonEPBucketSchedule.COMPUTE_OVERLAP,
+            MoonEPTokenTransport.RAGGED,
             ((0, 1),) * 8,
             id="exact-two-buckets-overlap",
+        ),
+        pytest.param(
+            MoonEPMode.EXACT,
+            1,
+            MoonEPBucketSchedule.EAGER_DISPATCH,
+            MoonEPTokenTransport.BOUNDED_ALL_TO_ALL,
+            ((0, 2), (4, 6)) * 4,
+            id="exact-bounded-token-all-to-all",
         ),
         pytest.param(
             MoonEPMode.QB_FIXED,
             1,
             MoonEPBucketSchedule.EAGER_DISPATCH,
+            MoonEPTokenTransport.RAGGED,
             ((0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7)),
             id="qb-fixed",
         ),
     ],
 )
 def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
-    mode, token_buckets, bucket_schedule, selected_expert_rows
+    mode, token_buckets, bucket_schedule, token_transport, selected_expert_rows
 ):
     if jax.default_backend() != "gpu" or jax.device_count() != 4:
         pytest.skip("requires one four-GPU GB200 tray")
@@ -800,7 +813,8 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
                 bucket_schedule=bucket_schedule,
                 grouped_gemm=MoonEPGroupedGemm.QUACK,
                 mode=mode,
-                fixed_capacity_factor=1.0,
+                fixed_capacity_factor=1.25 if token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL else 1.0,
+                token_transport=token_transport,
             ),
             report_capacity_overflow=True,
         )
