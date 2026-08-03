@@ -101,8 +101,13 @@ def release_evidence_decision(
         and blind_review_report["package_sha256"] == blind_package_sha256
     )
     training_validation = training_report["validation_decision"]
+    training_gates = training_validation["gates"]
     return {
-        "training_validation": bool(training_validation) and all(bool(value) for value in training_validation.values()),
+        "training_validation": (
+            training_validation["passed"] is True
+            and bool(training_gates)
+            and all(value is True for value in training_gates.values())
+        ),
         "evaluation_identity": evaluation_identity,
         "parent_semantics": bool(variant["parent"]["student_all_gates_passed"]),
         "leaf_semantics": bool(variant["leaf"]["student_all_gates_passed"]),

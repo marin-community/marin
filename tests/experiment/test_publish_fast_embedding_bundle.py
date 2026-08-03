@@ -15,7 +15,11 @@ from publish_fast_embedding_bundle import release_evidence_decision  # noqa: E40
 def release_reports() -> tuple[dict, dict, dict, dict]:
     training = {
         "final_model_sha256": "model-sha",
-        "validation_decision": {"semantic": True, "rank": True},
+        "validation_decision": {
+            "semantic_mean_delta": 0.1,
+            "gates": {"semantic": True, "rank": True},
+            "passed": True,
+        },
     }
     level = {"student_all_gates_passed": True}
     evaluation = {
@@ -78,7 +82,8 @@ def test_release_evidence_accepts_one_exact_student_that_passes_all_gates() -> N
 @pytest.mark.parametrize(
     ("report_index", "path"),
     [
-        (0, ("validation_decision", "rank")),
+        (0, ("validation_decision", "gates", "rank")),
+        (0, ("validation_decision", "passed")),
         (1, ("variants", "compact", "production_buckets", "student_all_gates_passed")),
         (2, ("measurement_valid",)),
         (2, ("compute_dtype",)),
