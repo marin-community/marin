@@ -69,6 +69,11 @@ def submit(args) -> None:
         SCALE_BATCH=str(args.batch),
         SCALE_STEPS=str(args.steps),
         SCALE_TRACKER="json_logger",
+        # The default s3 checkpointer saved at step 1 and step 2 of the probe run, ~25
+        # minutes of blocking upload each, dwarfing the 80 steps being measured and
+        # costing bucket traffic for state no one reads. `local` writes to the pod's
+        # /tmp with save_interval=None, so only the forced final save happens.
+        SCALE_CHECKPOINTS="local",
         RUN_ID=args.run_id,
     )
     print(f"submitting {args.run_id} with sweep [{sweep}]", flush=True)
