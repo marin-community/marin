@@ -100,7 +100,7 @@ class MoonEPTokenTransport(StrEnum):
     """Collective used for MoonEP token dispatch and combine."""
 
     RAGGED = "ragged"
-    BOUNDED_ALL_TO_ALL = "bounded_all_to_all"
+    CHUNKED_ALL_TO_ALL = "chunked_all_to_all"
 
 
 @dataclass(frozen=True)
@@ -112,6 +112,7 @@ class MoonEPConfig:
     grouped_gemm: MoonEPGroupedGemm
     mode: MoonEPMode
     fixed_capacity_factor: float
+    token_chunk_capacity_factor: float
     token_transport: MoonEPTokenTransport
     bucket_schedule: MoonEPBucketSchedule = MoonEPBucketSchedule.EAGER_DISPATCH
 
@@ -122,11 +123,13 @@ class MoonEPConfig:
             raise ValueError("token_buckets must be positive")
         if self.fixed_capacity_factor < 1.0:
             raise ValueError("fixed_capacity_factor must be at least 1.0")
-        if self.token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL:
+        if self.token_chunk_capacity_factor <= 0.0:
+            raise ValueError("token_chunk_capacity_factor must be positive")
+        if self.token_transport == MoonEPTokenTransport.CHUNKED_ALL_TO_ALL:
             if self.token_buckets != 1:
-                raise ValueError("bounded token all-to-all requires one token bucket")
+                raise ValueError("chunked token all-to-all requires one token bucket")
             if self.bucket_schedule != MoonEPBucketSchedule.EAGER_DISPATCH:
-                raise ValueError("bounded token all-to-all requires eager dispatch")
+                raise ValueError("chunked token all-to-all requires eager dispatch")
 
 
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:

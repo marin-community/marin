@@ -289,62 +289,96 @@ def _token_bucket_bounds(
     return starts, ends
 
 
-def _bounded_token_all_to_all(
+def _chunked_token_all_to_all_impl(
     values: jax.Array,
     send_matrix: Int[Array, "R R"],
     rank: Int[Array, ""],
     *,
-    capacity_factor: float,
+    chunk_capacity_factor: float,
 ) -> jax.Array:
-    """Use a padded all-to-all when each peer message fits its fixed slot."""
+    """Exchange exact peer messages through one or more fixed-size all-to-all rounds."""
     num_ranks = send_matrix.shape[0]
     total_rows = values.shape[0]
-    capacity = max(math.ceil(capacity_factor * total_rows / num_ranks), 1)
+    chunk_capacity = max(math.ceil(chunk_capacity_factor * total_rows / num_ranks), 1)
+    num_rounds = (jnp.max(send_matrix) + chunk_capacity - 1) // chunk_capacity
+    slots = jnp.arange(chunk_capacity, dtype=jnp.int32)[None, :]
+    local_sizes = send_matrix[rank]
+    local_starts = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
+    received_sizes = send_matrix[:, rank]
+    received_starts = jnp.cumsum(received_sizes, dtype=jnp.int32) - received_sizes
 
-    def _fixed_all_to_all(compact_values: jax.Array) -> jax.Array:
-        slots = jnp.arange(capacity, dtype=jnp.int32)[None, :]
-        local_sizes = send_matrix[rank]
-        local_starts = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
-        input_indices = local_starts[:, None] + slots
-        valid_inputs = slots < local_sizes[:, None]
+    def _exchange_round(state: tuple[Int[Array, ""], jax.Array]) -> tuple[Int[Array, ""], jax.Array]:
+        round_index, output = state
+        row_offset = round_index * chunk_capacity
+        input_indices = local_starts[:, None] + row_offset + slots
+        valid_inputs = row_offset + slots < local_sizes[:, None]
         padded_values = jnp.where(
             valid_inputs[..., None],
-            compact_values[jnp.minimum(input_indices, total_rows - 1)],
+            values[jnp.minimum(input_indices, total_rows - 1)],
             0,
         )
         received_blocks = jax.lax.all_to_all(
-            padded_values.reshape(num_ranks * capacity, *compact_values.shape[1:]),
+            padded_values.reshape(num_ranks * chunk_capacity, *values.shape[1:]),
             "expert",
             split_axis=0,
             concat_axis=0,
             tiled=True,
-        ).reshape(num_ranks, capacity, *compact_values.shape[1:])
+        ).reshape(num_ranks, chunk_capacity, *values.shape[1:])
 
-        received_sizes = send_matrix[:, rank]
-        received_starts = jnp.cumsum(received_sizes, dtype=jnp.int32) - received_sizes
-        output_indices = received_starts[:, None] + slots
-        valid_outputs = slots < received_sizes[:, None]
+        output_indices = received_starts[:, None] + row_offset + slots
+        valid_outputs = row_offset + slots < received_sizes[:, None]
         output_indices = jnp.where(valid_outputs, output_indices, total_rows)
-        return (
-            jnp.zeros_like(compact_values)
-            .at[output_indices.reshape(-1)]
-            .set(received_blocks.reshape(num_ranks * capacity, *compact_values.shape[1:]), mode="drop")
+        output = output.at[output_indices.reshape(-1)].set(
+            received_blocks.reshape(num_ranks * chunk_capacity, *values.shape[1:]),
+            mode="drop",
         )
+        return round_index + 1, output
 
-    def _ragged_all_to_all(compact_values: jax.Array) -> jax.Array:
-        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(send_matrix, rank)
-        return jax.lax.ragged_all_to_all(
-            compact_values,
-            jnp.zeros_like(compact_values),
-            input_offsets,
-            send_sizes,
-            output_offsets,
-            recv_sizes,
-            axis_name="expert",
-        )
+    _, output = jax.lax.while_loop(
+        lambda state: state[0] < num_rounds,
+        _exchange_round,
+        (jnp.array(0, dtype=jnp.int32), jnp.zeros_like(values)),
+    )
+    return output
 
-    fixed_capacity_suffices = jnp.max(send_matrix) <= capacity
-    return jax.lax.cond(fixed_capacity_suffices, _fixed_all_to_all, _ragged_all_to_all, values)
+
+@partial(jax.custom_vjp, nondiff_argnums=(3,))
+def _chunked_token_all_to_all(
+    values: jax.Array,
+    send_matrix: Int[Array, "R R"],
+    rank: Int[Array, ""],
+    chunk_capacity_factor: float,
+) -> jax.Array:
+    return _chunked_token_all_to_all_impl(
+        values,
+        send_matrix,
+        rank,
+        chunk_capacity_factor=chunk_capacity_factor,
+    )
+
+
+def _chunked_token_all_to_all_fwd(values, send_matrix, rank, chunk_capacity_factor):
+    output = _chunked_token_all_to_all_impl(
+        values,
+        send_matrix,
+        rank,
+        chunk_capacity_factor=chunk_capacity_factor,
+    )
+    return output, (send_matrix, rank)
+
+
+def _chunked_token_all_to_all_bwd(chunk_capacity_factor, residuals, output_gradient):
+    send_matrix, rank = residuals
+    input_gradient = _chunked_token_all_to_all_impl(
+        output_gradient,
+        send_matrix.T,
+        rank,
+        chunk_capacity_factor=chunk_capacity_factor,
+    )
+    return input_gradient, None, None
+
+
+_chunked_token_all_to_all.defvjp(_chunked_token_all_to_all_fwd, _chunked_token_all_to_all_bwd)
 
 
 def _ordered_after(dependency: jax.Array, value: jax.Array) -> jax.Array:
@@ -654,8 +688,8 @@ def _moe_mlp_ep_moonep_exact_local(
     token_buckets: int,
     bucket_schedule: MoonEPBucketSchedule,
     token_transport: MoonEPTokenTransport,
+    token_chunk_capacity_factor: float,
     grouped_gemm: MoonEPGroupedGemm,
-    fixed_capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Run portable MoonEP with sparse expert copies and exact receiver loads."""
     if capacity_factor != 1.0:
@@ -719,12 +753,12 @@ def _moe_mlp_ep_moonep_exact_local(
             if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and dispatched_buckets:
                 input_offsets = _ordered_after(dispatched_buckets[-1].received_x[0, 0], input_offsets)
 
-            if token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL:
-                received_x = _bounded_token_all_to_all(
+            if token_transport == MoonEPTokenTransport.CHUNKED_ALL_TO_ALL:
+                received_x = _chunked_token_all_to_all(
                     send_x,
                     bucket_send_matrix,
                     rank,
-                    capacity_factor=fixed_capacity_factor,
+                    token_chunk_capacity_factor,
                 )
             elif bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket > 0:
                 received_x = _scheduled_ragged_all_to_all(
@@ -859,12 +893,12 @@ def _moe_mlp_ep_moonep_exact_local(
                 rank,
             )
 
-            if token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL:
-                returned = _bounded_token_all_to_all(
+            if token_transport == MoonEPTokenTransport.CHUNKED_ALL_TO_ALL:
+                returned = _chunked_token_all_to_all(
                     outputs_in_receive_order,
                     bucket_send_matrix.T,
                     rank,
-                    capacity_factor=fixed_capacity_factor,
+                    token_chunk_capacity_factor,
                 )
             elif bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket + 2 == token_buckets:
                 returned = _scheduled_ragged_all_to_all(
@@ -940,6 +974,7 @@ def _moe_mlp_ep_moonep_local(
     token_buckets: int,
     bucket_schedule: MoonEPBucketSchedule,
     token_transport: MoonEPTokenTransport,
+    token_chunk_capacity_factor: float,
     grouped_gemm: MoonEPGroupedGemm,
     mode: MoonEPMode,
     fixed_capacity_factor: float,
@@ -972,7 +1007,7 @@ def _moe_mlp_ep_moonep_local(
             token_buckets=token_buckets,
             bucket_schedule=bucket_schedule,
             token_transport=token_transport,
+            token_chunk_capacity_factor=token_chunk_capacity_factor,
             grouped_gemm=grouped_gemm,
-            fixed_capacity_factor=fixed_capacity_factor,
         )
     raise AssertionError(f"Unhandled MoonEP mode {mode!r}")

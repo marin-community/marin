@@ -502,6 +502,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                         grouped_gemm=MoonEPGroupedGemm.XLA,
                         mode=MoonEPMode.EXACT,
                         fixed_capacity_factor=1.0,
+                        token_chunk_capacity_factor=0.5,
                         token_transport=MoonEPTokenTransport.RAGGED,
                     )
                     if implementation == "moonep_jax"
@@ -717,9 +718,9 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
             MoonEPMode.EXACT,
             1,
             MoonEPBucketSchedule.EAGER_DISPATCH,
-            MoonEPTokenTransport.BOUNDED_ALL_TO_ALL,
+            MoonEPTokenTransport.CHUNKED_ALL_TO_ALL,
             ((0, 2), (4, 6)) * 4,
-            id="exact-bounded-token-all-to-all",
+            id="exact-chunked-token-all-to-all",
         ),
         pytest.param(
             MoonEPMode.QB_FIXED,
@@ -813,7 +814,8 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
                 bucket_schedule=bucket_schedule,
                 grouped_gemm=MoonEPGroupedGemm.QUACK,
                 mode=mode,
-                fixed_capacity_factor=1.25 if token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL else 1.0,
+                fixed_capacity_factor=1.0,
+                token_chunk_capacity_factor=0.5,
                 token_transport=token_transport,
             ),
             report_capacity_overflow=True,

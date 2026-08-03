@@ -111,6 +111,7 @@ def build_hero_run(
     moonep_token_buckets: int = 1,
     moonep_bucket_schedule: MoonEPBucketSchedule = MoonEPBucketSchedule.EAGER_DISPATCH,
     moonep_token_transport: MoonEPTokenTransport = MoonEPTokenTransport.RAGGED,
+    moonep_token_chunk_capacity_factor: float = 0.5,
     moonep_grouped_gemm: MoonEPGroupedGemm = MoonEPGroupedGemm.QUACK,
     moonep_mode: MoonEPMode = MoonEPMode.EXACT,
     moonep_fixed_capacity_factor: float = 1.1,
@@ -155,6 +156,7 @@ def build_hero_run(
             grouped_gemm=moonep_grouped_gemm,
             mode=moonep_mode,
             fixed_capacity_factor=moonep_fixed_capacity_factor,
+            token_chunk_capacity_factor=moonep_token_chunk_capacity_factor,
             token_transport=moonep_token_transport,
         )
         if moe_implementation == "moonep_jax"
@@ -314,11 +316,18 @@ def build_hero_run(
     help="Collective for MoonEP token dispatch and combine.",
 )
 @click.option(
+    "--moonep-token-chunk-capacity-factor",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=0.5,
+    show_default=True,
+    help="Per-round peer capacity relative to the mean token message.",
+)
+@click.option(
     "--moonep-fixed-capacity-factor",
     type=click.FloatRange(min=1.0),
     default=1.1,
     show_default=True,
-    help="Capacity factor for fixed expert cells and bounded token messages.",
+    help="Capacity factor for fixed expert cells.",
 )
 @click.option(
     "--moonep-mode",
@@ -411,6 +420,7 @@ def main(
     moonep_token_buckets: int,
     moonep_bucket_schedule: str,
     moonep_token_transport: str,
+    moonep_token_chunk_capacity_factor: float,
     moonep_grouped_gemm: str,
     moonep_mode: str,
     moonep_fixed_capacity_factor: float,
@@ -434,6 +444,7 @@ def main(
         moonep_token_buckets=moonep_token_buckets,
         moonep_bucket_schedule=MoonEPBucketSchedule(moonep_bucket_schedule),
         moonep_token_transport=MoonEPTokenTransport(moonep_token_transport),
+        moonep_token_chunk_capacity_factor=moonep_token_chunk_capacity_factor,
         moonep_grouped_gemm=MoonEPGroupedGemm(moonep_grouped_gemm),
         moonep_mode=MoonEPMode(moonep_mode),
         moonep_fixed_capacity_factor=moonep_fixed_capacity_factor,
