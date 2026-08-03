@@ -28,6 +28,7 @@ from levanter.grug._moe.ep_fixed_all_to_all import _combine_gather, _dispatch_ga
 from levanter.grug.sharding import _batch_axes
 
 _QUACK_ALIGNMENT = 128
+_EXPERT_ID_DTYPE = jnp.dtype(jnp.int32)
 
 
 class MoonEPPlan(NamedTuple):
@@ -226,6 +227,18 @@ def _assignment_destinations(
     return jnp.minimum(destinations, num_ranks - 1), errors
 
 
+def _pack_expert_ids(expert_ids: Int[Array, " N"], token_dtype: jnp.dtype) -> jax.Array:
+    token_dtype = jnp.dtype(token_dtype)
+    if _EXPERT_ID_DTYPE.itemsize % token_dtype.itemsize != 0:
+        raise ValueError(f"Token dtype {token_dtype} cannot carry int32 expert IDs")
+    metadata_width = _EXPERT_ID_DTYPE.itemsize // token_dtype.itemsize
+    return jax.lax.bitcast_convert_type(expert_ids, token_dtype).reshape(expert_ids.shape[0], metadata_width)
+
+
+def _unpack_expert_ids(packed_expert_ids: jax.Array) -> Int[Array, " N"]:
+    return jax.lax.bitcast_convert_type(packed_expert_ids, _EXPERT_ID_DTYPE).reshape(packed_expert_ids.shape[0])
+
+
 def _exchange_remote_weights_impl(
     local_weights: jax.Array,
     experts_to_copy: Int[Array, "R B"],
@@ -380,27 +393,22 @@ def _moe_mlp_ep_moonep_local(
             jnp.ones((assignments_per_rank,), dtype=jnp.bool_),
         )
         send_experts = flat_experts[send_order]
+        packed_experts = _pack_expert_ids(send_experts, send_x.dtype)
+        send_payload = jnp.concatenate((send_x, packed_experts), axis=1)
         local_send_sizes = jnp.bincount(destinations, length=num_ranks).astype(jnp.int32)
         send_matrix = jax.lax.all_gather(local_send_sizes, "expert")
         input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(send_matrix, rank)
-        received_x = jax.lax.ragged_all_to_all(
-            send_x,
-            jnp.zeros((assignments_per_rank, hidden_dim), dtype=x_local.dtype),
+        received_payload = jax.lax.ragged_all_to_all(
+            send_payload,
+            jnp.zeros((assignments_per_rank, send_payload.shape[1]), dtype=x_local.dtype),
             input_offsets,
             send_sizes,
             output_offsets,
             recv_sizes,
             axis_name="expert",
         )
-        received_experts = jax.lax.ragged_all_to_all(
-            send_experts,
-            jnp.zeros((assignments_per_rank,), dtype=jnp.int32),
-            input_offsets,
-            send_sizes,
-            output_offsets,
-            recv_sizes,
-            axis_name="expert",
-        )
+        received_x = received_payload[:, :hidden_dim]
+        received_experts = _unpack_expert_ids(received_payload[:, hidden_dim:])
 
         local_start = rank * local_experts
         is_local = jnp.logical_and(received_experts >= local_start, received_experts < local_start + local_experts)
