@@ -48,6 +48,7 @@ def test_checkpoint_benchmark_uses_ttl_output_and_low_overhead_timing(monkeypatc
     assert config.trainer.trainer.checkpointer.keep == [{"every": 8}]
     assert config.trainer.trainer.checkpointer.debug.enabled is True
     assert config.trainer.trainer.checkpointer.debug.tracemalloc_frames is None
+    assert config.trainer.trainer.tracker[0].mode == "disabled"
 
 
 def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypatch):

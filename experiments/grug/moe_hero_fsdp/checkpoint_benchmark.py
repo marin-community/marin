@@ -114,6 +114,7 @@ def build_checkpoint_benchmark_run(
                     tags=["grug", "moe", "checkpoint", "fsdp", "gb200"],
                     group="moe-checkpoint-benchmark",
                     name=run_id,
+                    mode="disabled",
                     replicate_path=ctx.output_path,
                 ),
                 TelemetryConfig(training_stall_timeout=HERO_TRAINING_STALL_TIMEOUT),
