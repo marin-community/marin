@@ -13,6 +13,8 @@ PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-p
 sys.path.insert(0, str(PROJECT))
 
 from train_semantic_projection import (  # noqa: E402
+    SemanticLabels,
+    fit_projection_minibatches,
     fold_embedding_projection,
     retained_train_validation_indices,
     supervised_contrastive_loss,
@@ -112,3 +114,43 @@ def test_fold_embedding_projection_preserves_projected_directions() -> None:
 
     assert float(cosines.min()) >= 0.999
     assert eqx.tree_equal(model.backbone, folded_model.backbone)
+
+
+def test_fit_projection_minibatches_covers_all_rows_and_reduces_loss() -> None:
+    base_vectors = np.asarray(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.1, 0.9, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.9, 0.1],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.1, 0.9],
+        ]
+    )
+    labels = SemanticLabels(
+        parent=np.asarray([0, 1, 0, 1, 0, 1, 0, 1]),
+        leaf=np.asarray([0, 1, 0, 1, 0, 1, 0, 1]),
+        form=np.asarray([0, 1, 0, 1, 0, 1, 0, 1]),
+    )
+    sources = np.arange(8)
+
+    projection, history, audit = fit_projection_minibatches(
+        base_vectors,
+        labels,
+        sources,
+        batch_size=8,
+        epochs=50,
+    )
+
+    assert audit == {
+        "rows": 8,
+        "batch_size": 8,
+        "epochs": 50,
+        "batches_per_epoch": 1,
+        "padded_rows_per_epoch": 8,
+        "updates": 50,
+    }
+    assert np.isfinite(projection).all()
+    assert history[-1]["loss"] < history[0]["loss"]

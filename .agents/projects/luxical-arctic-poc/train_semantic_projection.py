@@ -5,11 +5,12 @@
 
 import json
 import logging
+import math
 import tempfile
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import equinox as eqx
 import jax
@@ -22,7 +23,7 @@ from evaluate_semantic_embeddings import semantic_sample
 from fast_student import FastStudent
 from glm_hierarchical_labels import OUTPUT_ROOT
 from glm_semantic_labels import stable_order
-from ladder_config import write_json
+from ladder_config import SEED, write_json
 from semantic_embedding_metrics import normalize_embeddings
 from sklearn.metrics import f1_score
 from train_fast_student import OUTPUT_ROOT as TRAINING_ROOT
@@ -61,13 +62,21 @@ RESULT_FILE = Path("/tmp/luxical-semantic-projection")
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class SemanticLabels:
+class SemanticLabels(NamedTuple):
     """Store integer hierarchy labels for one document table."""
 
-    parent: np.ndarray
-    leaf: np.ndarray
-    form: np.ndarray
+    parent: jax.Array | np.ndarray
+    leaf: jax.Array | np.ndarray
+    form: jax.Array | np.ndarray
+
+
+@dataclass(frozen=True)
+class ProjectionMixCandidate:
+    """Store one identity-mix validation result."""
+
+    alpha: float
+    metrics: dict[str, Any]
+    provisional_decision: dict[str, Any]
 
 
 def integer_labels(values: list[str]) -> np.ndarray:
@@ -262,21 +271,23 @@ def select_projection_mix(
 ) -> tuple[float, np.ndarray, list[dict[str, Any]]]:
     """Select the best pilot mix that passes the provisional gates."""
     candidates = []
+    validation_vectors = base_vectors[validation_indices]
+    validation_sources = sources[validation_indices]
     for alpha in PROJECTION_MIX_ALPHAS:
         candidate_projection = projection_mix(raw_projection, alpha)
-        candidate_vectors = normalize_embeddings(base_vectors @ candidate_projection)
+        candidate_vectors = normalize_embeddings(validation_vectors @ candidate_projection)
         metrics = evaluation_metrics(
-            candidate_vectors[validation_indices],
+            candidate_vectors,
             validation_labels,
-            sources[validation_indices],
+            validation_sources,
         )
         decision = validation_decision(base_validation, metrics, folded_cosine_minimum=1.0)
-        candidates.append({"alpha": alpha, "metrics": metrics, "provisional_decision": decision})
-    passed = [row for row in candidates if row["provisional_decision"]["passed"]]
+        candidates.append(ProjectionMixCandidate(alpha, metrics, decision))
+    passed = [row for row in candidates if row.provisional_decision["passed"]]
     selection_pool = passed if passed else candidates
-    selected = max(selection_pool, key=lambda row: row["provisional_decision"]["semantic_mean_delta"])
-    selected_alpha = float(selected["alpha"])
-    return selected_alpha, projection_mix(raw_projection, selected_alpha), candidates
+    selected = max(selection_pool, key=lambda row: row.provisional_decision["semantic_mean_delta"])
+    selected_alpha = selected.alpha
+    return selected_alpha, projection_mix(raw_projection, selected_alpha), [asdict(row) for row in candidates]
 
 
 def fit_projection(
@@ -315,6 +326,103 @@ def fit_projection(
     if not np.isfinite(result).all():
         raise ValueError("The semantic projection contains non-finite values")
     return result, history
+
+
+def fit_projection_minibatches(
+    base_vectors: np.ndarray,
+    labels: SemanticLabels,
+    source_ids: np.ndarray,
+    batch_size: int,
+    epochs: int,
+) -> tuple[np.ndarray, list[dict[str, float]], dict[str, int]]:
+    """Fit an identity-started projection with deterministic minibatches."""
+    rows, dimension = base_vectors.shape
+    if rows < 1 or batch_size < 1 or epochs < 1:
+        raise ValueError("Projection rows, batch size, and epochs must be positive")
+    if labels.parent.shape != (rows,) or labels.leaf.shape != (rows,) or labels.form.shape != (rows,):
+        raise ValueError("Projection labels do not match the base-vector rows")
+    if source_ids.shape != (rows,):
+        raise ValueError("Projection sources do not match the base-vector rows")
+
+    projection = jnp.eye(dimension)
+    base = jnp.asarray(normalize_embeddings(base_vectors))
+    device_labels = SemanticLabels(
+        parent=jnp.asarray(labels.parent),
+        leaf=jnp.asarray(labels.leaf),
+        form=jnp.asarray(labels.form),
+    )
+    sources = jnp.asarray(source_ids)
+    optimizer = optax.adam(LEARNING_RATE)
+    state = optimizer.init(projection)
+
+    @jax.jit
+    def step(
+        current_projection: jax.Array,
+        current_state: optax.OptState,
+        all_vectors: jax.Array,
+        all_labels: SemanticLabels,
+        all_sources: jax.Array,
+        indices: jax.Array,
+    ):
+        batch_labels = SemanticLabels(
+            parent=all_labels.parent[indices],
+            leaf=all_labels.leaf[indices],
+            form=all_labels.form[indices],
+        )
+        (loss, components), gradient = jax.value_and_grad(projection_loss, has_aux=True)(
+            current_projection,
+            all_vectors[indices],
+            batch_labels,
+            all_sources[indices],
+        )
+        updates, next_state = optimizer.update(gradient, current_state, current_projection)
+        return optax.apply_updates(current_projection, updates), next_state, loss, components
+
+    batches_per_epoch = math.ceil(rows / batch_size)
+    padded_rows_per_epoch = batches_per_epoch * batch_size
+    generator = np.random.default_rng(SEED + 700_000)
+    history = []
+    update_index = 0
+    for epoch_index in range(epochs):
+        order = generator.permutation(rows)
+        padded_order = np.resize(order, padded_rows_per_epoch)
+        for start in range(0, padded_rows_per_epoch, batch_size):
+            update_index += 1
+            indices = jnp.asarray(padded_order[start : start + batch_size])
+            projection, state, loss, components = step(
+                projection,
+                state,
+                base,
+                device_labels,
+                sources,
+                indices,
+            )
+            if update_index == 1 or update_index % 50 == 0 or update_index == batches_per_epoch * epochs:
+                row = {
+                    "step": float(update_index),
+                    "epoch": float(epoch_index + 1),
+                    "loss": float(loss),
+                }
+                row.update({name: float(value) for name, value in components.items()})
+                history.append(row)
+                logger.info(
+                    "Projection update %d/%d: %s",
+                    update_index,
+                    batches_per_epoch * epochs,
+                    json.dumps(row, sort_keys=True),
+                )
+    result = np.asarray(projection)
+    if not np.isfinite(result).all():
+        raise ValueError("The minibatch semantic projection contains non-finite values")
+    audit = {
+        "rows": rows,
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "batches_per_epoch": batches_per_epoch,
+        "padded_rows_per_epoch": padded_rows_per_epoch,
+        "updates": update_index,
+    }
+    return result, history, audit
 
 
 def main() -> None:
