@@ -23,7 +23,7 @@ import numpy as np
 import optax
 import pyarrow.parquet as pq
 from build_manifest import allocate_balanced_quotas
-from fast_student import MAX_TOKENS, FastStudent
+from fast_student import MAX_TOKENS, MODEL_CONFIGS, FastStudent
 from fast_student_training_data import (
     MaterializedTrainingRows,
     SourceTrainingRows,
@@ -435,7 +435,7 @@ def train(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=tuple(RUNG_TARGETS), required=True)
-    parser.add_argument("--config", choices=("full", "slim"), required=True)
+    parser.add_argument("--config", choices=tuple(MODEL_CONFIGS), required=True)
     parser.add_argument("--treatment", choices=tuple(SOURCE_GEOMETRY_WEIGHTS), default="baseline")
     parser.add_argument("--teacher", choices=tuple(TEACHERS), required=True)
     parser.add_argument("--training-layout", choices=tuple(TrainingLayout), type=TrainingLayout, required=True)
