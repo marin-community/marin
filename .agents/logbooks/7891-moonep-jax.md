@@ -1894,3 +1894,17 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Comparison: MNEP-093 recorded `15.181 s` of ragged transport, `2.180 s` of QuACK work, and `0.420 s` of exact overlap.
 - Gate: Require five finite steps, zero dropped assignments, and one complete XProf session.
 - Rationale: The step needs about `12 s` to reach `21.7%` median MFU. Total QuACK time is near `2.2 s`, so overlap alone cannot close the gap. This profile fixes the transport cost before the capacity work in MNEP-104.
+
+### 2026-08-03 22:15 UTC - Transport budget for the 21.7% gate
+
+- Traffic: Each rank moves `524,288` rows of `10,240` bytes for each token call, which is `5.369 GB`.
+- Call count: The MNEP-093 trace has 576 token calls. This equals 48 MoE layers times six transfer families times two buckets.
+- Families: Forward dispatch, forward combine, rematerialized dispatch, rematerialized combine, and the two backward transfers.
+- Volume: The total is `1,546 GB` for each GPU in each step.
+- Achieved rate: `1,546 GB` in `15.181 s` is `101.9 GB/s`, or about `11%` of the `900 GB/s` GB200 NVLink limit.
+- Fabric limit: The same traffic needs `1.72 s` at the NVLink limit.
+- Step budget: MNEP-102 gives `9.937%` MFU at `26.170 s`, so `21.7%` MFU needs a `11.98 s` step.
+- Non-transport work: The step contains `10.99 s` of other work. This value agrees with the `10.8 s` baseline step of MHEP-004.
+- Exposed budget: Exposed transport must stay below `0.99 s`.
+- Conclusion: A fabric-rate transport alone gives about `20.5%` MFU and does not pass the gate. The work needs both a cheap transport and compute overlap.
+- Third lever: The two rematerialized families are one third of the traffic. MNEP-091 could not save the MoE state, but a smaller collective pool can make `save_moe` fit.
