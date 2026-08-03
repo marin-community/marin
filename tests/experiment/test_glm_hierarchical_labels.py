@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT))
 import glm_hierarchical_labels as hierarchical_labels  # noqa: E402
 from glm_hierarchical_labels import (  # noqa: E402
     FORMS,
+    VALIDATION_REPAIR_PREFIX,
     Hierarchy,
     LeafBucket,
     Variant,
@@ -112,7 +113,7 @@ def test_build_hierarchy_gives_validation_error_to_retry(monkeypatch: pytest.Mon
     assert "FORMS_TEMPLATES" in calls[1][-1]["content"]
 
 
-def test_assign_document_checks_primary_leaf_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_assign_document_excludes_persistently_invalid_assignment(monkeypatch: pytest.MonkeyPatch) -> None:
     value, _ = hierarchy()
     payload = {
         "primary_parent_id": "SCIENCE",
@@ -123,11 +124,23 @@ def test_assign_document_checks_primary_leaf_parent(monkeypatch: pytest.MonkeyPa
         "confidence": 0.9,
         "rationale": "Test",
     }
-    monkeypatch.setattr(hierarchical_labels, "completion", lambda *args, **kwargs: payload)
+    calls = []
+
+    def completion(*args, **kwargs):
+        calls.append(args)
+        return payload
+
+    monkeypatch.setattr(hierarchical_labels, "completion", completion)
     document = SampleDocument(0, "hash", "hidden", "standard", 0, "Text")
 
-    with pytest.raises(ValueError, match="wrong parent"):
-        assign_document("http://server", document, value, 0)
+    assignment = assign_document("http://server", document, value, 0)
+
+    assert len(calls) == hierarchical_labels.MAX_ATTEMPTS
+    assert assignment.primary_parent_id == OTHER_BUCKET_ID
+    assert assignment.primary_leaf_id == OTHER_BUCKET_ID
+    assert assignment.form_id == OTHER_BUCKET_ID
+    assert assignment.confidence == 0.0
+    assert assignment.rationale.startswith(VALIDATION_REPAIR_PREFIX)
 
 
 def test_assign_document_gives_validation_error_to_retry(monkeypatch: pytest.MonkeyPatch) -> None:

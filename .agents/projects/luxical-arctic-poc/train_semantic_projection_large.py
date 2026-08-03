@@ -15,7 +15,7 @@ import numpy as np
 from evaluate_fast_student import load_student
 from evaluate_hierarchical_embeddings import hierarchical_assignments
 from fast_student import FastStudent
-from glm_hierarchical_labels import OUTPUT_ROOT
+from glm_hierarchical_labels import MAXIMUM_VALIDATION_REPAIR_FRACTION, OUTPUT_ROOT, VALIDATION_REPAIR_PREFIX
 from glm_semantic_labels import SampleDocument, read_jsonl
 from label_frozen_hierarchy_training import identity_digest
 from ladder_config import write_json
@@ -93,6 +93,9 @@ def validated_training_documents(
         raise ValueError("The GLM label run does not contain exactly 50,000 documents")
     if not summary.get("complete"):
         raise ValueError("The GLM label run is not complete")
+    repair_count = int(summary.get("validation_repair_count", -1))
+    if repair_count < 0 or repair_count > EXPECTED_DOCUMENTS * MAXIMUM_VALIDATION_REPAIR_FRACTION:
+        raise ValueError("The GLM label run has an invalid validation-repair count")
     if [row.sample_index for row in documents] != list(range(EXPECTED_DOCUMENTS)):
         raise ValueError("The GLM training sample indices are not complete")
     if identity_digest(documents) != config.get("training_identity_sha256"):
@@ -112,6 +115,7 @@ def main() -> None:
     training_root = OUTPUT_ROOT / HIERARCHY_RUN_ID / HIERARCHY_VARIANT / LABEL_RUN_ID
     documents, label_config, label_metadata = validated_training_documents(training_root)
     assignments = hierarchical_assignments(training_root, documents)
+    repaired_indices = {row.sample_index for row in assignments if row.rationale.startswith(VALIDATION_REPAIR_PREFIX)}
     confidences = np.asarray([row.confidence for row in assignments])
     leaf_names = [row.primary_leaf_id for row in assignments]
     training_indices, validation_indices, confidence_cutoff = retained_train_validation_indices(
@@ -120,6 +124,9 @@ def main() -> None:
         validation_fraction=VALIDATION_FRACTION,
         drop_fraction=CONFIDENCE_DROP_FRACTION,
     )
+    retained_indices = set(training_indices.tolist()) | set(validation_indices.tolist())
+    if repaired_indices & retained_indices:
+        raise ValueError("A validation-repaired GLM label entered the retained sample")
     labels = SemanticLabels(
         parent=integer_labels([row.primary_parent_id for row in assignments]),
         leaf=integer_labels(leaf_names),
@@ -192,6 +199,7 @@ def main() -> None:
         "validation_rows": len(validation_indices),
         "confidence_cutoff": confidence_cutoff,
         "dropped_rows": int(len(documents) - len(training_indices) - len(validation_indices)),
+        "validation_repair_count": len(repaired_indices),
         "label_run_id": LABEL_RUN_ID,
         "label_run_config": label_config,
         "label_artifacts": label_metadata,

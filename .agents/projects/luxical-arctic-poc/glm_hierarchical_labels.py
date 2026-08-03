@@ -54,6 +54,8 @@ DEFAULT_BATCH_SIZE = 50
 DEFAULT_CONCURRENCY = 24
 DEFAULT_MAX_MODEL_LEN = 64 * 1024
 DEFAULT_MAX_NUM_SEQS = 24
+VALIDATION_REPAIR_PREFIX = "VALIDATION_REPAIR:"
+MAXIMUM_VALIDATION_REPAIR_FRACTION = 0.001
 
 
 @dataclass(frozen=True)
@@ -387,7 +389,22 @@ def assign_document(
             )
         except (KeyError, TypeError, ValueError) as error:
             if attempt + 1 == MAX_ATTEMPTS:
-                raise
+                logger.warning(
+                    "Replacing invalid assignment for sample %d after %d attempts: %s",
+                    document.sample_index,
+                    MAX_ATTEMPTS,
+                    error,
+                )
+                return HierarchicalAssignment(
+                    sample_index=document.sample_index,
+                    primary_parent_id=OTHER_BUCKET_ID,
+                    secondary_parent_ids=[],
+                    primary_leaf_id=OTHER_BUCKET_ID,
+                    secondary_leaf_ids=[],
+                    form_id=OTHER_BUCKET_ID,
+                    confidence=0.0,
+                    rationale=f"{VALIDATION_REPAIR_PREFIX} {error}",
+                )
             if payload is not None:
                 messages.append({"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)})
             messages.append(
@@ -434,6 +451,7 @@ def summary(variant: Variant, hierarchy: Hierarchy, assignments: list[Hierarchic
     parent_counts = Counter(row.primary_parent_id for row in assignments)
     leaf_counts = Counter(row.primary_leaf_id for row in assignments)
     form_counts = Counter(row.form_id for row in assignments)
+    validation_repair_count = sum(row.rationale.startswith(VALIDATION_REPAIR_PREFIX) for row in assignments)
     return {
         "variant": asdict(variant),
         "model": MODEL,
@@ -447,6 +465,8 @@ def summary(variant: Variant, hierarchy: Hierarchy, assignments: list[Hierarchic
         "parent_counts": dict(sorted(parent_counts.items())),
         "leaf_counts": dict(sorted(leaf_counts.items())),
         "form_counts": dict(sorted(form_counts.items())),
+        "validation_repair_count": validation_repair_count,
+        "validation_repair_fraction": validation_repair_count / len(assignments),
         "mean_confidence": sum(row.confidence for row in assignments) / len(assignments),
         "parent_distribution": assignment_distribution_metrics(parent_counts),
         "leaf_distribution": assignment_distribution_metrics(leaf_counts),
