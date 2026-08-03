@@ -1,22 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Two-pass external merge sort over Polars LazyFrame streams.
+"""Bounded external merge sort over Polars LazyFrame streams.
 
 Used by the reduce stage when the number of scatter chunks exceeds
 ``EXTERNAL_SORT_FAN_IN`` or the estimated merge memory exceeds the worker
 budget.
 
-Pass 1: consume the input LazyFrame stream in groups of ``fan_in`` frames.
-Merge each group with :func:`polars.merge_sorted` and spill the sorted result
-to a zstd-compressed parquet run file.
-
-Pass 2: read all run files via :func:`polars.scan_parquet`, merge with
-:func:`polars.merge_sorted`, and yield DataFrame batches. Run files are
-deleted after the merge completes (or on error).
+The first pass consumes the input frames in groups of ``fan_in`` frames. Each
+group produces a sorted Parquet run. Later passes merge at most
+``max_merge_fan_in`` runs. Thus, the final streaming merge has a bounded input
+count. The function deletes all run files after completion or an error.
 """
 
-import io
 import logging
 from collections.abc import Iterator
 
@@ -31,16 +27,15 @@ def external_sort_merge(
     sort_key: str,
     external_sort_dir: str,
     fan_in: int,
+    max_merge_fan_in: int,
     shard: int,
 ) -> Iterator[pl.DataFrame]:
-    """Merge pre-sorted LazyFrames via a two-pass external sort with spill files.
+    """Merge sorted LazyFrames with a bounded external sort.
 
-    Pass 1 groups ``input_frames`` into batches of at most ``fan_in`` frames,
-    merges each batch with :func:`polars.merge_sorted`, and writes the result to
-    a zstd-compressed parquet run file under ``external_sort_dir``. Pass 2 scans
-    all run files, merges them again with :func:`polars.merge_sorted`, and
-    streams the result as DataFrame batches. Run files are deleted when pass 2
-    finishes (or on error).
+    The first pass merges groups of at most ``fan_in`` frames. Additional
+    passes limit each merge to ``max_merge_fan_in`` runs. The final merge
+    streams DataFrame batches. The function deletes run files after completion
+    or an error.
 
     Args:
         input_frames: LazyFrames already sorted ascending on ``sort_key``. Order
@@ -51,6 +46,7 @@ def external_sort_merge(
             temp dir or ``gs://.../stage1-external-sort/shard-NNNN``).
         fan_in: Maximum frames merged in one pass-1 group; bounds peak memory
             during pass 1. Callers typically use ``ceil(sqrt(n_chunks))``.
+        max_merge_fan_in: Maximum run files in all later merges.
         shard: Target shard id for log messages only.
 
     Yields:
@@ -58,38 +54,77 @@ def external_sort_merge(
     """
     if len(input_frames) == 0:
         return
+    if fan_in < 1:
+        raise ValueError(f"fan_in must be at least 1, got {fan_in}")
+    if max_merge_fan_in < 2:
+        raise ValueError(f"max_merge_fan_in must be at least 2, got {max_merge_fan_in}")
 
     spill_fs, spill_dir = url_to_fs(external_sort_dir)
     spill_fs.makedirs(spill_dir, exist_ok=True)
 
     logger.info("[shard %d] External sort: pass-1 fan_in=%d", shard, fan_in)
 
-    spill_files: list[str] = []
+    spill_files: set[str] = set()
+
+    def write_run(frames: list[pl.LazyFrame], pass_index: int, run_index: int) -> tuple[str, str]:
+        run_name = f"pass-{pass_index:04d}-run-{run_index:04d}.spill"
+        run_url = f"{external_sort_dir}/{run_name}"
+        run_path = f"{spill_dir}/{run_name}"
+        spill_files.add(run_path)
+        merged = pl.merge_sorted(frames, key=sort_key)
+        with open_url(run_url, "wb") as output:
+            merged.sink_parquet(output, compression="zstd")
+        return run_url, run_path
+
+    def delete_runs(runs: list[tuple[str, str]]) -> None:
+        paths = [path for _, path in runs]
+        if not paths:
+            return
+        spill_fs.rm(paths)
+        spill_files.difference_update(paths)
 
     try:
-        # TODO: When we upgrade to Python 3.12, use itertools.batched
         batches = [input_frames[i : i + fan_in] for i in range(0, len(input_frames), fan_in)]
-        for idx, batch in enumerate(batches):
-            merged = pl.merge_sorted(batch, key=sort_key).collect()
+        runs: list[tuple[str, str]] = []
+        for run_index, batch in enumerate(batches):
+            run = write_run(batch, pass_index=0, run_index=run_index)
+            runs.append(run)
+            logger.info("[shard %d] External sort: wrote run %d to %s", shard, run_index, run[0])
 
-            spill_file = f"{external_sort_dir}/run-{idx:04d}.spill"
-            buf = io.BytesIO()
-            merged.write_parquet(buf, compression="zstd")
-            with open_url(spill_file, "wb") as f:
-                f.write(buf.getvalue())
+        pass_index = 1
+        while len(runs) > max_merge_fan_in:
+            logger.info(
+                "[shard %d] External sort: pass %d merging %d runs with max fan-in %d",
+                shard,
+                pass_index,
+                len(runs),
+                max_merge_fan_in,
+            )
+            next_runs: list[tuple[str, str]] = []
+            consumed_runs: list[tuple[str, str]] = []
+            run_batches = [runs[i : i + max_merge_fan_in] for i in range(0, len(runs), max_merge_fan_in)]
+            for run_index, run_batch in enumerate(run_batches):
+                if len(run_batch) == 1:
+                    next_runs.extend(run_batch)
+                    continue
+                next_runs.append(
+                    write_run(
+                        [pl.scan_parquet(run_url) for run_url, _ in run_batch],
+                        pass_index=pass_index,
+                        run_index=run_index,
+                    )
+                )
+                consumed_runs.extend(run_batch)
+            delete_runs(consumed_runs)
+            runs = next_runs
+            pass_index += 1
 
-            spill_files.append(spill_file)
-            logger.info("[shard %d] External sort: wrote run %d to %s", shard, idx, spill_file)
-
-        logger.info("[shard %d] External sort: pass-2 merging %d run files", shard, len(spill_files))
-
-        merged = pl.merge_sorted([pl.scan_parquet(p) for p in spill_files], key=sort_key)
+        logger.info("[shard %d] External sort: final merge of %d run files", shard, len(runs))
+        merged = pl.merge_sorted([pl.scan_parquet(run_url) for run_url, _ in runs], key=sort_key)
         yield from merged.collect_batches()
     finally:
         if spill_files:
             try:
-                spill_fs.rm([f"{spill_dir}/run-{i:04d}.spill" for i in range(len(spill_files))])
+                spill_fs.rm(sorted(spill_files))
             except Exception:
-                # Spill files live under a per-shard temp dir that the worker
-                # eventually wipes; log so leaked files are at least traceable.
                 logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)
