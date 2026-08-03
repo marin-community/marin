@@ -28,6 +28,9 @@ from levanter.grug._moe.ep_fixed_all_to_all import _combine_gather, _dispatch_ga
 from levanter.grug.sharding import _batch_axes
 
 _QUACK_ALIGNMENT = 128
+# Keep normal QB traffic on the standard collective without materializing a much larger token buffer.
+_FIXED_TOKEN_CAPACITY_NUMERATOR = 9
+_FIXED_TOKEN_CAPACITY_DENOMINATOR = 8
 
 
 class MoonEPPlan(NamedTuple):
@@ -244,6 +247,66 @@ def _received_expert_ids(
     )
 
 
+def _token_all_to_all(
+    values: jax.Array,
+    send_matrix: Int[Array, "R R"],
+    rank: Int[Array, ""],
+) -> jax.Array:
+    """Use a bounded standard all-to-all, with exact ragged fallback."""
+    num_ranks = send_matrix.shape[0]
+    total_rows = values.shape[0]
+    capacity = max(
+        (total_rows * _FIXED_TOKEN_CAPACITY_NUMERATOR + num_ranks * _FIXED_TOKEN_CAPACITY_DENOMINATOR - 1)
+        // (num_ranks * _FIXED_TOKEN_CAPACITY_DENOMINATOR),
+        1,
+    )
+
+    def _fixed_all_to_all(compact_values: jax.Array) -> jax.Array:
+        slots = jnp.arange(capacity, dtype=jnp.int32)[None, :]
+        local_sizes = send_matrix[rank]
+        local_starts = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
+        input_indices = local_starts[:, None] + slots
+        valid_inputs = slots < local_sizes[:, None]
+        padded_values = jnp.where(
+            valid_inputs[..., None],
+            compact_values[jnp.minimum(input_indices, total_rows - 1)],
+            0,
+        )
+        received_blocks = jax.lax.all_to_all(
+            padded_values.reshape(num_ranks * capacity, *compact_values.shape[1:]),
+            "expert",
+            split_axis=0,
+            concat_axis=0,
+            tiled=True,
+        ).reshape(num_ranks, capacity, *compact_values.shape[1:])
+
+        received_sizes = send_matrix[:, rank]
+        received_starts = jnp.cumsum(received_sizes, dtype=jnp.int32) - received_sizes
+        output_indices = received_starts[:, None] + slots
+        valid_outputs = slots < received_sizes[:, None]
+        output_indices = jnp.where(valid_outputs, output_indices, total_rows)
+        return (
+            jnp.zeros_like(compact_values)
+            .at[output_indices.reshape(-1)]
+            .set(received_blocks.reshape(num_ranks * capacity, *compact_values.shape[1:]), mode="drop")
+        )
+
+    def _ragged_all_to_all(compact_values: jax.Array) -> jax.Array:
+        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(send_matrix, rank)
+        return jax.lax.ragged_all_to_all(
+            compact_values,
+            jnp.zeros_like(compact_values),
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            axis_name="expert",
+        )
+
+    fixed_capacity_suffices = jnp.max(send_matrix) <= capacity
+    return jax.lax.cond(fixed_capacity_suffices, _fixed_all_to_all, _ragged_all_to_all, values)
+
+
 def _exchange_remote_weights_impl(
     local_weights: jax.Array,
     experts_to_copy: Int[Array, "R B"],
@@ -399,16 +462,7 @@ def _moe_mlp_ep_moonep_local(
         )
         local_send_sizes = jnp.bincount(destinations, length=num_ranks).astype(jnp.int32)
         send_matrix = jax.lax.all_gather(local_send_sizes, "expert")
-        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(send_matrix, rank)
-        received_x = jax.lax.ragged_all_to_all(
-            send_x,
-            jnp.zeros((assignments_per_rank, hidden_dim), dtype=x_local.dtype),
-            input_offsets,
-            send_sizes,
-            output_offsets,
-            recv_sizes,
-            axis_name="expert",
-        )
+        received_x = _token_all_to_all(send_x, send_matrix, rank)
         received_experts = _received_expert_ids(
             all_expert_counts,
             plan,
@@ -480,19 +534,7 @@ def _moe_mlp_ep_moonep_local(
 
     with jax.named_scope("moonep_combine"):
         outputs_in_receive_order = expert_outputs[receiver_positions]
-        return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
-            send_matrix.T,
-            rank,
-        )
-        returned = jax.lax.ragged_all_to_all(
-            outputs_in_receive_order,
-            jnp.zeros((assignments_per_rank, hidden_dim), dtype=expert_outputs.dtype),
-            return_input_offsets,
-            return_send_sizes,
-            return_output_offsets,
-            return_recv_sizes,
-            axis_name="expert",
-        )
+        returned = _token_all_to_all(outputs_in_receive_order, send_matrix.T, rank)
         returned = tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT)
         restored = _combine_gather(
             returned,

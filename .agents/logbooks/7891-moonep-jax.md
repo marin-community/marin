@@ -1182,3 +1182,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Comparison: MNEP-063 had a 43-second median and about 6.0% MFU. Batched planning reduced median step time by 37% and raised MFU by about 60%.
 - Memory: Sampled worker allocation fell from about 171 GB to about 160 GB.
 - Decision: Keep batched planning. Replace the large token ragged collectives with a bounded standard all-to-all fast path and retain ragged transport as the exact fallback.
+
+### 2026-08-03 03:47 UTC - MNEP-066 bounded token all-to-all contract
+
+- Treatment: Pad each sender-to-rank token block to 9/8 of the mean block size and use one standard all-to-all for dispatch and combine. Compact the received blocks back to the exact MoonEP receiver order.
+- Fallback: If any sender-to-rank block exceeds the fixed bound, all ranks use the exact ragged collective. The branch condition comes from the replicated send matrix.
+- Correctness: The four-GPU dense-reference test passed for both the balanced fixed fast path and the full-skew ragged fallback. Both outputs and the input and weight gradients passed in 199.53 seconds, including two compilations.
+- Local checks: Five planner tests passed, both GPU cases skipped on CPU as required, and the required lint, formatting, license, syntax, and Pyrefly checks passed.
+- Rack gate: Require five finite steps on attempt zero, no dropped assignments, and a steady step time below the 27-second MNEP-065 result.
