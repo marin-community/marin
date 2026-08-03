@@ -217,6 +217,10 @@ def interpolate_models(
     """Interpolate equal model trees without an inference-time operation."""
     if not 0 <= alpha <= 1:
         raise ValueError("The model mix must be from zero through one")
+    if alpha == 0:
+        return base_model
+    if alpha == 1:
+        return fine_tuned_model
     base_parameters, base_static = eqx.partition(base_model, eqx.is_inexact_array)
     tuned_parameters, tuned_static = eqx.partition(fine_tuned_model, eqx.is_inexact_array)
     if not eqx.tree_equal(base_static, tuned_static):
