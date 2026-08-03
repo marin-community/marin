@@ -2062,3 +2062,29 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   `/rav/lux-glm52-projection-training-50k-b200-001`.
 - Next action: Require the prefix run to validate the full sample identity.
   Then use its private split result while the full label job completes.
+
+### LUX-SEMANTIC-PROJECTION-004: 17,250-label private result
+
+- Job: `/rav/lux-semantic-projection-prefix-17250-cpu-001`.
+- The job used the first 17,250 saved GLM labels and a private split.
+- It used the repaired 50,000-document sample with the verified identity
+  digest.
+- The base parent, leaf, and form macro-F1 values were 0.40407, 0.29320, and
+  0.34076.
+- The projected values were 0.52707, 0.41250, and 0.42995.
+- The gains were 0.12300, 0.11930, and 0.08919. The mean gain was 0.11050.
+- The selected identity-mix weight was 0.9.
+- All private semantic and vector-health gates passed.
+- The projected effective-rank fraction was 0.32607. Total variance was
+  0.77909. All vectors were finite and unique at four decimal places.
+- Folding the projection into the output head gave a minimum cosine of
+  0.9999956 against the separate projection calculation.
+- The CPU job completed in 1 minute 25.1 seconds with no failure or
+  preemption.
+- Report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/full-glm-semantic-projection-prefix/prefix-17250-cpu-diagnostic-v1/validation.json`.
+- Interpretation: The larger label set gives a much stronger semantic signal
+  than the 760-row pilot. This is a private development result. It does not
+  approve a release and does not replace the fixed 10,000-document test.
+- Next action: Complete the 50,000 labels, train one final projection, and run
+  the fixed semantic, 40-bucket, collapse, and CPU speed gates.

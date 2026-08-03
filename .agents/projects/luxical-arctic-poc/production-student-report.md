@@ -179,6 +179,18 @@ medical text, narrative, opinion, procurement, technical documents,
 instructions, unclear text, and structured data. The 760-row training set does
 not support production approval.
 
+The next private diagnostic used the first 17,250 saved GLM labels. The
+selected projection weight is 0.9. Parent macro-F1 increases from 0.40407 to
+0.52707. Leaf macro-F1 increases from 0.29320 to 0.41250. Form macro-F1
+increases from 0.34076 to 0.42995. The mean gain is 0.11050.
+
+The effective-rank fraction is 0.32607, and total variance is 0.77909. All
+vectors are finite and unique at four decimal places. The folded output has a
+minimum cosine of 0.9999956 against the separate projection calculation. All
+private gates pass. This result supports the projection design, but it does
+not approve a release. The fixed 10,000-document evaluation has not run on
+this model.
+
 ## Capacity and input controls
 
 The 28.4M-parameter control does not fix the semantic loss. Its parent, leaf,
@@ -348,6 +360,9 @@ sequential indices, and completed label summary before it loads the model.
 Train one projection after the label job completes. Select the projection mix
 on a separate 5-percent validation set. Do not use the fixed 10,000-document
 set for projection selection.
+
+The 17,250-label private result passed its development gates with a 0.11050
+mean semantic gain. Complete the 50,000-label run before the final projection.
 
 Run the fixed 10,000-document evaluation once when the internal validation
 passes. Reject the model when one global gate or one large-group gate fails.
