@@ -1960,3 +1960,22 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Basis: MNEP-091 requested `557.88 GiB` for each GPU with `remat_mode=save_moe`.
 - Cause: The tagged tensors are the dispatch buffers. One buffer is `5.37 GB` for each layer, and the model has 48 MoE layers.
 - Conclusion: Saving the MoE state to remove the two rematerialized transfer families cannot fit in `189.5 GiB`. Do not try this again at this shape.
+
+### 2026-08-03 23:20 UTC - MNEP-104 exhausts the collective memory pool
+
+- Admission: The gang waited 87 minutes in `SchedulingGated`, then started at 23:09 UTC.
+- Result: All 16 workers failed in the first `jit_train_step` with `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 15.93GiB with allocator GPU_collectivememory_0_bfc`.
+- Arithmetic: At factor `1.5`, each peer slot holds `12,288` rows. The send and receive buffers together are `15.9 GiB`, which matches the failed request.
+- Constraint: The limit is the collective memory pool, not total HBM. The ragged weight transport already holds part of that pool, and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.84` leaves the rest of the device to the main allocator.
+- Correction: The MNEP-098 numbers of `28.4 GiB` and `32.45 GiB` came from the two-branch `jax.lax.cond` graph. They do not predict the static padded pool.
+- Diagnostic: The run died before any MoE layer ran, so it printed no `max_cell` value.
+- Next: MNEP-105 uses capacity factor `1.0` (about `10.0 GiB`) and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78`.
+
+### 2026-08-03 23:22 UTC - MNEP-105 padded capacity measurement contract
+
+- Purpose: Survive one rack admission and return two numbers. The gate result is secondary.
+- Measure 1: `max_cell` for each MoE layer, which gives the smallest capacity factor without drops.
+- Measure 2: The rack-scale step time with a padded transport that moves the exact traffic once.
+- Treatment: One bucket, exact MoonEP, padded transport, capacity factor `1.0`, and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78`.
+- Expectation: Capacity `1.0` equals the mean message, so the run will drop assignments. A drop count above zero is a valid outcome here.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, or an out-of-memory error.
