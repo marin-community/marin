@@ -27,13 +27,21 @@ RESULT_FILE = Path("/tmp/luxical-fast-embedding-accelerator-speed")
 logger = logging.getLogger(__name__)
 
 
-def accelerator_rates(student: Any, texts: list[str], batch_size: int) -> dict[str, object]:
+def accelerator_rates(
+    student: Any,
+    texts: list[str],
+    batch_size: int,
+    calls_per_repeat: int,
+) -> dict[str, object]:
     """Return stable accelerator rates after one full-workload warmup."""
+    if calls_per_repeat < 1:
+        raise ValueError("The calls-per-repeat value must be positive")
     student(texts, batch_size=batch_size)
     durations = []
     rates = []
     for repeat in range(SPEED_REPEATS):
-        duration, rate = timed_rate(student, texts, batch_size)
+        duration = sum(timed_rate(student, texts, batch_size)[0] for _ in range(calls_per_repeat))
+        rate = len(texts) * calls_per_repeat / duration
         durations.append(duration)
         rates.append(rate)
         logger.info("repeat=%d model=student duration=%.3f rate=%.2f", repeat, duration, rate)
@@ -56,10 +64,13 @@ def main() -> None:
     parser.add_argument("--runtime-root", required=True)
     parser.add_argument("--runtime-manifest-sha256", required=True)
     parser.add_argument("--batch-size", type=int, default=8_192)
+    parser.add_argument("--calls-per-repeat", type=int, default=5)
     parser.add_argument("--output-root", default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
     if args.batch_size < 1:
         parser.error("--batch-size must be positive")
+    if args.calls_per_repeat < 1:
+        parser.error("--calls-per-repeat must be positive")
     logging.basicConfig(level=logging.INFO)
 
     backend = jax.default_backend()
@@ -93,9 +104,11 @@ def main() -> None:
         "training_report": training_report,
         "documents": len(texts),
         "batch_size": args.batch_size,
+        "calls_per_repeat": args.calls_per_repeat,
+        "measured_documents_per_repeat": len(texts) * args.calls_per_repeat,
         "repeats": SPEED_REPEATS,
         "warmup_documents": len(texts),
-        **accelerator_rates(student, texts, args.batch_size),
+        **accelerator_rates(student, texts, args.batch_size, args.calls_per_repeat),
     }
     output_url = (
         f"{args.output_root}/accelerator-runtime-{args.config}-{args.training_name}-{args.rung}-"
