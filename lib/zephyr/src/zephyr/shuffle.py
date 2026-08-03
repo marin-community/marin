@@ -14,8 +14,9 @@ On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
 Polars predicate pushdown with row-group statistics skips non-matching row
 groups via byte-range GETs, so each reducer reads roughly 1/N of each file.
-The resulting LazyFrames are merged via ``external_sort_merge`` (two-pass
-fan-in merge with ``sink_parquet`` pass-1, fully streaming).
+The resulting LazyFrames are merged via ``external_sort_merge``: a fully
+streaming multi-pass merge that writes runs with ``sink_parquet`` and keeps
+every merge below ``_EXTERNAL_SORT_MAX_MERGE_FAN_IN`` inputs.
 
 Write-side memory is bounded by buffer estimated size: when the sum of
 ``DataFrame.estimated_size()`` across buffered frames exceeds

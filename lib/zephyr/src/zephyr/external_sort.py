@@ -3,9 +3,8 @@
 
 """Bounded external merge sort over Polars LazyFrame streams.
 
-Used by the reduce stage when the number of scatter chunks exceeds
-``EXTERNAL_SORT_FAN_IN`` or the estimated merge memory exceeds the worker
-budget.
+The reduce stage uses this when an in-memory merge of its scatter chunks would
+exceed the task memory budget.
 
 The first pass consumes the input frames in groups of ``fan_in`` frames. Each
 group produces a sorted Parquet run. Later passes merge at most
@@ -15,11 +14,19 @@ count. The function deletes all run files after completion or an error.
 
 import logging
 from collections.abc import Iterator
+from typing import NamedTuple
 
 import polars as pl
 from rigging.filesystem import open_url, url_to_fs
 
 logger = logging.getLogger(__name__)
+
+
+class _SpillRun(NamedTuple):
+    """One sorted run file, addressed both as a URL and as a filesystem path."""
+
+    url: str
+    path: str
 
 
 def external_sort_merge(
@@ -66,18 +73,17 @@ def external_sort_merge(
 
     spill_files: set[str] = set()
 
-    def write_run(frames: list[pl.LazyFrame], pass_index: int, run_index: int) -> tuple[str, str]:
+    def write_run(frames: list[pl.LazyFrame], pass_index: int, run_index: int) -> _SpillRun:
         run_name = f"pass-{pass_index:04d}-run-{run_index:04d}.spill"
-        run_url = f"{external_sort_dir}/{run_name}"
-        run_path = f"{spill_dir}/{run_name}"
-        spill_files.add(run_path)
+        run = _SpillRun(url=f"{external_sort_dir}/{run_name}", path=f"{spill_dir}/{run_name}")
+        spill_files.add(run.path)
         merged = pl.merge_sorted(frames, key=sort_key)
-        with open_url(run_url, "wb") as output:
+        with open_url(run.url, "wb") as output:
             merged.sink_parquet(output, compression="zstd")
-        return run_url, run_path
+        return run
 
-    def delete_runs(runs: list[tuple[str, str]]) -> None:
-        paths = [path for _, path in runs]
+    def delete_runs(runs: list[_SpillRun]) -> None:
+        paths = [run.path for run in runs]
         if not paths:
             return
         spill_fs.rm(paths)
@@ -85,11 +91,11 @@ def external_sort_merge(
 
     try:
         batches = [input_frames[i : i + fan_in] for i in range(0, len(input_frames), fan_in)]
-        runs: list[tuple[str, str]] = []
+        runs: list[_SpillRun] = []
         for run_index, batch in enumerate(batches):
             run = write_run(batch, pass_index=0, run_index=run_index)
             runs.append(run)
-            logger.info("[shard %d] External sort: wrote run %d to %s", shard, run_index, run[0])
+            logger.info("[shard %d] External sort: wrote run %d to %s", shard, run_index, run.url)
 
         pass_index = 1
         while len(runs) > max_merge_fan_in:
@@ -100,8 +106,8 @@ def external_sort_merge(
                 len(runs),
                 max_merge_fan_in,
             )
-            next_runs: list[tuple[str, str]] = []
-            consumed_runs: list[tuple[str, str]] = []
+            next_runs: list[_SpillRun] = []
+            consumed_runs: list[_SpillRun] = []
             run_batches = [runs[i : i + max_merge_fan_in] for i in range(0, len(runs), max_merge_fan_in)]
             for run_index, run_batch in enumerate(run_batches):
                 if len(run_batch) == 1:
@@ -109,7 +115,7 @@ def external_sort_merge(
                     continue
                 next_runs.append(
                     write_run(
-                        [pl.scan_parquet(run_url) for run_url, _ in run_batch],
+                        [pl.scan_parquet(run.url) for run in run_batch],
                         pass_index=pass_index,
                         run_index=run_index,
                     )
@@ -120,7 +126,7 @@ def external_sort_merge(
             pass_index += 1
 
         logger.info("[shard %d] External sort: final merge of %d run files", shard, len(runs))
-        merged = pl.merge_sorted([pl.scan_parquet(run_url) for run_url, _ in runs], key=sort_key)
+        merged = pl.merge_sorted([pl.scan_parquet(run.url) for run in runs], key=sort_key)
         yield from merged.collect_batches()
     finally:
         if spill_files:
