@@ -8,7 +8,7 @@ import pytest
 
 from experiments.datakit.cluster.domain.v0.sample import sample_centroid_inputs
 from experiments.datakit.cluster.domain.v0.train import load_sample_embeddings
-from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData
+from experiments.datakit.embeddings.artifact import EmbeddingAttrData
 
 
 def _embedding_artifact(output_dir: str, source_key: str, embedding_dim: int) -> EmbeddingAttrData:

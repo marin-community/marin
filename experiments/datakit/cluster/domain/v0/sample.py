@@ -41,7 +41,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 
-from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData
+from experiments.datakit.embeddings.artifact import EmbeddingAttrData
 
 logger = logging.getLogger(__name__)
 

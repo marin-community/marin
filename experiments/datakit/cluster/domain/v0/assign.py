@@ -37,7 +37,7 @@ from zephyr.execution import ZephyrContext
 from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 
-from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData, dequantize_to_fp32
+from experiments.datakit.embeddings.artifact import EmbeddingAttrData, dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
 ASSIGNMENT_ATTR_DATA_VERSION = 2

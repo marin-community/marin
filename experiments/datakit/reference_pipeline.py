@@ -135,14 +135,13 @@ from experiments.datakit.decontam.config import (
     SOURCE_DF_SAMPLE_DOCS,
 )
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
+from experiments.datakit.embeddings.artifact import EMBEDDING_ATTR_DATA_VERSION, EmbeddingAttrData
 from experiments.datakit.embeddings.luxical.pipeline import (
-    EMBEDDING_ATTR_DATA_VERSION,
     LUXICAL_DIM,
     LUXICAL_REPO,
     LUXICAL_REVISION,
     LUXICAL_WEIGHTS_FILE,
     QUANT_SCALE,
-    EmbeddingAttrData,
     embed_source,
 )
 from experiments.datakit.global_exact_dedup import (

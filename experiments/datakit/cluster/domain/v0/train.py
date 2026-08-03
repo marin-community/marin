@@ -29,7 +29,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem import StoragePath, open_url
 
-from experiments.datakit.embeddings.luxical.pipeline import dequantize_to_fp32
+from experiments.datakit.embeddings.artifact import dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
 

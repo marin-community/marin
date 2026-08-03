@@ -39,9 +39,8 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
-from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
+from marin.datakit.source_key import datakit_source_key
 from marin.execution.artifact import write_artifact
-from pydantic import BaseModel
 from rigging.filesystem import StoragePath, marin_temp_bucket
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
@@ -50,8 +49,12 @@ from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 
+from experiments.datakit.embeddings.artifact import (
+    EmbeddingAttrData,
+    quantize_to_int8,
+)
+
 logger = logging.getLogger(__name__)
-EMBEDDING_ATTR_DATA_VERSION = 2
 
 LUXICAL_REPO = "DatologyAI/luxical-one"
 LUXICAL_WEIGHTS_FILE = "luxical_one_rc4.npz"
@@ -83,53 +86,6 @@ _EMBEDDING_SCHEMA = pa.schema(
         pa.field("embedding", pa.list_(pa.int8(), LUXICAL_DIM)),
     ]
 )
-
-
-class EmbeddingAttrData(BaseModel):
-    """Co-partitioned per-source embedding parquet shards.
-
-    Mirrors :class:`~marin.processing.tokenize.attributes.TokenizedAttrData`.
-    One output parquet shard per source shard, sharing basename and row order
-    (sort-by-id invariant carries through). Persisted as the step's ``.artifact``.
-    Load via ``read_artifact(step.output_path, EmbeddingAttrData)``.
-
-    Attributes:
-        output_dir: Directory containing the per-shard parquet outputs.
-        source_key: Prefix-relative identity of the ``NormalizedData.main_output_dir`` this mirrors.
-            Co-partitioning means consumers can join ``(basename, row_idx)``
-            without an id index.
-        model_name: HuggingFace model id.
-        embedding_dim: Vector dimension (192 for Luxical-One).
-        quantization_scale: ``fp32 = int8.astype(float32) * scale``.
-        quantization_range: Original envelope before quantization.
-        batch_size: Encode batch size used (informational; recoverable
-            from logs, but recorded for reproducibility).
-        counters: Aggregated zephyr counters from the embed pipeline.
-    """
-
-    version: str = f"v{EMBEDDING_ATTR_DATA_VERSION}"
-    output_dir: DatakitArtifactPath
-    source_key: str
-    model_name: str
-    model_revision: str = ""
-    embedding_dim: int
-    quantization_scale: float
-    quantization_range: float
-    batch_size: int
-    counters: dict[str, int | float] = {}
-
-    def shard_paths(self) -> list[str]:
-        return sorted(str(m) for m in StoragePath(f"{self.output_dir.rstrip('/')}/*.parquet").glob())
-
-
-def quantize_to_int8(arr: np.ndarray) -> np.ndarray:
-    """Quantize fp32 to int8 with ``QUANT_SCALE`` (255 symmetric levels in [-0.6, 0.6])."""
-    return np.clip(np.round(arr / QUANT_SCALE), -127, 127).astype(np.int8)
-
-
-def dequantize_to_fp32(arr: np.ndarray, scale: float = QUANT_SCALE) -> np.ndarray:
-    """Inverse of :func:`quantize_to_int8`. Consumers call this on the loaded int8 column."""
-    return arr.astype(np.float32) * scale
 
 
 # Zephyr shared-data key under which the driver broadcasts the staged .npz URL.
@@ -207,7 +163,7 @@ def _embed_shard(
         n_bytes += sum(len(t) for t in texts)
         raw = np.asarray(embedder(texts, progress_bars=False), dtype=np.float32)
         raw = _l2_normalize(raw)
-        q = quantize_to_int8(raw)
+        q = quantize_to_int8(raw, QUANT_SCALE)
         for i, did in enumerate(ids):
             yield {"id": did, "embedding": q[i].tolist()}
     counters.pipeline.update_counter("embed/docs_in", n_docs)
