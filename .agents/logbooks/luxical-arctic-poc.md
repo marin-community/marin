@@ -1975,8 +1975,7 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 
 ### LUX-SEMANTIC-PROJECTION-003: Label retry recovery
 
-- The first 50,000-label attempt stopped after approximately 16,150 durable
-  labels.
+- The first 50,000-label attempt stopped after 17,250 durable labels.
 - One document received a primary leaf that did not belong to its primary
   parent after all three correction requests.
 - The valid checkpoint files remain unchanged and complete through their
@@ -1995,3 +1994,17 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   required pre-commit checks pass.
 - The same federated interactive job was resubmitted. It will reuse the durable
   checkpoints and continue at the failed 50-document batch.
+
+### LUX-SEMANTIC-EVAL-001: Fixed 40-bucket release gate
+
+- Commit Hash: `43c150265`.
+- The prior semantic test used a different cluster count for each label level.
+  It did not test the fixed 40-bucket production setting.
+- The evaluator now fits one 40-bucket partition for each model.
+- It measures NMI and purity for parent, leaf, and document-form labels on the
+  same partition.
+- Each student metric must be no more than 0.02 below the best saved teacher.
+- The gate does not use source identity or source balance.
+- Seventeen focused behavior tests pass in 20.49 seconds.
+- Pyrefly reports zero errors. The required pre-commit checks pass.
+- Decision: Require all six 40-bucket semantic gates for production approval.

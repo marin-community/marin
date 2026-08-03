@@ -36,6 +36,7 @@ is not an approved production model.
 | Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The pilot projection passes every global level | Pass |
 | Blind neighborhood review | Student is not worse than the best teacher | Deferred until the 50,000-label model passes visible gates | Open |
 | Held-out robustness | All large semantic groups pass | 12 pilot-projection group gates fail | Fail |
+| Fixed production buckets | Parent, leaf, and form NMI and purity pass for 40 buckets | Added for the 50,000-label model | Open |
 | Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
 | Release artifact | Pinned model, tokenizer, loader, and production smoke | Not built | Open |
 
@@ -214,6 +215,8 @@ teacher:
 - Parent, leaf, and form nearest-label macro-F1 are each no more than 0.02 below
   the best teacher.
 - Parent and leaf cluster NMI are each no more than 0.02 below the best teacher.
+- Parent, leaf, and form NMI and purity for one fixed 40-bucket partition are
+  each no more than 0.02 below the best teacher.
 - No large parent or form group has a nearest-label F1 loss greater than 0.03
   against the best teacher for that group.
 - All vectors are finite. At least 99% are unique after four-decimal rounding.
