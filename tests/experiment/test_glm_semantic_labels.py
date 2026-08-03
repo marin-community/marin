@@ -136,15 +136,38 @@ def test_assignment_rejects_more_than_two_secondary_buckets(monkeypatch: pytest.
 def test_jsonl_write_keeps_complete_file_when_replacement_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = StoragePath(str(tmp_path / "rows.jsonl.gz"))
     semantic_labels.write_jsonl(path, [{"value": "complete"}])
-    original_write_text = StoragePath.write_text
+    filesystem, resolved_path = semantic_labels.url_to_fs(str(path))
+    original_open = filesystem.open
 
-    def fail_after_partial_write(temporary_path: StoragePath, text: str, *, compression: str | None = None) -> None:
-        original_write_text(temporary_path, text[:4], compression=compression)
-        raise RuntimeError("simulated stopped writer")
+    class FailedWrite:
+        def __init__(self, opened_file) -> None:
+            self.opened_file = opened_file
+            self.file = None
 
-    monkeypatch.setattr(StoragePath, "write_text", fail_after_partial_write)
+        def __enter__(self):
+            self.file = self.opened_file.__enter__()
+            return self
+
+        def write(self, text: str) -> None:
+            self.file.write(text[:4])
+            raise RuntimeError("simulated stopped writer")
+
+        def __exit__(self, exception_type, exception, traceback) -> None:
+            self.opened_file.__exit__(exception_type, exception, traceback)
+
+    def fail_open(temporary_path: str, mode: str, **kwargs):
+        filesystem.open = original_open
+        try:
+            opened_file = original_open(temporary_path, mode, **kwargs)
+        finally:
+            filesystem.open = fail_open
+        return FailedWrite(opened_file)
+
+    monkeypatch.setattr(semantic_labels, "url_to_fs", lambda _path, **_options: (filesystem, resolved_path))
+    monkeypatch.setattr(filesystem, "open", fail_open)
 
     with pytest.raises(RuntimeError, match="stopped writer"):
         semantic_labels.write_jsonl(path, [{"value": "replacement"}])
 
+    filesystem.open = original_open
     assert semantic_labels.read_jsonl(path) == [{"value": "complete"}]
