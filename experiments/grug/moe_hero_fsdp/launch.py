@@ -64,6 +64,7 @@ def build_hero_run(
     num_steps: int,
     fused_qkv: bool = False,
     gated_norm: bool = True,
+    sconv: bool | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run."""
@@ -77,6 +78,8 @@ def build_hero_run(
     batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
     model = dataclasses.replace(model, fused_qkv=fused_qkv, gated_norm=gated_norm)
+    if sconv is not None:
+        model = dataclasses.replace(model, sconv=sconv)
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -163,12 +166,13 @@ def build_hero_run(
 )
 @click.option("--fused-qkv", is_flag=True, default=False, help="Fuse Q/K/V into one GEMM + one K||V SConv.")
 @click.option("--gated-norm/--no-gated-norm", default=True, help="Apply GatedNorm after each RMSNorm.")
+@click.option("--sconv/--no-sconv", "sconv", default=None, help="Enable the SConv sites (default: model config).")
 @build_options
 def main(
-    run_id: str, dp_racks: int, num_steps: int, fused_qkv: bool, gated_norm: bool
+    run_id: str, dp_racks: int, num_steps: int, fused_qkv: bool, gated_norm: bool, sconv: bool | None
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
-        run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, fused_qkv=fused_qkv, gated_norm=gated_norm
+        run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, fused_qkv=fused_qkv, gated_norm=gated_norm, sconv=sconv
     )
 
 
