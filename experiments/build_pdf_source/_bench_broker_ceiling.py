@@ -248,7 +248,7 @@ def main() -> None:
             "shards": BENCH_SHARDS,
             "request_threads": REQUEST_THREADS,
             "sender_tasks": SENDER_TASKS,
-            "attempt": 2,
+            "attempt": 3,
         },
         fn=remote(
             partial(
