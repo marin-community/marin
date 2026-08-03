@@ -12,6 +12,7 @@ import functools
 import heapq
 import logging
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from itertools import groupby, islice
@@ -493,6 +494,41 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
     return state.finalize()
 
 
+# Number of Parquet footer reads issued at once while splitting input files.
+# Each read is a small, latency-bound GET, so a wide pool keeps planning a
+# corpus of thousands of files from serializing into thousands of round-trips.
+_FOOTER_READ_CONCURRENCY = 32
+
+# Whole-file read: a single span with no explicit row bounds.
+_WHOLE_FILE_ROW_RANGE: tuple[int | None, int | None] = (None, None)
+
+
+def _row_ranges_per_file(
+    files: list[FileEntry],
+    load_op: LoadFileOp,
+) -> list[list[tuple[int | None, int | None]]]:
+    """Row spans covering each file, in input order.
+
+    Without ``approx_shard_bytes`` every file is one unbounded span and no IO
+    happens. With it, each Parquet file is split at row-group boundaries, which
+    costs one footer read per file; those reads run concurrently. Splits are
+    best-effort: a row group is never divided, so a span can exceed
+    ``approx_shard_bytes`` when a single row group is larger.
+    """
+    approx_shard_bytes = load_op.approx_shard_bytes
+    if approx_shard_bytes is None:
+        return [[_WHOLE_FILE_ROW_RANGE] for _ in files]
+
+    def row_ranges(entry: FileEntry) -> list[tuple[int | None, int | None]]:
+        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and entry.path.endswith(".parquet"))
+        if not is_parquet:
+            return [_WHOLE_FILE_ROW_RANGE]
+        return list(compute_parquet_splits(entry.path, approx_shard_bytes))
+
+    with ThreadPoolExecutor(max_workers=_FOOTER_READ_CONCURRENCY) as pool:
+        return list(pool.map(row_ranges, files))
+
+
 def _compute_file_pushdown(
     files: list[FileEntry],
     load_op: LoadFileOp,
@@ -537,26 +573,15 @@ def _compute_file_pushdown(
         else:
             break
 
-    # Create InputFileSpecs with final columns/filter.
-    # When approx_shard_bytes is set, parquet files are split at row-group boundaries
-    # into multiple SourceItems. Splits are best-effort: a row group is never divided,
-    # so a shard can exceed approx_shard_bytes when a single row group is larger.
+    # Create InputFileSpecs with final columns/filter, one per row span.
     source_items: list[SourceItem] = []
-    for entry in files:
-        path = entry.path
-        is_parquet = load_op.format == "parquet" or (load_op.format == "auto" and path.endswith(".parquet"))
-        row_ranges: list[tuple[int | None, int | None]]
-        if load_op.approx_shard_bytes is not None and is_parquet:
-            row_ranges = list(compute_parquet_splits(path, load_op.approx_shard_bytes))
-        else:
-            # Whole-file read: a single span with no explicit row bounds.
-            row_ranges = [(None, None)]
+    for entry, row_ranges in zip(files, _row_ranges_per_file(files, load_op), strict=True):
         for row_start, row_end in row_ranges:
             source_items.append(
                 SourceItem(
                     shard_idx=len(source_items),
                     data=InputFileSpec(
-                        path=path,
+                        path=entry.path,
                         format=load_op.format,
                         columns=select_columns,
                         row_start=row_start,
