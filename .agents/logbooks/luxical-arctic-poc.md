@@ -2368,3 +2368,21 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - The new evaluation ID is `heldout-10000-20260803-002`.
 - Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu GB200x4 --replicas 2 --cpu 32 --memory 850GB --disk 1000GB --priority interactive --max-retries 0 --timeout 2592000 --user rav --job-name lux-glm52-release-10k-b200-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/label_frozen_hierarchy.py --pilot-run-id hierarchy-1000-20260802-002 --variant compact --evaluation-run-id heldout-10000-20260803-002 --evaluation-size 10000 --tensor-parallel-size 8 --max-model-len 16384 --max-num-seqs 4 --excluded-sample-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/sample-private.jsonl.gz --excluded-sample-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/projection-train-50000-20260803-001/sample-private.jsonl.gz`.
 - Next action: Monitor model load and label progress to completion.
+
+### LUX-SEMANTIC-FINETUNE-003: Start rank-safe model selection
+
+- Commit Hash: `d70bd2f71`.
+- The private gate keeps at least 75 percent of the base rank fraction.
+- It still requires every existing private semantic, finite, unique, absolute
+  rank, and variance gate.
+- Selection fails if no candidate passes. It does not upload the best failed
+  candidate.
+- The output rung is `training-50k-rank-preserving-v2`. This prevents changes
+  to the full-update artifact.
+- Five focused full-model tests pass. The required pre-commit checks pass.
+- The queued report-reader job was stopped before training submission. It did
+  not get an H100.
+- Job: `/rav/lux-semantic-finetune-rank-safe-h100-001`.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 120GB --disk 300GB --priority interactive --max-retries 1 --timeout 7200 --user rav --job-name lux-semantic-finetune-rank-safe-h100-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/train_semantic_finetune_large.py`.
+- The job waits for capacity. No task started, and no failure occurred.
+- Next action: Freeze the selected model if all private gates pass.
