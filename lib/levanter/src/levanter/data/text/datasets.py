@@ -41,6 +41,7 @@ from levanter.data.sharded_datasource import (
 from levanter.data.text.cache import build_lm_dataset_cache, load_lm_dataset_cache
 from levanter.data.text.examples import (
     GrugLmExample,
+    PaddingTargetLoss,
     named_lm_example_from_grug,
 )
 from levanter.data.text.formats import (
@@ -396,6 +397,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         slice_strategy: Literal["left", "right", "raise"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
+        padding_target_loss: PaddingTargetLoss = "mask",
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
@@ -406,6 +408,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         self.Pos = Pos
         self.block_cross_document_attention = block_cross_document_attention
         self.loss_weights_key = loss_weights_key
+        self.padding_target_loss = padding_target_loss
 
         sharding = _single_cpu_sharding()
 
@@ -423,6 +426,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     segment_ids=seg_ids_raw,
                     max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
+                    padding_target_loss=padding_target_loss,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
                 return out
@@ -441,6 +445,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
                     segment_ids=seg_ids_raw,
                     max_segments=max_segments_per_example + 1,
                     block_cross_document_attention=block_cross_document_attention,
+                    padding_target_loss=padding_target_loss,
                 )
                 out = jax.lax.with_sharding_constraint(out, sharding)
                 return out
@@ -461,6 +466,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
         slice_strategy: Literal["left", "right", "raise"] = "left",
         mask_user_turns: bool = True,
         block_cross_document_attention: bool = True,
+        padding_target_loss: PaddingTargetLoss = "mask",
     ):
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
@@ -473,6 +479,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
 
         sharding = _single_cpu_sharding()
         self.mask_user_turns = mask_user_turns
+        self.padding_target_loss = padding_target_loss
 
         @functools.partial(eqx.filter_jit)
         def _create_lm_example(e: tuple[ProcessedChatDict, ProcessedChatDict]) -> GrugLmExample:
@@ -494,6 +501,7 @@ class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict]
                 segment_ids=seg_ids_raw,
                 max_segments=max_segments_per_example + 1,
                 block_cross_document_attention=block_cross_document_attention,
+                padding_target_loss=padding_target_loss,
             )
             out = jax.lax.with_sharding_constraint(out, sharding)
             return out
@@ -508,6 +516,7 @@ def dataset_for_component(
     *,
     eos_id: int | None,
     block_cross_document_attention: bool,
+    padding_target_loss: PaddingTargetLoss = "mask",
 ) -> AsyncDataset[GrugLmExample]:
     pack = _effective_pack(component)
     fmt = component.format
@@ -520,6 +529,7 @@ def dataset_for_component(
                 max_segments_per_example=max_segments,
                 slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
+                padding_target_loss=padding_target_loss,
             )
         return CausalLmDataset(
             TokenSeqDataset(cache, Pos.size),
@@ -537,6 +547,7 @@ def dataset_for_component(
             slice_strategy=slice_strategy,
             mask_user_turns=fmt.mask_user_turns,
             block_cross_document_attention=block_cross_document_attention,
+            padding_target_loss=padding_target_loss,
         )  # type: ignore
     elif isinstance(fmt, PrebuiltLmDatasetFormat):
         return PrebuiltLmDataset(
@@ -647,6 +658,14 @@ class LmDataConfig:
     If False, full causal attention is allowed across packed documents.
     """
 
+    padding_target_loss: PaddingTargetLoss = "mask"
+    """How to handle positions whose next token is padding.
+
+    ``"mask"`` is the default because padding is an artificial target. Use
+    ``"include"`` only when you intentionally want those positions included in
+    the objective; doing so changes the meaning and scale of the reported loss.
+    """
+
     components: dict[str, DatasetComponentBase] = field(default_factory=dict)
     train_weights: dict[str, float] | list[tuple[int, dict[str, float]]] | None = None
 
@@ -733,6 +752,7 @@ class LmDataConfig:
                         cache,
                         eos_id=self.the_tokenizer.eos_token_id,
                         block_cross_document_attention=self.block_cross_document_attention,
+                        padding_target_loss=self.padding_target_loss,
                     )
                 if child_datasets:
                     datasets[name] = ConcatDataset(child_datasets)
@@ -753,6 +773,7 @@ class LmDataConfig:
                 cache,
                 eos_id=self.the_tokenizer.eos_token_id,
                 block_cross_document_attention=self.block_cross_document_attention,
+                padding_target_loss=self.padding_target_loss,
             )
 
         return datasets

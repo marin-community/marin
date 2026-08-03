@@ -731,6 +731,23 @@ def _build_train_cache(component, tokenizer):
     return build_lm_dataset_cache(component.cache_dir, source, component.format, tokenizer)
 
 
+def test_grug_causal_padding_target_mask_can_be_disabled():
+    tokens = jnp.array([10, 11, 0, 0], dtype=jnp.int32)
+    segment_ids = jnp.array([0, 0, -1, -1], dtype=jnp.int32)
+    loss_weight = jnp.ones_like(tokens, dtype=jnp.float32)
+
+    default = GrugLmExample.causal(tokens, loss_weight=loss_weight, segment_ids=segment_ids)
+    np.testing.assert_array_equal(np.asarray(default.loss_weight), np.array([1, 0, 0, 0], dtype=np.float32))
+
+    unmasked = GrugLmExample.causal(
+        tokens,
+        loss_weight=loss_weight,
+        segment_ids=segment_ids,
+        padding_target_loss="include",
+    )
+    np.testing.assert_array_equal(np.asarray(unmasked.loss_weight), np.array([1, 1, 1, 0], dtype=np.float32))
+
+
 def assert_padding_never_contributes_loss(example):
     """The pad value must not leak into the objective.
 
