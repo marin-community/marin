@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -44,7 +45,7 @@ from levanter.grug.grug_moe import (
     resolve_moe_implementation,
 )
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
-from levanter.grug.sharding import Pembed_vocab, Plm_head, unshard
+from levanter.grug.sharding import Pembed_vocab, unshard
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -59,6 +60,18 @@ GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+# FSDP axes for the non-expert weights. Expert parallelism takes its width out of
+# "data": at a fixed device count, growing "expert" shrinks "data" toward 1, so
+# sharding over both keeps attention and shared-expert weights and their optimizer
+# state split where "data" alone would replicate them on every device. This mirrors
+# _FSDP_AXES in the moe_hero_ep variant, which measured the layout at EP64.
+_FSDP_AXES: tuple[str, ...] = ("data", "expert")
+# The LM head also spans the cross-slice replica axis it had before EP.
+_LM_HEAD_AXES: tuple[str, ...] = ("replica_dcn", *_FSDP_AXES)
+# The groups these replace. A weight falls back to its pre-EP group whole rather than
+# to some smaller one, so widening can only ever add sharding, never remove it.
+_PRE_EP_FSDP_AXES: tuple[str, ...] = ("data",)
+_PRE_EP_LM_HEAD_AXES: tuple[str, ...] = ("replica_dcn", "data")
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -72,6 +85,44 @@ def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> i
 
 
 RematMode = Literal["recompute_all", "save_moe"]
+
+
+def _shard_axes(dim: int, widened: tuple[str, ...], pre_ep: tuple[str, ...]) -> tuple[str, ...] | str | None:
+    """``widened`` when its shard count divides ``dim``, otherwise ``pre_ep``.
+
+    Adding "expert" multiplies the divisibility requirement on ``dim`` by the expert
+    axis size, which would turn shapes that shard fine without it into a hard failure
+    at model init. The fallback is the whole pre-EP group rather than a smaller one:
+    when the wider group does not fit, the resulting spec -- and any init error it
+    raises -- is exactly what it was before expert parallelism, so widening can add
+    sharding but never silently take it away.
+
+    Axes absent from the mesh are dropped, which is how a non-EP mesh with no "expert"
+    axis still initializes.
+    """
+    mesh = get_abstract_mesh()
+    present = lambda axes: tuple(axis for axis in axes if axis in mesh.shape)  # noqa: E731
+    widened_shards = math.prod(int(mesh.shape[axis]) for axis in present(widened))
+
+    axes = present(widened) if dim % widened_shards == 0 else present(pre_ep)
+    if not axes:
+        # Neither group has an axis on this mesh, so there is nothing to shard over.
+        return None
+    return axes if len(axes) > 1 else axes[0]
+
+
+def _fsdp_column_spec(dim: int) -> P:
+    """Shard a weight's leading axis of size ``dim`` over FSDP, its trailing axis over "model"."""
+    return P(_shard_axes(dim, _FSDP_AXES, _PRE_EP_FSDP_AXES), "model")
+
+
+def _fsdp_row_spec(dim: int) -> P:
+    """Shard a weight's leading axis over "model", its trailing axis of size ``dim`` over FSDP."""
+    return P("model", _shard_axes(dim, _FSDP_AXES, _PRE_EP_FSDP_AXES))
+
+
+def _lm_head_spec(dim: int) -> P:
+    return P(_shard_axes(dim, _LM_HEAD_AXES, _PRE_EP_LM_HEAD_AXES), "model")
 
 
 def _batch_spec() -> P:
@@ -278,10 +329,10 @@ class CausalSelfAttention(eqx.Module):
         k_q, k_k, k_v, k_o = random.split(key, 4)
         d, n, m, h = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, cfg.inferred_head_dim
         return CausalSelfAttention(
-            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (d, n * h), cfg.initializer_std), _fsdp_column_spec(d)),
+            w_k=reshard(_init_weight(k_k, (d, m * h), cfg.initializer_std), _fsdp_column_spec(d)),
+            w_v=reshard(_init_weight(k_v, (d, m * h), cfg.initializer_std), _fsdp_column_spec(d)),
+            w_o=reshard(_init_weight(k_o, (n * h, d), cfg.initializer_std), _fsdp_row_spec(d)),
             attn_gate=reshard(jnp.zeros((d, n)), P(None, None)),
             cfg=cfg,
         )
@@ -417,9 +468,15 @@ class DenseMLP(eqx.Module):
     def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
-            w_gate=reshard(_init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_up=reshard(_init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), P("data", "model")),
-            w_down=reshard(_init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", "data")),
+            w_gate=reshard(
+                _init_weight(k_gate, (hidden_dim, intermediate_dim), initializer_std), _fsdp_column_spec(hidden_dim)
+            ),
+            w_up=reshard(
+                _init_weight(k_up, (hidden_dim, intermediate_dim), initializer_std), _fsdp_column_spec(hidden_dim)
+            ),
+            w_down=reshard(
+                _init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), _fsdp_row_spec(hidden_dim)
+            ),
         )
 
     @named_call
@@ -707,7 +764,10 @@ class Transformer(eqx.Module):
         token_embed = reshard(
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
-        output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        output_proj = reshard(
+            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
+            _lm_head_spec(cfg.hidden_dim),
+        )
         blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
         return Transformer(
             token_embed=token_embed,
