@@ -17,6 +17,7 @@ from train_semantic_projection import (  # noqa: E402
     fit_projection_minibatches,
     fold_embedding_projection,
     retained_train_validation_indices,
+    semantic_validation_decision,
     supervised_contrastive_loss,
     validation_decision,
 )
@@ -88,6 +89,26 @@ def test_validation_decision_rejects_low_rank_vectors_despite_semantic_gain() ->
     assert decision["semantic_mean_delta"] > 0
     assert not decision["gates"]["effective_rank_fraction"]
     assert not decision["passed"]
+
+
+def test_semantic_validation_decision_accepts_semantics_and_health_without_fold_gate() -> None:
+    base = {"parent_macro_f1": 0.4, "leaf_macro_f1": 0.4, "form_macro_f1": 0.4}
+    projected = {
+        "parent_macro_f1": 0.42,
+        "leaf_macro_f1": 0.42,
+        "form_macro_f1": 0.42,
+        "geometry": {
+            "finite_fraction": 1.0,
+            "unique_fraction_4dp": 1.0,
+            "effective_rank_fraction": 0.5,
+            "total_variance": 0.8,
+        },
+    }
+
+    decision = semantic_validation_decision(base, projected)
+
+    assert decision["passed"]
+    assert "folded_parity" not in decision["gates"]
 
 
 def test_fold_embedding_projection_preserves_projected_directions() -> None:

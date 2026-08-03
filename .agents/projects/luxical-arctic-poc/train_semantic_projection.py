@@ -216,8 +216,8 @@ def evaluation_metrics(
     }
 
 
-def validation_decision(base: dict[str, Any], projected: dict[str, Any], folded_cosine_minimum: float) -> dict[str, Any]:
-    """Return the predeclared pilot decision and its inputs."""
+def semantic_validation_decision(base: dict[str, Any], projected: dict[str, Any]) -> dict[str, Any]:
+    """Return the semantic and vector-health validation decision."""
     levels = ("parent_macro_f1", "leaf_macro_f1", "form_macro_f1")
     deltas = {level: float(projected[level] - base[level]) for level in levels}
     semantic_mean_delta = float(np.mean(list(deltas.values())))
@@ -229,11 +229,24 @@ def validation_decision(base: dict[str, Any], projected: dict[str, Any], folded_
         "unique": float(geometry["unique_fraction_4dp"]) >= 0.99,
         "effective_rank_fraction": float(geometry["effective_rank_fraction"]) >= MINIMUM_EFFECTIVE_RANK_FRACTION,
         "total_variance": float(geometry["total_variance"]) >= MINIMUM_TOTAL_VARIANCE,
-        "folded_parity": folded_cosine_minimum >= MINIMUM_FOLDED_COSINE,
     }
     return {
         "semantic_deltas": deltas,
         "semantic_mean_delta": semantic_mean_delta,
+        "gates": gates,
+        "passed": all(gates.values()),
+    }
+
+
+def validation_decision(base: dict[str, Any], projected: dict[str, Any], folded_cosine_minimum: float) -> dict[str, Any]:
+    """Add folded-model parity to the semantic validation decision."""
+    semantic_decision = semantic_validation_decision(base, projected)
+    gates = {
+        **semantic_decision["gates"],
+        "folded_parity": folded_cosine_minimum >= MINIMUM_FOLDED_COSINE,
+    }
+    return {
+        **semantic_decision,
         "folded_cosine_minimum": folded_cosine_minimum,
         "gates": gates,
         "passed": all(gates.values()),
