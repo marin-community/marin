@@ -1114,3 +1114,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Result: The existing dense-reference test passed for the output and the input, W13, and W2 gradients.
 - Runtime: The test completed in 110.25 seconds, including compilation.
 - Next gate: Complete the five-step EP64 rack run and compare its steady step time with MNEP-059.
+
+### 2026-08-03 02:40 UTC - MNEP-061 rejects packed dispatch rows
+
+- Result: All 16 workers completed five finite steps on attempt zero. The final loss was `8.63`, and the run dropped no expert assignments.
+- Timing: The four steady steps took 52, 65, 62, and 64 seconds. Their median was 63 seconds.
+- Comparison: MNEP-059's median was 41 seconds. Approximate MFU fell from 6.3% to 4.1%.
+- Cause: The packed metadata changed the BF16 token row from 5,120 to 5,122 elements. This breaks the aligned transport row used by the direct device kernel.
+- Decision: Reject and revert packed rows. Keep the 5,120-element token payload and reconstruct expert IDs from the global plan instead.
