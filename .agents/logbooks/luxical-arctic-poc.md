@@ -1669,3 +1669,25 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   but no matched-view result exists yet.
 - Next action: Run the fast-view Arctic diagnostic while the 30M teacher jobs
   remain active.
+
+### LUX-INPUT-001: Arctic fast-view diagnostic
+
+- Commit Hash: `a65754d15`.
+- Command:
+  `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 80GB --disk 200GB --priority interactive --max-retries 1 --timeout 7200 --user rav --job-name lux-arctic-fast-view-eval-h100-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/evaluate_arctic_fast_view.py --run-id hierarchy-1000-20260802-002 --variant compact --evaluation-run-id heldout-10000-20260802-001 --adjudication-review-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/claude-adjudication-v1/report.json`.
+- The job succeeded in 6 minutes 12 seconds. All 10,000 fast-view vectors were
+  finite.
+- Parent cross-source macro-F1 changed from 0.46499 to 0.43920. Parent cluster
+  NMI changed from 0.38533 to 0.37658.
+- Leaf cross-source macro-F1 changed from 0.37307 to 0.35364. Leaf cluster NMI
+  changed from 0.42397 to 0.41232.
+- Form cross-source macro-F1 stayed at 0.4113. Form cluster NMI changed from
+  0.29577 to 0.29961.
+- The fast-view teacher fails large-group gates for code, software, research,
+  narrative, and technical-document labels.
+- Report artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/teacher-diagnostics/arctic-fast-view-v1/report.json`.
+- Interpretation: The short teacher target is easier to observe, but its own
+  semantics are weaker. Reject it as the sole training target.
+- Next action: Keep the full-window teacher. Test a 512-token student because
+  the 256-token student has a large CPU speed margin.
