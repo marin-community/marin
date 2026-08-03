@@ -116,6 +116,8 @@ class MoonEPConfig:
     token_rounds: int
     token_transport: MoonEPTokenTransport
     bucket_schedule: MoonEPBucketSchedule = MoonEPBucketSchedule.EAGER_DISPATCH
+    report_capacity: bool = False
+    """Print the per-peer token message sizes. Use this only in a measurement run."""
 
     def __post_init__(self) -> None:
         if self.token_padding <= 0:

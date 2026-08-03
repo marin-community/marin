@@ -117,6 +117,7 @@ def build_hero_run(
     moonep_grouped_gemm: MoonEPGroupedGemm = MoonEPGroupedGemm.QUACK,
     moonep_mode: MoonEPMode = MoonEPMode.EXACT,
     moonep_fixed_capacity_factor: float = 1.1,
+    moonep_report_capacity: bool = False,
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
     moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None,
@@ -161,6 +162,7 @@ def build_hero_run(
             token_capacity_factor=moonep_token_capacity_factor,
             token_rounds=moonep_token_rounds,
             token_transport=moonep_token_transport,
+            report_capacity=moonep_report_capacity,
         )
         if moe_implementation == "moonep_jax"
         else None
@@ -347,6 +349,12 @@ def build_hero_run(
     help="Static MoonEP execution schedule.",
 )
 @click.option(
+    "--moonep-report-capacity",
+    is_flag=True,
+    default=False,
+    help="Print the per-peer token message sizes for each MoE layer.",
+)
+@click.option(
     "--qb-method",
     type=click.Choice([method.value for method in QuantileBalancingMethod]),
     default=QuantileBalancingMethod.LOCAL_EXACT.value,
@@ -435,6 +443,7 @@ def main(
     moonep_grouped_gemm: str,
     moonep_mode: str,
     moonep_fixed_capacity_factor: float,
+    moonep_report_capacity: bool,
     qb_method: str,
     qb_histogram_bins: int,
     moonep_jax_wheel_build: str | None,
@@ -460,6 +469,7 @@ def main(
         moonep_grouped_gemm=MoonEPGroupedGemm(moonep_grouped_gemm),
         moonep_mode=MoonEPMode(moonep_mode),
         moonep_fixed_capacity_factor=moonep_fixed_capacity_factor,
+        moonep_report_capacity=moonep_report_capacity,
         qb_method=QuantileBalancingMethod(qb_method),
         qb_histogram_bins=qb_histogram_bins,
         moonep_jax_wheel_build=(

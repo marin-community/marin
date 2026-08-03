@@ -684,6 +684,7 @@ def _moe_mlp_ep_moonep_exact_local(
     token_capacity_factor: float,
     token_rounds: int,
     grouped_gemm: MoonEPGroupedGemm,
+    report_capacity: bool,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Run portable MoonEP with sparse expert copies and exact receiver loads."""
     if capacity_factor != 1.0:
@@ -722,6 +723,15 @@ def _moe_mlp_ep_moonep_exact_local(
     local_send_sizes = jnp.bincount(destinations, length=num_ranks).astype(jnp.int32)
     send_matrix = jax.lax.all_gather(local_send_sizes, "expert")
     send_offsets = jnp.cumsum(local_send_sizes, dtype=jnp.int32) - local_send_sizes
+
+    if report_capacity:
+        # A padded all-to-all gives each peer `factor * mean_cell` rows. The
+        # smallest factor that drops nothing is `max_cell / mean_cell`.
+        jax.debug.print(
+            "moonep_capacity max_cell={max_cell} mean_cell={mean_cell}",
+            max_cell=jnp.max(send_matrix),
+            mean_cell=assignments_per_rank // num_ranks,
+        )
 
     with jax.named_scope("moonep_weight_exchange"):
         remote_w13 = _exchange_remote_weights(moe_w13_local, plan.experts_to_copy, rank)
@@ -975,6 +985,7 @@ def _moe_mlp_ep_moonep_local(
     grouped_gemm: MoonEPGroupedGemm,
     mode: MoonEPMode,
     fixed_capacity_factor: float,
+    report_capacity: bool,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Run the selected static MoonEP schedule."""
     if fixed_capacity_factor < 1.0:
@@ -1007,5 +1018,6 @@ def _moe_mlp_ep_moonep_local(
             token_capacity_factor=token_capacity_factor,
             token_rounds=token_rounds,
             grouped_gemm=grouped_gemm,
+            report_capacity=report_capacity,
         )
     raise AssertionError(f"Unhandled MoonEP mode {mode!r}")

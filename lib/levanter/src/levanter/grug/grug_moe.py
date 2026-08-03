@@ -284,6 +284,7 @@ def moe_mlp(
                 grouped_gemm=moonep_config.grouped_gemm,
                 mode=moonep_config.mode,
                 fixed_capacity_factor=moonep_config.fixed_capacity_factor,
+                report_capacity=moonep_config.report_capacity,
             )
 
         shard_fn = shard_map(
