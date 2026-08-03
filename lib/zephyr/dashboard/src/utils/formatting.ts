@@ -1,19 +1,13 @@
-import type { CounterValue, Integer } from '@/types/dashboard'
-
-export function numeric(value: Integer | undefined): number {
-  return value === undefined ? 0 : Number(value)
-}
-
-export function formatCount(value: Integer | undefined): string {
-  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(numeric(value))
+export function formatCount(value: number | undefined): string {
+  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value ?? 0)
 }
 
 export function formatNumber(value: number | undefined, digits = 1): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(value ?? 0)
 }
 
-export function formatBytes(value: Integer | undefined): string {
-  let amount = numeric(value)
+export function formatBytes(value: number | undefined): string {
+  let amount = value ?? 0
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
   let unit = 0
   while (Math.abs(amount) >= 1024 && unit < units.length - 1) {
@@ -32,12 +26,8 @@ export function formatDuration(milliseconds: number): string {
   return `${hours}h ${minutes % 60}m`
 }
 
-export function counterNumber(counter: CounterValue): number {
-  return counter.doubleValue ?? numeric(counter.intValue)
-}
-
-export function shortEnum(value: string | undefined, prefix: string): string {
-  return (value ?? 'UNKNOWN').replace(prefix, '').replace(/_/g, ' ').toLowerCase()
+export function formatState(value: string | undefined): string {
+  return (value || 'unknown').replace(/_/g, ' ')
 }
 
 export function irisTaskHref(taskId: string): string {

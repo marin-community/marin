@@ -2,30 +2,24 @@
 import * as Plot from '@observablehq/plot'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { MetricPoint } from '@/types/dashboard'
-import { numeric } from '@/utils/formatting'
 
 const props = defineProps<{
   title: string
   points: MetricPoint[]
-  field: 'itemRate' | 'byteRate' | 'cpuCores' | 'memoryBytes'
+  field: 'item_rate' | 'byte_rate' | 'cpu_cores' | 'memory_bytes'
   unit: string
 }>()
 
 const root = ref<HTMLElement | null>(null)
 let observer: ResizeObserver | null = null
 
-function value(point: MetricPoint): number {
-  if (props.field === 'memoryBytes') return numeric(point.memoryBytes)
-  return point[props.field] ?? 0
-}
-
 function render() {
   if (!root.value) return
   const width = Math.max(root.value.clientWidth, 320)
   const rows = props.points.map((point) => ({
-    time: new Date(numeric(point.timestampMs)),
+    time: new Date(point.timestamp_ms),
     stage: point.stage || 'pipeline',
-    value: value(point),
+    value: point[props.field] ?? 0,
   }))
   const chart = Plot.plot({
     width,

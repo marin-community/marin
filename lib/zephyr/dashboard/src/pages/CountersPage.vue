@@ -3,9 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue'
 import ErrorBanner from '@/components/ErrorBanner.vue'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { selectedExecutionId } from '@/composables/usePipelineSelection'
-import { useDashboardRpc } from '@/composables/useRpc'
-import type { ListCountersResponse } from '@/types/dashboard'
-import { counterNumber, formatNumber, shortEnum } from '@/utils/formatting'
+import { useDashboardApi } from '@/composables/useApi'
+import type { CounterPage } from '@/types/dashboard'
+import { formatNumber } from '@/utils/formatting'
 
 const search = ref('')
 const stage = ref('')
@@ -14,18 +14,18 @@ const sortDescending = ref(false)
 const offset = ref(0)
 const limit = 50
 
-const rpc = useDashboardRpc<ListCountersResponse>('ListCounters', () => ({
+const api = useDashboardApi<CounterPage>('counters', () => ({
   search: search.value,
   stage: stage.value,
-  sortField: sortField.value,
-  sortDescending: sortDescending.value,
+  sort_field: sortField.value,
+  sort_descending: sortDescending.value,
   offset: offset.value,
   limit,
-  executionId: selectedExecutionId.value,
+  execution_id: selectedExecutionId.value,
 }))
 
-const counters = computed(() => rpc.data.value?.counters ?? [])
-const total = computed(() => rpc.data.value?.total ?? 0)
+const counters = computed(() => api.data.value?.counters ?? [])
+const total = computed(() => api.data.value?.total ?? 0)
 const stages = computed(() => [...new Set(counters.value.map((counter) => counter.stage).filter(Boolean))].sort())
 
 function sort(field: string) {
@@ -34,25 +34,25 @@ function sort(field: string) {
     sortField.value = field
     sortDescending.value = false
   }
-  void rpc.refresh()
+  void api.refresh()
 }
 
 watch([search, stage], () => {
   offset.value = 0
-  void rpc.refresh()
+  void api.refresh()
 })
 watch(selectedExecutionId, () => {
   offset.value = 0
   stage.value = ''
-  void rpc.refresh()
+  void api.refresh()
 })
-useAutoRefresh(rpc.refresh)
-onMounted(rpc.refresh)
+useAutoRefresh(api.refresh)
+onMounted(api.refresh)
 </script>
 
 <template>
   <div class="space-y-4">
-    <ErrorBanner :message="rpc.error.value" />
+    <ErrorBanner :message="api.error.value" />
     <section class="card overflow-hidden">
       <div class="flex flex-wrap items-center gap-3 border-b border-surface-border p-4">
         <div>
@@ -86,9 +86,9 @@ onMounted(rpc.refresh)
             <tr v-for="counter in counters" :key="`${counter.stage}/${counter.name}/${counter.aggregation}`" class="hover:bg-surface-sunken/60">
               <td class="table-cell font-mono text-xs font-medium">{{ counter.name }}</td>
               <td class="table-cell text-text-secondary">{{ counter.stage || 'pipeline' }}</td>
-              <td class="table-cell capitalize text-text-secondary">{{ shortEnum(counter.aggregation, 'COUNTER_AGGREGATION_') }}</td>
+              <td class="table-cell capitalize text-text-secondary">{{ counter.aggregation }}</td>
               <td class="table-cell text-right tabular-nums text-text-secondary">{{ counter.observations ?? 0 }}</td>
-              <td class="table-cell text-right font-mono font-semibold tabular-nums">{{ formatNumber(counterNumber(counter), 3) }}</td>
+              <td class="table-cell text-right font-mono font-semibold tabular-nums">{{ formatNumber(counter.value, 3) }}</td>
             </tr>
             <tr v-if="!counters.length">
               <td colspan="5" class="p-12 text-center text-sm text-text-muted">No counters match this view.</td>
@@ -99,8 +99,8 @@ onMounted(rpc.refresh)
       <div class="flex items-center justify-between border-t border-surface-border px-4 py-3 text-xs text-text-secondary">
         <span>{{ offset + 1 }}–{{ Math.min(offset + counters.length, total) }} of {{ total }}</span>
         <div class="flex gap-2">
-          <button class="rounded border border-surface-border px-3 py-1.5 disabled:opacity-40" :disabled="offset === 0" @click="offset = Math.max(0, offset - limit); rpc.refresh()">Previous</button>
-          <button class="rounded border border-surface-border px-3 py-1.5 disabled:opacity-40" :disabled="offset + limit >= total" @click="offset += limit; rpc.refresh()">Next</button>
+          <button class="rounded border border-surface-border px-3 py-1.5 disabled:opacity-40" :disabled="offset === 0" @click="offset = Math.max(0, offset - limit); api.refresh()">Previous</button>
+          <button class="rounded border border-surface-border px-3 py-1.5 disabled:opacity-40" :disabled="offset + limit >= total" @click="offset += limit; api.refresh()">Next</button>
         </div>
       </div>
     </section>
