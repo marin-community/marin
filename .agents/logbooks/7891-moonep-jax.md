@@ -1064,7 +1064,22 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 
 ### 2026-08-03 01:49 UTC - MNEP-059 long profile barrier contract
 
-- Run ID: `mnep-059-long-profile-barrier-5-20260803-0149`.
+- Run ID: `mnep-059-long-profile-barrier-5-20260803-0151`.
 - Snapshot: `mnep-059-long-profile-barrier-20260803-0149` at `d975e2b7c`.
 - Treatment: Use a 600-second profile barrier, retain at most 100,000 activity and callback events, aggregate repeated kernels, and keep the one-GPU filter.
 - Gate: Require five finite steps, successful profile upload, and an operation-level profile summary.
+- Submission note: The first coordinator stopped before GPU allocation because its version label was invalid. The corrected coordinator uses `mnep-059-dev`.
+
+### 2026-08-03 02:05 UTC - MNEP-059 passes the rack correctness and profile gate
+
+- Result: All 16 workers completed all five steps on attempt zero.
+- Correctness: Every worker reported finite complete gradients at every step. The final logged loss was `8.18`, and the run dropped no expert assignments.
+- Profile: Process zero wrote a 370 MB XPlane and a 65 MB trace, then uploaded the session to `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mnep-059-long-profile-barrier-5-20260803-0151`.
+- Profile export: Finalization took about six minutes. The 600-second barrier let all workers complete.
+- Decision: Use this run as the overlap-one correctness baseline. Test four in-flight direct collectives without profiler overhead.
+
+### 2026-08-03 02:06 UTC - MNEP-060 overlap-four throughput contract
+
+- Run ID: `mnep-060-direct-overlap-4-5-20260803-0206`.
+- Treatment: Raise `--xla_gpu_experimental_parallel_collective_overlap_limit` from one to four through an explicit XLA flag.
+- Gate: Require five finite steps on attempt zero and compare the steady step time with MNEP-059's 40 to 44 seconds.
