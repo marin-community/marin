@@ -246,6 +246,13 @@ ratio was 3.29503. The accelerator median was 69,289.89 documents per second.
 The two five-repeat series passed their stability gates. The disjoint release
 result remains open.
 
+The absolute CPU rate changes with the host. Use 3,299.80 documents per second
+as the conservative eight-core planning rate from the two stable tests. At
+this rate, one eight-core process needs about 70 days for 20 billion documents.
+One accelerator needs about 80 hours at the measured 69,289.89 documents per
+second. These estimates exclude storage, job dispatch, and result-write time.
+The production canary must measure the complete pipeline.
+
 ## Capacity and input controls
 
 The 28.4M-parameter control does not fix the semantic loss. Its parent, leaf,
