@@ -1693,10 +1693,26 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Decision: Remove the cluster reservation. Keep the safe default-GEMM overlap and replace the exposed ragged token transfer with the bounded standard all-to-all path.
 - Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-094-reserve-clusters-5-20260803-1537-coord).
 
-### 2026-08-03 16:20 UTC - MNEP-095 bounded token transport contract
+### 2026-08-03 16:07 UTC - MNEP-095 bounded token transport contract
 
 - Treatment: Keep direct weight transport and replace token dispatch and combine with a bounded standard all-to-all.
 - Capacity: Give each peer message 1.25 times the mean size. Use exact ragged transport if a message exceeds this bound.
 - Basis: MNEP-066 passed output and gradient parity. It was neutral before direct weight transport removed the prior 14.12-second limit.
 - Gate: Require five finite steps on one NVL72, zero dropped assignments, and a median MFU above the 9.738% MNEP-092c result.
 - Stop criteria: Stop on a retry, a non-finite value, a transport error, or a dropped assignment.
+
+### 2026-08-03 16:20 UTC - MNEP-095b is correct but does not reduce step time
+
+- Setup: MNEP-095 stopped before compilation because the W&B key was missing. MNEP-095b corrected the launch environment.
+- Correctness: All 16 workers completed five steps. Loss and gradients stayed finite, and no expert assignment was dropped.
+- Performance: P50 MFU was `9.568%` at `155,045` tokens/s. The final sampled step took `27.052 s`.
+- Comparison: MNEP-092c reached `9.738%` MFU at `157,958` tokens/s. The bounded path was `1.75%` slower.
+- Decision: Capture one full-step profile. Determine whether the runtime used the bounded standard all-to-all or its ragged fallback.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-095b-bounded-token-a2a-5-20260803-1614-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-095b-bounded-token-a2a-5-20260803-1614).
+
+### 2026-08-03 16:21 UTC - MNEP-096 bounded token profile contract
+
+- Treatment: Repeat MNEP-095b and capture one complete step from step three on process zero.
+- Primary measure: Identify standard all-to-all and ragged all-to-all event families and measure their total device time.
+- Secondary measure: Compare communication, QuACK, layout, and full-step time with the MNEP-093 exact ragged profile.
+- Gate: Require five finite steps, zero dropped assignments, and a complete profile upload.
