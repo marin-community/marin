@@ -80,6 +80,7 @@ class MoonEPConfig:
     """Static MoonEP receiver-layout parameters."""
 
     token_padding: int
+    token_buckets: int
     grouped_gemm: "MoonEPGroupedGemm"
     mode: "MoonEPMode"
     fixed_capacity_factor: float
@@ -87,6 +88,8 @@ class MoonEPConfig:
     def __post_init__(self) -> None:
         if self.token_padding <= 0:
             raise ValueError("token_padding must be positive")
+        if self.token_buckets <= 0:
+            raise ValueError("token_buckets must be positive")
         if self.fixed_capacity_factor < 1.0:
             raise ValueError("fixed_capacity_factor must be at least 1.0")
 

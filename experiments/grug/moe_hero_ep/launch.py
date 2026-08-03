@@ -105,6 +105,7 @@ def build_hero_run(
     num_steps: int,
     moe_implementation: MoeImplementation = "fixed_all_to_all",
     moonep_token_padding: int = 128,
+    moonep_token_buckets: int = 1,
     moonep_grouped_gemm: MoonEPGroupedGemm = MoonEPGroupedGemm.QUACK,
     moonep_mode: MoonEPMode = MoonEPMode.EXACT,
     moonep_fixed_capacity_factor: float = 1.1,
@@ -143,6 +144,7 @@ def build_hero_run(
     moonep_config = (
         MoonEPConfig(
             token_padding=moonep_token_padding,
+            token_buckets=moonep_token_buckets,
             grouped_gemm=moonep_grouped_gemm,
             mode=moonep_mode,
             fixed_capacity_factor=moonep_fixed_capacity_factor,
@@ -282,6 +284,13 @@ def build_hero_run(
     help="MoonEP grouped GEMM implementation.",
 )
 @click.option(
+    "--moonep-token-buckets",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Token exchange buckets for communication and compute overlap.",
+)
+@click.option(
     "--moonep-fixed-capacity-factor",
     type=click.FloatRange(min=1.0),
     default=1.1,
@@ -369,6 +378,7 @@ def main(
     num_steps: int,
     moe_implementation: str,
     moonep_token_padding: int,
+    moonep_token_buckets: int,
     moonep_grouped_gemm: str,
     moonep_mode: str,
     moonep_fixed_capacity_factor: float,
@@ -388,6 +398,7 @@ def main(
         num_steps=num_steps,
         moe_implementation=resolve_moe_implementation(moe_implementation),
         moonep_token_padding=moonep_token_padding,
+        moonep_token_buckets=moonep_token_buckets,
         moonep_grouped_gemm=MoonEPGroupedGemm(moonep_grouped_gemm),
         moonep_mode=MoonEPMode(moonep_mode),
         moonep_fixed_capacity_factor=moonep_fixed_capacity_factor,

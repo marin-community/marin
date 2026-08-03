@@ -1353,3 +1353,21 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Treatment: Repeat MNEP-074 and profile one complete step from step three on process zero.
 - Trace: Enable host labels, HLO metadata, and one million GPU activity and callback events.
 - Gate: Require five finite steps, zero dropped assignments, a profile upload, and a full transport-time comparison with MNEP-072.
+
+### 2026-08-03 07:34 UTC - MNEP-075 identifies exposed token transport
+
+- Result: All 16 workers completed five finite steps on attempt zero with no dropped assignments.
+- Evidence: [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-075-multicontext-gin-profile-5-20260803-0701).
+- Profile: [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmnep-075-multicontext-gin-profile-5-20260803-0701).
+- Measurement: Ragged all-to-all used `15.0939 s` across 576 calls. Only `2.3611 s`, or `15.64%`, overlapped compute. The exposed part was `12.7328 s`.
+- Breakdown: The six large token dispatch and combine families used `14.1204 s`. The weight families used less than `1.0 s`.
+- Comparison: MNEP-072 used `14.9604 s`. More GIN contexts did not increase effective bandwidth.
+- Decision: Keep the correct direct transport. Split token dispatch, grouped GEMM, and combine into pipeline buckets before more GIN work.
+
+### 2026-08-03 07:49 UTC - MNEP-076 two-bucket rack contract
+
+- Treatment: Split every source-to-destination token message into two contiguous buckets. Dispatch, compute, and return each bucket independently so XLA can overlap the next transfer with the current grouped GEMM.
+- Local gate: The one-bucket and two-bucket paths match an independent dense output and input, W13, and W2 gradients on four GB200 GPUs. Both report zero routing errors.
+- Checks: The MoonEP unit set, the 41 hero-EP tests, formatting, lint, types, syntax, and file checks pass.
+- Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and a median MFU above MNEP-074's `10.004%`.
+- Next action: Profile the treatment if it improves MFU. Increase the bucket count only when the profile shows useful communication and compute overlap.

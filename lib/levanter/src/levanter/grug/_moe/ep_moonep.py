@@ -226,9 +226,11 @@ def _received_expert_ids(
     all_expert_counts: Int[Array, "R E"],
     plan: MoonEPPlan,
     rank: Int[Array, ""],
+    source_slice_starts: Int[Array, " R"],
+    source_slice_ends: Int[Array, " R"],
     *,
-    total_assignments: int,
-) -> Int[Array, " N"]:
+    output_capacity: int,
+) -> tuple[Int[Array, " N"], Array, Int[Array, "R E"]]:
     source_ends = jnp.cumsum(all_expert_counts, axis=0, dtype=jnp.int32)
     source_starts = source_ends - all_expert_counts
     destination_ends = plan.cumulative_allocation[:, rank]
@@ -238,14 +240,106 @@ def _received_expert_ids(
         jnp.minimum(source_ends, destination_ends[None, :]) - jnp.maximum(source_starts, destination_starts[None, :]),
         0,
     )
+    message_expert_ends = jnp.cumsum(counts_by_source_expert, axis=1, dtype=jnp.int32)
+    message_expert_starts = message_expert_ends - counts_by_source_expert
+    sliced_counts = jnp.maximum(
+        jnp.minimum(message_expert_ends, source_slice_ends[:, None])
+        - jnp.maximum(message_expert_starts, source_slice_starts[:, None]),
+        0,
+    )
     expert_ids = jnp.tile(
         jnp.arange(all_expert_counts.shape[1], dtype=jnp.int32),
         all_expert_counts.shape[0],
     )
-    return jnp.repeat(
+    received_experts = jnp.repeat(
         expert_ids,
-        counts_by_source_expert.reshape(-1),
-        total_repeat_length=total_assignments,
+        sliced_counts.reshape(-1),
+        total_repeat_length=output_capacity,
+    )
+    received_count = jnp.sum(sliced_counts, dtype=jnp.int32)
+    valid = jnp.arange(output_capacity, dtype=jnp.int32) < received_count
+    return received_experts, valid, sliced_counts
+
+
+def _token_bucket_bounds(
+    send_matrix: Int[Array, "R R"],
+    *,
+    bucket: int,
+    num_buckets: int,
+) -> tuple[Int[Array, "R R"], Int[Array, "R R"]]:
+    starts = send_matrix * bucket // num_buckets
+    ends = send_matrix * (bucket + 1) // num_buckets
+    return starts, ends
+
+
+def _bucket_assignment_ids(
+    send_order: Int[Array, " N"],
+    send_sizes: Int[Array, " R"],
+    bucket_starts: Int[Array, " R"],
+    bucket_sizes: Int[Array, " R"],
+    *,
+    output_capacity: int,
+) -> Int[Array, " C"]:
+    assignments = send_order.shape[0]
+    send_offsets = jnp.cumsum(send_sizes, dtype=jnp.int32) - send_sizes
+    bucket_offsets = jnp.cumsum(bucket_sizes, dtype=jnp.int32) - bucket_sizes
+    bucket_ends = bucket_offsets + bucket_sizes
+    positions = jnp.arange(output_capacity, dtype=jnp.int32)
+    destinations = jnp.searchsorted(bucket_ends, positions, side="right")
+    safe_destinations = jnp.minimum(destinations, send_sizes.shape[0] - 1)
+    positions_in_message = positions - bucket_offsets[safe_destinations]
+    sorted_positions = send_offsets[safe_destinations] + bucket_starts[safe_destinations] + positions_in_message
+    valid = positions < jnp.sum(bucket_sizes, dtype=jnp.int32)
+    safe_sorted_positions = jnp.minimum(sorted_positions, assignments - 1)
+    return jnp.where(valid, send_order[safe_sorted_positions], assignments)
+
+
+def _moonep_grouped_mlp(
+    expert_inputs: jax.Array,
+    group_w13: jax.Array,
+    group_w2: jax.Array,
+    group_sizes: jax.Array,
+    *,
+    activation_fn: Callable[[jax.Array], jax.Array],
+    grouped_gemm: MoonEPGroupedGemm,
+) -> jax.Array:
+    hidden_dim = expert_inputs.shape[1]
+    if grouped_gemm == MoonEPGroupedGemm.QUACK:
+        if activation_fn is not jax.nn.silu:
+            raise ValueError("MoonEP QuACK grouped GEMM requires SiLU")
+        if hidden_dim % _QUACK_ALIGNMENT != 0 or group_w2.shape[1] % _QUACK_ALIGNMENT != 0:
+            raise ValueError(
+                f"MoonEP QuACK dimensions must be multiples of {_QUACK_ALIGNMENT}, "
+                f"got hidden={hidden_dim} and intermediate={group_w2.shape[1]}"
+            )
+        from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
+
+        cumulative_group_sizes = jnp.concatenate(
+            [jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(group_sizes, dtype=jnp.int32)]
+        )
+        interleaved_w13 = _interleave_gate_up(group_w13, group_w2.shape[1])
+        return _expert_mlp(
+            expert_inputs,
+            interleaved_w13,
+            group_w2,
+            group_sizes,
+            cumulative_group_sizes,
+        )
+
+    w13_out = tree_checkpoint_name(
+        ragged_dot(expert_inputs, group_w13, group_sizes, implementation="xla"),
+        _CHECKPOINT_EXPERT_HIDDEN,
+    )
+    gate, up = split_moe_w13_output(
+        w13_out,
+        intermediate_dim=group_w2.shape[1],
+        interleaved=False,
+    )
+    return ragged_dot(
+        activation_fn(gate) * up,
+        group_w2,
+        group_sizes,
+        implementation="xla",
     )
 
 
@@ -371,6 +465,7 @@ def _moe_mlp_ep_moonep_exact_local(
     num_experts: int,
     capacity_factor: float,
     token_padding: int,
+    token_buckets: int,
     grouped_gemm: MoonEPGroupedGemm,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Run portable MoonEP with sparse expert copies and exact receiver loads."""
@@ -385,55 +480,31 @@ def _moe_mlp_ep_moonep_exact_local(
     tokens_per_rank, hidden_dim = x_local.shape
     top_k = selected_experts_local.shape[1]
     assignments_per_rank = tokens_per_rank * top_k
-    receiver_capacity = assignments_per_rank + 2 * local_experts * token_padding
+    num_groups = 2 * local_experts
+    bucket_capacity = (
+        assignments_per_rank
+        if token_buckets == 1
+        else (assignments_per_rank + token_buckets - 1) // token_buckets + num_ranks
+    )
+    receiver_capacity = bucket_capacity + num_groups * token_padding
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
     local_expert_counts = jnp.bincount(flat_experts, length=num_experts).astype(jnp.int32)
     all_expert_counts = jax.lax.all_gather(local_expert_counts, "expert")
     plan = moon_ep_plan(all_expert_counts, token_padding=token_padding)
     destinations, destination_errors = _assignment_destinations(flat_experts, all_expert_counts, plan, rank)
 
-    with jax.named_scope("moonep_dispatch"):
-        send_order = jnp.argsort(destinations * num_experts + flat_experts, stable=True)
-        inverse_send_order = jnp.argsort(send_order)
-        send_token_sources = send_order // top_k
-        send_x = _dispatch_gather(
-            x_local,
-            send_token_sources,
-            inverse_send_order,
-            jnp.ones((assignments_per_rank,), dtype=jnp.bool_),
-        )
-        local_send_sizes = jnp.bincount(destinations, length=num_ranks).astype(jnp.int32)
-        send_matrix = jax.lax.all_gather(local_send_sizes, "expert")
-        input_offsets, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(send_matrix, rank)
-        received_x = jax.lax.ragged_all_to_all(
-            send_x,
-            jnp.zeros((assignments_per_rank, hidden_dim), dtype=x_local.dtype),
-            input_offsets,
-            send_sizes,
-            output_offsets,
-            recv_sizes,
-            axis_name="expert",
-        )
-        received_experts = _received_expert_ids(
-            all_expert_counts,
-            plan,
-            rank,
-            total_assignments=assignments_per_rank,
-        )
-
-        local_start = rank * local_experts
-        is_local = jnp.logical_and(received_experts >= local_start, received_experts < local_start + local_experts)
-        local_group = received_experts - local_start
-        remote_matches = received_experts[:, None] == plan.experts_to_copy[rank][None, :]
-        has_remote_group = jnp.any(remote_matches, axis=1)
-        remote_group = jnp.argmax(remote_matches, axis=1).astype(jnp.int32)
-        group_ids = jnp.where(is_local, local_group, local_experts + remote_group)
-        mapping_errors = jnp.sum(jnp.logical_not(jnp.logical_or(is_local, has_remote_group)), dtype=jnp.int32)
-        rank_in_group = _stable_segment_rank(group_ids, num_buckets=2 * local_experts)
-        receiver_positions = plan.group_offsets[rank, group_ids] + rank_in_group
-        expert_inputs = jnp.zeros((receiver_capacity, hidden_dim), dtype=x_local.dtype)
-        expert_inputs = expert_inputs.at[receiver_positions].set(received_x)
-        expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
+    send_order = jnp.argsort(destinations * num_experts + flat_experts, stable=True)
+    inverse_send_order = jnp.argsort(send_order)
+    send_token_sources = send_order // top_k
+    send_x = _dispatch_gather(
+        x_local,
+        send_token_sources,
+        inverse_send_order,
+        jnp.ones((assignments_per_rank,), dtype=jnp.bool_),
+    )
+    local_send_sizes = jnp.bincount(destinations, length=num_ranks).astype(jnp.int32)
+    send_matrix = jax.lax.all_gather(local_send_sizes, "expert")
+    send_offsets = jnp.cumsum(local_send_sizes, dtype=jnp.int32) - local_send_sizes
 
     with jax.named_scope("moonep_weight_exchange"):
         remote_w13 = _exchange_remote_weights(moe_w13_local, plan.experts_to_copy, rank)
@@ -441,69 +512,130 @@ def _moe_mlp_ep_moonep_exact_local(
         group_w13 = jnp.concatenate((moe_w13_local, remote_w13), axis=0)
         group_w2 = jnp.concatenate((moe_w2_local, remote_w2), axis=0)
 
-    with jax.named_scope("moonep_grouped_gemm"):
-        group_sizes = plan.padded_group_sizes[rank]
-        layout_size = jnp.sum(group_sizes, dtype=jnp.int32)
-        group_sizes = group_sizes.at[-1].add(receiver_capacity - layout_size)
-        if grouped_gemm == MoonEPGroupedGemm.QUACK:
-            if activation_fn is not jax.nn.silu:
-                raise ValueError("MoonEP QuACK grouped GEMM requires SiLU")
-            if hidden_dim % _QUACK_ALIGNMENT != 0 or group_w2.shape[1] % _QUACK_ALIGNMENT != 0:
-                raise ValueError(
-                    f"MoonEP QuACK dimensions must be multiples of {_QUACK_ALIGNMENT}, "
-                    f"got hidden={hidden_dim} and intermediate={group_w2.shape[1]}"
-                )
-            from levanter.grug._moe.sonic_cute import _expert_mlp, _interleave_gate_up  # noqa: PLC0415
+    returned_buckets = []
+    assignment_id_buckets = []
+    mapping_errors = jnp.array(0, dtype=jnp.int32)
+    for bucket in range(token_buckets):
+        bucket_starts, bucket_ends = _token_bucket_bounds(
+            send_matrix,
+            bucket=bucket,
+            num_buckets=token_buckets,
+        )
+        bucket_send_matrix = bucket_ends - bucket_starts
 
-            cumulative_group_sizes = jnp.concatenate(
-                [jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(group_sizes, dtype=jnp.int32)]
+        with jax.named_scope(f"moonep_dispatch_bucket_{bucket}"):
+            _, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(bucket_send_matrix, rank)
+            input_offsets = send_offsets + bucket_starts[rank]
+            received_x = jax.lax.ragged_all_to_all(
+                send_x,
+                jnp.zeros((bucket_capacity, hidden_dim), dtype=x_local.dtype),
+                input_offsets,
+                send_sizes,
+                output_offsets,
+                recv_sizes,
+                axis_name="expert",
             )
-            interleaved_w13 = _interleave_gate_up(group_w13, group_w2.shape[1])
-            expert_outputs = _expert_mlp(
+            received_experts, received_valid, _ = _received_expert_ids(
+                all_expert_counts,
+                plan,
+                rank,
+                bucket_starts[:, rank],
+                bucket_ends[:, rank],
+                output_capacity=bucket_capacity,
+            )
+
+            local_start = rank * local_experts
+            is_local = jnp.logical_and(
+                received_experts >= local_start,
+                received_experts < local_start + local_experts,
+            )
+            local_group = received_experts - local_start
+            remote_matches = received_experts[:, None] == plan.experts_to_copy[rank][None, :]
+            has_remote_group = jnp.any(remote_matches, axis=1)
+            remote_group = jnp.argmax(remote_matches, axis=1).astype(jnp.int32)
+            mapped_group_ids = jnp.where(is_local, local_group, local_experts + remote_group)
+            group_ids = jnp.where(received_valid, mapped_group_ids, num_groups - 1)
+            mapping_errors = mapping_errors + jnp.sum(
+                jnp.logical_and(received_valid, jnp.logical_not(jnp.logical_or(is_local, has_remote_group))),
+                dtype=jnp.int32,
+            )
+            rank_in_group = _stable_segment_rank(group_ids, num_buckets=num_groups)
+            group_sizes = jnp.bincount(
+                group_ids,
+                weights=received_valid.astype(jnp.int32),
+                length=num_groups,
+            ).astype(jnp.int32)
+            padded_group_sizes = jnp.maximum(
+                ((group_sizes + token_padding - 1) // token_padding) * token_padding,
+                token_padding,
+            )
+            group_ends = jnp.cumsum(padded_group_sizes, dtype=jnp.int32)
+            group_offsets = group_ends - padded_group_sizes
+            receiver_positions = group_offsets[group_ids] + rank_in_group
+            safe_receiver_positions = jnp.minimum(receiver_positions, receiver_capacity - 1)
+            expert_inputs = jnp.zeros((receiver_capacity, hidden_dim), dtype=x_local.dtype)
+            expert_inputs = expert_inputs.at[
+                jnp.where(received_valid, safe_receiver_positions, receiver_capacity)
+            ].set(received_x, mode="drop")
+            expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
+
+        with jax.named_scope(f"moonep_grouped_gemm_bucket_{bucket}"):
+            layout_size = jnp.sum(padded_group_sizes, dtype=jnp.int32)
+            compute_group_sizes = padded_group_sizes.at[-1].add(receiver_capacity - layout_size)
+            expert_outputs = _moonep_grouped_mlp(
                 expert_inputs,
-                interleaved_w13,
+                group_w13,
                 group_w2,
-                group_sizes,
-                cumulative_group_sizes,
+                compute_group_sizes,
+                activation_fn=activation_fn,
+                grouped_gemm=grouped_gemm,
             )
-        else:
-            w13_out = tree_checkpoint_name(
-                ragged_dot(expert_inputs, group_w13, group_sizes, implementation="xla"),
-                _CHECKPOINT_EXPERT_HIDDEN,
+
+        with jax.named_scope(f"moonep_combine_bucket_{bucket}"):
+            outputs_in_receive_order = jnp.where(
+                received_valid[:, None],
+                expert_outputs[safe_receiver_positions],
+                0,
             )
-            gate, up = split_moe_w13_output(
-                w13_out,
-                intermediate_dim=group_w2.shape[1],
-                interleaved=False,
+            return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
+                bucket_send_matrix.T,
+                rank,
             )
-            expert_outputs = ragged_dot(
-                activation_fn(gate) * up,
-                group_w2,
-                group_sizes,
-                implementation="xla",
+            returned = jax.lax.ragged_all_to_all(
+                outputs_in_receive_order,
+                jnp.zeros((bucket_capacity, hidden_dim), dtype=expert_outputs.dtype),
+                return_input_offsets,
+                return_send_sizes,
+                return_output_offsets,
+                return_recv_sizes,
+                axis_name="expert",
+            )
+            returned_buckets.append(tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT))
+            assignment_id_buckets.append(
+                _bucket_assignment_ids(
+                    send_order,
+                    local_send_sizes,
+                    bucket_starts[rank],
+                    bucket_send_matrix[rank],
+                    output_capacity=bucket_capacity,
+                )
             )
 
     with jax.named_scope("moonep_combine"):
-        outputs_in_receive_order = expert_outputs[receiver_positions]
-        return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
-            send_matrix.T,
-            rank,
+        returned = jnp.concatenate(returned_buckets, axis=0)
+        assignment_sources = jnp.concatenate(assignment_id_buckets, axis=0)
+        returned_capacity = returned.shape[0]
+        assignment_positions = (
+            jnp.full((assignments_per_rank,), returned_capacity, dtype=jnp.int32)
+            .at[assignment_sources]
+            .set(jnp.arange(returned_capacity, dtype=jnp.int32), mode="drop")
         )
-        returned = jax.lax.ragged_all_to_all(
-            outputs_in_receive_order,
-            jnp.zeros((assignments_per_rank, hidden_dim), dtype=expert_outputs.dtype),
-            return_input_offsets,
-            return_send_sizes,
-            return_output_offsets,
-            return_recv_sizes,
-            axis_name="expert",
-        )
-        returned = tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT)
+        keep = assignment_positions < returned_capacity
         restored = _combine_gather(
             returned,
-            inverse_send_order,
-            jnp.ones((assignments_per_rank,), dtype=jnp.bool_),
-            send_order,
+            jnp.minimum(assignment_positions, returned_capacity - 1),
+            keep,
+            assignment_sources,
         )
         restored = restored.reshape(tokens_per_rank, top_k, hidden_dim)
         out_local = jnp.einsum(
@@ -512,7 +644,7 @@ def _moe_mlp_ep_moonep_exact_local(
             combine_weights_local.astype(restored.dtype),
             preferred_element_type=jnp.float32,
         ).astype(x_local.dtype)
-        local_errors = destination_errors + mapping_errors
+        local_errors = destination_errors + mapping_errors + jnp.sum(jnp.logical_not(keep), dtype=jnp.int32)
         errors = jax.lax.psum(local_errors, _batch_axes(jax.sharding.get_abstract_mesh())) + plan.violations
     return out_local, errors
 
@@ -528,6 +660,7 @@ def _moe_mlp_ep_moonep_local(
     num_experts: int,
     capacity_factor: float,
     token_padding: int,
+    token_buckets: int,
     grouped_gemm: MoonEPGroupedGemm,
     mode: MoonEPMode,
     fixed_capacity_factor: float,
@@ -557,6 +690,7 @@ def _moe_mlp_ep_moonep_local(
             num_experts=num_experts,
             capacity_factor=capacity_factor,
             token_padding=token_padding,
+            token_buckets=token_buckets,
             grouped_gemm=grouped_gemm,
         )
     raise AssertionError(f"Unhandled MoonEP mode {mode!r}")

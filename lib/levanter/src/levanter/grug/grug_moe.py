@@ -274,6 +274,7 @@ def moe_mlp(
             shard_local_call = partial(
                 shard_local_call,
                 token_padding=moonep_config.token_padding,
+                token_buckets=moonep_config.token_buckets,
                 grouped_gemm=moonep_config.grouped_gemm,
                 mode=moonep_config.mode,
                 fixed_capacity_factor=moonep_config.fixed_capacity_factor,

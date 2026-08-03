@@ -496,6 +496,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 moonep_config=(
                     MoonEPConfig(
                         token_padding=4,
+                        token_buckets=2,
                         grouped_gemm=MoonEPGroupedGemm.XLA,
                         mode=MoonEPMode.EXACT,
                         fixed_capacity_factor=1.0,
@@ -691,17 +692,19 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
 
 
 @pytest.mark.parametrize(
-    ("mode", "selected_expert_rows"),
+    ("mode", "token_buckets", "selected_expert_rows"),
     [
-        pytest.param(MoonEPMode.EXACT, ((0, 1),) * 8, id="exact"),
+        pytest.param(MoonEPMode.EXACT, 1, ((0, 1),) * 8, id="exact-one-bucket"),
+        pytest.param(MoonEPMode.EXACT, 2, ((0, 1),) * 8, id="exact-two-buckets"),
         pytest.param(
             MoonEPMode.QB_FIXED,
+            1,
             ((0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7)),
             id="qb-fixed",
         ),
     ],
 )
-def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(mode, selected_expert_rows):
+def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(mode, token_buckets, selected_expert_rows):
     if jax.default_backend() != "gpu" or jax.device_count() != 4:
         pytest.skip("requires one four-GPU GB200 tray")
 
@@ -764,6 +767,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(mode, selec
             capacity_factor=1.0,
             moonep_config=MoonEPConfig(
                 token_padding=4,
+                token_buckets=token_buckets,
                 grouped_gemm=MoonEPGroupedGemm.QUACK,
                 mode=mode,
                 fixed_capacity_factor=1.0,
