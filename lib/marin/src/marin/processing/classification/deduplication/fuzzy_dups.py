@@ -307,7 +307,19 @@ def compute_fuzzy_dups_attrs(
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
+
+    # A stage checkpoint references the intermediate chunk data, so it survives
+    # a failure only while that data does. An owned context puts the data under
+    # this step's output tree. A shared context keeps its own prefix, which the
+    # caller may point at temporary storage, thus checkpoints stay off there.
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    checkpoints_enabled = zephyr_context is None
+    if not checkpoints_enabled:
+        logger.info(
+            "Stage checkpoints are off: the supplied Zephyr context stores chunks at %s, "
+            "which this step does not own.",
+            ctx.chunk_storage_prefix,
+        )
     map_resources = map_task_resources or resources
     reduce_shards = num_reduce_shards if num_reduce_shards is not None else ctx.max_workers
     if reduce_shards is None or reduce_shards < 1:
@@ -331,7 +343,7 @@ def compute_fuzzy_dups_attrs(
         resume=cc_resume,
         map_task_resources=map_resources,
         reduce_task_resources=reduce_task_resources,
-        checkpoint_key_prefix=f"{output_path}:connected-components",
+        checkpoint_key_prefix=f"{output_path}:connected-components" if checkpoints_enabled else None,
     )
     if not converged:
         # A non-converged CC is still deterministic and reproducible across
@@ -380,7 +392,7 @@ def compute_fuzzy_dups_attrs(
         verbose=True,
         map_task_resources=map_resources,
         reduce_task_resources=reduce_task_resources,
-        checkpoint=ZephyrStageCheckpoint(key=f"{output_path}:final-attributes"),
+        checkpoint=ZephyrStageCheckpoint(key=f"{output_path}:final-attributes") if checkpoints_enabled else None,
     )
     shard_results = outcome.results
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)

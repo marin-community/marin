@@ -109,7 +109,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--dedup-input-shards",
-        dest="dedup_max_parallelism",
         type=int,
         default=DEFAULT_DEDUP_INPUT_SHARDS,
         help=f"Input map shards for global fuzzy dedup. Default: {DEFAULT_DEDUP_INPUT_SHARDS}.",
@@ -194,7 +193,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     for name in (
         "minhash_max_workers",
-        "dedup_max_parallelism",
+        "dedup_input_shards",
         "dedup_reduce_shards",
         "dedup_max_workers",
         "cc_max_iterations",
@@ -242,7 +241,7 @@ def _build_steps(args: argparse.Namespace) -> FuzzyDedupSteps:
     scale = replace(
         DEFAULT_SCALE,
         pool=PoolConfig(n_workers=args.minhash_max_workers, worker=worker),
-        dedup_max_parallelism=args.dedup_max_parallelism,
+        dedup_max_parallelism=args.dedup_input_shards,
     )
     coordinator_resources = ResourceConfig(
         cpu=args.coordinator_cpu,
@@ -290,7 +289,7 @@ def main(argv: list[str] | None = None) -> None:
         len(steps.minhash),
         steps.dedup.output_path,
         args.dedup_max_workers,
-        args.dedup_max_parallelism,
+        args.dedup_input_shards,
         args.dedup_reduce_shards,
     )
     if args.dry_run:
