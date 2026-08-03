@@ -1883,3 +1883,14 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Final loss: `8.626386642456055`.
 - Decision: Profile this exact graph. Measure remote transport time, QuACK overlap, and exposed communication before the next kernel change.
 - Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-102-one-remote-cta-5-20260803-1947-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-102-one-remote-cta-5-20260803-1947).
+
+### 2026-08-03 21:45 UTC - MNEP-103 one-CTA profile contract
+
+- Handover: This session takes over the work from the stopped Codex session at commit `f731677c3`.
+- Treatment: Repeat MNEP-102 without a code change. Record one complete step from step three on process zero.
+- Capture: Use one process only. MNEP-099 shows that an all-process capture stops the rack before step one.
+- Primary measure: Total ragged all-to-all time, exposed ragged time, and exact QuACK overlap after the one-CTA change.
+- Secondary measures: Layout time, gated-GEMM time, and full-step GPU event time.
+- Comparison: MNEP-093 recorded `15.181 s` of ragged transport, `2.180 s` of QuACK work, and `0.420 s` of exact overlap.
+- Gate: Require five finite steps, zero dropped assignments, and one complete XProf session.
+- Rationale: The step needs about `12 s` to reach `21.7%` median MFU. Total QuACK time is near `2.2 s`, so overlap alone cannot close the gap. This profile fixes the transport cost before the capacity work in MNEP-104.
