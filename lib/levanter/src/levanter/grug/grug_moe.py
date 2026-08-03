@@ -280,6 +280,7 @@ def moe_mlp(
                 bucket_schedule=moonep_config.bucket_schedule,
                 token_transport=moonep_config.token_transport,
                 token_capacity_factor=moonep_config.token_capacity_factor,
+                token_rounds=moonep_config.token_rounds,
                 grouped_gemm=moonep_config.grouped_gemm,
                 mode=moonep_config.mode,
                 fixed_capacity_factor=moonep_config.fixed_capacity_factor,

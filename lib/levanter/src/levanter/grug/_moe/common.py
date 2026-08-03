@@ -113,6 +113,7 @@ class MoonEPConfig:
     mode: MoonEPMode
     fixed_capacity_factor: float
     token_capacity_factor: float
+    token_rounds: int
     token_transport: MoonEPTokenTransport
     bucket_schedule: MoonEPBucketSchedule = MoonEPBucketSchedule.EAGER_DISPATCH
 
@@ -125,6 +126,8 @@ class MoonEPConfig:
             raise ValueError("fixed_capacity_factor must be at least 1.0")
         if self.token_capacity_factor <= 0.0:
             raise ValueError("token_capacity_factor must be positive")
+        if self.token_rounds <= 0:
+            raise ValueError("token_rounds must be positive")
         if self.token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL:
             if self.token_buckets != 1:
                 raise ValueError("bounded token all-to-all requires one token bucket")

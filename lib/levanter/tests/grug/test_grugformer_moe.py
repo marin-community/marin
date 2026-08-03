@@ -20,6 +20,7 @@ import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
+from levanter.grug._moe.ep_moonep import _static_padded_token_all_to_all
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -60,6 +61,93 @@ def _make_ep_mesh_or_none() -> Mesh | None:
         axis_names=("data", "expert", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
+
+
+def test_bounded_token_all_to_all_reassembles_static_rounds_and_gradients():
+    values = jnp.arange(20, dtype=jnp.float32).reshape(4, 5)
+    cotangent = jnp.arange(20, 40, dtype=jnp.float32).reshape(4, 5)
+    send_matrix = jnp.asarray([[4]], dtype=jnp.int32)
+
+    def exchange(local_values):
+        return _static_padded_token_all_to_all(
+            local_values,
+            send_matrix,
+            jax.lax.axis_index("expert"),
+            capacity=1,
+            num_rounds=4,
+        )
+
+    mapped_exchange = jax.vmap(exchange, axis_name="expert")
+    mapped_values = values[None, ...]
+    actual = mapped_exchange(mapped_values)[0]
+    actual_gradient = jax.grad(lambda x: jnp.sum(mapped_exchange(x)[0] * cotangent))(mapped_values)[0]
+
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(values))
+    np.testing.assert_array_equal(np.asarray(actual_gradient), np.asarray(cotangent))
+
+
+def test_bounded_token_all_to_all_matches_cross_shard_value_and_gradients_on_gpu():
+    if jax.default_backend() != "gpu" or jax.device_count() != 4:
+        pytest.skip("requires one four-GPU GB200 tray")
+
+    mesh = Mesh(
+        np.asarray(jax.devices()),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    send_matrix = np.asarray(
+        [
+            [0, 1, 3, 0],
+            [2, 0, 1, 1],
+            [1, 2, 0, 1],
+            [1, 1, 0, 2],
+        ],
+        dtype=np.int32,
+    )
+    values = np.arange(4 * 4 * 5, dtype=np.float32).reshape(4, 4, 5)
+    cotangent = np.arange(4 * 4 * 5, 2 * 4 * 4 * 5, dtype=np.float32).reshape(4, 4, 5)
+    expected = np.zeros_like(values)
+    expected_gradient = np.zeros_like(values)
+    for source in range(4):
+        input_start = 0
+        for destination in range(4):
+            count = send_matrix[source, destination]
+            output_start = int(np.sum(send_matrix[:source, destination]))
+            expected[destination, output_start : output_start + count] = values[
+                source, input_start : input_start + count
+            ]
+            expected_gradient[source, input_start : input_start + count] = cotangent[
+                destination, output_start : output_start + count
+            ]
+            input_start += count
+
+    def exchange(local_values):
+        return _static_padded_token_all_to_all(
+            local_values,
+            jnp.asarray(send_matrix),
+            jax.lax.axis_index("expert"),
+            capacity=2,
+            num_rounds=2,
+        )
+
+    mapped_exchange = jax.shard_map(
+        exchange,
+        mesh=mesh,
+        in_specs=P("expert", None),
+        out_specs=P("expert", None),
+        check_vma=False,
+    )
+    values = values.reshape(16, 5)
+    cotangent = cotangent.reshape(16, 5)
+    batch_sharding = NamedSharding(mesh, P("expert", None))
+    values = jax.device_put(values, batch_sharding)
+    cotangent = jax.device_put(cotangent, batch_sharding)
+    with jax.set_mesh(mesh):
+        actual = mapped_exchange(values)
+        actual_gradient = jax.grad(lambda x: jnp.sum(mapped_exchange(x) * cotangent))(values)
+
+    np.testing.assert_array_equal(np.asarray(actual), expected.reshape(16, 5))
+    np.testing.assert_array_equal(np.asarray(actual_gradient), expected_gradient.reshape(16, 5))
 
 
 def _make_abstract_moe_mesh(*, data: int, expert: int, model: int) -> AbstractMesh:
@@ -503,6 +591,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                         mode=MoonEPMode.EXACT,
                         fixed_capacity_factor=1.0,
                         token_capacity_factor=1.25,
+                        token_rounds=1,
                         token_transport=MoonEPTokenTransport.RAGGED,
                     )
                     if implementation == "moonep_jax"
@@ -816,6 +905,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
                 mode=mode,
                 fixed_capacity_factor=1.0,
                 token_capacity_factor=1.25,
+                token_rounds=1,
                 token_transport=token_transport,
             ),
             report_capacity_overflow=True,
