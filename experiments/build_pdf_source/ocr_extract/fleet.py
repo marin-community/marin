@@ -161,6 +161,11 @@ def build_inference_config(instances: int = INSTANCES) -> RemoteInferenceConfig:
             ),
             worker_environment=create_environment(),
             endpoint_ready_timeout_seconds=_ENDPOINT_READY_TIMEOUT,
+            # The default single failure retry permanently shrank two fleets: one EADDRINUSE
+            # port collision at startup and the instance never came back. The brokered path is
+            # elastic -- capacity is whoever is pulling -- so generous retries cost nothing when
+            # unused and keep a multi-hour batch-priority run from ratcheting down.
+            max_retries_failure=5,
         ),
         instances=instances,
         broker=BrokerConfig(

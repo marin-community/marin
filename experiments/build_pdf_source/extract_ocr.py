@@ -13,9 +13,10 @@ behind the endpoint. Nothing large moves through the driver -- it broadcasts the
 the endpoint address, both tiny, and every task pulls its own PDF bytes straight from object
 storage. The one thing a sender cannot delegate is rendering: the endpoint speaks OpenAI chat
 completions and takes images, so it cannot read Parquet or open a PDF. That cost is priced from
-measurement -- a task delivers ~1.4 pages/s once rendering, encoding, and its request threads
-share one cgroup-throttled CPU -- so a fleet is fed at about 12 one-CPU sender tasks per GPU
-(see the sizing block below for why the naive per-core render rate overstates this ~9x).
+measurement -- a task delivers ~0.75 pages/s once rendering, encoding, and its request threads
+share one cgroup-throttled CPU on the Grace-heavy worker fleet -- so a fleet is fed at about 24
+one-CPU sender tasks per GPU (see the sizing block below for why the naive per-core render rate
+overstates this ~17x).
 
 What the senders *must* get right is keeping the fleet full. Each task overlaps rendering with
 waiting rather than alternating between them, and :func:`sender_fleet_size` provisions enough
@@ -30,6 +31,7 @@ extractor produced a document. Running headers and footers are stripped by the s
 
 import logging
 import math
+import threading
 from collections import deque
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -120,23 +122,27 @@ _OCR_FIELDS: tuple[pa.Field, ...] = (
 _OUTPUT_SCHEMA = pa.schema([*PDF_DOCUMENT_FIELDS, *_OCR_FIELDS])
 
 # Sender sizing, from the measured economics of a task rather than from either intuition that
-# preceded them. A task delivers ~1.5 pages/s -- not the 13.2 a lone unthrottled render thread
-# manages -- because the render loop, the ~2 MB JSON/base64 encode per request, and every waking
-# request thread all contend for one cgroup-throttled CPU. Threads make that worse, not better:
-# 128 threads per task measured 0.7 pages/s, half the 64-thread rate, so 64 is the shape and
-# throughput scales by adding TASKS (each its own process; MuPDF holds the GIL through a render,
-# so threads cannot scale rendering at all). The sweep's 71 pages/s per GB200 node was measured
-# with a harness that did not pay this cost per page; a production fleet is fed at
-# ~12 one-CPU tasks per instance.
-_REQUEST_THREADS = 64
+# preceded them. A task delivers about one page per second -- not the 13.2 a lone unthrottled
+# render thread manages -- because the render loop, the ~2 MB JSON/base64 encode per request, and
+# every waking request thread all contend for one cgroup-throttled CPU. Threads make that worse,
+# not better (128 threads measured 0.7 pages/s against 64's 1.5 on x86), so throughput scales by
+# adding TASKS -- each its own process; MuPDF holds the GIL through a render, so threads cannot
+# scale rendering at all. 32 threads is ample cover for the ~17 requests a task actually keeps in
+# flight (its rate times the ~21s page latency), and it keeps the whole sender fleet's *maximum*
+# offered in-flight under the proxy's pending cap -- a rate-sized fleet at 64 threads could
+# collectively exceed it when queueing inflates latency, and past the cap the proxy sheds load as
+# 429s that consume page-request retries.
+_REQUEST_THREADS = 32
 # How many rendered pages a task may hold. Twice the thread count keeps every thread fed while
-# bounding encoded-page memory to roughly 180 MB per task.
+# bounding encoded-page memory to roughly 90 MB per task.
 _PAGES_IN_FLIGHT = 2 * _REQUEST_THREADS
 
 # The two rates that set the task:instance ratio. Engine-side throughput at the operating point is
-# the sweep's; task-side is bench4 (47.6 p/s / 32 tasks) and the first ceiling bench, which agree.
+# the sweep's. Task-side is the third ceiling bench: 0.78 pages/s per task on a fleet ~70% Grace
+# workers, half the x86-measured 1.49 -- ARM tasks degrade harder under thread contention than the
+# serial render probe predicted. 0.75 plans for the ARM-heavy fleet the full-sample run will get.
 _PAGES_PER_SECOND_PER_INSTANCE = 17.75
-_PAGES_PER_SECOND_PER_TASK = 1.4
+_PAGES_PER_SECOND_PER_TASK = 0.75
 
 _DRIVER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="8g")
 # A task is almost entirely blocked on the endpoint, so it costs one CPU and multiplexes eight-deep
@@ -150,6 +156,32 @@ _TASKS_PER_WORKER = 8
 _WORKER_RESOURCES = ResourceConfig(cpu=_TASKS_PER_WORKER, ram="40g", disk="32g")
 # A task holding a long document can legitimately go a long time without finishing one.
 _HEARTBEAT_TIMEOUT = 30 * 60
+
+
+def _check_alive_bounded(session, timeout_seconds: float = 120.0) -> None:
+    """``session.check_alive()``, bounded.
+
+    ``check_alive`` makes one controller RPC per fleet job, and the broker ceiling bench's driver
+    hung for over an hour after a completed run somewhere between this call and teardown -- with
+    the whole idle fleet still billed. The check is advisory (it distinguishes lost capacity from
+    lost pages); an answer that cannot arrive within the bound is not worth holding GPUs for.
+    """
+    outcome: list[BaseException | None] = [None]
+
+    def probe() -> None:
+        try:
+            session.check_alive()
+        except BaseException as error:
+            outcome[0] = error
+
+    prober = threading.Thread(target=probe, name="check-alive", daemon=True)
+    prober.start()
+    prober.join(timeout_seconds)
+    if prober.is_alive():
+        logger.warning("check_alive did not return within %.0fs; proceeding to fleet teardown", timeout_seconds)
+        return
+    if outcome[0] is not None:
+        raise outcome[0]
 
 
 def sender_fleet_size(instances: int) -> tuple[int, int]:
@@ -479,7 +511,7 @@ def ocr_pdf_text(
                 # phase's output to a race on the way out.
                 lost_pages = int(outcome.counters.get(f"{_COUNTER_PREFIX}/page_request_failed", 0))
                 try:
-                    session.check_alive()
+                    _check_alive_bounded(session)
                 except Exception as error:
                     if lost_pages:
                         raise

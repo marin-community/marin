@@ -21,7 +21,7 @@ failure leaves the others' completed output cached under their own step names. S
 them, at batch priority per the budget policy (the whole run is ~44 GB200 nodes, well past the
 128k budget's ~18):
 
-    for i in $(seq 0 5); do
+    for i in $(seq 0 10); do
       uv run iris --cluster=marin job run --target-cluster cw-us-east-08a \\
           --priority batch --job-name ocr-all-p$i \\
           -- python -m experiments.build_pdf_source.extract_ocr_all --partition $i
@@ -55,15 +55,16 @@ from experiments.build_pdf_source.plan import plan_step
 
 logger = logging.getLogger(__name__)
 
-# Set from the broker ceiling benchmark: instances one broker demonstrably feeds, times the
-# partition count, is the fleet. 6 x 29 = 174 GPUs ~= 44 GB200 nodes; at the sweep's 71 pages/s
-# per node that is ~30 minutes of steady state over the sample's 5.6M pages.
-NUM_PARTITIONS = 6
-INSTANCES_PER_PARTITION = 29
+# Set from the third broker ceiling benchmark, which validated one broker at ~310 pages/s
+# (~620 MB/s) and never pushed it further because the senders were the limit. A 16-instance
+# partition targets ~284 pages/s -- inside the measured envelope on both the broker and sender
+# axes, with no reliance on unmeasured headroom. 11 x 16 = 176 GPUs = 44 GB200 nodes.
+NUM_PARTITIONS = 11
+INSTANCES_PER_PARTITION = 16
 
-# The proxy parks one thread per in-flight request (512 x instances), each holding its ~2 MB body
-# until the response lands: ~29 GB of payload at full depth, plus thread stacks, the Zephyr
-# coordinator, and the routing-free key set.
+# The proxy parks one thread per in-flight request, each holding its ~2 MB body until the
+# response lands -- the sender fleet's maximum offer is ~758 in flight per instance (~24 tasks
+# x 32 threads), ~24 GB of payload at full depth, plus thread stacks and the Zephyr coordinator.
 _DRIVER_RESOURCES = ResourceConfig(cpu=12, ram="96g", disk="32g")
 
 
