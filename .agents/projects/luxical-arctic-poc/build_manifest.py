@@ -318,7 +318,8 @@ def write_source_rows(
 
 def manifest_digest(manifest: dict[str, Any]) -> str:
     """Return the canonical SHA-256 digest of a manifest."""
-    payload = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    content = {key: value for key, value in manifest.items() if key != "sha256"}
+    payload = json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 
 

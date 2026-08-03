@@ -13,7 +13,7 @@ import pytest
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
 sys.path.insert(0, str(PROJECT))
 
-from build_manifest import PositionOrder, block_sample_positions  # noqa: E402
+from build_manifest import PositionOrder, block_sample_positions, manifest_digest  # noqa: E402
 from extend_fast_student_manifest import (  # noqa: E402
     EXPANSION_VERSION,
     assigned_source_names,
@@ -22,6 +22,17 @@ from extend_fast_student_manifest import (  # noqa: E402
     reusable_source_result,
     selected_extension_table,
 )
+
+
+def test_manifest_digest_ignores_its_stored_digest() -> None:
+    manifest = {"version": 3, "sources": {"a": {"rows": 10}}}
+
+    digest = manifest_digest(manifest)
+    manifest["sha256"] = digest
+
+    assert manifest_digest(manifest) == digest
+    manifest["sources"]["a"]["rows"] = 11
+    assert manifest_digest(manifest) != digest
 
 
 def base_table() -> pa.Table:
