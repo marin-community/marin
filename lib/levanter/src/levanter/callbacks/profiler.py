@@ -83,6 +83,7 @@ class ProfilerConfig:
     perfetto_link: bool = False
     create_perfetto_trace: bool = False
     process_index: int | None = None
+    barrier_timeout: float = 200
     profile_options: ProfileOptionsConfig = field(default_factory=ProfileOptionsConfig)
     upload: XprofUploadConfig = field(default_factory=XprofUploadConfig)
 
@@ -123,6 +124,7 @@ class ProfilerConfig:
             create_perfetto_trace=self.create_perfetto_trace,
             profiler_options=self.build_jax_profile_options(),
             process_index=self.process_index,
+            barrier_timeout=self.barrier_timeout,
             upload_uri=upload_uri,
             xprof_service_url=service_url,
         )
@@ -146,6 +148,7 @@ def profile(
     create_perfetto_trace: bool = False,
     profiler_options: jax.profiler.ProfileOptions | None = None,
     process_index: int | None = None,
+    barrier_timeout: float | None = None,
     upload_uri: str | None = None,
     xprof_service_url: str | None = None,
 ) -> Callable[[StepInfo], None]:
@@ -212,7 +215,10 @@ def profile(
             if create_perfetto_link and jax.process_index() == 0:
                 event.set()
 
-        barrier_sync()
+        if barrier_timeout is None:
+            barrier_sync()
+        else:
+            barrier_sync(timeout=barrier_timeout)
         upload_error: Exception | None = None
         if captured_profile and upload_uri is not None:
             try:
@@ -224,7 +230,10 @@ def profile(
 
         if upload_uri is not None:
             # All processes must reach the same barrier before an upload error propagates.
-            barrier_sync()
+            if barrier_timeout is None:
+                barrier_sync()
+            else:
+                barrier_sync(timeout=barrier_timeout)
         profile_window_started = False
         if upload_error is not None:
             raise RuntimeError(f"Failed to upload XProf profile to {upload_uri}") from upload_error

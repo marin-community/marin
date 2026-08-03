@@ -155,20 +155,21 @@ def test_upload_error_reaches_second_barrier_before_propagating(monkeypatch, tmp
     monkeypatch.setattr(profiler_module.jax, "process_index", lambda: 0)
     monkeypatch.setattr(profiler_module.jax.profiler, "start_trace", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(profiler_module.jax.profiler, "stop_trace", lambda: None)
-    monkeypatch.setattr(profiler_module, "barrier_sync", lambda: calls.append("barrier"))
+    monkeypatch.setattr(profiler_module, "barrier_sync", lambda *, timeout=None: calls.append(("barrier", timeout)))
 
     callback = profile(
         str(tmp_path / "capture"),
         start_step=5,
         num_steps=1,
         create_perfetto_link=False,
+        barrier_timeout=600,
         upload_uri=f"file://{tmp_path}/upload",
     )
     callback(SimpleNamespace(step=4))
     with pytest.raises(RuntimeError, match="Failed to upload XProf profile"):
         callback(SimpleNamespace(step=5))
 
-    assert calls == ["barrier", "barrier"]
+    assert calls == [("barrier", 600), ("barrier", 600)]
 
 
 def test_profile_callback_stress_repeated_start_stop_finalization(monkeypatch, tmp_path):

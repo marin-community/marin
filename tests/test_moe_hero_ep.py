@@ -463,13 +463,14 @@ def test_profile_window_uses_one_process_and_compact_timeline():
     assert profiler.start_step == 3
     assert profiler.num_steps == 2
     assert profiler.process_index == 0
+    assert profiler.barrier_timeout == 600
     assert profiler.profile_options.host_tracer_level == 1
     assert profiler.profile_options.python_tracer_level == 0
     assert not profiler.profile_options.enable_hlo_proto
     assert profiler.profile_options.advanced_configuration == {
         "gpu_aggregated_tracing": True,
-        "gpu_max_activity_api_events": 250_000,
-        "gpu_max_callback_api_events": 250_000,
+        "gpu_max_activity_api_events": 100_000,
+        "gpu_max_callback_api_events": 100_000,
         "gpu_num_chips_to_profile_per_task": 1,
     }
 
