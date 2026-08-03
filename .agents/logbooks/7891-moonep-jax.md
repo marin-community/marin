@@ -1644,3 +1644,42 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Correctness: The standard ragged transport passed the dense-reference output and input, W13, and W2 gradient gate with two rematerialized scan layers and the latency-hiding scheduler enabled on four GB200 GPUs in `89.17 s`.
 - Direct-device note: The one-process, four-GPU symmetric-memory test exits with signal 11 in both one-bucket and two-bucket modes on this tray. The process-per-GPU rack path remains the direct-device correctness gate.
 - Next: Submit five finite steps on one NVL72 with block rematerialization, then profile exact ragged and QuACK overlap and compare MFU with MNEP-074.
+
+### 2026-08-03 14:49 UTC - MNEP-092 backward-overlap rack gate
+
+- Treatment: Run two token buckets with direct symmetric-memory transport and separate forward and backward transport-compute scheduling groups.
+- Resource correction: MNEP-092 requested 32 CPUs plus Iris overhead on each 32-core worker and could not pass the scheduling gate. MNEP-092b at 16 CPUs also could not fit 16 nodes in one NVLink domain under current use. Neither job used a GPU.
+- Resources: MNEP-092c uses the proven MNEP-074 shape: one NVL72 as 16 four-GB200 workers, eight CPUs and 128 GiB per worker, and one JAX process per GPU.
+- Gate: Require five finite steps on attempt zero, zero dropped assignments, and a p50 MFU above the `10.004%` MNEP-074 baseline.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-092c-backward-overlap-5-20260803-1455-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-092c-backward-overlap-5-20260803-1455).
+
+### 2026-08-03 15:02 UTC - MNEP-092c is correct but below baseline MFU
+
+- Correctness: All 16 workers completed five finite steps on attempt zero with zero dropped assignments.
+- Performance: P50 MFU was `9.738%` at `157,958` tokens/s. The final sampled step took `26.553 s`.
+- Comparison: MNEP-074 reached `10.004%` p50 MFU. The new schedule is `0.266` percentage points lower, so it is not a throughput win yet.
+- Decision: Record one full-step profile of this exact graph. Measure QuACK and ragged all-to-all overlap, exposed transport, and the overhead from two buckets and Triton layout barriers before changing the kernel again.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-092c-backward-overlap-5-20260803-1455-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-092c-backward-overlap-5-20260803-1455).
+
+### 2026-08-03 15:04 UTC - MNEP-093 overlap profile contract
+
+- Treatment: Repeat MNEP-092c and record one complete step from step three on process zero.
+- Primary measure: Compare exact QuACK and ragged all-to-all event overlap with MNEP-087, where 606 QuACK kernels overlapped `0.000 s` of ragged transport.
+- Secondary measures: Compute total ragged time, exposed ragged time, QuACK time, Triton layout time, and full-step GPU event time.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-093-backward-overlap-profile-5-20260803-1503-coord), [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-093-backward-overlap-profile-5-20260803-1503), and [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmnep-093-backward-overlap-profile-5-20260803-1503).
+
+### 2026-08-03 15:42 UTC - MNEP-093 proves logical overlap but not gated-GEMM overlap
+
+- Correctness: The job completed five finite steps and uploaded the full-step profile.
+- Transport and compute: The trace contains `15.181 s` of ragged all-to-all and `2.180 s` of QuACK work. Exact overlap is `0.420 s`; MNEP-087 had no exact overlap.
+- Gated GEMM: Only `0.007 s` of the `0.887 s` scheduled gated-GEMM time physically overlaps ragged transport. The default GEMM provides `0.413 s` of the measured overlap.
+- Cause: The scheduled QuACK kernel requests all 76 two-SM cluster slots. It cannot start while the ragged transport keeps remote-completion CTAs resident.
+- Layout cost: Equivalent scatter and gather event families total `2.829 s` in MNEP-087 and `2.509 s` in MNEP-093. The Triton row layout change is not the regression source.
+- Throughput: MNEP-092c is `5.6%` faster than the same two-bucket MNEP-087 graph, but it remains below the one-bucket MNEP-074 baseline.
+
+### 2026-08-03 15:55 UTC - Reserve QuACK capacity for transport
+
+- Change: Scheduled QuACK calls use at most 72 two-SM clusters and leave eight SMs free for direct ragged transport. Unscheduled QuACK calls keep all 76 clusters.
+- Isolated cost: At the rack expert shape (`M=262144`, `K=5120`, `N=1280`, eight local experts), the gated GEMM median changes from `4.154 ms` to `4.275 ms` (`2.9%`). The plain GEMM changes from `0.606 ms` to `0.630 ms` (`3.9%`).
+- Tests: The focused CPU suite passes all 49 tests.
+- Gate: Run five finite steps on one NVL72. If throughput improves, record a profile and confirm that the gated GEMM now overlaps ragged transport.
