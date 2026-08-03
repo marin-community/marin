@@ -381,6 +381,7 @@ def main() -> None:
     result["claude_model_usage_batches"] = review.model_usage_batches
     result["claude_cost_usd"] = review.cost_usd
     result["claude_assignments"] = review.assignments
+    result["package_sha256"] = review_package_sha256(package)
     output = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
     if args.output_path is None:
         print(output)
