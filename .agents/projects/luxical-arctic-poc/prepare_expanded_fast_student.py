@@ -16,7 +16,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
-from extend_arctic_teacher import expanded_root, teacher_root
+from extend_arctic_teacher import assigned_sources, expanded_root, teacher_root
 from fast_student import packed_document_ids
 from ladder_config import MANIFEST_ROOT, read_json, write_json
 from rigging.filesystem import atomic_rename
@@ -146,7 +146,21 @@ def prepare_source(
     return result
 
 
-def prepare_rung(rung: str) -> dict[str, Any]:
+def prepare_source_names(
+    manifest: dict[str, Any],
+    rung: str,
+    shard_index: int | None,
+    num_shards: int | None,
+) -> list[str]:
+    """Return all sources or one deterministic balanced source shard."""
+    if shard_index is None and num_shards is None:
+        return sorted(manifest["sources"])
+    if shard_index is None or num_shards is None:
+        raise ValueError("Both preparation shard arguments are required")
+    return assigned_sources(manifest, rung, shard_index, num_shards)
+
+
+def prepare_rung(rung: str, shard_index: int | None = None, num_shards: int | None = None) -> dict[str, Any]:
     """Pack all source rows in one audited expanded teacher rung."""
     expanded_manifest_url = f"{expanded_root(rung)}/manifest.json"
     teacher_audit_url = f"{teacher_root(rung)}/audit.json"
@@ -163,9 +177,11 @@ def prepare_rung(rung: str) -> dict[str, Any]:
         raise ValueError("The fixed tokenizer map has a different base manifest")
     raw_to_compact = load_numpy(base_prepared["raw_to_compact_url"])
     metadata = expected_metadata(manifest["sha256"], audit_sha256, base_prepared["raw_to_compact_sha256"])
+    source_names = prepare_source_names(manifest, rung, shard_index, num_shards)
     sources = {}
-    for index, (source, result) in enumerate(sorted(manifest["sources"].items()), start=1):
-        logger.info("Preparing source %d/%d: %s", index, len(manifest["sources"]), source)
+    for index, source in enumerate(source_names, start=1):
+        result = manifest["sources"][source]
+        logger.info("Preparing source %d/%d: %s", index, len(source_names), source)
         teacher_url = audit["sources"][source]["output_url"]
         sources[source] = prepare_source(
             rung,
@@ -177,10 +193,13 @@ def prepare_rung(rung: str) -> dict[str, Any]:
             metadata,
         )
     row_count = sum(result["rows"] for result in sources.values())
-    if row_count != int(manifest["training_targets"][rung]):
-        raise ValueError(f"Prepared {row_count} rows; expected {manifest['training_targets'][rung]}")
+    expected_rows = sum(int(manifest["sources"][source]["counts"][f"train_{rung}"]) for source in source_names)
+    if row_count != expected_rows:
+        raise ValueError(f"Prepared {row_count} rows; expected {expected_rows}")
     return {
         "rung": rung,
+        "shard_index": shard_index,
+        "num_shards": num_shards,
         "manifest_url": expanded_manifest_url,
         "manifest_sha256": manifest["sha256"],
         "teacher_audit_url": teacher_audit_url,
@@ -196,9 +215,19 @@ def prepare_rung(rung: str) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rung", choices=("10m", "30m"), required=True)
+    parser.add_argument("--shard-index", type=int)
+    parser.add_argument("--num-shards", type=int)
     arguments = parser.parse_args()
-    report = prepare_rung(arguments.rung)
-    report_url = f"{expanded_root(arguments.rung)}/prepared/manifest.json"
+    if (arguments.shard_index is None) != (arguments.num_shards is None):
+        parser.error("--shard-index and --num-shards must be used together")
+    report = prepare_rung(arguments.rung, arguments.shard_index, arguments.num_shards)
+    if arguments.shard_index is None:
+        report_url = f"{expanded_root(arguments.rung)}/prepared/manifest.json"
+    else:
+        report_url = (
+            f"{expanded_root(arguments.rung)}/prepared/shards/"
+            f"shard-{arguments.shard_index:02d}-of-{arguments.num_shards:02d}.json"
+        )
     write_json(report_url, report)
     summary = {
         "rung": arguments.rung,
