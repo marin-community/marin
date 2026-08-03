@@ -4,6 +4,7 @@
 import dataclasses
 import datetime
 import json
+import logging
 import os
 import pathlib
 import tempfile
@@ -25,6 +26,7 @@ from jax import numpy as jnp
 from rigging.filesystem import StoragePath
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+import levanter.checkpoint as checkpoint_module
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
     CheckpointCandidate,
@@ -495,6 +497,28 @@ def test_debug_checkpointer_state_providers_register_and_unregister():
 def test_checkpointer_config_rejects_invalid_debug_tracemalloc_settings():
     with pytest.raises(AssertionError, match="checkpoint debug tracemalloc_frames must be positive"):
         CheckpointerConfig(debug=CheckpointDebugConfig(tracemalloc_frames=0))
+
+
+def test_checkpointer_config_can_disable_tracemalloc_for_timing_runs():
+    config = CheckpointerConfig(debug=CheckpointDebugConfig(enabled=True, tracemalloc_frames=None))
+
+    checkpointer = config.create("timing-run")
+
+    assert checkpointer.debug.tracemalloc_frames is None
+
+
+def test_checkpoint_progress_logger_reports_phase_elapsed_time(caplog, monkeypatch):
+    times = iter([100.0, 103.5])
+    monkeypatch.setattr(checkpoint_module.time, "time", lambda: next(times, 103.5))
+    progress = checkpoint_module._CheckpointProgressLogger(step=8, checkpoint_path="memory://checkpoint")
+
+    with caplog.at_level(logging.INFO, logger=checkpoint_module.__name__):
+        progress.set_phase("tensorstore_serialize")
+
+    assert (
+        "phase=tensorstore_serialize path=memory://checkpoint previous_phase=starting "
+        "previous_phase_elapsed=3.50s total_elapsed=3.50s" in caplog.text
+    )
 
 
 def test_checkpointer_deletes_previous_checkpoints():

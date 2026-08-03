@@ -281,15 +281,23 @@ class _CheckpointProgressLogger:
         self._thread.start()
 
     def set_phase(self, phase: str) -> None:
+        now = time.time()
         with self._lock:
+            previous_phase = self.phase
+            previous_phase_elapsed = now - self.phase_started_at
             self.phase = phase
-            self.phase_started_at = time.time()
+            self.phase_started_at = now
+            total_elapsed = now - self.started_at
         self._log(
             logging.INFO,
-            "PHASE: CHECKPOINT step=%d phase=%s path=%s",
+            "PHASE: CHECKPOINT step=%d phase=%s path=%s previous_phase=%s "
+            "previous_phase_elapsed=%.2fs total_elapsed=%.2fs",
             self.step,
             phase,
             self.checkpoint_path,
+            previous_phase,
+            previous_phase_elapsed,
+            total_elapsed,
         )
         self._log_memory_state(f"phase_{phase}", include_top_allocations=True)
 
@@ -363,7 +371,8 @@ class CheckpointDebugConfig:
     enabled: bool = False
     log_interval: float = 60.0
     dump_stacks_after: float | None = None
-    tracemalloc_frames: int = 25
+    tracemalloc_frames: int | None = 25
+    """Python allocation stack depth. None disables tracemalloc for low-overhead timing runs."""
     top_allocations: int = 8
     force_gc_before_serialize: bool = True
     flush_logs: bool = True
@@ -372,7 +381,8 @@ class CheckpointDebugConfig:
         assert self.log_interval > 0, "checkpoint debug log_interval must be positive"
         if self.dump_stacks_after is not None:
             assert self.dump_stacks_after > 0, "checkpoint debug dump_stacks_after must be positive when set"
-        assert self.tracemalloc_frames > 0, "checkpoint debug tracemalloc_frames must be positive"
+        if self.tracemalloc_frames is not None:
+            assert self.tracemalloc_frames > 0, "checkpoint debug tracemalloc_frames must be positive"
         assert self.top_allocations >= 0, "checkpoint debug top_allocations must be non-negative"
 
     def __post_init__(self) -> None:
@@ -753,7 +763,7 @@ def save_checkpoint(
     logger.info(f"Saving checkpoint to {checkpoint_path} for step {step}")
     progress_logger: _CheckpointProgressLogger | None = None
     if checkpoint_debug.enabled:
-        if not tracemalloc.is_tracing():
+        if checkpoint_debug.tracemalloc_frames is not None and not tracemalloc.is_tracing():
             tracemalloc.start(checkpoint_debug.tracemalloc_frames)
         progress_logger = _CheckpointProgressLogger(
             step=step,
