@@ -406,7 +406,10 @@ def write_jsonl(path: StoragePath, rows: Iterable[dict[str, Any]]) -> None:
 
 def read_jsonl(path: StoragePath) -> list[dict[str, Any]]:
     """Read JSON records from private storage."""
-    return [json.loads(line) for line in path.read_text(compression="gzip").splitlines()]
+    lines = path.read_text(compression="gzip").split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return [json.loads(line) for line in lines]
 
 
 def describe_with_checkpoints(

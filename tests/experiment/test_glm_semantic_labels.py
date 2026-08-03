@@ -171,3 +171,12 @@ def test_jsonl_write_keeps_complete_file_when_replacement_fails(tmp_path: Path, 
 
     filesystem.open = original_open
     assert semantic_labels.read_jsonl(path) == [{"value": "complete"}]
+
+
+def test_jsonl_read_keeps_unicode_line_separators_inside_a_record(tmp_path: Path) -> None:
+    path = StoragePath(str(tmp_path / "rows.jsonl.gz"))
+    row = {"text": "before\u2028middle\u2029after"}
+
+    semantic_labels.write_jsonl(path, [row])
+
+    assert semantic_labels.read_jsonl(path) == [row]
