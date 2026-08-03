@@ -430,6 +430,12 @@ def test_run_grug_selects_collective_overlap_limit(
             "1c8884750de97f1620635b3e9a32cf8e0db00ad53d7de5e77bb9f4753f59a8f1",
             None,
         ),
+        (
+            MoonEPJaxWheelBuild.LSA_NCCL_2307_MULTICONTEXT_GIN_CTA16_FENCE_20260803,
+            "jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta16-fence-20260803",
+            "4d3f0da2320322ebafb01770bee19440ec2479f04da726761a67332eb9013f68",
+            None,
+        ),
     ],
 )
 def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(
@@ -530,6 +536,21 @@ def test_hero_transport_reaches_training_config():
 
     assert config.moonep_transport == train.MoonEPTransport.DIRECT_DEVICE
     assert config.trainer.finite_diagnostics == train.FiniteDiagnostics.GRADS
+
+
+def test_hero_bucket_schedule_reaches_model_config():
+    step = launch.build_hero_run(
+        run_id="overlap-bucket-schedule",
+        num_steps=3,
+        moe_implementation="moonep_jax",
+        moonep_bucket_schedule=launch.MoonEPBucketSchedule.COMPUTE_OVERLAP,
+        version="dev",
+    )
+
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.moonep_config is not None
+    assert config.model.moonep_config.bucket_schedule == launch.MoonEPBucketSchedule.COMPUTE_OVERLAP
 
 
 def test_direct_transport_keeps_explicit_finite_diagnostics():

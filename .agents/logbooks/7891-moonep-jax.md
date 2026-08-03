@@ -1435,3 +1435,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Correctness: Local lowering, 23 MoonEP tests, 41 hero tests, and the exact two-bucket four-GB200 output and gradient gate pass.
 - Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-078's `7.793%`.
 - Next action: Profile the treatment if it improves throughput, then apply the measured best fixed communication-CTA count.
+
+### 2026-08-03 09:33 UTC - MNEP-080 rejects overlap without a remote-write fence
+
+- Result: All 16 workers completed step 1 with finite gradients. All workers then reported non-finite gradients and a NaN loss at step 2. The later coordination errors were shutdown results.
+- Performance signal: The interval between the two finite-diagnostic boundaries fell from MNEP-078's `33.213 s` median step to about `24 s`, but the invalid result is not an MFU measurement.
+- Scope: The same overlap graph passes output and input, W13, and W2 gradient checks on four GB200 GPUs. The failure is in the cross-rack GIN path.
+- Cause hypothesis: The multi-context kernel ends with a relaxed world barrier. NCCL 2.30 states that an all-context barrier with a `Put` fence is required before prior remote puts are visible in local memory.
+- Decision: Keep eager dispatch as the default. Make compute overlap explicit, cap transport at 16 CTAs, and add an all-GIN-context `Put` fence before the next rack gate.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-080-forced-pipeline-5-20260803-0927-coord).
+
+### 2026-08-03 09:42 UTC - fenced 16-CTA overlap contract
+
+- Kernel: Apply sparse GIN, multi-context GIN, the 16-CTA cap, and the all-context remote-put fence to XLA `5d53e1e40c` with NCCL `2.30.7`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta16-fence-20260803`.
+- PJRT SHA-256: `4d3f0da2320322ebafb01770bee19440ec2479f04da726761a67332eb9013f68`.
+- Local gate: The exact two-bucket compute-overlap output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
+- Rack gate: Five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-078's `7.793%`.

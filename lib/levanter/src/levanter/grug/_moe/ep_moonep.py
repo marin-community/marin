@@ -20,6 +20,7 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_MOE_OUTPUT,
+    MoonEPBucketSchedule,
     MoonEPGroupedGemm,
     MoonEPMode,
     split_moe_w13_output,
@@ -553,6 +554,7 @@ def _moe_mlp_ep_moonep_exact_local(
     capacity_factor: float,
     token_padding: int,
     token_buckets: int,
+    bucket_schedule: MoonEPBucketSchedule,
     grouped_gemm: MoonEPGroupedGemm,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
     """Run portable MoonEP with sparse expert copies and exact receiver loads."""
@@ -599,9 +601,9 @@ def _moe_mlp_ep_moonep_exact_local(
         group_w13 = jnp.concatenate((moe_w13_local, remote_w13), axis=0)
         group_w2 = jnp.concatenate((moe_w2_local, remote_w2), axis=0)
 
-    # Each dispatch after the first waits for the prior dispatch output. This
-    # makes the next dispatch and the prior bucket's GEMM ready together, which
-    # gives XLA a clear communication-compute overlap window.
+    # In the overlap schedule, each dispatch after the first waits for the
+    # prior dispatch output. The next dispatch and prior bucket GEMM then become
+    # ready together.
     dispatched_buckets = []
     for bucket in range(token_buckets):
         layout = _expert_order_bucket_layout(
@@ -618,7 +620,7 @@ def _moe_mlp_ep_moonep_exact_local(
 
         with jax.named_scope(f"moonep_dispatch_bucket_{bucket}"):
             input_offsets = layout.input_offsets
-            if dispatched_buckets:
+            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and dispatched_buckets:
                 input_offsets = _ordered_after(dispatched_buckets[-1].expert_inputs[0, 0], input_offsets)
             expert_inputs = jax.lax.ragged_all_to_all(
                 send_x,
@@ -725,6 +727,7 @@ def _moe_mlp_ep_moonep_local(
     capacity_factor: float,
     token_padding: int,
     token_buckets: int,
+    bucket_schedule: MoonEPBucketSchedule,
     grouped_gemm: MoonEPGroupedGemm,
     mode: MoonEPMode,
     fixed_capacity_factor: float,
@@ -755,6 +758,7 @@ def _moe_mlp_ep_moonep_local(
             capacity_factor=capacity_factor,
             token_padding=token_padding,
             token_buckets=token_buckets,
+            bucket_schedule=bucket_schedule,
             grouped_gemm=grouped_gemm,
         )
     raise AssertionError(f"Unhandled MoonEP mode {mode!r}")

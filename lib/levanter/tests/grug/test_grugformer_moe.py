@@ -24,6 +24,7 @@ from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoEExpertMlpPspecs,
+    MoonEPBucketSchedule,
     MoonEPConfig,
     MoonEPGroupedGemm,
     MoonEPMode,
@@ -692,19 +693,34 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
 
 
 @pytest.mark.parametrize(
-    ("mode", "token_buckets", "selected_expert_rows"),
+    ("mode", "token_buckets", "bucket_schedule", "selected_expert_rows"),
     [
-        pytest.param(MoonEPMode.EXACT, 1, ((0, 1),) * 8, id="exact-one-bucket"),
-        pytest.param(MoonEPMode.EXACT, 2, ((0, 1),) * 8, id="exact-two-buckets"),
+        pytest.param(
+            MoonEPMode.EXACT,
+            1,
+            MoonEPBucketSchedule.EAGER_DISPATCH,
+            ((0, 1),) * 8,
+            id="exact-one-bucket",
+        ),
+        pytest.param(
+            MoonEPMode.EXACT,
+            2,
+            MoonEPBucketSchedule.COMPUTE_OVERLAP,
+            ((0, 1),) * 8,
+            id="exact-two-buckets-overlap",
+        ),
         pytest.param(
             MoonEPMode.QB_FIXED,
             1,
+            MoonEPBucketSchedule.EAGER_DISPATCH,
             ((0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7)),
             id="qb-fixed",
         ),
     ],
 )
-def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(mode, token_buckets, selected_expert_rows):
+def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
+    mode, token_buckets, bucket_schedule, selected_expert_rows
+):
     if jax.default_backend() != "gpu" or jax.device_count() != 4:
         pytest.skip("requires one four-GPU GB200 tray")
 
@@ -768,6 +784,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(mode, token
             moonep_config=MoonEPConfig(
                 token_padding=4,
                 token_buckets=token_buckets,
+                bucket_schedule=bucket_schedule,
                 grouped_gemm=MoonEPGroupedGemm.QUACK,
                 mode=mode,
                 fixed_capacity_factor=1.0,

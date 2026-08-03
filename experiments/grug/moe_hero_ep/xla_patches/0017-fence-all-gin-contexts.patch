@@ -1,0 +1,13 @@
+diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+--- a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
++++ b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+@@ -248,5 +248,9 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
+     bar.sync(ncclCoopCta(), ::cuda::memory_order_release,
+              ncclGinFenceLevel::Relaxed);
++    ncclGinBarrier(ncclCoopCta(), ncclGinAllContexts(dev_comm),
++                   ncclTeamTagWorld{}, blockIdx.x,
++                   ::cuda::memory_order_acq_rel,
++                   ncclGinFenceLevel::Put);
+   } else {
+     ncclLsaBarrierSession<ncclCoopCta> bar{ncclCoopCta(), dev_comm,
+                                            ncclTeamTagLsa{}, blockIdx.x};

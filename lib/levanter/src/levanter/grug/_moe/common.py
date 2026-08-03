@@ -75,25 +75,6 @@ class MoEExpertMlpPspecs:
         return P(self.expert, self.intermediate, self.hidden)
 
 
-@dataclass(frozen=True)
-class MoonEPConfig:
-    """Static MoonEP receiver-layout parameters."""
-
-    token_padding: int
-    token_buckets: int
-    grouped_gemm: "MoonEPGroupedGemm"
-    mode: "MoonEPMode"
-    fixed_capacity_factor: float
-
-    def __post_init__(self) -> None:
-        if self.token_padding <= 0:
-            raise ValueError("token_padding must be positive")
-        if self.token_buckets <= 0:
-            raise ValueError("token_buckets must be positive")
-        if self.fixed_capacity_factor < 1.0:
-            raise ValueError("fixed_capacity_factor must be at least 1.0")
-
-
 class MoonEPGroupedGemm(StrEnum):
     """Grouped GEMM implementation for MoonEP compute groups."""
 
@@ -106,6 +87,33 @@ class MoonEPMode(StrEnum):
 
     EXACT = "exact"
     QB_FIXED = "qb_fixed"
+
+
+class MoonEPBucketSchedule(StrEnum):
+    """Order for MoonEP token dispatch and expert compute."""
+
+    EAGER_DISPATCH = "eager_dispatch"
+    COMPUTE_OVERLAP = "compute_overlap"
+
+
+@dataclass(frozen=True)
+class MoonEPConfig:
+    """Static MoonEP receiver-layout parameters."""
+
+    token_padding: int
+    token_buckets: int
+    grouped_gemm: MoonEPGroupedGemm
+    mode: MoonEPMode
+    fixed_capacity_factor: float
+    bucket_schedule: MoonEPBucketSchedule = MoonEPBucketSchedule.EAGER_DISPATCH
+
+    def __post_init__(self) -> None:
+        if self.token_padding <= 0:
+            raise ValueError("token_padding must be positive")
+        if self.token_buckets <= 0:
+            raise ValueError("token_buckets must be positive")
+        if self.fixed_capacity_factor < 1.0:
+            raise ValueError("fixed_capacity_factor must be at least 1.0")
 
 
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
