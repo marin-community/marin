@@ -11,6 +11,7 @@ sys.path.insert(0, str(PROJECT))
 
 from semantic_embedding_metrics import (  # noqa: E402
     cosine_order_fidelity,
+    fixed_bucket_metrics,
     nearest_neighbors_outside_groups,
     normalize_embeddings,
     sampled_pairs,
@@ -79,6 +80,35 @@ def test_semantic_metrics_find_coherent_neighbors_and_clusters() -> None:
     )
     assert cached_metrics == metrics
     np.testing.assert_array_equal(cached_neighbors, neighbors)
+
+
+def test_fixed_bucket_metrics_use_one_clustering_for_all_semantic_levels() -> None:
+    vectors = np.asarray(
+        [
+            [1.0, 0.0],
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [-1.0, 0.0],
+            [-0.9, 0.1],
+            [-0.8, 0.2],
+        ]
+    )
+    labels = np.asarray(["A", "A", "A", "B", "B", "B"])
+
+    metrics = fixed_bucket_metrics(
+        vectors,
+        {"parent": labels, "form": labels},
+        cluster_count=2,
+        seed=42,
+    )
+
+    assert metrics["cluster_count"] == 2
+    assert metrics["cluster_sizes_descending"] == [3, 3]
+    assert metrics["effective_cluster_count"] == 2.0
+    assert metrics["levels"] == {
+        "parent": {"cluster_nmi": 1.0, "cluster_purity": 1.0},
+        "form": {"cluster_nmi": 1.0, "cluster_purity": 1.0},
+    }
 
 
 def test_cosine_order_fidelity_is_one_for_rotated_vectors() -> None:

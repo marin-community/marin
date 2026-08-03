@@ -95,6 +95,40 @@ def cluster_purity(primary_labels: np.ndarray, cluster_labels: np.ndarray) -> fl
     return correct / len(primary_labels)
 
 
+def fixed_bucket_metrics(
+    vectors: np.ndarray,
+    primary_labels_by_level: dict[str, np.ndarray],
+    cluster_count: int,
+    seed: int,
+) -> dict[str, object]:
+    """Return semantic quality for one fixed production-style clustering."""
+    normalized = normalize_embeddings(vectors)
+    if cluster_count < 2 or cluster_count > len(normalized):
+        raise ValueError("The fixed bucket count must be between two and the document count")
+    for labels in primary_labels_by_level.values():
+        if len(labels) != len(normalized):
+            raise ValueError("Embedding and fixed-bucket label counts differ")
+    clustering = KMeans(n_clusters=cluster_count, n_init=10, random_state=seed).fit_predict(normalized)
+    cluster_counts = np.bincount(clustering, minlength=cluster_count)
+    cluster_fractions = cluster_counts / len(clustering)
+    levels = {
+        level: {
+            "cluster_nmi": float(normalized_mutual_info_score(labels, clustering)),
+            "cluster_purity": float(cluster_purity(labels, clustering)),
+        }
+        for level, labels in primary_labels_by_level.items()
+    }
+    return {
+        "cluster_count": cluster_count,
+        "largest_cluster_fraction": float(cluster_fractions.max()),
+        "effective_cluster_count": float(
+            math.exp(-sum(fraction * math.log(fraction) for fraction in cluster_fractions if fraction > 0))
+        ),
+        "cluster_sizes_descending": sorted((int(value) for value in cluster_counts), reverse=True),
+        "levels": levels,
+    }
+
+
 def label_neighborhood_metrics(
     neighbors: np.ndarray,
     primary_labels: np.ndarray,

@@ -14,6 +14,7 @@ from evaluate_hierarchical_embeddings import (  # noqa: E402
     group_f1_gates,
     label_levels,
     neighborhood_review_indices,
+    production_bucket_gates,
     strongest_reference_model,
     validated_speed_ratio,
 )
@@ -122,6 +123,31 @@ def test_group_f1_gates_compare_each_large_group_with_its_best_teacher() -> None
 
     model_metrics["fast_arctic_10m"] = model_metrics.pop("fast_arctic_3m")
     assert group_f1_gates(model_metrics, "fast_arctic_10m") == gates
+
+
+def test_production_bucket_gates_compare_each_semantic_level_with_its_best_teacher() -> None:
+    def metrics(parent: float, leaf: float, form: float) -> dict:
+        return {
+            "levels": {
+                "parent": {"cluster_nmi": parent, "cluster_purity": parent},
+                "leaf": {"cluster_nmi": leaf, "cluster_purity": leaf},
+                "form": {"cluster_nmi": form, "cluster_purity": form},
+            }
+        }
+
+    model_metrics = {
+        "student": metrics(0.78, 0.67, 0.56),
+        "arctic_medium": metrics(0.80, 0.60, 0.50),
+        "qwen3_embedding_0.6b": metrics(0.70, 0.70, 0.50),
+        "lfm2.5_embedding_350m": metrics(0.70, 0.60, 0.60),
+    }
+
+    gates = production_bucket_gates(model_metrics, "student")
+
+    assert gates["parent_cluster_nmi"]["best_teacher"] == "arctic_medium"
+    assert gates["parent_cluster_nmi"]["passed"]
+    assert not gates["leaf_cluster_nmi"]["passed"]
+    assert not gates["form_cluster_purity"]["passed"]
 
 
 def test_strongest_reference_model_uses_all_levels_and_fixed_metrics() -> None:

@@ -37,6 +37,7 @@ from glm_semantic_labels import SampleDocument, read_json, read_jsonl, stable_or
 from rigging.filesystem import StoragePath, atomic_rename
 from semantic_embedding_metrics import (
     cosine_order_fidelity,
+    fixed_bucket_metrics,
     nearest_neighbors,
     nearest_neighbors_outside_groups,
     normalize_embeddings,
@@ -54,6 +55,8 @@ MAXIMUM_GROUP_F1_LOSS = 0.03
 REVIEW_QUERY_COUNT = 200
 REVIEW_NEIGHBOR_COUNT = 5
 REVIEW_TEXT_CHARACTERS = 600
+PRODUCTION_BUCKET_COUNT = 40
+MAXIMUM_PRODUCTION_BUCKET_METRIC_LOSS = 0.02
 EXACT_SPEED_REPORT_URL = (
     "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/"
     "fast-student/speed/cpu-trained-full-full-3m.json"
@@ -207,6 +210,47 @@ def group_f1_gates(
     return output
 
 
+def production_bucket_gates(model_metrics: dict[str, dict[str, Any]], student_model: str) -> dict[str, dict[str, Any]]:
+    """Compare fixed-bucket semantic quality with the best saved teacher."""
+    output = {}
+    for level in ("parent", "leaf", "form"):
+        for metric in ("cluster_nmi", "cluster_purity"):
+            teacher_values = {
+                model: float(model_metrics[model]["levels"][level][metric]) for model in SEMANTIC_REFERENCE_MODELS
+            }
+            best_model = max(teacher_values, key=lambda name: teacher_values[name])
+            best_value = teacher_values[best_model]
+            student_value = float(model_metrics[student_model]["levels"][level][metric])
+            output[f"{level}_{metric}"] = {
+                "student": student_value,
+                "best_teacher": best_model,
+                "best_teacher_value": best_value,
+                "delta": student_value - best_value,
+                "passed": student_value >= best_value - MAXIMUM_PRODUCTION_BUCKET_METRIC_LOSS,
+            }
+    return output
+
+
+def production_bucket_report(
+    models: dict[str, np.ndarray], assignments: list[HierarchicalAssignment], student_model: str
+) -> dict[str, Any]:
+    """Return semantic gates for one shared 40-bucket clustering task."""
+    primary_labels_by_level = {level: primary_labels for level, (primary_labels, _) in label_levels(assignments).items()}
+    model_metrics = {
+        name: fixed_bucket_metrics(vectors, primary_labels_by_level, PRODUCTION_BUCKET_COUNT, SEED)
+        for name, vectors in models.items()
+    }
+    gates = production_bucket_gates(model_metrics, student_model)
+    return {
+        "source_metadata_used": False,
+        "cluster_count": PRODUCTION_BUCKET_COUNT,
+        "models": model_metrics,
+        "student_model": student_model,
+        "student_gates_against_best_teacher": gates,
+        "student_all_gates_passed": all(row["passed"] for row in gates.values()),
+    }
+
+
 def variant_metrics(
     models: dict[str, np.ndarray],
     assignments: list[HierarchicalAssignment],
@@ -284,6 +328,7 @@ def variant_metrics(
                 }
             )
         levels[level] = level_report
+    levels["production_buckets"] = production_bucket_report(models, assignments, student_model)
     return levels, cross_group_neighbor_cache
 
 
