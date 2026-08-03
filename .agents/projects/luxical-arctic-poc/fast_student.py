@@ -13,7 +13,6 @@ import jax.random as jr
 import numpy as np
 import pyarrow as pa
 from huggingface_hub import hf_hub_download
-from ladder_config import teacher_windows_from_view
 from luxical.tokenization import ArrowTokenizer
 
 from experiments.datakit.cluster.quality.fast_transformer.data import UNK_ID, load_tokenizer
@@ -22,6 +21,7 @@ from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastEmbeddingTransformer,
     FastTransformerConfig,
 )
+from experiments.datakit.embeddings.fast_transformer.embedder import document_view
 
 E5_TOKENIZER_NAME = "intfloat/multilingual-e5-small"
 LUXICAL_TOKENIZER_NAME = "luxical-one-arrow"
@@ -169,19 +169,7 @@ def raw_document_window_ids(
 
 def fast_document_view(text: str, characters_per_source_window: int = CHARACTERS_PER_SOURCE_WINDOW) -> str:
     """Return one short view that keeps characters from three document regions."""
-    if characters_per_source_window < 1:
-        raise ValueError("The source-window character count must be positive")
-    if len(text) <= 3 * characters_per_source_window:
-        return text
-    head, middle, tail = teacher_windows_from_view(text)
-    middle_start = max(0, len(middle) // 2 - characters_per_source_window // 2)
-    return "\n".join(
-        (
-            head[:characters_per_source_window],
-            middle[middle_start : middle_start + characters_per_source_window],
-            tail[-characters_per_source_window:],
-        )
-    )
+    return document_view(text, characters_per_source_window)
 
 
 class FastStudent:

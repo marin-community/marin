@@ -36,6 +36,14 @@ def test_context_view_keeps_512_characters_from_each_document_region() -> None:
     assert view == "a" * 512 + "\n" + "b" * 512 + "\n" + "c" * 512
 
 
+def test_document_view_accepts_a_raw_document_with_the_stored_view_length() -> None:
+    raw_document = "a" * 6_002
+
+    view = fast_document_view(raw_document, characters_per_source_window=256)
+
+    assert view == "a" * 256 + "\n" + "a" * 256 + "\n" + "a" * 256
+
+
 def test_train_cli_accepts_large_student_config(monkeypatch) -> None:
     monkeypatch.setattr(
         sys,
