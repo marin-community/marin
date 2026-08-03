@@ -7,7 +7,12 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from levanter.grug._moe.ep_moonep import moon_ep_plan
+from levanter.grug._moe.ep_moonep import (
+    _assignment_destinations,
+    _expert_order_bucket_layout,
+    _token_bucket_bounds,
+    moon_ep_plan,
+)
 
 
 def _reference_allocation(tokens_per_expert: np.ndarray) -> np.ndarray:
@@ -115,3 +120,91 @@ def test_moonep_plan_remote_experts_come_from_one_owner():
         if remote.size:
             owners = remote // experts_per_rank
             assert np.unique(owners).size == 1, (receiver, remote)
+
+
+def test_expert_order_bucket_layout_round_trips_each_message_slice():
+    counts = jnp.array(
+        [
+            [3, 1, 0, 0],
+            [3, 1, 0, 0],
+        ],
+        dtype=jnp.int32,
+    )
+    plan = moon_ep_plan(counts, token_padding=1)
+    flat_experts = jnp.array([0, 0, 0, 1], dtype=jnp.int32)
+    send_payloads = []
+    local_send_sizes = []
+    for source in range(2):
+        destinations, errors = _assignment_destinations(flat_experts, counts, plan, jnp.array(source))
+        assert int(errors) == 0
+        order = jnp.argsort(destinations * counts.shape[1] + flat_experts, stable=True)
+        send_payloads.append(np.asarray((1 + source * 10 + jnp.arange(4))[order]))
+        local_send_sizes.append(np.bincount(np.asarray(destinations), minlength=2))
+
+    send_matrix = jnp.asarray(np.stack(local_send_sizes), dtype=jnp.int32)
+    bucket_capacity = 4
+    receiver_capacity = bucket_capacity + plan.group_experts.shape[1]
+
+    def emulate_ragged(operands, layouts, *, use_return: bool, output_size: int):
+        outputs = [np.zeros((output_size,), dtype=np.int32) for _ in range(2)]
+        for source, (operand, layout) in enumerate(zip(operands, layouts, strict=True)):
+            if use_return:
+                input_offsets = np.asarray(layout.return_input_offsets)
+                send_sizes = np.asarray(layout.return_send_sizes)
+                output_offsets = np.asarray(layout.return_output_offsets)
+            else:
+                input_offsets = np.asarray(layout.input_offsets)
+                send_sizes = np.asarray(layout.send_sizes)
+                output_offsets = np.asarray(layout.output_offsets)
+            slices_per_destination = send_sizes.size // 2
+            for update, size in enumerate(send_sizes):
+                destination = update // slices_per_destination
+                input_start = input_offsets[update]
+                output_start = output_offsets[update]
+                outputs[destination][output_start : output_start + size] = operand[input_start : input_start + size]
+        return outputs
+
+    for bucket in range(2):
+        layouts = []
+        for rank in range(2):
+            sizes = send_matrix[rank]
+            send_offsets = jnp.cumsum(sizes, dtype=jnp.int32) - sizes
+            layout = _expert_order_bucket_layout(
+                counts,
+                plan,
+                send_offsets,
+                send_matrix,
+                jnp.array(rank),
+                bucket=bucket,
+                num_buckets=2,
+                token_padding=1,
+                receiver_capacity=receiver_capacity,
+            )
+            assert int(layout.mapping_errors) == 0
+            layouts.append(layout)
+
+        expert_order_payloads = emulate_ragged(
+            send_payloads,
+            layouts,
+            use_return=False,
+            output_size=receiver_capacity,
+        )
+        returned = emulate_ragged(
+            expert_order_payloads,
+            layouts,
+            use_return=True,
+            output_size=bucket_capacity,
+        )
+
+        bucket_starts, bucket_ends = _token_bucket_bounds(send_matrix, bucket=bucket, num_buckets=2)
+        for source in range(2):
+            expected_parts = []
+            full_offset = 0
+            for destination in range(2):
+                start = full_offset + int(bucket_starts[source, destination])
+                end = full_offset + int(bucket_ends[source, destination])
+                expected_parts.append(send_payloads[source][start:end])
+                full_offset += int(send_matrix[source, destination])
+            expected = np.concatenate(expected_parts)
+            np.testing.assert_array_equal(returned[source][: expected.size], expected)
+            np.testing.assert_array_equal(returned[source][expected.size :], 0)

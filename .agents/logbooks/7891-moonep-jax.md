@@ -1387,3 +1387,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Local checks: The MoonEP test set reports 17 passed and 9 skipped. Formatting, lint, types, syntax, and file checks pass.
 - Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above MNEP-074's `10.004%`.
 - Next action: Profile the reordered pipeline if it improves MFU. If communication remains exposed, replace token transport with a persistent symmetric-memory kernel that uses a fixed small set of communication SMs.
+
+### 2026-08-03 08:37 UTC - MNEP-077 rejects graph-only reordering
+
+- Result: All 16 workers completed five finite steps on attempt zero. The run dropped no expert assignments.
+- Throughput: P50 MFU was `9.262%`, median measured step time was `27.210 s`, and median throughput was `154,144` tokens per second.
+- Comparison: MNEP-074 reached `10.004%` p50 MFU, and the interleaved MNEP-076 run reached `9.439%`. Moving the collective order did not create a useful compute window.
+- Decision: Reject graph-only reordering as a throughput result. Keep the ordering needed for later buckets, but remove the serial receive-order scatter and return gather before adding more buckets.
+- Evidence: [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-077-reordered-pipeline-5-20260803-0823).
+
+### 2026-08-03 08:45 UTC - MNEP-078 zero-copy expert layout contract
+
+- Treatment: Use four source-to-destination expert segments for each peer. Dispatch writes each segment directly into its final padded expert group, and combine reads the expert outputs directly from the same group layout.
+- Removed work: Delete the full receive-order-to-expert scatter and the expert-to-receive-order gather from every token dispatch and combine pair.
+- CPU gate: A two-rank, two-bucket round-trip test preserves every exact message slice through expert order and back to sender order.
+- GPU gate: Both one-bucket and two-bucket paths match the dense output and the input, W13, and W2 gradients on four GB200 GPUs. Both report zero routing errors.
+- Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above MNEP-074's `10.004%`.
+- Next action: Profile the treatment if it improves MFU. If transfer remains exposed, use the direct layout in a persistent communication kernel with a small fixed SM set and double buffers.
