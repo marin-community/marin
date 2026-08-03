@@ -1083,3 +1083,18 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Run ID: `mnep-060-direct-overlap-4-5-20260803-0206`.
 - Treatment: Raise `--xla_gpu_experimental_parallel_collective_overlap_limit` from one to four through an explicit XLA flag.
 - Gate: Require five finite steps on attempt zero and compare the steady step time with MNEP-059's 40 to 44 seconds.
+
+### 2026-08-03 02:21 UTC - MNEP-060 rejects overlap four
+
+- Result: All 16 workers completed five finite steps on attempt zero, with no dropped expert assignments.
+- Timing: The four steady steps took 41, 43, 45, and 45 seconds. Their median was 44 seconds.
+- Comparison: MNEP-059 took 40, 41, and 44 seconds outside its profile window. Its median was 41 seconds.
+- Decision: Keep the direct collective overlap limit at one. A limit of four did not improve throughput.
+- Estimate: The analytic ideal step time is 2.59 seconds. The current 41-second baseline is about 6.3% MFU, and the target 21.7% MFU needs a step time of at most 11.9 seconds.
+
+### 2026-08-03 02:24 UTC - MNEP-059 profile summary lacks GPU events
+
+- Result: In-cluster analysis read the complete 370 MB XPlane, with 20,461,033 complete events and no truncation signal.
+- Limitation: The aggregated trace contains host events but no useful GPU operations or collectives. It cannot identify GPU hot spots.
+- Decision: Disable host tracing and GPU aggregation for the next capture. Keep the one-GPU filter and the 100,000 activity and callback caps.
+- Next gate: Remove one dispatch collective by packing each expert ID with its token payload, then repeat the rack correctness and timing test.
