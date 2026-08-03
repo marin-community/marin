@@ -1337,3 +1337,19 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Treatment: Run exact MoonEP and global histogram QB on EP64. Divide W13, W2, and token transfers across all GIN contexts.
 - Resources: Use 16 workers with four GB200 GPUs, eight CPUs, and 128 GiB host RAM for each worker.
 - Gate: Require five finite steps, no dropped assignments, attempt zero, and at least `21.7%` median MFU.
+
+### 2026-08-03 06:59 UTC - MNEP-074 passes correctness but not MFU
+
+- Result: All 16 workers completed five steps on attempt zero. All gradient checks were finite, and the final loss was `8.1781`.
+- Routing: The run dropped zero expert assignments.
+- Throughput: Median MFU was `10.004%`, mean MFU was `9.976%`, and the final sampled step took `25.752 s`.
+- Evidence: [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-074-multicontext-gin-5-20260803-0648).
+- Comparison: Median MFU increased from the MNEP-071d result of `9.698%`, but the result did not meet the `21.7%` gate.
+- Decision: Keep the multi-context correctness result. Profile one complete step before the next transport change.
+
+### 2026-08-03 07:01 UTC - MNEP-075 multi-context profile contract
+
+- Run ID: `mnep-075-multicontext-gin-profile-5-20260803-0701`.
+- Treatment: Repeat MNEP-074 and profile one complete step from step three on process zero.
+- Trace: Enable host labels, HLO metadata, and one million GPU activity and callback events.
+- Gate: Require five finite steps, zero dropped assignments, a profile upload, and a full transport-time comparison with MNEP-072.
