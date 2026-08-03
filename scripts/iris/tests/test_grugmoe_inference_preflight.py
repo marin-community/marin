@@ -217,7 +217,7 @@ def test_health_cli_freezes_worker_settings_and_three_way_concurrency() -> None:
     assert [command[index + 1] for index, value in enumerate(command) if value == "--concurrency"] == ["48", "72"]
 
 
-def test_health_manifest_freezes_disjoint_warmup_inputs() -> None:
+def test_health_manifest_freezes_representative_disjoint_warmup_inputs() -> None:
     cohorts = ("short", "medium", "long")
     workload = {
         "schema_version": 2,
@@ -250,12 +250,22 @@ def test_health_manifest_freezes_disjoint_warmup_inputs() -> None:
 
     manifest = grug_preflight._health_workload_manifest(workload, concurrencies=[3])
 
-    assert [record["token_count"] for record in manifest["warm_up"]] == [3, 4, 5]
-    assert [record["token_ids_sha256"] for record in manifest["warm_up"]] == [
-        grug_preflight._sha256_json(grug_preflight._health_warm_prompt(index, length))
-        for index, length in enumerate((3, 4, 5))
-    ]
-    assert all(record["disjoint_from_measured_roots"] for record in manifest["warm_up"])
+    warm_up = manifest["warm_up"]
+    records = warm_up["by_concurrency"]["3"]
+    assert warm_up["rolling_passes"] == grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert len(records) == 3 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert {record["pass"] for record in records} == set(range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES))
+    assert {record["slot_id"] for record in records} == {0, 1, 2}
+    assert {record["data_parallel_rank"] for record in records} == {0, 1, 2}
+    assert {record["max_tokens"] for record in records} == {2}
+    assert {record["token_count"] for record in records} == {4, 5, 6}
+    assert all(record["disjoint_from_measured_roots"] for record in records)
+    assert len({record["token_ids_sha256"] for record in records}) == len(records)
+    assert all(
+        record["token_ids_sha256"]
+        == grug_preflight._sha256_json(grug_preflight._health_warm_prompt(record["prompt_index"], record["token_count"]))
+        for record in records
+    )
 
 
 def test_health_repeatability_gates_only_identical_settings() -> None:
@@ -560,7 +570,7 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
 ) -> None:
     case = CASES["exact-reference-ep16"]
     roots = [
-        {"root": root, "cohort": ("short", "medium", "long")[root // 6], "prefix_token_ids": [1]} for root in range(18)
+        {"root": root, "cohort": ("short", "medium", "long")[root // 6], "prefix_token_ids": [250]} for root in range(18)
     ]
     requests = []
     for root in range(18):
@@ -586,16 +596,20 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
     lock = threading.Lock()
     completed = 0
     started = 0
+    warm_requests = 0
     successor_started = threading.Event()
     opening_snapshot_taken = threading.Event()
     post_boundary_completion = threading.Event()
 
     def completion(*_: object, max_tokens: int, request_id: str, **kwargs: object) -> dict[str, object]:
-        nonlocal completed, started
+        nonlocal completed, started, warm_requests
         with lock:
-            started += 1
-            if started > 3:
-                successor_started.set()
+            if "-warm-pass-" in request_id:
+                warm_requests += 1
+            else:
+                started += 1
+                if started > 3:
+                    successor_started.set()
             completed += 1
             if opening_snapshot_taken.is_set():
                 post_boundary_completion.set()
@@ -688,7 +702,6 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
             0,
         )
 
-    monkeypatch.setattr(grug_preflight, "_health_warm_up", lambda *args, **kwargs: [])
     monkeypatch.setattr(grug_preflight, "_reset_health_prefix_cache", lambda _: {"status_code": 200})
     monkeypatch.setattr(
         grug_preflight,
@@ -732,6 +745,17 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
     )
     events.close()
 
+    assert warm_requests == 3 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert arm["warm_up"] == {
+        "requests": warm_requests,
+        "rolling_passes": grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
+        "target_concurrency": 3,
+        "max_tokens_per_request": 1,
+        "data_parallel_ranks_covered": [0, 6, 12],
+        "disjoint_from_measured_roots": True,
+        "excluded_from_measurement": True,
+        "prefix_cache_reset_after": True,
+    }
     assert successor_started.is_set()
     assert opening_snapshot_taken.is_set()
     assert post_boundary_completion.is_set()

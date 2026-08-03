@@ -102,6 +102,7 @@ ACCEPTANCE_STABLE_MINUTES = 10
 ACCEPTANCE_COUNTER_SAMPLE_SECONDS = 60.0
 HEALTH_MINIMUM_SECONDS = 120
 HEALTH_MINIMUM_GENERATED_TOKENS = 250_000
+HEALTH_REPRESENTATIVE_WARM_UP_PASSES = 4
 HEALTH_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/inference-bench/grugmoe-architecture/experiment-0"
 HEALTH_SAMPLING_PARAMETERS = {
     "temperature": 0.0,
@@ -2261,7 +2262,49 @@ def _health_completion(
 
 
 def _health_warm_prompt(index: int, prompt_length: int) -> list[int]:
-    return [1, *(3 + ((index * 101 + position * 37 + 17) % 252) for position in range(prompt_length - 1))]
+    prompt = [1, *(3 + ((index * 101 + position * 37 + 17) % 252) for position in range(prompt_length - 1))]
+    # The prior arithmetic repeats every 252 indices. Encode the index in the
+    # first two payload tokens so all experiment-0 warm-up prompts are unique.
+    if prompt_length > 1:
+        prompt[1] = 3 + index % 252
+    if prompt_length > 2:
+        prompt[2] = 3 + (index // 252) % 252
+    return prompt
+
+
+def _health_warm_up_schedule(
+    workload: dict[str, Any],
+    *,
+    target_concurrency: int,
+) -> list[dict[str, Any]]:
+    """Freeze representative rolling work that is excluded from measurement."""
+    schedule: list[dict[str, Any]] = []
+    slots = frozen_cohort_slots(workload["requests"], target_concurrency=target_concurrency)
+    measured_roots = {tuple(root["prefix_token_ids"]) for root in workload["roots"]}
+    for pass_index in range(HEALTH_REPRESENTATIVE_WARM_UP_PASSES):
+        for slot in slots:
+            request = slot.next_request()
+            prompt_length = len(materialize_prompt(workload, request))
+            prompt_index = pass_index * target_concurrency + int(slot.slot_id)
+            prompt = _health_warm_prompt(prompt_index, prompt_length)
+            if tuple(prompt) in measured_roots:
+                raise AssertionError("warm-up prompt collided with a measured root")
+            schedule.append(
+                {
+                    "pass": pass_index,
+                    "slot_id": int(slot.slot_id),
+                    "cohort": str(slot.cohort),
+                    "manifest_request_id": str(request["request_id"]),
+                    "prompt_index": prompt_index,
+                    "token_count": prompt_length,
+                    "token_ids_sha256": _sha256_json(prompt),
+                    "max_tokens": int(request["max_tokens"]),
+                    "sampling_seed": _frozen_health_seed(f"warm:{target_concurrency}:{pass_index}:{slot.slot_id}"),
+                    "data_parallel_rank": int(request["root"]) % 16,
+                    "disjoint_from_measured_roots": True,
+                }
+            )
+    return schedule
 
 
 def _health_warm_up(
@@ -2272,30 +2315,38 @@ def _health_warm_up(
     case: ModelCase,
     r3_enabled: bool,
     arm_id: str,
+    target_concurrency: int,
 ) -> list[dict[str, Any]]:
-    """Compile every length class with prompts disjoint from measured roots."""
-    history_lengths = [int(length) for length in workload["history_lengths"]]
+    """Warm every rolling slot and DP rank at the measured request shape."""
+    schedule = _health_warm_up_schedule(workload, target_concurrency=target_concurrency)
+    records_by_slot: dict[int, list[dict[str, Any]]] = {}
+    for record in schedule:
+        records_by_slot.setdefault(int(record["slot_id"]), []).append(record)
 
-    def one(index: int, prompt_length: int) -> dict[str, Any]:
-        prompt = _health_warm_prompt(index, prompt_length)
-        if any(prompt == root["prefix_token_ids"] for root in workload["roots"]):
-            raise AssertionError("warm-up prompt collided with a measured root")
-        result = _health_completion(
-            base_url,
-            model,
-            prompt,
-            case=case,
-            max_tokens=8,
-            data_parallel_rank=index % case.data_parallel_size,
-            request_id=f"{arm_id}-warm-{index}",
-            sampling_seed=_frozen_health_seed(f"warm:{index}"),
-            r3_enabled=r3_enabled,
-        )
-        result.pop("route_array", None)
-        return result
+    def one_slot(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for record in records:
+            result = _health_completion(
+                base_url,
+                model,
+                _health_warm_prompt(int(record["prompt_index"]), int(record["token_count"])),
+                case=case,
+                max_tokens=int(record["max_tokens"]),
+                data_parallel_rank=int(record["data_parallel_rank"]),
+                request_id=(
+                    f"{arm_id}-warm-pass-{record['pass']:02d}-slot-{record['slot_id']:03d}-"
+                    f"{record['manifest_request_id']}"
+                ),
+                sampling_seed=int(record["sampling_seed"]),
+                r3_enabled=r3_enabled,
+            )
+            result.pop("route_array", None)
+            results.append(result)
+        return results
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(history_lengths)) as executor:
-        return list(executor.map(lambda item: one(*item), enumerate(history_lengths)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=target_concurrency) as executor:
+        slot_results = executor.map(one_slot, records_by_slot.values())
+        return list(itertools.chain.from_iterable(slot_results))
 
 
 def _populate_health_roots(
@@ -2580,6 +2631,7 @@ def _run_rolling_health_arm(
         case=case,
         r3_enabled=r3_enabled,
         arm_id=arm_id,
+        target_concurrency=target_concurrency,
     )
     events.emit("warm_up_completed", arm_id=arm_id, requests=len(warm))
     cache_reset = _reset_health_prefix_cache(base_url)
@@ -3054,8 +3106,13 @@ def _run_rolling_health_arm(
         },
         "warm_up": {
             "requests": len(warm),
+            "rolling_passes": HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
+            "target_concurrency": target_concurrency,
+            "max_tokens_per_request": max(int(request["max_tokens"]) for request in workload["requests"]),
+            "data_parallel_ranks_covered": sorted({int(record["data_parallel_rank"]) for record in warm}),
             "disjoint_from_measured_roots": True,
             "excluded_from_measurement": True,
+            "prefix_cache_reset_after": True,
         },
         "prefix_cache_reset": cache_reset,
         "root_population": {
@@ -3184,18 +3241,14 @@ def _health_slot_schedule(workload: dict[str, Any], *, target_concurrency: int) 
 
 
 def _health_workload_manifest(workload: dict[str, Any], *, concurrencies: list[int]) -> dict[str, Any]:
-    warm_up = [
-        {
-            "index": index,
-            "token_count": int(prompt_length),
-            "token_ids_sha256": _sha256_json(_health_warm_prompt(index, int(prompt_length))),
-            "max_tokens": 8,
-            "sampling_seed": _frozen_health_seed(f"warm:{index}"),
-            "data_parallel_rank": index % 16,
-            "disjoint_from_measured_roots": True,
-        }
-        for index, prompt_length in enumerate(workload["history_lengths"])
-    ]
+    warm_up = {
+        "kind": "excluded representative rolling preconditioning followed by a prefix-cache reset",
+        "rolling_passes": HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
+        "by_concurrency": {
+            str(concurrency): _health_warm_up_schedule(workload, target_concurrency=concurrency)
+            for concurrency in sorted(set(concurrencies))
+        },
+    }
     roots = [
         {
             "root": int(root["root"]),
