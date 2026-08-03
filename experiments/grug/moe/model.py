@@ -9,6 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -75,6 +76,13 @@ _LM_HEAD_AXES: tuple[str, ...] = ("replica_dcn", *_FSDP_AXES)
 # a geometry that could not shard before still fails instead of quietly replicating.
 _PRE_EP_FSDP_AXES: tuple[str, ...] = ("data",)
 _PRE_EP_LM_HEAD_AXES: tuple[str, ...] = ("replica_dcn", "data")
+
+# Benchmark-only arm switch (see experiments/grug/moe/bench_ep_fsdp.py). Setting
+# SCALE_FSDP_LAYOUT=pre_ep restores the shard groups the template used before expert
+# parallelism, so both A/B arms run from one commit and one image.
+if os.environ.get("SCALE_FSDP_LAYOUT") == "pre_ep":
+    _FSDP_AXES = _PRE_EP_FSDP_AXES
+    _LM_HEAD_AXES = _PRE_EP_LM_HEAD_AXES
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
