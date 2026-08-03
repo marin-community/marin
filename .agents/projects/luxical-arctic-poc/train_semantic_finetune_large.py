@@ -298,6 +298,7 @@ def select_model_mix(
         metrics = evaluation_metrics(candidate_vectors, validation_labels, validation_sources)
         decision = model_mix_validation_decision(base_validation, metrics)
         candidates.append(ModelMixCandidate(alpha, metrics, decision))
+    logger.info("MODEL_MIX_CANDIDATES=%s", json.dumps([asdict(row) for row in candidates], sort_keys=True))
     selected = best_passing_model_mix(candidates)
     return (
         selected.alpha,
