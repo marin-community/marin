@@ -549,12 +549,20 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
     }
     lock = threading.Lock()
     completed = 0
+    started = 0
+    successor_started = threading.Event()
+    opening_snapshot_taken = threading.Event()
+    post_boundary_completion = threading.Event()
 
     def completion(*_: object, max_tokens: int, request_id: str, **kwargs: object) -> dict[str, object]:
-        nonlocal completed
-        time.sleep(0.002)
+        nonlocal completed, started
         with lock:
+            started += 1
+            if started > 3:
+                successor_started.set()
             completed += 1
+            if opening_snapshot_taken.is_set():
+                post_boundary_completion.set()
         return {
             "request_id": request_id,
             "data_parallel_rank": kwargs["data_parallel_rank"],
@@ -591,14 +599,18 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
         phase: str,
         **__: object,
     ) -> grug_preflight.HealthMetricSnapshot:
-        # A metrics scrape is slower than several fake completions. The load
-        # controller must keep refilling slots while this function runs.
+        # Hold the opening scrape until the controller has replenished a slot,
+        # then hold its response until another request finishes after the
+        # snapshot. This proves both sides of the boundary without wall-clock
+        # timing assumptions.
         if phase == "plateau-open":
-            time.sleep(0.005)
+            assert successor_started.wait(timeout=2)
         with lock:
             count = float(completed)
         captured_at = time.monotonic()
-        time.sleep(0.005)
+        if phase == "plateau-open":
+            opening_snapshot_taken.set()
+            assert post_boundary_completion.wait(timeout=2)
         index = len(metrics_map)
         totals = {metric: 0.0 for metric in grug_preflight.HEALTH_COUNTER_METRICS}
         totals["vllm:generation_tokens"] = count
@@ -684,6 +696,9 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
     )
     events.close()
 
+    assert successor_started.is_set()
+    assert opening_snapshot_taken.is_set()
+    assert post_boundary_completion.is_set()
     assert arm["passed"]
     assert arm["requests"]["plateau_successes"] >= 144
     assert arm["requests"]["excluded_before_valid_plateau_successes"] > 0
