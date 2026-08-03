@@ -12,15 +12,22 @@ pre-sorted by expert (varlen_m via ``cu_seqlens_m``; no A_idx gather).
 
 A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
 """
+
 from __future__ import annotations
 
+from collections.abc import Sequence
+from functools import partial
 
 import jax
 import jax.numpy as jnp
+from jax._src import core, dispatch, ffi as jax_ffi
+from jax._src.interpreters import mlir
 
 import cutlass
 import cutlass.cute as cute
 import cutlass.jax as cjax
+import cutlass.jax.compile as cutlass_compiler
+import cutlass.jax.primitive as cutlass_primitive
 from quack.gemm_act import GemmActMixin, GemmGatedSm100, act_fn_map, gate_fn_map
 from quack.gemm_act import get_max_active_clusters
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
@@ -33,6 +40,101 @@ _JAX_TO_CUTE = {
     jnp.dtype(jnp.float16): cutlass.Float16,
     jnp.dtype(jnp.float32): cutlass.Float32,
 }
+
+_scheduled_cutlass_call_p = core.Primitive("scheduled_cutlass_call")
+_scheduled_cutlass_call_p.multiple_results = True
+_scheduled_cutlass_call_p.def_impl(partial(dispatch.apply_primitive, _scheduled_cutlass_call_p))
+
+
+@_scheduled_cutlass_call_p.def_abstract_eval
+def _scheduled_cutlass_call_abstract(*_, output_shape_dtype_flat, **__):
+    return [core.ShapedArray(x.shape, x.dtype) for x in output_shape_dtype_flat]
+
+
+def _scheduled_cutlass_call_lowering(ctx, *args, scheduling_group_id, **params):
+    input_spec_flat = params["input_spec_flat"]
+    output_spec_flat = params["output_spec_flat"]
+    function_spec = cutlass_compiler.FunctionSpec(
+        in_args=tuple(
+            cutlass_compiler.Arg(i, aval.shape, aval.dtype, spec)
+            for i, (aval, spec) in enumerate(zip(ctx.avals_in, input_spec_flat, strict=True))
+        ),
+        input_tree=params["args_tree"],
+        out_args=tuple(
+            cutlass_compiler.Arg(i, output.shape, output.dtype, spec)
+            for i, (output, spec) in enumerate(zip(params["output_shape_dtype_flat"], output_spec_flat, strict=True))
+        ),
+        output_tree=params["output_tree"],
+        input_output_aliases=params["input_output_aliases"],
+        input_spec=input_spec_flat,
+        output_spec=output_spec_flat,
+        compile_options=params["compile_options"],
+        use_static_tensors=params["use_static_tensors"],
+        kwargs=(),
+    )
+    kernel = cutlass_compiler.get_or_compile_kernel(params["fn"], function_spec)
+    if not cutlass_primitive.is_ffi_registered():
+        cutlass_primitive.register_ffi()
+
+    def ffi_layout(spec, rank):
+        layout = cutlass_primitive.cutlass_to_jax_layout_order(spec.layout)
+        return tuple(reversed(layout)) if layout is not None else tuple(reversed(range(rank)))
+
+    input_layouts = tuple(ffi_layout(spec, len(aval.shape)) for spec, aval in zip(input_spec_flat, ctx.avals_in))
+    output_layouts = tuple(
+        ffi_layout(spec, len(output.shape))
+        for spec, output in zip(output_spec_flat, params["output_shape_dtype_flat"], strict=True)
+    )
+    rule = jax_ffi.ffi_lowering(
+        cutlass_primitive.get_cutlass_call_ffi_name(params["allow_cuda_graph"]),
+        operand_layouts=input_layouts,
+        result_layouts=output_layouts,
+    )
+    output = rule(ctx, *args, module=kernel.module, key=kernel.fingerprint)
+    attributes = mlir.ir.DictAttr.get({"_scheduling_group_id": mlir.ir.StringAttr.get(str(scheduling_group_id))})
+    for value in output:
+        value.owner.operation.attributes["mhlo.frontend_attributes"] = attributes
+    return output
+
+
+mlir.register_lowering(_scheduled_cutlass_call_p, _scheduled_cutlass_call_lowering, platform="cuda")
+dispatch.prim_requires_devices_during_lowering.add(_scheduled_cutlass_call_p)
+
+
+def _scheduled_cutlass_call(
+    fn,
+    args,
+    *,
+    output_shape_dtype,
+    input_spec,
+    output_spec,
+    scheduling_group_id,
+):
+    multiple_results = isinstance(output_shape_dtype, Sequence)
+    if not multiple_results:
+        output_shape_dtype = (output_shape_dtype,)
+    output_shape_dtype_flat, output_tree = jax.tree.flatten(output_shape_dtype)
+    args_flat, args_tree = jax.tree.flatten(args)
+    input_spec_flat = cutlass_primitive._resolve_spec_flat(input_spec, args_flat)
+    output_spec_flat = cutlass_primitive._resolve_spec_flat(output_spec, output_shape_dtype_flat)
+    cutlass_primitive._validate_specs("Input", args_flat, input_spec_flat)
+    cutlass_primitive._validate_specs("Output", output_shape_dtype_flat, output_spec_flat)
+    output_flat = _scheduled_cutlass_call_p.bind(
+        *args_flat,
+        fn=fn,
+        args_tree=args_tree,
+        output_shape_dtype_flat=tuple(output_shape_dtype_flat),
+        output_tree=output_tree,
+        input_spec_flat=input_spec_flat,
+        output_spec_flat=output_spec_flat,
+        input_output_aliases=(),
+        allow_cuda_graph=True,
+        compile_options=None,
+        use_static_tensors=False,
+        scheduling_group_id=scheduling_group_id,
+    )
+    output = jax.tree.unflatten(output_tree, output_flat)
+    return output if multiple_results else output[0]
 
 
 def _cute_dtype(dt):
@@ -81,6 +183,7 @@ def quack_gated_grouped_gemm(
     cluster_mnk=(2, 1, 1),
     max_swizzle=8,
     return_preact=False,
+    scheduling_group_id: int | None = None,
 ):
     """Grouped SwiGLU expert GEMM via QuACK's SM100 kernel.
 
@@ -113,17 +216,31 @@ def quack_gated_grouped_gemm(
     cu_spec = ts(static=False)  # [E+1] int32
     d_spec = ts(divisibility=(1, 8), static=False)  # [M,2N] n-major
     p_spec = ts(divisibility=(1, 8), static=False)  # [M,N]  n-major
-    call = cjax.cutlass_call(
-        launcher,
-        output_shape_dtype=(
-            jax.ShapeDtypeStruct((M, N2), x_sort.dtype),
-            jax.ShapeDtypeStruct((M, N), x_sort.dtype),
-        ),
-        input_spec=(a_spec, b_spec, cu_spec),
-        output_spec=(d_spec, p_spec),
-        use_static_tensors=False,
+    output_shape_dtype = (
+        jax.ShapeDtypeStruct((M, N2), x_sort.dtype),
+        jax.ShapeDtypeStruct((M, N), x_sort.dtype),
     )
-    preact, postact = call(x_sort, w_gate_up, cu_seqlens.astype(jnp.int32))
+    input_spec = (a_spec, b_spec, cu_spec)
+    output_spec = (d_spec, p_spec)
+    call_inputs = (x_sort, w_gate_up, cu_seqlens.astype(jnp.int32))
+    if scheduling_group_id is None:
+        call = cjax.cutlass_call(
+            launcher,
+            output_shape_dtype=output_shape_dtype,
+            input_spec=input_spec,
+            output_spec=output_spec,
+            use_static_tensors=False,
+        )
+        preact, postact = call(*call_inputs)
+    else:
+        preact, postact = _scheduled_cutlass_call(
+            launcher,
+            call_inputs,
+            output_shape_dtype=output_shape_dtype,
+            input_spec=input_spec,
+            output_spec=output_spec,
+            scheduling_group_id=scheduling_group_id,
+        )
     return (preact, postact) if return_preact else postact
 
 
@@ -139,7 +256,17 @@ def _build_plain_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters,
     return launcher
 
 
-def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), cluster_mnk=(2, 1, 1), max_swizzle=8):
+def quack_grouped_gemm(
+    a,
+    w,
+    cu_seqlens,
+    *,
+    b_major="n",
+    tile_mn=(256, 128),
+    cluster_mnk=(2, 1, 1),
+    max_swizzle=8,
+    scheduling_group_id: int | None = None,
+):
     """Plain grouped GEMM a[M,K] @ w -> [M,N], grouped by cu_seqlens (varlen_m).
 
     b_major='n': w is [E,K,N] (n-major, mode (2,1,0)).  b_major='k': w is [E,N,K]
@@ -160,11 +287,26 @@ def quack_grouped_gemm(a, w, cu_seqlens, *, b_major="n", tile_mn=(256, 128), clu
     b_spec = ts(mode=_bmode, divisibility=(1, 1, 8), static=False)
     cu_spec = ts(static=False)
     d_spec = ts(divisibility=(1, 8), static=False)
-    call = cjax.cutlass_call(
-        launcher,
-        output_shape_dtype=jax.ShapeDtypeStruct((M, N), a.dtype),
-        input_spec=(a_spec, b_spec, cu_spec),
-        output_spec=(d_spec,),
-        use_static_tensors=False,
-    )
-    return call(a, w, cu_seqlens.astype(jnp.int32))
+    output_shape_dtype = jax.ShapeDtypeStruct((M, N), a.dtype)
+    input_spec = (a_spec, b_spec, cu_spec)
+    output_spec = (d_spec,)
+    call_inputs = (a, w, cu_seqlens.astype(jnp.int32))
+    if scheduling_group_id is None:
+        call = cjax.cutlass_call(
+            launcher,
+            output_shape_dtype=output_shape_dtype,
+            input_spec=input_spec,
+            output_spec=output_spec,
+            use_static_tensors=False,
+        )
+        output = call(*call_inputs)
+    else:
+        output = _scheduled_cutlass_call(
+            launcher,
+            call_inputs,
+            output_shape_dtype=output_shape_dtype,
+            input_spec=input_spec,
+            output_spec=output_spec,
+            scheduling_group_id=scheduling_group_id,
+        )
+    return output

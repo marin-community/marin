@@ -138,9 +138,45 @@ if triton is not None and tl is not None:
         dw = tl.sum(dout * x, axis=0)
         tl.store(dw_ptr + assignment, dw)
 
+    @triton.jit
+    def _sonic_row_gather_kernel(
+        x_ptr,
+        positions_ptr,
+        valid_ptr,
+        out_ptr,
+        h: tl.constexpr,
+        block_h: tl.constexpr,
+    ):
+        row = tl.program_id(axis=0).to(tl.int64)
+        columns = (tl.program_id(axis=1) * block_h + tl.arange(0, block_h)).to(tl.int64)
+        valid = tl.load(valid_ptr + row)
+        source_row = tl.load(positions_ptr + row).to(tl.int64)
+        mask = valid & (columns < h)
+        values = tl.load(x_ptr + source_row * h + columns, mask=mask, other=0.0)
+        tl.store(out_ptr + row * h + columns, values, mask=columns < h)
+
+    @triton.jit
+    def _sonic_row_scatter_kernel(
+        dout_ptr,
+        positions_ptr,
+        valid_ptr,
+        dx_ptr,
+        h: tl.constexpr,
+        block_h: tl.constexpr,
+    ):
+        row = tl.program_id(axis=0).to(tl.int64)
+        columns = (tl.program_id(axis=1) * block_h + tl.arange(0, block_h)).to(tl.int64)
+        valid = tl.load(valid_ptr + row)
+        destination_row = tl.load(positions_ptr + row).to(tl.int64)
+        mask = valid & (columns < h)
+        values = tl.load(dout_ptr + row * h + columns, mask=mask, other=0.0)
+        tl.store(dx_ptr + destination_row * h + columns, values, mask=mask)
+
 else:
     _sonic_token_gather_sum_kernel = None
     _sonic_token_gather_sum_bwd_kernel = None
+    _sonic_row_gather_kernel = None
+    _sonic_row_scatter_kernel = None
 
 
 def _require_sonic_deps() -> None:
@@ -164,6 +200,78 @@ def _sonic_kernel_config(hidden_dim: int) -> tuple[int, int, int]:
     block_k = 1
     num_warps = 8 if block_h >= 1024 else 4
     return block_h, block_k, num_warps
+
+
+def _sonic_row_gather_impl(
+    x: Float[Array, "M H"],
+    positions: Int[Array, "T"],
+    valid: jax.Array,
+) -> Float[Array, "T H"]:
+    _require_sonic_deps()
+    rows = positions.shape[0]
+    hidden_dim = x.shape[1]
+    block_h = 256
+    out_shape = jax.ShapeDtypeStruct((rows, hidden_dim), x.dtype)
+    return jt.triton_call(
+        x,
+        positions,
+        valid,
+        kernel=_sonic_row_gather_kernel,
+        out_shape=out_shape,
+        grid=(rows, triton.cdiv(hidden_dim, block_h)),
+        num_warps=4,
+        num_stages=2,
+        h=hidden_dim,
+        block_h=block_h,
+    )
+
+
+def _sonic_row_scatter_impl(
+    dout: Float[Array, "T H"],
+    positions: Int[Array, "T"],
+    valid: jax.Array,
+    *,
+    output_rows: int,
+) -> Float[Array, "M H"]:
+    _require_sonic_deps()
+    rows, hidden_dim = dout.shape
+    block_h = 256
+    out_shape = jax.ShapeDtypeStruct((output_rows, hidden_dim), dout.dtype)
+    return jt.triton_call(
+        dout,
+        positions,
+        valid,
+        kernel=_sonic_row_scatter_kernel,
+        out_shape=out_shape,
+        grid=(rows, triton.cdiv(hidden_dim, block_h)),
+        num_warps=4,
+        num_stages=2,
+        zeroed_outputs=(0,),
+        h=hidden_dim,
+        block_h=block_h,
+    )
+
+
+@jax.custom_vjp
+def sonic_row_gather(
+    x: Float[Array, "M H"],
+    positions: Int[Array, "T"],
+    valid: jax.Array,
+) -> Float[Array, "T H"]:
+    """Gather unique rows with a non-fusible GPU kernel."""
+    return _sonic_row_gather_impl(x, positions, valid)
+
+
+def _sonic_row_gather_fwd(x, positions, valid):
+    return _sonic_row_gather_impl(x, positions, valid), (positions, valid, x.shape[0])
+
+
+def _sonic_row_gather_bwd(residuals, dout):
+    positions, valid, output_rows = residuals
+    return _sonic_row_scatter_impl(dout, positions, valid, output_rows=output_rows), None, None
+
+
+sonic_row_gather.defvjp(_sonic_row_gather_fwd, _sonic_row_gather_bwd)
 
 
 def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> Int[Array, "Tp1"]:

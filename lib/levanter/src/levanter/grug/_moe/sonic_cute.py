@@ -11,6 +11,8 @@ elementwise in JAX; the two weight-gradient GEMMs (``dw13``/``dw2``) stay on XLA
 ``ragged_dot`` (a different varlen-k grouping). QuACK covers ~2/3 of the MoE FLOPs.
 """
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -35,27 +37,39 @@ def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
     return jnp.stack([gate, up], axis=-1).reshape(moe_w13.shape)
 
 
-@jax.custom_vjp
-def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu):
+@partial(jax.custom_vjp, nondiff_argnums=(5,))
+def _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu, scheduling_group_id):
     """y = down( swiglu( x @ w13_il ) ), grouped by experts. Activation-path GEMMs on QuACK.
 
     ``group_sizes``/``cu`` are traced int arrays passed as explicit args (not closed
     over — that leaks under shard_map; not nondiff_argnums — that rejects tracers).
     """
-    _gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    return quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+    _gu, h = quack_gated_grouped_gemm(
+        x_dispatch,
+        w13_il,
+        cu,
+        return_preact=True,
+        scheduling_group_id=scheduling_group_id,
+    )
+    return quack_grouped_gemm(h, moe_w2, cu, b_major="n", scheduling_group_id=scheduling_group_id)
 
 
-def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu):
-    gu, h = quack_gated_grouped_gemm(x_dispatch, w13_il, cu, return_preact=True)
-    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n")
+def _expert_mlp_fwd(x_dispatch, w13_il, moe_w2, group_sizes, cu, scheduling_group_id):
+    gu, h = quack_gated_grouped_gemm(
+        x_dispatch,
+        w13_il,
+        cu,
+        return_preact=True,
+        scheduling_group_id=scheduling_group_id,
+    )
+    y = quack_grouped_gemm(h, moe_w2, cu, b_major="n", scheduling_group_id=scheduling_group_id)
     return y, (x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu)
 
 
-def _expert_mlp_bwd(res, dy):
+def _expert_mlp_bwd(scheduling_group_id, res, dy):
     x_dispatch, w13_il, moe_w2, gu, h, group_sizes, cu = res
     # down backward: dh via QuACK (transposed contraction), dw2 via XLA weight-grad
-    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k")
+    dh = quack_grouped_gemm(dy, moe_w2, cu, b_major="k", scheduling_group_id=scheduling_group_id)
     (dw2,) = jax.vjp(lambda w: ragged_dot(h, w, group_sizes), moe_w2)[1](dy)
     # SwiGLU backward (interleaved gate/up), elementwise
     gate, up = gu[:, 0::2], gu[:, 1::2]
@@ -65,7 +79,7 @@ def _expert_mlp_bwd(res, dy):
     dup = dh * silu
     d_gu = jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
     # gate/up backward: dx via QuACK, dw13 via XLA weight-grad
-    dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k")
+    dx = quack_grouped_gemm(d_gu, w13_il, cu, b_major="k", scheduling_group_id=scheduling_group_id)
     (dw13_il,) = jax.vjp(lambda w: ragged_dot(x_dispatch, w, group_sizes), w13_il)[1](d_gu)
     # int-typed routing args get float0 zero cotangents
     gs_ct = np.zeros(group_sizes.shape, dtype=jax.dtypes.float0)
@@ -95,7 +109,7 @@ def _moe_mlp_local_sonic_cute(
 
     with jax.named_scope("moe_up_down_quack"):
         out_dispatch = tree_checkpoint_name(
-            _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu), _CHECKPOINT_DISPATCH_OUTPUT
+            _expert_mlp(x_dispatch, w13_il, moe_w2, group_sizes, cu, None), _CHECKPOINT_DISPATCH_OUTPUT
         )
 
     with jax.named_scope("scatter"):
@@ -193,7 +207,7 @@ def _moe_mlp_local_sonic_cute_chunked(
 
         with jax.named_scope("moe_up_down_quack_chunk"):
             out_dispatch = tree_checkpoint_name(
-                _expert_mlp(x_seg, w13_il, w2_chunk, group_sizes_c, cu_c), _CHECKPOINT_DISPATCH_OUTPUT
+                _expert_mlp(x_seg, w13_il, w2_chunk, group_sizes_c, cu_c, None), _CHECKPOINT_DISPATCH_OUTPUT
             )
         with jax.named_scope("scatter_chunk"):
             out = out.at[token_seg].add(out_dispatch * w_seg[:, None], mode="drop")

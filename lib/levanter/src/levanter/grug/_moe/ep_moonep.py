@@ -12,6 +12,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax.experimental.xla_metadata import set_xla_metadata
 from haliax.jax_utils import tree_checkpoint_name
 from haliax.nn.ragged_dot import ragged_dot
 from jaxtyping import Array, Float, Int
@@ -31,9 +32,12 @@ from levanter.grug._moe.ep_fixed_all_to_all import (
     _dispatch_gather,
     _moe_mlp_ep_fixed_a2a_local,
 )
+from levanter.grug._moe.sonic import sonic_row_gather
 from levanter.grug.sharding import _batch_axes
 
 _QUACK_ALIGNMENT = 128
+_MOONEP_DISPATCH_COMPUTE_GROUP_BASE = 789_000
+_MOONEP_COMBINE_COMPUTE_GROUP_BASE = 790_000
 
 
 class MoonEPPlan(NamedTuple):
@@ -317,6 +321,7 @@ def _moonep_grouped_mlp(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     grouped_gemm: MoonEPGroupedGemm,
+    scheduling_group_id: int | None,
 ) -> jax.Array:
     hidden_dim = expert_inputs.shape[1]
     if grouped_gemm == MoonEPGroupedGemm.QUACK:
@@ -339,6 +344,7 @@ def _moonep_grouped_mlp(
             group_w2,
             group_sizes,
             cumulative_group_sizes,
+            scheduling_group_id,
         )
 
     w13_out = tree_checkpoint_name(
@@ -545,15 +551,33 @@ def _moe_mlp_ep_moonep_exact_local(
             input_offsets = send_offsets + bucket_starts[rank]
             if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and dispatched_buckets:
                 input_offsets = _ordered_after(dispatched_buckets[-1].received_x[0, 0], input_offsets)
-            received_x = jax.lax.ragged_all_to_all(
+
+            def dispatch_bucket(send_x, output, input_offsets, send_sizes, output_offsets, recv_sizes):
+                return jax.lax.ragged_all_to_all(
+                    send_x,
+                    output,
+                    input_offsets,
+                    send_sizes,
+                    output_offsets,
+                    recv_sizes,
+                    axis_name="expert",
+                )
+
+            dispatch_args = (
                 send_x,
                 jnp.zeros((bucket_capacity, hidden_dim), dtype=x_local.dtype),
                 input_offsets,
                 send_sizes,
                 output_offsets,
                 recv_sizes,
-                axis_name="expert",
             )
+            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket > 0:
+                with set_xla_metadata(
+                    _scheduling_group_id=_MOONEP_DISPATCH_COMPUTE_GROUP_BASE + bucket - 1,
+                ):
+                    received_x = dispatch_bucket(*dispatch_args)
+            else:
+                received_x = dispatch_bucket(*dispatch_args)
             received_experts, received_valid, _ = _received_expert_ids(
                 all_expert_counts,
                 plan,
@@ -622,6 +646,14 @@ def _moe_mlp_ep_moonep_exact_local(
         with jax.named_scope(f"moonep_grouped_gemm_bucket_{bucket}"):
             layout_size = jnp.sum(padded_group_sizes, dtype=jnp.int32)
             compute_group_sizes = padded_group_sizes.at[-1].add(receiver_capacity - layout_size)
+            # Each compute bucket overlaps one collective. Earlier buckets hide
+            # the next dispatch; the final bucket hides the prior combine.
+            scheduling_group_id = None
+            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP:
+                if bucket + 1 < token_buckets:
+                    scheduling_group_id = _MOONEP_DISPATCH_COMPUTE_GROUP_BASE + bucket
+                elif bucket > 0:
+                    scheduling_group_id = _MOONEP_COMBINE_COMPUTE_GROUP_BASE + bucket - 1
             expert_outputs = _moonep_grouped_mlp(
                 expert_inputs,
                 group_w13,
@@ -629,27 +661,53 @@ def _moe_mlp_ep_moonep_exact_local(
                 compute_group_sizes,
                 activation_fn=activation_fn,
                 grouped_gemm=grouped_gemm,
+                scheduling_group_id=scheduling_group_id,
             )
 
         with jax.named_scope(f"moonep_combine_bucket_{bucket}"):
-            outputs_in_receive_order = jnp.where(
-                received_valid[:, None],
-                expert_outputs[safe_receiver_positions],
-                0,
-            )
+            if grouped_gemm == MoonEPGroupedGemm.QUACK and bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP:
+                outputs_in_receive_order = sonic_row_gather(
+                    expert_outputs,
+                    safe_receiver_positions,
+                    received_valid,
+                )
+            else:
+                outputs_in_receive_order = jnp.where(
+                    received_valid[:, None],
+                    expert_outputs[safe_receiver_positions],
+                    0,
+                )
             return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
                 bucket_send_matrix.T,
                 rank,
             )
-            returned = jax.lax.ragged_all_to_all(
+
+            def combine_bucket(send_x, output, input_offsets, send_sizes, output_offsets, recv_sizes):
+                return jax.lax.ragged_all_to_all(
+                    send_x,
+                    output,
+                    input_offsets,
+                    send_sizes,
+                    output_offsets,
+                    recv_sizes,
+                    axis_name="expert",
+                )
+
+            combine_args = (
                 outputs_in_receive_order,
                 jnp.zeros((bucket_capacity, hidden_dim), dtype=expert_outputs.dtype),
                 return_input_offsets,
                 return_send_sizes,
                 return_output_offsets,
                 return_recv_sizes,
-                axis_name="expert",
             )
+            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket + 2 == token_buckets:
+                with set_xla_metadata(
+                    _scheduling_group_id=_MOONEP_COMBINE_COMPUTE_GROUP_BASE + bucket,
+                ):
+                    returned = combine_bucket(*combine_args)
+            else:
+                returned = combine_bucket(*combine_args)
             returned_buckets.append(tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT))
             assignment_id_buckets.append(
                 _bucket_assignment_ids(

@@ -1541,3 +1541,45 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `6df224e50a9a37965f671cc6a7f36a545baff0998777a9d1021fbb1477ef1707`.
 - Local gate: The receive-order two-bucket output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
 - Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-074.
+
+### 2026-08-03 11:12 UTC - MNEP-086 rejects local-only CTA release alone
+
+- Result: All 16 workers completed five finite steps on attempt zero with zero dropped assignments.
+- Performance: The p50 duration was `27.620 s`. The p50 MFU was `9.371%` at `151,855` tokens/s.
+- Comparison: MNEP-085 reached `9.364%` p50 MFU. Releasing the inactive CTAs did not change end-to-end speed.
+- Decision: Keep the kernel change as a valid overlap resource control, but do not claim a speed gain. Profile this exact graph to test if XLA still serializes the ready GEMM with the ragged collective.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-086-release-local-ctas-5-20260803-1105-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-086-release-local-ctas-5-20260803-1105).
+
+### 2026-08-03 11:14 UTC - MNEP-087 CTA-release profile contract
+
+- Treatment: Repeat MNEP-086 and record one complete step from step three on process zero.
+- Question: Measure ragged collective and grouped GEMM concurrency after inactive CTAs leave. Check if the ready GEMM starts during the remote wait.
+- Gate: Require five finite steps, zero dropped assignments, a profile upload, and an event-level comparison with MNEP-075.
+
+### 2026-08-03 11:22 UTC - MNEP-087 confirms serialized expert GEMM
+
+- Result: All 16 workers completed five finite steps on attempt zero with zero dropped assignments and uploaded one full-step profile.
+- Performance: The p50 duration was `28.081 s`. The p50 MFU was `9.217%` at `149,365` tokens/s.
+- Transport: 864 ragged all-to-all kernels used `15.584 s`. GPU compute overlapped `2.999 s`, or `19.24%`, of that transport.
+- Critical result: The 606 QuACK grouped GEMM kernels used `2.014 s`, but exactly `0.000 s` overlapped a ragged all-to-all kernel.
+- Cause: XLA assigns the ragged operation to a communication stream, but the latency-hiding schedule places each ready grouped GEMM after the collective completes. Releasing 60 local-only CTAs cannot help until the schedule starts the independent compute inside the collective window.
+- Decision: Add a narrow XLA latency-hiding rule that starts a ready ragged all-to-all before an independent compute candidate while keeping the one-collective overlap limit.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-087-release-local-profile-5-20260803-1113-coord), [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-087-release-local-profile-5-20260803-1113), and [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmnep-087-release-local-profile-5-20260803-1113).
+
+### 2026-08-03 12:38 UTC - CUTLASS scheduling-group overlap proof
+
+- XLA: Keep scheduling annotations on `CuteDSLRT_NvJaxCutlassCall` and `CuteDSLRT_NvJaxCutlassCallNoCudaGraph` in the GPU latency-hiding scheduler.
+- JAX: Attach the scheduling group to the QuACK FFI custom call. Pair dispatch bucket 1 with both expert GEMMs for bucket 0.
+- HLO result: The final GPU schedule contains `ragged-all-to-all-start.4`, the gated QuACK GEMM, the down QuACK GEMM, and `ragged-all-to-all-done.4` on four adjacent lines in group `789000`.
+- Correctness: The two-bucket forward probe returned the expected value with zero routing errors. The independent dense-reference test passed output and input, W13, and W2 gradient checks on four GB200 GPUs.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cutlass-overlap-20260803`.
+- PJRT SHA-256: `1aeb6b867f97af3deeadb5fe187c21327dca856a313264237f7e27548738815b`.
+- Next: Pair combine bucket 0 with expert compute bucket 1, then run the one-NVL72 correctness, throughput, and profile gates.
+
+### 2026-08-03 12:57 UTC - Both transport stages overlap expert compute
+
+- Dispatch: The final GPU schedule starts dispatch bucket 1, runs both expert GEMMs for bucket 0, and then completes the dispatch in scheduling group `789000`.
+- Combine: The final GPU schedule starts combine bucket 0, runs both expert GEMMs for bucket 1, and then completes the combine in scheduling group `790000`.
+- Fusion barrier: A small Triton row gather keeps XLA horizontal fusion from adding a false dependency between the two buckets. Its custom VJP uses a Triton row scatter because each valid receive position is unique.
+- Correctness: The two-bucket forward probe returned `1680.0` with zero routing errors. The four-GB200 dense-reference test passed the output and input, W13, and W2 gradient checks in `187.31 s`.
+- Gate: Push this stage, then run five finite steps on one NVL72. Compare p50 MFU and tokens/s with MNEP-074 and record a full-step profile if the throughput gate passes.
