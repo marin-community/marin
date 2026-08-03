@@ -274,6 +274,13 @@ def build_hero_run(
     help="MoonEP grouped GEMM implementation.",
 )
 @click.option(
+    "--moonep-fixed-capacity-factor",
+    type=click.FloatRange(min=1.0),
+    default=1.1,
+    show_default=True,
+    help="No-drop fixed all-to-all capacity factor.",
+)
+@click.option(
     "--qb-method",
     type=click.Choice([method.value for method in QuantileBalancingMethod]),
     default=QuantileBalancingMethod.LOCAL_EXACT.value,
@@ -348,6 +355,7 @@ def main(
     moe_implementation: str,
     moonep_token_padding: int,
     moonep_grouped_gemm: str,
+    moonep_fixed_capacity_factor: float,
     qb_method: str,
     qb_histogram_bins: int,
     moonep_jax_wheel_build: str | None,
@@ -365,6 +373,7 @@ def main(
         moe_implementation=resolve_moe_implementation(moe_implementation),
         moonep_token_padding=moonep_token_padding,
         moonep_grouped_gemm=MoonEPGroupedGemm(moonep_grouped_gemm),
+        moonep_fixed_capacity_factor=moonep_fixed_capacity_factor,
         qb_method=QuantileBalancingMethod(qb_method),
         qb_histogram_bins=qb_histogram_bins,
         moonep_jax_wheel_build=(
