@@ -1,0 +1,10 @@
+diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+--- a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
++++ b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+@@ -158,5 +158,5 @@ void RaggedAllToAllCopy(
+              meta.dst_byte_offset + chunk_begin, send_win,
+              meta.src_byte_offset + chunk_begin, chunk_bytes,
+-             ncclGin_WeakSignalInc{signal_index});
++             ncclGin_StrongSignalInc{signal_index});
+   }
+ }

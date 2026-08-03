@@ -1515,3 +1515,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Overlap: Dispatch bucket 1 and the layout plus expert compute for bucket 0 become ready at the same boundary.
 - Local gate: The exact two-bucket output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
 - Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-074.
+
+### 2026-08-03 10:49 UTC - Strong GIN completion contract
+
+- Kernel: Replace each weak GIN completion signal with a strong signal for the same remote chunk.
+- Purpose: Make the bundled remote put complete before the receiver observes the signal, without an added world barrier.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta64-strong-signal-20260803`.
+- PJRT SHA-256: `4ff4a481124ed4348f764ec5c75b6bce178f1b4975958d47586a61af8a75f4c8`.
+- Local gate: The receive-order two-bucket output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
+- Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-074.
