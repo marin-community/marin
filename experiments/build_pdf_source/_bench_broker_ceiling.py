@@ -20,10 +20,9 @@ Differences from ``_bench_ocr_route`` (which this reuses), each with a reason:
 
 * ``instances=32`` and everything derived from it (client concurrency 16,384; proxy
   ``max_pending_requests`` 32,768).
-* The sender fleet stays on the x86 pool by construction -- 16 workers x 8 CPU = 128 cores, inside
-  the cpu-erapids pool's 256 -- so an ARM surprise cannot confound the broker measurement (the ARM
-  question has its own probe, ``_probe_arm_render``). Holding 16,384 requests in flight from 128
-  tasks means 128 request threads per task instead of the production 64.
+* The sender fleet is sized by offered rate -- 384 tasks x ~1.5 pages/s -- because attempt 1
+  proved the task, not the broker, was the limit (see the sizing comment below). The workers
+  spill onto the GB200 nodes' Grace cores, which ``_probe_arm_render`` validated.
 * ``broker_resources`` raised to 8 CPU / 64 GB: at 16,384 in flight the broker holds ~31 GB of
   leased request payloads, and the stock 2 CPU / 8 GB would OOM before measuring anything.
 * The driver gets 12 CPU / 96 GB for the same reason -- the proxy parks one thread per in-flight
@@ -76,18 +75,24 @@ logger = logging.getLogger(__name__)
 INSTANCES = 32
 CLIENT_CONCURRENCY = fleet.MAX_IN_FLIGHT * INSTANCES  # 16,384
 
-# Sender fleet, pinned inside the x86 pool: 16 workers x 8 tasks x 128 threads = 16,384 in flight
-# from 128 CPU cores. 128 threads/task doubles the production 64 so the smaller task count can
-# still hold the budget; the render window scales with it (~360 MB of encoded pages per task).
-REQUEST_THREADS = 128
-SENDER_TASKS = CLIENT_CONCURRENCY // REQUEST_THREADS  # 128
+# Sender fleet sized by OFFERED RATE, not by in-flight capacity. Attempt 1 sized it to hold the
+# in-flight budget from 128 tasks x 128 threads and measured why that is wrong twice over: a task
+# delivers ~1.5 pages/s at 64 threads (bench4: 47.6 p/s / 32 tasks) and ~0.7 at 128 (attempt 1:
+# 4.6 docs/s from 128 tasks) -- the render loop, the 2 MB JSON/base64 encodes, and 100+ waking
+# threads all contend for one cgroup-throttled CPU, so more threads make a task slower. The
+# preflight's 13.2 pages/core-s was measured unthrottled and single-threaded and does not describe
+# a task. So: the proven 64-thread shape, and enough tasks that 1.5 p/s each offers ~576 p/s --
+# right at 32 instances' saturation -- pushing ~1.1 GB/s through the single broker under test.
+# 384 tasks no longer fit the x86 pool; most workers land on the GB200 nodes' Grace cores, which
+# _probe_arm_render validated (aarch64 installs, imports, renders at x86 speed).
+REQUEST_THREADS = 64
+SENDER_TASKS = 384
 TASKS_PER_WORKER = 8
-MAX_WORKERS = SENDER_TASKS // TASKS_PER_WORKER  # 16
+MAX_WORKERS = SENDER_TASKS // TASKS_PER_WORKER  # 48
 
-# 3 waves over the 128 task slots, so tail drain distorts the average less than bench4's 1.25
-# waves did. ~40 OCR docs / ~800 OCR pages per shard puts this near 300k pages: ~9 minutes at the
-# target rate, long enough that startup and drain are noise.
-BENCH_SHARDS = 384
+# Two waves over the 384 task slots. ~40 OCR docs / ~800 OCR pages per shard puts this near 600k
+# pages: ~18 minutes at the offered rate, long enough that startup and drain are noise.
+BENCH_SHARDS = 768
 
 _SOURCE_COLUMNS = ["pdf", "warc_filename", "warc_record_offset", "content_digest", "url"]
 
@@ -109,11 +114,11 @@ class CeilingReport(BenchReport):
 
 
 def ceiling_ocr_batch(batch: pa.RecordBatch, **kwargs) -> Iterator[dict]:
-    """The production sender at 128 request threads per task.
+    """The production sender pinned to the 64-thread task shape under test.
 
     The constants are module globals that ``ocr_batch`` reads at call time, and this function runs
     in the worker process, so patching here reshapes every task in that process. ``_request_pool``
-    is keyed by its thread count, so the wider pool is a distinct cached pool.
+    is keyed by its thread count, so the pool matches the patched width.
     """
     extract_ocr._REQUEST_THREADS = REQUEST_THREADS
     extract_ocr._PAGES_IN_FLIGHT = 2 * REQUEST_THREADS
@@ -242,7 +247,8 @@ def main() -> None:
             "instances": INSTANCES,
             "shards": BENCH_SHARDS,
             "request_threads": REQUEST_THREADS,
-            "attempt": 1,
+            "sender_tasks": SENDER_TASKS,
+            "attempt": 2,
         },
         fn=remote(
             partial(

@@ -12,14 +12,15 @@ renders pages, posts them, and writes documents; the model, the batching, and th
 behind the endpoint. Nothing large moves through the driver -- it broadcasts the routing key set and
 the endpoint address, both tiny, and every task pulls its own PDF bytes straight from object
 storage. The one thing a sender cannot delegate is rendering: the endpoint speaks OpenAI chat
-completions and takes images, so it cannot read Parquet or open a PDF. That cost is priced -- 13.2
-pages per core-second at this budget, so about 1.1 render cores per GPU -- and the sender fleet is
-sized well above it.
+completions and takes images, so it cannot read Parquet or open a PDF. That cost is priced from
+measurement -- a task delivers ~1.4 pages/s once rendering, encoding, and its request threads
+share one cgroup-throttled CPU -- so a fleet is fed at about 12 one-CPU sender tasks per GPU
+(see the sizing block below for why the naive per-core render rate overstates this ~9x).
 
-What the senders *must* get right is keeping the fleet full. Throughput here is set by in-flight
-count, not by how fast any one sender runs, so the fleet is sized to hold
-:data:`~experiments.build_pdf_source.ocr_extract.fleet.CLIENT_CONCURRENCY` requests in flight across
-all tasks, and each task overlaps rendering with waiting rather than alternating between them.
+What the senders *must* get right is keeping the fleet full. Each task overlaps rendering with
+waiting rather than alternating between them, and :func:`sender_fleet_size` provisions enough
+tasks that their combined offered rate meets the engines' throughput with the fleet's in-flight
+budget as a floor.
 
 The output is the same :class:`~marin.datakit.normalize.NormalizedData` shape the docling route
 produces, over the same shared columns, so a consumer joins the two routes without knowing which
@@ -28,6 +29,7 @@ extractor produced a document. Running headers and footers are stripped by the s
 """
 
 import logging
+import math
 from collections import deque
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -117,19 +119,24 @@ _OCR_FIELDS: tuple[pa.Field, ...] = (
 
 _OUTPUT_SCHEMA = pa.schema([*PDF_DOCUMENT_FIELDS, *_OCR_FIELDS])
 
-# Sender sizing, derived from the fleet's operating point rather than guessed. Throughput is set by
-# in-flight requests, so tasks x threads is the number that matters and it is pinned to the fleet's
-# client concurrency. 128 threads per task, not more tasks: a task's threads are all blocked on the
-# endpoint, so a thread is nearly free while a task costs a real CPU. The render budget stays sound
-# at this ratio -- a task's 128 requests are a quarter of one instance's 512 in flight, a quarter
-# of an instance's 17.75 pages/s is ~4.4, and one core renders 13.2 pages/s (14.5 on a Grace core),
-# 3x headroom that holds at any fleet size because both sides scale with the same in-flight count.
-# The old sizing tied worker count to instance count instead, which billed ~6x the measured render
-# requirement in sender CPU at large fleets.
-_REQUEST_THREADS = 128
+# Sender sizing, from the measured economics of a task rather than from either intuition that
+# preceded them. A task delivers ~1.5 pages/s -- not the 13.2 a lone unthrottled render thread
+# manages -- because the render loop, the ~2 MB JSON/base64 encode per request, and every waking
+# request thread all contend for one cgroup-throttled CPU. Threads make that worse, not better:
+# 128 threads per task measured 0.7 pages/s, half the 64-thread rate, so 64 is the shape and
+# throughput scales by adding TASKS (each its own process; MuPDF holds the GIL through a render,
+# so threads cannot scale rendering at all). The sweep's 71 pages/s per GB200 node was measured
+# with a harness that did not pay this cost per page; a production fleet is fed at
+# ~12 one-CPU tasks per instance.
+_REQUEST_THREADS = 64
 # How many rendered pages a task may hold. Twice the thread count keeps every thread fed while
-# bounding encoded-page memory to roughly 360 MB per task.
+# bounding encoded-page memory to roughly 180 MB per task.
 _PAGES_IN_FLIGHT = 2 * _REQUEST_THREADS
+
+# The two rates that set the task:instance ratio. Engine-side throughput at the operating point is
+# the sweep's; task-side is bench4 (47.6 p/s / 32 tasks) and the first ceiling bench, which agree.
+_PAGES_PER_SECOND_PER_INSTANCE = 17.75
+_PAGES_PER_SECOND_PER_TASK = 1.4
 
 _DRIVER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="8g")
 # A task is almost entirely blocked on the endpoint, so it costs one CPU and multiplexes eight-deep
@@ -145,12 +152,14 @@ _HEARTBEAT_TIMEOUT = 30 * 60
 def sender_fleet_size(instances: int) -> tuple[int, int]:
     """How many map tasks and Zephyr workers keep a fleet of ``instances`` engines full.
 
-    Returns ``(sender_tasks, max_workers)``. Sized from the in-flight budget, not the instance
-    count: the fleet is saturated exactly when ``sender_tasks * _REQUEST_THREADS`` equals the
-    fleet's total in-flight capacity.
+    Returns ``(sender_tasks, max_workers)``. Sized by offered rate -- tasks enough that their
+    measured ~1.4 pages/s each meets the engines' 17.75 -- with the in-flight budget as a floor
+    for the regime where request latency, not task throughput, is what limits delivery.
     """
-    sender_tasks = max(1, fleet.MAX_IN_FLIGHT * instances // _REQUEST_THREADS)
-    return sender_tasks, max(1, sender_tasks // _TASKS_PER_WORKER)
+    rate_basis = math.ceil(instances * _PAGES_PER_SECOND_PER_INSTANCE / _PAGES_PER_SECOND_PER_TASK)
+    inflight_basis = fleet.MAX_IN_FLIGHT * instances // _REQUEST_THREADS
+    sender_tasks = max(1, rate_basis, inflight_basis)
+    return sender_tasks, max(1, math.ceil(sender_tasks / _TASKS_PER_WORKER))
 
 
 @cache
