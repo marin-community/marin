@@ -1483,3 +1483,19 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `a9d724a350612b982757ac38dbac07f5a9305b55d62e96f9196eedcf4cb9f1b4`.
 - Local gate: The exact two-bucket overlap output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
 - Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above CTA16.
+
+### 2026-08-03 10:28 UTC - MNEP-083 rejects CTA32 transport
+
+- Result: All 16 workers completed five finite steps on attempt zero with zero dropped assignments.
+- Performance: The p50 duration was `43.602 s`. The p50 MFU was `5.936%` at `96,194` tokens/s.
+- Comparison: CTA32 improved on CTA16, but MNEP-074 reached `10.004%` p50 MFU without bucket overlap.
+- Decision: Reject the CTA cap as the primary overlap control. Restore CTA64 and fence only each active GIN context.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-083-cta32-overlap-5-20260803-1018-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-083-cta32-overlap-5-20260803-1018).
+
+### 2026-08-03 10:28 UTC - CTA64 active-context fence contract
+
+- Kernel: Keep the 64-CTA grid and add a `Put` fence only to each GIN context that transfers a remote chunk.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta64-active-fence-20260803`.
+- PJRT SHA-256: `f0666ab5da1982fecd925b38120abdb70af99ad5db54f449226c34598b7c5ef7`.
+- Local gate: The exact two-bucket overlap output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
+- Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-074.
