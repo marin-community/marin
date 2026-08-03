@@ -26,6 +26,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlpPspecs,
     MoonEPConfig,
     MoonEPGroupedGemm,
+    MoonEPMode,
     MoeImplementation,
     _compact_by_keep_mask,
     _expand_from_keep_mask,
@@ -496,6 +497,7 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                     MoonEPConfig(
                         token_padding=4,
                         grouped_gemm=MoonEPGroupedGemm.XLA,
+                        mode=MoonEPMode.EXACT,
                         fixed_capacity_factor=1.0,
                     )
                     if implementation == "moonep_jax"
@@ -689,16 +691,17 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
 
 
 @pytest.mark.parametrize(
-    "selected_expert_rows",
+    ("mode", "selected_expert_rows"),
     [
-        pytest.param(((0, 1),) * 8, id="exact-fallback"),
+        pytest.param(MoonEPMode.EXACT, ((0, 1),) * 8, id="exact"),
         pytest.param(
+            MoonEPMode.QB_FIXED,
             ((0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7)),
-            id="fixed-fast-path",
+            id="qb-fixed",
         ),
     ],
 )
-def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(selected_expert_rows):
+def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(mode, selected_expert_rows):
     if jax.default_backend() != "gpu" or jax.device_count() != 4:
         pytest.skip("requires one four-GPU GB200 tray")
 
@@ -762,6 +765,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(selected_ex
             moonep_config=MoonEPConfig(
                 token_padding=4,
                 grouped_gemm=MoonEPGroupedGemm.QUACK,
+                mode=mode,
                 fixed_capacity_factor=1.0,
             ),
             report_capacity_overflow=True,

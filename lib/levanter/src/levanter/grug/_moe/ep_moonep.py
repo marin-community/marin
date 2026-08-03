@@ -21,13 +21,13 @@ from levanter.grug._moe.common import (
     _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_MOE_OUTPUT,
     MoonEPGroupedGemm,
+    MoonEPMode,
     split_moe_w13_output,
 )
 from levanter.grug._moe.ep_common import _shard_a2a_params
 from levanter.grug._moe.ep_fixed_all_to_all import (
     _combine_gather,
     _dispatch_gather,
-    _fixed_a2a_capacity,
     _moe_mlp_ep_fixed_a2a_local,
 )
 from levanter.grug.sharding import _batch_axes
@@ -529,26 +529,13 @@ def _moe_mlp_ep_moonep_local(
     capacity_factor: float,
     token_padding: int,
     grouped_gemm: MoonEPGroupedGemm,
+    mode: MoonEPMode,
     fixed_capacity_factor: float,
 ) -> tuple[Float[Array, "Tlocal H"], Int[Array, ""]]:
-    """Use fixed all-to-all when it cannot drop assignments, else use exact MoonEP."""
+    """Run the selected static MoonEP schedule."""
     if fixed_capacity_factor < 1.0:
         raise ValueError(f"fixed_capacity_factor must be at least 1.0, got {fixed_capacity_factor}")
-
-    assignments_per_shard = selected_experts_local.size
-    fixed_capacity = _fixed_a2a_capacity(
-        assignments_per_shard=assignments_per_shard,
-        num_experts=num_experts,
-        capacity_factor=fixed_capacity_factor,
-    )
-    local_expert_counts = jnp.bincount(
-        selected_experts_local.reshape(-1),
-        length=num_experts,
-    ).astype(jnp.int32)
-    global_max_count = jax.lax.pmax(jnp.max(local_expert_counts), "expert")
-    use_fixed_a2a = global_max_count <= fixed_capacity
-
-    def fixed_a2a(_):
+    if mode == MoonEPMode.QB_FIXED:
         return _moe_mlp_ep_fixed_a2a_local(
             x_local,
             selected_experts_local,
@@ -559,8 +546,7 @@ def _moe_mlp_ep_moonep_local(
             num_experts=num_experts,
             capacity_factor=fixed_capacity_factor,
         )
-
-    def exact_moonep(_):
+    if mode == MoonEPMode.EXACT:
         return _moe_mlp_ep_moonep_exact_local(
             x_local,
             selected_experts_local,
@@ -573,5 +559,4 @@ def _moe_mlp_ep_moonep_local(
             token_padding=token_padding,
             grouped_gemm=grouped_gemm,
         )
-
-    return jax.lax.cond(use_fixed_a2a, fixed_a2a, exact_moonep, operand=None)
+    raise AssertionError(f"Unhandled MoonEP mode {mode!r}")

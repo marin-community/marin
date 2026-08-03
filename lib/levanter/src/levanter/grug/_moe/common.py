@@ -81,6 +81,7 @@ class MoonEPConfig:
 
     token_padding: int
     grouped_gemm: "MoonEPGroupedGemm"
+    mode: "MoonEPMode"
     fixed_capacity_factor: float
 
     def __post_init__(self) -> None:
@@ -95,6 +96,13 @@ class MoonEPGroupedGemm(StrEnum):
 
     XLA = "xla"
     QUACK = "quack"
+
+
+class MoonEPMode(StrEnum):
+    """Static execution schedule for the MoonEP backend."""
+
+    EXACT = "exact"
+    QB_FIXED = "qb_fixed"
 
 
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:

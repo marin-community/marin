@@ -12,7 +12,13 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
-from levanter.grug.grug_moe import MoeImplementation, MoonEPConfig, MoonEPGroupedGemm, resolve_moe_implementation
+from levanter.grug.grug_moe import (
+    MoeImplementation,
+    MoonEPConfig,
+    MoonEPGroupedGemm,
+    MoonEPMode,
+    resolve_moe_implementation,
+)
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
@@ -100,6 +106,7 @@ def build_hero_run(
     moe_implementation: MoeImplementation = "fixed_all_to_all",
     moonep_token_padding: int = 128,
     moonep_grouped_gemm: MoonEPGroupedGemm = MoonEPGroupedGemm.QUACK,
+    moonep_mode: MoonEPMode = MoonEPMode.EXACT,
     moonep_fixed_capacity_factor: float = 1.1,
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
@@ -137,6 +144,7 @@ def build_hero_run(
         MoonEPConfig(
             token_padding=moonep_token_padding,
             grouped_gemm=moonep_grouped_gemm,
+            mode=moonep_mode,
             fixed_capacity_factor=moonep_fixed_capacity_factor,
         )
         if moe_implementation == "moonep_jax"
@@ -281,6 +289,13 @@ def build_hero_run(
     help="No-drop fixed all-to-all capacity factor.",
 )
 @click.option(
+    "--moonep-mode",
+    type=click.Choice([mode.value for mode in MoonEPMode]),
+    default=MoonEPMode.EXACT.value,
+    show_default=True,
+    help="Static MoonEP execution schedule.",
+)
+@click.option(
     "--qb-method",
     type=click.Choice([method.value for method in QuantileBalancingMethod]),
     default=QuantileBalancingMethod.LOCAL_EXACT.value,
@@ -355,6 +370,7 @@ def main(
     moe_implementation: str,
     moonep_token_padding: int,
     moonep_grouped_gemm: str,
+    moonep_mode: str,
     moonep_fixed_capacity_factor: float,
     qb_method: str,
     qb_histogram_bins: int,
@@ -373,6 +389,7 @@ def main(
         moe_implementation=resolve_moe_implementation(moe_implementation),
         moonep_token_padding=moonep_token_padding,
         moonep_grouped_gemm=MoonEPGroupedGemm(moonep_grouped_gemm),
+        moonep_mode=MoonEPMode(moonep_mode),
         moonep_fixed_capacity_factor=moonep_fixed_capacity_factor,
         qb_method=QuantileBalancingMethod(qb_method),
         qb_histogram_bins=qb_histogram_bins,
