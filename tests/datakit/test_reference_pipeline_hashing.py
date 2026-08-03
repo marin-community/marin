@@ -16,7 +16,13 @@ import pytest
 from marin.execution.step_spec import StepSpec
 
 from experiments.datakit import reference_pipeline
-from experiments.datakit.reference_pipeline import SMOKE_SCALE, PoolConfig, StoreConfig, reference_datakit_steps
+from experiments.datakit.reference_pipeline import (
+    SMOKE_SCALE,
+    PoolConfig,
+    StoreConfig,
+    build_fuzzy_dedup_steps,
+    reference_datakit_steps,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -99,6 +105,23 @@ def test_minhash_params_rekey_minhash_and_dedup():
     assert changed["datakit/minhash/a"].hash_id != base["datakit/minhash/a"].hash_id
     # dedup has no params of its own; it must re-key via its minhash deps.
     assert changed["datakit/dedup"].hash_id != base["datakit/dedup"].hash_id
+
+
+def test_fuzzy_dedup_builder_wires_minhash_per_source_to_one_dedup():
+    sources = _sources()
+    result = build_fuzzy_dedup_steps(sources, scale=SMOKE_SCALE)
+
+    assert result.minhash["a"].deps == [sources["a"]]
+    assert result.minhash["b"].deps == [sources["b"]]
+    assert result.dedup.deps == [result.minhash["a"], result.minhash["b"]]
+    assert result.dedup.hash_id == "45d29279"
+
+
+def test_connected_components_iterations_rekey_global_fuzzy_dedup():
+    base = build_fuzzy_dedup_steps(_sources(), scale=SMOKE_SCALE, cc_max_iterations=10)
+    changed = build_fuzzy_dedup_steps(_sources(), scale=SMOKE_SCALE, cc_max_iterations=11)
+
+    assert changed.dedup.hash_id != base.dedup.hash_id
 
 
 def test_decon_drop_set_tracks_normalized_source_identity():

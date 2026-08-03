@@ -23,8 +23,15 @@ def test_connected_components_happy_path(tmp_path):
     ds = Dataset.from_list(input_data)
 
     ctx = ZephyrContext(name="test-cc")
-    converged, output_path = connected_components(ds, ctx, output_dir=tmp_path.as_posix(), max_iterations=5)
+    converged, output_path = connected_components(
+        ds,
+        ctx,
+        output_dir=tmp_path.as_posix(),
+        num_reduce_shards=3,
+        max_iterations=5,
+    )
     assert converged
+    assert len(output_path) == 3
     results = ctx.execute(Dataset.from_list(output_path).load_parquet()).results
     assert len(results) == len(set(r["id"] for r in input_data))
 
