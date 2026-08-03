@@ -1,7 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GB200 checkpoint staging and object-store commit benchmark."""
+"""Measure GB200 checkpoint staging and object-store commit time.
+
+Unlike the throughput hero run, this benchmark uses a smaller 52.85B-total,
+1.71B-active MoE and checkpoints at deterministic steps. It retains rack-local
+FSDP and optimizer offload while disabling W&B, profiling, and Python allocation
+tracing, then writes the disposable checkpoints to a one-day temporary bucket.
+"""
 
 import dataclasses
 import os

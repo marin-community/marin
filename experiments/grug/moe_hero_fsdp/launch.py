@@ -36,6 +36,7 @@ HERO_NODES_PER_RACK = 16
 HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
+# This must exceed XLA's 10-minute collective timeout and synchronous checkpoint staging.
 HERO_TRAINING_STALL_TIMEOUT = timedelta(minutes=15)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
