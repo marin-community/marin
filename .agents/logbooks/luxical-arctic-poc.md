@@ -1588,3 +1588,56 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   is active.
 - Next action: Audit all 30,074,752 teacher vectors. Then prepare and train the
   30M student.
+
+### LUX-CAPACITY-001: Large student control
+
+- Hypothesis: More student capacity can recover semantic quality at the 3M
+  rung.
+- Commit Hash: `27e8ad750`.
+- Training command:
+  `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 80GB --disk 200GB --priority interactive --max-retries 1 --timeout 10800 --user rav --job-name lux-fast-student-large-3m-h100-002 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/train_fast_student.py --rung 3m --config large --treatment baseline --teacher arctic-medium-256 --training-layout staged`.
+- The first launch stopped before training. The training CLI did not accept the
+  `large` config that the model code supplied.
+- A regression test reproduced the fault. The corrected CLI and two focused
+  tests passed.
+- The corrected job succeeded in 2 minutes 3 seconds. The model has 28,432,896
+  parameters.
+- The final model SHA-256 is
+  `faa28194a890e0e50326fba28e99f1924a07e15cfc66a1164983f3e75db46e56`.
+- All audit vectors are finite and unique at six decimal places. The effective
+  rank is 48.08.
+- CPU command:
+  `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 80GB --disk 200GB --priority interactive --max-retries 1 --timeout 7200 --user rav --job-name lux-fast-student-large-3m-cpu-speed-h100-001 --extra cpu --extra datakit -- env JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES= python .agents/projects/luxical-arctic-poc/benchmark_trained_fast_student.py --config large --teacher large --rung 3m`.
+- The student rate is 3,529.46 documents per second. The paired Luxical-One
+  rate is 4,470.38 documents per second.
+- The speed ratio is 0.78952. It fails the fixed 0.85 CPU release gate.
+- Speed artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-large-large-3m.json`.
+- Interpretation: The large model cannot be the production model without a
+  speed change. Its semantic result can show whether capacity limits the small
+  student.
+- Next action: Run the fixed adjudicated semantic evaluation. Keep the 30M
+  teacher jobs active.
+
+### LUX-CAPACITY-002: Large student semantic result
+
+- Command:
+  `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 80GB --disk 200GB --priority interactive --max-retries 1 --timeout 7200 --user rav --job-name lux-hierarchy-eval-adjudicated-large-3m-h100-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/evaluate_hierarchical_embeddings.py --run-id hierarchy-1000-20260802-002 --variants compact --evaluation-run-id heldout-10000-20260802-001 --student-model fast_arctic_large_3m --student-config large --student-training-name large --student-rung 3m --speed-report-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-large-large-3m.json --adjudication-review-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/claude-adjudication-v1/report.json`.
+- Job `/rav/lux-hierarchy-eval-adjudicated-large-3m-h100-001` succeeded in 4
+  minutes 35 seconds.
+- Parent cross-source macro-F1 is 0.43780. Leaf cross-source macro-F1 is
+  0.36117. Form cross-source macro-F1 is 0.39163.
+- Leaf cluster NMI is 0.42561. The larger model improves some fine-label
+  structure but does not pass all semantic gates.
+- Large-group gates fail for six parent groups, ten leaf groups, and five form
+  groups.
+- The failed groups include intellectual property, medical text, narrative,
+  technical documents, and structured data. Code does not fail the large-group
+  gate.
+- The CPU gate also fails because the paired speed ratio is 0.78952.
+- Report artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_large_3m/adjudicated-v1/embedding-screen-v1/report.json`.
+- Interpretation: More capacity alone does not fix the broad semantic loss.
+  Do not spend Claude review cost on this failed control.
+- Next action: Complete the fixed 30M rung. If it fails, change the teacher
+  windows or training objective.

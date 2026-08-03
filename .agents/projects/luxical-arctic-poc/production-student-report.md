@@ -236,6 +236,12 @@ the overall visible result.
 - 10M blind neighborhood report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_10m/adjudicated-v1/blind-neighborhood-review-v1/claude-opus-5-report.json`
   (SHA-256 `d149ac1a316bab66e5e87cb8ec29af016e4085e9388d3fde858c4f91ded86b8f`)
+- Large 3M control model SHA-256:
+  `faa28194a890e0e50326fba28e99f1924a07e15cfc66a1164983f3e75db46e56`
+- Large 3M exact CPU report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-large-large-3m.json`
+- Large 3M adjudicated report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_large_3m/adjudicated-v1/embedding-screen-v1/report.json`
 
 ## Open decision
 
@@ -258,3 +264,8 @@ Exact repeats do not change an averaged embedding, but overlap can weight the
 middle of a document more heavily. The independent GLM labels and blind
 neighborhood review must catch a harmful effect. If the 30M candidate fails
 those gates, stop scaling and test a deduplicated-window teacher.
+
+The 28.4M-parameter control fails the CPU release gate at 0.78952 times
+Luxical-One speed. It also fails the semantic and large-group gates. More
+capacity improves some fine-label metrics, but it does not correct the broad
+semantic loss. Thus, capacity alone is not the next production direction.
