@@ -1219,3 +1219,10 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Correctness: The balanced fast-path case and the full-skew fallback case both matched the dense output and the input, W13, and W2 gradients on four GB200 GPUs.
 - Runtime: Both cases passed in 54.36 seconds, including compilation.
 - Rack gate: Require five finite steps on attempt zero, no dropped assignments, and at least 21.7% median MFU.
+
+### 2026-08-03 04:49 UTC - MNEP-068 rejects the dynamic collective branch
+
+- Result: Step 1 completed with finite loss and finite gradients. Step 2 produced a NaN loss and a non-finite gradient diagnostic. The job stopped without a retry.
+- Timing: The step interval was 28 seconds. This matches exact MoonEP, so the 1.1 fixed-capacity gate did not pass for the rack routes.
+- Cause: The stable exact MoonEP path became unstable only after it was placed in a runtime conditional with a different collective sequence. The four-GPU test did not find this multi-host fault.
+- Decision: Remove the runtime conditional. Keep exact MoonEP as a static mode, and measure a separate static fixed-capacity mode before selecting a no-drop capacity for the QB run.
