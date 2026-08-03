@@ -5,15 +5,16 @@
 
 import hashlib
 import io
+import math
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import Literal, Self
 
 import equinox as eqx
 import jax.random as jr
 import numpy as np
 import pyarrow as pa
 from luxical.tokenization import ArrowTokenizer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from rigging.filesystem import StoragePath
 
 from experiments.datakit.cluster.quality.fast_transformer.embedding import (
@@ -66,6 +67,16 @@ class FastEmbeddingBundleManifest(FastEmbeddingRuntimeManifest):
     blind_review_report_sha256: str = Field(pattern=SHA256_PATTERN)
     blind_review_package_url: str = Field(min_length=1)
     blind_review_package_sha256: str = Field(pattern=SHA256_PATTERN)
+    quantization_range: float = Field(gt=0)
+    quantization_scale: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_quantization_scale(self) -> Self:
+        """Require the 255-level symmetric int8 scale."""
+        expected_scale = self.quantization_range / 127
+        if not math.isclose(self.quantization_scale, expected_scale, rel_tol=0, abs_tol=1e-12):
+            raise ValueError("The quantization scale does not match the quantization range")
+        return self
 
 
 def payload_sha256(payload: bytes) -> str:

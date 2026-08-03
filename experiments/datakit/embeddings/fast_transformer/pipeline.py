@@ -6,10 +6,9 @@
 import logging
 import os
 from collections.abc import Iterator
-from functools import cache
+from functools import cache, partial
 from typing import Any
 
-import numpy as np
 import pyarrow as pa
 from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
@@ -108,7 +107,6 @@ def embed_source(
     *,
     bundle_root: str,
     manifest_sha256: str,
-    quantization_range: float,
     batch_size: int,
     max_shards: int | None = None,
     worker_resources: ResourceConfig | None = None,
@@ -119,12 +117,12 @@ def embed_source(
         raise ValueError("The batch size must be positive")
     if max_workers < 1:
         raise ValueError("The worker count must be positive")
-    if quantization_range <= 0:
-        raise ValueError("The quantization range must be positive")
     manifest_payload = verified_payload(StoragePath(bundle_root), MANIFEST_FILENAME, manifest_sha256)
     manifest = FastEmbeddingBundleManifest.model_validate_json(manifest_payload)
 
-    source_shards = sorted(str(path) for path in StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob())
+    source_shards = sorted(
+        str(path) for path in StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob()
+    )
     if max_shards is not None:
         source_shards = source_shards[:max_shards]
     if not source_shards:
@@ -136,19 +134,18 @@ def embed_source(
         return f"{output_path.rstrip('/')}/{basenames[shard_index]}"
 
     source_specs = [InputFileSpec(path=path, columns=["id", "text"]) for path in source_shards]
-    quantization_scale = quantization_range / 127
+    quantization_scale = manifest.quantization_scale
     dataset = (
         Dataset.from_list(source_specs)
         .flat_map(load_file)
         .window(batch_size)
         .map_shard(
-            lambda batches, shard, root=bundle_root, digest=manifest_sha256, size=batch_size, scale=quantization_scale: _embed_shard(
-                batches,
-                shard,
-                bundle_root=root,
-                manifest_sha256=digest,
-                batch_size=size,
-                quantization_scale=scale,
+            partial(
+                _embed_shard,
+                bundle_root=bundle_root,
+                manifest_sha256=manifest_sha256,
+                batch_size=batch_size,
+                quantization_scale=quantization_scale,
             )
         )
         .write_parquet(
@@ -175,7 +172,7 @@ def embed_source(
         model_revision=manifest_sha256,
         embedding_dim=manifest.output_dimension,
         quantization_scale=quantization_scale,
-        quantization_range=quantization_range,
+        quantization_range=manifest.quantization_range,
         batch_size=batch_size,
         counters=dict(outcome.counters),
     )

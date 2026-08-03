@@ -79,6 +79,8 @@ def write_test_bundle(root: Path) -> str:
         blind_review_report_sha256="3" * 64,
         blind_review_package_url="memory://blind-package.json.gz",
         blind_review_package_sha256="4" * 64,
+        quantization_range=0.6,
+        quantization_scale=0.6 / 127,
     )
     manifest_payload = manifest.model_dump_json().encode()
     (root / MANIFEST_FILENAME).write_bytes(manifest_payload)
@@ -139,6 +141,18 @@ def test_fast_embedding_bundle_rejects_different_cpu_compute_dtype(tmp_path: Pat
     manifest_path.write_bytes(manifest_payload)
 
     with pytest.raises(ValueError, match="CPU compute data type"):
+        FastEmbeddingModel.load(str(tmp_path), payload_sha256(manifest_payload))
+
+
+def test_fast_embedding_bundle_rejects_inconsistent_quantization_scale(tmp_path: Path) -> None:
+    write_test_bundle(tmp_path)
+    manifest_path = tmp_path / MANIFEST_FILENAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["quantization_scale"] = 0.1
+    manifest_payload = json.dumps(manifest).encode()
+    manifest_path.write_bytes(manifest_payload)
+
+    with pytest.raises(ValueError, match="quantization scale"):
         FastEmbeddingModel.load(str(tmp_path), payload_sha256(manifest_payload))
 
 

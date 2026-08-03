@@ -74,6 +74,7 @@ def release_evidence_decision(
     blind_package_sha256: str,
     runtime_root: str,
     runtime_manifest_sha256: str,
+    quantization_range: float,
 ) -> dict[str, bool]:
     """Return the fixed release decisions for one exact student."""
     variant = evaluation_report["variants"]["compact"]
@@ -119,6 +120,13 @@ def release_evidence_decision(
         and blind_review_report["overall"]["documents"] == 200
         and blind_review_report["package_sha256"] == blind_package_sha256
     )
+    quantization = evaluation_report["student_quantization"]
+    quantization_identity = (
+        evaluation_report["student_representation"] == "symmetric_int8_dequantized"
+        and quantization["representation"] == "symmetric_int8_dequantized"
+        and np.isclose(float(quantization["quantization_range"]), quantization_range, rtol=0, atol=1e-12)
+        and np.isclose(float(quantization["quantization_scale"]), quantization_range / 127, rtol=0, atol=1e-12)
+    )
     training_validation = training_report["validation_decision"]
     training_gates = training_validation["gates"]
     return {
@@ -132,6 +140,8 @@ def release_evidence_decision(
         "leaf_semantics": bool(variant["leaf"]["student_all_gates_passed"]),
         "form_semantics": bool(variant["form"]["student_all_gates_passed"]),
         "fixed_40_buckets": bool(variant["production_buckets"]["student_all_gates_passed"]),
+        "quantization_identity": bool(quantization_identity),
+        "quantization_fidelity": bool(quantization["all_gates_passed"]),
         "speed_identity": speed_identity,
         "speed_stability": speed_report["measurement_valid"] is True,
         "cpu_speed": float(speed_report["student_to_baseline_ratio"]) >= MINIMUM_CPU_SPEED_RATIO,
@@ -178,6 +188,7 @@ def main() -> None:
     parser.add_argument("--blind-review-report-url", required=True)
     parser.add_argument("--runtime-root", required=True)
     parser.add_argument("--runtime-manifest-sha256", required=True)
+    parser.add_argument("--quantization-range", required=True, type=float)
     parser.add_argument("--output-root", required=True)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -204,6 +215,7 @@ def main() -> None:
         blind_package_sha256=blind_package_digest,
         runtime_root=args.runtime_root,
         runtime_manifest_sha256=args.runtime_manifest_sha256,
+        quantization_range=args.quantization_range,
     )
     if not all(decision.values()):
         failed = sorted(name for name, passed in decision.items() if not passed)
@@ -244,6 +256,8 @@ def main() -> None:
         blind_review_report_sha256=payload_sha256(blind_review_payload),
         blind_review_package_url=blind_package_url,
         blind_review_package_sha256=blind_package_digest,
+        quantization_range=args.quantization_range,
+        quantization_scale=args.quantization_range / 127,
     )
     runtime_student = FastEmbeddingModel.load_runtime(args.runtime_root, args.runtime_manifest_sha256)
     runtime_values = manifest.model_dump(include=set(FastEmbeddingRuntimeManifest.model_fields))

@@ -4,6 +4,7 @@
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 PROJECT = Path(__file__).parents[2] / ".agents" / "projects" / "luxical-arctic-poc"
@@ -15,6 +16,8 @@ from evaluate_hierarchical_embeddings import (  # noqa: E402
     label_levels,
     neighborhood_review_indices,
     production_bucket_gates,
+    production_bucket_report,
+    quantized_student_vectors,
     strongest_reference_model,
     validated_speed_ratio,
 )
@@ -149,6 +152,41 @@ def test_production_bucket_gates_compare_each_semantic_level_with_its_best_teach
     assert gates["parent_cluster_nmi"]["passed"]
     assert not gates["leaf_cluster_nmi"]["passed"]
     assert not gates["form_cluster_purity"]["passed"]
+
+
+def test_production_bucket_report_returns_fixed_bucket_decision() -> None:
+    random = np.random.default_rng(3)
+    vectors = random.normal(size=(45, 8)).astype(np.float32)
+    models = {
+        "student": vectors,
+        "arctic_medium": vectors.copy(),
+        "qwen3_embedding_0.6b": vectors.copy(),
+        "lfm2.5_embedding_350m": vectors.copy(),
+    }
+    assignments = [
+        HierarchicalAssignment(index, f"P{index % 3}", [], f"L{index % 5}", [], f"F{index % 2}", 0.9, "")
+        for index in range(45)
+    ]
+
+    report = production_bucket_report(models, assignments, "student")
+
+    assert report["cluster_count"] == 40
+    assert report["student_model"] == "student"
+    assert report["student_all_gates_passed"]
+
+
+def test_quantized_student_vectors_reports_production_fidelity() -> None:
+    random = np.random.default_rng(7)
+    vectors = random.normal(size=(100, 256)).astype(np.float32)
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+
+    production, report = quantized_student_vectors(vectors, 0.6, 10_000)
+
+    assert production.shape == vectors.shape
+    assert report["representation"] == "symmetric_int8_dequantized"
+    assert report["quantization_scale"] == pytest.approx(0.6 / 127)
+    assert report["all_gates_passed"]
+    assert report["row_cosine_p01"] >= 0.995
 
 
 def test_strongest_reference_model_uses_all_levels_and_fixed_metrics() -> None:

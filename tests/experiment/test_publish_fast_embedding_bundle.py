@@ -34,6 +34,13 @@ def release_reports() -> tuple[dict, dict, dict, dict, dict]:
         "student_runtime_root": "memory://runtime",
         "student_runtime_manifest_sha256": "runtime-sha",
         "model_metadata": {"student": {"final_model_sha256": "model-sha"}},
+        "student_representation": "symmetric_int8_dequantized",
+        "student_quantization": {
+            "representation": "symmetric_int8_dequantized",
+            "quantization_range": 0.6,
+            "quantization_scale": 0.6 / 127,
+            "all_gates_passed": True,
+        },
         "variants": {
             "compact": {
                 "parent": level,
@@ -91,6 +98,7 @@ def decision(*reports: dict) -> dict[str, bool]:
         blind_package_sha256="package-sha",
         runtime_root="memory://runtime",
         runtime_manifest_sha256="runtime-sha",
+        quantization_range=0.6,
     )
 
 
@@ -105,6 +113,8 @@ def test_release_evidence_accepts_one_exact_student_that_passes_all_gates() -> N
         (0, ("validation_decision", "passed")),
         (1, ("variants", "compact", "production_buckets", "student_all_gates_passed")),
         (1, ("student_runtime_manifest_sha256",)),
+        (1, ("student_quantization", "all_gates_passed")),
+        (1, ("student_quantization", "quantization_range")),
         (2, ("measurement_valid",)),
         (2, ("runtime_manifest_sha256",)),
         (2, ("compute_dtype",)),

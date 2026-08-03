@@ -47,6 +47,8 @@ from semantic_embedding_metrics import (
 )
 from verify_glm_hierarchy_with_claude import validate_claude_rows
 
+from experiments.datakit.embeddings.artifact import dequantize_to_fp32, quantize_to_int8
+
 SEED = 42
 DEFAULT_RUN_ID = "hierarchy-1000-20260802-001"
 DEFAULT_VARIANTS = ("compact", "balanced")
@@ -58,6 +60,9 @@ REVIEW_NEIGHBOR_COUNT = 5
 REVIEW_TEXT_CHARACTERS = 600
 PRODUCTION_BUCKET_COUNT = 40
 MAXIMUM_PRODUCTION_BUCKET_METRIC_LOSS = 0.02
+MAXIMUM_QUANTIZATION_CLIPPING_FRACTION = 0.0001
+MINIMUM_QUANTIZATION_ROW_COSINE_P01 = 0.995
+MINIMUM_QUANTIZATION_ORDER_FIDELITY = 0.99
 EXACT_SPEED_REPORT_URL = (
     "s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/"
     "fast-student/speed/cpu-trained-full-full-3m.json"
@@ -261,6 +266,47 @@ def production_bucket_report(
     }
 
 
+def quantized_student_vectors(
+    vectors: np.ndarray,
+    quantization_range: float,
+    maximum_pair_count: int | None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Return production int8 vectors and their fidelity report."""
+    if quantization_range <= 0:
+        raise ValueError("The student quantization range must be positive")
+    quantization_scale = quantization_range / 127
+    quantized = quantize_to_int8(vectors, quantization_scale)
+    production_vectors = dequantize_to_fp32(quantized, quantization_scale)
+    normalized_float = normalize_embeddings(vectors)
+    normalized_production = normalize_embeddings(production_vectors)
+    row_cosines = np.sum(normalized_float * normalized_production, axis=1)
+    clipping_fraction = float(np.mean(np.abs(vectors) > quantization_range))
+    order_fidelity = cosine_order_fidelity(
+        production_vectors,
+        vectors,
+        maximum_pair_count=maximum_pair_count,
+        seed=SEED,
+    )
+    gates = {
+        "clipping_fraction": clipping_fraction <= MAXIMUM_QUANTIZATION_CLIPPING_FRACTION,
+        "row_cosine_p01": float(np.quantile(row_cosines, 0.01)) >= MINIMUM_QUANTIZATION_ROW_COSINE_P01,
+        "cosine_order_fidelity": order_fidelity >= MINIMUM_QUANTIZATION_ORDER_FIDELITY,
+    }
+    report = {
+        "representation": "symmetric_int8_dequantized",
+        "quantization_range": quantization_range,
+        "quantization_scale": quantization_scale,
+        "clipping_fraction": clipping_fraction,
+        "row_cosine_minimum": float(row_cosines.min()),
+        "row_cosine_p01": float(np.quantile(row_cosines, 0.01)),
+        "row_cosine_mean": float(row_cosines.mean()),
+        "cosine_order_fidelity": order_fidelity,
+        "gates": gates,
+        "all_gates_passed": all(gates.values()),
+    }
+    return production_vectors, report
+
+
 def variant_metrics(
     models: dict[str, np.ndarray],
     assignments: list[HierarchicalAssignment],
@@ -453,6 +499,7 @@ def main() -> None:
     parser.add_argument("--student-rung", default="3m")
     parser.add_argument("--student-runtime-root")
     parser.add_argument("--student-runtime-manifest-sha256")
+    parser.add_argument("--student-quantization-range", type=float, required=True)
     parser.add_argument("--speed-report-url", default=EXACT_SPEED_REPORT_URL)
     args = parser.parse_args()
     if args.maximum_pair_count < 1:
@@ -493,6 +540,11 @@ def main() -> None:
         args.student_training_name,
         args.student_rung,
         student_runtime,
+    )
+    models[args.student_model], quantization_report = quantized_student_vectors(
+        models[args.student_model],
+        args.student_quantization_range,
+        args.maximum_pair_count,
     )
     speed_report = read_json(args.speed_report_url)
     speed_ratio = validated_speed_ratio(
@@ -550,6 +602,8 @@ def main() -> None:
         "student_rung": args.student_rung,
         "student_runtime_root": None if student_runtime is None else student_runtime.root,
         "student_runtime_manifest_sha256": None if student_runtime is None else student_runtime.manifest_sha256,
+        "student_representation": "symmetric_int8_dequantized",
+        "student_quantization": quantization_report,
         "student_cpu_speed_ratio": speed_ratio,
         "speed_report_url": args.speed_report_url,
         "maximum_pair_count": args.maximum_pair_count,
