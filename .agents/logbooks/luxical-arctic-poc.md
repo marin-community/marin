@@ -1957,3 +1957,18 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Pyrefly reports zero errors. The required pre-commit checks pass.
 - Decision: Run this fallback only if the 50,000-label folded projection fails
   a release gate.
+
+### LUX-SEMANTIC-FINETUNE-002: Exact H100 smoke result
+
+- Job: `/rav/lux-semantic-finetune-smoke-h100-002`.
+- The smoke loaded model SHA-256
+  `981388da726eb2dff8d19dd84fff17749f2b6dd974c93ad223fee581139c9c7f`.
+- The loaded model has exactly 9,299,200 parameters.
+- One 1,024-document semantic update completed on one federated H100.
+- All 1,024 output vectors were finite and unique at six decimal places.
+- The job succeeded in 37.33 seconds with no failure or preemption.
+- An earlier conservative smoke used a random 65,536-token vocabulary. It had
+  18,616,832 parameters and also passed. The exact checkpoint result replaces
+  that smoke as the launch gate.
+- Interpretation: The fallback compiles and runs at the production model size.
+  It remains inactive until the folded projection release result is known.
