@@ -41,8 +41,9 @@ from iris.cluster.platforms.k8s.controller import (
     configure_client_s3,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
+from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME, build_cluster_queue
 from iris.cluster.platforms.k8s.nodepool_manifests import (
+    CPU_TOPOLOGY_NODE_LABELS,
     compute_target_racks,
     nodepool_manifest,
     nodepool_name,
@@ -63,6 +64,7 @@ from iris.cluster.platforms.types import (
     InfraError,
     Labels,
 )
+from iris.cluster.types import AcceleratorType
 
 
 def _make_provider(
@@ -199,7 +201,16 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
             nodepool_manifest(
                 pool_name,
                 cw.instance_type,
-                node_labels=nodepool_node_labels(label_prefix, name, min_nodes=min_nodes),
+                node_labels=nodepool_node_labels(
+                    label_prefix,
+                    name,
+                    min_nodes=min_nodes,
+                    topology_node_labels=(
+                        CPU_TOPOLOGY_NODE_LABELS
+                        if sg.resources is not None and sg.resources.device_type == AcceleratorType.CPU
+                        else ()
+                    ),
+                ),
                 min_nodes=min_nodes,
                 max_nodes=max_nodes,
                 target_nodes=min_nodes,
@@ -209,9 +220,7 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
 
     cluster_queue = cluster_config.kubernetes_provider.kueue.cluster_queue
     if cluster_queue:
-        k8s.apply_json(
-            {"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ClusterQueue", "metadata": {"name": cluster_queue}}
-        )
+        k8s.apply_json(build_cluster_queue(cluster_queue))
     k8s.apply_json(
         {"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ResourceFlavor", "metadata": {"name": RESOURCE_FLAVOR_NAME}}
     )
@@ -672,7 +681,6 @@ def test_verify_prerequisites_raises_when_nothing_provisioned():
     assert "ClusterRoleBinding/iris-controller-iris" in message
     assert "NodePool/iris-cpu-erapids" in message
     assert "ClusterQueue/iris-cq" in message
-    assert "ResourceFlavor/cw-ib" in message
     assert "pulumi up" in message
     provider.shutdown()
 
@@ -689,6 +697,52 @@ def test_verify_prerequisites_passes_once_seeded():
     # Presence-only: verifying must not create, delete, or otherwise touch anything.
     assert {p["metadata"]["name"] for p in k8s.list_json(K8sResource.NODE_POOLS)} == pools_before
     assert k8s.get_json(K8sResource.NAMESPACES, "iris") is not None
+    provider.shutdown()
+
+
+def test_verify_prerequisites_uses_cluster_queue_resource_flavors():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    k8s.delete(K8sResource.RESOURCE_FLAVORS, RESOURCE_FLAVOR_NAME)
+    k8s.apply_json(
+        {
+            "apiVersion": "kueue.x-k8s.io/v1beta1",
+            "kind": "ClusterQueue",
+            "metadata": {"name": "iris-cq"},
+            "spec": {
+                "resourceGroups": [
+                    {
+                        "flavors": [
+                            {"name": "existing-cpu", "resources": []},
+                            {"name": "existing-gpu", "resources": []},
+                        ]
+                    }
+                ]
+            },
+        }
+    )
+    for flavor in ("existing-cpu", "existing-gpu"):
+        k8s.apply_json({"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ResourceFlavor", "metadata": {"name": flavor}})
+
+    # Presence validation follows the live ClusterQueue, independent of the
+    # flavor name rendered by the currently checked-out IaC code.
+    provider.verify_prerequisites(cluster_config)
+    provider.shutdown()
+
+
+def test_verify_prerequisites_reports_missing_cluster_queue_flavor():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    k8s.delete(K8sResource.RESOURCE_FLAVORS, RESOURCE_FLAVOR_NAME)
+
+    with pytest.raises(PrerequisitesNotProvisionedError) as exc_info:
+        provider.verify_prerequisites(cluster_config)
+
+    message = str(exc_info.value)
+    assert f"ResourceFlavor/{RESOURCE_FLAVOR_NAME}" in message
+    assert "ClusterQueue/iris-cq" not in message
     provider.shutdown()
 
 

@@ -1370,20 +1370,19 @@ def test_kueue_gang_uses_topology_not_affinity():
 
 def test_non_coscheduled_pod_routed_through_kueue_without_gang_metadata():
     """Every pod routes through Kueue when a LocalQueue is set: a non-coscheduled pod
-    carries the queue-name label but none of the gang-only pod-group labels or topology
-    annotations."""
+    carries the queue-name label but none of the gang-only pod-group metadata."""
     manifest = _build_pod_manifest(make_run_req("/job/task/0", num_tasks=4), pod_config(local_queue="iris-lq"))
     labels = manifest["metadata"]["labels"]
     assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
     assert _KUEUE_POD_GROUP_NAME not in labels
     assert _KUEUE_POD_GROUP_POD_INDEX not in labels
-    assert "annotations" not in manifest["metadata"]
+    assert _KUEUE_POD_GROUP_TOTAL not in manifest["metadata"]["annotations"]
 
 
 def test_single_pod_gpu_job_routed_through_kueue():
     """A single-pod GPU job (not coscheduled) routes through Kueue so its GPU capacity is
     accounted and preemptible: queue-name label and no gang pod-group metadata, but a soft
-    finest-level topology request so the topology-aware cw-ib flavor will admit it (a GPU
+    finest-level topology request so the topology-aware cw-tas flavor will admit it (a GPU
     workload with no topology request is rejected by TAS)."""
     req = make_run_req("/gpu-job/task/0", num_tasks=1)
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
@@ -1396,11 +1395,11 @@ def test_single_pod_gpu_job_routed_through_kueue():
     assert _KUEUE_POD_GROUP_TOTAL not in annotations
 
 
-def test_single_pod_cpu_job_has_no_topology_annotation():
-    """A CPU-only pod routes to the non-TAS cw-cpu flavor, so it must NOT carry a topology
-    annotation (Kueue would reject a topology request against a non-topology flavor)."""
+def test_single_pod_cpu_job_uses_unconstrained_topology():
+    """CPU work uses TAS so Kueue can reclaim its accelerator-node capacity."""
     manifest = _build_pod_manifest(make_run_req("/cpu-job/task/0", num_tasks=1), pod_config(local_queue="iris-lq"))
-    assert "annotations" not in manifest["metadata"]
+    assert manifest["metadata"]["annotations"]["kueue.x-k8s.io/podset-unconstrained-topology"] == "true"
+    assert "nodeSelector" not in manifest["spec"]
 
 
 def test_kueue_topologies_override_config():

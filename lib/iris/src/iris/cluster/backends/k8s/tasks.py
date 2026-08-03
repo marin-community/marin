@@ -150,9 +150,7 @@ _NODE_POD_LOG_DIR = "/var/log/pods"
 # Max pod name length is 253 chars in k8s. We stay well under it.
 _MAX_POD_NAME_LEN = 63
 
-# CoreWeave nodes are labeled with {label_prefix}.{attribute_key} by the NodePool.
 # Map well-known Iris constraint keys to their k8s node label keys.
-# The "iris." prefix matches platform.label_prefix in coreweave.yaml.
 _CONSTRAINT_KEY_TO_NODE_LABEL: dict[str, str] = {
     "pool": "iris.pool",
     "region": "iris.region",
@@ -222,6 +220,7 @@ _KUEUE_JOB_UID = "kueue.x-k8s.io/job-uid"
 _KUEUE_PRIORITY_CLASS = "kueue.x-k8s.io/priority-class"
 _KUEUE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-required-topology"
 _KUEUE_PREFERRED_TOPOLOGY = "kueue.x-k8s.io/podset-preferred-topology"
+_KUEUE_UNCONSTRAINED_TOPOLOGY = "kueue.x-k8s.io/podset-unconstrained-topology"
 # PodSet-slice request: partition the pod group into podset-slice-size chunks, each hard-bound
 # to one domain of the named level. Kueue >= 0.13 (feature under TopologyAwareScheduling).
 _KUEUE_SLICE_REQUIRED_TOPOLOGY = "kueue.x-k8s.io/podset-slice-required-topology"
@@ -266,7 +265,7 @@ _CW_DEFAULT_TOPOLOGIES: dict[str, KueueTopologyBinding] = {
 }
 
 # Finest topology level (one node), the last level in both CoreWeave Topology CRs. The
-# GPU ResourceFlavor (cw-ib) is topology-aware, so Kueue rejects any GPU workload that
+# The cw-tas ResourceFlavor is topology-aware, so Kueue rejects any workload that
 # carries no topology request against it. A non-coscheduled GPU pod has no colocation
 # need, so it requests this always-satisfiable level as a soft preference — just enough
 # to be a valid TAS workload — so single-host GPU jobs admit instead of hanging.
@@ -308,8 +307,7 @@ def _constraints_to_node_selector(
 ) -> dict[str, str]:
     """Map Iris constraints to k8s nodeSelector entries.
 
-    Only EQ constraints with known label keys are mapped. Unknown keys are
-    silently skipped. Known keys with non-EQ ops raise ValueError.
+    Unknown keys are silently skipped. Known keys require EQ with a value.
     """
     node_selector: dict[str, str] = {}
     for c in constraints:
@@ -851,6 +849,7 @@ def _build_pod_manifest(
             resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
 
     has_accelerator = gpu_count > 0 or has_tpu
+    is_gang = bool(run_req.coscheduling.group_by)
     volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, has_accelerator=has_accelerator)
 
     container: dict = {
@@ -888,6 +887,7 @@ def _build_pod_manifest(
         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
         _LABEL_JOB_ID: job_id,
     }
+    node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
     metadata: dict = {
@@ -896,12 +896,10 @@ def _build_pod_manifest(
         "labels": labels,
     }
 
-    # Every pod is admitted through Kueue: its accounting and preemption arbitrate
-    # all capacity. A GPU pod that bypassed Kueue would hold nodes Kueue can neither
-    # count in its topology bookkeeping nor select as a preemption victim, silently
-    # defeating priority preemption of lower-priority gangs; CPU-only pods route
-    # through it too, matching the cw-cpu ResourceFlavor. The composer enforces a
-    # configured LocalQueue for the K8s backend, so this is always set.
+    # Every pod is admitted through one Kueue TAS flavor: its accounting and
+    # preemption arbitrate all capacity. A pod that bypassed Kueue would hold nodes
+    # Kueue can neither count in its topology bookkeeping nor select as a victim.
+    # The composer enforces a configured LocalQueue for the K8s backend.
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
     # Stamp an explicit WorkloadPriorityClass only when the cluster maps this band.
@@ -912,7 +910,6 @@ def _build_pod_manifest(
     wpc = config.kueue_priority_classes.get(run_req.priority)
     if wpc:
         labels[_KUEUE_PRIORITY_CLASS] = wpc
-    is_gang = bool(run_req.coscheduling.group_by)
     if is_gang:
         group_by = run_req.coscheduling.group_by
         # group_by must name a topology level this cluster provisioned. An
@@ -938,11 +935,14 @@ def _build_pod_manifest(
             ),
         }
     elif gpu_count > 0:
-        # A non-coscheduled GPU pod still lands on the topology-aware cw-ib flavor, which
-        # Kueue will not admit without a topology request. It has no gang to colocate, so
-        # ask only for the finest, always-satisfiable level as a soft preference. CPU-only
-        # pods route to the non-TAS cw-cpu flavor and must NOT carry a topology annotation.
+        # A non-coscheduled GPU pod has no gang to colocate, so ask only for the
+        # finest, always-satisfiable level as a soft preference.
         metadata["annotations"] = {_KUEUE_PREFERRED_TOPOLOGY: _KUEUE_SINGLE_POD_TOPOLOGY}
+    else:
+        # Accelerator-free Pods remain in TAS without requesting colocation. This
+        # records their per-node CPU usage in the same flavor as GPU gangs, so a
+        # higher-priority gang can simulate reclaiming it before topology fit.
+        metadata["annotations"] = {_KUEUE_UNCONSTRAINED_TOPOLOGY: "true"}
 
     # Native log-shipping sidecar: ships the task container's node-side CRI log
     # file to finelog. As an initContainer with restartPolicy: Always it is
@@ -973,7 +973,6 @@ def _build_pod_manifest(
     if resolve_container_profile(run_req.container_profile) == job_pb2.CONTAINER_PROFILE_GVISOR:
         spec["runtimeClassName"] = "gvisor"
 
-    node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         node_selector[managed_label] = "true"
     if node_selector:
