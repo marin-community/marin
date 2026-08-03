@@ -154,6 +154,9 @@ class GrugTrainerConfig:
     # Scan training values after each step to locate the first non-finite boundary.
     # This is expensive and must stay disabled for throughput measurements.
     finite_diagnostics: bool = False
+    # Wait for the full returned state after each step. This isolates direct
+    # collective completion faults from compiler scheduling changes.
+    step_completion_barrier: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -682,6 +685,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = int(state.step) - 1
 
+                if config.trainer.step_completion_barrier:
+                    jax.block_until_ready(state)
                 jax.block_until_ready(metrics["train/loss"])
 
                 finite_metrics = {key: value for key, value in metrics.items() if key.startswith("diagnostics/")}

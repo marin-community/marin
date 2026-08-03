@@ -95,6 +95,7 @@ def build_hero_run(
     worker_cpu: int = HERO_WORKER_CPU,
     worker_ram_gb: int = HERO_WORKER_RAM_GB,
     finite_diagnostics: bool = False,
+    step_completion_barrier: bool = False,
     profile_start_step: int | None = None,
     profile_num_steps: int = 2,
     version: str | None = None,
@@ -147,6 +148,7 @@ def build_hero_run(
         z_loss_weight=1e-4,
         offload_opt_state=False,
         finite_diagnostics=finite_diagnostics,
+        step_completion_barrier=step_completion_barrier,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
         replica_axis_size=1,
         sharding_dump_path=None,
@@ -302,6 +304,11 @@ def build_hero_run(
     help="Scan each training boundary for non-finite values.",
 )
 @click.option(
+    "--step-completion-barrier/--no-step-completion-barrier",
+    default=False,
+    help="Wait for the full training state after each step.",
+)
+@click.option(
     "--profile-start-step",
     type=click.IntRange(min=MIN_HERO_PROFILE_START_STEP),
     default=None,
@@ -329,6 +336,7 @@ def main(
     worker_cpu: int,
     worker_ram_gb: int,
     finite_diagnostics: bool,
+    step_completion_barrier: bool,
     profile_start_step: int | None,
     profile_num_steps: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -348,6 +356,7 @@ def main(
         worker_cpu=worker_cpu,
         worker_ram_gb=worker_ram_gb,
         finite_diagnostics=finite_diagnostics,
+        step_completion_barrier=step_completion_barrier,
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
     )
