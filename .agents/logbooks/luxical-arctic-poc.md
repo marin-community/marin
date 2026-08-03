@@ -2088,3 +2088,21 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   approve a release and does not replace the fixed 10,000-document test.
 - Next action: Complete the 50,000 labels, train one final projection, and run
   the fixed semantic, 40-bucket, collapse, and CPU speed gates.
+
+### LUX-GLM-OPS-005: 50,000-label job admission
+
+- The first corrected label job requested 120 CPU cores on each four-accelerator
+  node.
+- The scheduler excluded 204 of 205 nodes for CPU and one node for memory.
+- The tasks did not start, and no new label was written.
+- The queued job was stopped after its exact scheduling gate was known.
+- Replacement job: `/rav/lux-glm52-projection-training-50k-b200-002`.
+- The replacement keeps the same two-node, eight-accelerator model shape,
+  label run ID, sample, model revision, batch size, and interactive priority.
+- It requests 32 CPU cores per node. Both tasks started with no failure or
+  preemption.
+- Each model rank loaded about 89.28 GiB of weights. The eight-way model load
+  and compile are active.
+- The job will reuse the complete assignment checkpoints through row 17,249.
+- Decision: Keep the lower CPU request. Do not treat scheduler wait time as a
+  model or data failure.
