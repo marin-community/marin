@@ -43,17 +43,19 @@ class RaggedDeviceProbeConfig:
     device_count: int
     rows_per_rank: int
     row_elements: int
+    updates_per_peer: int
 
 
 def _balanced_ragged_probe(config: RaggedDeviceProbeConfig) -> tuple[jax.Array, jax.Array]:
     devices = np.asarray(jax.devices())
     if devices.size != config.device_count:
         raise ValueError(f"probe requires {config.device_count} devices, got {devices.size}")
-    if config.rows_per_rank % config.device_count != 0:
-        raise ValueError(f"rows_per_rank={config.rows_per_rank} must be divisible by device_count={config.device_count}")
+    update_count = config.device_count * config.updates_per_peer
+    if config.rows_per_rank % update_count != 0:
+        raise ValueError(f"rows_per_rank={config.rows_per_rank} must be divisible by update_count={update_count}")
 
     mesh = Mesh(devices, axis_names=("expert",), axis_types=(AxisType.Explicit,))
-    rows_per_peer = config.rows_per_rank // config.device_count
+    rows_per_update = config.rows_per_rank // update_count
 
     @partial(
         shard_map,
@@ -68,10 +70,14 @@ def _balanced_ragged_probe(config: RaggedDeviceProbeConfig) -> tuple[jax.Array, 
             rank.astype(jnp.bfloat16),
             (config.rows_per_rank, config.row_elements),
         )
-        peer_ids = jnp.arange(config.device_count, dtype=jnp.int32)
-        input_offsets = peer_ids * rows_per_peer
-        send_sizes = jnp.full((config.device_count,), rows_per_peer, dtype=jnp.int32)
-        output_offsets = jnp.full((config.device_count,), rank * rows_per_peer, dtype=jnp.int32)
+        peer_ids = jnp.arange(config.device_count, dtype=jnp.int32)[:, None]
+        update_ids = jnp.arange(config.updates_per_peer, dtype=jnp.int32)[None, :]
+        input_offsets = ((peer_ids * config.updates_per_peer + update_ids) * rows_per_update).reshape(-1)
+        send_sizes = jnp.full((update_count,), rows_per_update, dtype=jnp.int32)
+        output_offsets = jnp.broadcast_to(
+            (rank * config.updates_per_peer + update_ids) * rows_per_update,
+            (config.device_count, config.updates_per_peer),
+        ).reshape(-1)
         destination = jnp.zeros_like(source)
         received = jax.lax.ragged_all_to_all(
             source,
@@ -83,7 +89,9 @@ def _balanced_ragged_probe(config: RaggedDeviceProbeConfig) -> tuple[jax.Array, 
             axis_name="expert",
         )
 
-        expected_sources = jnp.arange(config.rows_per_rank, dtype=jnp.int32) // rows_per_peer
+        expected_sources = jnp.arange(config.rows_per_rank, dtype=jnp.int32) // (
+            config.updates_per_peer * rows_per_update
+        )
         sample_columns = jnp.asarray((0, config.row_elements // 2, config.row_elements - 1), dtype=jnp.int32)
         samples = received[:, sample_columns].astype(jnp.int32)
         mismatches = jnp.sum(samples != expected_sources[:, None], dtype=jnp.int32)
@@ -121,6 +129,7 @@ def _run_probe_local(config: RaggedDeviceProbeConfig) -> None:
 @click.option("--run-id", required=True, help="Iris job identifier.")
 @click.option("--rows-per-rank", type=click.IntRange(min=PROBE_DEVICE_COUNT), required=True)
 @click.option("--row-elements", type=click.IntRange(min=1), required=True)
+@click.option("--updates-per-peer", type=click.IntRange(min=1), required=True)
 @click.option(
     "--moonep-jax-wheel-build",
     type=click.Choice([build.value for build in MoonEPJaxWheelBuild]),
@@ -130,6 +139,7 @@ def main(
     run_id: str,
     rows_per_rank: int,
     row_elements: int,
+    updates_per_peer: int,
     moonep_jax_wheel_build: str,
 ) -> None:
     """Dispatch a direct-device ragged all-to-all probe."""
@@ -150,6 +160,7 @@ def main(
         device_count=PROBE_DEVICE_COUNT,
         rows_per_rank=rows_per_rank,
         row_elements=row_elements,
+        updates_per_peer=updates_per_peer,
     )
     _apply_hero_ep_runtime_defaults("moonep_jax", MoonEPTransport.DIRECT_DEVICE)
     os.environ.setdefault("NCCL_DEBUG", "INFO")
