@@ -38,7 +38,7 @@ from experiments.datakit.cluster.quality.fast_transformer.data import PAD_ID
 POOL_KINDS = ("mean", "max", "meanmaxmin", "attn")
 FINAL_POOLS = ("mean", "attn")
 NEG_INF = -1e30
-COMPUTE_DTYPE = jnp.bfloat16
+ACCELERATOR_COMPUTE_DTYPE = jnp.bfloat16
 
 
 @dataclass(frozen=True)
@@ -101,8 +101,9 @@ def _glorot(key: PRNGKeyArray, shape: tuple[int, ...]) -> Array:
 
 
 def _matmul(x: Array, w: Array) -> Array:
-    """``x @ w`` in bf16 (TPU MXU) with f32 accumulation/output."""
-    out = jnp.matmul(x.astype(COMPUTE_DTYPE), w.astype(COMPUTE_DTYPE), preferred_element_type=jnp.float32)
+    """Run a matrix operation with the fast data type for the current backend."""
+    compute_dtype = jnp.float32 if jax.default_backend() == "cpu" else ACCELERATOR_COMPUTE_DTYPE
+    out = jnp.matmul(x.astype(compute_dtype), w.astype(compute_dtype), preferred_element_type=jnp.float32)
     return out.astype(jnp.float32)
 
 

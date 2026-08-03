@@ -189,6 +189,47 @@ def test_embedding_transformer_returns_distinct_unit_vectors():
     assert not np.allclose(vectors[0], vectors[1])
 
 
+@pytest.mark.skipif(jax.default_backend() != "cpu", reason="This contract applies to CPU inference")
+def test_embedding_transformer_cpu_matches_float32_reference():
+    config = FastTransformerConfig(
+        vocab_size=16,
+        max_tokens=4,
+        pool_window=2,
+        pool_kind="mean",
+        embed_dim=3,
+        hidden_dim=3,
+        num_layers=0,
+        num_heads=1,
+        dropout=0.0,
+    )
+    model = FastEmbeddingTransformer(config, output_dim=2, key=jr.PRNGKey(19))
+    ids = np.asarray([[2, 3, 4, 0], [5, 6, 7, 2]], dtype=np.int32)
+
+    mask = (ids != 0).astype(np.float32)
+    token_embeddings = np.asarray(model.backbone.embed)[ids]
+    window_embeddings = token_embeddings.reshape(2, 2, 2, 3)
+    window_mask = mask.reshape(2, 2, 2)
+    counts = window_mask.sum(axis=2, keepdims=True)
+    valid = (counts[..., 0] > 0).astype(np.float32)
+    pooled = (window_embeddings * window_mask[..., None]).sum(axis=2) / np.maximum(counts, 1.0)
+    hidden = (
+        pooled @ np.asarray(model.backbone.proj_w)
+        + np.asarray(model.backbone.proj_b)
+        + np.asarray(model.backbone.pos_embed)
+    )
+    document_hidden = (hidden * valid[..., None]).sum(axis=1) / np.maximum(valid.sum(axis=1, keepdims=True), 1.0)
+    mean = document_hidden.mean(axis=-1, keepdims=True)
+    variance = document_hidden.var(axis=-1, keepdims=True)
+    normalized = (document_hidden - mean) / np.sqrt(variance + 1e-5)
+    normalized = normalized * np.asarray(model.backbone.head_g) + np.asarray(model.backbone.head_b)
+    expected = normalized @ np.asarray(model.embedding_head)
+    expected /= np.maximum(np.linalg.norm(expected, axis=1, keepdims=True), 1e-12)
+
+    actual = np.asarray(model(jnp.asarray(ids)))
+
+    assert actual == pytest.approx(expected, abs=1e-6)
+
+
 def test_contrastive_embedding_loss_matches_numpy_reference():
     student = np.asarray(
         [[1.0, 0.2, -0.3], [0.1, 0.9, 0.4], [-0.2, 0.3, 1.1], [0.7, -0.4, 0.2]],
