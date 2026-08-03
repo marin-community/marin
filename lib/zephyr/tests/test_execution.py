@@ -301,6 +301,43 @@ def test_failed_shared_execution_does_not_stop_another(local_client, tmp_path):
             failed.result()
 
 
+def test_shared_pool_honors_configured_concurrent_pipeline_limit(local_client, tmp_path):
+    """A shared pool rejects a pipeline past ``max_concurrent_pipelines``.
+
+    The limit reaches the coordinator through ``_start_pool``. With the default
+    of 16 in place, the second execute below is accepted and succeeds.
+    """
+    holding = threading.Event()
+    release = threading.Event()
+
+    def hold(value: int) -> int:
+        holding.set()
+        assert release.wait(timeout=60.0)
+        return value
+
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=2,
+        resources=ResourceConfig(cpu=2, ram="1g"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name="test-shared-pipeline-limit",
+        max_concurrent_pipelines=1,
+    )
+
+    with ctx, ThreadPoolExecutor(max_workers=1) as executor:
+        held = executor.submit(ctx.execute, Dataset.from_list([1]).map(hold))
+        try:
+            assert holding.wait(timeout=60.0)
+            with pytest.raises(RuntimeError, match="max 1"):
+                ctx.execute(Dataset.from_list([2]).map(lambda value: value * 2))
+        finally:
+            release.set()
+        assert held.result().results == [1]
+
+        # The finished pipeline released its slot.
+        assert ctx.execute(Dataset.from_list([3]).map(lambda value: value * 2)).results == [6]
+
+
 def test_pull_task_rotates_between_executions(coordinator):
     tasks = [
         ShardTask(
