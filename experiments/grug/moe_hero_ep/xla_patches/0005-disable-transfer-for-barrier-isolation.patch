@@ -2,9 +2,9 @@ diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/
 --- a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
 +++ b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
 @@ -24,6 +24,8 @@ limitations under the License.
- 
+
  namespace stream_executor::gpu {
- 
+
 +constexpr bool kRunRaggedAllToAllTransfers = false;
 +
  template <int64_t kSize>
@@ -12,7 +12,7 @@ diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/
    uint8_t data[kSize];
 @@ -172,9 +174,6 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
      const unsigned int signal_index = 0;
- 
+
      ncclGin gin{dev_comm, gin_context};
 -    uint64_t signal_value =
 -        (blockIdx.x == 0) ? gin.readSignal(signal_index) : 0;
@@ -23,7 +23,7 @@ diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/
 @@ -192,20 +191,24 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
               ncclGinFenceLevel::Relaxed);
  #endif
- 
+
 -    RaggedAllToAllCopy<kVectorSize>(
 -        send_win, recv_win, input_offsets_ptr, send_sizes_ptr,
 -        output_offsets_ptr, num_updates_per_replica, num_row_elements,
@@ -44,7 +44,7 @@ diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/
 +          output_offsets_ptr, num_updates_per_replica, num_row_elements,
 +          input_buffer_offset_bytes, output_buffer_offset_bytes, start_lsa,
 +          lsa_size, num_ranks, &gin, world, signal_index);
- 
+
 -    gin.flush(ncclCoopCta());
 +      const int num_remote_peers =
 +          (num_ranks - lsa_size) * num_updates_per_replica;

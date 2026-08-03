@@ -4,14 +4,14 @@ diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc b/xla/backends/
 @@ -795,13 +795,13 @@ absl::Status RaggedAllToAllThunk::RunCollective(const ExecuteParams& params,
        } else {
          const bool gin = has_remote_peers && gpu_comm->SupportsGin();
- 
+
 +        return absl::OkStatus();
 +
          ASSIGN_OR_RETURN(
              GpuDeviceCommunicator * dev_comm,
              params.collective_cliques->GetDeviceComm(
                  clique_key, state->rank, DeviceKernelLsaDevCommRequirements()));
- 
+
 -        return absl::OkStatus();
 -
          const int64_t num_updates_per_replica =

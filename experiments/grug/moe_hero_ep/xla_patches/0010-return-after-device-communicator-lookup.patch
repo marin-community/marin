@@ -13,7 +13,7 @@ diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc b/xla/backends/
 @@ -800,6 +798,8 @@ absl::Status RaggedAllToAllThunk::RunCollective(const ExecuteParams& params,
              params.collective_cliques->GetDeviceComm(
                  clique_key, state->rank, DeviceKernelLsaDevCommRequirements()));
- 
+
 +        return absl::OkStatus();
 +
          const int64_t num_updates_per_replica =

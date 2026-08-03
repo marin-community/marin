@@ -4,7 +4,7 @@ diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc b/xla/backends/
 @@ -830,6 +830,12 @@ absl::Status RaggedAllToAllThunk::RunCollective(const ExecuteParams& params,
      }
    }
- 
+
 +  return Internal(
 +      "Device kernel predicate failed: uses_device_kernel=%d "
 +      "supports_device_comm=%d has_collective_memory=%d has_lsa_size=%d",

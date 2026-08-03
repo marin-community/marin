@@ -2,9 +2,9 @@ diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/
 --- a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
 +++ b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
 @@ -24,8 +24,6 @@ limitations under the License.
- 
+
  namespace stream_executor::gpu {
- 
+
 -constexpr bool kRunRaggedAllToAllTransfers = false;
 -
  template <int64_t kSize>
@@ -12,7 +12,7 @@ diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/
    uint8_t data[kSize];
 @@ -170,51 +168,10 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
    const bool has_remote_peers = (lsa_size < num_ranks);
- 
+
    if (has_remote_peers) {
 -    const int gin_context = 0;
 -    const unsigned int signal_index = 0;

@@ -30,7 +30,7 @@ diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/
 @@ -175,10 +175,20 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
      uint64_t signal_value =
          (blockIdx.x == 0) ? gin.readSignal(signal_index) : 0;
- 
+
 +#if NCCL_VERSION_CODE >= 23000
 +    ncclLsaBarrierSession<ncclCoopCta> lsa_bar{
 +        ncclCoopCta(), dev_comm, ncclTeamTagLsa{}, blockIdx.x};
@@ -45,12 +45,12 @@ diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/
      bar.sync(ncclCoopCta(), ::cuda::memory_order_acquire,
               ncclGinFenceLevel::Relaxed);
 +#endif
- 
+
      RaggedAllToAllCopy<kVectorSize>(
          send_win, recv_win, input_offsets_ptr, send_sizes_ptr,
 @@ -194,8 +204,14 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
      }
- 
+
      gin.flush(ncclCoopCta());
 +#if NCCL_VERSION_CODE >= 23000
 +    lsa_bar.sync(ncclCoopCta(), ::cuda::memory_order_release);

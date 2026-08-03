@@ -4,18 +4,18 @@ diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.cc b/xla/backends/
 @@ -763,6 +763,8 @@ absl::Status RaggedAllToAllThunk::RunCollective(const ExecuteParams& params,
                     ConvertToDeviceBuffers(params.buffer_allocations, buffers(),
                                            config_.config.operand_element_type));
- 
+
 +  return absl::OkStatus();
 +
    ASSIGN_OR_RETURN(bool peer_access_enabled,
                     params.collective_cliques->peer_access_enabled(clique_key));
- 
+
 @@ -793,8 +795,6 @@ absl::Status RaggedAllToAllThunk::RunCollective(const ExecuteParams& params,
              << " num_ranks=" << num_ranks << " requires GIN";
        } else {
          const bool gin = has_remote_peers && gpu_comm->SupportsGin();
 -
 -        return absl::OkStatus();
- 
+
          ASSIGN_OR_RETURN(
              GpuDeviceCommunicator * dev_comm,

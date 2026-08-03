@@ -7,21 +7,21 @@
 -    unsigned int signal_index) {
 +    int gin_context_count, unsigned int signal_index) {
    using T = DeviceVec<kVectorSize>;
- 
+
    if (lsa_size > 0) {
 @@ -120,7 +120,7 @@
      }
    }
- 
+
 -  if (gin == nullptr || blockIdx.x != 0) {
 +  if (gin == nullptr) {
      return;
    }
- 
+
 @@ -142,9 +142,23 @@
        continue;
      }
- 
+
 -    gin->put(world, meta.peer, recv_win, meta.dst_byte_offset, send_win,
 -             meta.src_byte_offset, meta.byte_count,
 -             ncclGin_StrongSignalInc{signal_index});
@@ -44,10 +44,10 @@
 +             ncclGin_WeakSignalInc{signal_index});
    }
  }
- 
+
 @@ -169,58 +183,63 @@
    const bool has_remote_peers = (lsa_size < num_ranks);
- 
+
    if (has_remote_peers) {
 -    const int gin_context = 0;
 +    const int gin_context_count =
@@ -55,7 +55,7 @@
 +                   static_cast<int>(gridDim.x)));
 +    const bool transfers_remote_chunk = blockIdx.x < gin_context_count;
      const unsigned int signal_index = 0;
- 
+
 -    ncclGin gin{dev_comm, gin_context};
 -    ncclLsaBarrierSession<ncclCoopCta> lsa_bar{
 -        ncclCoopCta(), dev_comm, ncclTeamTagLsa{}, blockIdx.x};
@@ -63,7 +63,7 @@
 +    ncclGin barrier_gin{dev_comm, 0};
 +    ncclGin transfer_gin{dev_comm,
 +                         transfers_remote_chunk ? blockIdx.x : 0};
- 
+
      __shared__ uint64_t signal_value;
      __shared__ int incoming_remote_updates;
 -    if (blockIdx.x == 0) {
@@ -105,7 +105,7 @@
 -      gin.waitSignal(ncclCoopCta(), signal_index,
 -                     signal_value + incoming_remote_updates);
      }
- 
+
 +    ncclBarrierSession<ncclCoopCta> bar{
 +        ncclCoopCta(), ncclTeamTagWorld(), barrier_gin, blockIdx.x};
 +    bar.sync(ncclCoopCta(), ::cuda::memory_order_acquire,
@@ -145,6 +145,6 @@
 -        lsa_size, num_ranks, /*gin=*/nullptr, world, /*signal_index=*/0);
 +        lsa_size, num_ranks, /*gin=*/nullptr, world,
 +        /*gin_context_count=*/1, /*signal_index=*/0);
- 
+
      bar.sync(ncclCoopCta(), ::cuda::memory_order_release);
    }
