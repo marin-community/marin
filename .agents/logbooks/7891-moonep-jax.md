@@ -1323,3 +1323,17 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Shape: Use four updates for each peer, 256 rows for each rank, and 5,120 BF16 elements for each row.
 - Local gate: The XLA build passed. The four-GPU exact MoonEP output and input, W13, and W2 gradient test passed.
 - Rack gate: Require attempt-zero completion, checksum `24192`, zero sampled mismatches, and success on all 16 workers.
+
+### 2026-08-03 06:48 UTC - MNEP-073 passes the rack transport gate
+
+- Result: All 16 workers succeeded on attempt zero in `43.31 s`, including setup and JAX startup.
+- Correctness: The checker raises for any sampled mismatch. All workers returned code zero, so the checksum is `24192` with zero sampled mismatches.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-073-multicontext-gin-probe-20260803-0643-coord).
+- Decision: Use the same wheel for a five-step exact MoonEP MFU gate.
+
+### 2026-08-03 06:48 UTC - MNEP-074 multi-context MFU contract
+
+- Run ID: `mnep-074-multicontext-gin-5-20260803-0648`.
+- Treatment: Run exact MoonEP and global histogram QB on EP64. Divide W13, W2, and token transfers across all GIN contexts.
+- Resources: Use 16 workers with four GB200 GPUs, eight CPUs, and 128 GiB host RAM for each worker.
+- Gate: Require five finite steps, no dropped assignments, attempt zero, and at least `21.7%` median MFU.
