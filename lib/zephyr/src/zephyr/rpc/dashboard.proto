@@ -19,12 +19,7 @@ message ListPipelinesRequest {}
 message PipelineSummary {
   string execution_id = 1;
   string pipeline_name = 2;
-  PipelinePhase phase = 3;
   string current_stage = 4;
-  int32 completed_shards = 5;
-  int32 total_shards = 6;
-  int64 started_at_ms = 7;
-  string fatal_error = 8;
 }
 
 message ListPipelinesResponse {
@@ -41,12 +36,10 @@ message GetStatusRequest {
 
 enum PipelinePhase {
   PIPELINE_PHASE_UNSPECIFIED = 0;
-  PIPELINE_PHASE_INITIALIZING = 1;
   PIPELINE_PHASE_WAITING_FOR_WORKERS = 2;
   PIPELINE_PHASE_RUNNING = 3;
   PIPELINE_PHASE_SUCCEEDED = 4;
   PIPELINE_PHASE_FAILED = 5;
-  PIPELINE_PHASE_STOPPING = 6;
 }
 
 enum PlanNodeState {
@@ -76,27 +69,16 @@ message PlanNode {
   bool auxiliary = 8;
 }
 
-message PlanEdge {
-  string source_node_id = 1;
-  string target_node_id = 2;
-  string label = 3;
-}
-
 message GetPlanResponse {
   string pipeline_name = 1;
-  int32 pipeline_id = 2;
   string execution_id = 3;
   int64 source_item_count = 4;
-  int32 source_shard_count = 5;
   repeated PlanNode nodes = 6;
-  repeated PlanEdge edges = 7;
 }
 
 message PlanNodeStatus {
   string node_id = 1;
   PlanNodeState state = 2;
-  int64 started_at_ms = 3;
-  int64 finished_at_ms = 4;
 }
 
 message WorkerStateCount {
@@ -106,10 +88,8 @@ message WorkerStateCount {
 
 message ResourceUsage {
   double cpu_cores = 1;
-  double cpu_capacity_cores = 2;
   double cpu_utilization = 3;
   int64 memory_bytes = 4;
-  int64 memory_capacity_bytes = 5;
   double memory_utilization = 6;
 }
 
@@ -117,8 +97,6 @@ message GetStatusResponse {
   PipelinePhase phase = 1;
   string current_node_id = 2;
   string current_stage = 3;
-  int32 current_stage_index = 4;
-  int32 total_stages = 5;
   int32 completed_shards = 6;
   int32 total_shards = 7;
   int32 in_flight_shards = 8;
@@ -147,7 +125,6 @@ message MetricPoint {
   double byte_rate = 4;
   double cpu_cores = 5;
   int64 memory_bytes = 6;
-  int32 active_shards = 7;
 }
 
 message GetMetricsResponse {

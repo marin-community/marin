@@ -45,10 +45,15 @@ function render() {
   root.value.replaceChildren(chart)
 }
 
-watch(() => [props.points, props.field], render, { deep: true })
+watch(() => [props.points, props.field], render, { deep: true, flush: 'post' })
+watch(root, (element, previous) => {
+  if (previous) observer?.unobserve(previous)
+  if (element) observer?.observe(element)
+  render()
+}, { flush: 'post' })
 onMounted(() => {
   observer = new ResizeObserver(render)
-  observer.observe(root.value as HTMLElement)
+  if (root.value) observer.observe(root.value)
   render()
 })
 onBeforeUnmount(() => observer?.disconnect())

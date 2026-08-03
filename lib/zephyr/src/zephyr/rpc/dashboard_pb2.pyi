@@ -10,12 +10,10 @@ DESCRIPTOR: _descriptor.FileDescriptor
 class PipelinePhase(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     PIPELINE_PHASE_UNSPECIFIED: _ClassVar[PipelinePhase]
-    PIPELINE_PHASE_INITIALIZING: _ClassVar[PipelinePhase]
     PIPELINE_PHASE_WAITING_FOR_WORKERS: _ClassVar[PipelinePhase]
     PIPELINE_PHASE_RUNNING: _ClassVar[PipelinePhase]
     PIPELINE_PHASE_SUCCEEDED: _ClassVar[PipelinePhase]
     PIPELINE_PHASE_FAILED: _ClassVar[PipelinePhase]
-    PIPELINE_PHASE_STOPPING: _ClassVar[PipelinePhase]
 
 class PlanNodeState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -33,12 +31,10 @@ class CounterAggregation(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     COUNTER_AGGREGATION_MAX: _ClassVar[CounterAggregation]
     COUNTER_AGGREGATION_MIN: _ClassVar[CounterAggregation]
 PIPELINE_PHASE_UNSPECIFIED: PipelinePhase
-PIPELINE_PHASE_INITIALIZING: PipelinePhase
 PIPELINE_PHASE_WAITING_FOR_WORKERS: PipelinePhase
 PIPELINE_PHASE_RUNNING: PipelinePhase
 PIPELINE_PHASE_SUCCEEDED: PipelinePhase
 PIPELINE_PHASE_FAILED: PipelinePhase
-PIPELINE_PHASE_STOPPING: PipelinePhase
 PLAN_NODE_STATE_UNSPECIFIED: PlanNodeState
 PLAN_NODE_STATE_PENDING: PlanNodeState
 PLAN_NODE_STATE_RUNNING: PlanNodeState
@@ -55,24 +51,14 @@ class ListPipelinesRequest(_message.Message):
     def __init__(self) -> None: ...
 
 class PipelineSummary(_message.Message):
-    __slots__ = ("execution_id", "pipeline_name", "phase", "current_stage", "completed_shards", "total_shards", "started_at_ms", "fatal_error")
+    __slots__ = ("execution_id", "pipeline_name", "current_stage")
     EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     PIPELINE_NAME_FIELD_NUMBER: _ClassVar[int]
-    PHASE_FIELD_NUMBER: _ClassVar[int]
     CURRENT_STAGE_FIELD_NUMBER: _ClassVar[int]
-    COMPLETED_SHARDS_FIELD_NUMBER: _ClassVar[int]
-    TOTAL_SHARDS_FIELD_NUMBER: _ClassVar[int]
-    STARTED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    FATAL_ERROR_FIELD_NUMBER: _ClassVar[int]
     execution_id: str
     pipeline_name: str
-    phase: PipelinePhase
     current_stage: str
-    completed_shards: int
-    total_shards: int
-    started_at_ms: int
-    fatal_error: str
-    def __init__(self, execution_id: _Optional[str] = ..., pipeline_name: _Optional[str] = ..., phase: _Optional[_Union[PipelinePhase, str]] = ..., current_stage: _Optional[str] = ..., completed_shards: _Optional[int] = ..., total_shards: _Optional[int] = ..., started_at_ms: _Optional[int] = ..., fatal_error: _Optional[str] = ...) -> None: ...
+    def __init__(self, execution_id: _Optional[str] = ..., pipeline_name: _Optional[str] = ..., current_stage: _Optional[str] = ...) -> None: ...
 
 class ListPipelinesResponse(_message.Message):
     __slots__ = ("pipelines",)
@@ -112,45 +98,25 @@ class PlanNode(_message.Message):
     auxiliary: bool
     def __init__(self, node_id: _Optional[str] = ..., label: _Optional[str] = ..., stage_type: _Optional[str] = ..., operation_types: _Optional[_Iterable[str]] = ..., output_shards: _Optional[int] = ..., stage_index: _Optional[int] = ..., parent_node_id: _Optional[str] = ..., auxiliary: _Optional[bool] = ...) -> None: ...
 
-class PlanEdge(_message.Message):
-    __slots__ = ("source_node_id", "target_node_id", "label")
-    SOURCE_NODE_ID_FIELD_NUMBER: _ClassVar[int]
-    TARGET_NODE_ID_FIELD_NUMBER: _ClassVar[int]
-    LABEL_FIELD_NUMBER: _ClassVar[int]
-    source_node_id: str
-    target_node_id: str
-    label: str
-    def __init__(self, source_node_id: _Optional[str] = ..., target_node_id: _Optional[str] = ..., label: _Optional[str] = ...) -> None: ...
-
 class GetPlanResponse(_message.Message):
-    __slots__ = ("pipeline_name", "pipeline_id", "execution_id", "source_item_count", "source_shard_count", "nodes", "edges")
+    __slots__ = ("pipeline_name", "execution_id", "source_item_count", "nodes")
     PIPELINE_NAME_FIELD_NUMBER: _ClassVar[int]
-    PIPELINE_ID_FIELD_NUMBER: _ClassVar[int]
     EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     SOURCE_ITEM_COUNT_FIELD_NUMBER: _ClassVar[int]
-    SOURCE_SHARD_COUNT_FIELD_NUMBER: _ClassVar[int]
     NODES_FIELD_NUMBER: _ClassVar[int]
-    EDGES_FIELD_NUMBER: _ClassVar[int]
     pipeline_name: str
-    pipeline_id: int
     execution_id: str
     source_item_count: int
-    source_shard_count: int
     nodes: _containers.RepeatedCompositeFieldContainer[PlanNode]
-    edges: _containers.RepeatedCompositeFieldContainer[PlanEdge]
-    def __init__(self, pipeline_name: _Optional[str] = ..., pipeline_id: _Optional[int] = ..., execution_id: _Optional[str] = ..., source_item_count: _Optional[int] = ..., source_shard_count: _Optional[int] = ..., nodes: _Optional[_Iterable[_Union[PlanNode, _Mapping]]] = ..., edges: _Optional[_Iterable[_Union[PlanEdge, _Mapping]]] = ...) -> None: ...
+    def __init__(self, pipeline_name: _Optional[str] = ..., execution_id: _Optional[str] = ..., source_item_count: _Optional[int] = ..., nodes: _Optional[_Iterable[_Union[PlanNode, _Mapping]]] = ...) -> None: ...
 
 class PlanNodeStatus(_message.Message):
-    __slots__ = ("node_id", "state", "started_at_ms", "finished_at_ms")
+    __slots__ = ("node_id", "state")
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
-    STARTED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    FINISHED_AT_MS_FIELD_NUMBER: _ClassVar[int]
     node_id: str
     state: PlanNodeState
-    started_at_ms: int
-    finished_at_ms: int
-    def __init__(self, node_id: _Optional[str] = ..., state: _Optional[_Union[PlanNodeState, str]] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ...) -> None: ...
+    def __init__(self, node_id: _Optional[str] = ..., state: _Optional[_Union[PlanNodeState, str]] = ...) -> None: ...
 
 class WorkerStateCount(_message.Message):
     __slots__ = ("state", "count")
@@ -161,28 +127,22 @@ class WorkerStateCount(_message.Message):
     def __init__(self, state: _Optional[str] = ..., count: _Optional[int] = ...) -> None: ...
 
 class ResourceUsage(_message.Message):
-    __slots__ = ("cpu_cores", "cpu_capacity_cores", "cpu_utilization", "memory_bytes", "memory_capacity_bytes", "memory_utilization")
+    __slots__ = ("cpu_cores", "cpu_utilization", "memory_bytes", "memory_utilization")
     CPU_CORES_FIELD_NUMBER: _ClassVar[int]
-    CPU_CAPACITY_CORES_FIELD_NUMBER: _ClassVar[int]
     CPU_UTILIZATION_FIELD_NUMBER: _ClassVar[int]
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
-    MEMORY_CAPACITY_BYTES_FIELD_NUMBER: _ClassVar[int]
     MEMORY_UTILIZATION_FIELD_NUMBER: _ClassVar[int]
     cpu_cores: float
-    cpu_capacity_cores: float
     cpu_utilization: float
     memory_bytes: int
-    memory_capacity_bytes: int
     memory_utilization: float
-    def __init__(self, cpu_cores: _Optional[float] = ..., cpu_capacity_cores: _Optional[float] = ..., cpu_utilization: _Optional[float] = ..., memory_bytes: _Optional[int] = ..., memory_capacity_bytes: _Optional[int] = ..., memory_utilization: _Optional[float] = ...) -> None: ...
+    def __init__(self, cpu_cores: _Optional[float] = ..., cpu_utilization: _Optional[float] = ..., memory_bytes: _Optional[int] = ..., memory_utilization: _Optional[float] = ...) -> None: ...
 
 class GetStatusResponse(_message.Message):
-    __slots__ = ("phase", "current_node_id", "current_stage", "current_stage_index", "total_stages", "completed_shards", "total_shards", "in_flight_shards", "queued_shards", "retries", "started_at_ms", "finished_at_ms", "fatal_error", "coordinator_task_id", "expected_workers", "worker_states", "resources", "node_statuses", "execution_id")
+    __slots__ = ("phase", "current_node_id", "current_stage", "completed_shards", "total_shards", "in_flight_shards", "queued_shards", "retries", "started_at_ms", "finished_at_ms", "fatal_error", "coordinator_task_id", "expected_workers", "worker_states", "resources", "node_statuses", "execution_id")
     PHASE_FIELD_NUMBER: _ClassVar[int]
     CURRENT_NODE_ID_FIELD_NUMBER: _ClassVar[int]
     CURRENT_STAGE_FIELD_NUMBER: _ClassVar[int]
-    CURRENT_STAGE_INDEX_FIELD_NUMBER: _ClassVar[int]
-    TOTAL_STAGES_FIELD_NUMBER: _ClassVar[int]
     COMPLETED_SHARDS_FIELD_NUMBER: _ClassVar[int]
     TOTAL_SHARDS_FIELD_NUMBER: _ClassVar[int]
     IN_FLIGHT_SHARDS_FIELD_NUMBER: _ClassVar[int]
@@ -200,8 +160,6 @@ class GetStatusResponse(_message.Message):
     phase: PipelinePhase
     current_node_id: str
     current_stage: str
-    current_stage_index: int
-    total_stages: int
     completed_shards: int
     total_shards: int
     in_flight_shards: int
@@ -216,7 +174,7 @@ class GetStatusResponse(_message.Message):
     resources: ResourceUsage
     node_statuses: _containers.RepeatedCompositeFieldContainer[PlanNodeStatus]
     execution_id: str
-    def __init__(self, phase: _Optional[_Union[PipelinePhase, str]] = ..., current_node_id: _Optional[str] = ..., current_stage: _Optional[str] = ..., current_stage_index: _Optional[int] = ..., total_stages: _Optional[int] = ..., completed_shards: _Optional[int] = ..., total_shards: _Optional[int] = ..., in_flight_shards: _Optional[int] = ..., queued_shards: _Optional[int] = ..., retries: _Optional[int] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., fatal_error: _Optional[str] = ..., coordinator_task_id: _Optional[str] = ..., expected_workers: _Optional[int] = ..., worker_states: _Optional[_Iterable[_Union[WorkerStateCount, _Mapping]]] = ..., resources: _Optional[_Union[ResourceUsage, _Mapping]] = ..., node_statuses: _Optional[_Iterable[_Union[PlanNodeStatus, _Mapping]]] = ..., execution_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, phase: _Optional[_Union[PipelinePhase, str]] = ..., current_node_id: _Optional[str] = ..., current_stage: _Optional[str] = ..., completed_shards: _Optional[int] = ..., total_shards: _Optional[int] = ..., in_flight_shards: _Optional[int] = ..., queued_shards: _Optional[int] = ..., retries: _Optional[int] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., fatal_error: _Optional[str] = ..., coordinator_task_id: _Optional[str] = ..., expected_workers: _Optional[int] = ..., worker_states: _Optional[_Iterable[_Union[WorkerStateCount, _Mapping]]] = ..., resources: _Optional[_Union[ResourceUsage, _Mapping]] = ..., node_statuses: _Optional[_Iterable[_Union[PlanNodeStatus, _Mapping]]] = ..., execution_id: _Optional[str] = ...) -> None: ...
 
 class GetMetricsRequest(_message.Message):
     __slots__ = ("max_points", "execution_id")
@@ -227,22 +185,20 @@ class GetMetricsRequest(_message.Message):
     def __init__(self, max_points: _Optional[int] = ..., execution_id: _Optional[str] = ...) -> None: ...
 
 class MetricPoint(_message.Message):
-    __slots__ = ("timestamp_ms", "stage", "item_rate", "byte_rate", "cpu_cores", "memory_bytes", "active_shards")
+    __slots__ = ("timestamp_ms", "stage", "item_rate", "byte_rate", "cpu_cores", "memory_bytes")
     TIMESTAMP_MS_FIELD_NUMBER: _ClassVar[int]
     STAGE_FIELD_NUMBER: _ClassVar[int]
     ITEM_RATE_FIELD_NUMBER: _ClassVar[int]
     BYTE_RATE_FIELD_NUMBER: _ClassVar[int]
     CPU_CORES_FIELD_NUMBER: _ClassVar[int]
     MEMORY_BYTES_FIELD_NUMBER: _ClassVar[int]
-    ACTIVE_SHARDS_FIELD_NUMBER: _ClassVar[int]
     timestamp_ms: int
     stage: str
     item_rate: float
     byte_rate: float
     cpu_cores: float
     memory_bytes: int
-    active_shards: int
-    def __init__(self, timestamp_ms: _Optional[int] = ..., stage: _Optional[str] = ..., item_rate: _Optional[float] = ..., byte_rate: _Optional[float] = ..., cpu_cores: _Optional[float] = ..., memory_bytes: _Optional[int] = ..., active_shards: _Optional[int] = ...) -> None: ...
+    def __init__(self, timestamp_ms: _Optional[int] = ..., stage: _Optional[str] = ..., item_rate: _Optional[float] = ..., byte_rate: _Optional[float] = ..., cpu_cores: _Optional[float] = ..., memory_bytes: _Optional[int] = ...) -> None: ...
 
 class GetMetricsResponse(_message.Message):
     __slots__ = ("points", "warning")

@@ -3,18 +3,27 @@
 
 """Behavior tests for the coordinator-owned dashboard boundary."""
 
+import hashlib
+import re
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 from conftest import _TEST_TASK_COST, _make_test_coordinator, start_test_stage
+from rigging.timing import Duration, ExponentialBackoff
 from starlette.testclient import TestClient
 from zephyr.coordinator import PullStatus
 from zephyr.dashboard import service_path
 from zephyr.dataset import Dataset
 from zephyr.plan import PhysicalPlan, compute_plan
 from zephyr.shuffle import ListShard
-from zephyr.stage_io import ShardTask
+from zephyr.stage_io import ShardTask, ZephyrWorkerError
 from zephyr.stats import ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, ZEPHYR_WORKER_MEM_CURRENT_KEY
 from zephyr.worker_context import CounterEntry, CounterSnapshot
+
+_DASHBOARD_ROOT = Path(__file__).parents[1] / "dashboard"
+_DASHBOARD_ASSET = Path(__file__).parents[1] / "src" / "zephyr" / "dashboard.html"
 
 
 def _rpc(client: TestClient, method: str, request: dict | None = None) -> dict:
@@ -55,6 +64,35 @@ def _task(shard: int, total_shards: int) -> ShardTask:
         stage_name="stage0-Map",
         cost=_TEST_TASK_COST,
     )
+
+
+def test_dashboard_asset_matches_frontend_sources():
+    source_files = [
+        *(_DASHBOARD_ROOT / "src").rglob("*"),
+        *(_DASHBOARD_ROOT / "scripts").rglob("*"),
+        *(
+            _DASHBOARD_ROOT / name
+            for name in [
+                "env.d.ts",
+                "package-lock.json",
+                "package.json",
+                "postcss.config.cjs",
+                "rsbuild.config.ts",
+                "tailwind.config.ts",
+                "tsconfig.json",
+            ]
+        ),
+    ]
+    digest = hashlib.sha256()
+    for path in sorted(path for path in source_files if path.is_file()):
+        digest.update(path.relative_to(_DASHBOARD_ROOT).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+
+    match = re.search(r'data-source-hash="([0-9a-f]{64})"', _DASHBOARD_ASSET.read_text())
+    assert match is not None
+    assert match.group(1) == digest.hexdigest(), "dashboard.html is stale; run npm run build"
 
 
 def test_dashboard_lists_and_selects_concurrent_pipelines(actor_context, tmp_path):
@@ -158,6 +196,26 @@ def test_dashboard_scopes_live_counters_and_status_by_pipeline(actor_context, tm
         coordinator.shutdown()
 
 
+def test_dashboard_rejects_metrics_for_unknown_execution(actor_context, tmp_path, monkeypatch):
+    class RejectingStatsWriter:
+        def query_pipeline_metrics(self, execution_id: str, max_points: int):
+            raise AssertionError(f"unexpected metrics query for {execution_id=} and {max_points=}")
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("zephyr.coordinator.StatsWriter.connect", lambda: RejectingStatsWriter())
+    plan = compute_plan(Dataset.from_list([1]).map(lambda value: value + 1))
+    coordinator = _make_test_coordinator(tmp_path)
+    _start_pipeline(coordinator, plan, "exec-a", "pipeline-a")
+    try:
+        with TestClient(coordinator.web_application) as client:
+            metrics = _rpc(client, "GetMetrics", {"executionId": "another-job", "maxPoints": 10})
+            assert metrics == {"warning": "The selected pipeline is not active."}
+    finally:
+        coordinator.shutdown()
+
+
 def test_dashboard_worker_assignments_include_pipeline(actor_context, tmp_path):
     plan = compute_plan(Dataset.from_list([1]).map(lambda value: value + 1))
     coordinator = _make_test_coordinator(tmp_path)
@@ -204,21 +262,48 @@ def test_dashboard_plan_includes_join_input_without_source_values(actor_context,
 def test_dashboard_reports_selected_pipeline_failure(actor_context, tmp_path):
     plan = compute_plan(Dataset.from_list([1]).map(lambda value: value + 1))
     coordinator = _make_test_coordinator(tmp_path)
-    _start_pipeline(coordinator, plan, "failed-exec", "failed", tasks=[_task(0, 1)])
     coordinator.register_worker("worker-0", MagicMock())
-    for _ in range(3):
-        pull_status, work = coordinator.pull_task("worker-0", _TEST_TASK_COST)
-        assert pull_status is PullStatus.RUN_TASK
-        assert work is not None
-        coordinator.report_error(
-            "worker-0",
-            work.execution_id,
-            work.task.shard_idx,
-            work.attempt,
-            "test stage failed",
-            work.stage_generation,
-        )
     try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            execution = executor.submit(
+                coordinator.run_pipeline,
+                plan,
+                "failed-exec",
+                "failed",
+                _TEST_TASK_COST,
+                _TEST_TASK_COST,
+            )
+            pulled_work = []
+
+            def pull_first_task() -> bool:
+                pull_status, work = coordinator.pull_task("worker-0", _TEST_TASK_COST)
+                if pull_status is not PullStatus.RUN_TASK or work is None:
+                    return False
+                pulled_work.append(work)
+                return True
+
+            assert ExponentialBackoff(initial=0.01, maximum=0.1).wait_until(
+                pull_first_task,
+                Duration.from_seconds(5),
+            )
+            for failure in range(3):
+                if failure:
+                    pull_status, work = coordinator.pull_task("worker-0", _TEST_TASK_COST)
+                    assert pull_status is PullStatus.RUN_TASK
+                    assert work is not None
+                else:
+                    work = pulled_work[0]
+                coordinator.report_error(
+                    "worker-0",
+                    work.execution_id,
+                    work.task.shard_idx,
+                    work.attempt,
+                    "test stage failed",
+                    work.stage_generation,
+                )
+            with pytest.raises(ZephyrWorkerError, match="test stage failed"):
+                execution.result(timeout=5)
+
         with TestClient(coordinator.web_application) as client:
             status = _rpc(client, "GetStatus", {"executionId": "failed-exec"})
             assert status["phase"] == "PIPELINE_PHASE_FAILED"
