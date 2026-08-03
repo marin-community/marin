@@ -442,6 +442,12 @@ def test_run_grug_selects_collective_overlap_limit(
             "4d3f0da2320322ebafb01770bee19440ec2479f04da726761a67332eb9013f68",
             None,
         ),
+        (
+            MoonEPJaxWheelBuild.LSA_NCCL_2307_MULTICONTEXT_GIN_CTA32_20260803,
+            "jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta32-20260803",
+            "a9d724a350612b982757ac38dbac07f5a9305b55d62e96f9196eedcf4cb9f1b4",
+            None,
+        ),
     ],
 )
 def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(

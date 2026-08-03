@@ -1,0 +1,12 @@
+diff --git a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+--- a/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
++++ b/xla/backends/gpu/runtime/ragged_all_to_all_thunk.h
+@@ -253,5 +253,6 @@ class RaggedAllToAllThunk : public CollectiveThunk {
+-  // Upper bound on the device-kernel launch grid and the number of barrier
+-  static constexpr int32_t kMaxDeviceKernelCtaCount = 64;
++  // Keep GPU resources free for expert compute. Use 32 CTAs to increase
++  // transport speed from the 16-CTA correctness point.
++  static constexpr int32_t kMaxDeviceKernelCtaCount = 32;
+   // Floor on the launch grid so small shapes still get some parallelism.
+   static constexpr int32_t kMinDeviceKernelCtaCount = 8;
+   // Target number of CTAs per (peer, update) copy unit before the grid

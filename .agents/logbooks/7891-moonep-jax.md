@@ -1467,3 +1467,19 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - CTA16 gate: Run the exact MNEP-081 graph without patch 0017. Require five finite steps before using its throughput result.
 - Rematerialization: Add an explicit `save_moe` launcher mode. The MNEP-079 profile contains rematerialized token transfers; saving the tagged MoE tensors can remove those duplicate collectives if the program fits in HBM.
 - Order: Isolate CTA16 correctness and speed first. Then combine the best safe transport with `save_moe` and measure HBM, MFU, and tokens/s.
+
+### 2026-08-03 10:09 UTC - MNEP-082 rejects CTA16 transport
+
+- Result: All 16 workers completed five finite steps on attempt zero with zero dropped assignments.
+- Performance: The p50 duration was `62.450 s`. The p50 MFU was `4.144%` at `67,162` tokens/s.
+- Comparison: MNEP-081 reached `4.159%` p50 MFU with the broad fence. Thus, the 16-CTA cap caused most of the slowdown.
+- Decision: Reject CTA16 as a performance path. Test CTA32 to increase transport throughput and keep GPU resources free for expert compute.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-082-cta16-overlap-5-20260803-0959-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-082-cta16-overlap-5-20260803-0959).
+
+### 2026-08-03 10:15 UTC - CTA32 overlap contract
+
+- Kernel: Apply sparse GIN, multi-context GIN, and a 32-CTA transport cap to XLA `5d53e1e40c` with NCCL `2.30.7`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta32-20260803`.
+- PJRT SHA-256: `a9d724a350612b982757ac38dbac07f5a9305b55d62e96f9196eedcf4cb9f1b4`.
+- Local gate: The exact two-bucket overlap output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
+- Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above CTA16.
