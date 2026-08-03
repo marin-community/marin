@@ -20,6 +20,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +44,9 @@ logger = logging.getLogger(__name__)
 _HARBOR_WORKDIR = Path("/tmp/harbor_workdir")
 # Harbor writes its job tree under ``output_dir/harbor_jobs/<job_name>/<trial>/`` as trials finish.
 _HARBOR_JOBS_SUBDIR = "harbor_jobs"
+# Trials normalize off independent per-trial reads on the remote job tree; fan them out so a
+# several-hundred-trial dataset is not a sequential round-trip per trial.
+_TRIAL_READ_WORKERS = 16
 _JOB_DATASET_LENGTH = 32
 _JOB_DIGEST_LENGTH = 12
 
@@ -60,7 +64,7 @@ class HarborTrial:
     task_id: str
     reward: float
     status: str
-    trajectory: str | None
+    trajectory_uri: str | None
     error: dict | None
 
 
@@ -116,46 +120,47 @@ def _job_dir(output_dir: str, job_name: str) -> StoragePath:
     return _jobs_dir(output_dir) / job_name
 
 
+def _read_trial(result_file: StoragePath) -> HarborTrial:
+    """Normalize one finished trial off its ``result.json``, referencing its durable trajectory."""
+    trial_dir = result_file.parent
+    data = json.loads(result_file.read_text())
+    task_id = data.get("task_name", trial_dir.name)
+    rewards = (data.get("verifier_result") or {}).get("rewards") or {}
+    reward = rewards.get("reward", 0.0)
+    reward = float(reward) if isinstance(reward, int | float) else 0.0
+    exc = data.get("exception_info")
+    error = {"type": exc.get("exception_type"), "message": exc.get("exception_message")} if exc else None
+    # The trajectory is already durable in the job tree; reference it in place rather than reading it
+    # back and re-uploading a copy.
+    trajectory_file = trial_dir / "agent" / "trajectory.json"
+    trajectory_uri = str(trajectory_file) if trajectory_file.exists() else None
+    return HarborTrial(
+        task_id=task_id,
+        reward=reward,
+        status="failed" if exc else "completed",
+        trajectory_uri=trajectory_uri,
+        error=error,
+    )
+
+
 def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
-    """Read every finished trial under ``job_dir`` off its ``result.json`` and ``trajectory.json``."""
-    trials: list[HarborTrial] = []
+    """Read every finished trial under ``job_dir``, one parallel per-trial read each."""
     result_files = sorted((job_dir / "*/result.json").glob(), key=lambda path: path.parent.name)
-    for result_file in result_files:
-        trial_dir = result_file.parent
-        data = json.loads(result_file.read_text())
-        task_id = data.get("task_name", trial_dir.name)
-        rewards = (data.get("verifier_result") or {}).get("rewards") or {}
-        reward = rewards.get("reward", 0.0)
-        reward = float(reward) if isinstance(reward, int | float) else 0.0
-        exc = data.get("exception_info")
-        error = {"type": exc.get("exception_type"), "message": exc.get("exception_message")} if exc else None
-        trajectory_file = trial_dir / "agent" / "trajectory.json"
-        trajectory = trajectory_file.read_text() if trajectory_file.exists() else None
-        trials.append(
-            HarborTrial(
-                task_id=task_id,
-                reward=reward,
-                status="failed" if exc else "completed",
-                trajectory=trajectory,
-                error=error,
-            )
-        )
-    return trials
+    if not result_files:
+        return []
+    with ThreadPoolExecutor(max_workers=min(_TRIAL_READ_WORKERS, len(result_files))) as pool:
+        return list(pool.map(_read_trial, result_files))
 
 
-def _sample_for(trial: HarborTrial, dataset: str, out_path: str) -> EvalSample:
-    """Normalize one trial into an agentic :class:`EvalSample`, saving its trajectory alongside."""
-    trajectory_uri: str | None = None
-    if trial.trajectory:
-        trajectory_uri = prefix_join(out_path, f"trajectories/{trial.task_id}.json")
-        StoragePath(trajectory_uri).write_text(trial.trajectory)
+def _sample_for(trial: HarborTrial, dataset: str) -> EvalSample:
+    """Normalize one trial into an agentic :class:`EvalSample`, referencing its durable trajectory."""
     solved = trial.reward >= SOLVED_REWARD
     detail = json.dumps({"reward": trial.reward, "error": trial.error}, ensure_ascii=False)
     return EvalSample(
         task=dataset,
         doc_id=trial.task_id,
         kind=SampleKind.AGENTIC,
-        trajectory_uri=trajectory_uri,
+        trajectory_uri=trial.trajectory_uri,
         grading=Grading(
             method="harbor:verifier",
             metric="reward",
@@ -172,7 +177,7 @@ def _write_samples(trials: list[HarborTrial], dataset: str, out_path: str) -> st
     """Write one agentic-sample parquet for the run; return its path (None if there were no trials)."""
     if not trials:
         return None
-    samples = [_sample_for(trial, dataset, out_path) for trial in trials]
+    samples = [_sample_for(trial, dataset) for trial in trials]
     dest = prefix_join(out_path, "samples_harbor.parquet")
     fs, _ = url_to_fs(dest)
     write_sample_parquet(fs, dest, samples)

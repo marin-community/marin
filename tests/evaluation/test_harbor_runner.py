@@ -15,6 +15,8 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
     HarborTrial,
+    _read_trials,
+    _sample_for,
     _write_samples,
 )
 from marin.evaluation.records import RunStatus
@@ -116,12 +118,35 @@ def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp
 
 
 def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
-    trial = HarborTrial(task_id="task-one", reward=0.0, status="completed", trajectory=None, error=None)
+    trial = HarborTrial(task_id="task-one", reward=0.0, status="completed", trajectory_uri=None, error=None)
 
     path = _write_samples([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
 
     assert path == str(tmp_path / "samples_harbor.parquet")
     assert Path(path).exists()
+
+
+def test_read_trials_references_trajectory_in_place(tmp_path):
+    """A trial's trajectory is referenced at its durable job-tree path, not copied elsewhere."""
+    job_dir = tmp_path / "harbor_jobs" / "job"
+    with_trajectory = job_dir / "trial-one"
+    (with_trajectory / "agent").mkdir(parents=True)
+    (with_trajectory / "result.json").write_text(
+        json.dumps({"task_name": "task-one", "verifier_result": {"rewards": {"reward": 1.0}}})
+    )
+    (with_trajectory / "agent" / "trajectory.json").write_text('{"steps": []}')
+    without_trajectory = job_dir / "trial-two"
+    without_trajectory.mkdir(parents=True)
+    (without_trajectory / "result.json").write_text(json.dumps({"task_name": "task-two"}))
+
+    trials = _read_trials(StoragePath(str(job_dir)))
+
+    by_task = {trial.task_id: trial for trial in trials}
+    assert by_task["task-one"].trajectory_uri == str(with_trajectory / "agent" / "trajectory.json")
+    assert by_task["task-two"].trajectory_uri is None
+    # The sample carries the in-place URI; no separate trajectories/ copy is written.
+    sample = _sample_for(by_task["task-one"], "aime")
+    assert sample.trajectory_uri == str(with_trajectory / "agent" / "trajectory.json")
 
 
 def _memory_remote(protocol: str, monkeypatch) -> None:
