@@ -13,7 +13,7 @@ from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 import cloudpickle
@@ -168,6 +168,7 @@ class _PipelineExecution:
     reduce_cost: ZephyrTaskResources
     plan: PhysicalPlan | None = None
     pipeline_name: str = ""
+    dashboard_plan: dashboard_pb2.GetPlanResponse | None = None
     started_at_ms: int = 0
     finished_at_ms: int = 0
     task_queue: deque[ShardTask] = field(default_factory=deque)
@@ -290,7 +291,7 @@ class _DashboardWorkerSnapshot:
     state: str
     last_seen_age_seconds: float
     assignments: tuple[tuple[str, int], ...]
-    counters: CounterSnapshot
+    counters: dict[str, CounterEntry]
 
 
 def _aggregate_counter_snapshots(
@@ -422,43 +423,39 @@ class ZephyrCoordinator:
                 dashboard_pb2.PipelineSummary(
                     execution_id=run.execution_id,
                     pipeline_name=run.pipeline_name or run.execution_id,
-                    phase=self._dashboard_phase_locked(run),
                     current_stage=run.stage_name,
-                    completed_shards=run.completed_shards,
-                    total_shards=run.total_shards,
-                    started_at_ms=run.started_at_ms,
-                    fatal_error=run.fatal_error or (str(run.terminal_error) if run.terminal_error is not None else ""),
                 )
                 for run in reversed(active)
             ]
         return dashboard_pb2.ListPipelinesResponse(pipelines=summaries)
 
+    def _dashboard_plan_locked(self, run: _PipelineExecution) -> dashboard_pb2.GetPlanResponse:
+        if run.dashboard_plan is None and run.plan is not None:
+            run.dashboard_plan = pipeline_plan(
+                run.plan,
+                pipeline_name=run.pipeline_name or run.execution_id,
+                execution_id=run.execution_id,
+            )
+        return run.dashboard_plan or dashboard_pb2.GetPlanResponse(execution_id=run.execution_id)
+
     def _dashboard_plan_response(self, execution_id: str) -> dashboard_pb2.GetPlanResponse:
         with self._lock:
             run = self._dashboard_run_locked(execution_id)
-            if run is None or run.plan is None:
+            if run is None:
                 return dashboard_pb2.GetPlanResponse(execution_id=execution_id)
-            plan = run.plan
-            pipeline_name = run.pipeline_name
-            selected_execution_id = run.execution_id
-        return pipeline_plan(
-            plan,
-            pipeline_name=pipeline_name or selected_execution_id,
-            pipeline_id=0,
-            execution_id=selected_execution_id,
-        )
+            cached = self._dashboard_plan_locked(run)
+            response = dashboard_pb2.GetPlanResponse()
+            response.CopyFrom(cached)
+            return response
 
-    def _worker_counter_snapshot_locked(self, worker_id: str) -> CounterSnapshot:
+    def _worker_counter_entries_locked(self, worker_id: str) -> dict[str, CounterEntry]:
         merged, conflicted = merge_counter_entries(
             (name, entry)
             for (snapshot_worker_id, _), snapshot in self._worker_counters.items()
             if snapshot_worker_id == worker_id
             for name, entry in snapshot.counters.items()
         )
-        return CounterSnapshot(
-            counters={name: entry for name, entry in merged.items() if name not in conflicted},
-            generation=0,
-        )
+        return {name: entry for name, entry in merged.items() if name not in conflicted}
 
     def _dashboard_status_response(self, execution_id: str) -> dashboard_pb2.GetStatusResponse:
         with self._lock:
@@ -483,16 +480,7 @@ class ZephyrCoordinator:
             active_workers = worker_states.get(WorkerState.ACTIVE.value, 0)
             cpu_capacity = active_workers * self._worker_resources.cpu
             memory_capacity = active_workers * self._worker_resources.memory
-            safe_plan = (
-                pipeline_plan(
-                    run.plan,
-                    pipeline_name=run.pipeline_name or run.execution_id,
-                    pipeline_id=0,
-                    execution_id=run.execution_id,
-                )
-                if run.plan is not None
-                else dashboard_pb2.GetPlanResponse()
-            )
+            safe_plan = self._dashboard_plan_locked(run)
             nodes_by_id = {node.node_id: node for node in safe_plan.nodes}
             node_statuses: list[dashboard_pb2.PlanNodeStatus] = []
             phase = self._dashboard_phase_locked(run)
@@ -502,13 +490,13 @@ class ZephyrCoordinator:
                 else:
                     parent = nodes_by_id.get(node.parent_node_id)
                     stage_index = parent.stage_index if parent is not None else node.stage_index
-                    if stage_index < run.current_stage_index or run.done:
+                    if stage_index < run.current_stage_index:
                         state = dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED
+                    elif phase == dashboard_pb2.PIPELINE_PHASE_FAILED and stage_index == run.current_stage_index:
+                        state = dashboard_pb2.PLAN_NODE_STATE_FAILED
                     elif stage_index > run.current_stage_index or not run.stage_name:
                         state = dashboard_pb2.PLAN_NODE_STATE_PENDING
-                    elif phase == dashboard_pb2.PIPELINE_PHASE_FAILED:
-                        state = dashboard_pb2.PLAN_NODE_STATE_FAILED
-                    elif run.total_shards > 0 and run.completed_shards >= run.total_shards:
+                    elif run.done or (run.total_shards > 0 and run.completed_shards >= run.total_shards):
                         state = dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED
                     else:
                         state = dashboard_pb2.PLAN_NODE_STATE_RUNNING
@@ -516,12 +504,6 @@ class ZephyrCoordinator:
                     dashboard_pb2.PlanNodeStatus(
                         node_id=node.node_id,
                         state=state,
-                        started_at_ms=run.started_at_ms if state != dashboard_pb2.PLAN_NODE_STATE_PENDING else 0,
-                        finished_at_ms=(
-                            run.finished_at_ms
-                            if state in {dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED, dashboard_pb2.PLAN_NODE_STATE_FAILED}
-                            else 0
-                        ),
                     )
                 )
 
@@ -533,8 +515,6 @@ class ZephyrCoordinator:
                 phase=phase,
                 current_node_id=current_node_id,
                 current_stage=run.stage_name,
-                current_stage_index=run.current_stage_index,
-                total_stages=len(run.plan.stages) if run.plan is not None else 0,
                 completed_shards=run.completed_shards,
                 total_shards=run.total_shards,
                 in_flight_shards=len(run.in_flight),
@@ -551,10 +531,8 @@ class ZephyrCoordinator:
                 ],
                 resources=dashboard_pb2.ResourceUsage(
                     cpu_cores=cpu_percent / 100,
-                    cpu_capacity_cores=cpu_capacity,
                     cpu_utilization=(cpu_percent / 100 / cpu_capacity) if cpu_capacity else 0,
                     memory_bytes=memory_bytes,
-                    memory_capacity_bytes=memory_capacity,
                     memory_utilization=(memory_bytes / memory_capacity) if memory_capacity else 0,
                 ),
                 node_statuses=node_statuses,
@@ -563,9 +541,9 @@ class ZephyrCoordinator:
     def _dashboard_metrics_response(self, execution_id: str, max_points: int) -> dashboard_pb2.GetMetricsResponse:
         with self._lock:
             run = self._dashboard_run_locked(execution_id)
-            selected_execution_id = run.execution_id if run is not None else execution_id
-        if not selected_execution_id:
-            return dashboard_pb2.GetMetricsResponse(warning="No active pipeline is selected.")
+            if run is None:
+                return dashboard_pb2.GetMetricsResponse(warning="The selected pipeline is not active.")
+            selected_execution_id = run.execution_id
         result = self._stats_writer.query_pipeline_metrics(selected_execution_id, max_points)
         return dashboard_pb2.GetMetricsResponse(
             points=[
@@ -576,7 +554,6 @@ class ZephyrCoordinator:
                     byte_rate=point.byte_rate,
                     cpu_cores=point.cpu_cores,
                     memory_bytes=point.memory_bytes,
-                    active_shards=point.active_shards,
                 )
                 for point in result.points
             ],
@@ -588,9 +565,9 @@ class ZephyrCoordinator:
             run = self._dashboard_run_locked(execution_id)
             if run is None:
                 return []
-            entries = [(name, replace(entry)) for (_, name, _), entry in run.completed_totals.items()]
+            entries = [(name, entry) for (_, name, _), entry in run.completed_totals.items()]
             entries.extend(
-                (name, replace(entry))
+                (name, entry)
                 for (worker_id, snapshot_execution_id), snapshot in self._worker_counters.items()
                 if worker_id in self._worker_states and snapshot_execution_id == run.execution_id
                 for name, entry in snapshot.counters.items()
@@ -600,11 +577,9 @@ class ZephyrCoordinator:
         for name, entry in entries:
             by_stage[entry.stage].append((name, entry))
         result: list[tuple[str, CounterEntry]] = []
-        for stage, stage_entries in by_stage.items():
+        for stage_entries in by_stage.values():
             merged, conflicted = merge_counter_entries(stage_entries)
-            result.extend(
-                (name, replace(entry, stage=stage)) for name, entry in merged.items() if name not in conflicted
-            )
+            result.extend((name, entry) for name, entry in merged.items() if name not in conflicted)
         return result
 
     def _dashboard_counters_response(
@@ -651,7 +626,7 @@ class ZephyrCoordinator:
                     state=state.value,
                     last_seen_age_seconds=max(0, now - self._last_seen.get(worker_id, now)),
                     assignments=tuple(sorted(assignments_by_worker[worker_id])),
-                    counters=self._worker_counter_snapshot_locked(worker_id),
+                    counters=self._worker_counter_entries_locked(worker_id),
                 )
                 for worker_id, state in self._worker_states.items()
             ]
@@ -670,12 +645,8 @@ class ZephyrCoordinator:
             "worker_id": lambda snapshot: snapshot.worker_id.casefold(),
             "state": lambda snapshot: snapshot.state,
             "last_seen": lambda snapshot: snapshot.last_seen_age_seconds,
-            "cpu": (
-                lambda snapshot: snapshot.counters.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value
-            ),
-            "memory": (
-                lambda snapshot: snapshot.counters.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value
-            ),
+            "cpu": lambda snapshot: snapshot.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value,
+            "memory": lambda snapshot: snapshot.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value,
             "active_shards": lambda snapshot: len(snapshot.assignments),
         }
         snapshots.sort(key=sort_keys.get(request.sort_field, sort_keys["worker_id"]), reverse=request.sort_descending)
@@ -692,10 +663,8 @@ class ZephyrCoordinator:
                     dashboard_pb2.WorkerAssignment(execution_id=execution_id, shard=shard)
                     for execution_id, shard in snapshot.assignments
                 ],
-                cpu_percent=float(
-                    snapshot.counters.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value
-                ),
-                memory_bytes=int(snapshot.counters.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value),
+                cpu_percent=float(snapshot.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value),
+                memory_bytes=int(snapshot.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value),
             )
             for snapshot in snapshots[offset : offset + limit]
         ]

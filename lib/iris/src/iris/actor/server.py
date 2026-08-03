@@ -156,6 +156,7 @@ class ActorServer:
         methods = {
             method_name: getattr(actor, method_name)
             for method_name in dir(actor)
+            # The dashboard property supplies an ASGI app; it is not an actor RPC.
             if method_name != "web_application"
             and not method_name.startswith("_")
             and callable(getattr(actor, method_name))

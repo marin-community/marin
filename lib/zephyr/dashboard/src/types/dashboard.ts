@@ -3,12 +3,7 @@ export type Integer = string | number
 export interface PipelineSummary {
   executionId: string
   pipelineName?: string
-  phase?: string
   currentStage?: string
-  completedShards?: number
-  totalShards?: number
-  startedAtMs?: Integer
-  fatalError?: string
 }
 
 export interface ListPipelinesResponse {
@@ -26,27 +21,16 @@ export interface PlanNode {
   auxiliary?: boolean
 }
 
-export interface PlanEdge {
-  sourceNodeId: string
-  targetNodeId: string
-  label?: string
-}
-
 export interface PipelinePlan {
   pipelineName?: string
-  pipelineId?: number
   executionId?: string
   sourceItemCount?: Integer
-  sourceShardCount?: number
   nodes?: PlanNode[]
-  edges?: PlanEdge[]
 }
 
 export interface PlanNodeStatus {
   nodeId: string
   state: string
-  startedAtMs?: Integer
-  finishedAtMs?: Integer
 }
 
 export interface WorkerStateCount {
@@ -56,10 +40,8 @@ export interface WorkerStateCount {
 
 export interface ResourceUsage {
   cpuCores?: number
-  cpuCapacityCores?: number
   cpuUtilization?: number
   memoryBytes?: Integer
-  memoryCapacityBytes?: Integer
   memoryUtilization?: number
 }
 
@@ -68,8 +50,6 @@ export interface PipelineStatus {
   phase?: string
   currentNodeId?: string
   currentStage?: string
-  currentStageIndex?: number
-  totalStages?: number
   completedShards?: number
   totalShards?: number
   inFlightShards?: number
@@ -92,7 +72,6 @@ export interface MetricPoint {
   byteRate?: number
   cpuCores?: number
   memoryBytes?: Integer
-  activeShards?: number
 }
 
 export interface PipelineMetrics {

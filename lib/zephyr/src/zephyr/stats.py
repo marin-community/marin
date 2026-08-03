@@ -146,7 +146,6 @@ class PipelineMetricPoint:
     byte_rate: float
     cpu_cores: float
     memory_bytes: int
-    active_shards: int
 
 
 @dataclass(frozen=True)
@@ -320,14 +319,15 @@ SELECT time_bin,
        sum(item_rate) AS item_rate,
        sum(byte_rate) AS byte_rate,
        sum(cpu_cores) AS cpu_cores,
-       sum(memory_bytes) AS memory_bytes,
-       count(*) AS active_shards
+       sum(memory_bytes) AS memory_bytes
 FROM per_shard
 GROUP BY 1, 2
 ORDER BY 1 DESC, 2
+LIMIT {max_points + MAX_METRIC_STAGE_SERIES}
 """.strip()
+        row_limit = max_points + MAX_METRIC_STAGE_SERIES
         try:
-            rows = self._log_client.query(sql, max_rows=max_points * MAX_METRIC_STAGE_SERIES).to_pylist()
+            rows = self._log_client.query(sql, max_rows=row_limit).to_pylist()
         except Exception:
             logger.warning("Failed to query Zephyr pipeline metrics", exc_info=True)
             return PipelineMetricsResult((), "Finelog metrics are temporarily unavailable.")
@@ -340,7 +340,6 @@ ORDER BY 1 DESC, 2
                 byte_rate=float(row["byte_rate"] or 0),
                 cpu_cores=float(row["cpu_cores"] or 0),
                 memory_bytes=int(row["memory_bytes"] or 0),
-                active_shards=int(row["active_shards"] or 0),
             )
             for row in rows
         ]
