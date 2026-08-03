@@ -2172,6 +2172,9 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - The final manifest also requires a stable accelerator report from the exact
   runtime. This report is for capacity planning; the CPU-to-Luxical ratio stays
   the approval speed gate.
+- The blind-review uploader verifies all 200 sample IDs, the package digest,
+  the pinned Claude model, the student name, and complete subgroup counts
+  before it writes an immutable report.
 - Twenty-eight focused loader, speed, semantic-evaluation, and publisher tests
   pass. The required file checks pass.
 - At 2026-08-03 12:19 UTC, the live GLM-5.2 run had 28,000 complete assignments
