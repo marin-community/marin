@@ -94,6 +94,7 @@ class FiniteDiagnostics(StrEnum):
     """Training values scanned for non-finite data."""
 
     NONE = "none"
+    EXPERT_GRADS = "expert_grads"
     GRADS = "grads"
     ALL = "all"
 
@@ -433,6 +434,16 @@ def _tree_all_finite(tree) -> jax.Array:
     return functools.reduce(jnp.logical_and, finite_leaves, jnp.array(True))
 
 
+def _expert_gradients_all_finite(grads: Transformer) -> jax.Array:
+    expert_grads = grads.stacked_blocks.stacked.mlp.expert_mlp
+    completion_slices = (
+        expert_grads.w_gate[..., 0, 0],
+        expert_grads.w_up[..., 0, 0],
+        expert_grads.w_down[..., 0, 0],
+    )
+    return _tree_all_finite(completion_slices)
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -482,7 +493,9 @@ def _make_train_step(
         updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
         params = optax.apply_updates(qb_params, updates)
 
-        if finite_diagnostics == FiniteDiagnostics.GRADS:
+        if finite_diagnostics == FiniteDiagnostics.EXPERT_GRADS:
+            metrics["diagnostics/expert_grads_finite"] = _expert_gradients_all_finite(grads)
+        elif finite_diagnostics == FiniteDiagnostics.GRADS:
             metrics["diagnostics/grads_finite"] = _tree_all_finite(grads)
         elif finite_diagnostics == FiniteDiagnostics.ALL:
             metrics.update(
