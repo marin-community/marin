@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import jax
 import numpy as np
 from evaluate_fast_student import load_student
 from fast_student import FastStudent
@@ -104,6 +105,7 @@ def main() -> None:
     """Fit and report one internal prefix rung without held-out evaluation."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--prefix-documents", type=int, required=True)
+    parser.add_argument("--report-name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     training_root = OUTPUT_ROOT / HIERARCHY_RUN_ID / HIERARCHY_VARIANT / LABEL_RUN_ID
@@ -174,10 +176,14 @@ def main() -> None:
         )
         decision = validation_decision(base_validation, projected_validation, folded_cosine_minimum)
 
-    output_root = f"{TRAINING_ROOT}/full-glm-semantic-projection-prefix/prefix-{args.prefix_documents}"
+    report_name = args.report_name or f"prefix-{args.prefix_documents}"
+    if Path(report_name).name != report_name or report_name in (".", ".."):
+        raise ValueError("The report name must be one path segment")
+    output_root = f"{TRAINING_ROOT}/full-glm-semantic-projection-prefix/{report_name}"
     report = {
         "purpose": "internal_prefix_validation",
         "heldout_evaluation_used": False,
+        "runtime_backend": jax.default_backend(),
         "prefix_documents": args.prefix_documents,
         "training_rows": len(training_indices),
         "validation_rows": len(validation_indices),
