@@ -25,6 +25,7 @@ from levanter.grug._moe.common import (
     MoonEPMode,
     split_moe_w13_output,
 )
+from levanter.grug._moe.ep_common import _shard_a2a_params
 from levanter.grug._moe.ep_fixed_all_to_all import (
     _combine_gather,
     _dispatch_gather,
@@ -52,30 +53,11 @@ class MoonEPPlan(NamedTuple):
 
 
 class _MoonEPDispatchedBucket(NamedTuple):
-    expert_inputs: Float[Array, "Tb H"]
-    compute_group_sizes: Int[Array, " G"]
-    return_input_offsets: Int[Array, " U"]
-    return_send_sizes: Int[Array, " U"]
-    return_output_offsets: Int[Array, " U"]
-    return_recv_sizes: Int[Array, " U"]
+    received_x: Float[Array, "Tb H"]
+    received_experts: Int[Array, " Tb"]
+    received_valid: jax.Array
     send_matrix: Int[Array, "R R"]
     starts: Int[Array, "R R"]
-    mapping_errors: Int[Array, ""]
-
-
-class _MoonEPBucketLayout(NamedTuple):
-    input_offsets: Int[Array, " U"]
-    send_sizes: Int[Array, " U"]
-    output_offsets: Int[Array, " U"]
-    recv_sizes: Int[Array, " U"]
-    compute_group_sizes: Int[Array, " G"]
-    return_input_offsets: Int[Array, " U"]
-    return_send_sizes: Int[Array, " U"]
-    return_output_offsets: Int[Array, " U"]
-    return_recv_sizes: Int[Array, " U"]
-    send_matrix: Int[Array, "R R"]
-    starts: Int[Array, "R R"]
-    mapping_errors: Int[Array, ""]
 
 
 def _balance_owner_groups(
@@ -249,6 +231,45 @@ def _assignment_destinations(
     return jnp.minimum(destinations, num_ranks - 1), errors
 
 
+def _received_expert_ids(
+    all_expert_counts: Int[Array, "R E"],
+    plan: MoonEPPlan,
+    rank: Int[Array, ""],
+    source_slice_starts: Int[Array, " R"],
+    source_slice_ends: Int[Array, " R"],
+    *,
+    output_capacity: int,
+) -> tuple[Int[Array, " N"], Array, Int[Array, "R E"]]:
+    source_ends = jnp.cumsum(all_expert_counts, axis=0, dtype=jnp.int32)
+    source_starts = source_ends - all_expert_counts
+    destination_ends = plan.cumulative_allocation[:, rank]
+    destination_starts = destination_ends - plan.allocation[:, rank]
+    # Each count is the overlap of one source interval and one destination interval.
+    counts_by_source_expert = jnp.maximum(
+        jnp.minimum(source_ends, destination_ends[None, :]) - jnp.maximum(source_starts, destination_starts[None, :]),
+        0,
+    )
+    message_expert_ends = jnp.cumsum(counts_by_source_expert, axis=1, dtype=jnp.int32)
+    message_expert_starts = message_expert_ends - counts_by_source_expert
+    sliced_counts = jnp.maximum(
+        jnp.minimum(message_expert_ends, source_slice_ends[:, None])
+        - jnp.maximum(message_expert_starts, source_slice_starts[:, None]),
+        0,
+    )
+    expert_ids = jnp.tile(
+        jnp.arange(all_expert_counts.shape[1], dtype=jnp.int32),
+        all_expert_counts.shape[0],
+    )
+    received_experts = jnp.repeat(
+        expert_ids,
+        sliced_counts.reshape(-1),
+        total_repeat_length=output_capacity,
+    )
+    received_count = jnp.sum(sliced_counts, dtype=jnp.int32)
+    valid = jnp.arange(output_capacity, dtype=jnp.int32) < received_count
+    return received_experts, valid, sliced_counts
+
+
 def _token_bucket_bounds(
     send_matrix: Int[Array, "R R"],
     *,
@@ -264,100 +285,6 @@ def _ordered_after(dependency: jax.Array, value: jax.Array) -> jax.Array:
     """Keep ``value`` unchanged, but schedule its consumer after ``dependency``."""
     _, ordered_value = jax.lax.optimization_barrier((dependency, value))
     return ordered_value
-
-
-def _expert_order_bucket_layout(
-    all_expert_counts: Int[Array, "R E"],
-    plan: MoonEPPlan,
-    send_offsets: Int[Array, " R"],
-    send_matrix: Int[Array, "R R"],
-    rank: Int[Array, ""],
-    *,
-    bucket: int,
-    num_buckets: int,
-    token_padding: int,
-    receiver_capacity: int,
-) -> _MoonEPBucketLayout:
-    """Build a zero-copy token layout for one communication bucket."""
-    source_ends = jnp.cumsum(all_expert_counts, axis=0, dtype=jnp.int32)
-    source_starts = source_ends - all_expert_counts
-    destination_ends = plan.cumulative_allocation.T
-    destination_starts = destination_ends - plan.allocation.T
-    counts_by_source_destination_expert = jnp.maximum(
-        jnp.minimum(source_ends[:, None, :], destination_ends[None, :, :])
-        - jnp.maximum(source_starts[:, None, :], destination_starts[None, :, :]),
-        0,
-    )
-    message_expert_ends = jnp.cumsum(counts_by_source_destination_expert, axis=2, dtype=jnp.int32)
-    message_expert_starts = message_expert_ends - counts_by_source_destination_expert
-    bucket_starts, bucket_ends = _token_bucket_bounds(
-        send_matrix,
-        bucket=bucket,
-        num_buckets=num_buckets,
-    )
-    bucket_send_matrix = bucket_ends - bucket_starts
-    sliced_counts = jnp.maximum(
-        jnp.minimum(message_expert_ends, bucket_ends[:, :, None])
-        - jnp.maximum(message_expert_starts, bucket_starts[:, :, None]),
-        0,
-    )
-
-    valid_groups = plan.group_experts >= 0
-    safe_group_experts = jnp.maximum(plan.group_experts, 0)
-    group_experts = jnp.broadcast_to(
-        safe_group_experts[None, :, :],
-        (*sliced_counts.shape[:2], safe_group_experts.shape[1]),
-    )
-    group_counts = jnp.take_along_axis(sliced_counts, group_experts, axis=2)
-    group_counts = jnp.where(valid_groups[None, :, :], group_counts, 0)
-    group_message_starts = jnp.take_along_axis(message_expert_starts, group_experts, axis=2)
-    group_bucket_starts = jnp.maximum(group_message_starts, bucket_starts[:, :, None])
-
-    input_offsets = (send_offsets[:, None] + group_bucket_starts[rank]).reshape(-1)
-    send_sizes = group_counts[rank].reshape(-1)
-
-    group_sizes = jnp.sum(group_counts, axis=0, dtype=jnp.int32)
-    padded_group_sizes = jnp.maximum(
-        ((group_sizes + token_padding - 1) // token_padding) * token_padding,
-        token_padding,
-    )
-    group_ends = jnp.cumsum(padded_group_sizes, axis=1, dtype=jnp.int32)
-    group_offsets = group_ends - padded_group_sizes
-    group_source_prefix = jnp.cumsum(group_counts, axis=0, dtype=jnp.int32) - group_counts
-    output_offsets = (group_offsets + group_source_prefix[rank]).reshape(-1)
-    recv_sizes = group_counts[:, rank, :].reshape(-1)
-
-    local_padded_group_sizes = padded_group_sizes[rank]
-    layout_size = jnp.sum(local_padded_group_sizes, dtype=jnp.int32)
-    compute_group_sizes = local_padded_group_sizes.at[-1].add(receiver_capacity - layout_size)
-
-    return_input_offsets = (group_offsets[rank][None, :] + group_source_prefix[:, rank, :]).reshape(-1)
-    return_send_sizes = group_counts[:, rank, :].reshape(-1)
-    bucket_output_offsets = jnp.cumsum(bucket_send_matrix, axis=1, dtype=jnp.int32) - bucket_send_matrix
-    return_output_offsets = (
-        bucket_output_offsets[:, rank, None] + group_bucket_starts[:, rank, :] - bucket_starts[:, rank, None]
-    ).reshape(-1)
-    return_recv_sizes = group_counts[rank].reshape(-1)
-
-    grouped_message_sizes = jnp.sum(group_counts, axis=2, dtype=jnp.int32)
-    mapping_errors = jnp.sum(
-        jnp.abs(grouped_message_sizes[:, rank] - bucket_send_matrix[:, rank]),
-        dtype=jnp.int32,
-    )
-    return _MoonEPBucketLayout(
-        input_offsets=input_offsets,
-        send_sizes=send_sizes,
-        output_offsets=output_offsets,
-        recv_sizes=recv_sizes,
-        compute_group_sizes=compute_group_sizes,
-        return_input_offsets=return_input_offsets,
-        return_send_sizes=return_send_sizes,
-        return_output_offsets=return_output_offsets,
-        return_recv_sizes=return_recv_sizes,
-        send_matrix=bucket_send_matrix,
-        starts=bucket_starts,
-        mapping_errors=mapping_errors,
-    )
 
 
 def _bucket_assignment_ids(
@@ -606,44 +533,43 @@ def _moe_mlp_ep_moonep_exact_local(
     # ready together.
     dispatched_buckets = []
     for bucket in range(token_buckets):
-        layout = _expert_order_bucket_layout(
-            all_expert_counts,
-            plan,
-            send_offsets,
+        bucket_starts, bucket_ends = _token_bucket_bounds(
             send_matrix,
-            rank,
             bucket=bucket,
             num_buckets=token_buckets,
-            token_padding=token_padding,
-            receiver_capacity=receiver_capacity,
         )
+        bucket_send_matrix = bucket_ends - bucket_starts
 
         with jax.named_scope(f"moonep_dispatch_bucket_{bucket}"):
-            input_offsets = layout.input_offsets
+            _, send_sizes, output_offsets, recv_sizes = _shard_a2a_params(bucket_send_matrix, rank)
+            input_offsets = send_offsets + bucket_starts[rank]
             if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and dispatched_buckets:
-                input_offsets = _ordered_after(dispatched_buckets[-1].expert_inputs[0, 0], input_offsets)
-            expert_inputs = jax.lax.ragged_all_to_all(
+                input_offsets = _ordered_after(dispatched_buckets[-1].received_x[0, 0], input_offsets)
+            received_x = jax.lax.ragged_all_to_all(
                 send_x,
-                jnp.zeros((receiver_capacity, hidden_dim), dtype=x_local.dtype),
+                jnp.zeros((bucket_capacity, hidden_dim), dtype=x_local.dtype),
                 input_offsets,
-                layout.send_sizes,
-                layout.output_offsets,
-                layout.recv_sizes,
+                send_sizes,
+                output_offsets,
+                recv_sizes,
                 axis_name="expert",
             )
-            expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
+            received_experts, received_valid, _ = _received_expert_ids(
+                all_expert_counts,
+                plan,
+                rank,
+                bucket_starts[:, rank],
+                bucket_ends[:, rank],
+                output_capacity=bucket_capacity,
+            )
 
         dispatched_buckets.append(
             _MoonEPDispatchedBucket(
-                expert_inputs=expert_inputs,
-                compute_group_sizes=layout.compute_group_sizes,
-                return_input_offsets=layout.return_input_offsets,
-                return_send_sizes=layout.return_send_sizes,
-                return_output_offsets=layout.return_output_offsets,
-                return_recv_sizes=layout.return_recv_sizes,
-                send_matrix=layout.send_matrix,
-                starts=layout.starts,
-                mapping_errors=layout.mapping_errors,
+                received_x=received_x,
+                received_experts=received_experts,
+                received_valid=received_valid,
+                send_matrix=bucket_send_matrix,
+                starts=bucket_starts,
             )
         )
 
@@ -651,29 +577,77 @@ def _moe_mlp_ep_moonep_exact_local(
     assignment_id_buckets = []
     mapping_errors = jnp.array(0, dtype=jnp.int32)
     for bucket, dispatched in enumerate(dispatched_buckets):
-        expert_inputs = dispatched.expert_inputs
+        received_x = dispatched.received_x
+        received_experts = dispatched.received_experts
+        received_valid = dispatched.received_valid
         bucket_send_matrix = dispatched.send_matrix
         bucket_starts = dispatched.starts
-        mapping_errors = mapping_errors + dispatched.mapping_errors
+
+        with jax.named_scope(f"moonep_layout_bucket_{bucket}"):
+            local_start = rank * local_experts
+            is_local = jnp.logical_and(
+                received_experts >= local_start,
+                received_experts < local_start + local_experts,
+            )
+            local_group = received_experts - local_start
+            remote_matches = received_experts[:, None] == plan.experts_to_copy[rank][None, :]
+            has_remote_group = jnp.any(remote_matches, axis=1)
+            remote_group = jnp.argmax(remote_matches, axis=1).astype(jnp.int32)
+            mapped_group_ids = jnp.where(is_local, local_group, local_experts + remote_group)
+            group_ids = jnp.where(received_valid, mapped_group_ids, num_groups - 1)
+            mapping_errors = mapping_errors + jnp.sum(
+                jnp.logical_and(received_valid, jnp.logical_not(jnp.logical_or(is_local, has_remote_group))),
+                dtype=jnp.int32,
+            )
+            rank_in_group = _stable_segment_rank(group_ids, num_buckets=num_groups)
+            group_sizes = jnp.bincount(
+                group_ids,
+                weights=received_valid.astype(jnp.int32),
+                length=num_groups,
+            ).astype(jnp.int32)
+            padded_group_sizes = jnp.maximum(
+                ((group_sizes + token_padding - 1) // token_padding) * token_padding,
+                token_padding,
+            )
+            group_ends = jnp.cumsum(padded_group_sizes, dtype=jnp.int32)
+            group_offsets = group_ends - padded_group_sizes
+            receiver_positions = group_offsets[group_ids] + rank_in_group
+            safe_receiver_positions = jnp.minimum(receiver_positions, receiver_capacity - 1)
+            expert_inputs = jnp.zeros((receiver_capacity, hidden_dim), dtype=x_local.dtype)
+            expert_inputs = expert_inputs.at[
+                jnp.where(received_valid, safe_receiver_positions, receiver_capacity)
+            ].set(received_x, mode="drop")
+            expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
 
         with jax.named_scope(f"moonep_grouped_gemm_bucket_{bucket}"):
+            layout_size = jnp.sum(padded_group_sizes, dtype=jnp.int32)
+            compute_group_sizes = padded_group_sizes.at[-1].add(receiver_capacity - layout_size)
             expert_outputs = _moonep_grouped_mlp(
                 expert_inputs,
                 group_w13,
                 group_w2,
-                dispatched.compute_group_sizes,
+                compute_group_sizes,
                 activation_fn=activation_fn,
                 grouped_gemm=grouped_gemm,
             )
 
         with jax.named_scope(f"moonep_combine_bucket_{bucket}"):
+            outputs_in_receive_order = jnp.where(
+                received_valid[:, None],
+                expert_outputs[safe_receiver_positions],
+                0,
+            )
+            return_input_offsets, return_send_sizes, return_output_offsets, return_recv_sizes = _shard_a2a_params(
+                bucket_send_matrix.T,
+                rank,
+            )
             returned = jax.lax.ragged_all_to_all(
-                expert_outputs,
+                outputs_in_receive_order,
                 jnp.zeros((bucket_capacity, hidden_dim), dtype=expert_outputs.dtype),
-                dispatched.return_input_offsets,
-                dispatched.return_send_sizes,
-                dispatched.return_output_offsets,
-                dispatched.return_recv_sizes,
+                return_input_offsets,
+                return_send_sizes,
+                return_output_offsets,
+                return_recv_sizes,
                 axis_name="expert",
             )
             returned_buckets.append(tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT))

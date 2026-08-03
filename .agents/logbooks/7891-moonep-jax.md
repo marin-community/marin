@@ -1499,3 +1499,19 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `f0666ab5da1982fecd925b38120abdb70af99ad5db54f449226c34598b7c5ef7`.
 - Local gate: The exact two-bucket overlap output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
 - Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-074.
+
+### 2026-08-03 10:40 UTC - MNEP-084 rejects the active-context fence
+
+- Result: All 16 workers completed five finite steps on attempt zero with zero dropped assignments.
+- Performance: The p50 duration was `33.333 s`. The p50 MFU was `7.765%` at `125,830` tokens/s.
+- Comparison: The active-context fence is safe and faster than CTA32, but MNEP-074 reached `10.004%` p50 MFU.
+- Decision: Keep the fence as a correctness option. Restore one token message per peer before the next overlap gate.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-084-cta64-active-fence-5-20260803-1030-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-084-cta64-active-fence-5-20260803-1030).
+
+### 2026-08-03 10:44 UTC - Receive-order bucket pipeline contract
+
+- Treatment: Dispatch one contiguous message to each peer, then move received rows into the expert-grouped compute buffer.
+- Purpose: Reduce each token collective from multiple expert segments per peer to one segment per peer.
+- Overlap: Dispatch bucket 1 and the layout plus expert compute for bucket 0 become ready at the same boundary.
+- Local gate: The exact two-bucket output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
+- Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-074.
