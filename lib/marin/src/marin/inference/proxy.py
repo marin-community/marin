@@ -201,7 +201,10 @@ class InferenceProxy:
                     headers=tuple((headers or {}).items()),
                 ),
             )
-            logger.info(
+            # DEBUG, not INFO: this fires once per request, and a brokered fleet at full tilt sees
+            # hundreds of requests per second -- at that rate per-request logging is a measurable
+            # cost in the proxy's own event loop and the aggregate story lives in ProxyStats.
+            logger.debug(
                 "InferenceProxy submitted request request_id=%s method=%s path=%s pending=%d/%d",
                 request_id,
                 method,
@@ -226,7 +229,7 @@ class InferenceProxy:
                 if not future.done():
                     future.cancel()
 
-        logger.info(
+        logger.debug(
             "InferenceProxy returning response request_id=%s method=%s path=%s status_code=%d",
             request_id,
             method,
@@ -268,7 +271,11 @@ class InferenceProxy:
         self.stats.matched_responses += len(matched_ids)
         self.stats.dropped_responses += len(dropped_ids)
         if responses:
-            logger.info(
+            # A drop means a response arrived for a request nobody is waiting on -- worth a line.
+            # A clean batch is routine (the poller fetches many times per second at load) and logs
+            # at DEBUG so the fetch loop is not spending its time formatting request ids.
+            log = logger.info if dropped_ids else logger.debug
+            log(
                 "InferenceProxy fetched responses count=%d matched=%d dropped=%d "
                 "pending=%d matched_ids=%s dropped_ids=%s",
                 len(responses),

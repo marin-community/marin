@@ -79,7 +79,9 @@ class InferenceWorker:
                         for leased_request in leased_requests:
                             in_flight.add(pool.submit(self._forward_one, client, leased_request))
                         if leased_requests:
-                            logger.info(
+                            # DEBUG for the same reason as the proxy's per-request lines: at load
+                            # this fires many times a second and the id formatting is real work.
+                            logger.debug(
                                 "InferenceWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
                                 len(leased_requests),
                                 len(in_flight),
@@ -103,12 +105,16 @@ class InferenceWorker:
                     if done:
                         responses = [future.result() for future in done]
                         self._broker.submit_responses(responses)
-                        logger.info(
+                        statuses = dict(Counter(response.response.status_code for response in responses))
+                        # All-200 batches are routine and log at DEBUG; a batch carrying any error
+                        # status is the line someone will actually be looking for.
+                        log = logger.info if any(code != 200 for code in statuses) else logger.debug
+                        log(
                             "InferenceWorker submitted responses count=%d in_flight=%d/%d statuses=%s request_ids=%s",
                             len(responses),
                             len(in_flight),
                             max_in_flight,
-                            dict(Counter(response.response.status_code for response in responses)),
+                            statuses,
                             format_request_ids([response.response.request_id for response in responses]),
                         )
                         backoff.reset()
