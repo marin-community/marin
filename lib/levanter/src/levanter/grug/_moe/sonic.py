@@ -10,6 +10,7 @@ SonicMoE is also Apache-2.0.
 """
 
 from collections.abc import Callable
+from functools import partial
 import os
 
 import jax
@@ -182,8 +183,7 @@ else:
 def _require_sonic_deps() -> None:
     if jt is None or _sonic_token_gather_sum_kernel is None or _sonic_token_gather_sum_bwd_kernel is None:
         raise ImportError(
-            "implementation='sonic' requires jax-triton and triton; install the gpu extra for marin-levanter "
-            "or marin."
+            "implementation='sonic' requires jax-triton and triton; install the gpu extra for marin-levanter or marin."
         )
     if not os.environ.get("TRITON_CACHE_DIR"):
         os.environ["TRITON_CACHE_DIR"] = _DEFAULT_TRITON_CACHE_DIR
@@ -272,6 +272,29 @@ def _sonic_row_gather_bwd(residuals, dout):
 
 
 sonic_row_gather.defvjp(_sonic_row_gather_fwd, _sonic_row_gather_bwd)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3,))
+def sonic_row_scatter(
+    x: Float[Array, "T H"],
+    positions: Int[Array, "T"],
+    valid: jax.Array,
+    output_rows: int,
+) -> Float[Array, "M H"]:
+    """Scatter unique rows with a non-fusible GPU kernel."""
+    return _sonic_row_scatter_impl(x, positions, valid, output_rows=output_rows)
+
+
+def _sonic_row_scatter_fwd(x, positions, valid, output_rows):
+    return _sonic_row_scatter_impl(x, positions, valid, output_rows=output_rows), (positions, valid)
+
+
+def _sonic_row_scatter_bwd(_output_rows, residuals, dout):
+    positions, valid = residuals
+    return _sonic_row_gather_impl(dout, positions, valid), None, None
+
+
+sonic_row_scatter.defvjp(_sonic_row_scatter_fwd, _sonic_row_scatter_bwd)
 
 
 def _sonic_fixed_k_offsets(*, tokens: int, topk: int) -> Int[Array, "Tp1"]:

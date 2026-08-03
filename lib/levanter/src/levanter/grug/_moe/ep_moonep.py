@@ -33,12 +33,13 @@ from levanter.grug._moe.ep_fixed_all_to_all import (
     _dispatch_gather,
     _moe_mlp_ep_fixed_a2a_local,
 )
-from levanter.grug._moe.sonic import sonic_row_gather
+from levanter.grug._moe.sonic import sonic_row_gather, sonic_row_scatter
 from levanter.grug.sharding import _batch_axes
 
 _QUACK_ALIGNMENT = 128
 _MOONEP_DISPATCH_COMPUTE_GROUP_BASE = 789_000
 _MOONEP_COMBINE_COMPUTE_GROUP_BASE = 790_000
+_MOONEP_BACKWARD_GROUP_OFFSET = 2_000
 
 
 class MoonEPPlan(NamedTuple):
@@ -292,6 +293,10 @@ def _ordered_after(dependency: jax.Array, value: jax.Array) -> jax.Array:
     return ordered_value
 
 
+def _backward_scheduling_group_id(scheduling_group_id: int) -> int:
+    return scheduling_group_id + _MOONEP_BACKWARD_GROUP_OFFSET
+
+
 def _scheduled_ragged_all_to_all_impl(
     operand: jax.Array,
     input_offsets: jax.Array,
@@ -367,22 +372,23 @@ def _scheduled_ragged_all_to_all_fwd(
 def _scheduled_ragged_all_to_all_bwd(
     _output_rows,
     axis_name,
-    _scheduling_group_id,
+    scheduling_group_id,
     residuals,
     output_gradient,
 ):
     input_offsets, send_sizes, output_offsets, recv_sizes, input_rows = residuals
     transpose_output_offsets = jax.lax.all_to_all(output_offsets, axis_name, 0, 0, tiled=True)
     transpose_input_offsets = jax.lax.all_to_all(input_offsets, axis_name, 0, 0, tiled=True)
-    operand_gradient = jax.lax.ragged_all_to_all(
-        output_gradient,
-        jnp.zeros((input_rows, *output_gradient.shape[1:]), dtype=output_gradient.dtype),
-        transpose_output_offsets,
-        recv_sizes,
-        transpose_input_offsets,
-        send_sizes,
-        axis_name=axis_name,
-    )
+    with set_xla_metadata(_scheduling_group_id=_backward_scheduling_group_id(scheduling_group_id)):
+        operand_gradient = jax.lax.ragged_all_to_all(
+            output_gradient,
+            jnp.zeros((input_rows, *output_gradient.shape[1:]), dtype=output_gradient.dtype),
+            transpose_output_offsets,
+            recv_sizes,
+            transpose_input_offsets,
+            send_sizes,
+            axis_name=axis_name,
+        )
     return operand_gradient, None, None, None, None
 
 
@@ -443,6 +449,7 @@ def _moonep_grouped_mlp(
             group_sizes,
             cumulative_group_sizes,
             scheduling_group_id,
+            (_backward_scheduling_group_id(scheduling_group_id) if scheduling_group_id is not None else None),
         )
 
     w13_out = tree_checkpoint_name(
@@ -730,10 +737,18 @@ def _moe_mlp_ep_moonep_exact_local(
             group_offsets = group_ends - padded_group_sizes
             receiver_positions = group_offsets[group_ids] + rank_in_group
             safe_receiver_positions = jnp.minimum(receiver_positions, receiver_capacity - 1)
-            expert_inputs = jnp.zeros((receiver_capacity, hidden_dim), dtype=x_local.dtype)
-            expert_inputs = expert_inputs.at[
-                jnp.where(received_valid, safe_receiver_positions, receiver_capacity)
-            ].set(received_x, mode="drop")
+            if grouped_gemm == MoonEPGroupedGemm.QUACK and bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP:
+                expert_inputs = sonic_row_scatter(
+                    received_x,
+                    safe_receiver_positions,
+                    received_valid,
+                    receiver_capacity,
+                )
+            else:
+                expert_inputs = jnp.zeros((receiver_capacity, hidden_dim), dtype=x_local.dtype)
+                expert_inputs = expert_inputs.at[
+                    jnp.where(received_valid, safe_receiver_positions, receiver_capacity)
+                ].set(received_x, mode="drop")
             expert_inputs = tree_checkpoint_name(expert_inputs, _CHECKPOINT_DISPATCH_INPUT)
 
         with jax.named_scope(f"moonep_grouped_gemm_bucket_{bucket}"):
