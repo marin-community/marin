@@ -80,6 +80,7 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    save_checkpoints: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -494,8 +495,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        # This throughput reproduction intentionally produces no checkpoint.
-        checkpointer = None
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),

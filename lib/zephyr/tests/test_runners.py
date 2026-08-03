@@ -8,6 +8,7 @@ import time
 import uuid
 from contextlib import suppress
 
+import polars as pl
 import pytest
 from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
@@ -54,6 +55,29 @@ def test_simple_map(local_client, tmp_path, runner_factory):
     finally:
         ctx.shutdown()
     assert sorted(results) == [3, 6, 9, 12, 15]
+
+
+def test_subprocess_runner_limits_polars_threads_to_task_cpu(local_client, tmp_path):
+    def polars_thread_pool_size(_: int) -> int:
+        return pl.thread_pool_size()
+
+    ctx = ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=4, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-polars-threads-{uuid.uuid4().hex[:8]}",
+        stage_runner_factory=lambda: SubprocessRunner(),
+    )
+    try:
+        results = ctx.execute(
+            Dataset.from_list([0]).map(polars_thread_pool_size),
+            map_task_resources=ResourceConfig(cpu=1, ram="256m"),
+        ).results
+    finally:
+        ctx.shutdown()
+
+    assert results == [1]
 
 
 def test_user_counters_propagate(local_client, tmp_path, runner_factory):
