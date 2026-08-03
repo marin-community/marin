@@ -2162,6 +2162,8 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   document view, compute data types, training-report digest, and model digest.
 - The CPU benchmark and fixed semantic evaluation can now load that runtime
   through the production loader.
+- The CPU benchmark fixes process affinity before it loads JAX model state.
+  This keeps the measured runtime from creating a larger thread pool first.
 - The final publisher rejects evaluation or speed evidence from a different
   runtime manifest. It also checks that the evaluated runtime fields equal the
   final release runtime fields.

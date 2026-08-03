@@ -46,3 +46,29 @@ def test_paired_rates_reject_unstable_measurement(monkeypatch) -> None:
     assert result["student_stability"]["passed"]
     assert not result["baseline_stability"]["passed"]
     assert not result["measurement_valid"]
+
+
+def test_benchmark_limits_cpu_before_loading_the_student(monkeypatch) -> None:
+    events = []
+
+    def set_cpu_limits() -> int:
+        events.append("limit")
+        return 8
+
+    def load_student(config: str, teacher: str, rung: str, directory: Path):
+        events.append("load")
+        return object(), {"final_model_sha256": "model-sha"}
+
+    def benchmark_loaded_student(*args):
+        events.append("benchmark")
+        assert args[-1] == 8
+        return {"measurement_valid": True}
+
+    monkeypatch.setattr(benchmark_module, "set_cpu_limits", set_cpu_limits)
+    monkeypatch.setattr(benchmark_module, "load_student", load_student)
+    monkeypatch.setattr(benchmark_module, "benchmark_loaded_student", benchmark_loaded_student)
+
+    result = benchmark_module.benchmark("full", "semantic", "50k", 8_192)
+
+    assert result == {"measurement_valid": True}
+    assert events == ["limit", "load", "benchmark"]

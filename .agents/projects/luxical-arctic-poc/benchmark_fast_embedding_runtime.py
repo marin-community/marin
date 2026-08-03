@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 
 import fsspec
-from benchmark_trained_fast_student import benchmark_loaded_student
+from benchmark_trained_fast_student import benchmark_loaded_student, set_cpu_limits
 from rigging.filesystem import StoragePath, atomic_rename
 
 from experiments.datakit.embeddings.fast_transformer.embedder import FastEmbeddingModel, payload_sha256
@@ -37,6 +37,7 @@ def main() -> None:
         parser.error("--batch-size must be positive")
     logging.basicConfig(level=logging.INFO)
 
+    cpu_affinity_count = set_cpu_limits()
     student = FastEmbeddingModel.load_runtime(args.runtime_root, args.runtime_manifest_sha256)
     training_payload = StoragePath(student.manifest.training_report_url).read_bytes()
     if payload_sha256(training_payload) != student.manifest.training_report_sha256:
@@ -58,6 +59,7 @@ def main() -> None:
         args.training_name,
         args.rung,
         args.batch_size,
+        cpu_affinity_count,
     )
     report.update(
         {

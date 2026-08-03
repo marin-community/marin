@@ -111,9 +111,9 @@ def benchmark_loaded_student(
     teacher: str,
     rung: str,
     batch_size: int,
+    cpu_affinity_count: int,
 ) -> dict[str, Any]:
     """Return a paired CPU report for one already loaded student."""
-    cpu_affinity_count = set_cpu_limits()
     texts = evaluation_texts()
     baseline_path = hf_hub_download(
         repo_id=BASELINE_REPO,
@@ -151,9 +151,18 @@ def benchmark_loaded_student(
 
 def benchmark(config: str, teacher: str, rung: str, batch_size: int) -> dict[str, Any]:
     """Load exact model artifacts and return a paired CPU report."""
+    cpu_affinity_count = set_cpu_limits()
     with tempfile.TemporaryDirectory() as temporary_directory:
         student, training_report = load_student(config, teacher, rung, Path(temporary_directory))
-        return benchmark_loaded_student(student, training_report, config, teacher, rung, batch_size)
+        return benchmark_loaded_student(
+            student,
+            training_report,
+            config,
+            teacher,
+            rung,
+            batch_size,
+            cpu_affinity_count,
+        )
 
 
 def main() -> None:
