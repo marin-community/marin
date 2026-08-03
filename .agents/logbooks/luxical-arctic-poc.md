@@ -1907,3 +1907,53 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   runtime cost. The 760-row training set is too small for all large groups.
 - Next action: Create a separate 50,000-document GLM label set. Train the same
   folded projection method, then run the fixed release gates once.
+
+### Background research brief: semantic fine-tuning fallback
+
+- Effort: Low.
+- Stop rule: Stop when one fallback can reuse the 50,000 GLM labels and keep
+  the current inference shape.
+- Question: Can changes to the full FastTransformer correct subgroup failures
+  that a folded output projection cannot correct?
+- Current Marin result: The rank-preserving projection improves every global
+  semantic metric. It still fails 12 large-group gates.
+- Current Marin result: Pure Arctic scaling, a larger student, a longer input,
+  and Qwen relation-only training all fail the release gates.
+- Repository search found no hierarchy-supervised FastTransformer trainer.
+- [Supervised Contrastive Learning](https://arxiv.org/abs/2004.11362) supports
+  the same-label batch objective that the projection already uses.
+- [Robust fine-tuning of zero-shot models](https://arxiv.org/abs/2109.01903)
+  supports interpolation between the base and fine-tuned weights to keep
+  out-of-distribution behavior.
+- [Model soups](https://arxiv.org/abs/2203.05482) reports that weight averaging
+  can improve fine-tuned models without an inference-time cost. The paper also
+  ties this result to models in one low-error basin.
+- Caveat: The cited weight-mix results do not prove that this small text encoder
+  stays in one low-error basin. The private validation ladder must select the
+  mix and reject a low-rank result.
+- Hypothesis: Fine-tuning the 30M Arctic checkpoint on parent, leaf, and form
+  labels can correct failures inside the encoder. An Arctic-vector anchor and
+  a base-to-fine-tuned weight mix can limit geometry loss.
+- Minimum experiment: Train three epochs on the same disjoint 50,000 labels.
+  Select one of 11 fixed weight mixes on the private 5-percent split.
+- Falsifier: Stop this treatment when no mix passes the semantic, rank,
+  variance, finite, and unique validation gates.
+- Cost: One federated H100 job after the projection release test fails.
+- Confidence: Exploratory. The projection result supports the GLM signal, but
+  the full-model treatment has not run.
+
+### LUX-SEMANTIC-FINETUNE-001: End-to-end fallback preparation
+
+- Commit Hash: `e8d239438`.
+- The trainer starts from the exact 30M Arctic model.
+- It drops the least-confident 5 percent of GLM labels.
+- It trains parent, leaf, and document-form objectives across different
+  sources.
+- It anchors each new vector to the original Arctic-student vector.
+- It adds the existing vector-spread loss.
+- It selects one of 11 base-to-fine-tuned weight mixes on the private split.
+- The selected model keeps 9.3 million parameters and adds no inference step.
+- Eight focused behavior tests pass in 63.37 seconds.
+- Pyrefly reports zero errors. The required pre-commit checks pass.
+- Decision: Run this fallback only if the 50,000-label folded projection fails
+  a release gate.
