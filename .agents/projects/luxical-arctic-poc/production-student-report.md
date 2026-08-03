@@ -8,7 +8,8 @@ The 3M and 10M students are faster than Luxical-One on CPU. Their vectors pass
 all health gates. Both students fail the held-out semantic gates and the
 model-hidden neighborhood review. The 10M rung improves non-English text and
 some global metrics. It does not improve the overall hidden-review score, and
-it reduces the code score. The nested 30M rung is the final pure-scaling test.
+it reduces the code score. A larger model and a longer input both fail. The
+nested 30M rung is the final pure-scaling test.
 
 ## Decision rule
 
@@ -132,6 +133,26 @@ and form results also show losses in administrative records, narrative text,
 reference text, structured data, and technical specifications. The exact group
 set depends on the hierarchy level.
 
+## Capacity and input controls
+
+The 28.4M-parameter control does not fix the semantic loss. Its parent, leaf,
+and form macro-F1 values are 0.43780, 0.36117, and 0.39163. It also reaches
+only 0.78952 times the paired Luxical CPU speed. More model capacity is not the
+main limit.
+
+A matched short-view Arctic teacher also fails. Parent macro-F1 decreases from
+0.46499 to 0.43920. Leaf macro-F1 decreases from 0.37307 to 0.35364. Form
+macro-F1 stays near 0.4113. The short teacher target loses code, research,
+narrative, and technical-document quality.
+
+The 512-token student keeps the full Arctic teacher. It reads twice as many
+token positions and twice as many characters from each document region. Its
+vectors pass all health checks, but its paired CPU ratio is only 0.40383. Its
+parent macro-F1 is 0.43890, its leaf NMI is 0.40145, and its form macro-F1 is
+0.38207. Only form F1 improves over the 256-token 3M student, by 0.00926. It
+still fails all three semantic decisions. Student input length is not the main
+quality limit.
+
 ## Required embedding gates
 
 Use only documents that were not used to train the student. Exclude neighbors
@@ -242,6 +263,12 @@ the overall visible result.
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-large-large-3m.json`
 - Large 3M adjudicated report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_large_3m/adjudicated-v1/embedding-screen-v1/report.json`
+- 512-token 3M model SHA-256:
+  `a0fe19c545620f5f49f4e9943c3a39d5e5d33cb8cc3464568d975c7e4bdcc43b`
+- 512-token 3M exact CPU report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-context512-context512-3m.json`
+- 512-token 3M adjudicated report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_context512_3m/adjudicated-v1/embedding-screen-v1/report.json`
 
 ## Open decision
 
@@ -269,3 +296,8 @@ The 28.4M-parameter control fails the CPU release gate at 0.78952 times
 Luxical-One speed. It also fails the semantic and large-group gates. More
 capacity improves some fine-label metrics, but it does not correct the broad
 semantic loss. Thus, capacity alone is not the next production direction.
+
+The short-view teacher and the 512-token student also fail. A simple input
+length change is not the next production direction. If the 30M rung fails the
+stop rule, change the training signal. Test a teacher mix or a semantic pair
+objective while the production student keeps its 256-token input.
