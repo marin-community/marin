@@ -1927,3 +1927,15 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Runtime: The five cases took `159.80 s` and `153.97 s` in two groups, including compilation.
 - Wheel: The development pod holds PJRT `bb72fa53`, not the MNEP-102 rack build `d781426a`. The padded path uses the standard all-to-all, and the XLA patches change only the ragged device kernel.
 - Next: Run five EP64 steps with the padded transport and a `1.5` capacity factor as MNEP-104.
+
+### 2026-08-03 22:45 UTC - MNEP-104 static padded rack gate
+
+- Treatment: One token bucket, exact MoonEP, and the static padded all-to-all with a `1.5` capacity factor.
+- Capacity: Each peer slot holds `12,288` rows against a mean of `8,192` rows. The fixed pool is about `24 GiB`, below the `28.4 GiB` that fit in MNEP-098c.
+- Exactness: There is no ragged fallback. Rows above the capacity count as dropped assignments.
+- Diagnostic: `--moonep-report-capacity` prints `max_cell` and `mean_cell` for each MoE layer. The smallest capacity factor without drops is `max_cell / 8192`.
+- Local gate: The four-GPU padded parity gate passed for one bucket and for two buckets.
+- Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above the `9.937%` of MNEP-102.
+- Primary question: Does the standard all-to-all move the same traffic near the NVLink limit? The exact ragged path reaches `101.9 GB/s`, or `11%` of the limit.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, or an out-of-memory error.
+- Capacity note: No NVLink domain has 16 free nodes at submit time. The job waits in the Kueue queue.
