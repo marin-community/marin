@@ -9,7 +9,7 @@ up to ``per_shard`` rows uniformly, write a parquet file labeled with the
 source. Output schema (per shard)::
 
     source     string
-    embedding  list<int8> length 192   (same encoding as EmbeddingAttrData)
+    embedding  fixed-size list<int8>   (dimension from EmbeddingAttrData)
 
 Why one context per source instead of one global context: at ~100 sources x
 ~1K shards/source you get ~100K total tasks. A single Zephyr coordinator
@@ -41,17 +41,46 @@ from zephyr.execution import ZephyrContext
 from zephyr.readers import InputFileSpec, load_file
 from zephyr.runners import InlineRunner
 
-from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, EmbeddingAttrData
+from experiments.datakit.embeddings.luxical.pipeline import EmbeddingAttrData
 
 logger = logging.getLogger(__name__)
 
 
-_SAMPLE_SCHEMA = pa.schema(
-    [
-        pa.field("source", pa.string()),
-        pa.field("embedding", pa.list_(pa.int8(), LUXICAL_DIM)),
-    ]
-)
+def _sample_schema(embedding_dim: int) -> pa.Schema:
+    return pa.schema(
+        [
+            pa.field("source", pa.string()),
+            pa.field("embedding", pa.list_(pa.int8(), embedding_dim)),
+        ]
+    )
+
+
+def _validate_embedding_space(embeddings: dict[str, EmbeddingAttrData]) -> int:
+    if not embeddings:
+        raise ValueError("embeddings must contain at least one source")
+
+    first_name, first = next(iter(sorted(embeddings.items())))
+    expected = (
+        first.model_name,
+        first.model_revision,
+        first.embedding_dim,
+        first.quantization_scale,
+        first.quantization_range,
+    )
+    for source_name, attr in sorted(embeddings.items()):
+        actual = (
+            attr.model_name,
+            attr.model_revision,
+            attr.embedding_dim,
+            attr.quantization_scale,
+            attr.quantization_range,
+        )
+        if actual != expected:
+            raise ValueError(
+                f"embedding space for {source_name!r} does not match {first_name!r}: "
+                f"expected {expected}, got {actual}"
+            )
+    return first.embedding_dim
 
 
 def _sample_shard(
@@ -112,7 +141,7 @@ def _sample_one_source(
                 batches, shard, source_name=sn, per_shard=ps, seed=sd
             )
         )
-        .write_parquet(_out, schema=_SAMPLE_SCHEMA, skip_existing=True)
+        .write_parquet(_out, schema=_sample_schema(attr.embedding_dim), skip_existing=True)
     )
 
     ctx = ZephyrContext(
@@ -148,14 +177,16 @@ def sample_centroid_inputs(
     are still chosen in sorted order; first-completed-first-reported on the
     way out.
     """
+    embedding_dim = _validate_embedding_space(embeddings)
     if worker_resources is None:
         worker_resources = ResourceConfig(cpu=2, ram="4g")
 
     items = sorted(embeddings.items())
     total = len(items)
     logger.info(
-        "Sample pipeline: %d sources, %d concurrent Zephyr contexts, %d workers each",
+        "Sample pipeline: %d sources, dimension=%d, %d concurrent Zephyr contexts, %d workers each",
         total,
+        embedding_dim,
         parallel_sources,
         max_workers,
     )

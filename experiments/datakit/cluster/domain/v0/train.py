@@ -8,8 +8,8 @@ Writes:
 - ``lookup_<k_train>_to_<k>.npy`` for each k in ``k_views`` (e.g. 1000, 40)
 - ``train_stats.json``
 
-Uses FAISS K-means (BLAS-backed, multi-threaded) — at K=5000 on 10M x 192
-float32 it takes hours on cpu=32, not days. Agglomerative merging the
+Uses FAISS K-means (BLAS-backed, multi-threaded) — at K=5000 on 10M vectors
+it takes hours on cpu=32, not days. Agglomerative merging the
 trained centroids is trivial (5000x5000 cosine distance, seconds).
 
 Why ``method="average"`` for the merge: K-means centroids are means, so
@@ -29,7 +29,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem import StoragePath, open_url
 
-from experiments.datakit.embeddings.luxical.pipeline import LUXICAL_DIM, QUANT_SCALE, dequantize_to_fp32
+from experiments.datakit.embeddings.luxical.pipeline import dequantize_to_fp32
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ _LOAD_PARALLELISM = 64
 _PROGRESS_INTERVAL = 5000
 
 
-def _load_sample_parquet(sample_path: str) -> np.ndarray:
+def load_sample_embeddings(sample_path: str, *, embedding_dim: int, quantization_scale: float) -> np.ndarray:
     """Load all sample parquet shards, dequantize int8 → fp32, return one stacked array.
 
     Parquet reads parallelize over ``_LOAD_PARALLELISM`` threads — the bottleneck
@@ -73,9 +73,11 @@ def _load_sample_parquet(sample_path: str) -> np.ndarray:
 
     table = pa.concat_tables(tables)
     fsl = table["embedding"].combine_chunks()
+    if not pa.types.is_fixed_size_list(fsl.type) or fsl.type.list_size != embedding_dim:
+        raise ValueError(f"sample embedding dimension {fsl.type} does not match configured dimension {embedding_dim}")
     flat_int8 = fsl.values.to_numpy(zero_copy_only=False)
-    embeddings_int8 = flat_int8.reshape(-1, LUXICAL_DIM)
-    embeddings = dequantize_to_fp32(embeddings_int8, scale=QUANT_SCALE)
+    embeddings_int8 = flat_int8.reshape(-1, embedding_dim)
+    embeddings = dequantize_to_fp32(embeddings_int8, scale=quantization_scale)
     logger.info(
         "Loaded sample (%d x %d) in %.1fs",
         embeddings.shape[0],
@@ -88,6 +90,9 @@ def _load_sample_parquet(sample_path: str) -> np.ndarray:
 def train_centroids(
     output_path: str,
     sample_path: str,
+    *,
+    embedding_dim: int,
+    quantization_scale: float,
     k_train: int = 5000,
     k_views: tuple[int, ...] = (40, 1000),
     n_iter: int = 20,
@@ -111,7 +116,11 @@ def train_centroids(
     from threadpoolctl import threadpool_limits  # noqa: PLC0415  # optional dep: threadpoolctl
 
     faiss.omp_set_num_threads(n_threads)
-    embeddings = _load_sample_parquet(sample_path)
+    embeddings = load_sample_embeddings(
+        sample_path,
+        embedding_dim=embedding_dim,
+        quantization_scale=quantization_scale,
+    )
     logger.info(
         "Running K-means K=%d on %d x %d sample (n_threads=%d, seed=%d)", k_train, *embeddings.shape, n_threads, seed
     )

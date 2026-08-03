@@ -137,9 +137,11 @@ from experiments.datakit.decontam.config import (
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.embeddings.luxical.pipeline import (
     EMBEDDING_ATTR_DATA_VERSION,
+    LUXICAL_DIM,
     LUXICAL_REPO,
     LUXICAL_REVISION,
     LUXICAL_WEIGHTS_FILE,
+    QUANT_SCALE,
     EmbeddingAttrData,
     embed_source,
 )
@@ -415,6 +417,8 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
         hash_attrs={
             "k_train": cluster.k_train,
             "k_views": list(cluster.k_views),
+            "embedding_dim": LUXICAL_DIM,
+            "quantization_scale": QUANT_SCALE,
             "n_threads": n_threads,
             "seed": cluster.train_seed,
             "n_iter": cluster.train_n_iter,
@@ -425,6 +429,8 @@ def build_train_centroids_step(embed_steps: dict[str, StepSpec], scale: Pipeline
             lambda output_path, sp=sample_step.output_path: train_centroids(
                 output_path=output_path,
                 sample_path=sp,
+                embedding_dim=LUXICAL_DIM,
+                quantization_scale=QUANT_SCALE,
                 k_train=cluster.k_train,
                 k_views=cluster.k_views,
                 n_threads=n_threads,
