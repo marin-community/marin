@@ -38,6 +38,9 @@ def release_reports() -> tuple[dict, dict, dict, dict]:
         },
     }
     speed = {
+        "mode": "cpu",
+        "jax_backend": "cpu",
+        "compute_dtype": "float32",
         "config_name": "full",
         "teacher": "semantic",
         "rung": "50k",
@@ -78,6 +81,7 @@ def test_release_evidence_accepts_one_exact_student_that_passes_all_gates() -> N
         (0, ("validation_decision", "rank")),
         (1, ("variants", "compact", "production_buckets", "student_all_gates_passed")),
         (2, ("measurement_valid",)),
+        (2, ("compute_dtype",)),
         (3, ("non_english", "release_gate_passed")),
     ],
 )

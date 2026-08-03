@@ -190,6 +190,7 @@ def speed_report() -> dict:
     return {
         "mode": "cpu",
         "jax_backend": "cpu",
+        "compute_dtype": "float32",
         "config_name": "full",
         "teacher": "semantic",
         "rung": "50k",
@@ -215,13 +216,15 @@ def test_validated_speed_ratio_accepts_exact_stable_model() -> None:
     assert ratio == 1.0
 
 
-@pytest.mark.parametrize("fault", ["model_hash", "model_rung", "unstable"])
+@pytest.mark.parametrize("fault", ["model_hash", "model_rung", "compute_dtype", "unstable"])
 def test_validated_speed_ratio_rejects_wrong_or_unstable_measurement(fault: str) -> None:
     report = speed_report()
     if fault == "model_hash":
         report["training_report"]["final_model_sha256"] = "wrong-sha"
     elif fault == "model_rung":
         report["rung"] = "wrong-rung"
+    elif fault == "compute_dtype":
+        report["compute_dtype"] = "bfloat16"
     else:
         report["baseline_rates"][0] = 1.0
 

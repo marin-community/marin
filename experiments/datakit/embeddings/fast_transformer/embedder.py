@@ -21,6 +21,8 @@ from experiments.datakit.cluster.quality.fast_transformer.embedding import (
     predict_embeddings,
 )
 from experiments.datakit.cluster.quality.fast_transformer.model import (
+    ACCELERATOR_COMPUTE_DTYPE_NAME,
+    CPU_COMPUTE_DTYPE_NAME,
     FastEmbeddingTransformer,
     FastTransformerConfig,
 )
@@ -32,7 +34,7 @@ SHA256_PATTERN = r"^[0-9a-f]{64}$"
 class FastEmbeddingBundleManifest(BaseModel):
     """Pinned files and inference settings for one embedding model."""
 
-    version: Literal["v1"] = "v1"
+    version: Literal["v2"] = "v2"
     model_filename: str = Field(min_length=1)
     model_sha256: str = Field(pattern=SHA256_PATTERN)
     token_remap_filename: str = Field(min_length=1)
@@ -44,6 +46,8 @@ class FastEmbeddingBundleManifest(BaseModel):
     config: FastTransformerConfig
     output_dimension: int = Field(ge=1)
     characters_per_region: int = Field(ge=1)
+    cpu_compute_dtype: str = Field(min_length=1)
+    accelerator_compute_dtype: str = Field(min_length=1)
     training_report_url: str = Field(min_length=1)
     training_report_sha256: str = Field(pattern=SHA256_PATTERN)
     evaluation_report_url: str = Field(min_length=1)
@@ -101,6 +105,10 @@ class FastEmbeddingModel:
         root = StoragePath(bundle_root)
         manifest_payload = verified_payload(root, MANIFEST_FILENAME, expected_manifest_sha256)
         manifest = FastEmbeddingBundleManifest.model_validate_json(manifest_payload)
+        if manifest.cpu_compute_dtype != CPU_COMPUTE_DTYPE_NAME:
+            raise ValueError("The CPU compute data type does not match the bundle loader")
+        if manifest.accelerator_compute_dtype != ACCELERATOR_COMPUTE_DTYPE_NAME:
+            raise ValueError("The accelerator compute data type does not match the bundle loader")
         model_payload = verified_payload(root, manifest.model_filename, manifest.model_sha256)
         remap_payload = verified_payload(root, manifest.token_remap_filename, manifest.token_remap_sha256)
         tokenizer_payload = verified_payload(root, manifest.tokenizer_filename, manifest.tokenizer_sha256)

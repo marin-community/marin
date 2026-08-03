@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import io
+import json
 from pathlib import Path
 
 import equinox as eqx
@@ -62,6 +63,8 @@ def write_test_bundle(root: Path) -> str:
         config=config,
         output_dimension=6,
         characters_per_region=8,
+        cpu_compute_dtype="float32",
+        accelerator_compute_dtype="bfloat16",
         training_report_url="memory://training.json",
         training_report_sha256="0" * 64,
         evaluation_report_url="memory://evaluation.json",
@@ -97,6 +100,18 @@ def test_fast_embedding_bundle_rejects_changed_model(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match=r"digest for model\.eqx"):
         FastEmbeddingModel.load(str(tmp_path), manifest_sha256)
+
+
+def test_fast_embedding_bundle_rejects_different_cpu_compute_dtype(tmp_path: Path) -> None:
+    write_test_bundle(tmp_path)
+    manifest_path = tmp_path / MANIFEST_FILENAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest["cpu_compute_dtype"] = "bfloat16"
+    manifest_payload = json.dumps(manifest).encode()
+    manifest_path.write_bytes(manifest_payload)
+
+    with pytest.raises(ValueError, match="CPU compute data type"):
+        FastEmbeddingModel.load(str(tmp_path), payload_sha256(manifest_payload))
 
 
 def test_document_view_keeps_fixed_head_middle_and_tail() -> None:

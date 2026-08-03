@@ -89,6 +89,7 @@ def validated_speed_ratio(
     expected_identity = {
         "mode": "cpu",
         "jax_backend": "cpu",
+        "compute_dtype": "float32",
         "config_name": student_config,
         "teacher": student_training_name,
         "rung": student_rung,

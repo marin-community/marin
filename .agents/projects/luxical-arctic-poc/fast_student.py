@@ -18,6 +18,8 @@ from luxical.tokenization import ArrowTokenizer
 from experiments.datakit.cluster.quality.fast_transformer.data import UNK_ID, load_tokenizer
 from experiments.datakit.cluster.quality.fast_transformer.embedding import pack_remapped_windows, predict_embeddings
 from experiments.datakit.cluster.quality.fast_transformer.model import (
+    ACCELERATOR_COMPUTE_DTYPE_NAME,
+    CPU_COMPUTE_DTYPE_NAME,
     FastEmbeddingTransformer,
     FastTransformerConfig,
 )
@@ -225,5 +227,7 @@ class FastStudent:
             "windows_per_document": WINDOWS_PER_DOCUMENT,
             "source_windows_per_document": SOURCE_WINDOWS_PER_DOCUMENT,
             "characters_per_source_window": max_tokens,
+            "cpu_compute_dtype": CPU_COMPUTE_DTYPE_NAME,
+            "accelerator_compute_dtype": ACCELERATOR_COMPUTE_DTYPE_NAME,
             "config": asdict(self.model.backbone.config),
         }

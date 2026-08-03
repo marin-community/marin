@@ -18,7 +18,11 @@ from huggingface_hub import hf_hub_download
 from rigging.filesystem import StoragePath
 from verify_blind_neighborhood_with_claude import review_package_sha256
 
-from experiments.datakit.cluster.quality.fast_transformer.model import FastTransformerConfig
+from experiments.datakit.cluster.quality.fast_transformer.model import (
+    ACCELERATOR_COMPUTE_DTYPE_NAME,
+    CPU_COMPUTE_DTYPE_NAME,
+    FastTransformerConfig,
+)
 from experiments.datakit.embeddings.fast_transformer.embedder import (
     MANIFEST_FILENAME,
     FastEmbeddingBundleManifest,
@@ -82,7 +86,10 @@ def release_evidence_decision(
         == training_report["final_model_sha256"]
     )
     speed_identity = (
-        speed_report["config_name"] == config_name
+        speed_report["mode"] == "cpu"
+        and speed_report["jax_backend"] == "cpu"
+        and speed_report["compute_dtype"] == CPU_COMPUTE_DTYPE_NAME
+        and speed_report["config_name"] == config_name
         and speed_report["teacher"] == training_name
         and speed_report["rung"] == rung
         and speed_report["training_report"]["final_model_sha256"] == training_report["final_model_sha256"]
@@ -186,6 +193,8 @@ def main() -> None:
         config=config,
         output_dimension=OUTPUT_DIMENSION,
         characters_per_region=config.max_tokens,
+        cpu_compute_dtype=CPU_COMPUTE_DTYPE_NAME,
+        accelerator_compute_dtype=ACCELERATOR_COMPUTE_DTYPE_NAME,
         training_report_url=training_report_url,
         training_report_sha256=payload_sha256(training_payload),
         evaluation_report_url=args.evaluation_report_url,

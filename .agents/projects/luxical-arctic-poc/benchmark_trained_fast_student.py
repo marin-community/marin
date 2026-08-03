@@ -118,9 +118,12 @@ def benchmark(config: str, teacher: str, rung: str, batch_size: int) -> dict[str
         student, training_report = load_student(config, teacher, rung, Path(temporary_directory))
         rates = paired_rates(student, baseline, texts, batch_size)
         metadata = student.metadata()
+    backend = jax.default_backend()
+    compute_dtype = metadata["cpu_compute_dtype"] if backend == "cpu" else metadata["accelerator_compute_dtype"]
     return {
         "mode": "cpu",
-        "jax_backend": jax.default_backend(),
+        "jax_backend": backend,
+        "compute_dtype": compute_dtype,
         "config_name": config,
         "teacher": teacher,
         "rung": rung,
