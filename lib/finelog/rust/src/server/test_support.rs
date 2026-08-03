@@ -52,6 +52,9 @@ fn client_config(addr: SocketAddr) -> (TestTransport, ClientConfig) {
     );
     let config = ClientConfig::new(uri)
         .proto()
+        // Match production forwarding clients so integration tests exercise the
+        // server's zstd request path for large WriteRows payloads.
+        .compress_requests("zstd")
         .with_default_max_message_size(MAX_MESSAGE_BYTES);
     (transport, config)
 }
