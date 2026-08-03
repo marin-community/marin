@@ -1616,3 +1616,31 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Scale: The test uses expert weight scale `0.05`. The rack model uses about `0.007`; the test remains more numerically demanding without adding two layer gradients into one shared weight tensor.
 - Result: The forward and reverse scans compiled without an annotation collision. Output and input, W13, and W2 gradient parity passed the existing tolerances on four GB200 GPUs in `85.49 s`.
 - Decision: Commit and submit the next five-step rack gate.
+
+### 2026-08-03 13:43 UTC - MNEP-090 isolates block-remat duplication
+
+- Result: The CUTLASS-gradient and collective-transpose collisions are gone. Full training-graph compilation still failed before step 0 on a forward `scheduled_cutlass_call` in groups `789000` or `790000`.
+- Cause: Block rematerialization makes a second forward MoE region after JAX builds the scan transpose. The cloned region keeps the original numeric scheduling group IDs, so XLA sees two separate transport-compute windows as one group with a gap.
+- Decision: Test `remat_mode=save_moe` first. This saves the tagged MoE values, removes the cloned dispatch window, and avoids extra EP communication in backward. Keep an XLA group-split fix as a fallback if the rack cannot hold the saved values.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-090-cutlass-overlap-5-20260803-1335-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-090-cutlass-overlap-5-20260803-1335).
+
+### 2026-08-03 13:43 UTC - MNEP-091 save-MoE rack gate
+
+- Treatment: Use the two-bucket annotated CUTLASS overlap graph with `remat_mode=save_moe` on one NVL72.
+- Gate: Require all 16 workers to compile and complete five finite steps on attempt zero with zero dropped assignments.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-091-save-moe-overlap-5-20260803-1343-coord).
+
+### 2026-08-03 13:49 UTC - MNEP-091 cannot save the MoE state
+
+- Result: Full training-graph compilation requested `557.88 GiB` on each GPU and failed before step 0.
+- Decision: Keep block rematerialization. Reduce the custom expert VJP residual to inputs and weights, then recompute only the gated activation in its backward rule.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-091-save-moe-overlap-5-20260803-1343-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-091-save-moe-overlap-5-20260803-1343).
+
+### 2026-08-03 14:36 UTC - Backward transport-compute overlap gate passes
+
+- Backward schedule: Transposed dispatch and combine collectives use group IDs `791000` and `792000`. Each group overlaps the independent bucket's QuACK `dh` GEMM.
+- Rematerialization: The expert VJP saves only inputs and weights. It recomputes the gated activation once and does not recompute the down projection.
+- Fusion barrier: A Triton row scatter and its gather transpose keep XLA from merging both bucket-layout gradients into one multi-output fusion. The merged fusion created a false dependency from the communication start to the other bucket's GEMM.
+- Correctness: The standard ragged transport passed the dense-reference output and input, W13, and W2 gradient gate with two rematerialized scan layers and the latency-hiding scheduler enabled on four GB200 GPUs in `89.17 s`.
+- Direct-device note: The one-process, four-GPU symmetric-memory test exits with signal 11 in both one-bucket and two-bucket modes on this tray. The process-per-GPU rack path remains the direct-device correctness gate.
+- Next: Submit five finite steps on one NVL72 with block rematerialization, then profile exact ragged and QuACK overlap and compare MFU with MNEP-074.
