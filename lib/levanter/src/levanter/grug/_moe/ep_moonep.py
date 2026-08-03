@@ -8,6 +8,7 @@ https://github.com/moonshotAI/moonep/tree/0f385f038fc33bec22e3bcf5a07a8a22693e75
 """
 
 from collections.abc import Callable
+from functools import partial
 from typing import NamedTuple
 
 import jax
@@ -291,6 +292,103 @@ def _ordered_after(dependency: jax.Array, value: jax.Array) -> jax.Array:
     return ordered_value
 
 
+def _scheduled_ragged_all_to_all_impl(
+    operand: jax.Array,
+    input_offsets: jax.Array,
+    send_sizes: jax.Array,
+    output_offsets: jax.Array,
+    recv_sizes: jax.Array,
+    *,
+    output_rows: int,
+    axis_name: str,
+    scheduling_group_id: int,
+) -> jax.Array:
+    output = jnp.zeros((output_rows, *operand.shape[1:]), dtype=operand.dtype)
+    with set_xla_metadata(_scheduling_group_id=scheduling_group_id):
+        return jax.lax.ragged_all_to_all(
+            operand,
+            output,
+            input_offsets,
+            send_sizes,
+            output_offsets,
+            recv_sizes,
+            axis_name=axis_name,
+        )
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7))
+def _scheduled_ragged_all_to_all(
+    operand: jax.Array,
+    input_offsets: jax.Array,
+    send_sizes: jax.Array,
+    output_offsets: jax.Array,
+    recv_sizes: jax.Array,
+    output_rows: int,
+    axis_name: str,
+    scheduling_group_id: int,
+) -> jax.Array:
+    """Run an annotated forward collective with an unannotated transpose."""
+    return _scheduled_ragged_all_to_all_impl(
+        operand,
+        input_offsets,
+        send_sizes,
+        output_offsets,
+        recv_sizes,
+        output_rows=output_rows,
+        axis_name=axis_name,
+        scheduling_group_id=scheduling_group_id,
+    )
+
+
+def _scheduled_ragged_all_to_all_fwd(
+    operand,
+    input_offsets,
+    send_sizes,
+    output_offsets,
+    recv_sizes,
+    output_rows,
+    axis_name,
+    scheduling_group_id,
+):
+    result = _scheduled_ragged_all_to_all_impl(
+        operand,
+        input_offsets,
+        send_sizes,
+        output_offsets,
+        recv_sizes,
+        output_rows=output_rows,
+        axis_name=axis_name,
+        scheduling_group_id=scheduling_group_id,
+    )
+    residuals = (input_offsets, send_sizes, output_offsets, recv_sizes, operand.shape[0])
+    return result, residuals
+
+
+def _scheduled_ragged_all_to_all_bwd(
+    _output_rows,
+    axis_name,
+    _scheduling_group_id,
+    residuals,
+    output_gradient,
+):
+    input_offsets, send_sizes, output_offsets, recv_sizes, input_rows = residuals
+    transpose_output_offsets = jax.lax.all_to_all(output_offsets, axis_name, 0, 0, tiled=True)
+    transpose_input_offsets = jax.lax.all_to_all(input_offsets, axis_name, 0, 0, tiled=True)
+    operand_gradient = jax.lax.ragged_all_to_all(
+        output_gradient,
+        jnp.zeros((input_rows, *output_gradient.shape[1:]), dtype=output_gradient.dtype),
+        transpose_output_offsets,
+        recv_sizes,
+        transpose_input_offsets,
+        send_sizes,
+        axis_name=axis_name,
+    )
+    return operand_gradient, None, None, None, None
+
+
+_scheduled_ragged_all_to_all.defvjp(_scheduled_ragged_all_to_all_fwd, _scheduled_ragged_all_to_all_bwd)
+
+
 def _bucket_assignment_ids(
     send_order: Int[Array, " N"],
     send_sizes: Int[Array, " R"],
@@ -552,32 +650,27 @@ def _moe_mlp_ep_moonep_exact_local(
             if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and dispatched_buckets:
                 input_offsets = _ordered_after(dispatched_buckets[-1].received_x[0, 0], input_offsets)
 
-            def dispatch_bucket(send_x, output, input_offsets, send_sizes, output_offsets, recv_sizes):
-                return jax.lax.ragged_all_to_all(
+            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket > 0:
+                received_x = _scheduled_ragged_all_to_all(
                     send_x,
-                    output,
+                    input_offsets,
+                    send_sizes,
+                    output_offsets,
+                    recv_sizes,
+                    bucket_capacity,
+                    "expert",
+                    _MOONEP_DISPATCH_COMPUTE_GROUP_BASE + bucket - 1,
+                )
+            else:
+                received_x = jax.lax.ragged_all_to_all(
+                    send_x,
+                    jnp.zeros((bucket_capacity, hidden_dim), dtype=x_local.dtype),
                     input_offsets,
                     send_sizes,
                     output_offsets,
                     recv_sizes,
                     axis_name="expert",
                 )
-
-            dispatch_args = (
-                send_x,
-                jnp.zeros((bucket_capacity, hidden_dim), dtype=x_local.dtype),
-                input_offsets,
-                send_sizes,
-                output_offsets,
-                recv_sizes,
-            )
-            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket > 0:
-                with set_xla_metadata(
-                    _scheduling_group_id=_MOONEP_DISPATCH_COMPUTE_GROUP_BASE + bucket - 1,
-                ):
-                    received_x = dispatch_bucket(*dispatch_args)
-            else:
-                received_x = dispatch_bucket(*dispatch_args)
             received_experts, received_valid, _ = _received_expert_ids(
                 all_expert_counts,
                 plan,
@@ -682,32 +775,27 @@ def _moe_mlp_ep_moonep_exact_local(
                 rank,
             )
 
-            def combine_bucket(send_x, output, input_offsets, send_sizes, output_offsets, recv_sizes):
-                return jax.lax.ragged_all_to_all(
-                    send_x,
-                    output,
-                    input_offsets,
-                    send_sizes,
-                    output_offsets,
-                    recv_sizes,
+            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket + 2 == token_buckets:
+                returned = _scheduled_ragged_all_to_all(
+                    outputs_in_receive_order,
+                    return_input_offsets,
+                    return_send_sizes,
+                    return_output_offsets,
+                    return_recv_sizes,
+                    bucket_capacity,
+                    "expert",
+                    _MOONEP_COMBINE_COMPUTE_GROUP_BASE + bucket,
+                )
+            else:
+                returned = jax.lax.ragged_all_to_all(
+                    outputs_in_receive_order,
+                    jnp.zeros((bucket_capacity, hidden_dim), dtype=expert_outputs.dtype),
+                    return_input_offsets,
+                    return_send_sizes,
+                    return_output_offsets,
+                    return_recv_sizes,
                     axis_name="expert",
                 )
-
-            combine_args = (
-                outputs_in_receive_order,
-                jnp.zeros((bucket_capacity, hidden_dim), dtype=expert_outputs.dtype),
-                return_input_offsets,
-                return_send_sizes,
-                return_output_offsets,
-                return_recv_sizes,
-            )
-            if bucket_schedule == MoonEPBucketSchedule.COMPUTE_OVERLAP and bucket + 2 == token_buckets:
-                with set_xla_metadata(
-                    _scheduling_group_id=_MOONEP_COMBINE_COMPUTE_GROUP_BASE + bucket,
-                ):
-                    returned = combine_bucket(*combine_args)
-            else:
-                returned = combine_bucket(*combine_args)
             returned_buckets.append(tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT))
             assignment_id_buckets.append(
                 _bucket_assignment_ids(

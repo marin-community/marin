@@ -1599,3 +1599,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Regression gate: The four-GB200 dense-reference test now applies `jax.checkpoint` to the MoonEP call before differentiation.
 - Result: The rematerialized graph compiled without a scheduling-group error and matched output and input, W13, and W2 gradients in `237.29 s`.
 - Decision: Commit the correction, release the debug tray, and submit MNEP-089 as one controlled retry of the five-step rack gate.
+
+### 2026-08-03 13:24 UTC - MNEP-089 exposes the collective transpose collision
+
+- Result: The CUTLASS collision from MNEP-088 is gone. Full training-graph compilation then failed before step 0 on annotated `ragged-all-to-all-start` operations.
+- Error: Groups `789000` and `790000` had a prior operation with the same annotation in their operand trees and unannotated operations between the two calls.
+- Cause: JAX copies the metadata context from a forward ragged collective into its automatic transpose. The rematerialized reverse-scan body then joins the recomputed forward collective and its transpose into one group with gaps.
+- Fix: Wrap annotated zero-output ragged collectives in a custom VJP. Keep the annotation on the forward call and implement the standard ragged transpose without metadata.
+- Regression gate: Run two rematerialized MoonEP layers in `jax.lax.scan` on four GB200 GPUs, then compare the final output and all gradients with a dense two-layer scan.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-089-cutlass-overlap-5-20260803-1315-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-089-cutlass-overlap-5-20260803-1315).
+
+### 2026-08-03 13:31 UTC - Reverse-scan collective gate passes
+
+- Custom VJP: Annotated zero-output ragged collectives keep the group ID in the forward pass. Their transpose exchanges input and output offsets and runs the reverse ragged collective without metadata.
+- Regression shape: Two distinct expert-weight sets run through two rematerialized MoonEP layers in `jax.lax.scan`, with a residual connection between layers.
+- Scale: The test uses expert weight scale `0.05`. The rack model uses about `0.007`; the test remains more numerically demanding without adding two layer gradients into one shared weight tensor.
+- Result: The forward and reverse scans compiled without an annotation collision. Output and input, W13, and W2 gradient parity passed the existing tolerances on four GB200 GPUs in `85.49 s`.
+- Decision: Commit and submit the next five-step rack gate.

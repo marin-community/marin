@@ -733,14 +733,20 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
     hidden_dim = 128
     intermediate_dim = 128
     num_experts = 8
+    scan_layers = 2
+    weight_scale = 0.05
     selected_experts = jnp.asarray(selected_expert_rows, dtype=jnp.int32)
     x = jax.random.normal(jax.random.key(51), (tokens, hidden_dim), dtype=jnp.float32).astype(jnp.bfloat16)
     combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(52), (tokens, 2)), axis=-1).astype(jnp.bfloat16)
-    w_up_gate = 0.1 * jax.random.normal(
-        jax.random.key(53), (num_experts, hidden_dim, 2 * intermediate_dim), dtype=jnp.float32
+    w_up_gate = weight_scale * jax.random.normal(
+        jax.random.key(53),
+        (scan_layers, num_experts, hidden_dim, 2 * intermediate_dim),
+        dtype=jnp.float32,
     ).astype(jnp.bfloat16)
-    w_down = 0.1 * jax.random.normal(
-        jax.random.key(54), (num_experts, intermediate_dim, hidden_dim), dtype=jnp.float32
+    w_down = weight_scale * jax.random.normal(
+        jax.random.key(54),
+        (scan_layers, num_experts, intermediate_dim, hidden_dim),
+        dtype=jnp.float32,
     ).astype(jnp.bfloat16)
     cotangent = jax.random.normal(jax.random.key(55), x.shape, dtype=jnp.float32).astype(jnp.bfloat16)
 
@@ -755,14 +761,21 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
         )
         return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
 
-    expected = dense_output(x, w_up_gate, w_down)
+    def dense_scanned_output(x, w_up_gate, w_down):
+        def layer(carry, layer_weights):
+            layer_w_up_gate, layer_w_down = layer_weights
+            return carry + dense_output(carry, layer_w_up_gate, layer_w_down), None
+
+        return jax.lax.scan(layer, x, (w_up_gate, w_down))[0]
+
+    expected = dense_scanned_output(x, w_up_gate, w_down)
     expected_gradients = jax.grad(
-        lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
+        lambda x, w_up_gate, w_down: jnp.sum(dense_scanned_output(x, w_up_gate, w_down) * cotangent),
         argnums=(0, 1, 2),
     )(x, w_up_gate, w_down)
 
     batch_sharding = NamedSharding(mesh, P("expert", None))
-    expert_sharding = NamedSharding(mesh, P("expert", None, None))
+    expert_sharding = NamedSharding(mesh, P(None, "expert", None, None))
     x = jax.device_put(x, batch_sharding)
     selected_experts = jax.device_put(selected_experts, batch_sharding)
     combine_weights = jax.device_put(combine_weights, batch_sharding)
@@ -792,8 +805,16 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
             report_capacity_overflow=True,
         )
 
+    def rematerialized_moonep_output(x, w_up_gate, w_down):
+        def layer(carry, layer_weights):
+            layer_w_up_gate, layer_w_down = layer_weights
+            update, errors = jax.checkpoint(moonep_output)(carry, layer_w_up_gate, layer_w_down)
+            return carry + update, errors
+
+        return jax.lax.scan(layer, x, (w_up_gate, w_down))
+
     with jax.set_mesh(mesh):
-        actual, errors = moonep_output(x, w_up_gate, w_down)
+        actual, errors = rematerialized_moonep_output(x, w_up_gate, w_down)
 
     np.testing.assert_allclose(
         np.asarray(actual.astype(jnp.float32)),
@@ -803,7 +824,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
     )
     with jax.set_mesh(mesh):
         actual_gradients = jax.grad(
-            lambda x, w_up_gate, w_down: jnp.sum(jax.checkpoint(moonep_output)(x, w_up_gate, w_down)[0] * cotangent),
+            lambda x, w_up_gate, w_down: jnp.sum(rematerialized_moonep_output(x, w_up_gate, w_down)[0] * cotangent),
             argnums=(0, 1, 2),
         )(x, w_up_gate, w_down)
     for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
@@ -814,7 +835,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
         relative_l2_error = float(np.linalg.norm(difference) / np.linalg.norm(expected_gradient_array))
         assert max_error <= 0.2
         assert relative_l2_error <= 0.02
-    assert int(errors) == 0
+    assert np.all(np.asarray(errors) == 0)
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():
