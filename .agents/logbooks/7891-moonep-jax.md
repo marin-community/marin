@@ -1761,3 +1761,94 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above MNEP-092c.
 - Stop criteria: Stop on a retry, a non-finite value, a transport error, an OOM, or a dropped assignment.
 - Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-098-bounded2-token-a2a-5-20260803-1714-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-098-bounded2-token-a2a-5-20260803-1714).
+
+### 2026-08-03 17:27 UTC - MNEP-098 scheduler replacement
+
+- Result: The worker group did not start. Kueue could fit only one of 16 tasks because 197 candidate nodes did not have 128 GiB of free host memory.
+- Action: Stop MNEP-098 before it used a GPU. Replace it with MNEP-098b at 64 GiB of host memory per task. The model and batch settings are unchanged.
+- Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above `9.738%`.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-098b-bounded2-token-a2a-5-20260803-1727-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-098b-bounded2-token-a2a-5-20260803-1727).
+
+### 2026-08-03 17:32 UTC - MNEP-098b rejects factor two
+
+- Result: The rack compiled, but step one did not start. The collective-memory allocator could not reserve a `32.45 GiB` buffer on each GPU.
+- Correctness: There was no retry and no numerical failure. Stop the parent job after the first allocation error.
+- Decision: Reduce the padded factor to `1.75`. This lowers the fixed collective buffer to about `28.4 GiB` while keeping the exact ragged fallback.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-098b-bounded2-token-a2a-5-20260803-1727-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-098b-bounded2-token-a2a-5-20260803-1727).
+
+### 2026-08-03 17:33 UTC - MNEP-098c factor-1.75 rack gate
+
+- Treatment: Use one padded all-to-all with `1.75` times the mean peer capacity. Use exact ragged transfer when any message exceeds the limit.
+- Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above `9.738%`.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, an OOM, or a dropped assignment.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-098c-bounded175-token-a2a-5-20260803-1732-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-098c-bounded175-token-a2a-5-20260803-1732).
+
+### 2026-08-03 17:41 UTC - MNEP-098c is correct but below baseline MFU
+
+- Correctness: All 16 workers completed five steps on attempt zero. Loss and gradients stayed finite, and no expert assignment was dropped.
+- Memory: The fixed collective fit at about `180.4 GiB` of sampled HBM use per GPU. XLA estimated a `187.18 GiB` program peak.
+- Performance: P50 MFU was `9.545%` at `153,538` tokens/s. The final sampled step took `27.318 s`.
+- Comparison: MNEP-092c reached `9.738%` MFU. Factor `1.75` is `1.99%` slower, so it is not a throughput path.
+- Decision: Profile the same treatment across all 64 allocated GPUs. Count fixed and ragged token calls and measure the remaining exposed communication.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-098c-bounded175-token-a2a-5-20260803-1732-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-098c-bounded175-token-a2a-5-20260803-1732).
+
+### 2026-08-03 17:42 UTC - MNEP-099 all-GPU profile contract
+
+- Treatment: Repeat MNEP-098c and profile step three on every JAX process and every visible GPU.
+- Capture: CUPTI chip count `0` selects all visible GPUs. No process-index filter is set, so all 64 allocated processes upload one host trace to the shared XProf session.
+- Primary measure: Count standard and ragged all-to-all calls. Measure exposed communication and its overlap with QuACK work.
+- Gate: Require five finite steps, zero dropped assignments, 64 GPU traces, and one complete XProf session.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-099-bounded175-allgpu-profile-5-20260803-1741-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-099-bounded175-allgpu-profile-5-20260803-1741).
+
+### 2026-08-03 18:06 UTC - MNEP-099 all-GPU profile does not start step one
+
+- Result: All 64 processes entered the first compiled JAX call, but no process completed step one in 23 minutes.
+- Evidence: Process stacks stayed in the PJIT executable call. Task logs had no transport error, numerical error, or retry.
+- Action: Stop the parent job to release the rack. The run did not create a usable profile.
+- Decision: Keep the all-process profile settings. Use them after the static two-round transport passes its rack gate.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-099-bounded175-allgpu-profile-5-20260803-1741-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-099-bounded175-allgpu-profile-5-20260803-1741).
+
+### 2026-08-03 18:15 UTC - Static two-round transport passes the four-GPU gate
+
+- Change: Unroll a fixed number of equal-size padded all-to-all rounds. Use the exact ragged path only when the total fixed capacity is too small.
+- Value gate: An uneven four-rank message matrix gives an exact compact receive order across two rounds.
+- Gradient gate: The input gradient is exact across the same two real GB200 all-to-all rounds.
+- Runtime: The test uses the same fixed JAX and XLA wheel build as the rack runs.
+- Caveat: The full-MoE single-process test still requests a separate `138 GiB` RATA allocation during its gradient executable. The transport-only test does not use RATA, and the one-rack training gate will check the combined gradient path.
+- Next: Run five exact EP64 training steps with a `1.25` per-round capacity factor and two static rounds.
+
+### 2026-08-03 18:24 UTC - MNEP-100 static two-round rack gate
+
+- Treatment: Use one token bucket and two static padded all-to-all rounds. Each round has `1.25` times the mean peer capacity.
+- Exactness: Use the ragged transport when a peer message exceeds the combined two-round capacity.
+- Baseline: MNEP-092c reached `9.738%` median MFU at `157,958` tokens/s.
+- Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above MNEP-092c.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, an OOM, or a dropped assignment.
+- Code: Commit `5006b8154` (`[moe] Split bounded token exchange into static rounds`).
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-100-static2-token-a2a-5-20260803-1824-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-100-static2-token-a2a-5-20260803-1824).
+
+### 2026-08-03 18:28 UTC - MNEP-100b replaces an empty W&B key
+
+- Setup result: MNEP-100 stopped before compilation because its shell expanded the W&B key before the command-local assignment took effect. The child received an empty key.
+- GPU use: The workers completed setup only. No training executable compiled and no step ran.
+- Replacement: MNEP-100b exports the key before the Iris command. The model, transport, resources, code commit, and gate are unchanged.
+- Evidence: [MNEP-100 Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-100-static2-token-a2a-5-20260803-1824-coord), [MNEP-100b Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-100b-static2-token-a2a-5-20260803-1827-coord), and [MNEP-100b W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-100b-static2-token-a2a-5-20260803-1827).
+
+### 2026-08-03 18:32 UTC - MNEP-100b rejects unrolled static rounds
+
+- Result: The rack compiled the training executable, but step one did not start.
+- Memory: XLA requested four large collective pools of about `31.66 GiB` and `28.49 GiB`, then could not reserve a final `25.15 GiB` pool.
+- Cause: Python unrolling gives each all-to-all round a separate collective buffer. XLA does not reuse one pool across the rounds.
+- Action: Stop the parent after the first OOM. There was no retry and no numerical failure.
+- Decision: Remove the unrolled full-rack path. Move repeated rounds into one loop or one custom communication kernel with one reusable buffer.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-100b-static2-token-a2a-5-20260803-1827-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-100b-static2-token-a2a-5-20260803-1827).
+
+### 2026-08-03 18:40 UTC - MNEP-101 one-buffer two-round rack gate
+
+- Treatment: Keep two `1.25`-times-mean rounds, but lower both rounds through one fixed JAX loop body.
+- Memory intent: Reuse one standard all-to-all pool across both rounds. Do not create a separate pool for each Python-unrolled call.
+- Local gate: Exact value and input gradients pass on an uneven four-rank matrix across two real GB200 all-to-all rounds.
+- Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above `9.738%`.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, an OOM, or a dropped assignment.
+- Code: Commit `418395124` (`[moe] Reuse the token round buffer`).
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-101-loop2-token-a2a-5-20260803-1840-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-101-loop2-token-a2a-5-20260803-1840).
