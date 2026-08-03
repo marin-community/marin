@@ -1299,3 +1299,19 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Evidence: [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-071d-exact-sparse-gin-5-20260803-0601).
 - Comparison: The exact MNEP-067 baseline was about `9.6%` MFU. Sparse GIN did not remove the measured weight-transport cost.
 - Decision: Keep the transport correctness result. Capture a full GPU profile before the next XLA change.
+
+### 2026-08-03 06:09 UTC - MNEP-072 sparse GIN profile contract
+
+- Run ID: `mnep-072-sparse-gin-profile-5-20260803-0609` at `24944a477`.
+- Treatment: Repeat MNEP-071d and profile one complete step from step three on process zero.
+- Trace: Enable host labels, HLO metadata, and one million GPU activity and callback events.
+- Gate: Require five finite steps, no dropped assignments, successful profile upload, and a full ragged all-to-all time comparison with MNEP-067.
+
+### 2026-08-03 06:28 UTC - MNEP-072 sparse GIN profile result
+
+- Result: All 16 workers completed five finite exact steps with no dropped assignments.
+- Evidence: [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-072-sparse-gin-profile-5-20260803-0609).
+- Profile: [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmnep-072-sparse-gin-profile-5-20260803-0609).
+- Measurement: Ragged all-to-all used `14.9604 s` across 576 calls and `54.6%` of the device time.
+- Comparison: MNEP-067 used `15.1776 s` for the same 576 calls. The sparse handshake saved only `0.2172 s`.
+- Decision: Keep the sparse handshake for correctness. Restore parallel GIN writes before another rack test.
