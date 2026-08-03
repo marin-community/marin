@@ -12,7 +12,7 @@ const elapsed = computed(() => {
 })
 const shardProgress = computed(() => `${props.status?.completedShards ?? 0}/${props.status?.totalShards ?? 0}`)
 const workerCount = computed(() =>
-  (props.status?.workerStates ?? []).reduce((sum, item) => sum + item.count, 0),
+  (props.status?.workerStates ?? []).find((item) => item.state === 'active')?.count ?? 0,
 )
 </script>
 

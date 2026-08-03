@@ -42,7 +42,7 @@ _NOT_BUILT_HTML = """<!doctype html>
 
 
 class CoordinatorDashboardData(Protocol):
-    """Internal data boundary between the Connect service and coordinator."""
+    """Dashboard data methods that stay private to avoid actor RPC publication."""
 
     def _dashboard_pipelines_response(self) -> dashboard_pb2.ListPipelinesResponse: ...
     def _dashboard_plan_response(self, execution_id: str) -> dashboard_pb2.GetPlanResponse: ...
@@ -135,16 +135,13 @@ def pipeline_plan(
     plan: PhysicalPlan,
     *,
     pipeline_name: str,
-    pipeline_id: int,
     execution_id: str,
 ) -> dashboard_pb2.GetPlanResponse:
     """Build a safe graph that contains no source values or callable representations."""
     response = dashboard_pb2.GetPlanResponse(
         pipeline_name=pipeline_name,
-        pipeline_id=pipeline_id,
         execution_id=execution_id,
         source_item_count=len(plan.source_items),
-        source_shard_count=plan.num_shards,
     )
 
     def add_plan(
@@ -153,7 +150,6 @@ def pipeline_plan(
         prefix: str,
         parent_node_id: str = "",
         auxiliary: bool = False,
-        target_node_id: str = "",
     ) -> None:
         plan_source_node_id = source_node_id(prefix)
         response.nodes.append(
@@ -167,7 +163,6 @@ def pipeline_plan(
                 auxiliary=auxiliary,
             )
         )
-        previous_node_id = plan_source_node_id
         current_shards = nested_plan.num_shards
         for stage_index, stage in enumerate(nested_plan.stages):
             node_id = stage_node_id(prefix, stage_index)
@@ -184,8 +179,6 @@ def pipeline_plan(
                     auxiliary=auxiliary,
                 )
             )
-            response.edges.append(dashboard_pb2.PlanEdge(source_node_id=previous_node_id, target_node_id=node_id))
-            previous_node_id = node_id
             current_shards = output_shards
 
             for operation_index, operation in enumerate(stage.operations):
@@ -196,17 +189,7 @@ def pipeline_plan(
                     prefix=join_right_prefix(node_id, operation_index),
                     parent_node_id=node_id,
                     auxiliary=True,
-                    target_node_id=node_id,
                 )
-
-        if target_node_id:
-            response.edges.append(
-                dashboard_pb2.PlanEdge(
-                    source_node_id=previous_node_id,
-                    target_node_id=target_node_id,
-                    label="join input",
-                )
-            )
 
     add_plan(plan, prefix="main")
     return response
