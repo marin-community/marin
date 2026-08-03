@@ -1558,3 +1558,33 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   release the 3M student unless the fixed gate decisions stay stable.
 - Raw report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/raw-v1/embedding-screen-v1/report.json`.
+
+### LUX-ARCTIC-30M-001: Final pure-scaling rung
+
+- Hypothesis: A nested 30M rung can recover the semantic quality that the 3M
+  and 10M students lost.
+- Commit Hash: `31fd0c72736a78861c0dd51719747d447e427e70`.
+- The 10M blind review had 84 wins, 10 ties, and 106 losses. Its score was
+  0.4450 with a 95 percent interval from 0.3775 through 0.5125.
+- The 10M code score was 0.45. The non-English score was 0.32258. The other
+  text score was 0.47479. All three scores failed their fixed gates.
+- The 3M-to-10M score change was -0.0025. Stop pure scaling when the
+  10M-to-30M score change is less than 0.005.
+- The 10M student CPU speed was 6,798.62 documents per second. Luxical-One
+  speed was 655.95 documents per second in the same forced-CPU job.
+- The 30M manifest has 30,000,000 training rows and 74,752 evaluation rows
+  from 146 sources. Its SHA-256 is
+  `19fe07f483b27d26cbf6402a3ee97c7f90953487378bbf5d37401d0819c5dbf4`.
+- The exact audit confirmed that all 10M rows are unchanged and nested in the
+  30M rung. Audit artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/expanded-30m/manifest-audit.json`.
+- The teacher path reuses the exact 10M vectors. It embeds 20M new rows instead
+  of 27M new rows.
+- Command:
+  `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 80GB --disk 200GB --priority interactive --max-retries 1 --timeout 21600 --user rav --job-name lux-arctic-teacher-30m-h100-00 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/extend_arctic_teacher.py --rung 30m --shard-index 0 --num-shards 32`.
+- Result: All 32 independent teacher jobs entered Iris. The first source on
+  shard 0 has 169,527 new rows after 10M prefix reuse.
+- Interpretation: The input and prefix checks pass. Teacher vector generation
+  is active.
+- Next action: Audit all 30,074,752 teacher vectors. Then prepare and train the
+  30M student.
