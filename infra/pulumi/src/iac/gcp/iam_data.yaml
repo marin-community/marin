@@ -750,6 +750,7 @@ kms_grants:
 - role: roles/cloudkms.cryptoKeyEncrypterDecrypter
   members:
   - serviceAccount:iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+  - serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
   - serviceAccount:ravwojdyla@rav-openathena.iam.gserviceaccount.com
   - principal: human-032
