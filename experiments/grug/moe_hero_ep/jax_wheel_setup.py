@@ -49,6 +49,7 @@ class MoonEPJaxWheelBuild(StrEnum):
         "lsa-nccl-2307-multicontext-gin-release-local-ctas-20260803"
     )
     LSA_NCCL_2307_MULTICONTEXT_CUTLASS_OVERLAP_20260803 = "lsa-nccl-2307-multicontext-cutlass-overlap-20260803"
+    LSA_NCCL_2307_ONE_REMOTE_CTA_20260803 = "lsa-nccl-2307-one-remote-cta-20260803"
 
 
 @dataclass(frozen=True)
@@ -635,6 +636,28 @@ _LSA_NCCL_2307_MULTICONTEXT_CUTLASS_OVERLAP_20260803 = _WheelSet(
     ),
 )
 
+_LSA_NCCL_2307_ONE_REMOTE_CTA_20260803 = _WheelSet(
+    prefix=f"{_WHEEL_ARTIFACT_ROOT}/jax-f9f6bbace-xla-5d53e1e-nccl2307-one-remote-cta-20260803",
+    wheels=(
+        _WheelArtifact(
+            filename="jax-0.11.1.dev20260802+f9f6bbace-py3-none-any.whl",
+            sha256="40b447b71c8a45032abe9ebdbadfd9d0d434165500c27831a408a8ee053dac4d",
+        ),
+        _WheelArtifact(
+            filename="jax_cuda13_pjrt-0.11.1.dev0+selfbuilt-py3-none-manylinux_2_27_aarch64.whl",
+            sha256="d781426ad4b29012c46079d3297b30a373e48b4ffbe43249aef8afd4544de34f",
+        ),
+        _WheelArtifact(
+            filename="jax_cuda13_plugin-0.11.1.dev0+selfbuilt-cp312-cp312-manylinux_2_27_aarch64.whl",
+            sha256="d04ee6bdc956979fa0c43ed95bfdba7bc4f665ceceb34531ef792cff742ddf95",
+        ),
+        _WheelArtifact(
+            filename="jaxlib-0.11.1.dev0+selfbuilt-cp312-cp312-manylinux_2_27_aarch64.whl",
+            sha256="03e838842547a66af13bc93a533ce1943dc0f2eb83026a94994eca7f47c072b4",
+        ),
+    ),
+)
+
 
 def _wheel_set(build: MoonEPJaxWheelBuild) -> _WheelSet:
     if build == MoonEPJaxWheelBuild.LSA_20260802:
@@ -689,6 +712,8 @@ def _wheel_set(build: MoonEPJaxWheelBuild) -> _WheelSet:
         return _LSA_NCCL_2307_MULTICONTEXT_GIN_RELEASE_LOCAL_CTAS_20260803
     if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_MULTICONTEXT_CUTLASS_OVERLAP_20260803:
         return _LSA_NCCL_2307_MULTICONTEXT_CUTLASS_OVERLAP_20260803
+    if build == MoonEPJaxWheelBuild.LSA_NCCL_2307_ONE_REMOTE_CTA_20260803:
+        return _LSA_NCCL_2307_ONE_REMOTE_CTA_20260803
     raise ValueError(f"unknown MoonEP JAX wheel build: {build}")
 
 
