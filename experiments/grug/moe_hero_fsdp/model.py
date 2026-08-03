@@ -159,6 +159,8 @@ class GrugModelConfig:
     # block (instead of two). Mathematically identical to the unfused path (per-column GEMM + depthwise
     # conv); purely a kernel-count/tensor-core-fill optimization. Requires K and V SConv sites together.
     fused_qkv: bool = False
+    # Apply the learnable GatedNorm after each RMSNorm. False removes it entirely (ablation / throughput).
+    gated_norm: bool = True
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
@@ -853,10 +855,10 @@ class MoEMLP(eqx.Module):
 
 class Block(eqx.Module):
     rms_attn: RMSNorm
-    attn_gated_norm: GatedNorm
+    attn_gated_norm: "GatedNorm | None"
     attn: CausalSelfAttention
     rms_mlp: RMSNorm
-    mlp_gated_norm: GatedNorm
+    mlp_gated_norm: "GatedNorm | None"
     mlp: MoEMLP
     shared: tuple[DenseMLP, ...] | None
     sconv_attn: "ShortConv | None"  # SConv on the attention branch output (cfg.sconv)
@@ -878,10 +880,14 @@ class Block(eqx.Module):
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key) if cfg.gated_norm else None
+            ),
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key) if cfg.gated_norm else None
+            ),
             mlp=MoEMLP.init(cfg, key=mlp_key),
             shared=shared,
             sconv_attn=(
@@ -904,12 +910,16 @@ class Block(eqx.Module):
         _seg = mask.segment_ids if isinstance(mask, AttentionMask) else None
         sconv_segment_ids = _seg[0] if _seg is not None else None
 
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        attn_in = self.rms_attn(x)
+        if self.attn_gated_norm is not None:
+            attn_in = self.attn_gated_norm(attn_in)
         attn_out = self.attn(attn_in, mask, disable_rope=disable_rope, is_global=is_global)
         if self.sconv_attn is not None:
             attn_out = self.sconv_attn(attn_out, sconv_segment_ids)
         x = x + attn_out
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
+        mlp_in = self.rms_mlp(x)
+        if self.mlp_gated_norm is not None:
+            mlp_in = self.mlp_gated_norm(mlp_in)
         mlp_out, router_stats = self.mlp(mlp_in)
         if self.shared is not None:
             for shared_expert in self.shared:
@@ -928,11 +938,11 @@ def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
-    embed_gated_norm: GatedNorm
+    embed_gated_norm: "GatedNorm | None"
     output_proj: jax.Array
     stacked_blocks: ArrayStacked[Block]
     final_norm: RMSNorm
-    final_gated_norm: GatedNorm
+    final_gated_norm: "GatedNorm | None"
     config: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
@@ -966,11 +976,15 @@ class Transformer(eqx.Module):
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key) if cfg.gated_norm else None
+            ),
             output_proj=output_proj,
             stacked_blocks=stacked_blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=(
+                GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.gated_norm else None
+            ),
             config=cfg,
         )
 
@@ -989,7 +1003,9 @@ class Transformer(eqx.Module):
 
         cfg = self.config
         hidden = _embedding_gather(self.token_embed, token_ids)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        hidden = self.embed_norm(hidden)
+        if self.embed_gated_norm is not None:
+            hidden = self.embed_gated_norm(hidden)
 
         # Local layers use a sliding window; every global_every-th layer is full causal.
         segment_ids = None
@@ -1054,7 +1070,9 @@ class Transformer(eqx.Module):
             "qb_beta_per_layer": stacked_router_stats["qb_beta"],
             "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
         }
-        hidden = self.final_gated_norm(self.final_norm(hidden))
+        hidden = self.final_norm(hidden)
+        if self.final_gated_norm is not None:
+            hidden = self.final_gated_norm(hidden)
         return hidden, router_metrics
 
     @named_call
