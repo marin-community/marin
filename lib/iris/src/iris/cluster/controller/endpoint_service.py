@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from threading import RLock
 from typing import Any
+from urllib.parse import urlsplit
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -116,6 +117,15 @@ class ProxyRegistrySnapshot:
     endpoints: tuple[ProxyEndpointMapping, ...]
 
 
+def _proxyable_address(address: str) -> bool:
+    candidate = address if "://" in address else f"http://{address}"
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
 class EndpointServiceImpl:
     """Leased service-discovery registry over the shared endpoints projection."""
 
@@ -156,7 +166,7 @@ class EndpointServiceImpl:
             generation = self._proxy_generation
             system_endpoints = tuple(self._system_endpoints.items())
             task_endpoints = tuple(self._db.caches[EndpointsProjection].all())
-        mappings = tuple(self._task_proxy_mapping(row) for row in task_endpoints)
+        mappings = tuple(mapping for row in task_endpoints if (mapping := self._task_proxy_mapping(row)) is not None)
         mappings += tuple(self._system_proxy_mapping(name, address) for name, address in system_endpoints)
         return ProxyRegistrySnapshot(generation=generation, endpoints=mappings)
 
@@ -164,9 +174,17 @@ class EndpointServiceImpl:
         if isinstance(mutation, EndpointReset):
             self._publish_proxy_reset()
             return
+        upserts: list[ProxyEndpointMapping] = []
+        deletes = list(mutation.deletes)
+        for row in mutation.upserts:
+            mapping = self._task_proxy_mapping(row)
+            if mapping is None:
+                deletes.append(row.endpoint_id)
+            else:
+                upserts.append(mapping)
         self._publish_proxy_delta(
-            upserts=tuple(self._task_proxy_mapping(row) for row in mutation.upserts),
-            deletes=mutation.deletes,
+            upserts=tuple(upserts),
+            deletes=tuple(deletes),
         )
 
     def _publish_proxy_delta(
@@ -197,7 +215,9 @@ class EndpointServiceImpl:
             listener(ProxyRegistryReset())
 
     @staticmethod
-    def _task_proxy_mapping(row: EndpointRow) -> ProxyEndpointMapping:
+    def _task_proxy_mapping(row: EndpointRow) -> ProxyEndpointMapping | None:
+        if not _proxyable_address(row.address):
+            return None
         return ProxyEndpointMapping(
             endpoint_id=row.endpoint_id,
             name=row.name,

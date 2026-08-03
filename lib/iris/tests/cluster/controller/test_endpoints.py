@@ -211,6 +211,40 @@ def test_proxy_registry_publishes_deltas_and_snapshots(state):
     assert deltas[-1].deletes == ("endpoint-1",)
 
 
+def test_proxy_registry_omits_tcp_endpoint_without_hiding_it(state):
+    task, attempt = _live_task(state)
+    service = _service(state)
+    updates = []
+    service.subscribe_proxy_updates(updates.append)
+    service.register_system_endpoint("/system/log-server", "http://logs:9000")
+    updates.clear()
+
+    service.register_endpoint(
+        _register_request(
+            "jax-coordinator",
+            task,
+            attempt_id=attempt,
+            endpoint_id="tcp-endpoint",
+            address="tcp://10.0.0.1:8476",
+        ),
+        None,
+    )
+
+    [delta] = updates
+    assert delta.upserts == ()
+    assert delta.deletes == ("tcp-endpoint",)
+    assert [mapping.endpoint_id for mapping in service.proxy_registry_snapshot().endpoints] == [
+        "system:/system/log-server"
+    ]
+    listed = service.list_endpoints(
+        controller_pb2.Controller.ListEndpointsRequest(prefix="jax-coordinator", exact=True),
+        None,
+    )
+    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in listed.endpoints] == [
+        ("tcp-endpoint", "tcp://10.0.0.1:8476")
+    ]
+
+
 def test_proxy_registry_requires_snapshot_after_database_replace(state, tmp_path: Path):
     service = _service(state)
     updates = []
