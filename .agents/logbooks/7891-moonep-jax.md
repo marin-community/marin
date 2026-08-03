@@ -1196,3 +1196,10 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Result: The coordinator and all 16 workers succeeded on attempt zero. The five training steps had finite loss and dropped no expert assignments.
 - Timing: The observed steady steps took 28, 26, 28, and about 26 seconds. The median stayed near 27 seconds, or about 9.6% MFU.
 - Decision: Reject the bounded token all-to-all as a performance change. Keep the batched planner result from MNEP-065 and profile the remaining device time before the next optimization.
+
+### 2026-08-03 04:16 UTC - MNEP-067 post-planner profile contract
+
+- Baseline: Restore the MNEP-065 exact ragged token transport and its 27-second median step time.
+- Capture: Profile step three on process zero after the batched planner change. Increase the GPU activity and callback limits to one million events.
+- Trace data: Enable the host trace and HLO metadata so that the full device timeline has named regions and compiler operation names.
+- Gate: Require five finite steps, no dropped assignments, a successful profile upload, and a full-step kernel and collective summary.

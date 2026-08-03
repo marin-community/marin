@@ -71,12 +71,13 @@ def _hero_profiler_config(start_step: int | None, num_steps: int) -> ProfilerCon
         process_index=0,
         barrier_timeout=600,
         profile_options=ProfileOptionsConfig(
-            host_tracer_level=0,
+            host_tracer_level=1,
             python_tracer_level=0,
-            enable_hlo_proto=False,
+            enable_hlo_proto=True,
             advanced_configuration={
-                "gpu_max_activity_api_events": 100_000,
-                "gpu_max_callback_api_events": 100_000,
+                # A MoonEP step contains more than 100,000 events. Keep enough data for a full-step profile.
+                "gpu_max_activity_api_events": 1_000_000,
+                "gpu_max_callback_api_events": 1_000_000,
                 "gpu_num_chips_to_profile_per_task": 1,
             },
         ),
