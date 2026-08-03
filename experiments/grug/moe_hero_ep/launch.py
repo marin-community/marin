@@ -77,7 +77,7 @@ def _hero_profiler_config(start_step: int | None, num_steps: int) -> ProfilerCon
         enabled=True,
         start_step=start_step,
         num_steps=num_steps,
-        process_index=0,
+        process_index=None,
         barrier_timeout=600,
         profile_options=ProfileOptionsConfig(
             host_tracer_level=1,
@@ -87,7 +87,8 @@ def _hero_profiler_config(start_step: int | None, num_steps: int) -> ProfilerCon
                 # A MoonEP step contains more than 100,000 events. Keep enough data for a full-step profile.
                 "gpu_max_activity_api_events": 1_000_000,
                 "gpu_max_callback_api_events": 1_000_000,
-                "gpu_num_chips_to_profile_per_task": 1,
+                # Zero tells CUPTI to profile all GPUs visible to each JAX process.
+                "gpu_num_chips_to_profile_per_task": 0,
             },
         ),
     )

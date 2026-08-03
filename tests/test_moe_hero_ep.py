@@ -505,12 +505,12 @@ def test_run_grug_adds_verified_jax_wheels_after_standard_gpu_setup(
         assert "nvidia/nccl/lib/libnccl.so.2" in scripts[2]
 
 
-def test_profile_window_uses_one_process_and_complete_timeline():
+def test_profile_window_uses_all_processes_and_complete_timeline():
     profiler = launch._hero_profiler_config(start_step=3, num_steps=2)
     assert profiler.enabled
     assert profiler.start_step == 3
     assert profiler.num_steps == 2
-    assert profiler.process_index == 0
+    assert profiler.process_index is None
     assert profiler.barrier_timeout == 600
     assert profiler.profile_options.host_tracer_level == 1
     assert profiler.profile_options.python_tracer_level == 0
@@ -518,7 +518,7 @@ def test_profile_window_uses_one_process_and_complete_timeline():
     assert profiler.profile_options.advanced_configuration == {
         "gpu_max_activity_api_events": 1_000_000,
         "gpu_max_callback_api_events": 1_000_000,
-        "gpu_num_chips_to_profile_per_task": 1,
+        "gpu_num_chips_to_profile_per_task": 0,
     }
 
 
