@@ -1315,3 +1315,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Measurement: Ragged all-to-all used `14.9604 s` across 576 calls and `54.6%` of the device time.
 - Comparison: MNEP-067 used `15.1776 s` for the same 576 calls. The sparse handshake saved only `0.2172 s`.
 - Decision: Keep the sparse handshake for correctness. Restore parallel GIN writes before another rack test.
+
+### 2026-08-03 06:43 UTC - MNEP-073 multi-context GIN probe contract
+
+- Run ID: `mnep-073-multicontext-gin-probe-20260803-0643` at `e0214a306`.
+- Treatment: Divide each remote row across all GIN contexts. Use a world barrier and one weak completion signal for each chunk.
+- Shape: Use four updates for each peer, 256 rows for each rank, and 5,120 BF16 elements for each row.
+- Local gate: The XLA build passed. The four-GPU exact MoonEP output and input, W13, and W2 gradient test passed.
+- Rack gate: Require attempt-zero completion, checksum `24192`, zero sampled mismatches, and success on all 16 workers.
