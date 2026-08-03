@@ -2181,3 +2181,70 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   with no missing range.
 - Next action: Complete 50,000 labels, train the projection, stage its runtime,
   and run all release gates through that runtime.
+
+### LUX-GLM-007: Complete 50,000-label training set
+
+- Job: `/rav/lux-glm52-projection-training-50k-b200-002`.
+- GLM-5.2 returned valid assignments for all 50,000 documents.
+- The sample indices are continuous from zero through 49,999.
+- The mean label confidence is 0.89637. No assignment needed JSON repair.
+- The assignments use 12 parents, 23 leaves, and 11 document forms.
+- The largest parent has 24.932 percent of the documents.
+- The effective leaf count is 16.686.
+- Code form has 5,782 documents. The software-code leaf has 5,390 documents.
+- Both tasks succeeded with no failure or preemption.
+- The teacher is `zai-org/GLM-5.2-FP8` at revision
+  `ba978f7d347eaf65d22f1a86833408afdb953541`.
+- Decision: Use this complete set for one final private projection fit.
+
+### LUX-SEMANTIC-PROJECTION-005: Final 50,000-label private result
+
+- Job: `/rav/lux-semantic-projection-50k-h100-001`.
+- The fit used 45,126 training rows and 2,374 private validation rows.
+- The base parent, leaf, and form macro-F1 values were 0.44885, 0.35303,
+  and 0.40878.
+- The projected values were 0.54864, 0.44816, and 0.50017.
+- The mean semantic gain was 0.09544.
+- The selected projection weight was 1.0.
+- The effective-rank fraction was 0.30005. The total variance was 0.74490.
+- All private semantic, finite, unique, rank, variance, and folding gates
+  passed.
+- The folded projection had minimum cosine 0.9999939.
+- The final model SHA-256 is
+  `b7035650ca96023297d50c0822814032850ccd59e103e93c331be0b10fcea337`.
+- The job succeeded in 48.79 seconds with no failure or preemption.
+- Report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/full-glm-semantic-projection/training-50k-v1/training.json`.
+- Interpretation: The projection is the final candidate for the fixed release
+  evaluation. Full-model fine-tuning is not necessary unless that evaluation
+  fails.
+
+### LUX-RUNTIME-005: Pilot runtime speed results
+
+- The exact pilot runtime accelerator test used batch size 8,192.
+- The median accelerator rate was 14,971.66 documents per second.
+- The five-repeat stability gate passed.
+- The exact pilot CPU test used batch size 4,096.
+- The student median was 2,515.82 documents per second.
+- Luxical-One had a median of 3,076.06 documents per second.
+- The ratio was 0.81787, below the 0.85 release limit.
+- One Luxical repeat was also outside the stability limit. Thus, this CPU
+  report is not valid release evidence.
+- The earlier valid base-graph CPU test used batch size 8,192 and reached a
+  ratio of 0.94729.
+- Decision: Repeat the exact runtime test at batch size 8,192 before a runtime
+  code change.
+
+### LUX-RELEASE-005: Evaluate stored int8 vectors
+
+- Commit Hash: `22d26b019`.
+- The fixed semantic, 40-bucket, collapse, and blind-neighborhood inputs now
+  use dequantized production int8 vectors.
+- The evaluator records clipping, row-cosine, and cosine-order fidelity.
+- The release gate requires clipping at most 0.0001, row-cosine p01 at least
+  0.995, and cosine-order fidelity at least 0.99.
+- The release manifest pins the quantization range and scale.
+- The pipeline reads these values from the released manifest.
+- Thirty-five focused tests pass. The required pre-commit checks pass.
+- Next action: Run the int8 gates on the final staged runtime. Do not evaluate
+  only the research float vectors.
