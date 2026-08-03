@@ -2025,3 +2025,13 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   pre-commit checks pass.
 - Next action: Publish the selected 50,000-label model in this bundle format and
   do an exact research-to-production parity test.
+- Commit Hash: `2b2f1043e`.
+- The publisher now requires the exact training model, adjudicated 10,000-row
+  semantic gates, six fixed 40-bucket gates, stable CPU speed, and blind gates
+  for 200 total queries, code, non-English text, and other text.
+- The blind result now records the SHA-256 of its private randomized package.
+- The publisher verifies this package hash against the package from the semantic
+  evaluation report.
+- The release manifest pins all four evidence reports and the blind package.
+- Fourteen focused tests pass. Pyrefly reports zero errors, and the required
+  pre-commit checks pass.
