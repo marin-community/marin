@@ -1418,3 +1418,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Treatment: Record one measured step from the MNEP-078 graph without another code change.
 - Question: Measure the new ragged collective time, removed layout time, compute overlap, and cost of four slices per peer.
 - Decision gate: Use the measured exposed transfer as the baseline for a persistent transport kernel with fixed communication SMs and double buffers.
+
+### 2026-08-03 09:15 UTC - MNEP-079 confirms exposed transport
+
+- Result: All 16 workers completed five finite steps on attempt zero and uploaded the requested one-step profile.
+- Ragged transport: 864 device-kernel calls used `26.424 s`. Only `4.091 s` overlapped compute, for a `15.5%` overlap fraction and `22.333 s` of exposed ragged transport.
+- Kernel shape: The deployed device kernel used a 64-CTA grid with 512 threads per CTA. The trace reports 25% theoretical occupancy for each launch.
+- Cause: Two token buckets add dispatch and combine calls in the forward pass, the rematerialized forward pass, and the collective transpose. The current graph still starts most transfers outside the expert GEMM windows.
+- Decision: Add an explicit value-preserving dependency from dispatch bucket N to dispatch bucket N+1. This makes the next transfer and the current bucket GEMM ready at the same point. Build a 16-CTA transport variant in parallel for the next kernel gate.
+- Evidence: [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmnep-079-zero-copy-profile-5-20260803-0900) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-079-zero-copy-profile-5-20260803-0900).
+
+### 2026-08-03 09:20 UTC - MNEP-080 forced pipeline contract
+
+- Treatment: Pass the next dispatch metadata through an XLA optimization barrier with one scalar from the prior dispatch result. The metadata value does not change and the dependency does not copy the token buffer.
+- Expected schedule: Dispatch 0 completes first. Dispatch 1 then runs with bucket 0 GEMM. Combine 0 can then run with bucket 1 GEMM.
+- Correctness: Local lowering, 23 MoonEP tests, 41 hero tests, and the exact two-bucket four-GB200 output and gradient gate pass.
+- Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-078's `7.793%`.
+- Next action: Profile the treatment if it improves throughput, then apply the measured best fixed communication-CTA count.

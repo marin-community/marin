@@ -259,6 +259,12 @@ def _token_bucket_bounds(
     return starts, ends
 
 
+def _ordered_after(dependency: jax.Array, value: jax.Array) -> jax.Array:
+    """Keep ``value`` unchanged, but schedule its consumer after ``dependency``."""
+    _, ordered_value = jax.lax.optimization_barrier((dependency, value))
+    return ordered_value
+
+
 def _expert_order_bucket_layout(
     all_expert_counts: Int[Array, "R E"],
     plan: MoonEPPlan,
@@ -593,9 +599,9 @@ def _moe_mlp_ep_moonep_exact_local(
         group_w13 = jnp.concatenate((moe_w13_local, remote_w13), axis=0)
         group_w2 = jnp.concatenate((moe_w2_local, remote_w2), axis=0)
 
-    # Put all dispatch collectives before the first combine collective. XLA
-    # keeps collective order, so this order lets dispatch N+1 run while bucket
-    # N uses the compute stream.
+    # Each dispatch after the first waits for the prior dispatch output. This
+    # makes the next dispatch and the prior bucket's GEMM ready together, which
+    # gives XLA a clear communication-compute overlap window.
     dispatched_buckets = []
     for bucket in range(token_buckets):
         layout = _expert_order_bucket_layout(
@@ -611,10 +617,13 @@ def _moe_mlp_ep_moonep_exact_local(
         )
 
         with jax.named_scope(f"moonep_dispatch_bucket_{bucket}"):
+            input_offsets = layout.input_offsets
+            if dispatched_buckets:
+                input_offsets = _ordered_after(dispatched_buckets[-1].expert_inputs[0, 0], input_offsets)
             expert_inputs = jax.lax.ragged_all_to_all(
                 send_x,
                 jnp.zeros((receiver_capacity, hidden_dim), dtype=x_local.dtype),
-                layout.input_offsets,
+                input_offsets,
                 layout.send_sizes,
                 layout.output_offsets,
                 layout.recv_sizes,
