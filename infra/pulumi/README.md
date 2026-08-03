@@ -17,7 +17,7 @@ Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster n
 `cw-us-west-04a`, `cw-us-east-02a`, `cw-rno2a`, `cw-us-east-08a` (GB200), all adopted into
 `gs://marin-iac-state/`. GCP — `marin`, which declares the reserved
 federation-egress static IPs (`GcpStaticAddresses`) and every non-authoritative GCP IAM grant
-on `hai-gcp-models` (`GcpIam`, driven by `src/iac/gcp/iam_data.py`; see "User grants" below).
+on `hai-gcp-models` (`GcpIam`, driven by `src/iac/gcp/iam_data.yaml`; see "User grants" below).
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
@@ -59,20 +59,24 @@ redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.goo
 
 ### User grants
 
-A user grant is either a GCP IAM binding in `src/iac/gcp/iam_data.py` (applied by the `marin`
-stack, human `user:` principals KMS-encrypted as `GcpEncryptedMember`) or an IAP `viewers`
-entry in a service's `infra/<service>/Pulumi.marin-<service>.yaml` (plaintext, applied by that
-service's own stack). Two agent skills drive the flow so no personal email lands in this public
-repo unencrypted:
+A user grant is either a GCP IAM binding in `src/iac/gcp/iam_data.yaml` (applied by the `marin`
+stack) or an IAP `viewers` entry in a service's `infra/<service>/Pulumi.marin-<service>.yaml`
+(plaintext, applied by that service's own stack). The IAM YAML declares each human principal's
+KMS ciphertext once under an opaque `human-NNN` ID; grants reference that ID so one person's
+ciphertext cannot drift across roles. Two agent skills drive the flow so no personal email
+lands in this public repo unencrypted:
 
 - **`add-grant`** — collect the request (locally or from a GitHub issue), encrypt the
   principal, edit the right surface, and open a reviewable PR.
 - **`review-grant`** — decrypt a grant PR's changed principals into the real emails and grants,
   confirm with a human, then approve, merge, and run `pulumi up`.
 
-Both use `iam_principal.py encrypt <email>` / `decrypt --diff` for single principals;
-`iam_audit.py` bulk-rotates the members already declared in `iam_data.py`. Encrypting or
-applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac key ("Backend").
+For project roles, `iam_principal.py grant <email> --project-role <role>` finds and reuses an
+existing encrypted principal or creates one, then updates every requested role in one
+deterministic YAML edit. `iam_principal.py decrypt --diff` resolves changed opaque IDs for
+review. `iam_audit.py` bulk-rotates the principals declared in `iam_data.yaml`. Granting,
+decrypting, or applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac
+key ("Backend").
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
