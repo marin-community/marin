@@ -61,8 +61,9 @@ def test_global_exact_dedup_filters_only_the_store():
 
 def test_benchmark_routes_every_stage_under_one_prefix():
     routed = _route_outputs(reference_pipeline.zephyr_datakit_steps(_sources()), "gs://temp/benchmark")
+    steps = [routed.exact_dedup, *routed.tokenize.values(), *routed.minhash.values(), routed.fuzzy_dedup]
 
-    assert all(step.output_path.startswith("gs://temp/benchmark/") for step in routed.all_steps)
+    assert all(step.output_path.startswith("gs://temp/benchmark/") for step in steps)
     assert routed.fuzzy_dedup.deps == list(routed.minhash.values())
 
 

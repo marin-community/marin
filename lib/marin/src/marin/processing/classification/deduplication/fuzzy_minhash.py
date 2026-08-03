@@ -83,7 +83,7 @@ class MinHashAttrData(BaseModel):
 
 
 def _minhash_batch(batch: pa.RecordBatch, params: MinHashParams) -> pa.RecordBatch:
-    """Run the dupekit MinHash+LSH pipeline without materializing Python rows.
+    """Return MinHash bucket attributes for non-empty documents in one batch.
 
     Returns one ``{id, buckets}`` row per input document with at least one
     bucket. Documents whose signature column is null are dropped and counted
@@ -228,7 +228,6 @@ def compute_minhash_attrs(
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
-    map_resources = map_task_resources or resources
 
     # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
@@ -245,7 +244,7 @@ def compute_minhash_attrs(
     outcome = ctx.execute(
         pipeline,
         verbose=True,
-        map_task_resources=map_resources,
+        map_task_resources=map_task_resources,
         reduce_task_resources=reduce_task_resources,
     )
 

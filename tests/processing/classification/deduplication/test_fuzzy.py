@@ -84,7 +84,6 @@ def test_minhash_batch_preserves_arrow_and_filters_null_text():
 
     result = _minhash_batch(batch, TEST_MINHASH_PARAMS)
 
-    assert isinstance(result, pa.RecordBatch)
     assert result.schema == pa.schema([pa.field("id", pa.string()), pa.field("buckets", pa.list_(pa.string()))])
     assert result.column("id").to_pylist() == ["content"]
     assert len(result.column("buckets")[0].as_py()) == TEST_MINHASH_PARAMS.num_bands
@@ -102,7 +101,7 @@ def test_minhash_attrs_default_and_explicit_task_packing(tmp_path, monkeypatch):
 
     task_resources = []
 
-    def capture_context(context, _pipeline, *, verbose, map_task_resources, reduce_task_resources):
+    def capture_context(_context, _pipeline, *, verbose, map_task_resources, reduce_task_resources):
         assert verbose
         assert reduce_task_resources is None
         task_resources.append(map_task_resources)

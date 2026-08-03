@@ -502,17 +502,12 @@ class DatakitSteps:
 
 @dataclass(frozen=True)
 class ZephyrDatakitSteps:
-    """S3-backed Datakit stages implemented as Zephyr pipelines."""
+    """Storage-backed Datakit stages implemented as Zephyr pipelines."""
 
     exact_dedup: StepSpec
     tokenize: dict[str, StepSpec]
     minhash: dict[str, StepSpec]
     fuzzy_dedup: StepSpec
-
-    @property
-    def all_steps(self) -> list[StepSpec]:
-        """Return the independently runnable steps in dependency order."""
-        return [self.exact_dedup, *self.tokenize.values(), *self.minhash.values(), self.fuzzy_dedup]
 
 
 def zephyr_datakit_steps(

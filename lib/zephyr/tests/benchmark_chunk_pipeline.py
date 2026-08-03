@@ -22,7 +22,6 @@ import hashlib
 import json
 import logging
 import math
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,10 +32,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypedDict
 
 import click
-import fsspec
 import psutil
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -44,6 +42,7 @@ import pyarrow.parquet as pq
 from fray.current_client import current_client
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from rigging.filesystem import StoragePath
 from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
@@ -76,11 +75,21 @@ _OUTPUT_SCHEMA = pa.schema(
 )
 
 
-def _keep_row(row: dict[str, Any]) -> bool:
+class InputRow(TypedDict):
+    id: str
+    text: str
+    score: float
+
+
+class OutputRow(InputRow):
+    text_chars: int
+
+
+def _keep_row(row: InputRow) -> bool:
     return row["score"] >= _SCORE_THRESHOLD
 
 
-def _enrich_row(row: dict[str, Any]) -> dict[str, Any]:
+def _enrich_row(row: InputRow) -> OutputRow:
     text = row["text"]
     return {
         "id": row["id"],
@@ -145,7 +154,7 @@ class DistributedArm:
 
     @property
     def name(self) -> str:
-        return f"{self.mode}-{self.processes_per_worker}ppw"
+        return f"{self.mode}-{self.processes_per_worker}-processes-per-worker"
 
 
 def _rss_bytes() -> int:
@@ -173,7 +182,7 @@ def _peak_rss_sampler() -> Iterator[list[int]]:
 
 def _corpus_digest(path: str | Path) -> CorpusDigest:
     """Hash fixed-size logical batches so digest ignores Parquet row-group layout."""
-    with fsspec.open(str(path), "rb").open() as source:
+    with StoragePath(str(path)).open("rb") as source:
         parquet = pq.ParquetFile(source)
         digest = hashlib.sha256()
         pending: list[pa.Table] = []
@@ -206,7 +215,7 @@ def _write_base_corpus(path: Path) -> dict[str, int]:
     compressed_bytes = 0
     uncompressed_bytes = 0
     rows = 0
-    with fsspec.open(_SOURCE_URL, "rb").open() as source:
+    with StoragePath(_SOURCE_URL).open("rb") as source:
         parquet = pq.ParquetFile(source)
         projected_schema = pa.schema(
             [parquet.schema_arrow.field(column) for column in _COLUMNS],
@@ -250,7 +259,7 @@ def _write_scaled_corpus(base_path: Path, output_path: Path, target_rows: int) -
                 written += len(batch)
 
 
-def _corpus_path(cache_dir: Path, rows: int) -> Path:
+def _prepare_corpus(cache_dir: Path, rows: int) -> Path:
     if rows <= 0:
         raise ValueError(f"rows must be positive, got {rows}")
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -414,32 +423,25 @@ def _parse_distributed_arms(value: str) -> list[DistributedArm]:
     return arms
 
 
-def _remote_file_size(path: str) -> int:
-    filesystem, filesystem_path = fsspec.core.url_to_fs(path)
-    return filesystem.size(filesystem_path)
-
-
 def _write_remote_json(path: str, value: Mapping[str, Any]) -> None:
-    with fsspec.open(path, "wt").open() as output:
-        json.dump(value, output, indent=2, sort_keys=True)
+    StoragePath(path).write_text(json.dumps(value, indent=2, sort_keys=True))
 
 
 def _stage_distributed_input(rows: int, benchmark_prefix: str) -> str:
-    input_path = f"{benchmark_prefix}/input/fineweb-edu-{rows}.parquet"
-    manifest_path = f"{benchmark_prefix}/input/manifest.json"
-    filesystem, filesystem_path = fsspec.core.url_to_fs(input_path)
-    if filesystem.exists(filesystem_path):
+    benchmark_root = StoragePath(benchmark_prefix)
+    input_path = benchmark_root / "input" / f"fineweb-edu-{rows}.parquet"
+    manifest_path = benchmark_root / "input" / "manifest.json"
+    if input_path.exists():
         logger.info("Using staged corpus: %s", input_path)
-        return input_path
+        return str(input_path)
 
     with tempfile.TemporaryDirectory(prefix="zephyr-chunk-benchmark-input-") as temp_dir:
-        local_path = _corpus_path(Path(temp_dir), rows)
+        local_path = _prepare_corpus(Path(temp_dir), rows)
         logger.info("Uploading %.2f GiB corpus to %s", local_path.stat().st_size / 2**30, input_path)
-        with local_path.open("rb") as source, fsspec.open(input_path, "wb").open() as output:
-            shutil.copyfileobj(source, output)
+        input_path.upload_from(str(local_path))
         digest = _corpus_digest(local_path)
         _write_remote_json(
-            manifest_path,
+            str(manifest_path),
             {
                 "source_url": _SOURCE_URL,
                 "source_commit": _SOURCE_COMMIT,
@@ -450,7 +452,7 @@ def _stage_distributed_input(rows: int, benchmark_prefix: str) -> str:
                 "semantic_sha256": digest.sha256,
             },
         )
-    return input_path
+    return str(input_path)
 
 
 def _distributed_resources(processes_per_worker: int) -> tuple[ResourceConfig, ResourceConfig]:
@@ -469,7 +471,7 @@ def _distributed_resources(processes_per_worker: int) -> tuple[ResourceConfig, R
     return worker, task
 
 
-def _distributed_arm(
+def _run_distributed_arm(
     arm: DistributedArm,
     input_path: str,
     benchmark_prefix: str,
@@ -478,15 +480,14 @@ def _distributed_arm(
     processes_per_worker = arm.processes_per_worker
     worker_count = math.ceil(shards / processes_per_worker)
     worker_resources, task_resources = _distributed_resources(processes_per_worker)
-    output_pattern = f"{benchmark_prefix}/output/{arm.name}/part-{{shard:05d}}.parquet"
+    benchmark_root = StoragePath(benchmark_prefix)
+    output_pattern = str(benchmark_root / "output" / arm.name / "part-{shard:05d}.parquet")
     pipeline = _PIPELINES[arm.mode]([input_path] * shards, output_pattern)
     ctx = ZephyrContext(
         client=current_client(),
         resources=worker_resources,
-        map_task_resources=task_resources,
-        reduce_task_resources=task_resources,
         max_workers=worker_count,
-        chunk_storage_prefix=f"{benchmark_prefix}/chunks/{arm.name}",
+        chunk_storage_prefix=str(benchmark_root / "chunks" / arm.name),
         name=f"chunk-benchmark-{arm.name}",
     )
 
@@ -499,7 +500,12 @@ def _distributed_arm(
     )
     wall_start = time.monotonic()
     try:
-        result = ctx.execute(pipeline, verbose=True)
+        result = ctx.execute(
+            pipeline,
+            verbose=True,
+            map_task_resources=task_resources,
+            reduce_task_resources=task_resources,
+        )
     finally:
         ctx.shutdown()
     wall_seconds = time.monotonic() - wall_start
@@ -512,11 +518,11 @@ def _distributed_arm(
     output_bytes = 0
     output_schemas: set[str] = set()
     for output_path in output_paths:
-        with fsspec.open(output_path, "rb").open() as source:
+        with StoragePath(output_path).open("rb") as source:
             parquet = pq.ParquetFile(source)
             output_rows += parquet.metadata.num_rows
             output_schemas.add(str(parquet.schema_arrow))
-        output_bytes += _remote_file_size(output_path)
+        output_bytes += StoragePath(output_path).size()
     if len(output_schemas) != 1:
         raise RuntimeError(f"Arm {arm.name} produced inconsistent output schemas")
 
@@ -529,7 +535,7 @@ def _distributed_arm(
         "processes_per_worker": processes_per_worker,
         "cpu_slots": worker_count * processes_per_worker,
         "wall_seconds_context_only": wall_seconds,
-        "input_bytes_per_shard": _remote_file_size(input_path),
+        "input_bytes_per_shard": StoragePath(input_path).size(),
         "output_files": len(output_paths),
         "output_rows": output_rows,
         "output_bytes": output_bytes,
@@ -545,15 +551,16 @@ def _run_distributed_benchmark(rows: int, shards: int, raw_arms: str, benchmark_
         raise click.BadParameter("rows must be positive", param_hint="rows")
     if shards <= 0:
         raise click.BadParameter("shards must be positive", param_hint="distributed-shards")
-    if not benchmark_prefix.startswith("s3://"):
+    benchmark_root = StoragePath(benchmark_prefix)
+    if benchmark_root.scheme != "s3":
         raise click.BadParameter("Distributed benchmark prefix must be an s3:// path", param_hint="distributed-prefix")
     if isinstance(current_client(), LocalClient):
         raise click.UsageError("Distributed mode must run inside an Iris job")
 
     arms = _parse_distributed_arms(raw_arms)
-    result_path = f"{benchmark_prefix}/{_REMOTE_RESULT_FILENAME}"
-    result_filesystem, result_filesystem_path = fsspec.core.url_to_fs(result_path)
-    if result_filesystem.exists(result_filesystem_path):
+    benchmark_prefix = str(benchmark_root)
+    result_path = benchmark_root / _REMOTE_RESULT_FILENAME
+    if result_path.exists():
         raise click.BadParameter(
             f"Benchmark prefix already contains {_REMOTE_RESULT_FILENAME}: {benchmark_prefix}",
             param_hint="distributed-prefix",
@@ -569,7 +576,7 @@ def _run_distributed_benchmark(rows: int, shards: int, raw_arms: str, benchmark_
     }
     semantic_keys: set[tuple[int, int, str, str]] = set()
     for arm in arms:
-        arm_result = _distributed_arm(arm, input_path, benchmark_prefix, shards)
+        arm_result = _run_distributed_arm(arm, input_path, benchmark_prefix, shards)
         manifest["arms"].append(arm_result)
         semantic_keys.add(
             (
@@ -579,18 +586,18 @@ def _run_distributed_benchmark(rows: int, shards: int, raw_arms: str, benchmark_
                 arm_result["representative_semantic_sha256"],
             )
         )
-        _write_remote_json(result_path, manifest)
+        _write_remote_json(str(result_path), manifest)
         print(_RESULT_PREFIX + json.dumps(arm_result, sort_keys=True))
 
     if len(semantic_keys) != 1:
         raise RuntimeError("Distributed benchmark arms disagree on output digest, schema, or row count")
     manifest["semantic_gate"] = "passed"
-    _write_remote_json(result_path, manifest)
+    _write_remote_json(str(result_path), manifest)
     print("SUMMARY: " + json.dumps(manifest, sort_keys=True))
 
 
 def _run_parent_benchmark(rows: int, modes: str, repeat: int, cache_dir: Path, prepare_only: bool) -> None:
-    input_path = _corpus_path(cache_dir, rows)
+    input_path = _prepare_corpus(cache_dir, rows)
     logger.info("Corpus ready: %s (%s rows, %.2f GiB)", input_path, f"{rows:,}", input_path.stat().st_size / 2**30)
     if prepare_only:
         return
@@ -686,7 +693,7 @@ def main(
         _run_child_benchmark(child_mode, input_file, output_file, chunk_prefix)
         return
     if distributed_prefix is not None:
-        _run_distributed_benchmark(rows, distributed_shards, distributed_arms, distributed_prefix.rstrip("/"))
+        _run_distributed_benchmark(rows, distributed_shards, distributed_arms, distributed_prefix)
         return
     _run_parent_benchmark(rows, modes, repeat, cache_dir, prepare_only)
 

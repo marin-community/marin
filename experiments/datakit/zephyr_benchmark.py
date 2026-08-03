@@ -27,7 +27,7 @@ from enum import StrEnum
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
-from rigging.filesystem import marin_temp_bucket
+from rigging.filesystem import marin_temp_bucket, prefix_join
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
@@ -110,7 +110,7 @@ def main() -> None:
     )
     output_prefix = marin_temp_bucket(
         ttl_days=BENCHMARK_OUTPUT_TTL_DAYS,
-        prefix=f"{BENCHMARK_OUTPUT_PREFIX}/{args.run_tag}/outputs",
+        prefix=prefix_join(prefix_join(BENCHMARK_OUTPUT_PREFIX, args.run_tag), "outputs"),
         source_prefix=args.sample_prefix,
     )
     steps = _route_outputs(zephyr_datakit_steps(sources, scale), output_prefix)
