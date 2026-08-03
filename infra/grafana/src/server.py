@@ -325,6 +325,8 @@ def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
 
 def finelog_fleet_health_rows(finelog_sources: Mapping[str, MetricSource], k8s_fleet: K8sFleet) -> list[FinelogHealth]:
     """Probe every configured GCE server and expected CoreWeave mirror."""
+    # The alert route belongs to the main datasource and must not silently degrade
+    # to a dev-only fleet when its hub source is misconfigured.
     _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
     return [
         *(finelog_sources[name].health() for name in sorted(finelog_sources)),
