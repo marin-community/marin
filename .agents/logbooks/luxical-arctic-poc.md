@@ -2035,3 +2035,30 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - The release manifest pins all four evidence reports and the blind package.
 - Fourteen focused tests pass. Pyrefly reports zero errors, and the required
   pre-commit checks pass.
+
+### LUX-DATA-004: Unicode JSONL separator recovery
+
+- The 17,250-label prefix run first reported an unterminated JSON string in
+  `sample-private.jsonl.gz`.
+- The saved gzip object contains 194,634,443 decoded characters.
+- Python `splitlines()` returned 50,003 lines and split one document into four
+  invalid parts at row 42,863.
+- Splitting only on the JSONL newline byte returned exactly 50,000 valid JSON
+  records. The sample indices were exactly zero through 49,999.
+- Root cause: The document text contains Unicode line-separator characters.
+  `json.dumps()` keeps these valid characters inside the JSON string, but
+  `splitlines()` treats them as record boundaries.
+- Commit Hash: `6c3b8a697`.
+- The JSONL reader now splits only on `\n`. A regression test includes U+2028
+  and U+2029 inside one document.
+- Commits `e70cfed37` and `62e7cd176` also make large JSONL writes atomic,
+  streamed, and compatible with fixed-size S3 multipart uploads. These changes
+  reduce memory use and prevent partial final objects, but the saved sample was
+  complete.
+- Eighteen focused tests pass. Pyrefly reports zero errors, and the required
+  pre-commit checks pass.
+- The corrected federated interactive jobs are
+  `/rav/lux-semantic-projection-prefix-17250-h100-002` and
+  `/rav/lux-glm52-projection-training-50k-b200-001`.
+- Next action: Require the prefix run to validate the full sample identity.
+  Then use its private split result while the full label job completes.
