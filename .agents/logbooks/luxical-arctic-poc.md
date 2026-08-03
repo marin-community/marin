@@ -2386,3 +2386,80 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 120GB --disk 300GB --priority interactive --max-retries 1 --timeout 7200 --user rav --job-name lux-semantic-finetune-rank-safe-h100-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/train_semantic_finetune_large.py`.
 - The job waits for capacity. No task started, and no failure occurred.
 - Next action: Freeze the selected model if all private gates pass.
+
+### LUX-SEMANTIC-FINETUNE-004: Select a rank-safe full-model mix
+
+- Commit Hash: `0b7cb0f8b`.
+- The H100 requests could not get the minimum four free CPU cores on an
+  eligible node. No H100 task started.
+- Job: `/rav/lux-semantic-finetune-rank-safe-b200-001`.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu GB200 --cpu 4 --memory 120GB --disk 300GB --priority interactive --max-retries 1 --timeout 7200 --user rav --job-name lux-semantic-finetune-rank-safe-b200-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/train_semantic_finetune_large.py`.
+- The job succeeded in 4 minutes 55.77 seconds. It had no failure or
+  preemption.
+- The private ladder selected the 0.7 base-to-trained mix.
+- Parent, leaf, and form macro-F1 increased from 0.44885, 0.35303, and
+  0.40897 to 0.54400, 0.44811, and 0.47510.
+- The mean semantic gain was 0.08545.
+- The rank fraction was 0.35930. This value keeps 77.54 percent of the base
+  rank and passes the 75-percent gate.
+- The total variance was 0.74480. All vectors were finite and unique.
+- Alpha 0.8 had a larger semantic gain, but its 71.44-percent rank retention
+  failed the gate.
+- The selected model SHA-256 is
+  `8391e15f6c760bb591213a80e2654af151c7ee6310a2fb8e8f5854ecef276a9b`.
+- Report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/full-glm-semantic-finetune/training-50k-rank-preserving-v2/training.json`.
+- Decision: Freeze the 0.7 mix for the remaining release gates.
+- Next action: Bind exact runtime speed reports and run one evaluation on the
+  new disjoint 10,000-document set.
+
+### LUX-RUNTIME-007: Stage the rank-safe runtime
+
+- Job: `/rav/lux-stage-runtime-rank-safe-b200-001`.
+- The job succeeded in 14.53 seconds. It had no failure or preemption.
+- Runtime root:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/runtime/full-glm-semantic-finetune/training-50k-rank-preserving-v2/8391e15f6c760bb591213a80e2654af151c7ee6310a2fb8e8f5854ecef276a9b`.
+- The runtime report-reader waits for capacity. The model artifact is complete.
+- Next action: Read the runtime manifest digest and start the exact speed jobs.
+
+### LUX-RUNTIME-008: Bind the rank-safe runtime and start speed gates
+
+- Commit Hash: `0b7cb0f8b`.
+- The delayed task logs contain the complete runtime report.
+- The runtime manifest SHA-256 is
+  `dbe37b498a3bd630e6d0d1a54b1e3e9c0ef3027f2c875b246fd30d460c7da49f`.
+- The runtime model SHA-256 is
+  `8391e15f6c760bb591213a80e2654af151c7ee6310a2fb8e8f5854ecef276a9b`.
+- The research-to-runtime minimum cosine was 1.0 across eight smoke documents.
+- All smoke vectors were finite and unique at six decimals.
+- CPU job: `/rav/lux-runtime-speed-rank-safe-b200-001`.
+- Accelerator job: `/rav/lux-runtime-accelerator-rank-safe-b200-001`.
+- The two jobs use the exact staged runtime and interactive priority.
+- Next action: Monitor the two jobs to completion and apply their speed gates.
+
+### LUX-RUNTIME-009: Rank-safe runtime passes exact speed gates
+
+- Commit Hash: `0b7cb0f8b`.
+- CPU job: `/rav/lux-runtime-speed-rank-safe-b200-001`.
+- CPU submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu GB200 --cpu 32 --memory 120GB --disk 200GB --priority interactive --max-retries 1 --timeout 3600 --user rav --job-name lux-runtime-speed-rank-safe-b200-001 -e JAX_PLATFORMS cpu -e CUDA_VISIBLE_DEVICES '' --sync-package marin-core --extra cpu --extra datakit -- python .agents/projects/luxical-arctic-poc/benchmark_fast_embedding_runtime.py --config full --training-name full-glm-semantic-finetune --rung training-50k-rank-preserving-v2 --runtime-root s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/runtime/full-glm-semantic-finetune/training-50k-rank-preserving-v2/8391e15f6c760bb591213a80e2654af151c7ee6310a2fb8e8f5854ecef276a9b --runtime-manifest-sha256 dbe37b498a3bd630e6d0d1a54b1e3e9c0ef3027f2c875b246fd30d460c7da49f --batch-size 10000 --output-root s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed-runtime-rank-safe-final`.
+- The CPU test used 20,000 fixed documents, batch size 10,000, eight CPU
+  cores, one full warmup, and five alternating paired repeats.
+- The student median was 9,356.30 documents per second.
+- The Luxical-One median was 2,839.52 documents per second.
+- The student-to-Luxical ratio was 3.29503. The required ratio is 0.85.
+- Student rates ranged from 7,770.29 through 9,646.75 documents per second.
+- Baseline rates ranged from 2,821.70 through 2,845.78 documents per second.
+- The two stability checks passed.
+- CPU report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed-runtime-rank-safe-final/cpu-runtime-full-full-glm-semantic-finetune-training-50k-rank-preserving-v2-dbe37b498a3b.json`.
+- Accelerator job: `/rav/lux-runtime-accelerator-rank-safe-b200-001`.
+- Accelerator submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu GB200 --cpu 8 --memory 80GB --disk 200GB --priority interactive --max-retries 1 --timeout 3600 --user rav --job-name lux-runtime-accelerator-rank-safe-b200-001 --sync-package marin-core --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/benchmark_fast_embedding_accelerator.py --config full --training-name full-glm-semantic-finetune --rung training-50k-rank-preserving-v2 --runtime-root s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/runtime/full-glm-semantic-finetune/training-50k-rank-preserving-v2/8391e15f6c760bb591213a80e2654af151c7ee6310a2fb8e8f5854ecef276a9b --runtime-manifest-sha256 dbe37b498a3bd630e6d0d1a54b1e3e9c0ef3027f2c875b246fd30d460c7da49f --batch-size 10000 --calls-per-repeat 5 --output-root s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed-runtime-rank-safe-final`.
+- The accelerator median was 69,289.89 documents per second.
+- Accelerator rates ranged from 60,103.48 through 81,433.35 documents per
+  second. The stability check passed.
+- Accelerator report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed-runtime-rank-safe-final/accelerator-runtime-full-full-glm-semantic-finetune-training-50k-rank-preserving-v2-dbe37b498a3b.json`.
+- Each speed job succeeded with no failure or preemption.
+- Decision: The exact rank-safe runtime passes the CPU and accelerator speed
+  gates.
+- Next action: Keep the model frozen and apply the disjoint release gates.

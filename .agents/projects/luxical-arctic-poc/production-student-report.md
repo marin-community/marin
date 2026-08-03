@@ -1,16 +1,16 @@
 # Production semantic student trust report
 
-Status: final projection rejected; full-model fallback in progress
+Status: rank-safe full-model candidate selected; release gates in progress
 
 ## TL;DR
 
 The 50,000-label GLM projection passes every fixed 40-bucket gate. It does not
-pass the complete release decision. The fixed evaluation found a relative-rank
-failure and three small-group failures. Full-model training gives a larger
-private semantic gain, but the full update also loses too much rank. The next
-candidate is a rank-safe mix of the base and trained model. A new disjoint
-10,000-document release set prevents reuse of the first fixed set. The exact
-CPU and accelerator speed gates pass for the projection runtime.
+pass the complete release decision. The first fixed evaluation found a
+relative-rank failure and three small-group failures. Private validation
+selected a 0.7 mix of the base and full-update models. This mix increases the
+mean semantic score by 0.08545 and keeps 77.54 percent of the base rank. A new
+disjoint 10,000-document release set prevents reuse of the first fixed set.
+The exact mixed-model speed gates pass. The disjoint release gates are open.
 
 ## Decision rule
 
@@ -21,18 +21,18 @@ contain many unrelated semantic domains and document forms.
 The current path uses a mixed 30M Arctic FastTransformer. It has 9,299,200
 parameters and returns 256-dimensional vectors. GLM-5.2 supplies 50,000
 semantic labels. Arctic supplies the base vector geometry. Private validation
-will select the rank-safe mix. No mixed model has production approval.
+selected a rank-safe mix. The mixed model does not have production approval.
 
 ## Current evidence
 
 | Gate | Requirement | Current result | State |
 | --- | --- | --- | --- |
-| Finite output | 100% finite vectors | 100% on private validation for the final projection | Pass |
-| Non-constant output | At least 99% unique vectors | 100% on private validation for the final projection | Pass |
-| Global geometry | Effective-rank fraction at least 0.25 | The projection passes; the full update has 0.26955 and needs a rank-safe mix | Open |
-| Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | 3,299.80 documents/s; 1.36877 times Luxical-One; both five-repeat series are stable | Pass |
-| Accelerator speed | Stable exact-runtime throughput for capacity planning | 37,800.70 documents/s; five full calls per repeat; stable | Pass |
-| Coarse semantic screen | No metric more than 0.02 below the best tested teacher | The full update has a 0.12291 mean private gain | Pass |
+| Finite output | 100% finite vectors | 100% on private validation for the mixed model | Pass |
+| Non-constant output | At least 99% unique vectors | 100% on private validation for the mixed model | Pass |
+| Global geometry | Effective-rank fraction at least 0.25 | The mixed model has 0.35930 on private validation; the disjoint release test is open | Open |
+| Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | 9,356.30 documents/s; 3.29503 times Luxical-One; both series are stable | Pass |
+| Accelerator speed | Stable exact-runtime throughput for capacity planning | 69,289.89 documents/s; five full calls per repeat; stable | Pass |
+| Coarse semantic screen | No metric more than 0.02 below the best tested teacher | The mixed model has a 0.08545 mean private gain | Pass |
 | Label reliability | Independent review gates for a frozen hierarchy | Tail adjudication changed each global metric by at most 0.00458 and changed no gate decision | Pass |
 | Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The projection fails three groups on the first fixed set | Fail |
 | Blind neighborhood review | Student is not worse than the best teacher | Deferred until the 50,000-label model passes visible gates | Open |
@@ -228,6 +228,23 @@ The training report contains a pre-registered base-to-trained mix ladder.
 Candidate selection will use private validation only. A candidate must keep at
 least 75 percent of the base rank. Among passing candidates, select the largest
 mean semantic gain.
+
+The rank-safe rerun selected the 0.7 mix. Parent, leaf, and form macro-F1 values
+increased from 0.44885, 0.35303, and 0.40897 to 0.54400, 0.44811, and 0.47510.
+The mean semantic gain was 0.08545. The rank fraction was 0.35930, which keeps
+77.54 percent of the base value. The total variance was 0.74480. All vectors
+were finite and unique at four decimals.
+
+The selected model SHA-256 is
+`8391e15f6c760bb591213a80e2654af151c7ee6310a2fb8e8f5854ecef276a9b`.
+The staged production runtime passed its parity smoke with a minimum cosine of
+1.0 across eight documents. Its manifest SHA-256 is
+`dbe37b498a3bd630e6d0d1a54b1e3e9c0ef3027f2c875b246fd30d460c7da49f`.
+The exact runtime reached 9,356.30 documents per second on eight CPU cores.
+Luxical-One reached 2,839.52 documents per second in the same paired test. The
+ratio was 3.29503. The accelerator median was 69,289.89 documents per second.
+The two five-repeat series passed their stability gates. The disjoint release
+result remains open.
 
 ## Capacity and input controls
 
