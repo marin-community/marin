@@ -1972,3 +1972,26 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   that smoke as the launch gate.
 - Interpretation: The fallback compiles and runs at the production model size.
   It remains inactive until the folded projection release result is known.
+
+### LUX-SEMANTIC-PROJECTION-003: Label retry recovery
+
+- The first 50,000-label attempt stopped after approximately 16,150 durable
+  labels.
+- One document received a primary leaf that did not belong to its primary
+  parent after all three correction requests.
+- The valid checkpoint files remain unchanged and complete through their
+  recorded ranges.
+- Root cause: One persistently malformed semantic assignment raised an error
+  after the bounded retry loop. The error stopped the complete two-node GLM
+  job.
+- Commit Hash: `7b05f4e7b`.
+- The labeler now writes `OTHER_UNCLEAR` with confidence zero after three
+  invalid semantic responses. The rationale starts with
+  `VALIDATION_REPAIR:` for an audit.
+- The final label summary records the repair count and fraction.
+- The 50,000-label trainer rejects more than 50 repairs. It also verifies that
+  no repaired row enters training or private validation.
+- Eighteen focused behavior tests pass in 31.98 seconds. Pyrefly and the
+  required pre-commit checks pass.
+- The same federated interactive job was resubmitted. It will reuse the durable
+  checkpoints and continue at the failed 50-document batch.
