@@ -972,3 +972,70 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Action: Stop the fourth attempt and set `max_retries_failure=0` in the MoonEP training dispatch.
 - Interpretation: The balanced direct-transport probe is not a sufficient full-program correctness gate.
 - Next gate: Set the collective overlap limit to one. This tests whether concurrent direct kernels corrupt shared device-communicator state.
+
+### 2026-08-02 23:51 UTC - MNEP-049 rules out the overlap limit
+
+- Treatment: Reduce the direct collective overlap limit from four to one.
+- Result: The run still reported a NaN loss at step two.
+- Interpretation: The overlap limit does not order all remote writes before their consumers.
+- Next gate: Add compiled finite checks at the main training boundaries.
+
+### 2026-08-02 23:59 UTC - MNEP-050 passes with full boundary checks
+
+- Run ID: `mnep-050-finite-diagnostics-3-20260802-2359`.
+- Result: All three steps completed with finite inputs, loss, gradients, updates, outputs, and QB values.
+- Result: The final loss was `9.42`, and the run dropped no expert assignments.
+- Interpretation: A compiled consumer changes the failing schedule.
+- Next gate: Test a host wait without the compiled checks.
+
+### 2026-08-03 00:07 UTC - MNEP-051 rules out a host wait
+
+- Treatment: Wait for the complete training state after each step, with no compiled finite checks.
+- Result: The run still reported a NaN loss at step two.
+- Interpretation: The missing order is inside the compiled step. Host completion between steps is not sufficient.
+- Next gate: Keep only the full-gradient finite consumer.
+
+### 2026-08-03 00:15 UTC - MNEP-052 passes with a full-gradient consumer
+
+- Run ID: `mnep-052-gradient-completion-3-20260803-0015`.
+- Result: All three steps completed on attempt zero with finite gradients and a final loss of `9.7`.
+- Result: Steady step times were 49 and 54 seconds.
+- Interpretation: The full-gradient consumer can change the direct-kernel schedule, but it is not yet a data dependency of the optimizer.
+- Next gate: Test a smaller expert-gradient consumer.
+
+### 2026-08-03 00:23 UTC - MNEP-053 small expert consumer passes once
+
+- Run ID: `mnep-053-expert-gradient-completion-3-20260803-0023`.
+- Result: All three steps completed on attempt zero with finite sampled expert gradients and a final loss of `9.42`.
+- Result: Steady step times were 48 to 49 seconds.
+- Interpretation: This single pass did not prove that a narrow consumer orders all direct writes.
+- Next gate: Capture a five-step profile with the narrow consumer.
+
+### 2026-08-03 00:33 UTC - MNEP-054 rejects the narrow consumer
+
+- Run ID: `mnep-054-direct-guard-profile-5-20260803-0033`.
+- Result: Step one was finite. At step two, one worker reported a non-finite sampled expert gradient and a NaN loss.
+- Interpretation: The three sampled expert tensors do not order all gradient writes.
+- Next gate: Repeat the profile with the full-gradient consumer.
+
+### 2026-08-03 00:45 UTC - MNEP-055 rejects an independent full scan
+
+- Run ID: `mnep-055-full-gradient-profile-5-20260803-0045`.
+- Result: All 16 workers reported finite gradients at step one and non-finite gradients at step two. The loss was NaN.
+- Interpretation: An independent full-gradient output does not make the optimizer wait for that reduction.
+- Decision: Make every gradient passed to the optimizer depend on the full finite reduction.
+
+### 2026-08-03 00:57 UTC - MNEP-056 data-dependent guard contract
+
+- Run ID: `mnep-056-optimizer-gradient-gate-profile-5-20260803-0057`.
+- Snapshot: `mnep-056-optimizer-gradient-gate-20260803-0057` at `eb2f5ad38`.
+- Treatment: Gate every optimizer gradient on the full-gradient finite result before the update.
+- Gate: Require five finite steps on attempt zero, no dropped assignments, and a step-three XPlane profile.
+
+### 2026-08-03 01:11 UTC - MNEP-056 passes four steps before profile timeout
+
+- Correctness: All 16 workers reported finite gradients through step four. This passes the old step-two failure point.
+- Profile: Process zero captured all four local GPUs and retained about two million events. CUPTI then dropped more events.
+- Failure: Profile flush took more than the 200-second distributed barrier limit. A non-tracing worker timed out before process zero reached the barrier.
+- Interpretation: The terminal failure is in profile export. The run did not report a training NaN.
+- Decision: Capture one representative GPU from process zero, then repeat the five-step gate.
