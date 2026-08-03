@@ -33,7 +33,7 @@
 //! - Each namespace seeds at its current tip, so enabling forwarding ships new rows
 //!   rather than backfilling a retention window.
 //! - It materializes at most [`FORWARD_BATCH_ROWS`] rows per read, and packs them into
-//!   requests of at most [`FORWARD_BATCH_BYTES`].
+//!   requests of at most [`FORWARD_BATCH_BYTES`] unless one row alone exceeds the limit.
 //! - It advances a namespace's cursor past a batch only once that batch can never be
 //!   sent again: the hub acked it, or the forwarder gave it up. A crash mid-batch
 //!   re-forwards it (at-least-once; tolerable for logs and append-only stats).
@@ -92,7 +92,7 @@ const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (1 << 20);
 /// Arrow IPC contains repeated strings, especially for telemetry resource attributes.
 /// Zstd is supported by every Finelog server and avoids sending that redundancy over
 /// the cross-cluster link.
-const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
+pub(super) const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
 
 /// How far a namespace's cursor may trail its durability watermark before the forwarder
 /// gives up on the backlog and jumps to `persisted - MAX_FORWARD_LAG_SEQS`, keeping the
@@ -317,7 +317,7 @@ where
             if *stop.borrow() {
                 break;
             }
-            let more_rows = self.forward_round(&mut progress, &mut stop).await;
+            let turn = self.forward_round(&mut progress, &mut stop).await;
 
             // A drain's own `wait_or_stop` marks the value seen when it returns, so the
             // select below would wait for a second change that never comes. Read the
@@ -325,7 +325,7 @@ where
             if *stop.borrow() {
                 break;
             }
-            if more_rows {
+            if turn == ForwardTurn::MoreRows {
                 continue;
             }
             tokio::select! {
@@ -336,32 +336,33 @@ where
         tracing::info!("finelog forwarder: stopped");
     }
 
-    /// Give every live namespace one batch-sized turn. Returns whether another round
-    /// should begin immediately because at least one namespace still has settled rows.
+    /// Give every live namespace one batch-sized turn. [`ForwardTurn::MoreRows`] means
+    /// at least one namespace advanced successfully but remains behind its captured
+    /// watermark; caught-up, failed, or interrupted rounds return [`ForwardTurn::Wait`].
     async fn forward_round(
         &self,
         progress: &mut Progress,
         stop: &mut watch::Receiver<bool>,
-    ) -> bool {
+    ) -> ForwardTurn {
         let namespaces = match self.store.list_namespaces_with_stats() {
             Ok(namespaces) => namespaces,
             Err(e) => {
                 tracing::warn!(error = %e, "finelog forwarder: cannot list namespaces; retrying");
-                return false;
+                return ForwardTurn::Wait;
             }
         };
-        let mut more_rows = false;
+        let mut turn = ForwardTurn::Wait;
         for (name, schema, _stats, _policy) in namespaces {
             if *stop.borrow() {
                 break;
             }
             if self.forward_namespace(&name, &schema, progress, stop).await == ForwardTurn::MoreRows
             {
-                more_rows = true;
+                turn = ForwardTurn::MoreRows;
             }
         }
         progress.report();
-        more_rows
+        turn
     }
 
     /// Forward at most one read batch settled in `name` since its cursor. A read,
@@ -750,9 +751,9 @@ where
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ForwardTurn {
-    /// Retry on the normal interval: this namespace is caught up, failed, or stopping.
+    /// Retry on the normal interval: work is caught up, unable to progress, or stopping.
     Wait,
-    /// Start another round immediately after other namespaces receive their turns.
+    /// Start another round immediately after every other namespace receives a turn.
     MoreRows,
 }
 
@@ -815,14 +816,9 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// Encode `ship` into IPC chunks whose encoded size does not exceed `max_bytes`, pairing each
-/// with the largest `seq` it carries (the cursor to advance to once the hub acks it).
-///
-/// The in-memory batch size is only an initial proxy for IPC size: Arrow allocation
-/// overhead can otherwise leave a request substantially underfilled. After encoding,
-/// proportional scaling and bounded refinement find the largest nearby slice that fits.
-/// A chunk never has fewer than one row: a single row over budget still ships, rather
-/// than stalling the watermark behind it.
+/// Encode `ship` into IPC chunks bounded by `max_bytes`, pairing each with the largest
+/// `seq` it carries. A single row that exceeds the budget is emitted alone so it cannot
+/// stall every later row behind the forwarding cursor.
 fn chunk_by_bytes(
     ship: &RecordBatch,
     seqs: &Int64Array,

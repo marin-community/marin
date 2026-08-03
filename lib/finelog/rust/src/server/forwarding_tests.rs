@@ -494,7 +494,8 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
 }
 
 #[test]
-fn fifty_thousand_telemetry_sized_rows_fit_two_write_requests() {
+fn one_telemetry_sized_read_turn_fits_two_write_requests() {
+    let rows = FORWARD_BATCH_ROWS as usize;
     let row = "x".repeat(450);
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
@@ -502,10 +503,10 @@ fn fifty_thousand_telemetry_sized_rows_fit_two_write_requests() {
             DataType::Utf8,
             false,
         )])),
-        vec![Arc::new(StringArray::from(vec![row; 50_000]))],
+        vec![Arc::new(StringArray::from(vec![row; rows]))],
     )
     .unwrap();
-    let seqs = Int64Array::from_iter_values(1..=50_000);
+    let seqs = Int64Array::from_iter_values(1..=FORWARD_BATCH_ROWS);
 
     let chunks = chunk_by_bytes(&batch, &seqs, FORWARD_BATCH_BYTES).unwrap();
 
@@ -521,7 +522,7 @@ fn fifty_thousand_telemetry_sized_rows_fit_two_write_requests() {
     assert!(chunks
         .iter()
         .all(|(ipc, _)| ipc.len() <= FORWARD_BATCH_BYTES));
-    assert_eq!(chunks.last().unwrap().1, 50_000);
+    assert_eq!(chunks.last().unwrap().1, FORWARD_BATCH_ROWS);
 }
 
 // -------------------------------------------------------------------------------------
@@ -759,7 +760,10 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
     let forwarder = fx.forwarder(PRIV_A);
     let mut progress = Progress::new();
     let (_stop_tx, mut stop) = watch::channel(false);
-    assert!(forwarder.forward_round(&mut progress, &mut stop).await);
+    assert_eq!(
+        forwarder.forward_round(&mut progress, &mut stop).await,
+        ForwardTurn::MoreRows
+    );
 
     assert!(
         fx.cursor("busy").unwrap() < fx.tip("busy"),
@@ -775,7 +779,7 @@ async fn a_busy_namespace_yields_before_the_next_namespace_is_forwarded() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
     let fx = Fixture::new("large-batch").await;
-    write_id_rows(&fx.source, "events", 50_000).await;
+    write_id_rows(&fx.source, "events", FORWARD_BATCH_ROWS as usize).await;
     fx.forward_from_start("events");
     let requests_before = fx.requests();
 
@@ -784,7 +788,7 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
     assert_eq!(
         fx.requests() - requests_before,
         2,
-        "50,000 compact rows need one RegisterTable and one WriteRows request"
+        "one compact read turn needs one RegisterTable and one WriteRows request"
     );
 }
 
