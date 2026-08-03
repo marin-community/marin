@@ -163,6 +163,7 @@ def candidate_vectors(candidate_name: str, manifest: dict[str, Any], documents: 
 def local_model_vectors(
     documents: list[SampleDocument],
     student_model: str = "fast_arctic_3m",
+    student_config: str = "full",
     student_training_name: str = "full",
     student_rung: str = "3m",
 ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
@@ -178,7 +179,7 @@ def local_model_vectors(
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
         baseline = Embedder.load(baseline_path)
-        student, training_report = load_student("full", student_training_name, student_rung, directory)
+        student, training_report = load_student(student_config, student_training_name, student_rung, directory)
         qwen_student, qwen_training_report = load_student("full", "full-qwen3-06b-1024-crossdim", "750k", directory)
         vectors = {
             "luxical_one": normalize_embeddings(baseline(texts, batch_size=4_096)),

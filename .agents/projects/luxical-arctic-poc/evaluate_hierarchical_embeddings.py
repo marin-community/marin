@@ -122,12 +122,19 @@ def label_levels(assignments: list[HierarchicalAssignment]) -> dict[str, tuple[n
 def embedding_models(
     documents: list[SampleDocument],
     student_model: str,
+    student_config: str,
     student_training_name: str,
     student_rung: str,
 ) -> tuple[dict[str, np.ndarray], dict[str, Any], dict[str, Any]]:
     """Load all saved student, baseline, and teacher vectors once."""
     manifest = read_json(MANIFEST_URL)
-    models, metadata = local_model_vectors(documents, student_model, student_training_name, student_rung)
+    models, metadata = local_model_vectors(
+        documents,
+        student_model,
+        student_config,
+        student_training_name,
+        student_rung,
+    )
     models["arctic_medium"] = arctic_vectors(manifest, documents)
     models["qwen3_embedding_0.6b"] = candidate_vectors("qwen3-embedding-0.6b", manifest, documents)
     models["lfm2.5_embedding_350m"] = candidate_vectors("lfm2.5-embedding-350m", manifest, documents)
@@ -349,6 +356,7 @@ def main() -> None:
     parser.add_argument("--adjudication-review-url")
     parser.add_argument("--maximum-pair-count", type=int, default=DEFAULT_MAXIMUM_PAIR_COUNT)
     parser.add_argument("--student-model", default="fast_arctic_3m")
+    parser.add_argument("--student-config", default="full")
     parser.add_argument("--student-training-name", default="full")
     parser.add_argument("--student-rung", default="3m")
     parser.add_argument("--speed-report-url", default=EXACT_SPEED_REPORT_URL)
@@ -381,6 +389,7 @@ def main() -> None:
     models, metadata, manifest = embedding_models(
         documents,
         args.student_model,
+        args.student_config,
         args.student_training_name,
         args.student_rung,
     )
@@ -427,6 +436,7 @@ def main() -> None:
         "source_metadata_used_as_quality_target": False,
         "semantic_reference_models": list(SEMANTIC_REFERENCE_MODELS),
         "student_model": args.student_model,
+        "student_config": args.student_config,
         "student_training_name": args.student_training_name,
         "student_rung": args.student_rung,
         "student_cpu_speed_ratio": speed_ratio,

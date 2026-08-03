@@ -39,6 +39,12 @@ SOURCE_WINDOWS_PER_DOCUMENT = 3
 CHARACTERS_PER_SOURCE_WINDOW = 256
 
 MODEL_CONFIGS: dict[str, dict[str, Any]] = {
+    "large": {
+        "embed_dim": 512,
+        "hidden_dim": 512,
+        "num_layers": 4,
+        "num_heads": 8,
+    },
     "full": {
         "embed_dim": 256,
         "hidden_dim": 256,
