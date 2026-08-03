@@ -1174,3 +1174,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Correctness: All five CPU planner reference tests passed. The four-GPU dense-reference output and input and weight gradient test passed in 115.30 seconds, including compilation.
 - Static checks: The required lint, formatting, license, syntax, and Pyrefly checks passed.
 - Rack gate: Require five finite steps on attempt zero, no dropped assignments, and a steady step time below the 43-second MNEP-063 result.
+
+### 2026-08-03 03:38 UTC - MNEP-065 raises MFU to about 9.6%
+
+- Result: All 16 workers completed five finite steps on attempt zero. The final loss was `8.18`, and the run dropped no expert assignments.
+- Timing: The four steady steps took 26, 27, 27, and 27 seconds. Their median was 27 seconds, which is about 9.6% MFU.
+- Comparison: MNEP-063 had a 43-second median and about 6.0% MFU. Batched planning reduced median step time by 37% and raised MFU by about 60%.
+- Memory: Sampled worker allocation fell from about 171 GB to about 160 GB.
+- Decision: Keep batched planning. Replace the large token ragged collectives with a bounded standard all-to-all fast path and retain ragged transport as the exact fallback.
