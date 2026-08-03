@@ -109,7 +109,7 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         enable_patch_force=True,
     )
 
-    CoreweaveCluster(
+    coreweave_cluster = CoreweaveCluster(
         "cluster",
         CoreweaveClusterArgs(
             cluster=coreweave_provisioning.cluster,
@@ -145,6 +145,7 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
             adopt=adopt,
         ),
         k8s_provider=k8s_provider,
+        opts=pulumi.ResourceOptions(depends_on=[coreweave_cluster]),
     )
 
     controller_coreweave = iris_config.controller.coreweave
