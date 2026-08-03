@@ -2248,3 +2248,123 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Thirty-five focused tests pass. The required pre-commit checks pass.
 - Next action: Run the int8 gates on the final staged runtime. Do not evaluate
   only the research float vectors.
+
+### LUX-RUNTIME-006: Final runtime speed gates pass
+
+- Commit Hash: `be0802dc8`.
+- The exact final runtime used model SHA-256
+  `b7035650ca96023297d50c0822814032850ccd59e103e93c331be0b10fcea337`.
+- The CPU job was `/rav/lux-runtime-speed-50k-isolated-h100-001`.
+- The CPU test used 20,000 fixed documents, batch size 10,000, eight CPU
+  cores, one full warmup, and five alternating paired repeats.
+- The student median was 3,299.80 documents per second.
+- The Luxical-One median was 2,410.77 documents per second.
+- The student-to-Luxical ratio was 1.36877. The required ratio is 0.85.
+- Student rates ranged from 3,146.97 through 3,417.79 documents per second.
+- Baseline rates ranged from 2,258.96 through 2,450.57 documents per second.
+- Both stability checks passed. The job succeeded with no failure or
+  preemption.
+- CPU report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed-runtime-final-isolated/cpu-runtime-full-full-glm-semantic-projection-training-50k-v1-5b39d9a2d6b6.json`.
+- The accelerator job was
+  `/rav/lux-runtime-accelerator-50k-stable-h100-001`.
+- The accelerator test measured five complete calls in each repeat. Each
+  repeat measured 100,000 documents.
+- The accelerator median was 37,800.70 documents per second.
+- Accelerator rates ranged from 32,136.64 through 40,735.15 documents per
+  second. The stability check passed.
+- Accelerator report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed-runtime-final-stable/accelerator-runtime-full-full-glm-semantic-projection-training-50k-v1-5b39d9a2d6b6.json`.
+- Decision: The final runtime passes the CPU and accelerator speed gates.
+- Next action: Run the fixed 10,000-document semantic evaluation one time.
+
+### LUX-RELEASE-006: Start the final fixed evaluation
+
+- Job: `/rav/lux-hierarchy-eval-glm50k-h100-001`.
+- Commit Hash: `be0802dc8`.
+- The job uses the compact hierarchy and fixed evaluation run
+  `heldout-10000-20260802-001`.
+- The job reads the final staged runtime and the valid CPU report.
+- The job evaluates dequantized int8 vectors with quantization range 0.6.
+- The job uses the pinned Claude adjudication report.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 120GB --disk 300GB --priority interactive --max-retries 1 --timeout 7200 --user rav --job-name lux-hierarchy-eval-glm50k-h100-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/evaluate_hierarchical_embeddings.py --run-id hierarchy-1000-20260802-002 --variants compact --evaluation-run-id heldout-10000-20260802-001 --student-model fast_glm52_projection_50k_v1 --student-config full --student-training-name full-glm-semantic-projection --student-rung training-50k-v1 --student-runtime-root s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/runtime/full-glm-semantic-projection/training-50k-v1/b7035650ca96023297d50c0822814032850ccd59e103e93c331be0b10fcea337 --student-runtime-manifest-sha256 5b39d9a2d6b60d972878f3ffc972c7e8b9352b101887b3fb81dce71efb3e4a05 --student-quantization-range 0.6 --speed-report-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed-runtime-final-isolated/cpu-runtime-full-full-glm-semantic-projection-training-50k-v1-5b39d9a2d6b6.json --adjudication-review-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/claude-adjudication-v1/report.json`.
+- The job first waited for accelerator capacity. This wait is not a model
+  failure.
+
+### LUX-RELEASE-007: The final projection does not pass all release gates
+
+- Job: `/rav/lux-hierarchy-eval-glm50k-h100-001`.
+- The job succeeded in 14 minutes 45.07 seconds. It had no failure or
+  preemption.
+- The test used 10,000 fixed documents and the dequantized production int8
+  vectors.
+- The student passed all finite, unique, variance, CPU speed, and absolute
+  rank-health gates.
+- The student passed all global semantic gates except the relative-rank gate.
+- The student rank fraction was 0.30985. The best reference rank fraction was
+  0.67729. The gate requires at least half of the reference value.
+- One leaf group failed. `CREATIVE_NARRATIVE` had F1 0.12000. The best
+  reference had F1 0.27723 on 90 documents.
+- Two form groups failed. `NARRATIVE` was 0.03069 below the best reference on
+  278 documents. `OTHER_UNCLEAR` was 0.11222 below on 66 documents.
+- The production 40-bucket gate passed at all three levels.
+- The student exceeded the best teacher for every 40-bucket metric. The NMI
+  gains were 0.07521 for parent, 0.08895 for leaf, and 0.06879 for form.
+- The purity gains were 0.09380 for parent, 0.11320 for leaf, and 0.07940 for
+  form.
+- Report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_glm52_projection_50k_v1/adjudicated-v1/embedding-screen-v1/report.json`.
+- Decision: Do not approve this projection. Do not tune it on the fixed set.
+- Next action: Run the prebuilt full-model fine-tuning fallback. Select its
+  model mix only on the separate private validation split.
+
+### LUX-SEMANTIC-FINETUNE-001: Start the full-model fallback
+
+- Job: `/rav/lux-semantic-finetune-50k-h100-001`.
+- Commit Hash: `be0802dc8`.
+- The job uses the same 45,126 training rows and 2,374 private validation rows.
+- The objective updates the complete 9.3M-parameter encoder. It keeps an
+  Arctic vector anchor and a spread loss.
+- The model-mix selection uses only the private validation split.
+- The job does not read the fixed 10,000-document evaluation set.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu H100 --cpu 16 --memory 120GB --disk 300GB --priority interactive --max-retries 1 --timeout 7200 --user rav --job-name lux-semantic-finetune-50k-h100-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/train_semantic_finetune_large.py`.
+
+### LUX-SEMANTIC-FINETUNE-002: Full-model endpoint improves semantics but loses rank
+
+- Job: `/rav/lux-semantic-finetune-50k-h100-001`.
+- The job succeeded in 2 minutes 58.81 seconds. It had no failure or
+  preemption.
+- The fit used 45,126 training rows and 2,374 private validation rows.
+- Base parent, leaf, and form macro-F1 values were 0.44885, 0.35303, and
+  0.40878.
+- Full-update values were 0.59581, 0.48606, and 0.49752.
+- The mean semantic gain was 0.12291.
+- The base rank fraction was 0.46339. The full-update value was 0.26955.
+- Total variance was 0.71166. All vectors were finite and unique.
+- The minimum base cosine was 0.58082.
+- The selected full-update model SHA-256 is
+  `246c02f84370fd92ac4e6a460ab85a2f0d9df969f7993f1b108cc6db35aab6e1`.
+- Report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/full-glm-semantic-finetune/training-50k-v1/training.json`.
+- Interpretation: The full-model path gives more semantic gain than the
+  projection. The full endpoint does not keep enough rank for release.
+- Next action: Read the pre-registered mix ladder. Select a candidate that
+  keeps at least 75 percent of the base private rank.
+
+### LUX-DATA-005: Start a fully disjoint release label set
+
+- Commit Hash: `2219be748`.
+- The label code accepts repeated excluded sample URLs.
+- The code verifies each excluded sample and rejects duplicate identities.
+- The run config records each URL, the excluded row count, and one identity
+  digest.
+- Seven focused tests pass. The required pre-commit checks pass.
+- Job: `/rav/lux-glm52-release-10k-b200-001`.
+- The job uses two nodes and eight accelerators with interactive priority.
+- The new set has 10,000 documents.
+- It excludes the 1,000-document hierarchy pilot.
+- It also excludes the first 10,000-document fixed set and 50,000 training
+  documents.
+- The new evaluation ID is `heldout-10000-20260803-002`.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait --enable-extra-resources --gpu GB200x4 --replicas 2 --cpu 32 --memory 850GB --disk 1000GB --priority interactive --max-retries 0 --timeout 2592000 --user rav --job-name lux-glm52-release-10k-b200-001 --extra gpu --extra datakit -- python .agents/projects/luxical-arctic-poc/label_frozen_hierarchy.py --pilot-run-id hierarchy-1000-20260802-002 --variant compact --evaluation-run-id heldout-10000-20260803-002 --evaluation-size 10000 --tensor-parallel-size 8 --max-model-len 16384 --max-num-seqs 4 --excluded-sample-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/sample-private.jsonl.gz --excluded-sample-url s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/projection-train-50000-20260803-001/sample-private.jsonl.gz`.
+- Next action: Monitor model load and label progress to completion.

@@ -1,16 +1,16 @@
 # Production semantic student trust report
 
-Status: evaluation in progress
+Status: final projection rejected; full-model fallback in progress
 
 ## TL;DR
 
-The rank-preserving GLM projection is the lead candidate. It folds into the
-9.3M-parameter FastTransformer head and adds no inference operation. The
-1,000-label pilot passes all global semantic and vector-health gates on 10,000
-fixed documents. It fails 12 large content-group gates. A disjoint 50,000-label
-run is active to determine whether semantic supervision fixes these remaining
-groups. The 30M Arctic student, larger student, longer-input student, and Qwen
-neighbor student all fail release gates.
+The 50,000-label GLM projection passes every fixed 40-bucket gate. It does not
+pass the complete release decision. The fixed evaluation found a relative-rank
+failure and three small-group failures. Full-model training gives a larger
+private semantic gain, but the full update also loses too much rank. The next
+candidate is a rank-safe mix of the base and trained model. A new disjoint
+10,000-document release set prevents reuse of the first fixed set. The exact
+CPU and accelerator speed gates pass for the projection runtime.
 
 ## Decision rule
 
@@ -18,43 +18,41 @@ Do not approve a production student until every required gate passes on fixed
 held-out documents. Source provenance is not a prediction target. A source can
 contain many unrelated semantic domains and document forms.
 
-The current candidate is the projected 30M Arctic FastTransformer. It has
-9,299,200 parameters and returns 256-dimensional vectors. GLM-5.2 supplies
-semantic labels. Arctic supplies the base vector geometry. The pilot candidate
-is not an approved production model.
+The current path uses a mixed 30M Arctic FastTransformer. It has 9,299,200
+parameters and returns 256-dimensional vectors. GLM-5.2 supplies 50,000
+semantic labels. Arctic supplies the base vector geometry. Private validation
+will select the rank-safe mix. No mixed model has production approval.
 
 ## Current evidence
 
 | Gate | Requirement | Current result | State |
 | --- | --- | --- | --- |
-| Finite output | 100% finite vectors | 100% for the pilot projection on the held-out set | Pass |
-| Non-constant output | At least 99% unique vectors | At least 99% for the pilot projection | Pass |
-| Global geometry | Effective-rank fraction at least 0.25 | 0.39314 for the pilot projection | Pass |
-| Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | The base graph reached 0.94729 with float32 CPU math. The final projected artifact still needs the exact test | Open |
-| Accelerator speed | Stable exact-runtime throughput for capacity planning | The exact benchmark is ready. The final projected artifact still needs the measurement | Open |
-| Coarse semantic screen | No metric more than 0.02 below the best tested teacher | Every global pilot-projection metric passes | Pass |
+| Finite output | 100% finite vectors | 100% on private validation for the final projection | Pass |
+| Non-constant output | At least 99% unique vectors | 100% on private validation for the final projection | Pass |
+| Global geometry | Effective-rank fraction at least 0.25 | The projection passes; the full update has 0.26955 and needs a rank-safe mix | Open |
+| Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | 3,299.80 documents/s; 1.36877 times Luxical-One; both five-repeat series are stable | Pass |
+| Accelerator speed | Stable exact-runtime throughput for capacity planning | 37,800.70 documents/s; five full calls per repeat; stable | Pass |
+| Coarse semantic screen | No metric more than 0.02 below the best tested teacher | The full update has a 0.12291 mean private gain | Pass |
 | Label reliability | Independent review gates for a frozen hierarchy | Tail adjudication changed each global metric by at most 0.00458 and changed no gate decision | Pass |
-| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The pilot projection passes every global level | Pass |
+| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The projection fails three groups on the first fixed set | Fail |
 | Blind neighborhood review | Student is not worse than the best teacher | Deferred until the 50,000-label model passes visible gates | Open |
-| Held-out robustness | All large semantic groups pass | 12 pilot-projection group gates fail | Fail |
-| Fixed production buckets | Parent, leaf, and form NMI and purity pass for 40 buckets | Added for the 50,000-label model | Open |
+| Held-out robustness | All large semantic groups pass | Creative narrative, narrative form, and unclear form fail | Fail |
+| Fixed production buckets | Parent, leaf, and form NMI and purity pass for 40 buckets | All six metrics exceed the best teacher | Pass |
 | Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
-| Release artifact | Pinned model, tokenizer, loader, and production smoke | A staged runtime now binds evaluation and speed to the production loader; final candidate bundle remains open | Open |
+| Release artifact | Pinned model, tokenizer, loader, and production smoke | The final runtime passed exact parity; the released bundle and canary remain open | Open |
 
-The previous paired CPU test used 20,000 fixed documents, five alternating
-timed repeats, eight CPU threads, and the CPU JAX backend. The projected
-student rates were stable from 6,589 through 6,836 documents per second.
-Luxical-One varied from 367 through 4,735 documents per second. Thus, the
-reported ratio is invalid. The final protocol uses a full-workload warmup, a
-fixed eight-CPU affinity, and a 20-percent spread limit for each model. It also
-requires the exact model hash, rung, and baseline revision.
+The final paired CPU test used 20,000 fixed documents, five alternating timed
+repeats, eight CPU threads, and the CPU JAX backend. The final student had a
+median of 3,299.80 documents per second. Luxical-One had a median of 2,410.77
+documents per second. The ratio was 1.36877. Both series passed the 20-percent
+stability limit.
 
 The float32 CPU path passed the same stable protocol on the 30M base model at
 batch size 8,192. The student median was 2,951.38 documents per second. The
 Luxical-One median was 3,115.60 documents per second. The ratio was 0.94729.
 All five rates for each model stayed within 6% of their median. This result
 removes the known graph-speed risk. It does not replace the required test of
-the final projected model hash.
+the final mixed model hash.
 
 The staged production-runtime path passed a real-model smoke on the pilot
 projection. The minimum research-to-runtime cosine was 0.99999988 across eight
@@ -205,6 +203,32 @@ private gates pass. This result supports the projection design, but it does
 not approve a release. The fixed 10,000-document evaluation has not run on
 this model.
 
+The complete projection used 45,126 training rows and 2,374 private validation
+rows. Its mean private semantic gain is 0.09544. The projection passes every
+private gate. Its fixed 10,000-document rank fraction is 0.30985. The release
+gate needs 0.33864. Creative narrative and two document-form groups also fail.
+
+The same projection exceeds the best teacher for all six fixed 40-bucket
+metrics. Parent, leaf, and form NMI gains are 0.07521, 0.08895, and 0.06879.
+The related purity gains are 0.09380, 0.11320, and 0.07940. Thus, the model
+forms useful coarse buckets, but it loses some fine semantic structure.
+
+## Full-model semantic result
+
+The full-model job uses the same private split and updates all 9.3M parameters.
+Parent, leaf, and form macro-F1 increase from 0.44885, 0.35303, and 0.40878.
+The full-update values are 0.59581, 0.48606, and 0.49752. The mean semantic
+gain is 0.12291.
+
+The full update reduces the rank fraction from 0.46339 to 0.26955. Total
+variance is 0.71166. All vectors are finite and unique. The minimum cosine
+against the base vector is 0.58082. This endpoint is not the release candidate.
+
+The training report contains a pre-registered base-to-trained mix ladder.
+Candidate selection will use private validation only. A candidate must keep at
+least 75 percent of the base rank. Among passing candidates, select the largest
+mean semantic gain.
+
 ## Capacity and input controls
 
 The 28.4M-parameter control does not fix the semantic loss. Its parent, leaf,
@@ -321,6 +345,10 @@ the overall visible result.
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-full-full-glm-semantic-projection-pilot-1k-mix-v2.json`
 - 30M base model SHA-256:
   `981388da726eb2dff8d19dd84fff17749f2b6dd974c93ad223fee581139c9c7f`
+- Full-update model SHA-256:
+  `246c02f84370fd92ac4e6a460ab85a2f0d9df969f7993f1b108cc6db35aab6e1`
+- Full-update training report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/full-glm-semantic-finetune/training-50k-v1/training.json`
 - 30M base held-out report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_30m/adjudicated-v1/embedding-screen-v1/report.json`
 - 3M model SHA-256:
@@ -364,29 +392,30 @@ the overall visible result.
 
 ## Open decision
 
-Reject the pure Arctic, capacity, input-length, and Qwen-neighbor candidates.
-Keep the 30M Arctic student as the base geometry. Use GLM-5.2 labels to train a
-rank-preserving projection for that base.
+Reject the pure Arctic, capacity, input-length, Qwen-neighbor, and final
+projection candidates. Keep the 30M Arctic student as the base geometry. Use
+GLM-5.2 labels for a rank-safe full-model update.
 
 The active label set contains 50,000 source-balanced documents. It excludes
 the 1,000-document pilot and the fixed 10,000-document evaluation set. The
 training code verifies the document count, identity digest, exclusion run,
 sequential indices, and completed label summary before it loads the model.
 
-Train one projection after the label job completes. Select the projection mix
-on a separate 5-percent validation set. Do not use the fixed 10,000-document
-set for projection selection.
+Read the pre-registered full-model mix ladder from the private validation
+report. Select the best semantic result that keeps 75 percent of the base rank.
+Do not use the first fixed 10,000-document set for this selection.
 
-The 17,250-label private result passed its development gates with a 0.11050
-mean semantic gain. Complete the 50,000-label run before the final projection.
+Freeze the selected model before the new release evaluation. Stage its exact
+production runtime. Then do the vector-health, CPU, and accelerator tests on
+that runtime.
 
-Run the fixed 10,000-document evaluation once when the internal validation
-passes. Reject the model when one global gate or one large-group gate fails.
-Stage the exact production runtime after training. Run the stable CPU test and
-the fixed evaluation through that runtime. Start the 200-query blind review
-only after the visible and CPU gates pass.
+The new release set has 10,000 documents. It excludes the pilot, the first
+fixed set, and all 50,000 training documents. GLM-5.2 will label this set with
+the frozen hierarchy. Claude will do an independent label review.
 
-If large-group failures remain, use the same labels for end-to-end
-FastTransformer training. Keep the 256-token production input and 256-number
-output. Add targeted labels only for groups that the 50,000-label projection
-still fails.
+Run the new fixed evaluation one time after the model and evidence are frozen.
+Reject the model when one global gate or one large-group gate fails. Start the
+200-query blind review only after the visible and speed gates pass.
+
+If no model mix passes private rank and semantic gates, change the training
+loss. Add direct rank or covariance preservation before a new release test.
