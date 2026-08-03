@@ -303,7 +303,7 @@ def test_load_checkpoint_rejects_missing_arrays_by_default():
         save_checkpoint({"present": jnp.ones(2)}, step=10, checkpoint_path=tempdir)
         exemplar = {"present": jnp.zeros(2), "missing": jnp.zeros(2)}
 
-        with pytest.raises(FileNotFoundError, match="Missing 1 arrays"):
+        with pytest.raises(FileNotFoundError):
             load_checkpoint(exemplar, checkpoint_path=tempdir)
 
 

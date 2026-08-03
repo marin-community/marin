@@ -264,9 +264,8 @@ def initialize_jax(
     Iris endpoint registry, and tasks 1..N-1 poll until they discover it. All
     tasks then call jax.distributed.initialize with the coordinator address.
 
-    For single-task jobs (or when not running inside an Iris job),
-    initialization is skipped — JAX works correctly without distributed
-    init when there is only one process.
+    Single-task Iris jobs initialize an explicit one-process distributed world.
+    Processes outside an Iris job leave JAX distributed initialization unchanged.
 
     Iris TPU jobs use the same endpoint-registry coordinator path as other Iris
     multi-task jobs.

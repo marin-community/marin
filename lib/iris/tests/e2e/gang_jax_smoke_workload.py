@@ -32,6 +32,7 @@ import json
 import math
 import os
 import sys
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
@@ -47,33 +48,61 @@ def log(msg: str) -> None:
     print(f"[gang-jax] {msg}", flush=True)
 
 
-def maybe_inject_exit(completed_step: int) -> None:
-    """Immediately terminate the selected process for the manual fault probe."""
+@dataclass(frozen=True)
+class ExitInjection:
+    process_index: int
+    completed_step: int
+    attempt: int
+    exit_code: int
+
+
+def exit_injection_from_env() -> ExitInjection | None:
+    """Parse the optional manual fault-injection configuration."""
     raw_process_index = os.environ.get("GANG_SMOKE_INJECT_EXIT_PROCESS_INDEX")
     raw_step = os.environ.get("GANG_SMOKE_INJECT_EXIT_STEP")
     if raw_process_index is None and raw_step is None:
-        return
+        return None
     if raw_process_index is None or raw_step is None:
         raise ValueError("GANG_SMOKE_INJECT_EXIT_PROCESS_INDEX and GANG_SMOKE_INJECT_EXIT_STEP must be set together")
+
+    injection = ExitInjection(
+        process_index=int(raw_process_index),
+        completed_step=int(raw_step),
+        attempt=int(os.environ.get("GANG_SMOKE_INJECT_EXIT_ATTEMPT", "0")),
+        exit_code=int(os.environ.get("GANG_SMOKE_INJECT_EXIT_CODE", "17")),
+    )
+    if injection.process_index < 0:
+        raise ValueError("GANG_SMOKE_INJECT_EXIT_PROCESS_INDEX must be non-negative")
+    if injection.completed_step <= 0:
+        raise ValueError("GANG_SMOKE_INJECT_EXIT_STEP must be positive")
+    if injection.attempt < 0:
+        raise ValueError("GANG_SMOKE_INJECT_EXIT_ATTEMPT must be non-negative")
+    if injection.exit_code == 0:
+        raise ValueError("GANG_SMOKE_INJECT_EXIT_CODE must be nonzero")
+    return injection
+
+
+def maybe_inject_exit(injection: ExitInjection | None, completed_step: int) -> None:
+    """Immediately terminate the selected process for the manual fault probe."""
+    if injection is None:
+        return
 
     info = get_job_info()
     if info is None:
         raise RuntimeError("fault injection requires Iris job metadata")
 
-    target_process = int(raw_process_index)
-    target_step = int(raw_step)
-    target_attempt = int(os.environ.get("GANG_SMOKE_INJECT_EXIT_ATTEMPT", "0"))
-    exit_code = int(os.environ.get("GANG_SMOKE_INJECT_EXIT_CODE", "17"))
-    if exit_code == 0:
-        raise ValueError("GANG_SMOKE_INJECT_EXIT_CODE must be nonzero")
-    if jax.process_index() != target_process or completed_step != target_step or info.attempt_id != target_attempt:
+    if (
+        jax.process_index() != injection.process_index
+        or completed_step != injection.completed_step
+        or info.attempt_id != injection.attempt
+    ):
         return
 
     marker = {
         "attempt": info.attempt_id,
         "completed_step": completed_step,
         "event": "synthetic_process_exit",
-        "exit_code": exit_code,
+        "exit_code": injection.exit_code,
         "process_count": jax.process_count(),
         "process_index": jax.process_index(),
         "task_id": info.task_id.to_wire(),
@@ -81,10 +110,11 @@ def maybe_inject_exit(completed_step: int) -> None:
     log(f"FAULT_INJECTION {json.dumps(marker, sort_keys=True)}")
     sys.stdout.flush()
     sys.stderr.flush()
-    os._exit(exit_code)
+    os._exit(injection.exit_code)
 
 
 def main() -> None:
+    exit_injection = exit_injection_from_env()
     steps = int(os.environ.get("GANG_SMOKE_STEPS", "20"))
     per_device_batch = int(os.environ.get("GANG_SMOKE_PDB", "8"))
 
@@ -168,7 +198,7 @@ def main() -> None:
         params, loss = train_step(params, x, y)
         if jax.process_index() == 0:
             log(f"step {step + 1}/{steps} loss={float(loss):.4f}")
-        maybe_inject_exit(step + 1)
+        maybe_inject_exit(exit_injection, step + 1)
     log(f"final loss={float(loss):.4f}")
 
     multihost_utils.sync_global_devices("gang-jax-done")
