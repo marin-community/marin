@@ -1371,3 +1371,19 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Checks: The MoonEP unit set, the 41 hero-EP tests, formatting, lint, types, syntax, and file checks pass.
 - Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and a median MFU above MNEP-074's `10.004%`.
 - Next action: Profile the treatment if it improves MFU. Increase the bucket count only when the profile shows useful communication and compute overlap.
+
+### 2026-08-03 08:12 UTC - MNEP-076 rejects interleaved token buckets
+
+- Result: All 16 workers completed five finite steps on attempt zero. The run dropped no expert assignments, and the final loss was `8.6264`.
+- Throughput: Median MFU was `9.439%`, median measured step time was `27.314 s`, and median throughput was `153,559` tokens per second.
+- Comparison: MNEP-074 reached `10.004%` median MFU. Splitting each transfer into two smaller transfers added work without enough overlap.
+- Cause: The graph put `combine 0` before `dispatch 1` in collective order. XLA preserves this order, so it could not start the next dispatch during the first bucket's expert GEMM.
+- Evidence: [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-076-bucket2-5-20260803-0753).
+
+### 2026-08-03 08:18 UTC - MNEP-077 reordered pipeline contract
+
+- Treatment: Put all token dispatch collectives before the first token combine collective. This permits XLA to run `dispatch N+1` during bucket `N` compute and to run `combine N` during bucket `N+1` compute.
+- Correctness: The two-bucket path matches the dense output and the input, W13, and W2 gradients on four GB200 GPUs. It reports zero routing errors.
+- Local checks: The MoonEP test set reports 17 passed and 9 skipped. Formatting, lint, types, syntax, and file checks pass.
+- Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above MNEP-074's `10.004%`.
+- Next action: Profile the reordered pipeline if it improves MFU. If communication remains exposed, replace token transport with a persistent symmetric-memory kernel that uses a fixed small set of communication SMs.

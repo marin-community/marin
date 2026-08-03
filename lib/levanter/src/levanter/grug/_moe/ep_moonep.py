@@ -51,6 +51,14 @@ class MoonEPPlan(NamedTuple):
     violations: Int[Array, ""]
 
 
+class _MoonEPDispatchedBucket(NamedTuple):
+    received_x: Float[Array, "Tb H"]
+    received_experts: Int[Array, " Tb"]
+    received_valid: jax.Array
+    send_matrix: Int[Array, "R R"]
+    starts: Int[Array, "R R"]
+
+
 def _balance_owner_groups(
     allocation: Int[Array, "E R"],
     group_counts: Int[Array, " R"],
@@ -512,9 +520,10 @@ def _moe_mlp_ep_moonep_exact_local(
         group_w13 = jnp.concatenate((moe_w13_local, remote_w13), axis=0)
         group_w2 = jnp.concatenate((moe_w2_local, remote_w2), axis=0)
 
-    returned_buckets = []
-    assignment_id_buckets = []
-    mapping_errors = jnp.array(0, dtype=jnp.int32)
+    # Put all dispatch collectives before the first combine collective. XLA
+    # keeps collective order, so this order lets dispatch N+1 run while bucket
+    # N uses the compute stream.
+    dispatched_buckets = []
     for bucket in range(token_buckets):
         bucket_starts, bucket_ends = _token_bucket_bounds(
             send_matrix,
@@ -544,6 +553,27 @@ def _moe_mlp_ep_moonep_exact_local(
                 output_capacity=bucket_capacity,
             )
 
+        dispatched_buckets.append(
+            _MoonEPDispatchedBucket(
+                received_x=received_x,
+                received_experts=received_experts,
+                received_valid=received_valid,
+                send_matrix=bucket_send_matrix,
+                starts=bucket_starts,
+            )
+        )
+
+    returned_buckets = []
+    assignment_id_buckets = []
+    mapping_errors = jnp.array(0, dtype=jnp.int32)
+    for bucket, dispatched in enumerate(dispatched_buckets):
+        received_x = dispatched.received_x
+        received_experts = dispatched.received_experts
+        received_valid = dispatched.received_valid
+        bucket_send_matrix = dispatched.send_matrix
+        bucket_starts = dispatched.starts
+
+        with jax.named_scope(f"moonep_layout_bucket_{bucket}"):
             local_start = rank * local_experts
             is_local = jnp.logical_and(
                 received_experts >= local_start,
