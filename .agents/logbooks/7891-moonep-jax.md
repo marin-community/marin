@@ -1939,3 +1939,21 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Primary question: Does the standard all-to-all move the same traffic near the NVLink limit? The exact ragged path reaches `101.9 GB/s`, or `11%` of the limit.
 - Stop criteria: Stop on a retry, a non-finite value, a transport error, or an out-of-memory error.
 - Capacity note: No NVLink domain has 16 free nodes at submit time. The job waits in the Kueue queue.
+
+### 2026-08-03 23:00 UTC - Collective bandwidth A/B on four GB200 GPUs
+
+- Method: Move the same balanced traffic at the EP64 token row shape (`524,288` rows of `5,120` BF16 elements) through each collective. Five repeats after one warm call.
+- Ragged all-to-all: `598.03 ms` median, or `6.7 GB/s`.
+- Padded standard all-to-all: `7.68 ms` median, or `524.1 GB/s`. This is `78` times faster.
+- Padded at factor `1.5`: `11.30 ms` median, or `534.5 GB/s`. The rate holds, so padding costs in proportion to the extra bytes.
+- Wheel: The development pod holds PJRT `bb72fa53`. The rack build reaches `101.9 GB/s` for the ragged path, so the XLA patches give a large gain. The standard collective is still about five times faster.
+- Planning rate: Use `530 GB/s` for each GPU. The `1,546 GB` of exact traffic then needs `2.92 s`.
+- Revised budget: The exposed transport budget is `0.99 s`. A padded transport at factor `1.25` needs `3.65 s` and thus `73%` overlap. Factor `1.5` needs `77%`.
+- Conclusion: Overlap is the primary requirement, not a second-order gain. A cheap collective alone cannot pass the gate at any capacity factor.
+- Direction: The standard all-to-all is a normal collective on the communication stream. The XLA latency-hiding scheduler handles it directly, unlike the custom ragged call that reached only `15.6%` overlap in MNEP-075.
+
+### 2026-08-03 23:02 UTC - Saved MoE state is not a lever
+
+- Basis: MNEP-091 requested `557.88 GiB` for each GPU with `remat_mode=save_moe`.
+- Cause: The tagged tensors are the dispatch buffers. One buffer is `5.37 GB` for each layer, and the model has 48 MoE layers.
+- Conclusion: Saving the MoE state to remove the two rematerialized transfer families cannot fit in `189.5 GiB`. Do not try this again at this shape.
