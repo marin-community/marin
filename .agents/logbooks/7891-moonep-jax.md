@@ -1736,3 +1736,28 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - GPU gate: A five-round transfer has zero output error and zero gradient error on four GB200 GPUs.
 - Full-model note: The forward parity check passes. The existing one-process symmetric-memory allocation error stops the full-model gradient result transfer.
 - Next: Run five finite EP64 steps on one NVL72 with one token bucket and a 0.5 chunk capacity factor.
+
+### 2026-08-03 16:56 UTC - MNEP-097 chunked transport rack gate
+
+- Treatment: Use one token bucket and exact standard all-to-all rounds with a 0.5 chunk capacity factor.
+- Baseline: MNEP-092c reached `9.738%` median MFU at `157,958` tokens/s.
+- Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above MNEP-092c.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, or a dropped assignment.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-097-chunked-token-a2a-5-20260803-1655-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-097-chunked-token-a2a-5-20260803-1655).
+
+### 2026-08-03 17:10 UTC - MNEP-097 rejects multi-round token transfer
+
+- Correctness: Three steps completed with finite gradients and zero dropped assignments.
+- Performance: The first W&B throughput sample was `5.716%` MFU. Steps two and three each used about `46 s`.
+- Memory: After step three, some ranks requested a new `110.61 GiB` allocation. Sampled HBM use was already `178.4 GiB` of `189.5 GiB`.
+- Result: The allocation failed with `RESOURCE_EXHAUSTED`. The parent job stopped without a retry.
+- Decision: Remove the dynamic round loop. Test one larger padded all-to-all with the exact ragged fallback.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-097-chunked-token-a2a-5-20260803-1655-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-097-chunked-token-a2a-5-20260803-1655).
+
+### 2026-08-03 17:14 UTC - MNEP-098 factor-two bounded rack gate
+
+- Treatment: Use one padded all-to-all with twice the mean peer capacity. Use exact ragged transfer when a message exceeds the limit.
+- Baseline: MNEP-092c reached `9.738%` median MFU at `157,958` tokens/s.
+- Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above MNEP-092c.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, an OOM, or a dropped assignment.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-098-bounded2-token-a2a-5-20260803-1714-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-098-bounded2-token-a2a-5-20260803-1714).
