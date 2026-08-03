@@ -47,6 +47,7 @@ ENDPOINT_LEASE = Duration.from_minutes(10)
 # Floor on a granted lease: bounds how often a client may force the controller to
 # re-register by capping the renewal rate a short requested lease can ask for.
 MIN_ENDPOINT_LEASE = Duration.from_minutes(3)
+SYSTEM_PROXY_ENDPOINT_PREFIX = "system:"
 
 
 def proxy_name_to_endpoint_names(proxy_name: str) -> tuple[str, str]:
@@ -153,7 +154,7 @@ class EndpointServiceImpl:
         mapping = self._system_proxy_mapping(name, address)
         self._publish_proxy_delta(
             upserts=(mapping,) if mapping is not None else (),
-            deletes=() if mapping is not None else (f"system:{name}",),
+            deletes=() if mapping is not None else (f"{SYSTEM_PROXY_ENDPOINT_PREFIX}{name}",),
         )
 
     def subscribe_proxy_updates(self, listener: Callable[[ProxyMappingDelta | ProxyRegistryReset], None]) -> None:
@@ -239,7 +240,7 @@ class EndpointServiceImpl:
         if not _proxyable_address(address):
             return None
         return ProxyEndpointMapping(
-            endpoint_id=f"system:{name}",
+            endpoint_id=f"{SYSTEM_PROXY_ENDPOINT_PREFIX}{name}",
             name=name,
             address=address,
             link_access=False,

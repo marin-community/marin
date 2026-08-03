@@ -31,6 +31,7 @@ from rigging.token_authority import SigningKey, generate_ed25519_keypair, signin
 from iris.cli.build import (
     CARGO_PROFILES,
     DEFAULT_CARGO_PROFILE,
+    _image_repository,
     _versioned_tag,
     build_image,
     find_marin_root,
@@ -344,10 +345,7 @@ def _resolve_prebuilt_image(image: str) -> str:
     digest = manifest.get("digest", "")
     if DIGEST_PATTERN.fullmatch(digest) is None:
         raise click.ClickException(f"Prebuilt image {image} has no valid manifest digest")
-    image_without_digest = image.split("@", 1)[0]
-    final_component = image_without_digest.rsplit("/", 1)[-1]
-    image_base = image_without_digest.rsplit(":", 1)[0] if ":" in final_component else image_without_digest
-    return f"{image_base}@{digest}"
+    return f"{_image_repository(image)}@{digest}"
 
 
 def _use_prebuilt_kubernetes_images(config, tag: str) -> str:
@@ -360,10 +358,7 @@ def _use_prebuilt_kubernetes_images(config, tag: str) -> str:
     def _replace_tag(image: str, name: str) -> str:
         if not image:
             raise click.ClickException(f"{name} image is required with --prebuilt-tag")
-        image = image.split("@", 1)[0]
-        final_component = image.rsplit("/", 1)[-1]
-        image_base = image.rsplit(":", 1)[0] if ":" in final_component else image
-        return f"{image_base}:{tag}"
+        return f"{_image_repository(image)}:{tag}"
 
     controller_tag = _replace_tag(config.controller.image, "controller")
     task_tag = _replace_tag(
@@ -1325,10 +1320,11 @@ def controller_restart(
 ):
     """Restart the controller in place, preserving state (remote platforms only).
 
-    Forward deploy: take a pre-deploy checkpoint, build fresh images from the
-    working tree, record the rollout, restart the controller, and health-check it.
-    A failed health check auto-rolls back to the previous image and its pre-deploy
-    checkpoint. Workers on separate VMs survive the restart.
+    A forward deploy takes a pre-deploy checkpoint, then either builds images
+    from the working tree or verifies requested prebuilt images. It records the
+    rollout, restarts the controller, and health-checks it. A failed health check
+    auto-rolls back to the previous image and its pre-deploy checkpoint. Workers
+    on separate VMs survive the restart.
 
     Pass ``--rollback`` to revert the last deploy — the previous image plus its
     pre-deploy checkpoint, read from the rollout record.
@@ -1464,8 +1460,12 @@ def _build_forward_image(
     cargo_profile: str = DEFAULT_CARGO_PROFILE,
     prebuilt_tag: str | None = None,
 ) -> str:
-    """Build deploy images from the working tree and return the controller image tag."""
+    """Resolve forward-deploy images and return the controller image reference."""
     if prebuilt_tag is not None:
+        if task_platforms is not None:
+            raise click.ClickException("--prebuilt-tag cannot be combined with --image-platform")
+        if cargo_profile != DEFAULT_CARGO_PROFILE:
+            raise click.ClickException("--prebuilt-tag cannot be combined with a non-default --cargo-profile")
         return _use_prebuilt_kubernetes_images(config, prebuilt_tag)
     _build_and_pin_deploy_images(
         ctx,

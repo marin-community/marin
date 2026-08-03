@@ -69,6 +69,12 @@ def _split_image_tag(image: str) -> tuple[str, str | None]:
     return image[:tag_separator], image[tag_separator + 1 :]
 
 
+def _image_repository(image: str) -> str:
+    """Remove an optional tag or digest from an image reference."""
+    repository, _ = _split_image_tag(image.split("@", 1)[0])
+    return repository
+
+
 def _ghcr_image_reference(image: str, ghcr_org: str) -> str:
     """Return the fully qualified GHCR reference for ``image``."""
     if image.startswith("ghcr.io/"):
