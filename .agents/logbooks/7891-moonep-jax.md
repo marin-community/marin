@@ -1190,3 +1190,9 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Correctness: The four-GPU dense-reference test passed for both the balanced fixed fast path and the full-skew ragged fallback. Both outputs and the input and weight gradients passed in 199.53 seconds, including two compilations.
 - Local checks: Five planner tests passed, both GPU cases skipped on CPU as required, and the required lint, formatting, license, syntax, and Pyrefly checks passed.
 - Rack gate: Require five finite steps on attempt zero, no dropped assignments, and a steady step time below the 27-second MNEP-065 result.
+
+### 2026-08-03 04:00 UTC - MNEP-066 does not improve rack time
+
+- Result: The coordinator and all 16 workers succeeded on attempt zero. The five training steps had finite loss and dropped no expert assignments.
+- Timing: The observed steady steps took 28, 26, 28, and about 26 seconds. The median stayed near 27 seconds, or about 9.6% MFU.
+- Decision: Reject the bounded token all-to-all as a performance change. Keep the batched planner result from MNEP-065 and profile the remaining device time before the next optimization.

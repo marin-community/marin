@@ -684,15 +684,7 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize(
-    "selected_expert_rows",
-    [
-        ((0, 1),) * 8,
-        ((0, 2), (4, 6)) * 4,
-    ],
-    ids=("ragged-fallback", "fixed-token-all-to-all"),
-)
-def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(selected_expert_rows):
+def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu():
     if jax.default_backend() != "gpu" or jax.device_count() != 4:
         pytest.skip("requires one four-GPU GB200 tray")
 
@@ -705,7 +697,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(selected_ex
     hidden_dim = 128
     intermediate_dim = 128
     num_experts = 8
-    selected_experts = jnp.asarray(selected_expert_rows, dtype=jnp.int32)
+    selected_experts = jnp.tile(jnp.asarray([[0, 1]], dtype=jnp.int32), (tokens, 1))
     x = jax.random.normal(jax.random.key(51), (tokens, hidden_dim), dtype=jnp.float32).astype(jnp.bfloat16)
     combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(52), (tokens, 2)), axis=-1).astype(jnp.bfloat16)
     w_up_gate = 0.1 * jax.random.normal(
