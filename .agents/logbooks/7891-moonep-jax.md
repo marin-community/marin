@@ -1203,3 +1203,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Capture: Profile step three on process zero after the batched planner change. Increase the GPU activity and callback limits to one million events.
 - Trace data: Enable the host trace and HLO metadata so that the full device timeline has named regions and compiler operation names.
 - Gate: Require five finite steps, no dropped assignments, a successful profile upload, and a full-step kernel and collective summary.
+
+### 2026-08-03 04:25 UTC - MNEP-067 finds weight transport as the main limit
+
+- Result: All 16 workers completed five finite steps on attempt zero. The loss stayed finite, and the run dropped no expert assignments.
+- Timing: The steady step time stayed near 27 seconds, or about 9.6% MFU.
+- Profile: The complete 28.35-second trace contains 1,265,679 complete events with no suspected truncation. Communication used 56.1% of device time.
+- Finding: Ragged all-to-all used 15.18 seconds across 576 calls. The six large W13 and W2 transfer families used 14.12 seconds; the six token transfer families used about 1.06 seconds.
+- Decision: Add a global no-drop gate for the fixed-capacity all-to-all path. Use exact MoonEP when any sender-to-expert cell exceeds the fixed capacity.

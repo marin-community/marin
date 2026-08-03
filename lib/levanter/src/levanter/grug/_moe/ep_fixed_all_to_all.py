@@ -15,6 +15,10 @@ from levanter.grug._moe.common import _CHECKPOINT_DISPATCH_INPUT, _CHECKPOINT_MO
 from levanter.grug.sharding import _batch_axes
 
 
+def _fixed_a2a_capacity(*, assignments_per_shard: int, num_experts: int, capacity_factor: float) -> int:
+    return max(int(math.ceil(capacity_factor * assignments_per_shard / num_experts)), 1)
+
+
 @jax.custom_vjp
 def _dispatch_gather(
     x_local: Float[Array, "Tlocal H"],
@@ -101,7 +105,11 @@ def _moe_mlp_ep_fixed_a2a_local(
     topk = selected_experts_local.shape[1]
     hidden_dim = x_local.shape[1]
     assignments_per_shard = tokens_per_shard * topk
-    capacity = max(int(math.ceil(capacity_factor * assignments_per_shard / num_experts)), 1)
+    capacity = _fixed_a2a_capacity(
+        assignments_per_shard=assignments_per_shard,
+        num_experts=num_experts,
+        capacity_factor=capacity_factor,
+    )
 
     flat_experts = selected_experts_local.reshape(-1).astype(jnp.int32)
 

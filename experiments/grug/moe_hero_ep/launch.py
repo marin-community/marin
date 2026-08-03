@@ -100,6 +100,7 @@ def build_hero_run(
     moe_implementation: MoeImplementation = "fixed_all_to_all",
     moonep_token_padding: int = 128,
     moonep_grouped_gemm: MoonEPGroupedGemm = MoonEPGroupedGemm.QUACK,
+    moonep_fixed_capacity_factor: float = 1.1,
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
     moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None,
@@ -133,7 +134,11 @@ def build_hero_run(
         raise ValueError("a MoonEP JAX wheel build requires the moonep_jax implementation")
 
     moonep_config = (
-        MoonEPConfig(token_padding=moonep_token_padding, grouped_gemm=moonep_grouped_gemm)
+        MoonEPConfig(
+            token_padding=moonep_token_padding,
+            grouped_gemm=moonep_grouped_gemm,
+            fixed_capacity_factor=moonep_fixed_capacity_factor,
+        )
         if moe_implementation == "moonep_jax"
         else None
     )

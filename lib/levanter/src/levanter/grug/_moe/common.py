@@ -81,10 +81,13 @@ class MoonEPConfig:
 
     token_padding: int
     grouped_gemm: "MoonEPGroupedGemm"
+    fixed_capacity_factor: float
 
     def __post_init__(self) -> None:
         if self.token_padding <= 0:
             raise ValueError("token_padding must be positive")
+        if self.fixed_capacity_factor < 1.0:
+            raise ValueError("fixed_capacity_factor must be at least 1.0")
 
 
 class MoonEPGroupedGemm(StrEnum):

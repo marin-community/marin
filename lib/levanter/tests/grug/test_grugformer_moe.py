@@ -493,7 +493,11 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
                 mesh=mesh,
                 capacity_factor=1.0 if implementation == "moonep_jax" else 1.25,
                 moonep_config=(
-                    MoonEPConfig(token_padding=4, grouped_gemm=MoonEPGroupedGemm.XLA)
+                    MoonEPConfig(
+                        token_padding=4,
+                        grouped_gemm=MoonEPGroupedGemm.XLA,
+                        fixed_capacity_factor=1.0,
+                    )
                     if implementation == "moonep_jax"
                     else None
                 ),
@@ -684,7 +688,17 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
     assert result.returncode == 0, result.stderr
 
 
-def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu():
+@pytest.mark.parametrize(
+    "selected_expert_rows",
+    [
+        pytest.param(((0, 1),) * 8, id="exact-fallback"),
+        pytest.param(
+            ((0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7)),
+            id="fixed-fast-path",
+        ),
+    ],
+)
+def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(selected_expert_rows):
     if jax.default_backend() != "gpu" or jax.device_count() != 4:
         pytest.skip("requires one four-GPU GB200 tray")
 
@@ -697,7 +711,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu():
     hidden_dim = 128
     intermediate_dim = 128
     num_experts = 8
-    selected_experts = jnp.tile(jnp.asarray([[0, 1]], dtype=jnp.int32), (tokens, 1))
+    selected_experts = jnp.asarray(selected_expert_rows, dtype=jnp.int32)
     x = jax.random.normal(jax.random.key(51), (tokens, hidden_dim), dtype=jnp.float32).astype(jnp.bfloat16)
     combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(52), (tokens, 2)), axis=-1).astype(jnp.bfloat16)
     w_up_gate = 0.1 * jax.random.normal(
@@ -745,7 +759,11 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu():
             implementation="moonep_jax",
             mesh=mesh,
             capacity_factor=1.0,
-            moonep_config=MoonEPConfig(token_padding=4, grouped_gemm=MoonEPGroupedGemm.QUACK),
+            moonep_config=MoonEPConfig(
+                token_padding=4,
+                grouped_gemm=MoonEPGroupedGemm.QUACK,
+                fixed_capacity_factor=1.0,
+            ),
             report_capacity_overflow=True,
         )
 

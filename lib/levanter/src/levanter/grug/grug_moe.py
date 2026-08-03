@@ -274,6 +274,7 @@ def moe_mlp(
                 shard_local_call,
                 token_padding=moonep_config.token_padding,
                 grouped_gemm=moonep_config.grouped_gemm,
+                fixed_capacity_factor=moonep_config.fixed_capacity_factor,
             )
 
         shard_fn = shard_map(
