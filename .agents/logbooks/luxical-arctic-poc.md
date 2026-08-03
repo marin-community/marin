@@ -1641,3 +1641,31 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   Do not spend Claude review cost on this failed control.
 - Next action: Complete the fixed 30M rung. If it fails, change the teacher
   windows or training objective.
+
+### Background research brief: teacher and student input mismatch
+
+- Effort: Low.
+- Stop rule: Stop after the local code and primary distillation sources give
+  one falsifiable test.
+- Question: Does the teacher target contain text that the fast student cannot
+  read?
+- Current code: Arctic reads three windows. Each window has as many as 512
+  tokens. The student reads one 256-token row from 768 selected characters.
+- Current result: The 28.4M-parameter control fails broad semantic gates. Thus,
+  more capacity does not correct the loss.
+- Luxical describes the distillation input as the same `X` for the teacher and
+  student. See the [Luxical training notes](https://github.com/datologyai/luxical#training).
+- DistilCSE reports that objective consistency improves sentence-embedding
+  distillation. See [Gao et al.](https://arxiv.org/abs/2112.05638).
+- No Echo result described this input mismatch.
+- Hypothesis: The student cannot match a target that includes approximately six
+  times more tokens. Long documents lose the most information.
+- Minimum test: Run Arctic on the exact fast student character view. Compare
+  its fixed hierarchical metrics with full-window Arctic.
+- Falsifier: Reject the hypothesis when the fast-view teacher does not improve
+  the student-target information match, or when its own semantic quality fails.
+- Cost: One 10,000-document teacher pass and the existing fixed evaluation.
+- Confidence: Exploratory. The token-count difference is direct code evidence,
+  but no matched-view result exists yet.
+- Next action: Run the fast-view Arctic diagnostic while the 30M teacher jobs
+  remain active.
