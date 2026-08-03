@@ -1852,3 +1852,34 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Stop criteria: Stop on a retry, a non-finite value, a transport error, an OOM, or a dropped assignment.
 - Code: Commit `418395124` (`[moe] Reuse the token round buffer`).
 - Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-101-loop2-token-a2a-5-20260803-1840-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-101-loop2-token-a2a-5-20260803-1840).
+
+### 2026-08-03 18:52 UTC - MNEP-101 does not reuse collective pools
+
+- Result: The training executable failed before step one. There was no retry and no numerical failure.
+- Memory: XLA reserved separate pools of about `31.66 GiB`, `28.49 GiB`, and `25.65 GiB`. A final `22.67 GiB` request failed.
+- Cause: The fixed JAX loop did not make XLA reuse one collective pool in the complete training graph.
+- Decision: Remove the fixed-round prototype. Change the direct transport kernel so that only one CTA waits for remote completion.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-101-loop2-token-a2a-5-20260803-1840-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-101-loop2-token-a2a-5-20260803-1840).
+
+### 2026-08-03 19:47 UTC - MNEP-102 one-CTA overlap rack gate
+
+- Kernel: One CTA uses 16 warps for all remote GIN contexts. The other CTAs leave after the local LSA copy.
+- Compute: A scheduled QuACK call reserves one two-SM cluster for the remote-completion CTA.
+- Build: CUDA `13.0.2`, NCCL `2.30.7`, JAX `f9f6bbace`, and XLA `5d53e1e40cd`.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-one-remote-cta-20260803`.
+- PJRT SHA-256: `d781426ad4b29012c46079d3297b30a373e48b4ffbe43249aef8afd4544de34f`.
+- Local gate: The XLA source compiled. The rematerialized two-bucket output and all three gradients matched the dense reference on four GB200 GPUs.
+- Code: Commit `e33a64738` (`[moe] Use one CTA for remote MoonEP completion`).
+- Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above `9.738%`.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, an OOM, or a dropped assignment.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-102-one-remote-cta-5-20260803-1947-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-102-one-remote-cta-5-20260803-1947).
+
+### 2026-08-03 19:54 UTC - MNEP-102 proves rack correctness with a small MFU gain
+
+- Correctness: All 16 workers completed five steps on attempt zero. All gradient checks were finite, and no expert assignment was dropped.
+- Performance: P50 MFU was `9.937%` at `160,272` tokens/s. The final sampled step took `26.170 s`.
+- Comparison: MNEP-092c reached `9.738%` MFU. One remote CTA improved MFU by `0.199` percentage points, or `2.04%`.
+- Baseline comparison: MNEP-074 reached `10.004%` MFU. The new result is still `0.067` percentage points below that one-bucket result.
+- Final loss: `8.626386642456055`.
+- Decision: Profile this exact graph. Measure remote transport time, QuACK overlap, and exposed communication before the next kernel change.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-102-one-remote-cta-5-20260803-1947-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-102-one-remote-cta-5-20260803-1947).
