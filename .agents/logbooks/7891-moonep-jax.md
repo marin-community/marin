@@ -1211,3 +1211,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Profile: The complete 28.35-second trace contains 1,265,679 complete events with no suspected truncation. Communication used 56.1% of device time.
 - Finding: Ragged all-to-all used 15.18 seconds across 576 calls. The six large W13 and W2 transfer families used 14.12 seconds; the six token transfer families used about 1.06 seconds.
 - Decision: Add a global no-drop gate for the fixed-capacity all-to-all path. Use exact MoonEP when any sender-to-expert cell exceeds the fixed capacity.
+
+### 2026-08-03 04:42 UTC - MNEP-068 passes both four-GPU branches
+
+- Treatment: Use fixed all-to-all with capacity factor 1.1 only when the maximum sender-to-expert count fits the fixed cell. The branch predicate is equal on all expert ranks.
+- Fallback: Use exact MoonEP when any sender-to-expert cell exceeds the fixed capacity.
+- Correctness: The balanced fast-path case and the full-skew fallback case both matched the dense output and the input, W13, and W2 gradients on four GB200 GPUs.
+- Runtime: Both cases passed in 54.36 seconds, including compilation.
+- Rack gate: Require five finite steps on attempt zero, no dropped assignments, and at least 21.7% median MFU.
