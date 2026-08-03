@@ -36,6 +36,8 @@ first this module raises ``TypeError`` at construction; without the second it ru
 serves a fraction of the throughput above.
 """
 
+import math
+
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from marin.inference.config import (
     BrokerConfig,
@@ -68,6 +70,13 @@ MAX_MODEL_LEN = 24_576
 # Per instance. Total in-flight across the fleet is this times INSTANCES.
 MAX_IN_FLIGHT = 512
 CLIENT_CONCURRENCY = MAX_IN_FLIGHT * INSTANCES
+
+# Broker memory is in-flight payload, so it scales with the fleet: every leased request holds its
+# ~1.9 MB of base64 PNG in the broker process until the worker reports the response. The margin
+# covers Python object overhead and the response queue.
+_REQUEST_MB = 2.0
+_BROKER_BASE_RAM_GB = 8
+_BROKER_CPU = 8
 
 # Prebuilt FlashInfer kernel artifacts. CoreWeave runtime images have no nvcc, so FlashInfer's JIT
 # path cannot compile; ``flashinfer-cubin`` (PyPI) ships device cubins and ``flashinfer-jit-cache``
@@ -120,8 +129,16 @@ def _vllm_extra_args() -> tuple[str, ...]:
     )
 
 
-def build_inference_config() -> RemoteInferenceConfig:
-    """The brokered four-instance fleet the extraction step serves its pages from."""
+def build_inference_config(instances: int = INSTANCES) -> RemoteInferenceConfig:
+    """One brokered fleet of ``instances`` one-GPU engines behind a single proxy.
+
+    Everything per-instance is fixed at the measured operating point; what scales with
+    ``instances`` is the broker -- its in-flight payload memory and the proxy's pending budget are
+    both linear in fleet size, so a caller sharding a large run into several fleets sizes each
+    broker for exactly the fleet behind it.
+    """
+    in_flight = MAX_IN_FLIGHT * instances
+    broker_ram_gb = _BROKER_BASE_RAM_GB + math.ceil(in_flight * _REQUEST_MB / 1024)
     return RemoteInferenceConfig(
         model=ServedModelConfig(weights=MODEL, max_model_len=MAX_MODEL_LEN, tensor_parallel_size=1),
         engine=VllmEngineConfig(
@@ -145,18 +162,24 @@ def build_inference_config() -> RemoteInferenceConfig:
             worker_environment=create_environment(),
             endpoint_ready_timeout_seconds=_ENDPOINT_READY_TIMEOUT,
         ),
-        instances=INSTANCES,
+        instances=instances,
         broker=BrokerConfig(
             worker=InferenceWorkerConfig(
                 max_in_flight=MAX_IN_FLIGHT,
                 request_timeout_seconds=_WORKER_REQUEST_TIMEOUT,
             ),
             request_lease_timeout_seconds=_LEASE_TIMEOUT,
+            broker_resources=ResourceConfig.with_cpu(
+                cpu=_BROKER_CPU,
+                ram=f"{broker_ram_gb}g",
+                disk="20g",
+                preemptible=False,
+            ),
             proxy=InferenceProxyConfig(
                 request_timeout_seconds=_PROXY_REQUEST_TIMEOUT,
                 readiness_timeout_seconds=_PROXY_READINESS_TIMEOUT,
                 # The proxy rejects past this, so it has to sit above what the senders will offer.
-                max_pending_requests=CLIENT_CONCURRENCY * 2,
+                max_pending_requests=in_flight * 2,
             ),
         ),
     )

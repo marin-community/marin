@@ -397,7 +397,7 @@ def bench(output_path: str, source_output_path: str, classification_output_path:
         outcome = ZephyrContext(
             name="ocr-route-bench",
             resources=extract_ocr._WORKER_RESOURCES,
-            max_workers=extract_ocr._MAX_WORKERS,
+            max_workers=extract_ocr.sender_fleet_size(fleet.INSTANCES)[1],
             stage_runner_factory=SubprocessRunner,
             map_task_resources=extract_ocr._MAP_TASK_RESOURCES,
             heartbeat_timeout=extract_ocr._HEARTBEAT_TIMEOUT,

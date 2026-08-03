@@ -59,6 +59,7 @@ from experiments.build_pdf_source.boilerplate import BoilerplateOptions, strip_b
 from experiments.build_pdf_source.classify import routing_keys
 from experiments.build_pdf_source.common import FOCUS_CRAWL, PdfClassificationData, PdfSourceData
 from experiments.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS, source_id
+from experiments.build_pdf_source.ocr_extract import fleet
 from experiments.build_pdf_source.ocr_extract.client import (
     DEFAULT_MAX_TOKENS,
     PROMPT_DOC2MD,
@@ -66,7 +67,7 @@ from experiments.build_pdf_source.ocr_extract.client import (
     PageOcr,
     ocr_page,
 )
-from experiments.build_pdf_source.ocr_extract.fleet import CLIENT_CONCURRENCY, MODEL, build_inference_config
+from experiments.build_pdf_source.ocr_extract.fleet import MODEL, build_inference_config
 from experiments.build_pdf_source.ocr_extract.render import RenderOptions, iter_rendered_pages, open_pdf
 
 logger = logging.getLogger(__name__)
@@ -117,25 +118,39 @@ _OCR_FIELDS: tuple[pa.Field, ...] = (
 _OUTPUT_SCHEMA = pa.schema([*PDF_DOCUMENT_FIELDS, *_OCR_FIELDS])
 
 # Sender sizing, derived from the fleet's operating point rather than guessed. Throughput is set by
-# in-flight requests, so the product of these two is the number that matters and it is pinned to
-# CLIENT_CONCURRENCY; splitting it 64 x 32 rather than, say, 256 x 8 keeps any one task's failure
-# cheap and spreads the render work over more cores.
-_REQUEST_THREADS = 64
-_SENDER_TASKS = CLIENT_CONCURRENCY // _REQUEST_THREADS
+# in-flight requests, so tasks x threads is the number that matters and it is pinned to the fleet's
+# client concurrency. 128 threads per task, not more tasks: a task's threads are all blocked on the
+# endpoint, so a thread is nearly free while a task costs a real CPU. The render budget stays sound
+# at this ratio -- a task's 128 requests are a quarter of one instance's 512 in flight, a quarter
+# of an instance's 17.75 pages/s is ~4.4, and one core renders 13.2 pages/s (14.5 on a Grace core),
+# 3x headroom that holds at any fleet size because both sides scale with the same in-flight count.
+# The old sizing tied worker count to instance count instead, which billed ~6x the measured render
+# requirement in sender CPU at large fleets.
+_REQUEST_THREADS = 128
 # How many rendered pages a task may hold. Twice the thread count keeps every thread fed while
-# bounding encoded-page memory to roughly 180 MB per task.
+# bounding encoded-page memory to roughly 360 MB per task.
 _PAGES_IN_FLIGHT = 2 * _REQUEST_THREADS
 
 _DRIVER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="8g")
 # A task is almost entirely blocked on the endpoint, so it costs one CPU and multiplexes eight-deep
 # per worker. The fleet's total CPU is several times the measured render requirement, which is the
 # headroom for JSON encoding and the HTTP write of ~1.9 MB per request.
-_MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="3g", disk="4g")
+_MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="4g")
 _TASKS_PER_WORKER = 8
-_WORKER_RESOURCES = ResourceConfig(cpu=_TASKS_PER_WORKER, ram="32g", disk="32g")
-_MAX_WORKERS = _SENDER_TASKS // _TASKS_PER_WORKER
+_WORKER_RESOURCES = ResourceConfig(cpu=_TASKS_PER_WORKER, ram="40g", disk="32g")
 # A task holding a long document can legitimately go a long time without finishing one.
 _HEARTBEAT_TIMEOUT = 30 * 60
+
+
+def sender_fleet_size(instances: int) -> tuple[int, int]:
+    """How many map tasks and Zephyr workers keep a fleet of ``instances`` engines full.
+
+    Returns ``(sender_tasks, max_workers)``. Sized from the in-flight budget, not the instance
+    count: the fleet is saturated exactly when ``sender_tasks * _REQUEST_THREADS`` equals the
+    fleet's total in-flight capacity.
+    """
+    sender_tasks = max(1, fleet.MAX_IN_FLIGHT * instances // _REQUEST_THREADS)
+    return sender_tasks, max(1, sender_tasks // _TASKS_PER_WORKER)
 
 
 @cache
@@ -267,7 +282,7 @@ class _Document:
 
 def ocr_batch(
     batch: pa.RecordBatch,
-    keys: frozenset[tuple[str, int]],
+    keys: frozenset[tuple[str, int]] | None,
     endpoint: OcrEndpoint,
     render_options: RenderOptions,
     boilerplate: BoilerplateOptions,
@@ -283,6 +298,9 @@ def ocr_batch(
 
     Documents are emitted in the order they were read, which they reach naturally: pages resolve in
     submission order, so a document becomes complete only once every document before it has.
+
+    ``keys`` is the OCR route's key set, or ``None`` to OCR every document in the shard -- the
+    all-routes comparison run, where the point is reading the same documents both extractors read.
     """
     pool = _request_pool(_REQUEST_THREADS)
     inflight: deque[tuple[_Document, Future[PageOcr]]] = deque()
@@ -299,7 +317,7 @@ def ocr_batch(
                 yield record
 
     for row in batch.to_pylist():
-        if (row["warc_filename"], row["warc_record_offset"]) not in keys:
+        if keys is not None and (row["warc_filename"], row["warc_record_offset"]) not in keys:
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/skipped_text_route", 1)
             continue
 
@@ -344,23 +362,56 @@ def _keep_all(_key: str, records: Iterator[dict]) -> Iterator[MainOutput]:
     yield from (MainOutput(data=record) for record in records)
 
 
-def ocr_pdf_text(output_path: str, source_output_path: str, classification_output_path: str) -> NormalizedData:
+def ocr_pdf_text(
+    output_path: str,
+    source_output_path: str,
+    classification_output_path: str | None = None,
+    *,
+    ocr_route_only: bool = True,
+    instances: int = fleet.INSTANCES,
+    partition: tuple[int, int] = (0, 1),
+) -> NormalizedData:
     """Run the OCR route against a fleet started for the duration of this step.
 
     The fleet is the expensive resource and it is held for exactly as long as there is work: the
     Zephyr run happens inside the ``remote_inference`` context, so the GPUs come up, get saturated
     by the sender fleet, and are released when the last shard lands.
+
+    ``partition`` is ``(index, count)`` over the sorted source shards, which is how a run larger
+    than one broker can carry scales out: several of these steps run side by side, each with its
+    own fleet, broker, proxy, and sender fleet, over disjoint slices of the corpus. Sharding
+    whole steps rather than endpoints keeps every per-fleet process at the size the ceiling
+    benchmark validated -- one shared driver would park one thread per in-flight request across
+    *all* fleets in a single process.
     """
+    partition_index, partition_count = partition
     source = read_artifact(source_output_path, PdfSourceData)
-    classification = read_artifact(classification_output_path, PdfClassificationData)
-    keys = routing_keys(classification.main_output_dir, needs_ocr=True)
+    keys = None
+    if ocr_route_only:
+        if classification_output_path is None:
+            raise ValueError("ocr_route_only requires classification_output_path")
+        classification = read_artifact(classification_output_path, PdfClassificationData)
+        keys = routing_keys(classification.main_output_dir, needs_ocr=True)
 
     filesystem, path = url_to_fs(source.main_output_dir)
-    num_shards = len(filesystem.glob(f"{path}/*.parquet"))
+    shards = sorted(filesystem.unstrip_protocol(shard) for shard in filesystem.glob(f"{path}/*.parquet"))
+    shards = shards[partition_index::partition_count]
+    num_shards = len(shards)
     if not num_shards:
         raise RuntimeError(f"No fetched PDFs under {source.main_output_dir}")
 
-    with remote_inference(build_inference_config()) as session:
+    sender_tasks, max_workers = sender_fleet_size(instances)
+    logger.info(
+        "OCR partition %d/%d: %d shards, %d instances, %d sender tasks on %d workers",
+        partition_index,
+        partition_count,
+        num_shards,
+        instances,
+        sender_tasks,
+        max_workers,
+    )
+
+    with remote_inference(build_inference_config(instances=instances)) as session:
         endpoint = OcrEndpoint(
             base_url=session.model.endpoint.base_url,
             model=session.model.endpoint.model,
@@ -369,7 +420,7 @@ def ocr_pdf_text(output_path: str, source_output_path: str, classification_outpu
         logger.info("OCR endpoint ready at %s (%s)", endpoint.base_url, session.backend_name)
 
         pipeline = (
-            Dataset.from_files(prefix_join(source.main_output_dir, "*.parquet"))
+            Dataset.from_list(shards)
             .load_parquet(columns=_SOURCE_COLUMNS, batch_mode=True)
             .flat_map(
                 partial(
@@ -389,9 +440,9 @@ def ocr_pdf_text(output_path: str, source_output_path: str, classification_outpu
             .map_shard(make_split_writer(output_path, output_schema=_OUTPUT_SCHEMA))
         )
         outcome = ZephyrContext(
-            name="focus-crawl-pdf-ocr",
+            name=f"focus-crawl-pdf-ocr-{partition_index}",
             resources=_WORKER_RESOURCES,
-            max_workers=_MAX_WORKERS,
+            max_workers=max_workers,
             stage_runner_factory=SubprocessRunner,
             map_task_resources=_MAP_TASK_RESOURCES,
             heartbeat_timeout=_HEARTBEAT_TIMEOUT,
