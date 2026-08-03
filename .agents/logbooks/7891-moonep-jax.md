@@ -1716,3 +1716,23 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Primary measure: Identify standard all-to-all and ragged all-to-all event families and measure their total device time.
 - Secondary measure: Compare communication, QuACK, layout, and full-step time with the MNEP-093 exact ragged profile.
 - Gate: Require five finite steps, zero dropped assignments, and a complete profile upload.
+
+### 2026-08-03 16:52 UTC - MNEP-096 rejects the bounded transport
+
+- Correctness: All 16 workers completed five finite steps with zero dropped assignments.
+- Performance: P50 MFU was `9.612%` at `155,772` tokens/s. The final sampled step took `26.926 s`.
+- Transport: All 576 token calls used `RaggedAllToAllDeviceKernelImpl`. The calls used `14.536 s` in the full-step trace.
+- Step share: Communication used `15.001 s`, or `55.7%` of the `26.915 s` step.
+- Cause: The 1.25-times-mean peer limit was too small for each call. Thus, each call selected the exact ragged fallback.
+- Decision: Replace the conditional fallback with exact standard all-to-all rounds. Use a small fixed peer slot in each round.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-096-bounded-token-profile-5-20260803-1623-coord), [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-096-bounded-token-profile-5-20260803-1623), and [XProf](https://iris.oa.dev/proxy/xprof/open?uri=s3%3A%2F%2Fmarin-us-east-02a%2Ftmp%2Fttl%3D30d%2Fxprof%2Fmnep-096-bounded-token-profile-5-20260803-1623).
+
+### 2026-08-03 16:54 UTC - Exact chunked transport passes the four-GPU gate
+
+- Change: Each token call uses one or more standard all-to-all rounds. Each peer slot has 0.5 times the mean message size.
+- Exactness: The round count comes from the largest message. The output keeps the compact receive order.
+- Gradient: A custom VJP applies the same exact transfer to the transposed count matrix.
+- Local checks: Ruff, Pyrefly, 49 launch tests, and five focused Levanter tests pass. Four device-only cases are skipped locally.
+- GPU gate: A five-round transfer has zero output error and zero gradient error on four GB200 GPUs.
+- Full-model note: The forward parity check passes. The existing one-process symmetric-memory allocation error stops the full-model gradient result transfer.
+- Next: Run five finite EP64 steps on one NVL72 with one token bucket and a 0.5 chunk capacity factor.
