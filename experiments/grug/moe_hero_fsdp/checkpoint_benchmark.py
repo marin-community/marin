@@ -26,12 +26,12 @@ from rigging.filesystem import marin_temp_bucket
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_checkpoint_benchmark_configs
 from experiments.grug.moe_hero_fsdp.launch import (
+    _SLIMPAJAMA_SHUFFLE,
     HERO_FSDP_BATCH_SIZE,
     HERO_MIXED_PRECISION,
     HERO_NODES_PER_RACK,
     HERO_PROCESSES_PER_TASK,
     HERO_TRAINING_STALL_TIMEOUT,
-    _SLIMPAJAMA_SHUFFLE,
     _slimpajama_6b_dataset,
 )
 from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug

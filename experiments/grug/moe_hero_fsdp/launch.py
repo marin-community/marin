@@ -35,7 +35,7 @@ HERO_FSDP_BATCH_SIZE = 1024
 HERO_NODES_PER_RACK = 16
 HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
-HERO_CHECKPOINT_INTERVAL = timedelta(minutes=10)
+HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
 HERO_TRAINING_STALL_TIMEOUT = timedelta(minutes=15)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")

@@ -103,7 +103,7 @@ by the one-day lifecycle policy.
 - **25 steps**, batch **1024 per rack**, seq **4096**, SlimPajama-6B, Llama-3 tokenizer, vocab
   128256.
 - Mixed precision: params fp32, compute/output bf16.
-- Eval is off. Training writes a resumable checkpoint every 10 minutes and at clean completion;
+- Eval is off. Training writes a resumable checkpoint every 30 minutes and at clean completion;
   a restarted gang resumes from the latest fully committed checkpoint.
 - After the first completed step, a process-local watchdog terminates training with exit code 124
   if no subsequent loss is logged for 15 minutes. This is a fallback for collectives that fail to
