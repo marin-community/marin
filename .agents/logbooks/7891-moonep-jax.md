@@ -1979,3 +1979,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Treatment: One bucket, exact MoonEP, padded transport, capacity factor `1.0`, and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.78`.
 - Expectation: Capacity `1.0` equals the mean message, so the run will drop assignments. A drop count above zero is a valid outcome here.
 - Stop criteria: Stop on a retry, a non-finite value, a transport error, or an out-of-memory error.
+
+### 2026-08-03 23:45 UTC - Padded overlap needs no scheduling group
+
+- Problem: In `compute_overlap` mode, each expert GEMM takes a scheduling group ID. Only the ragged path gives the matching ID to its collective.
+- Consequence: A padded transport left each GEMM alone in its group. MNEP-088 and MNEP-090 both show that an unbalanced group stops compilation before step zero.
+- Change: The overlap schedule sets no scheduling group ID when the transport is padded. The bucket dependency through the optimization barrier stays.
+- Basis: A padded call is a standard collective on the communication stream, so the XLA latency-hiding scheduler can overlap it without an annotation. The custom ragged call needs the annotation because the scheduler does not treat it as a collective.
+- Tests: 74 local tests pass, and 12 GPU cases skip.
+- Value: This removes a compile failure from the next rack gate before that gate uses an admission.
