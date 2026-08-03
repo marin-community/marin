@@ -64,6 +64,14 @@ def write_test_bundle(root: Path) -> str:
         characters_per_region=8,
         training_report_url="memory://training.json",
         training_report_sha256="0" * 64,
+        evaluation_report_url="memory://evaluation.json",
+        evaluation_report_sha256="1" * 64,
+        speed_report_url="memory://speed.json",
+        speed_report_sha256="2" * 64,
+        blind_review_report_url="memory://blind-review.json",
+        blind_review_report_sha256="3" * 64,
+        blind_review_package_url="memory://blind-package.json.gz",
+        blind_review_package_sha256="4" * 64,
     )
     manifest_payload = manifest.model_dump_json().encode()
     (root / MANIFEST_FILENAME).write_bytes(manifest_payload)

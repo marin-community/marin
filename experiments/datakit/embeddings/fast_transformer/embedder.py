@@ -46,6 +46,14 @@ class FastEmbeddingBundleManifest(BaseModel):
     characters_per_region: int = Field(ge=1)
     training_report_url: str = Field(min_length=1)
     training_report_sha256: str = Field(pattern=SHA256_PATTERN)
+    evaluation_report_url: str = Field(min_length=1)
+    evaluation_report_sha256: str = Field(pattern=SHA256_PATTERN)
+    speed_report_url: str = Field(min_length=1)
+    speed_report_sha256: str = Field(pattern=SHA256_PATTERN)
+    blind_review_report_url: str = Field(min_length=1)
+    blind_review_report_sha256: str = Field(pattern=SHA256_PATTERN)
+    blind_review_package_url: str = Field(min_length=1)
+    blind_review_package_sha256: str = Field(pattern=SHA256_PATTERN)
 
 
 def payload_sha256(payload: bytes) -> str:

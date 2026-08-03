@@ -316,6 +316,7 @@ def comparison(package: dict[str, Any], decisions: list[dict[str, Any]]) -> dict
     ]
     other = [row for row in joined if row not in code and row not in non_english]
     return {
+        "package_sha256": review_package_sha256(package),
         "overall": preference_metrics(joined),
         "code": (
             preference_metrics(code) if len(code) >= 2 else {"documents": len(code), "release_gate_applicable": False}
