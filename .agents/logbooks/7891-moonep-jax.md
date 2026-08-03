@@ -1404,3 +1404,17 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - GPU gate: Both one-bucket and two-bucket paths match the dense output and the input, W13, and W2 gradients on four GB200 GPUs. Both report zero routing errors.
 - Rack gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above MNEP-074's `10.004%`.
 - Next action: Profile the treatment if it improves MFU. If transfer remains exposed, use the direct layout in a persistent communication kernel with a small fixed SM set and double buffers.
+
+### 2026-08-03 09:00 UTC - MNEP-078 rejects zero-copy layout alone
+
+- Result: All 16 workers completed five finite steps on attempt zero. The run dropped no expert assignments.
+- Throughput: P50 MFU was `7.793%`, median measured step time was `33.213 s`, and median throughput was `126,284` tokens per second.
+- Comparison: MNEP-074 reached `10.004%` p50 MFU. Direct placement removed two full-buffer layout kernels, but its four ragged slices per peer made the current XLA collective path slower.
+- Decision: Keep the direct expert layout as the target for a fused transport path, but reject the current multi-slice XLA ragged collective as a throughput result.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-078-zero-copy-layout-5-20260803-0850-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-078-zero-copy-layout-5-20260803-0850).
+
+### 2026-08-03 09:00 UTC - MNEP-079 zero-copy profile contract
+
+- Treatment: Record one measured step from the MNEP-078 graph without another code change.
+- Question: Measure the new ragged collective time, removed layout time, compute overlap, and cost of four slices per peer.
+- Decision gate: Use the measured exposed transfer as the baseline for a persistent transport kernel with fixed communication SMs and double buffers.
