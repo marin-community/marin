@@ -141,7 +141,9 @@ def test_health_server_knobs_toggle_r3_and_batch_budget() -> None:
     assert disabled[disabled.index("--max-num-batched-tokens") + 1] == "8192"
 
 
-def test_health_server_enables_cache_reset_dev_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_health_server_enables_control_routes_and_aggregated_engine_logging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
 
     class FakeProcess:
@@ -164,6 +166,7 @@ def test_health_server_enables_cache_reset_dev_route(monkeypatch: pytest.MonkeyP
         smoke=False,
         local_dir=tmp_path,
         enable_dev_endpoints=True,
+        aggregate_engine_logging=True,
     )
     server.log_stream.close()
 
@@ -171,6 +174,7 @@ def test_health_server_enables_cache_reset_dev_route(monkeypatch: pytest.MonkeyP
     assert isinstance(environment, dict)
     assert environment["VLLM_SERVER_DEV_MODE"] == "1"
     assert server.provenance_environment == {"VLLM_SERVER_DEV_MODE": "1"}
+    assert server.command.count("--aggregate-engine-logging") == 1
 
 
 def test_health_cli_freezes_worker_settings_and_three_way_concurrency() -> None:
@@ -1075,19 +1079,22 @@ def test_independent_reader_recomputes_aggregates_and_rejects_tampering(tmp_path
     image = "example.invalid/task@sha256:" + "a" * 64
     marin_commit = "b" * 40
     rank_commands = {
-        str(rank): grug_preflight.vllm_command(
-            grug_preflight.vllm_args(
-                CASES["exact-reference-ep16"],
-                model_dir="/tmp/model",
-                model_source="dummy",
-                leader_ip="10.0.0.0",
-                node_index=rank,
-                smoke=False,
-                r3_enabled=True,
-                max_num_batched_tokens=8192,
-                max_num_seqs=3,
-            )
-        )
+        str(rank): [
+            *grug_preflight.vllm_command(
+                grug_preflight.vllm_args(
+                    CASES["exact-reference-ep16"],
+                    model_dir="/tmp/model",
+                    model_source="dummy",
+                    leader_ip="10.0.0.0",
+                    node_index=rank,
+                    smoke=False,
+                    r3_enabled=True,
+                    max_num_batched_tokens=8192,
+                    max_num_seqs=3,
+                )
+            ),
+            "--aggregate-engine-logging",
+        ]
         for rank in range(4)
     }
     ranks = [
@@ -1143,6 +1150,7 @@ def test_independent_reader_recomputes_aggregates_and_rejects_tampering(tmp_path
             "prefix_caching": True,
             "chunked_prefill": True,
             "cuda_graphs": True,
+            "aggregate_engine_logging": True,
             "vllm_environment": dict(grug_preflight.VLLM_SERVER_DEV_MODE_ENVIRONMENT),
         },
         "workload": workload_manifest,

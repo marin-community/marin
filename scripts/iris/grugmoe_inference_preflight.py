@@ -1904,6 +1904,7 @@ def _start_local_vllm(
     max_num_batched_tokens: int = 8192,
     max_num_seqs: int = 64,
     enable_dev_endpoints: bool = False,
+    aggregate_engine_logging: bool = False,
 ) -> LocalVllm:
     interface = Path(f"/sys/class/net/{GLOO_CONTROL_INTERFACE}")
     if not interface.exists():
@@ -1921,6 +1922,8 @@ def _start_local_vllm(
             max_num_seqs=max_num_seqs,
         )
     )
+    if aggregate_engine_logging:
+        command.append("--aggregate-engine-logging")
     log_path = local_dir / f"vllm-node-{node_index}.log"
     log_stream = log_path.open("w")
     # vLLM exposes prefix-cache reset through its development router. Health
@@ -3645,6 +3648,7 @@ def run_health_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
                 max_num_batched_tokens=args.max_num_batched_tokens,
                 max_num_seqs=max_num_seqs,
                 enable_dev_endpoints=True,
+                aggregate_engine_logging=True,
             )
             startup = {
                 "rank": rank,
@@ -3847,6 +3851,7 @@ def run_health_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "prefix_caching": True,
             "chunked_prefill": True,
             "cuda_graphs": True,
+            "aggregate_engine_logging": True,
             "vllm_environment": dict(VLLM_SERVER_DEV_MODE_ENVIRONMENT),
         },
         "workload": _health_workload_manifest(workload, concurrencies=concurrencies),
@@ -5112,6 +5117,7 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
             and command.count("--enable-prefix-caching") == 1
             and command.count("--enable-chunked-prefill") == 1
             and command.count("--enable-prompt-tokens-details") == 1
+            and command.count("--aggregate-engine-logging") == 1
             and "--enforce-eager" not in command
             and (command.count("--enable-return-routed-experts") == 1) is bool(server_settings["r3_enabled"])
             and (
@@ -5178,6 +5184,7 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
             and server_settings["prefix_caching"] is True
             and server_settings["chunked_prefill"] is True
             and server_settings["cuda_graphs"] is True
+            and server_settings.get("aggregate_engine_logging") is True
             and server_settings.get("vllm_environment") == VLLM_SERVER_DEV_MODE_ENVIRONMENT
             and int(server_settings["max_num_seqs"]) > 0
             and all(
