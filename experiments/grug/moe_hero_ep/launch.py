@@ -26,7 +26,13 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild
 from experiments.grug.moe_hero_ep.quantile_balancing import QuantileBalancingMethod
-from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, MoonEPTransport, run_grug
+from experiments.grug.moe_hero_ep.train import (
+    FiniteDiagnostics,
+    GrugRunConfig,
+    GrugTrainerConfig,
+    MoonEPTransport,
+    run_grug,
+)
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -94,8 +100,7 @@ def build_hero_run(
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     worker_cpu: int = HERO_WORKER_CPU,
     worker_ram_gb: int = HERO_WORKER_RAM_GB,
-    finite_diagnostics: bool = False,
-    step_completion_barrier: bool = False,
+    finite_diagnostics: FiniteDiagnostics = FiniteDiagnostics.NONE,
     profile_start_step: int | None = None,
     profile_num_steps: int = 2,
     version: str | None = None,
@@ -148,7 +153,6 @@ def build_hero_run(
         z_loss_weight=1e-4,
         offload_opt_state=False,
         finite_diagnostics=finite_diagnostics,
-        step_completion_barrier=step_completion_barrier,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
         replica_axis_size=1,
         sharding_dump_path=None,
@@ -299,14 +303,11 @@ def build_hero_run(
     help="RAM in GiB for each rack worker.",
 )
 @click.option(
-    "--finite-diagnostics/--no-finite-diagnostics",
-    default=False,
+    "--finite-diagnostics",
+    type=click.Choice([diagnostics.value for diagnostics in FiniteDiagnostics]),
+    default=FiniteDiagnostics.NONE.value,
+    show_default=True,
     help="Scan each training boundary for non-finite values.",
-)
-@click.option(
-    "--step-completion-barrier/--no-step-completion-barrier",
-    default=False,
-    help="Wait for the full training state after each step.",
 )
 @click.option(
     "--profile-start-step",
@@ -335,8 +336,7 @@ def main(
     processes_per_task: int,
     worker_cpu: int,
     worker_ram_gb: int,
-    finite_diagnostics: bool,
-    step_completion_barrier: bool,
+    finite_diagnostics: str,
     profile_start_step: int | None,
     profile_num_steps: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -355,8 +355,7 @@ def main(
         processes_per_task=processes_per_task,
         worker_cpu=worker_cpu,
         worker_ram_gb=worker_ram_gb,
-        finite_diagnostics=finite_diagnostics,
-        step_completion_barrier=step_completion_barrier,
+        finite_diagnostics=FiniteDiagnostics(finite_diagnostics),
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
     )

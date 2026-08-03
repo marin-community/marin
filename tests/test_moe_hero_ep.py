@@ -517,15 +517,13 @@ def test_hero_diagnostics_reach_training_config():
     step = launch.build_hero_run(
         run_id="finite-diagnostics",
         num_steps=3,
-        finite_diagnostics=True,
-        step_completion_barrier=True,
+        finite_diagnostics=train.FiniteDiagnostics.ALL,
         version="dev",
     )
 
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
-    assert config.trainer.finite_diagnostics
-    assert config.trainer.step_completion_barrier
+    assert config.trainer.finite_diagnostics == train.FiniteDiagnostics.ALL
 
 
 @pytest.mark.parametrize(

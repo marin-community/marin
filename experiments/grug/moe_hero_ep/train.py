@@ -90,6 +90,14 @@ class MoonEPTransport(StrEnum):
     DIRECT_DEVICE = "direct_device"
 
 
+class FiniteDiagnostics(StrEnum):
+    """Training values scanned for non-finite data."""
+
+    NONE = "none"
+    GRADS = "grads"
+    ALL = "all"
+
+
 @dataclass(frozen=True)
 class _MoonEPTransportRuntime:
     memory_fraction: str
@@ -153,10 +161,7 @@ class GrugTrainerConfig:
     offload_opt_state: bool = False
     # Scan training values after each step to locate the first non-finite boundary.
     # This is expensive and must stay disabled for throughput measurements.
-    finite_diagnostics: bool = False
-    # Wait for the full returned state after each step. This isolates direct
-    # collective completion faults from compiler scheduling changes.
-    step_completion_barrier: bool = False
+    finite_diagnostics: FiniteDiagnostics = FiniteDiagnostics.NONE
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -436,7 +441,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
-    finite_diagnostics: bool = False,
+    finite_diagnostics: FiniteDiagnostics = FiniteDiagnostics.NONE,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -477,7 +482,9 @@ def _make_train_step(
         updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
         params = optax.apply_updates(qb_params, updates)
 
-        if finite_diagnostics:
+        if finite_diagnostics == FiniteDiagnostics.GRADS:
+            metrics["diagnostics/grads_finite"] = _tree_all_finite(grads)
+        elif finite_diagnostics == FiniteDiagnostics.ALL:
             metrics.update(
                 {
                     "diagnostics/params_input_finite": _tree_all_finite(state.params),
@@ -685,8 +692,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
                 step = int(state.step) - 1
 
-                if config.trainer.step_completion_barrier:
-                    jax.block_until_ready(state)
                 jax.block_until_ready(metrics["train/loss"])
 
                 finite_metrics = {key: value for key, value in metrics.items() if key.startswith("diagnostics/")}
@@ -761,6 +766,7 @@ def run_grug(config: GrugRunConfig) -> None:
 
 
 __all__ = [
+    "FiniteDiagnostics",
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",
