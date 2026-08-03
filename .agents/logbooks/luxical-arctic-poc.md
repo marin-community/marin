@@ -1801,3 +1801,47 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   also pass.
 - Next action: Run the 64K H100 smoke test. Start the 750K rung only when all
   three epoch audits stay finite, unique, variable, and above rank 2.
+
+### LUX-ARCTIC-30M-003: Hidden review result
+
+- Claude Opus 5 reviewed 200 model-hidden neighborhoods. The reference model
+  was Arctic Medium.
+- The 30M student had 92 wins, 10 ties, and 98 losses. Its score was 0.4850.
+  The paired 95-percent interval was [0.4175, 0.5525].
+- The score improved by 0.0400 from the 10M score of 0.4450. This exceeds the
+  registered 0.005 scaling threshold.
+- The code score was 0.48889 on 45 queries. The non-English score was 0.3750
+  on 32 queries. The other-text score was 0.51220 on 123 queries.
+- The overall, code, non-English, and other-text interval gates all fail.
+- Claude cost was $11.90656. The report SHA-256 is
+  `531f28f5ac368831c18bec1941e222c3247dc5ed3658c4fcc59856b7b0bf1ba5`.
+- Report artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_30m/adjudicated-v1/blind-neighborhood-review-v1/claude-opus-5-report.json`.
+- Interpretation: The 30M rung is not releasable. The hidden score shows that
+  Arctic scaling did not saturate at 10M. More scaling remains a fallback, but
+  the 30M visible parent, large-group, and CPU gates still fail.
+
+### LUX-NEIGHBOR-002: Qwen neighbor result
+
+- Commit Hash: `d8ea6f727`.
+- The 64K smoke job completed all three epochs. Effective rank rose from 3.98
+  to 5.47. All vectors were finite and unique.
+- The 750K job completed 552 updates in 1 minute 15 seconds. The final model
+  SHA-256 is
+  `3dfad418733503db251ab4518362cb037cf06b15b55872948c162f816ecda5af`.
+- The 750K training audit had effective rank 12.49 and total variance 0.43810.
+- The exact student CPU rates were stable from 6,780 through 7,079 documents
+  per second. Luxical rates varied from 314 through 4,779 on the same worker.
+  The median ratio was 8.60771, but the Luxical variation makes this ratio weak
+  evidence.
+- On 10,000 held-out documents, the effective-rank fraction was 0.05788. The
+  fixed minimum is 0.25.
+- Parent macro-F1 was 0.40751. Leaf macro-F1 was 0.30528. Form macro-F1 was
+  0.34132. Every global semantic level and every large-group gate failed.
+- Semantic artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_qwen_neighbor_750k/adjudicated-v1/embedding-screen-v1/report.json`.
+- Interpretation: A sharp relation-only teacher loss produces a low-rank space
+  and lower semantic quality. Stop this treatment. Do not run a paid review.
+- Next action: Keep the 30M Arctic base model. Train a small semantic projection
+  on separate GLM hierarchy labels, anchor it to the base geometry, and fold it
+  into the existing embedding head.
