@@ -1106,3 +1106,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Treatment: Bit-pack each int32 expert ID into the token dtype and send both in one ragged all-to-all. This removes one dispatch collective from every MoE layer.
 - Local gate: Exact ID recovery passed for BF16, FP16, and FP32 payloads. The MoonEP planner and abstract distributed lowering tests passed.
 - Rack gate: Require five finite steps on attempt zero, no dropped assignments, and a lower steady step time than the 41-second MNEP-059 baseline.
+
+### 2026-08-03 02:37 UTC - MNEP-061 passes four-GPU numerical parity
+
+- Environment: The supplied four-GB200 pod, clean XLA `5d53e1e40cd`, and NCCL 2.30.7.
+- Sync: The packed transport source in `/tmp/rav-codex-mnep061` had the same SHA-256 as the pushed source.
+- Result: The existing dense-reference test passed for the output and the input, W13, and W2 gradients.
+- Runtime: The test completed in 110.25 seconds, including compilation.
+- Next gate: Complete the five-step EP64 rack run and compare its steady step time with MNEP-059.
