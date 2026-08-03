@@ -23,6 +23,7 @@ from iris.cluster.platforms.k8s.rbac_manifests import (
 from iac.config import RbacSpec
 
 GRAFANA_OBSERVER_ROLE = "marin-grafana-node-reader"
+GRAFANA_FINELOG_PROBER_ROLE = "marin-grafana-finelog-prober"
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,9 @@ class IrisRbac(pulumi.ComponentResource):
 
 @dataclass(frozen=True)
 class GrafanaObserverRbacArgs:
+    namespace: str
     usernames: tuple[str, ...]
+    finelog_service: str | None
     adopt: bool = False
 
 
@@ -130,8 +133,46 @@ def grafana_observer_manifests(usernames: tuple[str, ...]) -> tuple[dict, dict]:
     return role, binding
 
 
+def grafana_finelog_probe_manifests(
+    namespace: str, usernames: tuple[str, ...], finelog_service: str
+) -> tuple[dict, dict]:
+    """Return least-privilege RBAC for Finelog's HTTP service-proxy probe."""
+    labels = {
+        "app.kubernetes.io/name": "marin-grafana",
+        "app.kubernetes.io/component": "finelog-prober",
+    }
+    role = {
+        "metadata": {"name": GRAFANA_FINELOG_PROBER_ROLE, "namespace": namespace, "labels": labels},
+        "rules": [
+            {
+                "apiGroups": [""],
+                "resources": ["services/proxy"],
+                "resourceNames": [f"http:{finelog_service}:rpc"],
+                "verbs": ["get"],
+            }
+        ],
+    }
+    binding = {
+        "metadata": {"name": GRAFANA_FINELOG_PROBER_ROLE, "namespace": namespace, "labels": labels},
+        "roleRef": {
+            "apiGroup": "rbac.authorization.k8s.io",
+            "kind": "Role",
+            "name": GRAFANA_FINELOG_PROBER_ROLE,
+        },
+        "subjects": [
+            {
+                "apiGroup": "rbac.authorization.k8s.io",
+                "kind": "User",
+                "name": username,
+            }
+            for username in usernames
+        ],
+    }
+    return role, binding
+
+
 class GrafanaObserverRbac(pulumi.ComponentResource):
-    """Nodes-only read access for Grafana's CoreWeave Managed Auth identity."""
+    """Read-only node observation and optional Finelog health probing for Grafana."""
 
     def __init__(
         self,
@@ -165,4 +206,27 @@ class GrafanaObserverRbac(pulumi.ComponentResource):
             subjects=binding_manifest["subjects"],
             opts=child_opts(depends_on=[cluster_role]),
         )
+        if args.finelog_service is not None:
+            finelog_role_manifest, finelog_binding_manifest = grafana_finelog_probe_manifests(
+                args.namespace,
+                args.usernames,
+                args.finelog_service,
+            )
+
+            def namespaced_child_opts(depends_on: list | None = None) -> pulumi.ResourceOptions:
+                return pulumi.ResourceOptions(parent=self, provider=k8s_provider, depends_on=depends_on)
+
+            finelog_role = k8s.rbac.v1.Role(
+                "finelog-probe-role",
+                metadata=finelog_role_manifest["metadata"],
+                rules=finelog_role_manifest["rules"],
+                opts=namespaced_child_opts(),
+            )
+            k8s.rbac.v1.RoleBinding(
+                "finelog-probe-role-binding",
+                metadata=finelog_binding_manifest["metadata"],
+                role_ref=finelog_binding_manifest["roleRef"],
+                subjects=finelog_binding_manifest["subjects"],
+                opts=namespaced_child_opts(depends_on=[finelog_role]),
+            )
         self.register_outputs({})

@@ -12,6 +12,8 @@ IRIS_DEPLOY = "/apis/apps/v1/namespaces/iris/deployments/iris-controller"
 TRAEFIK_DEPLOY = "/apis/apps/v1/namespaces/traefik/deployments/traefik"
 CERT_DEPLOY = "/apis/apps/v1/namespaces/cert-manager/deployments/cert-manager"
 FINELOG_DEPLOYMENTS_PATH = "/apis/apps/v1/deployments"
+FINELOG_DEPLOY = "/apis/apps/v1/namespaces/iris/deployments/finelog-cw-a"
+FINELOG_PROXY = "/api/v1/namespaces/iris/services/http:finelog-cw-a:rpc/proxy/health"
 KUEUE_SLICES = "/apis/discovery.k8s.io/v1/namespaces/kueue-system/endpointslices"
 
 
@@ -133,6 +135,8 @@ def k8s_api(routes: dict):
             return body(request)
         if isinstance(body, list):
             return httpx.Response(200, json={"items": body, "metadata": {}})
+        if isinstance(body, str):
+            return httpx.Response(200, text=body)
         return httpx.Response(200, json=body)
 
     return handler
@@ -144,7 +148,11 @@ def make_k8s_source(
     token: str | None = "secret",
     target: K8sClusterTarget | None = None,
 ) -> K8sSource:
-    source = K8sSource(target or K8sClusterTarget(name, "https://api.example"), token=token, timeout=5.0)
+    source = K8sSource(
+        target or K8sClusterTarget(name, "https://api.example", finelog_service="finelog-cw-a"),
+        token=token,
+        timeout=5.0,
+    )
     source._client = httpx.Client(
         transport=httpx.MockTransport(handler), base_url="https://api.example", headers=source._client.headers
     )
@@ -153,13 +161,16 @@ def make_k8s_source(
 
 def healthy_k8s_routes() -> dict:
     """A cluster where every watched component is up, the webhook has one endpoint, and one GPU rack is full."""
+    finelog_deployment = deployment("iris", "finelog-cw-a", containers=("finelog",))
     return {
         "/version": {"gitVersion": "v1.32.0"},
         KUEUE_DEPLOY: deployment("kueue-system", "kueue-controller-manager"),
         IRIS_DEPLOY: deployment("iris", "iris-controller"),
         TRAEFIK_DEPLOY: deployment("traefik", "traefik"),
         CERT_DEPLOY: deployment("cert-manager", "cert-manager"),
-        FINELOG_DEPLOYMENTS_PATH: [deployment("iris", "finelog-cw-a", containers=("finelog",))],
+        FINELOG_DEPLOYMENTS_PATH: [finelog_deployment],
+        FINELOG_DEPLOY: finelog_deployment,
+        FINELOG_PROXY: "ok",
         "/api/v1/namespaces/kueue-system/pods": [pod("kueue-system", "kueue-controller-manager-abc")],
         "/api/v1/namespaces/iris/pods": [pod("iris", "iris-controller-abc")],
         "/api/v1/namespaces/traefik/pods": [pod("traefik", "traefik-abc")],

@@ -183,3 +183,43 @@ event also reports the effective SQLite journal and synchronous modes. Remote
 reconcile runs after the listener binds and reports object listing, footer fetch,
 catalog update, and delete timings separately; a slow remote phase cannot explain
 pre-bind readiness delay.
+
+## Verifying Grafana's direct mirror probe
+
+`FinelogFleetUnhealthy` calls each mirror's `/health` endpoint through the Kubernetes
+API service proxy. It also checks the Deployment's desired and Ready replica counts.
+The alert evaluates every minute and pages after one minute if either check fails.
+
+The Grafana token's built-in CoreWeave `read` role does not include
+`services/proxy`. `infra/pulumi` adds a Role in the Iris namespace with one permitted
+resource name, `http:<finelog-service>:rpc`, and binds it to the Managed Auth usernames
+under `provisioning.coreweave.grafana_observer_rbac`. A 403 with
+`error_class=auth` means the cluster stack does not contain the current token username
+or its `finelog_service` value.
+
+Apply the two new RBAC resources in each Finelog cluster before deploying a Grafana
+revision that uses the direct probe. Use targeted updates because an unrelated
+replacement or deletion elsewhere in a cluster preview is not safe to apply:
+
+```bash
+cd infra/pulumi
+for cluster in cw-us-east-02a cw-us-east-08a cw-rno2a; do
+  pulumi stack select "$cluster"
+  role='urn:pulumi:'"$cluster"'::marin-iac::marin:coreweave:GrafanaObserverRbac$kubernetes:rbac.authorization.k8s.io/v1:Role::finelog-probe-role'
+  binding='urn:pulumi:'"$cluster"'::marin-iac::marin:coreweave:GrafanaObserverRbac$kubernetes:rbac.authorization.k8s.io/v1:RoleBinding::finelog-probe-role-binding'
+  pulumi preview --target "$role" --target "$binding"
+  pulumi up --target "$role" --target "$binding"
+done
+```
+
+Each preview must contain only the Role and RoleBinding additions. Stop if it includes
+any replacement, deletion, or unrelated update.
+
+After the RBAC update, the same named-port proxy path should return `ok` with an
+operator kubeconfig. The production bridge token exercises the identical path on every
+Grafana alert evaluation:
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> get --raw \
+  /api/v1/namespaces/iris/services/http:<finelog-service>:rpc/proxy/health
+```

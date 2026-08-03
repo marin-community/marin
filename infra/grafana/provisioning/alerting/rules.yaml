@@ -335,11 +335,11 @@ groups:
               conditions:
                 - evaluator: { type: lt, params: [16] }
 
-  # The marin datasource combines a query-path probe of the GCE hub with the
-  # HTTP-readiness state of each CoreWeave finelog Deployment. K8s marks a pod
-  # NotReady when /health misses its fifteen-second deadline; the hub reports its
-  # measured one-row log query latency. The alert projection returns an explicit zero for
-  # every healthy server, so NoData means the monitoring path itself failed.
+  # The marin datasource combines query-path probes of both GCE servers with a
+  # direct /health request to each CoreWeave finelog Service through the Kubernetes
+  # API proxy. Deployment readiness is attached to the mirror row. The alert
+  # projection returns an explicit zero for every healthy server, so NoData means
+  # the monitoring path itself failed.
   - orgId: 1
     name: finelog-health
     folder: Alerts
@@ -348,7 +348,7 @@ groups:
       - uid: finelog-fleet-unhealthy
         title: FinelogFleetUnhealthy
         condition: C
-        for: 5m
+        for: 1m
         noDataState: Alerting
         execErrState: Alerting
         labels:

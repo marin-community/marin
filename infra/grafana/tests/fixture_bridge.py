@@ -345,6 +345,7 @@ def _rows(path: str, query: str) -> list[dict] | dict:
             }
             for cluster, server, role in (
                 ("marin", "finelog-marin", "hub"),
+                ("marin-dev", "finelog-marin-dev", "standalone"),
                 ("cw-us-east-02a", "finelog-cw-use02a", "mirror"),
                 ("cw-us-east-08a", "finelog-cw-use08a", "mirror"),
                 ("cw-rno2a", "finelog-cw-rno2a", "mirror"),

@@ -129,9 +129,10 @@ class RbacSpec(BaseModel):
 
 
 class GrafanaObserverRbacSpec(BaseModel):
-    """CoreWeave Managed Auth usernames accepted during Grafana token rotation."""
+    """CoreWeave Managed Auth identities and optional Finelog probe target."""
 
     usernames: tuple[str, ...] = Field(min_length=1)
+    finelog_service: str | None = None
 
 
 class CoreweaveProvisioning(BaseModel):

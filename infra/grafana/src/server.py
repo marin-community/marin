@@ -13,7 +13,7 @@ Routes, grouped by source (cluster is a path segment where it applies):
 
     GET /finelog/{cluster}/query?sql=&from=&to=  finelog SQL (window macros, cached per bucket)
     GET /finelog/{cluster}/v1/vllm/overview       bounded per-job/run vLLM telemetry
-    GET /finelog/marin/fleet_health              hub query health + k8s mirror readiness
+    GET /finelog/marin/fleet_health              GCE query health + direct k8s mirror health
     GET /finelog/marin/alerts/fleet_health       alert rows: server labels + value(0|1)
     GET /finelog/marin/alerts/training_stalls    active jobs + stalled-progress value(0|1)
     GET /finelog/marin/alerts/zephyr_stalls      active pipelines + stalled-progress value(0|1)
@@ -323,6 +323,15 @@ def _iris_for(name: str, sources: Mapping[str, IrisSource]) -> IrisSource:
     return sources[name]
 
 
+def finelog_fleet_health_rows(finelog_sources: Mapping[str, MetricSource], k8s_fleet: K8sFleet) -> list[FinelogHealth]:
+    """Probe every configured GCE server and expected CoreWeave mirror."""
+    _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
+    return [
+        *(finelog_sources[name].health() for name in sorted(finelog_sources)),
+        *k8s_fleet.finelog_health(),
+    ]
+
+
 def create_app(
     config: BridgeConfig,
     finelog_sources: Mapping[str, MetricSource],
@@ -411,10 +420,9 @@ def create_app(
             return JSONResponse({"error": f"{err}; narrow the vLLM time range"}, status_code=400)
 
     def fleet_health_rows() -> list[FinelogHealth]:
-        _target_for(_FINELOG_HUB_CLUSTER, finelog_sources)
         return finelog_health_cache.get_or_compute(
             "fleet_health",
-            lambda: [finelog_sources[_FINELOG_HUB_CLUSTER].health(), *k8s_fleet.finelog_health()],
+            lambda: finelog_fleet_health_rows(finelog_sources, k8s_fleet),
         )
 
     def finelog_fleet_health(_: Request) -> JSONResponse:

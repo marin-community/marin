@@ -11,12 +11,13 @@ class FinelogRole(StrEnum):
     """A server's place in the finelog forwarding topology."""
 
     HUB = "hub"
+    STANDALONE = "standalone"
     MIRROR = "mirror"
 
 
 @dataclass(frozen=True)
 class FinelogHealth:
-    """One finelog server's query or HTTP-readiness health."""
+    """One finelog server's query or direct HTTP health."""
 
     cluster: str
     server: str

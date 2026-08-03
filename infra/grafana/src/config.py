@@ -10,6 +10,8 @@ per entry and addresses it by name in the URL path.
 import dataclasses
 import os
 
+from finelog_health import FinelogRole
+
 # Port finelog listens on, set in lib/finelog/config/{marin,marin-dev}.yaml.
 FINELOG_PORT = 10001
 
@@ -20,7 +22,7 @@ CONTROLLER_PORT = 10000
 # (provisioning/datasources/finelog.yaml) use it.
 BRIDGE_PORT = 8081
 
-# A main-hub log query at or above this latency is unhealthy.
+# A GCE Finelog log query at or above this latency is unhealthy.
 FINELOG_SLOW_THRESHOLD_MS = 5_000
 
 # GitHub REST/GraphQL API base; the ferry/build/nightly panels and App auth build
@@ -60,6 +62,7 @@ class ClusterTarget:
     zone: str
     instance_filter: str
     controller_filter: str
+    finelog_role: FinelogRole
 
 
 CLUSTERS: tuple[ClusterTarget, ...] = (
@@ -69,6 +72,7 @@ CLUSTERS: tuple[ClusterTarget, ...] = (
         zone="us-central1-a",
         instance_filter="name = finelog-marin",
         controller_filter="labels.iris-marin-controller=true AND status=RUNNING",
+        finelog_role=FinelogRole.HUB,
     ),
     ClusterTarget(
         name="marin-dev",
@@ -76,6 +80,7 @@ CLUSTERS: tuple[ClusterTarget, ...] = (
         zone="us-central1-a",
         instance_filter="name = finelog-marin-dev",
         controller_filter="labels.iris-marin-dev-controller=true AND status=RUNNING",
+        finelog_role=FinelogRole.STANDALONE,
     ),
 )
 
@@ -87,20 +92,32 @@ class K8sClusterTarget:
     name: str  # iris cluster name, e.g. "cw-us-east-08a"
     api_server: str  # public CKS API server URL
     iris_namespace: str = "iris"
-    finelog_expected: bool = True
+    # None means this cluster intentionally has no standalone finelog mirror.
+    finelog_service: str | None = None
 
 
 # All requests authenticate with the single org-wide CW read-role token from the
 # CW_READ_TOKEN env var (Secret Manager: marin-grafana-cw-read-token).
 K8S_CLUSTERS: tuple[K8sClusterTarget, ...] = (
-    K8sClusterTarget("cw-us-east-02a", "https://208261-34513e48.k8s.us-east-02a.coreweave.com"),
-    K8sClusterTarget("cw-us-east-08a", "https://208261-d2cd61ed.k8s.us-east-08a.coreweave.com"),
-    K8sClusterTarget("cw-rno2a", "https://208261-6670debc.k8s.rno2a.coreweave.com"),
+    K8sClusterTarget(
+        "cw-us-east-02a",
+        "https://208261-34513e48.k8s.us-east-02a.coreweave.com",
+        finelog_service="finelog-cw-use02a",
+    ),
+    K8sClusterTarget(
+        "cw-us-east-08a",
+        "https://208261-d2cd61ed.k8s.us-east-08a.coreweave.com",
+        finelog_service="finelog-cw-use08a",
+    ),
+    K8sClusterTarget(
+        "cw-rno2a",
+        "https://208261-6670debc.k8s.rno2a.coreweave.com",
+        finelog_service="finelog-cw-rno2a",
+    ),
     K8sClusterTarget(
         "cw-us-west-04a",
         "https://208261-52d9a2cc.k8s.us-west-04a.coreweave.com",
         iris_namespace="iris-ci",
-        finelog_expected=False,
     ),
 )
 

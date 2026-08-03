@@ -126,8 +126,14 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
     if grafana_observer := coreweave_provisioning.grafana_observer_rbac:
         GrafanaObserverRbac(
             "grafana-observer-rbac",
-            GrafanaObserverRbacArgs(usernames=grafana_observer.usernames, adopt=adopt),
+            GrafanaObserverRbacArgs(
+                namespace=namespace,
+                usernames=grafana_observer.usernames,
+                finelog_service=grafana_observer.finelog_service,
+                adopt=adopt,
+            ),
             k8s_provider=k8s_provider,
+            opts=pulumi.ResourceOptions(depends_on=[rbac.namespace]),
         )
 
     kueue_config = kubernetes_provider.kueue if kubernetes_provider else None

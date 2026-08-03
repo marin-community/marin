@@ -56,6 +56,7 @@ provisioning:
     rbac: { service_account: iris-controller }
     grafana_observer_rbac:
       usernames: [cwtoken-uhBSRqWXRtyV7WWciRtYr-readonly-ops-token]
+      finelog_service: finelog-cw-rno2a
 
 platform:
   label_prefix: cw-rno2a
