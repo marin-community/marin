@@ -9,6 +9,7 @@ resource_hint:
 serve:
   tensor_parallel_size: 1
   max_model_len: 32768
+  max_num_seqs: 96
   tool_call_parser: hermes
   reasoning_parser: qwen3
   vllm_extra_args:

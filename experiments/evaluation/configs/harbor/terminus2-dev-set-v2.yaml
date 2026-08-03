@@ -1,6 +1,6 @@
 n_attempts: 3
 timeout_multiplier: 16.0
-n_concurrent_trials: 32
+n_concurrent_trials: 128
 retry:
   max_retries: 10
   exclude_exceptions:
