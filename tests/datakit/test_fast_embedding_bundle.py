@@ -25,6 +25,7 @@ from experiments.datakit.embeddings.fast_transformer.embedder import (
     document_view,
     payload_sha256,
 )
+from experiments.datakit.embeddings.fast_transformer.pipeline import embed_records
 
 
 def write_test_bundle(root: Path) -> str:
@@ -145,3 +146,19 @@ def test_document_view_keeps_fixed_head_middle_and_tail() -> None:
     text = "a" * 20 + "b" * 20 + "c" * 20
 
     assert document_view(text, 8) == "a" * 8 + "\n" + "b" * 8 + "\n" + "c" * 8
+
+
+def test_embed_records_preserves_ids_and_quantizes_released_bundle(tmp_path: Path) -> None:
+    manifest_sha256 = write_test_bundle(tmp_path)
+    model = FastEmbeddingModel.load(str(tmp_path), manifest_sha256)
+    records = [{"id": "a", "text": "alpha beta"}, {"id": "b", "text": "gamma alpha"}]
+
+    output = embed_records(model, records, batch_size=2, quantization_scale=0.01)
+
+    assert [record["id"] for record in output] == ["a", "b"]
+    quantized = np.asarray([record["embedding"] for record in output], dtype=np.int8)
+    assert quantized.shape == (2, 6)
+    expected = model(["alpha beta", "gamma alpha"], batch_size=2)
+    dequantized = quantized.astype(np.float32) * 0.01
+    cosine = np.sum(expected * dequantized, axis=1) / np.linalg.norm(dequantized, axis=1)
+    assert cosine == pytest.approx([1.0, 1.0], abs=1e-3)
