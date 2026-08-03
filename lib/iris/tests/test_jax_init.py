@@ -106,7 +106,6 @@ def test_initialize_jax_single_task(
         "10.0.0.1:8476",
         num_processes=1,
         process_id=0,
-        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
     )
     mock_iris_ctx.assert_not_called()
 

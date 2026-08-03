@@ -27,7 +27,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
-from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, hero_grug_trainer_config, run_grug
+from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -72,7 +72,17 @@ def build_hero_run(
     batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
-    grug_trainer = hero_grug_trainer_config(replica_axis_size=dp_racks)
+    grug_trainer = GrugTrainerConfig(
+        data_seed=None,
+        log_every=1,
+        ema_beta=None,
+        z_loss_weight=1e-4,
+        offload_opt_state=True,
+        save_checkpoints=True,
+        expert_axis_size=1,
+        replica_axis_size=dp_racks,
+        sharding_dump_path=None,
+    )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=4,

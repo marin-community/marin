@@ -215,7 +215,6 @@ def _initialize_supervised_jax(
             num_processes=1,
             process_id=0,
             local_device_ids=device_ids,
-            heartbeat_timeout_seconds=heartbeat_timeout,
         )
         return
 
@@ -332,7 +331,6 @@ def initialize_jax(
             coordinator,
             num_processes=1,
             process_id=0,
-            heartbeat_timeout_seconds=heartbeat_timeout,
         )
         return
 

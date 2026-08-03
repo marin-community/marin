@@ -10,6 +10,7 @@ tracing, then writes the disposable checkpoints to a one-day temporary bucket.
 """
 
 import dataclasses
+import math
 from datetime import timedelta
 
 import click
@@ -28,7 +29,7 @@ from marin.experiment.data import mixture
 from marin.experiment.namespacing import user_namespaced_name
 from rigging.filesystem import marin_temp_bucket, prefix_join
 
-from experiments.grug.moe_hero_fsdp.heuristic import build_checkpoint_benchmark_configs
+from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_fsdp.launch import (
     _SLIMPAJAMA_SHUFFLE,
     HERO_FSDP_BATCH_SIZE,
@@ -38,7 +39,9 @@ from experiments.grug.moe_hero_fsdp.launch import (
     HERO_TRAINING_STALL_TIMEOUT,
     _slimpajama_6b_dataset,
 )
-from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, hero_grug_trainer_config, run_grug
+from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
+from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
+from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
 
 DEFAULT_BENCHMARK_STEPS = 12
 DEFAULT_CHECKPOINT_EVERY_STEPS = 8
@@ -49,6 +52,47 @@ CHECKPOINT_STACK_DUMP_AFTER = timedelta(minutes=5).total_seconds()
 
 class CheckpointBenchmarkResult(Artifact):
     """Timing logs and checkpoints from the GB200 checkpoint benchmark."""
+
+
+def build_checkpoint_benchmark_configs(
+    *, num_train_steps: int, batch_size: int
+) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+    """Build the 52.85B-total, approximately 1.71B-active benchmark model."""
+    hidden_dim = 2048
+    model = GrugModelConfig(
+        vocab_size=128_256,
+        hidden_dim=hidden_dim,
+        intermediate_dim=hidden_dim,
+        shared_expert_intermediate_dim=hidden_dim,
+        num_shared_experts=1,
+        num_experts=128,
+        num_experts_per_token=1,
+        num_layers=32,
+        num_heads=16,
+        num_kv_heads=4,
+        local_kv_heads=4,
+        global_kv_heads=2,
+        head_dim=128,
+        max_seq_len=2048,
+        sliding_window=512,
+        global_every=4,
+        capacity_factor=1.0,
+        initializer_std=0.5 / math.sqrt(hidden_dim),
+        qk_mult=1.3,
+        sconv=True,
+        attention_implementation="gpu_fa4_cute",
+        moe_implementation="sonic_cute",
+        expert_chunks=4,
+        report_capacity_overflow=True,
+        rope_fused=True,
+    )
+    optimizer = MoeHeuristic().build_optimizer_config(
+        num_train_steps=num_train_steps,
+        batch_size=batch_size,
+        hidden_dim=model.hidden_dim,
+        seq_len=model.max_seq_len,
+    )
+    return model, optimizer
 
 
 def build_checkpoint_benchmark_run(
@@ -74,7 +118,17 @@ def build_checkpoint_benchmark_run(
 
     batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_checkpoint_benchmark_configs(num_train_steps=num_steps, batch_size=batch_size)
-    grug_trainer = hero_grug_trainer_config(replica_axis_size=dp_racks)
+    grug_trainer = GrugTrainerConfig(
+        data_seed=None,
+        log_every=1,
+        ema_beta=None,
+        z_loss_weight=1e-4,
+        offload_opt_state=True,
+        save_checkpoints=True,
+        expert_axis_size=1,
+        replica_axis_size=dp_racks,
+        sharding_dump_path=None,
+    )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
         count=4,
