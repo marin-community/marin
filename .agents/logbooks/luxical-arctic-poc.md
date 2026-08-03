@@ -2123,3 +2123,29 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Interpretation: The replacement job resumed the same sample and writes new
   durable labels. Continue the job until all 50,000 assignments and the final
   summary are present.
+
+### LUX-CPU-003: Float32 CPU inference passes the base-graph speed gate
+
+- Commits: `70ff2a185` and `6eec84c1e`.
+- Job: `/rav/lux-fast-student-30m-cpu-f32-batch-8192-h100-003`.
+- The CPU path now uses float32 matrix operations. GPU and TPU paths keep
+  bfloat16 matrix operations.
+- A synthetic eight-core test measured 1.50 times the prior model-compute rate.
+- A 128-document synthetic parity check gave minimum cosine 0.9999818 between
+  the float32 and bfloat16 vectors.
+- The exact 30M base model used 20,000 fixed documents, batch size 8,192, eight
+  CPU cores, one warmup, and five alternating paired repeats.
+- The student median was 2,951.38 documents per second. The Luxical-One median
+  was 3,115.60 documents per second.
+- The student-to-Luxical ratio was 0.94729. It passes the 0.85 release limit.
+- Student rates ranged from 2,848.52 through 3,113.20 documents per second.
+  Baseline rates ranged from 2,968.17 through 3,171.47 documents per second.
+  Both stability checks passed.
+- The job succeeded in 3 minutes 57.4 seconds with no failure or preemption.
+- Artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed-cpu-f32-batch-8192/cpu-trained-full-full-30m.json`.
+- The version-two release manifest now records float32 CPU math and bfloat16
+  accelerator math. The release gate rejects a different CPU data type.
+- Interpretation: The production graph can meet the CPU speed limit. Repeat the
+  stable paired test on the final projected model because release evidence must
+  identify its exact model hash.

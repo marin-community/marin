@@ -30,7 +30,7 @@ is not an approved production model.
 | Finite output | 100% finite vectors | 100% for the pilot projection on the held-out set | Pass |
 | Non-constant output | At least 99% unique vectors | At least 99% for the pilot projection | Pass |
 | Global geometry | Effective-rank fraction at least 0.25 | 0.39314 for the pilot projection | Pass |
-| Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | Student median 6,729.92 documents per second. Luxical measurement was unstable | Open |
+| Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | The base graph reached 0.94729 with float32 CPU math. The final projected artifact still needs the exact test | Open |
 | Coarse semantic screen | No metric more than 0.02 below the best tested teacher | Every global pilot-projection metric passes | Pass |
 | Label reliability | Independent review gates for a frozen hierarchy | Tail adjudication changed each global metric by at most 0.00458 and changed no gate decision | Pass |
 | Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The pilot projection passes every global level | Pass |
@@ -47,6 +47,13 @@ Luxical-One varied from 367 through 4,735 documents per second. Thus, the
 reported ratio is invalid. The final protocol uses a full-workload warmup, a
 fixed eight-CPU affinity, and a 20-percent spread limit for each model. It also
 requires the exact model hash, rung, and baseline revision.
+
+The float32 CPU path passed the same stable protocol on the 30M base model at
+batch size 8,192. The student median was 2,951.38 documents per second. The
+Luxical-One median was 3,115.60 documents per second. The ratio was 0.94729.
+All five rates for each model stayed within 6% of their median. This result
+removes the known graph-speed risk. It does not replace the required test of
+the final projected model hash.
 
 The coarse 1,000-document screen found coherent recipe, literature, code, and
 molecule neighborhoods. It also found weak government-statistics and
@@ -280,12 +287,12 @@ the overall visible result.
   speed must be at least 0.85 times Luxical-One.
 - Use five timed repeats after a full 20,000-document warmup. Each model rate
   must stay from 0.8 through 1.2 times its median.
-- Reject the CPU report when its model hash, rung, baseline revision, or JAX
-  backend differs from the evaluated release artifact.
+- Reject the CPU report when its model hash, rung, baseline revision, JAX
+  backend, or compute data type differs from the evaluated release artifact.
 - Record accelerator throughput for capacity planning. Accelerator speed does
   not replace the CPU gate.
 - Pin the model digest, tokenizer-map digest, dependency versions, maximum input
-  length, pooling method, and normalization method.
+  length, pooling method, normalization method, and backend compute data types.
 - Add a loader smoke test that checks shape, finite values, nonzero variance,
   and deterministic output for fixed documents.
 - Run the full trust report from the release artifact, not from an in-memory
