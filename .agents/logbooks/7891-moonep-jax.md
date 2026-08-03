@@ -1139,3 +1139,9 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Expected effect: Remove one int32 ragged all-to-all from every MoE layer while keeping the aligned 5,120-element BF16 token row.
 - Local gate: The planner and abstract distributed lowering tests passed. The dense-reference output and input and weight gradient test passed on four GB200 GPUs in 117.99 seconds, including compilation.
 - Rack gate: Require five finite steps on attempt zero, no dropped assignments, and a steady step time below the 41-second aligned baseline.
+
+### 2026-08-03 02:55 UTC - MNEP-062 profile run is invalid
+
+- Result: All 64 workers completed the first finite step. The run then stopped in the next direct collective while the four-GPU parity test used another tray in the same NVL72 rack.
+- Evidence: After the parity test ended, all workers remained active but the sampled rack GPUs had 0% use and about 171 GB allocated memory. No worker failure or retry occurred.
+- Decision: Stop MNEP-062. Do not run the development pod and an EP64 rack job at the same time. Run MNEP-063 next, then profile that exact implementation with exclusive rack use.
