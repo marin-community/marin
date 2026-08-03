@@ -77,7 +77,8 @@ def _image_repository(image: str) -> str:
 
 def _ghcr_image_reference(image: str, ghcr_org: str) -> str:
     """Return the fully qualified GHCR reference for ``image``."""
-    if image.startswith("ghcr.io/"):
+    registry, separator, _ = image.partition("/")
+    if separator and registry == "ghcr.io":
         return image
     return f"ghcr.io/{ghcr_org}/{image}"
 
