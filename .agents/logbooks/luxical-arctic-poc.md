@@ -2106,3 +2106,20 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - The job will reuse the complete assignment checkpoints through row 17,249.
 - Decision: Keep the lower CPU request. Do not treat scheduler wait time as a
   model or data failure.
+
+### LUX-GLM-OPS-006: Durable label resume
+
+- Job: `/rav/lux-glm52-projection-training-50k-b200-002`.
+- Commit Hash: `db83a0dd8`.
+- The eight-way GLM-5.2 server completed model load, compilation, and warmup.
+- All eight GPUs showed 100-percent use during label requests.
+- The job reused the complete checkpoints through row 17,249.
+- At 2026-08-03 11:25 UTC, object storage contained 357 checkpoint files and
+  17,850 assignments.
+- The files covered each 50-row range from row 0 through row 17,849. No range
+  was missing.
+- No task failure, preemption, out-of-memory error, or invalid-label error was
+  present.
+- Interpretation: The replacement job resumed the same sample and writes new
+  durable labels. Continue the job until all 50,000 assignments and the final
+  summary are present.
