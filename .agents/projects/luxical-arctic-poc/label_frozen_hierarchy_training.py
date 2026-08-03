@@ -1,10 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Apply one accepted semantic hierarchy to a new held-out sample."""
+"""Apply the accepted GLM hierarchy to a disjoint student-training sample."""
 
 import argparse
-import dataclasses
 import hashlib
 import json
 import logging
@@ -26,56 +25,57 @@ from glm_hierarchical_labels import (
     summary,
     validate_hierarchy,
 )
-from glm_semantic_labels import SampleDocument, read_jsonl, select_sample, write_json, write_jsonl
+from glm_semantic_labels import SampleDocument, read_jsonl, write_json, write_jsonl
 from iris.rpc import job_pb2
-from ladder_config import MANIFEST_ROOT, SEED, read_json
+from label_frozen_hierarchy import MANIFEST_URL, document_identity, documents_excluding
+from ladder_config import SEED, read_json
 
 from experiments.rollout_data.glm52_vllm import MODEL, MODEL_REVISION, Glm52LaunchConfig, ServerConfig, serve_glm52
 
-logger = logging.getLogger(__name__)
-
-MANIFEST_URL = f"{MANIFEST_ROOT}/manifest.json"
-DEFAULT_EVALUATION_SIZE = 10_000
+DEFAULT_TRAINING_SIZE = 50_000
 DEFAULT_TENSOR_PARALLEL_SIZE = 8
 RAY_PORT = 6_379
 HTTP_PORT = 8_000
 
-
-def document_identity(document: SampleDocument) -> tuple[str, int]:
-    """Return the stable identity of one evaluation row."""
-    return document.source, document.eval_rank
+logger = logging.getLogger(__name__)
 
 
-def documents_excluding(
+def identity_digest(documents: list[SampleDocument]) -> str:
+    """Return a stable digest of document identities."""
+    payload = json.dumps(sorted(document_identity(row) for row in documents), separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def projection_training_documents(
     manifest: dict[str, Any],
-    excluded_documents: list[SampleDocument],
-    sample_size: int,
+    pilot_documents: list[SampleDocument],
+    evaluation_documents: list[SampleDocument],
+    training_size: int,
 ) -> list[SampleDocument]:
-    """Select new documents after removing all specified rows."""
-    candidates = select_sample(manifest, sample_size + len(excluded_documents))
-    excluded_ids = {document_identity(row) for row in excluded_documents}
-    if len(excluded_ids) != len(excluded_documents):
-        raise ValueError("The excluded documents have duplicate evaluation identities")
-    candidate_ids = {document_identity(row) for row in candidates}
-    missing = excluded_ids - candidate_ids
-    if missing:
-        raise ValueError(f"The nested sample is missing {len(missing)} excluded rows")
-    selected = [row for row in candidates if document_identity(row) not in excluded_ids]
-    if len(selected) != sample_size:
-        raise ValueError(f"The selected sample has {len(selected)} rows, expected {sample_size}")
-    return [dataclasses.replace(row, sample_index=index) for index, row in enumerate(selected)]
+    """Select training documents that exclude the pilot and fixed evaluation."""
+    pilot_ids = {document_identity(row) for row in pilot_documents}
+    evaluation_ids = {document_identity(row) for row in evaluation_documents}
+    overlap = pilot_ids & evaluation_ids
+    if overlap:
+        raise ValueError(f"The pilot and fixed evaluation overlap on {len(overlap)} documents")
+    documents = documents_excluding(manifest, [*pilot_documents, *evaluation_documents], training_size)
+    training_ids = {document_identity(row) for row in documents}
+    if training_ids & (pilot_ids | evaluation_ids):
+        raise ValueError("The projection training sample overlaps an excluded sample")
+    return documents
 
 
-def label_frozen_hierarchy(
+def label_projection_training_set(
     vllm_url: str,
     pilot_run_id: str,
     variant: Variant,
     evaluation_run_id: str,
-    evaluation_size: int,
+    training_run_id: str,
+    training_size: int,
     batch_size: int,
     concurrency: int,
 ) -> None:
-    """Apply one frozen hierarchy to a source-blind held-out sample."""
+    """Apply one frozen hierarchy to a disjoint student-training sample."""
     pilot_root = SOURCE_RUN_ROOT / "hierarchies-v1" / pilot_run_id
     taxonomy_path = pilot_root / variant.name / "taxonomy.json"
     taxonomy_text = taxonomy_path.read_text()
@@ -83,28 +83,35 @@ def label_frozen_hierarchy(
     validate_hierarchy(hierarchy, variant)
 
     pilot_documents = [SampleDocument(**row) for row in read_jsonl(SOURCE_RUN_ROOT / "sample-private.jsonl.gz")]
+    evaluation_root = pilot_root / variant.name / evaluation_run_id
+    evaluation_documents = [SampleDocument(**row) for row in read_jsonl(evaluation_root / "sample-private.jsonl.gz")]
     manifest = read_json(MANIFEST_URL)
-    documents = documents_excluding(manifest, pilot_documents, evaluation_size)
+    documents = projection_training_documents(manifest, pilot_documents, evaluation_documents, training_size)
 
-    output_root = pilot_root / variant.name / evaluation_run_id
+    output_root = pilot_root / variant.name / training_run_id
     write_jsonl(output_root / "sample-private.jsonl.gz", (asdict(document) for document in documents))
     write_json(
         str(output_root / "run-config.json"),
         {
-            "evaluation_run_id": evaluation_run_id,
+            "training_run_id": training_run_id,
             "pilot_run_id": pilot_run_id,
+            "excluded_evaluation_run_id": evaluation_run_id,
             "variant": asdict(variant),
             "manifest_url": MANIFEST_URL,
             "manifest_sha256": manifest["sha256"],
             "taxonomy_path": str(taxonomy_path),
             "taxonomy_sha256": hashlib.sha256(taxonomy_text.encode()).hexdigest(),
+            "pilot_identity_sha256": identity_digest(pilot_documents),
+            "evaluation_identity_sha256": identity_digest(evaluation_documents),
+            "training_identity_sha256": identity_digest(documents),
             "model": MODEL,
             "model_revision": MODEL_REVISION,
             "seed": SEED,
             "document_count": len(documents),
-            "sampling": "nested_source_balanced_then_remove_hierarchy_pilot",
+            "sampling": "nested_source_balanced_then_remove_pilot_and_fixed_evaluation",
             "source_metadata_in_prompts": False,
             "assignment_input": "raw_document_view",
+            "purpose": "semantic_projection_training",
         },
     )
 
@@ -122,38 +129,41 @@ def label_frozen_hierarchy(
     output = {
         **result,
         "pilot_run_id": pilot_run_id,
-        "evaluation_run_id": evaluation_run_id,
+        "excluded_evaluation_run_id": evaluation_run_id,
+        "training_run_id": training_run_id,
         "elapsed_seconds": time.time() - started,
         "complete": True,
     }
     write_json(str(output_root / "summary.json"), output)
-    logger.info("GLM_FROZEN_HIERARCHY_LABELS=%s", json.dumps(output, sort_keys=True))
+    logger.info("GLM_PROJECTION_TRAINING_LABELS=%s", json.dumps(output, sort_keys=True))
 
 
 def launch_config(
     pilot_run_id: str,
     variant: Variant,
     evaluation_run_id: str,
-    evaluation_size: int,
+    training_run_id: str,
+    training_size: int,
     batch_size: int,
     concurrency: int,
     tensor_parallel_size: int,
     max_model_len: int,
     max_num_seqs: int,
 ) -> Glm52LaunchConfig:
-    """Return the server config for held-out hierarchy labeling."""
+    """Return the server config for projection-training labels."""
     return Glm52LaunchConfig(
-        vllm_endpoint=f"glm52-frozen-hierarchy-{evaluation_run_id}",
-        ray_endpoint=f"glm52-frozen-hierarchy-ray-{evaluation_run_id}",
+        vllm_endpoint=f"glm52-projection-training-{training_run_id}",
+        ray_endpoint=f"glm52-projection-training-ray-{training_run_id}",
         server=ServerConfig(max_model_len=max_model_len, max_num_seqs=max_num_seqs),
         tensor_parallel_size=tensor_parallel_size,
         priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
         client=partial(
-            label_frozen_hierarchy,
+            label_projection_training_set,
             pilot_run_id=pilot_run_id,
             variant=variant,
             evaluation_run_id=evaluation_run_id,
-            evaluation_size=evaluation_size,
+            training_run_id=training_run_id,
+            training_size=training_size,
             batch_size=batch_size,
             concurrency=concurrency,
         ),
@@ -161,12 +171,13 @@ def launch_config(
 
 
 def main() -> None:
-    """Parse arguments and run the held-out label client in a GLM server gang."""
+    """Parse arguments and run the projection-training label client."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--pilot-run-id", required=True)
     parser.add_argument("--variant", choices=tuple(VARIANTS), required=True)
     parser.add_argument("--evaluation-run-id", required=True)
-    parser.add_argument("--evaluation-size", type=int, default=DEFAULT_EVALUATION_SIZE)
+    parser.add_argument("--training-run-id", required=True)
+    parser.add_argument("--training-size", type=int, default=DEFAULT_TRAINING_SIZE)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
     parser.add_argument("--tensor-parallel-size", type=int, default=DEFAULT_TENSOR_PARALLEL_SIZE)
@@ -174,7 +185,7 @@ def main() -> None:
     parser.add_argument("--max-num-seqs", type=int, default=DEFAULT_MAX_NUM_SEQS)
     args = parser.parse_args()
     numeric = (
-        args.evaluation_size,
+        args.training_size,
         args.batch_size,
         args.concurrency,
         args.tensor_parallel_size,
@@ -188,7 +199,8 @@ def main() -> None:
         args.pilot_run_id,
         VARIANTS[args.variant],
         args.evaluation_run_id,
-        args.evaluation_size,
+        args.training_run_id,
+        args.training_size,
         args.batch_size,
         args.concurrency,
         args.tensor_parallel_size,
