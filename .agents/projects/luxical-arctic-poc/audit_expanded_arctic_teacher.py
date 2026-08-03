@@ -11,19 +11,20 @@ from typing import Any
 
 import fsspec
 import numpy as np
+import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from extend_arctic_teacher import (
     EMBEDDING_DIMENSION,
     expanded_root,
     expected_metadata,
-    selected_expanded_table,
     teacher_root,
 )
 from ladder_config import read_json, write_json
 
 MINIMUM_UNIQUE_FRACTION = 0.80
 RESULT_FILE = Path("/tmp/luxical-expanded-arctic-audit")
+IDENTITY_COLUMNS = ("raw_sha256", "split", "eval_rank", "train_rank")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,6 +33,19 @@ logger = logging.getLogger(__name__)
 def aligned_columns_equal(left: Any, right: Any, columns: tuple[str, ...]) -> bool:
     """Return true when each requested Arrow column is exactly equal."""
     return all(pc.all(pc.equal(left[column], right[column])).as_py() for column in columns)
+
+
+def selected_source_identity_table(url: str, rung: str) -> pa.Table:
+    """Read only the source columns needed for the teacher alignment audit."""
+    filesystem, path = fsspec.core.url_to_fs(url)
+    selection_column = f"in_{rung}"
+    table = pq.read_table(
+        path,
+        filesystem=filesystem,
+        columns=[*IDENTITY_COLUMNS, selection_column],
+    )
+    selected = pc.or_(pc.equal(table["split"], "eval"), table[selection_column])
+    return table.filter(selected)
 
 
 def source_metrics(
@@ -43,7 +57,7 @@ def source_metrics(
     expected_rows: int,
 ) -> dict[str, Any]:
     """Verify one teacher file and return collapse metrics."""
-    source = selected_expanded_table(input_url, rung)
+    source = selected_source_identity_table(input_url, rung)
     filesystem, path = fsspec.core.url_to_fs(teacher_url)
     with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
         rows = parquet_file.metadata.num_rows
@@ -54,7 +68,7 @@ def source_metrics(
     if any(metadata.get(key) != value for key, value in required_metadata.items()):
         raise ValueError(f"Teacher metadata mismatch for {teacher_url}")
     teacher = pq.read_table(path, filesystem=filesystem)
-    columns = ("raw_sha256", "split", "eval_rank", "train_rank", f"in_{rung}")
+    columns = (*IDENTITY_COLUMNS, f"in_{rung}")
     if not aligned_columns_equal(source, teacher, columns):
         raise ValueError(f"Teacher alignment mismatch for {teacher_url}")
     embedding = teacher["embedding"].combine_chunks()
