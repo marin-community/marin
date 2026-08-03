@@ -1,0 +1,20 @@
+diff --git a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+--- a/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
++++ b/xla/stream_executor/gpu/ragged_all_to_all_device_kernel_lib.cu.h
+@@ -237,9 +237,13 @@ __global__ void __launch_bounds__(512) RaggedAllToAllDeviceKernelImpl(
+       transfer_gin.waitSignal(ncclCoopCta(), signal_index,
+                               signal_value + incoming_remote_updates);
+       transfer_gin.flush(ncclCoopCta());
++      bar.sync(ncclCoopCta(), ::cuda::memory_order_release,
++               ncclGinFenceLevel::Relaxed);
++    } else {
++      // Release CTAs that only copy local LSA rows after local peers finish.
++      ncclLsaBarrierSession<ncclCoopCta> lsa_bar{
++          ncclCoopCta(), dev_comm, ncclTeamTagLsa{}, blockIdx.x};
++      lsa_bar.sync(ncclCoopCta(), ::cuda::memory_order_release);
+     }
+-
+-    bar.sync(ncclCoopCta(), ::cuda::memory_order_release,
+-             ncclGinFenceLevel::Relaxed);
+   } else {
+     ncclLsaBarrierSession<ncclCoopCta> bar{ncclCoopCta(), dev_comm,

@@ -1524,3 +1524,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `4ff4a481124ed4348f764ec5c75b6bce178f1b4975958d47586a61af8a75f4c8`.
 - Local gate: The receive-order two-bucket output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
 - Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-074.
+
+### 2026-08-03 10:58 UTC - MNEP-085 rejects receive-order overlap
+
+- Result: All 16 workers completed five finite steps on attempt zero with zero dropped assignments.
+- Performance: The p50 duration was `27.641 s`. The p50 MFU was `9.364%` at `151,744` tokens/s.
+- Comparison: One token message per peer is faster than the expert-segment transport, but MNEP-074 reached `10.004%` p50 MFU.
+- Decision: Keep the lower-fanout receive-order layout. Change the transport kernel so that local-only CTAs leave after their local barrier while the smaller active GIN set waits for remote completion.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-085-receive-strong-5-20260803-1050-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-085-receive-strong-5-20260803-1050).
+
+### 2026-08-03 11:00 UTC - Local-only CTA release contract
+
+- Kernel: CTAs that copy only local LSA rows use an LSA barrier and then leave. CTAs that transfer remote rows keep the world barrier and wait for strong GIN completion.
+- Purpose: Keep the remote transfer on the small active GIN set and release the other SMs for expert compute.
+- Artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-release-local-ctas-20260803`.
+- PJRT SHA-256: `6df224e50a9a37965f671cc6a7f36a545baff0998777a9d1021fbb1477ef1707`.
+- Local gate: The receive-order two-bucket output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
+- Rack gate: Require five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-074.
