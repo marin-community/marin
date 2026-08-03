@@ -302,6 +302,8 @@ Levanter saves two kinds of checkpoints:
 time-based checkpoint is deleted when a new one is saved.
 * **step-based checkpoints**: **permanent** checkpoints that are saved according to a policy. These checkpoints are never deleted.
 
+Either kind is saved to a `step-N` directory, where `step-N` always contains the model after exactly `N` completed training steps.
+
 At a minimum, you should set a `base_path` for your checkpoints. This can be a local path or a GCS path.
 
 ### Determining Batch Size

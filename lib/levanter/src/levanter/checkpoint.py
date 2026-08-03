@@ -444,6 +444,12 @@ class Checkpointer:
 
         Time checkpoints are deleted after the next checkpoint is saved. Step checkpoints are never deleted.
 
+        Every checkpoint (either kind) is written to a ``step-N`` directory, and ``step-N`` always
+        holds a model that has completed exactly N training steps: periodic saves with ``every=k``
+        land at ``step-k``, ``step-2k``, ...; the end-of-training forced save lands at the final
+        ``state.step``. ``step-0`` — the initial, untrained weights — is only ever written by a
+        forced save.
+
         Args:
             base_path: the base path to save checkpoints to. may be gcs, local, or anything that tensorstore supports
             save_interval: the minimum amount of time between checkpoints (for time)
@@ -469,7 +475,7 @@ class Checkpointer:
         self.keep_params = keep_params
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
-        self._last_save_step = 0
+        self._last_save_step: Optional[int] = None
         self.keep_last_temporary_checkpoints = keep_last_temporary_checkpoints
         self.debug = debug or CheckpointDebugConfig()
         self._temporary_checkpoints = []
@@ -532,6 +538,19 @@ class Checkpointer:
         return ret_dict["model"]
 
     def on_step(self, *, tree: PyTree, step: int, force: bool = False):
+        """Trigger a checkpoint save if the modulo schedule fires (or if ``force=True``).
+
+        Args:
+            tree: the pytree to serialize.
+            step: count of completed training steps (= ``state.step``; 0 before any
+                  step has run — no save then unless forced). Disk
+                  destination will be ``step-{step}``. This matches the convention
+                  that "after the Nth step has completed, save as ``step-N``".
+            force: if True, save unconditionally — except when a save was already
+                   written at this same ``step`` (no point re-writing an identical
+                   artifact; this is what makes the end-of-training force-save a
+                   no-op when ``num_train_steps`` is a multiple of ``every``).
+        """
         step = int(step)
 
         if step == 0:
@@ -539,8 +558,13 @@ class Checkpointer:
             if not force:
                 return  # don't save checkpoint at step 0 unless forced
 
-        if step == self._last_save_step and not force:
-            # we've already saved a checkpoint at this step
+        if step == self._last_save_step:
+            # We've already saved a PERMANENT checkpoint at this step (periodic boundary or
+            # earlier force-save). Skip — re-saving would overwrite an identical artifact, and
+            # the end-of-training force-save is meant to capture the FINAL state, which
+            # is already captured if a periodic save just fired at this same step.
+            # `_last_save_step` is None until the first permanent save, so neither a forced
+            # save at step 0 nor one right after a same-step temporary save is swallowed here.
             return
 
         # two reasons we can save: time or step
@@ -710,7 +734,11 @@ class Checkpointer:
             is_temporary=is_temporary,
             debug=self.debug,
         )
-        self._last_save_step = step
+        # Only a permanent save arms the dedup guard: a time-based (temporary) save at the
+        # final step must not swallow the end-of-training forced save, which is the only
+        # thing that promotes that state to a permanent checkpoint.
+        if not is_temporary:
+            self._last_save_step = step
         self._last_save_time = self._dt_now_injection()
 
     def _async_checkpoint_remover(self):

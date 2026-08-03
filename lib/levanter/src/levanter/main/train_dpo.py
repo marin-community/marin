@@ -544,17 +544,17 @@ def _install_separate_reference_export_hooks(
             logger.warning(f"Invalid hf_save_dtype: {export.hf_save_dtype}. Defaulting to None.")
 
     def save_policy_hf_checkpoint(step):
-        if step.step == 0:
+        if step.next_step == 0:
             return
 
         upload_to_hf = export.hf_upload or False
         hf_upload_kwargs = {}
         if upload_to_hf is not None:
-            hf_upload_kwargs["commit_message"] = f"Upload for step {step.step} from Levanter"
+            hf_upload_kwargs["commit_message"] = f"Upload for step {step.next_step} from Levanter"
 
         converter.save_pretrained(
             _policy_model_for_hf_save(step.eval_model),
-            os.path.join(full_save_path, f"step-{step.step}"),
+            os.path.join(full_save_path, f"step-{step.next_step}"),
             upload_to_hf=upload_to_hf,
             dtype=save_dtype,
             generation_config=export.generation_config,
