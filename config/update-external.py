@@ -58,7 +58,7 @@ class DependencyUpdate:
 
 EXTERNAL_PROJECTS = (
     ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject("harbor", "harbor", "HARBOR", runtime_distributions=("daytona",)),
+    ExternalProject("harbor", "harbor", "HARBOR", runtime_distributions=("daytona", "gcsfs", "s3fs")),
     ExternalProject("MarinSkyRL", "skyrl", "MARIN_SKYRL"),
 )
 
@@ -106,7 +106,12 @@ def render_pins(dependencies: tuple[LockedDependency, ...]) -> str:
 
     def tuple_literal(values: tuple[str, ...]) -> str:
         quoted = ", ".join(f'"{value}"' for value in values)
-        return f"({quoted},)" if values else "()"
+        # A single-element tuple needs its trailing comma; adding one for 2+ elements is a magic
+        # trailing comma that Black would explode across lines, so the generated file would never
+        # match a Black pass. Emit the flat form Black leaves alone.
+        if not values:
+            return "()"
+        return f'("{values[0]}",)' if len(values) == 1 else f"({quoted})"
 
     entries = "\n\n".join(
         f"{dependency.project.constant_name} = ExternalDependency(\n"
