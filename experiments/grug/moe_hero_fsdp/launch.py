@@ -65,6 +65,7 @@ def build_hero_run(
     fused_qkv: bool = False,
     gated_norm: bool = True,
     sconv: bool | None = None,
+    batch_size: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run."""
@@ -75,7 +76,7 @@ def build_hero_run(
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
-    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
+    batch_size = batch_size if batch_size is not None else dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
     model = dataclasses.replace(model, fused_qkv=fused_qkv, gated_norm=gated_norm)
     if sconv is not None:
@@ -167,12 +168,25 @@ def build_hero_run(
 @click.option("--fused-qkv", is_flag=True, default=False, help="Fuse Q/K/V into one GEMM + one K||V SConv.")
 @click.option("--gated-norm/--no-gated-norm", default=True, help="Apply GatedNorm after each RMSNorm.")
 @click.option("--sconv/--no-sconv", "sconv", default=None, help="Enable the SConv sites (default: model config).")
+@click.option("--batch-size", type=int, default=None, help="Override global batch size (default: dp_racks*1024).")
 @build_options
 def main(
-    run_id: str, dp_racks: int, num_steps: int, fused_qkv: bool, gated_norm: bool, sconv: bool | None
+    run_id: str,
+    dp_racks: int,
+    num_steps: int,
+    fused_qkv: bool,
+    gated_norm: bool,
+    sconv: bool | None,
+    batch_size: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
-        run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, fused_qkv=fused_qkv, gated_norm=gated_norm, sconv=sconv
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        fused_qkv=fused_qkv,
+        gated_norm=gated_norm,
+        sconv=sconv,
+        batch_size=batch_size,
     )
 
 
