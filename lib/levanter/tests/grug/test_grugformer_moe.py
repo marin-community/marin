@@ -20,7 +20,9 @@ import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
-from levanter.grug._moe.ep_moonep import _static_padded_token_all_to_all
+from functools import partial
+
+from levanter.grug._moe.ep_moonep import _padded_token_all_to_all, _static_padded_token_all_to_all
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -63,7 +65,7 @@ def _make_ep_mesh_or_none() -> Mesh | None:
     )
 
 
-def test_bounded_token_all_to_all_reassembles_static_rounds_and_gradients():
+def test_padded_token_all_to_all_reassembles_static_rounds_and_gradients():
     values = jnp.arange(20, dtype=jnp.float32).reshape(4, 5)
     cotangent = jnp.arange(20, 40, dtype=jnp.float32).reshape(4, 5)
     send_matrix = jnp.asarray([[4]], dtype=jnp.int32)
@@ -86,7 +88,40 @@ def test_bounded_token_all_to_all_reassembles_static_rounds_and_gradients():
     np.testing.assert_array_equal(np.asarray(actual_gradient), np.asarray(cotangent))
 
 
-def test_bounded_token_all_to_all_matches_cross_shard_value_and_gradients_on_gpu():
+def test_padded_token_all_to_all_counts_the_rows_above_capacity():
+    send_matrix = np.asarray([[3, 1], [1, 3]], dtype=np.int32)
+    values = np.arange(2 * 4 * 5, dtype=np.float32).reshape(2, 4, 5)
+    expected = np.zeros_like(values)
+    for source in range(2):
+        input_start = 0
+        for destination in range(2):
+            count = int(send_matrix[source, destination])
+            output_start = int(np.sum(send_matrix[:source, destination]))
+            expected[destination, output_start : output_start + count] = values[
+                source, input_start : input_start + count
+            ]
+            input_start += count
+
+    def exchange(local_values, capacity_factor):
+        return _padded_token_all_to_all(
+            local_values,
+            jnp.asarray(send_matrix),
+            jax.lax.axis_index("expert"),
+            capacity_factor=capacity_factor,
+            num_rounds=1,
+        )
+
+    # capacity = ceil(1.5 * 4 / 2) = 3 holds the largest message of three rows.
+    received, overflow = jax.vmap(partial(exchange, capacity_factor=1.5), axis_name="expert")(jnp.asarray(values))
+    np.testing.assert_array_equal(np.asarray(received), expected)
+    np.testing.assert_array_equal(np.asarray(overflow), np.zeros(2, dtype=np.int32))
+
+    # capacity = ceil(1.0 * 4 / 2) = 2 leaves one row of each three-row message.
+    _, small_overflow = jax.vmap(partial(exchange, capacity_factor=1.0), axis_name="expert")(jnp.asarray(values))
+    np.testing.assert_array_equal(np.asarray(small_overflow), np.ones(2, dtype=np.int32))
+
+
+def test_padded_token_all_to_all_matches_cross_shard_value_and_gradients_on_gpu():
     if jax.default_backend() != "gpu" or jax.device_count() != 4:
         pytest.skip("requires one four-GPU GB200 tray")
 
@@ -807,7 +842,7 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
             MoonEPMode.EXACT,
             1,
             MoonEPBucketSchedule.EAGER_DISPATCH,
-            MoonEPTokenTransport.BOUNDED_ALL_TO_ALL,
+            MoonEPTokenTransport.PADDED_ALL_TO_ALL,
             ((0, 2), (4, 6)) * 4,
             id="exact-bounded-token-all-to-all",
         ),

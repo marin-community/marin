@@ -100,7 +100,7 @@ class MoonEPTokenTransport(StrEnum):
     """Collective used for MoonEP token dispatch and combine."""
 
     RAGGED = "ragged"
-    BOUNDED_ALL_TO_ALL = "bounded_all_to_all"
+    PADDED_ALL_TO_ALL = "padded_all_to_all"
 
 
 @dataclass(frozen=True)
@@ -130,11 +130,15 @@ class MoonEPConfig:
             raise ValueError("token_capacity_factor must be positive")
         if self.token_rounds <= 0:
             raise ValueError("token_rounds must be positive")
-        if self.token_transport == MoonEPTokenTransport.BOUNDED_ALL_TO_ALL:
+        if self.token_transport == MoonEPTokenTransport.PADDED_ALL_TO_ALL:
             if self.token_buckets != 1:
-                raise ValueError("bounded token all-to-all requires one token bucket")
+                raise ValueError("padded token all-to-all requires one token bucket")
             if self.bucket_schedule != MoonEPBucketSchedule.EAGER_DISPATCH:
-                raise ValueError("bounded token all-to-all requires eager dispatch")
+                raise ValueError("padded token all-to-all requires eager dispatch")
+            if self.token_rounds != 1:
+                # MNEP-100b and MNEP-101 both show that XLA gives each round its
+                # own collective pool, and the rack runs out of memory.
+                raise ValueError("padded token all-to-all requires one round")
 
 
 def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
