@@ -1039,3 +1039,32 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Failure: Profile flush took more than the 200-second distributed barrier limit. A non-tracing worker timed out before process zero reached the barrier.
 - Interpretation: The terminal failure is in profile export. The run did not report a training NaN.
 - Decision: Capture one representative GPU from process zero, then repeat the five-step gate.
+
+### 2026-08-03 01:30 UTC - MNEP-057 device filter does not bound collection
+
+- Run ID: `mnep-057-one-gpu-profile-5-20260803-0115`.
+- Correctness: All 16 workers again reported finite gradients through step four.
+- Profile: The tracer still reached two million events. CUPTI counts process events before it filters the selected GPU.
+- Failure: The non-tracing workers timed out at the profile barrier while process zero flushed the capture.
+- Decision: Limit activity and callback events to 250,000 and aggregate repeated kernels.
+
+### 2026-08-03 01:31 UTC - MNEP-058 bounded profile contract
+
+- Run ID: `mnep-058-bounded-profile-5-20260803-0131`.
+- Snapshot: `mnep-058-bounded-profile-20260803-0131` at `1963ee40d`.
+- Treatment: Keep the one-GPU filter, cap activity and callback events at 250,000, and aggregate repeated kernels.
+- Gate: Require five finite steps, successful profile upload, and an operation-level profile summary.
+
+### 2026-08-03 01:47 UTC - MNEP-058 keeps training finite but exceeds the profile barrier
+
+- Correctness: All workers kept finite gradients and loss through step four for the third consecutive guarded rack run.
+- Failure: Fifteen workers reached the export barrier. Process zero needed more than 200 seconds to flush 250,000 retained events.
+- Interpretation: The terminal error is profile finalization. The training error did not return.
+- Decision: Increase the profile barrier limit to 600 seconds and reduce each event cap to 100,000.
+
+### 2026-08-03 01:49 UTC - MNEP-059 long profile barrier contract
+
+- Run ID: `mnep-059-long-profile-barrier-5-20260803-0149`.
+- Snapshot: `mnep-059-long-profile-barrier-20260803-0149` at `d975e2b7c`.
+- Treatment: Use a 600-second profile barrier, retain at most 100,000 activity and callback events, aggregate repeated kernels, and keep the one-GPU filter.
+- Gate: Require five finite steps, successful profile upload, and an operation-level profile summary.
