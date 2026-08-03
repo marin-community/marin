@@ -511,6 +511,22 @@ def test_hero_transport_reaches_training_config():
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.moonep_transport == train.MoonEPTransport.DIRECT_DEVICE
+    assert config.trainer.finite_diagnostics == train.FiniteDiagnostics.GRADS
+
+
+def test_direct_transport_keeps_explicit_finite_diagnostics():
+    step = launch.build_hero_run(
+        run_id="direct-device-diagnostics",
+        num_steps=3,
+        moe_implementation="moonep_jax",
+        moonep_transport=train.MoonEPTransport.DIRECT_DEVICE,
+        finite_diagnostics=train.FiniteDiagnostics.ALL,
+        version="dev",
+    )
+
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.trainer.finite_diagnostics == train.FiniteDiagnostics.ALL
 
 
 def test_hero_diagnostics_reach_training_config():

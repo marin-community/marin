@@ -487,6 +487,13 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
+        if finite_diagnostics in (FiniteDiagnostics.GRADS, FiniteDiagnostics.ALL):
+            grads_finite = _tree_all_finite(grads)
+            metrics["diagnostics/grads_finite"] = grads_finite
+            grads = jax.tree_util.tree_map(
+                lambda grad: jnp.where(grads_finite, grad, jnp.asarray(jnp.nan, dtype=grad.dtype)),
+                grads,
+            )
         opt_state_in = (
             _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         )
@@ -495,8 +502,6 @@ def _make_train_step(
 
         if finite_diagnostics == FiniteDiagnostics.EXPERT_GRADS:
             metrics["diagnostics/expert_grads_finite"] = _expert_gradients_all_finite(grads)
-        elif finite_diagnostics == FiniteDiagnostics.GRADS:
-            metrics["diagnostics/grads_finite"] = _tree_all_finite(grads)
         elif finite_diagnostics == FiniteDiagnostics.ALL:
             metrics.update(
                 {
@@ -505,7 +510,6 @@ def _make_train_step(
                     "diagnostics/qb_params_finite": _tree_all_finite(qb_params),
                     "diagnostics/qb_bias_output_finite": _tree_all_finite(metrics["qb_beta_per_layer"]),
                     "diagnostics/loss_finite": jnp.isfinite(loss),
-                    "diagnostics/grads_finite": _tree_all_finite(grads),
                     "diagnostics/updates_finite": _tree_all_finite(updates),
                     "diagnostics/params_output_finite": _tree_all_finite(params),
                 }

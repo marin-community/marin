@@ -146,6 +146,13 @@ def build_hero_run(
     transport_tag = f"transport-{moonep_transport.value.replace('_', '-')}"
     experiment_tag = "MNEP" if run_id.upper().startswith("MNEP") else "MHEP"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
+    if (
+        moe_implementation == "moonep_jax"
+        and moonep_transport == MoonEPTransport.DIRECT_DEVICE
+        and finite_diagnostics == FiniteDiagnostics.NONE
+    ):
+        finite_diagnostics = FiniteDiagnostics.GRADS
+
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
         log_every=1,
