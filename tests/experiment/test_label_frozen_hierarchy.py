@@ -58,3 +58,11 @@ def test_projection_training_documents_exclude_pilot_and_fixed_evaluation(
 
     assert [row.eval_rank for row in selected] == [2, 3]
     assert [row.sample_index for row in selected] == [0, 1]
+
+
+def test_projection_training_sample_round_trip_is_exact(tmp_path: Path) -> None:
+    documents = [document(0), document(1)]
+
+    stored = training.write_projection_training_documents(training.StoragePath(str(tmp_path)), documents)
+
+    assert stored == documents

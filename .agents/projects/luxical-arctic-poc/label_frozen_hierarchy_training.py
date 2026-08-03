@@ -29,6 +29,7 @@ from glm_semantic_labels import SampleDocument, read_jsonl, write_json, write_js
 from iris.rpc import job_pb2
 from label_frozen_hierarchy import MANIFEST_URL, document_identity, documents_excluding
 from ladder_config import SEED, read_json
+from rigging.filesystem import StoragePath
 
 from experiments.rollout_data.glm52_vllm import MODEL, MODEL_REVISION, Glm52LaunchConfig, ServerConfig, serve_glm52
 
@@ -65,6 +66,18 @@ def projection_training_documents(
     return documents
 
 
+def write_projection_training_documents(
+    output_root: StoragePath, documents: list[SampleDocument]
+) -> list[SampleDocument]:
+    """Write the training sample and return its validated stored value."""
+    path = output_root / "sample-private.jsonl.gz"
+    write_jsonl(path, (asdict(document) for document in documents))
+    stored_documents = [SampleDocument(**row) for row in read_jsonl(path)]
+    if stored_documents != documents:
+        raise ValueError("The stored projection training sample differs from the selected sample")
+    return stored_documents
+
+
 def label_projection_training_set(
     vllm_url: str,
     pilot_run_id: str,
@@ -89,7 +102,7 @@ def label_projection_training_set(
     documents = projection_training_documents(manifest, pilot_documents, evaluation_documents, training_size)
 
     output_root = pilot_root / variant.name / training_run_id
-    write_jsonl(output_root / "sample-private.jsonl.gz", (asdict(document) for document in documents))
+    documents = write_projection_training_documents(output_root, documents)
     write_json(
         str(output_root / "run-config.json"),
         {

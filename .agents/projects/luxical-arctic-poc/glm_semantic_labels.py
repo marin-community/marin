@@ -27,7 +27,7 @@ import requests
 from iris.client import iris_ctx
 from iris.rpc import job_pb2
 from ladder_config import MANIFEST_ROOT, SEED, document_view, read_json, write_json
-from rigging.filesystem import StoragePath
+from rigging.filesystem import StoragePath, atomic_rename
 
 from experiments.rollout_data.glm52_vllm import (
     MODEL,
@@ -395,9 +395,9 @@ def parallel_map(function: Callable[[Any], Any], values: Iterable[Any], concurre
 
 def write_jsonl(path: StoragePath, rows: Iterable[dict[str, Any]]) -> None:
     """Write JSON records to private storage."""
-    path.write_text(
-        "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows), compression="gzip"
-    )
+    text = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows)
+    with atomic_rename(str(path)) as temporary_path:
+        StoragePath(temporary_path).write_text(text, compression="gzip")
 
 
 def read_jsonl(path: StoragePath) -> list[dict[str, Any]]:

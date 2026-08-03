@@ -22,6 +22,7 @@ from glm_semantic_labels import (  # noqa: E402
     review_indices,
     source_quotas,
 )
+from rigging.filesystem import StoragePath  # noqa: E402
 
 
 def test_source_quotas_are_balanced_and_exact() -> None:
@@ -130,3 +131,20 @@ def test_assignment_rejects_more_than_two_secondary_buckets(monkeypatch: pytest.
 
     with pytest.raises(ValueError, match="more than two"):
         semantic_labels.assign_document("http://server", document, buckets)
+
+
+def test_jsonl_write_keeps_complete_file_when_replacement_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = StoragePath(str(tmp_path / "rows.jsonl.gz"))
+    semantic_labels.write_jsonl(path, [{"value": "complete"}])
+    original_write_text = StoragePath.write_text
+
+    def fail_after_partial_write(temporary_path: StoragePath, text: str, *, compression: str | None = None) -> None:
+        original_write_text(temporary_path, text[:4], compression=compression)
+        raise RuntimeError("simulated stopped writer")
+
+    monkeypatch.setattr(StoragePath, "write_text", fail_after_partial_write)
+
+    with pytest.raises(RuntimeError, match="stopped writer"):
+        semantic_labels.write_jsonl(path, [{"value": "replacement"}])
+
+    assert semantic_labels.read_jsonl(path) == [{"value": "complete"}]
