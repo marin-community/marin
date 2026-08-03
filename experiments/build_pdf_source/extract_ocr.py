@@ -143,6 +143,9 @@ _DRIVER_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="8g")
 # per worker. The fleet's total CPU is several times the measured render requirement, which is the
 # headroom for JSON encoding and the HTTP write of ~1.9 MB per request.
 _MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="4g")
+# Phase 2's tasks read raw text shards and merge-sort them -- no rendered pages, no request
+# threads. Same one-CPU shape so they pack the same worker pods the senders just vacated.
+_NORMALIZE_TASK_RESOURCES = ResourceConfig(cpu=1, ram="4g", disk="4g")
 _TASKS_PER_WORKER = 8
 _WORKER_RESOURCES = ResourceConfig(cpu=_TASKS_PER_WORKER, ram="40g", disk="32g")
 # A task holding a long document can legitimately go a long time without finishing one.
@@ -380,11 +383,19 @@ def ocr_pdf_text(
     instances: int = fleet.INSTANCES,
     partition: tuple[int, int] = (0, 1),
 ) -> NormalizedData:
-    """Run the OCR route against a fleet started for the duration of this step.
+    """Run the OCR route in two phases on one warm sender pool, holding GPUs only for the first.
 
-    The fleet is the expensive resource and it is held for exactly as long as there is work: the
-    Zephyr run happens inside the ``remote_inference`` context, so the GPUs come up, get saturated
-    by the sender fleet, and are released when the last shard lands.
+    Phase 1 OCRs pages and writes **raw per-source-shard parquet** -- no shuffle -- inside the
+    ``remote_inference`` context, so the fleet is released the moment the last page lands. Phase 2
+    reads the raw shards back and runs the one legitimate shuffle (the normalized format's global
+    sort by content-hash ``id``) on the same Zephyr worker pool, which #7145 keeps warm across
+    ``execute()`` calls. Holding GPUs through the shuffle would buy nothing: the sort key is a
+    hash computed after OCR, so the repartition is CPU-and-storage work by construction.
+
+    The raw directory is also the checkpoint. Phase 1 writes with ``skip_existing``, so a retry
+    of this step re-OCRs only the shards whose raw file never landed, and a phase-2 failure --
+    shuffle-storage trouble burned a fleet once already -- costs no GPU time at all: with every
+    raw shard present the fleet is never started.
 
     ``partition`` is ``(index, count)`` over the sorted source shards, which is how a run larger
     than one broker can carry scales out: several of these steps run side by side, each with its
@@ -420,26 +431,67 @@ def ocr_pdf_text(
         max_workers,
     )
 
-    with remote_inference(build_inference_config(instances=instances)) as session:
-        endpoint = OcrEndpoint(
-            base_url=session.model.endpoint.base_url,
-            model=session.model.endpoint.model,
-            max_visual_tokens=RENDER_OPTIONS.max_visual_tokens,
-        )
-        logger.info("OCR endpoint ready at %s (%s)", endpoint.base_url, session.backend_name)
+    raw_dir = prefix_join(output_path, "raw")
+    raw_filesystem, raw_path = url_to_fs(raw_dir)
+    tallies: dict[str, int | float] = {}
 
-        pipeline = (
-            Dataset.from_list(shards)
-            .load_parquet(columns=_SOURCE_COLUMNS, batch_mode=True)
-            .flat_map(
-                partial(
-                    ocr_batch,
-                    keys=keys,
-                    endpoint=endpoint,
-                    render_options=RENDER_OPTIONS,
-                    boilerplate=BOILERPLATE_OPTIONS,
+    with ZephyrContext(
+        name=f"focus-crawl-pdf-ocr-{partition_index}",
+        resources=_WORKER_RESOURCES,
+        max_workers=max_workers,
+        stage_runner_factory=SubprocessRunner,
+        heartbeat_timeout=_HEARTBEAT_TIMEOUT,
+    ) as pool:
+        raw_shards_present = len(raw_filesystem.glob(f"{raw_path}/*.parquet"))
+        if raw_shards_present < num_shards:
+            with remote_inference(build_inference_config(instances=instances)) as session:
+                endpoint = OcrEndpoint(
+                    base_url=session.model.endpoint.base_url,
+                    model=session.model.endpoint.model,
+                    max_visual_tokens=RENDER_OPTIONS.max_visual_tokens,
                 )
-            )
+                logger.info("OCR endpoint ready at %s (%s)", endpoint.base_url, session.backend_name)
+
+                ocr_pipeline = (
+                    Dataset.from_list(shards)
+                    .load_parquet(columns=_SOURCE_COLUMNS, batch_mode=True)
+                    .flat_map(
+                        partial(
+                            ocr_batch,
+                            keys=keys,
+                            endpoint=endpoint,
+                            render_options=RENDER_OPTIONS,
+                            boilerplate=BOILERPLATE_OPTIONS,
+                        )
+                    )
+                    .write_parquet(
+                        prefix_join(raw_dir, "part-{shard:05d}-of-{total:05d}.parquet"),
+                        schema=_OUTPUT_SCHEMA,
+                        skip_existing=True,
+                    )
+                )
+                outcome = pool.execute(ocr_pipeline, map_task_resources=_MAP_TASK_RESOURCES)
+                tallies.update(outcome.counters)
+                # A fleet that died partway through would show up as failed pages rather than as an
+                # error, so the corpus would be quietly short. Surface that -- but only when it
+                # actually cost something. An instance that exits after the last shard has landed is
+                # not a reason to throw away a complete run, and treating it as one loses the whole
+                # phase's output to a race on the way out.
+                lost_pages = int(outcome.counters.get(f"{_COUNTER_PREFIX}/page_request_failed", 0))
+                try:
+                    session.check_alive()
+                except Exception as error:
+                    if lost_pages:
+                        raise
+                    logger.warning("An inference job ended before the fleet was released: %s", error)
+                    logger.warning("No page request failed, so the extracted corpus is complete.")
+        else:
+            logger.info("All %d raw shards already written under %s; skipping the OCR phase", num_shards, raw_dir)
+
+        # The GPUs are gone; the same warm workers now run the shuffle.
+        normalize_pipeline = (
+            Dataset.from_files(prefix_join(raw_dir, "*.parquet"))
+            .load_parquet()
             .group_by(
                 key=lambda record: record["id"],
                 reducer=_keep_all,
@@ -448,31 +500,13 @@ def ocr_pdf_text(
             )
             .map_shard(make_split_writer(output_path, output_schema=_OUTPUT_SCHEMA))
         )
-        outcome = ZephyrContext(
-            name=f"focus-crawl-pdf-ocr-{partition_index}",
-            resources=_WORKER_RESOURCES,
-            max_workers=max_workers,
-            stage_runner_factory=SubprocessRunner,
-            heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-        ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
-        # A fleet that died partway through would show up as failed pages rather than as an error,
-        # so the corpus would be quietly short. Surface that -- but only when it actually cost
-        # something. An instance that exits after the last shard has landed is not a reason to throw
-        # away a complete run, and treating it as one loses the whole step's output to a race on the
-        # way out.
-        lost_pages = int(outcome.counters.get(f"{_COUNTER_PREFIX}/page_request_failed", 0))
-        try:
-            session.check_alive()
-        except Exception as error:
-            if lost_pages:
-                raise
-            logger.warning("An inference job ended before the fleet was released: %s", error)
-            logger.warning("No page request failed, so the extracted corpus is complete.")
+        outcome = pool.execute(normalize_pipeline, map_task_resources=_NORMALIZE_TASK_RESOURCES)
+        tallies.update(outcome.counters)
 
     return NormalizedData(
         main_output_dir=prefix_join(output_path, "outputs/main"),
         dup_output_dir=prefix_join(output_path, "outputs/dups"),
-        counters=dict(outcome.counters),
+        counters=tallies,
     )
 
 

@@ -223,6 +223,13 @@ def test_documents_routed_to_text_extraction_are_not_ocred(run_batch):
     assert [record["warc_record_offset"] for record in records] == [1]
 
 
+def test_no_key_set_ocrs_every_route(run_batch):
+    """``keys=None`` is the all-routes comparison run: no document is filtered."""
+    rows = [_row(0, _pdf(1)), _row(1, _pdf(1))]
+    records = run_batch(rows, _page_text, keys=None)
+    assert [record["warc_record_offset"] for record in records] == [0, 1]
+
+
 def test_truncated_documents_report_the_pages_they_lost(run_batch):
     (record,) = run_batch([_row(0, _pdf(9))], _page_text, render_options=RenderOptions(max_pages=4))
     assert record["num_pages"] == 4
