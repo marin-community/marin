@@ -27,17 +27,17 @@ selected a rank-safe mix. The mixed model does not have production approval.
 
 | Gate | Requirement | Current result | State |
 | --- | --- | --- | --- |
-| Finite output | 100% finite vectors | 100% on private validation for the mixed model | Pass |
-| Non-constant output | At least 99% unique vectors | 100% on private validation for the mixed model | Pass |
+| Finite output | 100% finite vectors | 100% on private validation; the disjoint release test is open | Open |
+| Non-constant output | At least 99% unique vectors | 100% on private validation; the disjoint release test is open | Open |
 | Global geometry | Effective-rank fraction at least 0.25 | The mixed model has 0.35930 on private validation; the disjoint release test is open | Open |
 | Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | 9,356.30 documents/s; 3.29503 times Luxical-One; both series are stable | Pass |
 | Accelerator speed | Stable exact-runtime throughput for capacity planning | 69,289.89 documents/s; five full calls per repeat; stable | Pass |
 | Coarse semantic screen | No metric more than 0.02 below the best tested teacher | The mixed model has a 0.08545 mean private gain | Pass |
-| Label reliability | Independent review gates for a frozen hierarchy | Tail adjudication changed each global metric by at most 0.00458 and changed no gate decision | Pass |
-| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The projection fails three groups on the first fixed set | Fail |
+| Label reliability | Independent review gates for a frozen hierarchy | The first tail adjudication was stable; review of the disjoint set is open | Open |
+| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The projection failed three groups; the mixed-model test is open | Open |
 | Blind neighborhood review | Student is not worse than the best teacher | Deferred until the 50,000-label model passes visible gates | Open |
-| Held-out robustness | All large semantic groups pass | Creative narrative, narrative form, and unclear form fail | Fail |
-| Fixed production buckets | Parent, leaf, and form NMI and purity pass for 40 buckets | All six metrics exceed the best teacher | Pass |
+| Held-out robustness | All large semantic groups pass | The projection failed three groups; the mixed-model test is open | Open |
+| Fixed production buckets | Parent, leaf, and form NMI and purity pass for 40 buckets | The projection passed all six metrics; the mixed-model test is open | Open |
 | Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
 | Release artifact | Pinned model, tokenizer, loader, and production smoke | The final runtime passed exact parity; the released bundle and canary remain open | Open |
 
