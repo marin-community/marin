@@ -316,9 +316,9 @@ class GcpWorkerProvider:
     ) -> GcpSliceHandle:
         """Build a TPU slice handle, filling in the provider-owned fields.
 
-        Every ``GcpSliceHandle`` — freshly created or rediscovered — carries the
-        same project/label-prefix/port/service/ssh wiring, so it is threaded in
-        here rather than at each construction site.
+        Every ``GcpSliceHandle`` carries the same project, label prefix, port,
+        service, and ssh wiring; this factory supplies those fields so callers
+        pass only the per-slice values.
         """
         return GcpSliceHandle(
             _slice_id=slice_id,

@@ -175,7 +175,7 @@ def test_parquet_splits_stay_paired_with_their_input_file(tmp_path):
         spans = spans_by_path[path]
         assert len(spans) > 1
         assert spans[0][0] == 0
-        # The last span ends at this file's row count, not another file's.
+        # The last span ends at this file's own row count.
         assert spans[-1][1] == row_count
         for (_, end), (start, _) in itertools.pairwise(spans):
             assert end == start

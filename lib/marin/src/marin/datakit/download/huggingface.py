@@ -346,8 +346,8 @@ def download_hf(cfg: DownloadConfig) -> None:
         list_kwargs = {"revision": cfg.revision}
 
     # `detail=True` carries the sizes (download validation) and Xet hashes (source
-    # fingerprinting) out of the listing itself, so we never pay a per-file `info()`
-    # round trip. Overlapping glob patterns collapse into one task per path.
+    # fingerprinting) in the listing itself, avoiding a per-file `info()` round
+    # trip. Overlapping glob patterns collapse into one task per path.
     file_info: dict[str, dict] = {}
     if not cfg.hf_urls_glob:
         file_info.update(source_fs.find(source_root, detail=True, **list_kwargs))

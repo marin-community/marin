@@ -1388,7 +1388,7 @@ def _actually_run_eval_harness(
         outputs["averages"] = averages
 
         # Attach each benchmark's own samples to its results entry. Group-level entries in
-        # `results` have no requests of their own, so they simply have no samples to attach.
+        # `results` have no requests of their own, so they have no samples to attach.
         sample_outputs = harness.get_sample_outputs()
         for task_name, task_results in outputs.get("results", {}).items():
             samples = sample_outputs.get(task_name)
