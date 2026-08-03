@@ -174,8 +174,10 @@ class FastEmbeddingModel:
             views = [
                 document_view(text, self.manifest.characters_per_region) for text in texts[start : start + batch_size]
             ]
-            token_lists = self.tokenizer.tokenize(pa.array(views), add_special_tokens=False).to_pylist()
-            raw_windows = [[row] for row in token_lists]
+            token_rows = self.tokenizer.tokenize(pa.array(views), add_special_tokens=False).to_numpy(
+                zero_copy_only=False
+            )
+            raw_windows = [[row[: self.manifest.config.max_tokens]] for row in token_rows]
             ids = pack_remapped_windows(
                 raw_windows,
                 self.raw_to_compact,

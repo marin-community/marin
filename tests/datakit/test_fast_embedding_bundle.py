@@ -8,11 +8,16 @@ from pathlib import Path
 import equinox as eqx
 import jax.random as jr
 import numpy as np
+import pyarrow as pa
 import pytest
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 
+from experiments.datakit.cluster.quality.fast_transformer.embedding import (
+    pack_remapped_windows,
+    predict_embeddings,
+)
 from experiments.datakit.cluster.quality.fast_transformer.model import (
     FastEmbeddingTransformer,
     FastTransformerConfig,
@@ -109,6 +114,24 @@ def test_fast_embedding_bundle_round_trip_returns_distinct_unit_vectors(tmp_path
     assert np.isfinite(vectors).all()
     assert np.linalg.norm(vectors, axis=1) == pytest.approx([1.0, 1.0], abs=1e-6)
     assert not np.allclose(vectors[0], vectors[1])
+
+
+def test_fast_embedding_bundle_array_token_staging_matches_list_reference(tmp_path: Path) -> None:
+    manifest_sha256 = write_test_bundle(tmp_path)
+    embedder = FastEmbeddingModel.load(str(tmp_path), manifest_sha256)
+    texts = ["alpha beta gamma " * 20, "gamma alpha beta " * 20]
+
+    views = [document_view(text, embedder.manifest.characters_per_region) for text in texts]
+    token_rows = embedder.tokenizer.tokenize(pa.array(views), add_special_tokens=False).to_pylist()
+    ids = pack_remapped_windows(
+        [[row] for row in token_rows],
+        embedder.raw_to_compact,
+        embedder.manifest.config.max_tokens,
+        embedder.manifest.config.max_tokens,
+    )
+    reference = predict_embeddings(embedder.model, ids, batch_size=2)
+
+    np.testing.assert_array_equal(embedder(texts, batch_size=2), reference)
 
 
 def test_fast_embedding_runtime_bundle_uses_same_loader_before_release(tmp_path: Path) -> None:
