@@ -4,12 +4,13 @@ Status: evaluation in progress
 
 ## TL;DR
 
-The 3M and 10M students are faster than Luxical-One on CPU. Their vectors pass
-all health gates. Both students fail the held-out semantic gates and the
-model-hidden neighborhood review. The 10M rung improves non-English text and
-some global metrics. It does not improve the overall hidden-review score, and
-it reduces the code score. A larger model and a longer input both fail. The
-nested 30M rung is the final pure-scaling test.
+The rank-preserving GLM projection is the lead candidate. It folds into the
+9.3M-parameter FastTransformer head and adds no inference operation. The
+1,000-label pilot passes all global semantic and vector-health gates on 10,000
+fixed documents. It fails 12 large content-group gates. A disjoint 50,000-label
+run is active to determine whether semantic supervision fixes these remaining
+groups. The 30M Arctic student, larger student, longer-input student, and Qwen
+neighbor student all fail release gates.
 
 ## Decision rule
 
@@ -17,31 +18,34 @@ Do not approve a production student until every required gate passes on fixed
 held-out documents. Source provenance is not a prediction target. A source can
 contain many unrelated semantic domains and document forms.
 
-The current candidate is the 10M Arctic FastTransformer. It has 9,299,200
-parameters and returns 256-dimensional vectors. It is the lead candidate, not
-an approved production model.
+The current candidate is the projected 30M Arctic FastTransformer. It has
+9,299,200 parameters and returns 256-dimensional vectors. GLM-5.2 supplies
+semantic labels. Arctic supplies the base vector geometry. The pilot candidate
+is not an approved production model.
 
 ## Current evidence
 
 | Gate | Requirement | Current result | State |
 | --- | --- | --- | --- |
-| Finite output | 100% finite vectors | 100% on the 10,000-document held-out set | Pass |
-| Non-constant output | At least 99% unique vectors | 99.97% on the held-out set | Pass |
-| Global geometry | Effective-rank fraction at least 0.25 | 0.42414 on the held-out set | Pass |
-| Exact CPU speed | At least 0.85 times Luxical-One | 10.36458 times Luxical-One on the paired 10M test | Pass |
-| Coarse semantic screen | No metric more than 0.02 below the best tested teacher | Passed all eight fixed metrics | Pass |
+| Finite output | 100% finite vectors | 100% for the pilot projection on the held-out set | Pass |
+| Non-constant output | At least 99% unique vectors | At least 99% for the pilot projection | Pass |
+| Global geometry | Effective-rank fraction at least 0.25 | 0.39314 for the pilot projection | Pass |
+| Exact CPU speed | At least 0.85 times Luxical-One from a stable paired test | Student median 6,729.92 documents per second. Luxical measurement was unstable | Open |
+| Coarse semantic screen | No metric more than 0.02 below the best tested teacher | Every global pilot-projection metric passes | Pass |
 | Label reliability | Independent review gates for a frozen hierarchy | Tail adjudication changed each global metric by at most 0.00458 and changed no gate decision | Pass |
-| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The 10M parent macro-F1 gate fails; leaf and form global gates pass | Fail |
-| Blind neighborhood review | Student is not worse than the best teacher | 10M score 0.4450; 95% interval [0.3775, 0.5125] | Fail |
-| Held-out robustness | All large semantic groups pass | Parent, form, and leaf large-group gates fail | Fail |
+| Fine semantic coherence | Parent, leaf, and form gates on accepted labels | The pilot projection passes every global level | Pass |
+| Blind neighborhood review | Student is not worse than the best teacher | Deferred until the 50,000-label model passes visible gates | Open |
+| Held-out robustness | All large semantic groups pass | 12 pilot-projection group gates fail | Fail |
 | Optional ladder input | Bounded loader below 8 GiB peak RSS | 1.62 GB on all 3M rows | Pass |
 | Release artifact | Pinned model, tokenizer, loader, and production smoke | Not built | Open |
 
-Each exact paired CPU test used 20,000 fixed documents, five alternating timed
-repeats, eight CPU threads, and the CPU JAX backend. On the 10M test host, the
-student median was 6,798.62 documents per second. Pinned Luxical-One reached
-655.95 documents per second. This host was slower than the 3M test host. The
-paired ratio is the portable release gate.
+The previous paired CPU test used 20,000 fixed documents, five alternating
+timed repeats, eight CPU threads, and the CPU JAX backend. The projected
+student rates were stable from 6,589 through 6,836 documents per second.
+Luxical-One varied from 367 through 4,735 documents per second. Thus, the
+reported ratio is invalid. The final protocol uses a full-workload warmup, a
+fixed eight-CPU affinity, and a 20-percent spread limit for each model. It also
+requires the exact model hash, rung, and baseline revision.
 
 The coarse 1,000-document screen found coherent recipe, literature, code, and
 molecule neighborhoods. It also found weak government-statistics and
@@ -133,6 +137,47 @@ and form results also show losses in administrative records, narrative text,
 reference text, structured data, and technical specifications. The exact group
 set depends on the hierarchy level.
 
+## Held-out 30M result
+
+The 30M student keeps the same 9.3M-parameter architecture. Training used
+30,000,000 rows from 146 sources. It completed 21,975 updates in 17 minutes 12
+seconds.
+
+The student is not collapsed. Its final training audit has effective rank
+67.96590 and total variance 0.42014. On the fixed held-out set, parent, leaf,
+and form macro-F1 values are 0.45021, 0.37371, and 0.40299. Parent macro-F1
+improves by only 0.00318 from the 10M result. Every large-group level still
+fails.
+
+The model-hidden review gives 92 wins, 10 ties, and 98 losses. Its score is
+0.4850, with a 95-percent interval of [0.4175, 0.5525]. The score improves by
+0.0400 from 10M, but the overall and subgroup interval gates fail. Pure Arctic
+scaling does not produce an approved student.
+
+## GLM semantic projection result
+
+The first projection used 760 GLM-labeled training documents and 190 validation
+documents. A raw learned projection improves the mean semantic score by
+0.01989. It reduces the effective-rank fraction from 0.31188 to 0.17904. This
+raw projection fails the 0.25 rank gate.
+
+A fixed identity-mix ladder selects a projection weight of 0.6. The mixed
+projection passes the validation rank gate at 0.26271. Its mean semantic gain
+is 0.01247. Folding the projection into the embedding head gives a minimum
+cosine of 0.99999 against the separate projection calculation.
+
+The fixed 10,000-document result improves all primary semantic values. Parent
+macro-F1 increases from 0.45021 to 0.49406. Leaf macro-F1 increases from
+0.37371 to 0.40247. Form macro-F1 increases from 0.40299 to 0.42825. Parent,
+leaf, and form cluster NMI increase by 0.06417, 0.05477, and 0.04196.
+
+All global semantic and vector-health gates pass. The effective-rank fraction
+is 0.39314, and total variance is 0.87190. Large-group failures decrease from
+18 to 12. The remaining failures include humanities, intellectual property,
+medical text, narrative, opinion, procurement, technical documents,
+instructions, unclear text, and structured data. The 760-row training set does
+not support production approval.
+
 ## Capacity and input controls
 
 The 28.4M-parameter control does not fix the semantic loss. Its parent, leaf,
@@ -218,6 +263,10 @@ the overall visible result.
 
 - Repeat the exact CPU benchmark from a pinned release artifact. The median
   speed must be at least 0.85 times Luxical-One.
+- Use five timed repeats after a full 20,000-document warmup. Each model rate
+  must stay from 0.8 through 1.2 times its median.
+- Reject the CPU report when its model hash, rung, baseline revision, or JAX
+  backend differs from the evaluated release artifact.
 - Record accelerator throughput for capacity planning. Accelerator speed does
   not replace the CPU gate.
 - Pin the model digest, tokenizer-map digest, dependency versions, maximum input
@@ -231,11 +280,23 @@ the overall visible result.
 
 ## Current artifact identity
 
-- Model SHA-256:
+- Pilot projection model SHA-256:
+  `1aba2f7ab48841f87b63a23b9c35d154cfd4655feaa7f1808eb1d1e1dca76192`
+- Pilot projection training report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/full-glm-semantic-projection/pilot-1k-mix-v2/training.json`
+- Pilot projection held-out report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_glm_projection_pilot_1k_mix_v2/adjudicated-v1/embedding-screen-v1/report.json`
+- Pilot projection CPU report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-full-full-glm-semantic-projection-pilot-1k-mix-v2.json`
+- 30M base model SHA-256:
+  `981388da726eb2dff8d19dd84fff17749f2b6dd974c93ad223fee581139c9c7f`
+- 30M base held-out report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_30m/adjudicated-v1/embedding-screen-v1/report.json`
+- 3M model SHA-256:
   `8735a4b49de0f7925904b0301516a2c8a5f9651bc2b605e4d27a80bca3f8ac3a`
-- Tokenizer-map SHA-256:
+- 3M tokenizer-map SHA-256:
   `50c92752d5a1d408234b8eee58c1c0f6179f603253caabe4fcd3a06f990710f0`
-- Exact CPU report:
+- 3M exact CPU report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-full-full-3m.json`
 - Coarse semantic report:
   `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/embedding-screen-v2/report.json`
@@ -272,32 +333,25 @@ the overall visible result.
 
 ## Open decision
 
-Reject the 3M and 10M candidates. Train the nested 30M rung with the same
-architecture, loss, tokenizer map, and Arctic teacher. This is the final
-pure-scaling test. The 3M-to-10M hidden-review score changed by -0.0025. If the
-10M-to-30M score improves by less than 0.005, two adjacent scaling changes will
-have failed the stop rule. Stop scaling and change the teacher windows or the
-training objective at that point.
+Reject the pure Arctic, capacity, input-length, and Qwen-neighbor candidates.
+Keep the 30M Arctic student as the base geometry. Use GLM-5.2 labels to train a
+rank-preserving projection for that base.
 
-The disk-backed staged loader passed its 3M canary with 1,623,203,840 bytes of
-peak RSS. It scanned every row and saw all 146 sources. This is a 79.1 percent
-peak-RSS reduction from the first mapped-page implementation. A 10M or 30M
-rung is now permitted only when the 3M candidate fails a semantic gate and the
-required prepared rows and teacher vectors exist.
+The active label set contains 50,000 source-balanced documents. It excludes
+the 1,000-document pilot and the fixed 10,000-document evaluation set. The
+training code verifies the document count, identity digest, exclusion run,
+sequential indices, and completed label summary before it loads the model.
 
-The Arctic teacher embeds three head, middle, and tail windows. Short documents
-can repeat the same text, and medium documents can have overlapping windows.
-Exact repeats do not change an averaged embedding, but overlap can weight the
-middle of a document more heavily. The independent GLM labels and blind
-neighborhood review must catch a harmful effect. If the 30M candidate fails
-those gates, stop scaling and test a deduplicated-window teacher.
+Train one projection after the label job completes. Select the projection mix
+on a separate 5-percent validation set. Do not use the fixed 10,000-document
+set for projection selection.
 
-The 28.4M-parameter control fails the CPU release gate at 0.78952 times
-Luxical-One speed. It also fails the semantic and large-group gates. More
-capacity improves some fine-label metrics, but it does not correct the broad
-semantic loss. Thus, capacity alone is not the next production direction.
+Run the fixed 10,000-document evaluation once when the internal validation
+passes. Reject the model when one global gate or one large-group gate fails.
+Run the stable CPU test from the exact saved model. Start the 200-query blind
+review only after the visible and CPU gates pass.
 
-The short-view teacher and the 512-token student also fail. A simple input
-length change is not the next production direction. If the 30M rung fails the
-stop rule, change the training signal. Test a teacher mix or a semantic pair
-objective while the production student keeps its 256-token input.
+If large-group failures remain, use the same labels for end-to-end
+FastTransformer training. Keep the 256-token production input and 256-number
+output. Add targeted labels only for groups that the 50,000-label projection
+still fails.
