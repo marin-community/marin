@@ -55,11 +55,12 @@ from experiments.datakit.cluster.quality.fast_transformer.embedding import embed
 from experiments.datakit.cluster.quality.fast_transformer.model import FastEmbeddingTransformer, count_params
 
 TRAINING_NAME = "full-glm-semantic-finetune"
-RUNG = "training-50k-v1"
+RUNG = "training-50k-rank-preserving-v2"
 BATCH_SIZE = 1_024
 EPOCHS = 3
 LEARNING_RATE = 5e-5
 GRADIENT_CLIP = 1.0
+MIN_BASE_RANK_RETENTION = 0.75
 RESULT_FILE = Path("/tmp/luxical-semantic-finetune-large")
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,53 @@ class ModelMixCandidate:
     alpha: float
     metrics: dict[str, Any]
     provisional_decision: dict[str, Any]
+
+
+def rank_preservation_decision(
+    base_validation: dict[str, Any],
+    candidate_validation: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the base-rank gate for one model mix."""
+    base_rank = float(base_validation["geometry"]["effective_rank_fraction"])
+    candidate_rank = float(candidate_validation["geometry"]["effective_rank_fraction"])
+    rank_retention = candidate_rank / base_rank
+    minimum_candidate_rank = MIN_BASE_RANK_RETENTION * base_rank
+    rank_preserved = candidate_rank >= minimum_candidate_rank or math.isclose(
+        candidate_rank,
+        minimum_candidate_rank,
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    )
+    return {
+        "base_rank_fraction": base_rank,
+        "candidate_rank_fraction": candidate_rank,
+        "base_rank_retention": rank_retention,
+        "minimum_base_rank_retention": MIN_BASE_RANK_RETENTION,
+        "rank_preserved": rank_preserved,
+    }
+
+
+def model_mix_validation_decision(
+    base_validation: dict[str, Any],
+    candidate_validation: dict[str, Any],
+) -> dict[str, Any]:
+    """Return semantic and base-rank gates for one model mix."""
+    decision = semantic_validation_decision(base_validation, candidate_validation)
+    rank_decision = rank_preservation_decision(base_validation, candidate_validation)
+    return {
+        **decision,
+        **rank_decision,
+        "semantic_gates_passed": decision["passed"],
+        "passed": decision["passed"] and rank_decision["rank_preserved"],
+    }
+
+
+def best_passing_model_mix(candidates: list[ModelMixCandidate]) -> ModelMixCandidate:
+    """Return the passing model mix with the largest semantic gain."""
+    passed = [row for row in candidates if row.provisional_decision["passed"]]
+    if not passed:
+        raise ValueError("No model mix passed the private semantic and rank gates")
+    return max(passed, key=lambda row: row.provisional_decision["semantic_mean_delta"])
 
 
 def semantic_model_loss(
@@ -248,11 +296,9 @@ def select_model_mix(
         candidate_model = interpolate_models(base_model, fine_tuned_model, alpha)
         candidate_vectors = predict_embeddings(candidate_model, validation_ids, batch_size=4_096)
         metrics = evaluation_metrics(candidate_vectors, validation_labels, validation_sources)
-        decision = semantic_validation_decision(base_validation, metrics)
+        decision = model_mix_validation_decision(base_validation, metrics)
         candidates.append(ModelMixCandidate(alpha, metrics, decision))
-    passed = [row for row in candidates if row.provisional_decision["passed"]]
-    selection_pool = passed if passed else candidates
-    selected = max(selection_pool, key=lambda row: row.provisional_decision["semantic_mean_delta"])
+    selected = best_passing_model_mix(candidates)
     return (
         selected.alpha,
         interpolate_models(base_model, fine_tuned_model, selected.alpha),
@@ -340,7 +386,7 @@ def main() -> None:
             validation_labels,
             sources[validation_indices],
         )
-        decision = semantic_validation_decision(base_validation, selected_validation)
+        decision = model_mix_validation_decision(base_validation, selected_validation)
         normalized_base = normalize_embeddings(base_vectors)
         normalized_selected = normalize_embeddings(selected_vectors)
         base_cosines = np.sum(normalized_base * normalized_selected, axis=1)
@@ -386,6 +432,7 @@ def main() -> None:
             "spread_standard_deviation_target": SPREAD_STANDARD_DEVIATION_TARGET,
             "spread_covariance_weight": SPREAD_COVARIANCE_WEIGHT,
             "model_mix_alphas": list(PROJECTION_MIX_ALPHAS),
+            "minimum_base_rank_retention": MIN_BASE_RANK_RETENTION,
             "validation_fraction": VALIDATION_FRACTION,
             "confidence_drop_fraction": CONFIDENCE_DROP_FRACTION,
             "minibatch": minibatch_audit,
