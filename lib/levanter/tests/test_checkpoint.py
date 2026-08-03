@@ -297,6 +297,16 @@ def test_checkpoint_discovery():
         assert discover_latest_checkpoint("file:///tmp/does-not-exist") is None
 
 
+def test_load_checkpoint_rejects_missing_arrays_by_default():
+    """A commit marker alone must not make a shard-missing checkpoint restorable."""
+    with use_test_mesh(), tempfile.TemporaryDirectory() as tempdir:
+        save_checkpoint({"present": jnp.ones(2)}, step=10, checkpoint_path=tempdir)
+        exemplar = {"present": jnp.zeros(2), "missing": jnp.zeros(2)}
+
+        with pytest.raises(FileNotFoundError, match="Missing 1 arrays"):
+            load_checkpoint(exemplar, checkpoint_path=tempdir)
+
+
 def test_checkpoint_discovery_across_multiple_paths():
     with tempfile.TemporaryDirectory() as permanent_dir, tempfile.TemporaryDirectory() as temp_dir:
         save_checkpoint(dict(model=1), step=10, checkpoint_path=f"{permanent_dir}/step-10", is_temporary=False)

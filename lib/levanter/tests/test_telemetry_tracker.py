@@ -1,6 +1,9 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from datetime import timedelta
+from threading import Event
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -90,6 +93,27 @@ def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch
     values = _values(exported.wait_for(7))
     assert values["progress_time_seconds"] == 1234.5
     assert values["phase"] == TrainingPhase.FINISHED
+
+
+def test_training_stall_timeout_terminates_process_after_progress_stops(exported, monkeypatch):
+    terminated = Event()
+    exit_codes = []
+
+    def record_exit(exit_code: int) -> None:
+        exit_codes.append(exit_code)
+        terminated.set()
+
+    monkeypatch.setattr(tracker_telemetry.os, "_exit", record_exit)
+    tracker = TelemetryTracker(
+        training_stall_timeout=timedelta(milliseconds=30),
+        watchdog_poll_interval=0.005,
+    )
+    assert not terminated.wait(timeout=0.05), "the watchdog must remain unarmed before the first completed step"
+    tracker.log({"train/loss": 1.25}, step=3)
+
+    assert terminated.wait(timeout=1)
+    tracker.finish()
+    assert exit_codes == [tracker_telemetry.STALLED_TRAINING_EXIT_CODE]
 
 
 @pytest.fixture

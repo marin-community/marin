@@ -494,8 +494,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        # This throughput reproduction intentionally produces no checkpoint.
-        checkpointer = None
+        checkpointer = trainer.checkpointer.create(run_id)
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),

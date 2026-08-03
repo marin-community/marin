@@ -16,14 +16,27 @@ across every device. The gradient all-reduce is the real inter-host collective
 
     GANG_SMOKE_STEPS  training steps (default 20)
     GANG_SMOKE_PDB    per-device batch (default 8)
+
+The manual GB200 fault probe additionally accepts:
+
+    GANG_SMOKE_INJECT_EXIT_PROCESS_INDEX  global JAX process to terminate
+    GANG_SMOKE_INJECT_EXIT_STEP           completed training step to terminate after
+    GANG_SMOKE_INJECT_EXIT_ATTEMPT        Iris attempt to target (default 0)
+    GANG_SMOKE_INJECT_EXIT_CODE           immediate exit code (default 17)
+
+The attempt guard makes the injection one-shot: after Iris restarts the gang,
+the next attempt completes normally.
 """
 
+import json
 import math
 import os
+import sys
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from iris.cluster.client.job_info import get_job_info
 from iris.runtime.jax_init import initialize_jax
 from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
@@ -32,6 +45,43 @@ from jax.sharding import PartitionSpec as P
 
 def log(msg: str) -> None:
     print(f"[gang-jax] {msg}", flush=True)
+
+
+def maybe_inject_exit(completed_step: int) -> None:
+    """Immediately terminate the selected process for the manual fault probe."""
+    raw_process_index = os.environ.get("GANG_SMOKE_INJECT_EXIT_PROCESS_INDEX")
+    raw_step = os.environ.get("GANG_SMOKE_INJECT_EXIT_STEP")
+    if raw_process_index is None and raw_step is None:
+        return
+    if raw_process_index is None or raw_step is None:
+        raise ValueError("GANG_SMOKE_INJECT_EXIT_PROCESS_INDEX and GANG_SMOKE_INJECT_EXIT_STEP must be set together")
+
+    info = get_job_info()
+    if info is None:
+        raise RuntimeError("fault injection requires Iris job metadata")
+
+    target_process = int(raw_process_index)
+    target_step = int(raw_step)
+    target_attempt = int(os.environ.get("GANG_SMOKE_INJECT_EXIT_ATTEMPT", "0"))
+    exit_code = int(os.environ.get("GANG_SMOKE_INJECT_EXIT_CODE", "17"))
+    if exit_code == 0:
+        raise ValueError("GANG_SMOKE_INJECT_EXIT_CODE must be nonzero")
+    if jax.process_index() != target_process or completed_step != target_step or info.attempt_id != target_attempt:
+        return
+
+    marker = {
+        "attempt": info.attempt_id,
+        "completed_step": completed_step,
+        "event": "synthetic_process_exit",
+        "exit_code": exit_code,
+        "process_count": jax.process_count(),
+        "process_index": jax.process_index(),
+        "task_id": info.task_id.to_wire(),
+    }
+    log(f"FAULT_INJECTION {json.dumps(marker, sort_keys=True)}")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)
 
 
 def main() -> None:
@@ -118,6 +168,7 @@ def main() -> None:
         params, loss = train_step(params, x, y)
         if jax.process_index() == 0:
             log(f"step {step + 1}/{steps} loss={float(loss):.4f}")
+        maybe_inject_exit(step + 1)
     log(f"final loss={float(loss):.4f}")
 
     multihost_utils.sync_global_devices("gang-jax-done")
