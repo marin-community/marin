@@ -2463,3 +2463,19 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Decision: The exact rank-safe runtime passes the CPU and accelerator speed
   gates.
 - Next action: Keep the model frozen and apply the disjoint release gates.
+
+### LUX-RELEASE-010: Bind the final adjudication report to its inputs
+
+- Commit Hash: `38e0cbffa`.
+- The disjoint GLM label job completed model start-up and data selection.
+- It saved its first 150 of 10,000 assignments. All observed requests returned
+  successfully. Iris reported no task failure or preemption.
+- The Claude verifier now records the SHA-256 of its exact private review
+  package.
+- A new uploader rebuilds the source-blind package from the fixed documents,
+  GLM labels, taxonomy, and low-confidence selection rule.
+- The uploader rejects a different package, Claude model, assignment set, or
+  metric result. It writes the accepted report only once.
+- Seventeen focused tests and the required changed-file checks pass.
+- Next action: Complete the labels, review the fixed low-confidence 5 percent,
+  and upload the bound report before semantic evaluation.
