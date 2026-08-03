@@ -1691,3 +1691,35 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
   semantics are weaker. Reject it as the sole training target.
 - Next action: Keep the full-window teacher. Test a 512-token student because
   the 256-token student has a large CPU speed margin.
+
+### LUX-INPUT-002: 512-token student control
+
+- Commit Hash: `61826a83e`.
+- The preparation job wrote exactly 3,000,000 rows from 146 sources. Each row
+  has 512 token positions and uses 512 characters from each document region.
+- Preparation job: `/rav/lux-fast-student-prepare-context512-3m-h100-001`.
+- Prepared manifest:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/prepared-3m-context512/manifest.json`.
+- Training job: `/rav/lux-fast-student-context512-3m-h100-001`.
+- Training completed 2,199 steps over three epochs. All audited vectors are
+  finite and unique. Final effective rank is 46.26582, and total variance is
+  0.37537.
+- Final model SHA-256:
+  `a0fe19c545620f5f49f4e9943c3a39d5e5d33cb8cc3464568d975c7e4bdcc43b`.
+- The paired CPU test measured 3,737.09 documents per second for the student
+  and 9,254.12 for Luxical. The ratio is 0.40383. It fails the 0.85 speed gate.
+- Speed artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-context512-context512-3m.json`.
+- The fixed semantic diagnosis gives parent macro-F1 0.43890, leaf macro-F1
+  0.35123, and form macro-F1 0.38207. Parent cluster NMI is 0.39564, leaf NMI
+  is 0.40145, and form NMI is 0.28984.
+- The original 256-token 3M result had parent macro-F1 0.44498, leaf cluster
+  NMI 0.40660, and form macro-F1 0.37281. The longer input improves only form
+  F1 by 0.00926. Parent F1 and leaf NMI decrease.
+- The longer-input student fails all three semantic release decisions and the
+  speed decision. Do not send it to the paid blind review.
+- Semantic report:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_context512_3m/adjudicated-v1/embedding-screen-v1/report.json`.
+- Interpretation: The student input length is not the main quality limit.
+  Reject this control and keep the 256-token production shape. Complete the
+  fixed 30M rung before a change to the training objective or teacher mix.
