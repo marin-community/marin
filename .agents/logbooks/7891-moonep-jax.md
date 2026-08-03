@@ -1130,3 +1130,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Treatment: Restore the aligned baseline transport. Capture one GPU step with host tracing and GPU event aggregation disabled.
 - Limits: Keep one GPU, 100,000 activity events, 100,000 callback events, and the 600-second profile barrier.
 - Gate: Require five finite steps, successful profile upload, and a kernel and collective time summary from the GPU timeline.
+
+### 2026-08-03 02:50 UTC - MNEP-063 metadata-free dispatch contract
+
+- Planned run ID: `mnep-063-rebuilt-metadata-5-20260803-0250`.
+- Snapshot: `mnep-063-rebuilt-metadata-20260803-0250` at `09417ad7d`.
+- Treatment: Sort each sender's assignments by destination and expert. Rebuild the received expert IDs from source and destination interval intersections in the shared allocation plan.
+- Expected effect: Remove one int32 ragged all-to-all from every MoE layer while keeping the aligned 5,120-element BF16 token row.
+- Local gate: The planner and abstract distributed lowering tests passed. The dense-reference output and input and weight gradient test passed on four GB200 GPUs in 117.99 seconds, including compilation.
+- Rack gate: Require five finite steps on attempt zero, no dropped assignments, and a steady step time below the 41-second aligned baseline.
