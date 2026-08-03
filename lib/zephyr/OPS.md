@@ -4,9 +4,9 @@
 
 The Zephyr coordinator serves a read-only pipeline dashboard on its actor
 endpoint. Open the coordinator task in the Iris dashboard, then open its
-endpoint link. Iris authenticates the browser and proxies dashboard and Connect
-RPC requests to the coordinator. The browser does not need direct access to the
-Zephyr network.
+endpoint link. Iris authenticates the browser and proxies the dashboard and its
+JSON API requests to the coordinator. The browser does not need direct access to
+the Zephyr network.
 
 The pipeline selector lists active executions on the shared coordinator. Plan,
 status, counter, and metric views apply to the selected execution. The worker
@@ -25,7 +25,7 @@ Key files:
 - `src/zephyr/coordinator.py` — coordinator state, task dispatch, and dashboard data
 - `src/zephyr/worker.py` — worker polling and per-execution heartbeats
 - `src/zephyr/execution.py` — pool lifecycle and pipeline submission
-- `src/zephyr/dashboard.py` — coordinator dashboard RPC and HTTP application
+- `src/zephyr/dashboard.py` — coordinator dashboard payloads and HTTP application
 - `src/zephyr/plan.py` — pipeline plan, scatter/reduce, k-way merge
 
 Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`. Focus on the latest attempt.

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { shortEnum } from '@/utils/formatting'
+import { formatState } from '@/utils/formatting'
 
-const props = defineProps<{ value?: string; prefix?: string }>()
+const props = defineProps<{ value?: string }>()
 
-const label = computed(() => shortEnum(props.value, props.prefix ?? ''))
+const label = computed(() => formatState(props.value))
 const tone = computed(() => {
   const value = label.value
   if (value.includes('succeeded') || value === 'active') return 'bg-status-success-bg text-status-success'

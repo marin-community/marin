@@ -3,8 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import ErrorBanner from '@/components/ErrorBanner.vue'
 import StateBadge from '@/components/StateBadge.vue'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
-import { useDashboardRpc } from '@/composables/useRpc'
-import type { ListWorkersResponse } from '@/types/dashboard'
+import { useDashboardApi } from '@/composables/useApi'
+import type { WorkerPage } from '@/types/dashboard'
 import { formatBytes, formatDuration, formatNumber, irisTaskHref } from '@/utils/formatting'
 
 const search = ref('')
@@ -12,15 +12,15 @@ const sortField = ref('worker_id')
 const sortDescending = ref(false)
 const offset = ref(0)
 const limit = 50
-const rpc = useDashboardRpc<ListWorkersResponse>('ListWorkers', () => ({
+const api = useDashboardApi<WorkerPage>('workers', () => ({
   search: search.value,
-  sortField: sortField.value,
-  sortDescending: sortDescending.value,
+  sort_field: sortField.value,
+  sort_descending: sortDescending.value,
   offset: offset.value,
   limit,
 }))
-const workers = computed(() => rpc.data.value?.workers ?? [])
-const total = computed(() => rpc.data.value?.total ?? 0)
+const workers = computed(() => api.data.value?.workers ?? [])
+const total = computed(() => api.data.value?.total ?? 0)
 
 function sort(field: string) {
   if (sortField.value === field) sortDescending.value = !sortDescending.value
@@ -28,20 +28,20 @@ function sort(field: string) {
     sortField.value = field
     sortDescending.value = false
   }
-  void rpc.refresh()
+  void api.refresh()
 }
 
 watch(search, () => {
   offset.value = 0
-  void rpc.refresh()
+  void api.refresh()
 })
-useAutoRefresh(rpc.refresh)
-onMounted(rpc.refresh)
+useAutoRefresh(api.refresh)
+onMounted(api.refresh)
 </script>
 
 <template>
   <div class="space-y-4">
-    <ErrorBanner :message="rpc.error.value" />
+    <ErrorBanner :message="api.error.value" />
     <section class="card overflow-hidden">
       <div class="flex items-center gap-3 border-b border-surface-border p-4">
         <div>
@@ -68,17 +68,17 @@ onMounted(rpc.refresh)
             </tr>
           </thead>
           <tbody>
-            <tr v-for="worker in workers" :key="worker.workerId" class="hover:bg-surface-sunken/60">
-              <td class="table-cell font-mono text-xs font-medium">{{ worker.workerId }}</td>
+            <tr v-for="worker in workers" :key="worker.worker_id" class="hover:bg-surface-sunken/60">
+              <td class="table-cell font-mono text-xs font-medium">{{ worker.worker_id }}</td>
               <td class="table-cell"><StateBadge :value="worker.state" /></td>
               <td class="table-cell text-right font-mono text-xs tabular-nums">
-                {{ worker.assignments?.map((assignment) => `${assignment.executionId.slice(0, 8)}:${assignment.shard}`).join(', ') || '—' }}
+                {{ worker.assignments?.map((assignment) => `${assignment.execution_id.slice(0, 8)}:${assignment.shard}`).join(', ') || '—' }}
               </td>
-              <td class="table-cell text-right tabular-nums">{{ formatNumber(worker.cpuPercent) }}%</td>
-              <td class="table-cell text-right tabular-nums">{{ formatBytes(worker.memoryBytes) }}</td>
-              <td class="table-cell text-right tabular-nums text-text-secondary">{{ formatDuration((worker.lastSeenAgeSeconds ?? 0) * 1000) }}</td>
+              <td class="table-cell text-right tabular-nums">{{ formatNumber(worker.cpu_percent) }}%</td>
+              <td class="table-cell text-right tabular-nums">{{ formatBytes(worker.memory_bytes) }}</td>
+              <td class="table-cell text-right tabular-nums text-text-secondary">{{ formatDuration((worker.last_seen_age_seconds ?? 0) * 1000) }}</td>
               <td class="table-cell">
-                <a v-if="worker.taskId" :href="irisTaskHref(worker.taskId)" target="_top" class="font-medium text-accent hover:text-accent-hover">Open task</a>
+                <a v-if="worker.task_id" :href="irisTaskHref(worker.task_id)" target="_top" class="font-medium text-accent hover:text-accent-hover">Open task</a>
                 <span v-else class="text-text-muted">—</span>
               </td>
             </tr>
@@ -91,8 +91,8 @@ onMounted(rpc.refresh)
       <div class="flex items-center justify-between border-t border-surface-border px-4 py-3 text-xs text-text-secondary">
         <span>{{ offset + 1 }}–{{ Math.min(offset + workers.length, total) }} of {{ total }}</span>
         <div class="flex gap-2">
-          <button class="rounded border border-surface-border px-3 py-1.5 disabled:opacity-40" :disabled="offset === 0" @click="offset = Math.max(0, offset - limit); rpc.refresh()">Previous</button>
-          <button class="rounded border border-surface-border px-3 py-1.5 disabled:opacity-40" :disabled="offset + limit >= total" @click="offset += limit; rpc.refresh()">Next</button>
+          <button class="rounded border border-surface-border px-3 py-1.5 disabled:opacity-40" :disabled="offset === 0" @click="offset = Math.max(0, offset - limit); api.refresh()">Previous</button>
+          <button class="rounded border border-surface-border px-3 py-1.5 disabled:opacity-40" :disabled="offset + limit >= total" @click="offset += limit; api.refresh()">Next</button>
         </div>
       </div>
     </section>

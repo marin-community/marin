@@ -1,35 +1,36 @@
-export type Integer = string | number
+// These interfaces mirror the dataclasses in `zephyr/dashboard.py`. The
+// coordinator and this dashboard ship together, so the two stay in step.
 
 export interface PipelineSummary {
-  executionId: string
-  pipelineName?: string
-  currentStage?: string
+  execution_id: string
+  pipeline_name: string
+  current_stage: string
 }
 
-export interface ListPipelinesResponse {
-  pipelines?: PipelineSummary[]
+export interface PipelineList {
+  pipelines: PipelineSummary[]
 }
 
 export interface PlanNode {
-  nodeId: string
+  node_id: string
   label: string
-  stageType: string
-  operationTypes?: string[]
-  outputShards?: number
-  stageIndex?: number
-  parentNodeId?: string
-  auxiliary?: boolean
+  stage_type: string
+  output_shards: number
+  stage_index: number
+  parent_node_id: string
+  auxiliary: boolean
+  operation_types: string[]
 }
 
 export interface PipelinePlan {
-  pipelineName?: string
-  executionId?: string
-  sourceItemCount?: Integer
-  nodes?: PlanNode[]
+  pipeline_name: string
+  execution_id: string
+  source_item_count: number
+  nodes: PlanNode[]
 }
 
 export interface PlanNodeStatus {
-  nodeId: string
+  node_id: string
   state: string
 }
 
@@ -39,76 +40,75 @@ export interface WorkerStateCount {
 }
 
 export interface ResourceUsage {
-  cpuCores?: number
-  cpuUtilization?: number
-  memoryBytes?: Integer
-  memoryUtilization?: number
+  cpu_cores: number
+  cpu_utilization: number
+  memory_bytes: number
+  memory_utilization: number
 }
 
 export interface PipelineStatus {
-  executionId?: string
-  phase?: string
-  currentNodeId?: string
-  currentStage?: string
-  completedShards?: number
-  totalShards?: number
-  inFlightShards?: number
-  queuedShards?: number
-  retries?: number
-  startedAtMs?: Integer
-  finishedAtMs?: Integer
-  fatalError?: string
-  coordinatorTaskId?: string
-  expectedWorkers?: number
-  workerStates?: WorkerStateCount[]
-  resources?: ResourceUsage
-  nodeStatuses?: PlanNodeStatus[]
+  execution_id: string
+  phase: string
+  current_node_id: string
+  current_stage: string
+  completed_shards: number
+  total_shards: number
+  in_flight_shards: number
+  queued_shards: number
+  retries: number
+  started_at_ms: number
+  finished_at_ms: number
+  fatal_error: string
+  coordinator_task_id: string
+  expected_workers: number
+  worker_states: WorkerStateCount[]
+  resources: ResourceUsage
+  node_statuses: PlanNodeStatus[]
 }
 
 export interface MetricPoint {
-  timestampMs: Integer
-  stage?: string
-  itemRate?: number
-  byteRate?: number
-  cpuCores?: number
-  memoryBytes?: Integer
+  timestamp_ms: number
+  stage: string
+  item_rate: number
+  byte_rate: number
+  cpu_cores: number
+  memory_bytes: number
 }
 
 export interface PipelineMetrics {
-  points?: MetricPoint[]
-  warning?: string
+  points: MetricPoint[]
+  warning: string
 }
 
 export interface CounterValue {
   name: string
-  intValue?: Integer
-  doubleValue?: number
-  aggregation?: string
-  stage?: string
-  observations?: Integer
+  value: number
+  aggregation: string
+  stage: string
+  observations: number
 }
 
-export interface ListCountersResponse {
-  counters?: CounterValue[]
-  total?: number
-}
-
-export interface WorkerStatus {
-  workerId: string
-  taskId?: string
-  state?: string
-  lastSeenAgeSeconds?: number
-  assignments?: WorkerAssignment[]
-  cpuPercent?: number
-  memoryBytes?: Integer
+export interface CounterPage {
+  counters: CounterValue[]
+  total: number
 }
 
 export interface WorkerAssignment {
-  executionId: string
+  execution_id: string
   shard: number
 }
 
-export interface ListWorkersResponse {
-  workers?: WorkerStatus[]
-  total?: number
+export interface WorkerStatus {
+  worker_id: string
+  task_id: string
+  state: string
+  last_seen_age_seconds: number
+  assignments: WorkerAssignment[]
+  cpu_percent: number
+  memory_bytes: number
+}
+
+export interface WorkerPage {
+  workers: WorkerStatus[]
+  total: number
 }

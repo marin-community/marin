@@ -25,11 +25,22 @@ from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 from starlette.types import ASGIApp
 
 from zephyr.dashboard import (
-    DEFAULT_COUNTER_LIMIT,
-    DEFAULT_WORKER_LIMIT,
-    MAX_COUNTER_LIMIT,
-    MAX_WORKER_LIMIT,
-    bounded_limit,
+    CounterPage,
+    CounterQuery,
+    PipelineList,
+    PipelineMetrics,
+    PipelinePhase,
+    PipelinePlan,
+    PipelineStatus,
+    PipelineSummary,
+    PlanNodeState,
+    PlanNodeStatus,
+    ResourceUsage,
+    WorkerAssignment,
+    WorkerPage,
+    WorkerQuery,
+    WorkerStateCount,
+    WorkerStatus,
     counter_value,
     create_dashboard_application,
     pipeline_plan,
@@ -37,7 +48,6 @@ from zephyr.dashboard import (
     stage_node_id,
 )
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
-from zephyr.rpc import dashboard_pb2
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
     ShardTask,
@@ -168,7 +178,7 @@ class _PipelineExecution:
     reduce_cost: ZephyrTaskResources
     plan: PhysicalPlan | None = None
     pipeline_name: str = ""
-    dashboard_plan: dashboard_pb2.GetPlanResponse | None = None
+    dashboard_plan: PipelinePlan | None = None
     started_at_ms: int = 0
     finished_at_ms: int = 0
     task_queue: deque[ShardTask] = field(default_factory=deque)
@@ -407,46 +417,44 @@ class ZephyrCoordinator:
             return self._executions.get(execution_id)
         return next((run for run in reversed(self._executions.values()) if not run.done), None)
 
-    def _dashboard_phase_locked(self, run: _PipelineExecution) -> int:
+    def _dashboard_phase_locked(self, run: _PipelineExecution) -> PipelinePhase:
         if run.fatal_error is not None or run.terminal_error is not None:
-            return dashboard_pb2.PIPELINE_PHASE_FAILED
+            return PipelinePhase.FAILED
         if run.done:
-            return dashboard_pb2.PIPELINE_PHASE_SUCCEEDED
+            return PipelinePhase.SUCCEEDED
         if not self._worker_states:
-            return dashboard_pb2.PIPELINE_PHASE_WAITING_FOR_WORKERS
-        return dashboard_pb2.PIPELINE_PHASE_RUNNING
+            return PipelinePhase.WAITING_FOR_WORKERS
+        return PipelinePhase.RUNNING
 
-    def _dashboard_pipelines_response(self) -> dashboard_pb2.ListPipelinesResponse:
+    def _dashboard_pipelines(self) -> PipelineList:
         with self._lock:
             active = [run for run in self._executions.values() if not run.done]
-            summaries = [
-                dashboard_pb2.PipelineSummary(
-                    execution_id=run.execution_id,
-                    pipeline_name=run.pipeline_name or run.execution_id,
-                    current_stage=run.stage_name,
+            return PipelineList(
+                pipelines=tuple(
+                    PipelineSummary(
+                        execution_id=run.execution_id,
+                        pipeline_name=run.pipeline_name or run.execution_id,
+                        current_stage=run.stage_name,
+                    )
+                    for run in reversed(active)
                 )
-                for run in reversed(active)
-            ]
-        return dashboard_pb2.ListPipelinesResponse(pipelines=summaries)
+            )
 
-    def _dashboard_plan_locked(self, run: _PipelineExecution) -> dashboard_pb2.GetPlanResponse:
+    def _dashboard_plan_locked(self, run: _PipelineExecution) -> PipelinePlan:
         if run.dashboard_plan is None and run.plan is not None:
             run.dashboard_plan = pipeline_plan(
                 run.plan,
                 pipeline_name=run.pipeline_name or run.execution_id,
                 execution_id=run.execution_id,
             )
-        return run.dashboard_plan or dashboard_pb2.GetPlanResponse(execution_id=run.execution_id)
+        return run.dashboard_plan or PipelinePlan(pipeline_name="", execution_id=run.execution_id)
 
-    def _dashboard_plan_response(self, execution_id: str) -> dashboard_pb2.GetPlanResponse:
+    def _dashboard_plan(self, execution_id: str) -> PipelinePlan:
         with self._lock:
             run = self._dashboard_run_locked(execution_id)
             if run is None:
-                return dashboard_pb2.GetPlanResponse(execution_id=execution_id)
-            cached = self._dashboard_plan_locked(run)
-            response = dashboard_pb2.GetPlanResponse()
-            response.CopyFrom(cached)
-            return response
+                return PipelinePlan(pipeline_name="", execution_id=execution_id)
+            return self._dashboard_plan_locked(run)
 
     def _worker_counter_entries_locked(self, worker_id: str) -> dict[str, CounterEntry]:
         merged, conflicted = merge_counter_entries(
@@ -457,11 +465,11 @@ class ZephyrCoordinator:
         )
         return {name: entry for name, entry in merged.items() if name not in conflicted}
 
-    def _dashboard_status_response(self, execution_id: str) -> dashboard_pb2.GetStatusResponse:
+    def _dashboard_status(self, execution_id: str) -> PipelineStatus:
         with self._lock:
             run = self._dashboard_run_locked(execution_id)
             if run is None:
-                return dashboard_pb2.GetStatusResponse(execution_id=execution_id)
+                return PipelineStatus(execution_id=execution_id)
 
             worker_states = Counter(state.value for state in self._worker_states.values())
             worker_snapshots = [
@@ -482,35 +490,30 @@ class ZephyrCoordinator:
             memory_capacity = active_workers * self._worker_resources.memory
             safe_plan = self._dashboard_plan_locked(run)
             nodes_by_id = {node.node_id: node for node in safe_plan.nodes}
-            node_statuses: list[dashboard_pb2.PlanNodeStatus] = []
+            node_statuses: list[PlanNodeStatus] = []
             phase = self._dashboard_phase_locked(run)
             for node in safe_plan.nodes:
                 if node.stage_type == "SOURCE":
-                    state = dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED
+                    state = PlanNodeState.SUCCEEDED
                 else:
                     parent = nodes_by_id.get(node.parent_node_id)
                     stage_index = parent.stage_index if parent is not None else node.stage_index
                     if stage_index < run.current_stage_index:
-                        state = dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED
-                    elif phase == dashboard_pb2.PIPELINE_PHASE_FAILED and stage_index == run.current_stage_index:
-                        state = dashboard_pb2.PLAN_NODE_STATE_FAILED
+                        state = PlanNodeState.SUCCEEDED
+                    elif phase is PipelinePhase.FAILED and stage_index == run.current_stage_index:
+                        state = PlanNodeState.FAILED
                     elif stage_index > run.current_stage_index or not run.stage_name:
-                        state = dashboard_pb2.PLAN_NODE_STATE_PENDING
+                        state = PlanNodeState.PENDING
                     elif run.done or (run.total_shards > 0 and run.completed_shards >= run.total_shards):
-                        state = dashboard_pb2.PLAN_NODE_STATE_SUCCEEDED
+                        state = PlanNodeState.SUCCEEDED
                     else:
-                        state = dashboard_pb2.PLAN_NODE_STATE_RUNNING
-                node_statuses.append(
-                    dashboard_pb2.PlanNodeStatus(
-                        node_id=node.node_id,
-                        state=state,
-                    )
-                )
+                        state = PlanNodeState.RUNNING
+                node_statuses.append(PlanNodeStatus(node_id=node.node_id, state=state))
 
             current_node_id = (
                 stage_node_id("main", run.current_stage_index) if run.stage_name else source_node_id("main")
             )
-            return dashboard_pb2.GetStatusResponse(
+            return PipelineStatus(
                 execution_id=run.execution_id,
                 phase=phase,
                 current_node_id=current_node_id,
@@ -525,40 +528,26 @@ class ZephyrCoordinator:
                 fatal_error=run.fatal_error or (str(run.terminal_error) if run.terminal_error is not None else ""),
                 coordinator_task_id=self._coordinator_task_id,
                 expected_workers=self._expected_workers,
-                worker_states=[
-                    dashboard_pb2.WorkerStateCount(state=state, count=count)
-                    for state, count in sorted(worker_states.items())
-                ],
-                resources=dashboard_pb2.ResourceUsage(
+                worker_states=tuple(
+                    WorkerStateCount(state=state, count=count) for state, count in sorted(worker_states.items())
+                ),
+                resources=ResourceUsage(
                     cpu_cores=cpu_percent / 100,
                     cpu_utilization=(cpu_percent / 100 / cpu_capacity) if cpu_capacity else 0,
                     memory_bytes=memory_bytes,
                     memory_utilization=(memory_bytes / memory_capacity) if memory_capacity else 0,
                 ),
-                node_statuses=node_statuses,
+                node_statuses=tuple(node_statuses),
             )
 
-    def _dashboard_metrics_response(self, execution_id: str, max_points: int) -> dashboard_pb2.GetMetricsResponse:
+    def _dashboard_metrics(self, execution_id: str, max_points: int) -> PipelineMetrics:
         with self._lock:
             run = self._dashboard_run_locked(execution_id)
             if run is None:
-                return dashboard_pb2.GetMetricsResponse(warning="The selected pipeline is not active.")
+                return PipelineMetrics(warning="The selected pipeline is not active.")
             selected_execution_id = run.execution_id
         result = self._stats_writer.query_pipeline_metrics(selected_execution_id, max_points)
-        return dashboard_pb2.GetMetricsResponse(
-            points=[
-                dashboard_pb2.MetricPoint(
-                    timestamp_ms=point.timestamp_ms,
-                    stage=point.stage,
-                    item_rate=point.item_rate,
-                    byte_rate=point.byte_rate,
-                    cpu_cores=point.cpu_cores,
-                    memory_bytes=point.memory_bytes,
-                )
-                for point in result.points
-            ],
-            warning=result.warning,
-        )
+        return PipelineMetrics(points=result.points, warning=result.warning)
 
     def _dashboard_counter_entries(self, execution_id: str) -> list[tuple[str, CounterEntry]]:
         with self._lock:
@@ -582,14 +571,12 @@ class ZephyrCoordinator:
             result.extend((name, entry) for name, entry in merged.items() if name not in conflicted)
         return result
 
-    def _dashboard_counters_response(
-        self, request: dashboard_pb2.ListCountersRequest
-    ) -> dashboard_pb2.ListCountersResponse:
-        search = request.search.casefold()
+    def _dashboard_counters(self, query: CounterQuery) -> CounterPage:
+        search = query.search.casefold()
         entries = [
             (name, entry)
-            for name, entry in self._dashboard_counter_entries(request.execution_id)
-            if (not request.stage or entry.stage == request.stage)
+            for name, entry in self._dashboard_counter_entries(query.execution_id)
+            if (not query.stage or entry.stage == query.stage)
             and (not search or search in name.casefold() or search in (entry.stage or "").casefold())
         ]
         sort_keys: dict[str, Callable[[tuple[str, CounterEntry]], object]] = {
@@ -599,18 +586,14 @@ class ZephyrCoordinator:
             "aggregation": lambda item: item[1].aggregation.value,
             "observations": lambda item: item[1].count,
         }
-        entries.sort(key=sort_keys.get(request.sort_field, sort_keys["name"]), reverse=request.sort_descending)
-        total = len(entries)
-        offset = max(request.offset, 0)
-        limit = bounded_limit(request.limit, DEFAULT_COUNTER_LIMIT, MAX_COUNTER_LIMIT)
-        return dashboard_pb2.ListCountersResponse(
-            counters=[counter_value(name, entry) for name, entry in entries[offset : offset + limit]],
-            total=total,
+        entries.sort(key=sort_keys.get(query.sort_field, sort_keys["name"]), reverse=query.sort_descending)
+        page = entries[query.offset : query.offset + query.limit]
+        return CounterPage(
+            counters=tuple(counter_value(name, entry) for name, entry in page),
+            total=len(entries),
         )
 
-    def _dashboard_workers_response(
-        self, request: dashboard_pb2.ListWorkersRequest
-    ) -> dashboard_pb2.ListWorkersResponse:
+    def _dashboard_workers(self, query: WorkerQuery) -> WorkerPage:
         now = time.monotonic()
         with self._lock:
             assignments_by_worker: dict[str, list[tuple[str, int]]] = defaultdict(list)
@@ -631,7 +614,7 @@ class ZephyrCoordinator:
                 for worker_id, state in self._worker_states.items()
             ]
 
-        search = request.search.casefold()
+        search = query.search.casefold()
         snapshots = [
             snapshot
             for snapshot in snapshots
@@ -649,26 +632,23 @@ class ZephyrCoordinator:
             "memory": lambda snapshot: snapshot.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value,
             "active_shards": lambda snapshot: len(snapshot.assignments),
         }
-        snapshots.sort(key=sort_keys.get(request.sort_field, sort_keys["worker_id"]), reverse=request.sort_descending)
-        total = len(snapshots)
-        offset = max(request.offset, 0)
-        limit = bounded_limit(request.limit, DEFAULT_WORKER_LIMIT, MAX_WORKER_LIMIT)
-        workers = [
-            dashboard_pb2.WorkerStatus(
+        snapshots.sort(key=sort_keys.get(query.sort_field, sort_keys["worker_id"]), reverse=query.sort_descending)
+        workers = tuple(
+            WorkerStatus(
                 worker_id=snapshot.worker_id,
                 task_id=snapshot.task_id,
                 state=snapshot.state,
                 last_seen_age_seconds=snapshot.last_seen_age_seconds,
-                assignments=[
-                    dashboard_pb2.WorkerAssignment(execution_id=execution_id, shard=shard)
+                assignments=tuple(
+                    WorkerAssignment(execution_id=execution_id, shard=shard)
                     for execution_id, shard in snapshot.assignments
-                ],
+                ),
                 cpu_percent=float(snapshot.counters.get(ZEPHYR_WORKER_CPU_PCT_CURRENT_KEY, CounterEntry(0)).value),
                 memory_bytes=int(snapshot.counters.get(ZEPHYR_WORKER_MEM_CURRENT_KEY, CounterEntry(0)).value),
             )
-            for snapshot in snapshots[offset : offset + limit]
-        ]
-        return dashboard_pb2.ListWorkersResponse(workers=workers, total=total)
+            for snapshot in snapshots[query.offset : query.offset + query.limit]
+        )
+        return WorkerPage(workers=workers, total=len(snapshots))
 
     def set_worker_group(self, worker_group: Any) -> None:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""

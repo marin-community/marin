@@ -1,23 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Coordinator-owned Connect service and browser dashboard."""
+"""Coordinator-owned JSON API and browser dashboard.
 
+The coordinator and the dashboard asset ship in the same wheel, so the payloads
+are plain dataclasses that :mod:`msgspec` encodes to JSON. The TypeScript
+interfaces in ``dashboard/src/types/dashboard.ts`` mirror them field for field.
+"""
+
+import enum
 import html
 import importlib.resources
+from dataclasses import dataclass, field
 from typing import Protocol
 
-from connectrpc.request import RequestContext
+import msgspec
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import HTMLResponse
-from starlette.routing import Mount, Route
+from starlette.responses import HTMLResponse, Response
+from starlette.routing import Route
 from starlette.types import ASGIApp
 
 from zephyr.plan import Join, PhysicalPlan
-from zephyr.rpc import dashboard_pb2
-from zephyr.rpc.dashboard_connect import CoordinatorDashboardServiceASGIApplication
+from zephyr.stats import PipelineMetricPoint
 from zephyr.worker_context import Aggregation, CounterEntry
 
 DEFAULT_COUNTER_LIMIT = 100
@@ -27,75 +34,182 @@ MAX_WORKER_LIMIT = 200
 DEFAULT_METRIC_POINTS = 200
 MAX_METRIC_POINTS = 500
 
-_DASHBOARD_SERVICE_PATH = "zephyr.dashboard.v1.CoordinatorDashboardService"
 _BASE_ELEMENT = '<base href="/"'
-_COUNTER_AGGREGATIONS = {
-    Aggregation.SUM: dashboard_pb2.COUNTER_AGGREGATION_SUM,
-    Aggregation.AVERAGE: dashboard_pb2.COUNTER_AGGREGATION_AVERAGE,
-    Aggregation.MAX: dashboard_pb2.COUNTER_AGGREGATION_MAX,
-    Aggregation.MIN: dashboard_pb2.COUNTER_AGGREGATION_MIN,
-}
 _NOT_BUILT_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><base href="/"><title>Zephyr Dashboard</title></head>
 <body><h1>Zephyr Dashboard</h1><p>The dashboard asset is not available.</p></body></html>
 """
 
 
+class PipelinePhase(enum.StrEnum):
+    """Coarse pipeline state that the dashboard header shows."""
+
+    UNKNOWN = "unknown"
+    WAITING_FOR_WORKERS = "waiting_for_workers"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class PlanNodeState(enum.StrEnum):
+    """State of one plan node in the selected execution."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class PipelineSummary:
+    execution_id: str
+    pipeline_name: str
+    current_stage: str
+
+
+@dataclass(frozen=True)
+class PipelineList:
+    pipelines: tuple[PipelineSummary, ...]
+
+
+@dataclass(frozen=True)
+class PlanNode:
+    node_id: str
+    label: str
+    stage_type: str
+    output_shards: int
+    stage_index: int
+    parent_node_id: str
+    auxiliary: bool
+    operation_types: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PipelinePlan:
+    pipeline_name: str
+    execution_id: str
+    source_item_count: int = 0
+    nodes: tuple[PlanNode, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlanNodeStatus:
+    node_id: str
+    state: PlanNodeState
+
+
+@dataclass(frozen=True)
+class WorkerStateCount:
+    state: str
+    count: int
+
+
+@dataclass(frozen=True)
+class ResourceUsage:
+    cpu_cores: float = 0.0
+    cpu_utilization: float = 0.0
+    memory_bytes: int = 0
+    memory_utilization: float = 0.0
+
+
+@dataclass(frozen=True)
+class PipelineStatus:
+    execution_id: str
+    phase: PipelinePhase = PipelinePhase.UNKNOWN
+    current_node_id: str = ""
+    current_stage: str = ""
+    completed_shards: int = 0
+    total_shards: int = 0
+    in_flight_shards: int = 0
+    queued_shards: int = 0
+    retries: int = 0
+    started_at_ms: int = 0
+    finished_at_ms: int = 0
+    fatal_error: str = ""
+    coordinator_task_id: str = ""
+    expected_workers: int = 0
+    worker_states: tuple[WorkerStateCount, ...] = ()
+    resources: ResourceUsage = field(default_factory=ResourceUsage)
+    node_statuses: tuple[PlanNodeStatus, ...] = ()
+
+
+@dataclass(frozen=True)
+class PipelineMetrics:
+    points: tuple[PipelineMetricPoint, ...] = ()
+    warning: str = ""
+
+
+@dataclass(frozen=True)
+class CounterValue:
+    name: str
+    value: float
+    aggregation: Aggregation
+    stage: str
+    observations: int
+
+
+@dataclass(frozen=True)
+class CounterPage:
+    counters: tuple[CounterValue, ...]
+    total: int
+
+
+@dataclass(frozen=True)
+class WorkerAssignment:
+    execution_id: str
+    shard: int
+
+
+@dataclass(frozen=True)
+class WorkerStatus:
+    worker_id: str
+    task_id: str
+    state: str
+    last_seen_age_seconds: float
+    assignments: tuple[WorkerAssignment, ...]
+    cpu_percent: float
+    memory_bytes: int
+
+
+@dataclass(frozen=True)
+class WorkerPage:
+    workers: tuple[WorkerStatus, ...]
+    total: int
+
+
+@dataclass(frozen=True)
+class CounterQuery:
+    """Normalized ``/api/counters`` query parameters."""
+
+    execution_id: str
+    stage: str
+    search: str
+    sort_field: str
+    sort_descending: bool
+    offset: int
+    limit: int
+
+
+@dataclass(frozen=True)
+class WorkerQuery:
+    """Normalized ``/api/workers`` query parameters."""
+
+    search: str
+    sort_field: str
+    sort_descending: bool
+    offset: int
+    limit: int
+
+
 class CoordinatorDashboardData(Protocol):
     """Dashboard data methods that stay private to avoid actor RPC publication."""
 
-    def _dashboard_pipelines_response(self) -> dashboard_pb2.ListPipelinesResponse: ...
-    def _dashboard_plan_response(self, execution_id: str) -> dashboard_pb2.GetPlanResponse: ...
-    def _dashboard_status_response(self, execution_id: str) -> dashboard_pb2.GetStatusResponse: ...
-    def _dashboard_metrics_response(self, execution_id: str, max_points: int) -> dashboard_pb2.GetMetricsResponse: ...
-    def _dashboard_counters_response(
-        self, request: dashboard_pb2.ListCountersRequest
-    ) -> dashboard_pb2.ListCountersResponse: ...
-    def _dashboard_workers_response(
-        self, request: dashboard_pb2.ListWorkersRequest
-    ) -> dashboard_pb2.ListWorkersResponse: ...
-
-
-class CoordinatorDashboardService:
-    """Read-only Connect service over a coordinator state snapshot."""
-
-    def __init__(self, coordinator: CoordinatorDashboardData) -> None:
-        self._coordinator = coordinator
-
-    async def list_pipelines(
-        self, _request: dashboard_pb2.ListPipelinesRequest, _ctx: RequestContext
-    ) -> dashboard_pb2.ListPipelinesResponse:
-        return await run_in_threadpool(self._coordinator._dashboard_pipelines_response)
-
-    async def get_plan(
-        self, request: dashboard_pb2.GetPlanRequest, _ctx: RequestContext
-    ) -> dashboard_pb2.GetPlanResponse:
-        return await run_in_threadpool(self._coordinator._dashboard_plan_response, request.execution_id)
-
-    async def get_status(
-        self, request: dashboard_pb2.GetStatusRequest, _ctx: RequestContext
-    ) -> dashboard_pb2.GetStatusResponse:
-        return await run_in_threadpool(self._coordinator._dashboard_status_response, request.execution_id)
-
-    async def get_metrics(
-        self, request: dashboard_pb2.GetMetricsRequest, _ctx: RequestContext
-    ) -> dashboard_pb2.GetMetricsResponse:
-        max_points = bounded_limit(request.max_points, DEFAULT_METRIC_POINTS, MAX_METRIC_POINTS)
-        return await run_in_threadpool(
-            self._coordinator._dashboard_metrics_response,
-            request.execution_id,
-            max_points,
-        )
-
-    async def list_counters(
-        self, request: dashboard_pb2.ListCountersRequest, _ctx: RequestContext
-    ) -> dashboard_pb2.ListCountersResponse:
-        return await run_in_threadpool(self._coordinator._dashboard_counters_response, request)
-
-    async def list_workers(
-        self, request: dashboard_pb2.ListWorkersRequest, _ctx: RequestContext
-    ) -> dashboard_pb2.ListWorkersResponse:
-        return await run_in_threadpool(self._coordinator._dashboard_workers_response, request)
+    def _dashboard_pipelines(self) -> PipelineList: ...
+    def _dashboard_plan(self, execution_id: str) -> PipelinePlan: ...
+    def _dashboard_status(self, execution_id: str) -> PipelineStatus: ...
+    def _dashboard_metrics(self, execution_id: str, max_points: int) -> PipelineMetrics: ...
+    def _dashboard_counters(self, query: CounterQuery) -> CounterPage: ...
+    def _dashboard_workers(self, query: WorkerQuery) -> WorkerPage: ...
 
 
 def bounded_limit(value: int, default: int, maximum: int) -> int:
@@ -105,18 +219,14 @@ def bounded_limit(value: int, default: int, maximum: int) -> int:
     return min(value, maximum)
 
 
-def counter_value(name: str, entry: CounterEntry) -> dashboard_pb2.CounterValue:
-    value = dashboard_pb2.CounterValue(
+def counter_value(name: str, entry: CounterEntry) -> CounterValue:
+    return CounterValue(
         name=name,
-        aggregation=_COUNTER_AGGREGATIONS[entry.aggregation],
+        value=entry.value,
+        aggregation=entry.aggregation,
         stage=entry.stage or "",
         observations=entry.count,
     )
-    if isinstance(entry.value, int):
-        value.int_value = entry.value
-    else:
-        value.double_value = entry.value
-    return value
 
 
 def source_node_id(prefix: str) -> str:
@@ -136,13 +246,9 @@ def pipeline_plan(
     *,
     pipeline_name: str,
     execution_id: str,
-) -> dashboard_pb2.GetPlanResponse:
+) -> PipelinePlan:
     """Build a safe graph that contains no source values or callable representations."""
-    response = dashboard_pb2.GetPlanResponse(
-        pipeline_name=pipeline_name,
-        execution_id=execution_id,
-        source_item_count=len(plan.source_items),
-    )
+    nodes: list[PlanNode] = []
 
     def add_plan(
         nested_plan: PhysicalPlan,
@@ -151,10 +257,9 @@ def pipeline_plan(
         parent_node_id: str = "",
         auxiliary: bool = False,
     ) -> None:
-        plan_source_node_id = source_node_id(prefix)
-        response.nodes.append(
-            dashboard_pb2.PlanNode(
-                node_id=plan_source_node_id,
+        nodes.append(
+            PlanNode(
+                node_id=source_node_id(prefix),
                 label=f"Source ({nested_plan.num_shards} shards)",
                 stage_type="SOURCE",
                 output_shards=nested_plan.num_shards,
@@ -167,12 +272,12 @@ def pipeline_plan(
         for stage_index, stage in enumerate(nested_plan.stages):
             node_id = stage_node_id(prefix, stage_index)
             output_shards = stage.output_shards or current_shards
-            response.nodes.append(
-                dashboard_pb2.PlanNode(
+            nodes.append(
+                PlanNode(
                     node_id=node_id,
                     label=stage.stage_name(),
                     stage_type=stage.stage_type.value.upper(),
-                    operation_types=[type(operation).__name__ for operation in stage.operations],
+                    operation_types=tuple(type(operation).__name__ for operation in stage.operations),
                     output_shards=output_shards,
                     stage_index=stage_index,
                     parent_node_id=parent_node_id,
@@ -192,7 +297,12 @@ def pipeline_plan(
                 )
 
     add_plan(plan, prefix="main")
-    return response
+    return PipelinePlan(
+        pipeline_name=pipeline_name,
+        execution_id=execution_id,
+        source_item_count=len(plan.source_items),
+        nodes=tuple(nodes),
+    )
 
 
 def _dashboard_html() -> str:
@@ -216,23 +326,75 @@ def _html_with_base(raw_html: str, forwarded_prefix: str) -> str:
     return raw_html.replace(_BASE_ELEMENT, f'<base href="{safe_prefix}/"', 1)
 
 
+def _json_response(payload: object) -> Response:
+    return Response(msgspec.json.encode(payload), media_type="application/json")
+
+
+def _integer_parameter(request: Request, name: str) -> int:
+    """Return an integer query parameter, or 0 when the browser omits it."""
+    raw = request.query_params.get(name, "")
+    if not raw:
+        return 0
+    try:
+        return int(raw)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"Query parameter {name!r} must be an integer") from error
+
+
 def create_dashboard_application(coordinator: CoordinatorDashboardData) -> ASGIApp:
-    """Create the coordinator dashboard app with Connect routes before SPA routes."""
-    service_app = CoordinatorDashboardServiceASGIApplication(CoordinatorDashboardService(coordinator))
+    """Create the coordinator dashboard app with API routes before SPA routes."""
     raw_html = _dashboard_html()
+
+    async def pipelines(_request: Request) -> Response:
+        return _json_response(await run_in_threadpool(coordinator._dashboard_pipelines))
+
+    async def plan(request: Request) -> Response:
+        execution_id = request.query_params.get("execution_id", "")
+        return _json_response(await run_in_threadpool(coordinator._dashboard_plan, execution_id))
+
+    async def status(request: Request) -> Response:
+        execution_id = request.query_params.get("execution_id", "")
+        return _json_response(await run_in_threadpool(coordinator._dashboard_status, execution_id))
+
+    async def metrics(request: Request) -> Response:
+        execution_id = request.query_params.get("execution_id", "")
+        max_points = bounded_limit(_integer_parameter(request, "max_points"), DEFAULT_METRIC_POINTS, MAX_METRIC_POINTS)
+        return _json_response(await run_in_threadpool(coordinator._dashboard_metrics, execution_id, max_points))
+
+    async def counters(request: Request) -> Response:
+        query = CounterQuery(
+            execution_id=request.query_params.get("execution_id", ""),
+            stage=request.query_params.get("stage", ""),
+            search=request.query_params.get("search", ""),
+            sort_field=request.query_params.get("sort_field", "name"),
+            sort_descending=request.query_params.get("sort_descending") == "true",
+            offset=max(_integer_parameter(request, "offset"), 0),
+            limit=bounded_limit(_integer_parameter(request, "limit"), DEFAULT_COUNTER_LIMIT, MAX_COUNTER_LIMIT),
+        )
+        return _json_response(await run_in_threadpool(coordinator._dashboard_counters, query))
+
+    async def workers(request: Request) -> Response:
+        query = WorkerQuery(
+            search=request.query_params.get("search", ""),
+            sort_field=request.query_params.get("sort_field", "worker_id"),
+            sort_descending=request.query_params.get("sort_descending") == "true",
+            offset=max(_integer_parameter(request, "offset"), 0),
+            limit=bounded_limit(_integer_parameter(request, "limit"), DEFAULT_WORKER_LIMIT, MAX_WORKER_LIMIT),
+        )
+        return _json_response(await run_in_threadpool(coordinator._dashboard_workers, query))
 
     async def index(request: Request) -> HTMLResponse:
         return HTMLResponse(_html_with_base(raw_html, request.headers.get("x-forwarded-prefix", "")))
 
     return Starlette(
         routes=[
-            Mount(service_app.path, app=service_app),
+            Route("/api/pipelines", pipelines),
+            Route("/api/plan", plan),
+            Route("/api/status", status),
+            Route("/api/metrics", metrics),
+            Route("/api/counters", counters),
+            Route("/api/workers", workers),
             Route("/", index),
             Route("/{path:path}", index),
         ]
     )
-
-
-def service_path(method: str) -> str:
-    """Return the relative Connect path used by the browser client."""
-    return f"{_DASHBOARD_SERVICE_PATH}/{method}"

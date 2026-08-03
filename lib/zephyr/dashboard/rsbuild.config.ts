@@ -21,7 +21,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/zephyr.dashboard.v1.CoordinatorDashboardService': 'http://localhost:8000',
+      '/api': 'http://localhost:8000',
     },
   },
 })
