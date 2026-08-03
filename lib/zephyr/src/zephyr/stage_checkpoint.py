@@ -170,7 +170,9 @@ def load_stage_checkpoint(
             errors.append(f"{path}: unknown manifest type {type(manifest).__name__}")
             continue
         if manifest.version != STAGE_CHECKPOINT_VERSION:
-            raise ValueError(f"Stage checkpoint {path} has version {manifest.version}; expected {STAGE_CHECKPOINT_VERSION}")
+            raise ValueError(
+                f"Stage checkpoint {path} has version {manifest.version}; expected {STAGE_CHECKPOINT_VERSION}"
+            )
         if manifest.plan_fingerprint != fingerprint:
             raise ValueError(f"Stage checkpoint {path} does not match the current physical plan")
         if not 0 <= manifest.stage_index < num_stages:
