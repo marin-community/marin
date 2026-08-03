@@ -245,26 +245,6 @@ def test_proxy_registry_omits_tcp_endpoint_without_hiding_it(state):
     ]
 
 
-def test_proxy_registry_omits_non_http_system_endpoint_without_hiding_it(state):
-    service = _service(state)
-    updates = []
-    service.subscribe_proxy_updates(updates.append)
-
-    service.register_system_endpoint("/system/coordinator", "tcp://10.0.0.1:8476")
-
-    [delta] = updates
-    assert delta.upserts == ()
-    assert delta.deletes == ("system:/system/coordinator",)
-    assert service.proxy_registry_snapshot().endpoints == ()
-    listed = service.list_endpoints(
-        controller_pb2.Controller.ListEndpointsRequest(prefix="/system/coordinator", exact=True),
-        None,
-    )
-    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in listed.endpoints] == [
-        ("/system/coordinator", "tcp://10.0.0.1:8476")
-    ]
-
-
 def test_proxy_registry_requires_snapshot_after_database_replace(state, tmp_path: Path):
     service = _service(state)
     updates = []

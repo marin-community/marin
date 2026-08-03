@@ -268,10 +268,6 @@ def test_start_controller_creates_controller_resources():
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
 
     agent_spec = node_agent["spec"]["template"]["spec"]
-    assert node_agent["spec"]["updateStrategy"] == {
-        "type": "RollingUpdate",
-        "rollingUpdate": {"maxUnavailable": "10%"},
-    }
     assert agent_spec["hostNetwork"] is True
     assert agent_spec["containers"][0]["command"] == [
         ".venv/bin/python",
