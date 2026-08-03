@@ -1583,3 +1583,19 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Fusion barrier: A small Triton row gather keeps XLA horizontal fusion from adding a false dependency between the two buckets. Its custom VJP uses a Triton row scatter because each valid receive position is unique.
 - Correctness: The two-bucket forward probe returned `1680.0` with zero routing errors. The four-GB200 dense-reference test passed the output and input, W13, and W2 gradient checks in `187.31 s`.
 - Gate: Push this stage, then run five finite steps on one NVL72. Compare p50 MFU and tokens/s with MNEP-074 and record a full-step profile if the throughput gate passes.
+
+### 2026-08-03 13:08 UTC - MNEP-088 exposes a rematerialized-gradient group collision
+
+- Result: The 64-GPU job formed one `nvlink.domain`, installed the fixed runtime, and failed during full training-graph compilation before step 0.
+- Error: XLA rejected scheduling groups `789000` and `790000` because a later `scheduled_cutlass_call` had an operand with the same annotation and unannotated operations between them.
+- Cause: The custom VJP reused the forward transport group ID for activation-gradient QuACK calls. Rematerialization put the recomputed forward calls and gradient calls in one computation, which joined separate windows into a group with gaps.
+- Fix: Keep scheduling IDs on the two forward expert GEMMs only. Leave activation-gradient GEMMs unannotated until they have a separate backward transport schedule.
+- Test: Rematerialize the MoE call in the four-GB200 dense-reference gradient gate before MNEP-089.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-088-cutlass-overlap-5-20260803-1303-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-088-cutlass-overlap-5-20260803-1303).
+
+### 2026-08-03 13:14 UTC - Rematerialized gradient gate passes
+
+- Change: Activation-gradient QuACK calls no longer reuse the forward transport group ID.
+- Regression gate: The four-GB200 dense-reference test now applies `jax.checkpoint` to the MoonEP call before differentiation.
+- Result: The rematerialized graph compiled without a scheduling-group error and matched output and input, W13, and W2 gradients in `237.29 s`.
+- Decision: Commit the correction, release the debug tray, and submit MNEP-089 as one controlled retry of the five-step rack gate.

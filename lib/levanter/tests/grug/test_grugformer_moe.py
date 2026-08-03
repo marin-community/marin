@@ -803,7 +803,7 @@ def test_moonep_matches_dense_cross_shard_value_and_gradients_on_gpu(
     )
     with jax.set_mesh(mesh):
         actual_gradients = jax.grad(
-            lambda x, w_up_gate, w_down: jnp.sum(moonep_output(x, w_up_gate, w_down)[0] * cotangent),
+            lambda x, w_up_gate, w_down: jnp.sum(jax.checkpoint(moonep_output)(x, w_up_gate, w_down)[0] * cotangent),
             argnums=(0, 1, 2),
         )(x, w_up_gate, w_down)
     for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
