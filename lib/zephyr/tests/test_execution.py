@@ -304,8 +304,9 @@ def test_failed_shared_execution_does_not_stop_another(local_client, tmp_path):
 def test_shared_pool_honors_configured_concurrent_pipeline_limit(local_client, tmp_path):
     """A shared pool rejects a pipeline past ``max_concurrent_pipelines``.
 
-    The limit reaches the coordinator through ``_start_pool``. With the default
-    of 16 in place, the second execute below is accepted and succeeds.
+    The limit must reach the coordinator through ``_start_pool``. An argument
+    bound to the wrong coordinator parameter leaves the default of 16 in place,
+    and the second execute below then succeeds instead of raising.
     """
     holding = threading.Event()
     release = threading.Event()
