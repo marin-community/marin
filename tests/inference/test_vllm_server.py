@@ -21,20 +21,37 @@ import pytest
 from marin.inference.config import VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 from marin.inference.vllm_server import (
+    IsolatedCudaVllm,
     TransientStartupError,
+    VllmEnvironment,
+    VllmLauncherWithEnvironment,
     VllmServerHandle,
+    WorkspaceVllm,
     _engine_kwargs_to_cli_args,
     _linux_process_group_status,
     _LogPump,
+    _native_logs,
     _native_logs_tail,
+    _prepare_vllm_compilation_cache,
     _ProcessGroupStatus,
     _start_vllm_native_server,
+    _starts_nccl_ras_probe,
 )
 from rigging.timing import ExponentialBackoff
 
 
 def test_engine_kwargs_forward_dtype_to_vllm_command() -> None:
     assert _engine_kwargs_to_cli_args({"dtype": "float16"}) == ["--dtype", "float16"]
+
+
+def test_nccl_ras_probe_supports_direct_and_wrapped_cuda_launchers() -> None:
+    cuda = IsolatedCudaVllm(version="test")
+    workspace = WorkspaceVllm()
+
+    assert _starts_nccl_ras_probe(cuda)
+    assert _starts_nccl_ras_probe(VllmLauncherWithEnvironment(cuda, {"VLLM_HOST_IP": "10.0.0.2"}))
+    assert not _starts_nccl_ras_probe(workspace)
+    assert not _starts_nccl_ras_probe(VllmLauncherWithEnvironment(workspace, {"VLLM_HOST_IP": "10.0.0.2"}))
 
 
 def _spawn(script: str, *, start_new_session: bool = False) -> subprocess.Popen[str]:
@@ -111,6 +128,15 @@ def test_native_logs_tail_includes_unterminated_final_fragment(tmp_path):
 
     assert "FATAL partial line no newline" in _native_logs_tail(str(tmp_path))
     pump.close()
+
+
+def test_native_logs_keeps_placement_older_than_diagnostic_tail(tmp_path):
+    placement = "Worker placement: process_rank=0"
+    (tmp_path / "stdout.log").write_text("\n".join([placement, *(f"later line {index}" for index in range(250))]))
+    (tmp_path / "stderr.log").write_text("")
+
+    assert placement not in _native_logs_tail(str(tmp_path), max_lines=200)
+    assert placement in _native_logs(str(tmp_path))
 
 
 def test_handle_stop_terminates_drains_and_is_idempotent(tmp_path, monkeypatch):
@@ -268,6 +294,26 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def test_subprocess_environment_overrides_reach_vllm():
+    cache, environment = _prepare_vllm_compilation_cache(
+        model_name_or_path="fake-model",
+        extra_cli_args=None,
+        launcher=VllmLauncherWithEnvironment(
+            _FakeLauncher("serve"),
+            {
+                "VLLM_HOST_IP": "10.0.0.2",
+                "GLOO_SOCKET_IFNAME": "eth0",
+            },
+        ),
+        mode=VllmCompilationCacheMode.CALLER_MANAGED,
+    )
+    try:
+        assert environment["VLLM_HOST_IP"] == "10.0.0.2"
+        assert environment["GLOO_SOCKET_IFNAME"] == "eth0"
+    finally:
+        cache.close()
+
+
 def _start(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmServerHandle:
     return _start_vllm_native_server(
         model_name_or_path="fake-model",
@@ -280,6 +326,44 @@ def _start(launcher: _FakeLauncher, *, timeout_seconds: float = 30) -> VllmServe
         poll_interval_seconds=0.05,
         backoff=_FAST_BACKOFF,
     )
+
+
+def test_headless_worker_starts_without_waiting_for_http_readiness(tmp_path):
+    counter = tmp_path / "starts"
+    environment = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
+        port=_free_port(),
+        extra_args=["--headless"],
+        launcher=_FakeLauncher("hang", str(counter)),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+        wait_for_ready=False,
+    )
+
+    with environment:
+        deadline = time.monotonic() + 5
+        while not counter.exists():
+            if time.monotonic() > deadline:
+                raise AssertionError("headless child never started")
+            time.sleep(0.01)
+        assert environment.vllm_server is not None
+        assert environment.vllm_server.process.poll() is None
+
+
+def test_headless_worker_rejects_a_clean_early_exit():
+    environment = VllmEnvironment(
+        vllm_server.InferenceModelConfig(name="fake-model", path=None, engine_kwargs={}),
+        port=_free_port(),
+        extra_args=["--headless"],
+        launcher=_FakeLauncher("exit"),
+        compilation_cache_mode=VllmCompilationCacheMode.CALLER_MANAGED,
+        wait_for_ready=False,
+    )
+
+    with environment:
+        assert environment.vllm_server is not None
+        environment.vllm_server.process.wait(timeout=5)
+        with pytest.raises(RuntimeError, match="exited unexpectedly with code 0"):
+            environment.check_alive()
 
 
 def test_serves_when_startup_succeeds():

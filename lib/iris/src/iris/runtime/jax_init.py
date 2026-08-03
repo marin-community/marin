@@ -117,28 +117,28 @@ def configure_jax_compilation_cache() -> None:
 # coordinator that has not come up is the expected state while polling, as is a
 # transiently unreachable controller (UNAVAILABLE), so all are retried. Other
 # Connect errors are genuine and propagate.
-_COORDINATOR_PENDING_CODES = frozenset({Code.NOT_FOUND, Code.UNIMPLEMENTED, Code.UNAVAILABLE})
+_REGISTERED_ENDPOINT_PENDING_CODES = frozenset({Code.NOT_FOUND, Code.UNIMPLEMENTED, Code.UNAVAILABLE})
 
 
-def _poll_for_coordinator(
+def poll_for_registered_endpoint(
     resolver: Resolver,
     endpoint_name: str,
     timeout: float,
     poll_interval: float,
 ) -> str:
-    """Poll the endpoint registry until the coordinator address appears.
+    """Poll the endpoint registry until an address appears.
 
     Args:
         resolver: Namespaced resolver for this job.
-        endpoint_name: Name of the coordinator endpoint.
+        endpoint_name: Name of the registered endpoint.
         timeout: Maximum seconds to wait.
         poll_interval: Initial backoff delay in seconds.
 
     Returns:
-        The coordinator address string (host:port).
+        The registered endpoint address.
 
     Raises:
-        TimeoutError: If the coordinator is not found within timeout.
+        TimeoutError: If the endpoint is not found within timeout.
     """
     backoff = ExponentialBackoff(initial=poll_interval, maximum=max(poll_interval, 30.0))
     deadline = Deadline.from_now(Duration.from_seconds(timeout))
@@ -148,10 +148,10 @@ def _poll_for_coordinator(
             if not resolved.is_empty:
                 return resolved.first().url
         except ConnectError as e:
-            if e.code not in _COORDINATOR_PENDING_CODES:
+            if e.code not in _REGISTERED_ENDPOINT_PENDING_CODES:
                 raise
         if deadline.expired():
-            raise TimeoutError(f"Timed out after {timeout}s waiting for coordinator endpoint '{endpoint_name}'")
+            raise TimeoutError(f"Timed out after {timeout}s waiting for registered endpoint '{endpoint_name}'")
         interval = min(backoff.next_interval(), deadline.remaining_seconds())
         if interval > 0:
             time.sleep(interval)
@@ -227,7 +227,7 @@ def _initialize_supervised_jax(
     role = _supervised_coordinator_role(proc_index, task_index, num_tasks)
     if role is _CoordinatorRole.POLL:
         ctx = iris_ctx()
-        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
+        coordinator = poll_for_registered_endpoint(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
     elif role is _CoordinatorRole.REGISTER:
         ctx = iris_ctx()
         endpoint_id = ctx.registry.register(endpoint_name, coordinator)
@@ -357,7 +357,7 @@ def initialize_jax(
             heartbeat_timeout_seconds=heartbeat_timeout,
         )
     else:
-        coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
+        coordinator = poll_for_registered_endpoint(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
         jax.distributed.initialize(
             coordinator,
             job_info.num_tasks,

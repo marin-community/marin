@@ -21,9 +21,9 @@ from iris.cluster.types import JobName
 from iris.runtime.jax_init import (
     _JAX_DIST_HEARTBEAT_TIMEOUT,
     _JAX_DIST_INIT_TIMEOUT,
-    _poll_for_coordinator,
     configure_jax_compilation_cache,
     initialize_jax,
+    poll_for_registered_endpoint,
 )
 
 
@@ -382,7 +382,7 @@ def test_initialize_jax_supervised_other_host_polls(
 # NOT_FOUND is the proper Connect "name absent"; UNIMPLEMENTED is what an older
 # controller's bare HTTP 404 decodes to for the same condition. Both must retry.
 @pytest.mark.parametrize("pending_code", [Code.NOT_FOUND, Code.UNIMPLEMENTED])
-def test_poll_for_coordinator_retries_until_registered(pending_code: Code) -> None:
+def test_poll_for_registered_endpoint_retries_until_registered(pending_code: Code) -> None:
     """The lookup reports the name absent until rank 0 registers; the poller retries, not crashes."""
     found = ResolveResult(
         name="jax_coordinator",
@@ -400,12 +400,12 @@ def test_poll_for_coordinator_retries_until_registered(pending_code: Code) -> No
             return found
 
     resolver = NotYetRegisteredResolver()
-    url = _poll_for_coordinator(resolver, "jax_coordinator", timeout=5.0, poll_interval=0.001)
+    url = poll_for_registered_endpoint(resolver, "jax_coordinator", timeout=5.0, poll_interval=0.001)
     assert url == "10.0.0.9:8476"
     assert resolver.calls == 3
 
 
-def test_poll_for_coordinator_propagates_real_connect_errors() -> None:
+def test_poll_for_registered_endpoint_propagates_real_connect_errors() -> None:
     """A Connect error outside the pending set (e.g. PERMISSION_DENIED) is real and propagates."""
 
     class DeniedResolver:
@@ -413,7 +413,7 @@ def test_poll_for_coordinator_propagates_real_connect_errors() -> None:
             raise ConnectError(Code.PERMISSION_DENIED, "not allowed")
 
     with pytest.raises(ConnectError):
-        _poll_for_coordinator(DeniedResolver(), "jax_coordinator", timeout=5.0, poll_interval=0.001)
+        poll_for_registered_endpoint(DeniedResolver(), "jax_coordinator", timeout=5.0, poll_interval=0.001)
 
 
 @contextmanager
@@ -509,32 +509,32 @@ def test_configure_compilation_cache_keeps_explicit_xla_autotune_setting() -> No
         assert os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] == "all"
 
 
-def test_poll_for_coordinator_default_interval() -> None:
-    """_poll_for_coordinator works with the default poll_interval=2.0 (must not crash on ExponentialBackoff)."""
+def test_poll_for_registered_endpoint_default_interval() -> None:
+    """The endpoint poller accepts a 2-second initial backoff."""
     found = ResolveResult(
         name="coord",
         endpoints=[ResolvedEndpoint(url="1.2.3.4:8476", actor_id="ep-1")],
     )
     resolver = FakeResolver(results=[found])
-    address = _poll_for_coordinator(resolver, "coord", timeout=10.0, poll_interval=2.0)
+    address = poll_for_registered_endpoint(resolver, "coord", timeout=10.0, poll_interval=2.0)
     assert address == "1.2.3.4:8476"
 
 
-def test_poll_for_coordinator_returns_url() -> None:
-    """_poll_for_coordinator returns the url from the first resolved endpoint."""
+def test_poll_for_registered_endpoint_returns_url() -> None:
+    """The endpoint poller returns the first resolved URL."""
     found = ResolveResult(
         name="coord",
         endpoints=[ResolvedEndpoint(url="1.2.3.4:8476", actor_id="ep-1")],
     )
     resolver = FakeResolver(results=[found])
-    address = _poll_for_coordinator(resolver, "coord", timeout=5.0, poll_interval=0.01)
+    address = poll_for_registered_endpoint(resolver, "coord", timeout=5.0, poll_interval=0.01)
     assert address == "1.2.3.4:8476"
 
 
-def test_poll_for_coordinator_timeout() -> None:
-    """_poll_for_coordinator raises TimeoutError when endpoint never appears."""
+def test_poll_for_registered_endpoint_timeout() -> None:
+    """The endpoint poller times out when the endpoint never appears."""
     empty = ResolveResult(name="coord", endpoints=[])
     resolver = FakeResolver(results=[empty])
 
     with pytest.raises(TimeoutError, match="Timed out"):
-        _poll_for_coordinator(resolver, "coord", timeout=0.1, poll_interval=0.01)
+        poll_for_registered_endpoint(resolver, "coord", timeout=0.1, poll_interval=0.01)

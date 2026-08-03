@@ -8,6 +8,7 @@
 Modes:
   serve                          Answer /v1/models with 200.
   hang <counter>                 Record the start, then sleep without becoming ready.
+  exit                           Exit successfully without becoming ready.
   fail <counter> <n> [message]   Record the start; fail the first <n> starts (printing <message>,
                                  default the libstreamer fault, to stderr), then serve.
 """
@@ -49,6 +50,8 @@ def main() -> None:
     elif mode == "hang":
         _record_start(sys.argv[2])
         time.sleep(30)
+    elif mode == "exit":
+        return
     elif mode == "fail":
         started = _record_start(sys.argv[2])
         fail_until = int(sys.argv[3])
