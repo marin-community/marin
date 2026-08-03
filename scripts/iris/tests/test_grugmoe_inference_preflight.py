@@ -294,50 +294,6 @@ def test_health_repeatability_gates_only_identical_settings() -> None:
     assert calibration == {"applicable": False, "comparisons": [], "passed": True}
 
 
-def test_health_result_contract_accepts_consistent_failed_benchmark() -> None:
-    def arm(arm_id: str, rate: float) -> dict[str, object]:
-        return {
-            "arm_id": arm_id,
-            "passed": True,
-            "settings": {
-                "r3_enabled": True,
-                "target_concurrency": 144,
-                "max_num_batched_tokens": 16_384,
-                "max_num_seqs": 144,
-            },
-            "headline": {"generation_tokens_per_second_per_gpu": rate},
-        }
-
-    arms = [arm("arm-0", 227.8925), arm("arm-1", 244.0493)]
-    repeatability = grug_preflight._health_repeatability(arms)
-    result = {
-        "run_id": "failed-health-unit",
-        "error": None,
-        "all_rank_health": {"passed": True},
-        "placement": {"passed": True},
-        "arms": arms,
-        "repeatability": repeatability,
-        "passed": False,
-        "status": "failed",
-    }
-    manifest = {
-        "server_settings": {"concurrencies": [144, 144]},
-        "result_aggregate_sha256": grug_preflight._sha256_json(arms),
-    }
-
-    contract = grug_preflight._health_result_contract(
-        result,
-        manifest,
-        recomputed_repeatability=repeatability,
-        result_markdown="# Result\n\nRun: `failed-health-unit`\n\nStatus: **FAIL**\n",
-    )
-
-    assert not repeatability["passed"]
-    assert contract["passed"]
-    assert not contract["benchmark_passed"]
-    assert contract["expected_status"] == "failed"
-
-
 def test_four_node_case_has_contiguous_rank_starts() -> None:
     case = CASES["granular-ep16"]
     rank_starts = []
@@ -811,7 +767,7 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
     )
 
 
-def test_independent_reader_recomputes_aggregates_and_rejects_tampering(tmp_path: Path) -> None:
+def test_independent_reader_separates_health_from_integrity_and_rejects_tampering(tmp_path: Path) -> None:
     run_id = "readback-unit"
 
     class MemoryFilesystem:
@@ -1250,6 +1206,81 @@ def test_independent_reader_recomputes_aggregates_and_rejects_tampering(tmp_path
     receipt = grug_preflight.readback_health_artifacts(filesystem, run_id=run_id)
 
     assert receipt["passed"], json.dumps(receipt["checks"], indent=2)
+    assert receipt["benchmark_health"]["passed"]
+
+    repeated_arm = json.loads(json.dumps(arm))
+    repeated_arm_id = "arm-01-c3"
+    repeated_arm["arm_id"] = repeated_arm_id
+    repeated_arm["plateau"]["elapsed_seconds"] = 130
+    repeated_arm["headline"]["generation_tokens_per_second_per_gpu"] = 294_912 / 130 / 16
+    repeated_kv_path = metrics_dir / f"{repeated_arm_id}-kv.log"
+    repeated_kv_path.write_text(kv_text)
+    repeated_arm["kv_cache"]["source"]["path"] = f"metrics/{repeated_kv_path.name}"
+
+    first_repeated_metric_index = len(metrics_map)
+    repeated_metrics = []
+    for offset, source in enumerate(metrics_map):
+        repeated = json.loads(json.dumps(source))
+        repeated["index"] = first_repeated_metric_index + offset
+        repeated["path"] = f"metrics/raw-{repeated['index']:06d}.prom"
+        repeated["monotonic_seconds"] = 200.0 + 130.0 * offset
+        repeated["arm_id"] = repeated_arm_id
+        (tmp_path / repeated["path"]).write_bytes((tmp_path / source["path"]).read_bytes())
+        repeated_metrics.append(repeated)
+    metrics_map.extend(repeated_metrics)
+    repeated_arm["metrics"].update(
+        {
+            "rolling_start": repeated_metrics[0]["path"],
+            "boundary_start": repeated_metrics[0]["path"],
+            "boundary_end": repeated_metrics[1]["path"],
+            "final_after_drain": repeated_metrics[1]["path"],
+            "per_engine_plateau_series": grug_preflight._health_engine_series(
+                metrics_map,
+                first_index=first_repeated_metric_index,
+                last_index=first_repeated_metric_index + 1,
+            ),
+        }
+    )
+
+    repeated_events = [
+        {"event": event, "arm_id": repeated_arm_id} for event in ("plateau_opened", "plateau_closed", "arm_completed")
+    ]
+    for event in event_records:
+        if event.get("event") != "request_completed":
+            continue
+        repeated = json.loads(json.dumps(event))
+        repeated["arm_id"] = repeated_arm_id
+        completed = 200.0 + float(event["completed_at_monotonic_seconds"]) * 130.0 / 120.0
+        repeated["completed_at_monotonic_seconds"] = completed
+        repeated["timing"]["started_at_monotonic_seconds"] += 200.0
+        repeated["timing"]["completed_at_monotonic_seconds"] = completed
+        repeated_events.append(repeated)
+    event_records[-1:-1] = repeated_events
+    (tmp_path / "events.jsonl").write_text("\n".join(json.dumps(event) for event in event_records) + "\n")
+
+    result["arms"].append(repeated_arm)
+    result["repeatability"] = grug_preflight._health_repeatability(result["arms"])
+    result["passed"] = False
+    result["status"] = "failed"
+    manifest["server_settings"]["concurrencies"].append(3)
+    manifest["final_prefix_provenance"][repeated_arm_id] = final_prefix_provenance
+    grug_preflight._write_and_upload_health_artifacts(
+        filesystem,
+        artifact_dir=tmp_path,
+        artifact_prefix=f"{grug_preflight.HEALTH_ARTIFACT_ROOT}/{run_id}/",
+        result=result,
+        manifest=manifest,
+        metrics_map=metrics_map,
+    )
+
+    failed_health = grug_preflight.readback_health_artifacts(filesystem, run_id=run_id)
+    assert failed_health["passed"], json.dumps(failed_health["checks"], indent=2)
+    assert not failed_health["benchmark_health"]["passed"]
+    assert failed_health["benchmark_health"]["status"] == "failed"
+    assert not failed_health["benchmark_health"]["repeatability"]["passed"]
+    assert failed_health["checks"]["repeatability"]["passed"]
+    assert not failed_health["checks"]["repeatability"]["benchmark_passed"]
+
     root_key = grug_preflight._s3_key(f"{grug_preflight.HEALTH_ARTIFACT_ROOT}/{run_id}")
     filesystem.data[f"{root_key}/metrics/raw-000001.prom"] += b"\n"
     tampered = grug_preflight.readback_health_artifacts(filesystem, run_id=run_id)
