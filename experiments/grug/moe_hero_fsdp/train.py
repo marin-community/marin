@@ -235,7 +235,7 @@ def _compute_flops(
         num_shared_experts=model_config.num_shared_experts if model_config.shared_expert_intermediate_dim > 0 else 0,
         num_experts_per_tok=model_config.num_experts_per_token,
         sliding_window=model_config.sliding_window,
-        global_every=model_config.global_every,
+        num_long_layers=model_config.num_layers // model_config.global_every,
         local_kv_heads=model_config.local_kv_heads,
         global_kv_heads=model_config.global_kv_heads,
     )
