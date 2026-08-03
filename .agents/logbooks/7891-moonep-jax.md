@@ -1452,3 +1452,18 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - PJRT SHA-256: `4d3f0da2320322ebafb01770bee19440ec2479f04da726761a67332eb9013f68`.
 - Local gate: The exact two-bucket compute-overlap output and input, W13, and W2 gradient checks pass on four GB200 GPUs.
 - Rack gate: Five finite steps on attempt zero, zero dropped assignments, and p50 MFU above MNEP-078's `7.793%`.
+
+### 2026-08-03 09:58 UTC - MNEP-081 proves fenced overlap correctness
+
+- Result: All 16 workers completed five finite steps on attempt zero with zero dropped assignments. The fence fixed the step-2 failure from MNEP-080.
+- Performance: Steady durations were `62.791 s`, `59.593 s`, and `62.236 s`. The p50 MFU was `4.159%` at `67,394` tokens/s.
+- Comparison: MNEP-078 reached `7.793%` p50 MFU. The all-context `Put` fence is correct but adds more cost than the overlap removes.
+- Decision: Keep the fence build as correctness evidence, not as the throughput path. Test the same 16-CTA kernel without the added fence to isolate CTA count from fence cost.
+- Evidence: [Iris job](https://iris.oa.dev/#/job/%2Frav%2Fmnep-081-fenced-overlap-5-20260803-0948-coord) and [W&B run](https://wandb.ai/marin-community/rav_moe/runs/mnep-081-fenced-overlap-5-20260803-0948).
+
+### 2026-08-03 09:59 UTC - CTA16 and rematerialization treatments
+
+- CTA16 artifact: `s3://marin-us-east-02a/marin/research/moonep/jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta16-20260803`, PJRT SHA-256 `f6f661a75a992a137e641a183deee79c9c79978d8fff062395980f0b3faf87ca`.
+- CTA16 gate: Run the exact MNEP-081 graph without patch 0017. Require five finite steps before using its throughput result.
+- Rematerialization: Add an explicit `save_moe` launcher mode. The MNEP-079 profile contains rematerialized token transfers; saving the tagged MoE tensors can remove those duplicate collectives if the program fits in HBM.
+- Order: Isolate CTA16 correctness and speed first. Then combine the best safe transport with `save_moe` and measure HBM, MFU, and tokens/s.

@@ -32,6 +32,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild
+from experiments.grug.moe_hero_ep.model import RematMode
 from experiments.grug.moe_hero_ep.quantile_balancing import QuantileBalancingMethod
 from experiments.grug.moe_hero_ep.train import (
     FiniteDiagnostics,
@@ -115,6 +116,7 @@ def build_hero_run(
     qb_histogram_bins: int = 1000,
     moonep_jax_wheel_build: MoonEPJaxWheelBuild | None = None,
     moonep_transport: MoonEPTransport = MoonEPTransport.TWO_SLICE,
+    remat_mode: RematMode = "recompute_all",
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     worker_cpu: int = HERO_WORKER_CPU,
     worker_ram_gb: int = HERO_WORKER_RAM_GB,
@@ -160,6 +162,7 @@ def build_hero_run(
         batch_size=HERO_EP_BATCH_SIZE,
         moe_implementation=moe_implementation,
         moonep_config=moonep_config,
+        remat_mode=remat_mode,
         qb_method=qb_method,
         qb_histogram_bins=qb_histogram_bins,
     )
@@ -342,6 +345,13 @@ def build_hero_run(
     help="XLA transport for MoonEP ragged collectives.",
 )
 @click.option(
+    "--remat-mode",
+    type=click.Choice(["recompute_all", "save_moe"]),
+    default="recompute_all",
+    show_default=True,
+    help="Block values saved for the backward pass.",
+)
+@click.option(
     "--processes-per-task",
     type=click.IntRange(min=1, max=HERO_GPUS_PER_NODE),
     default=HERO_PROCESSES_PER_TASK,
@@ -397,6 +407,7 @@ def main(
     qb_histogram_bins: int,
     moonep_jax_wheel_build: str | None,
     moonep_transport: str,
+    remat_mode: RematMode,
     processes_per_task: int,
     worker_cpu: int,
     worker_ram_gb: int,
@@ -420,6 +431,7 @@ def main(
             MoonEPJaxWheelBuild(moonep_jax_wheel_build) if moonep_jax_wheel_build is not None else None
         ),
         moonep_transport=MoonEPTransport(moonep_transport),
+        remat_mode=remat_mode,
         processes_per_task=processes_per_task,
         worker_cpu=worker_cpu,
         worker_ram_gb=worker_ram_gb,

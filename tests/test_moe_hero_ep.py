@@ -431,6 +431,12 @@ def test_run_grug_selects_collective_overlap_limit(
             None,
         ),
         (
+            MoonEPJaxWheelBuild.LSA_NCCL_2307_MULTICONTEXT_GIN_CTA16_20260803,
+            "jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta16-20260803",
+            "f6f661a75a992a137e641a183deee79c9c79978d8fff062395980f0b3faf87ca",
+            None,
+        ),
+        (
             MoonEPJaxWheelBuild.LSA_NCCL_2307_MULTICONTEXT_GIN_CTA16_FENCE_20260803,
             "jax-f9f6bbace-xla-5d53e1e-nccl2307-multicontext-cta16-fence-20260803",
             "4d3f0da2320322ebafb01770bee19440ec2479f04da726761a67332eb9013f68",
@@ -551,6 +557,19 @@ def test_hero_bucket_schedule_reaches_model_config():
 
     assert config.model.moonep_config is not None
     assert config.model.moonep_config.bucket_schedule == launch.MoonEPBucketSchedule.COMPUTE_OVERLAP
+
+
+def test_hero_remat_mode_reaches_model_config():
+    step = launch.build_hero_run(
+        run_id="save-moe-remat",
+        num_steps=3,
+        remat_mode="save_moe",
+        version="dev",
+    )
+
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert config.model.remat_mode == "save_moe"
 
 
 def test_direct_transport_keeps_explicit_finite_diagnostics():

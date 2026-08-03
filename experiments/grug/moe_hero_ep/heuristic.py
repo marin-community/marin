@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from levanter.grug.grug_moe import MoeImplementation, MoonEPConfig
 
-from experiments.grug.moe_hero_ep.model import GrugModelConfig
+from experiments.grug.moe_hero_ep.model import GrugModelConfig, RematMode
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_ep.quantile_balancing import QuantileBalancingMethod
 
@@ -82,6 +82,7 @@ def build_hero_configs(
     batch_size: int,
     moe_implementation: MoeImplementation = "fixed_all_to_all",
     moonep_config: MoonEPConfig | None = None,
+    remat_mode: RematMode = "recompute_all",
     qb_method: QuantileBalancingMethod = QuantileBalancingMethod.LOCAL_EXACT,
     qb_histogram_bins: int = 1000,
 ) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
@@ -107,6 +108,7 @@ def build_hero_configs(
         attention_implementation="gpu_fa4_cute",
         moe_implementation=moe_implementation,
         moonep_config=moonep_config,
+        remat_mode=remat_mode,
         qb_method=qb_method,
         qb_histogram_bins=qb_histogram_bins,
         expert_chunks=1,
