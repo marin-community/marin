@@ -1723,3 +1723,81 @@ A smaller domain hierarchy will reduce valid primary-label disagreements while i
 - Interpretation: The student input length is not the main quality limit.
   Reject this control and keep the 256-token production shape. Complete the
   fixed 30M rung before a change to the training objective or teacher mix.
+
+### LUX-ARCTIC-30M-002: Training, speed, and visible semantic result
+
+- Commit Hash: `bd1a6719e`.
+- Training job: `/rav/lux-fast-student-full-30m-h100-001`.
+- Training used 30,000,000 rows from 146 sources for three epochs. It completed
+  21,975 updates in 17 minutes 12 seconds.
+- Final model SHA-256:
+  `981388da726eb2dff8d19dd84fff17749f2b6dd974c93ad223fee581139c9c7f`.
+- All training-audit vectors are finite and unique. Final effective rank is
+  67.96590, and total variance is 0.42014.
+- The paired CPU job measured 6,901.41 documents per second for the student and
+  9,225.16 for Luxical-One. The 0.74811 ratio fails the 0.85 speed gate.
+- Speed artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/fast-student/speed/cpu-trained-full-full-30m.json`.
+- The fixed 10,000-document evaluation gives parent macro-F1 0.45021, leaf
+  macro-F1 0.37371, and form macro-F1 0.40299.
+- Parent macro-F1 improves by 0.00318 from the 10M value of 0.44703. It still
+  fails the fixed teacher-relative gate.
+- Parent, leaf, and form large-group gates all fail. The CPU gate also fails.
+- Semantic artifact:
+  `s3://marin-us-east-02a/marin/user/rav/luxical-arctic-ladder/manifest-v2/evaluation/semantic-labels/glm-5.2/pilot-1000-20260802-001/hierarchies-v1/hierarchy-1000-20260802-002/compact/heldout-10000-20260802-001/student-fast_arctic_30m/adjudicated-v1/embedding-screen-v1/report.json`.
+- Interpretation: Pure Arctic scaling still does not give a releasable student.
+  The fixed 200-query review remains active for the registered scaling stop
+  rule.
+
+### Background research brief: relation-only student training
+
+- Effort: Medium.
+- Stop rule: Stop when local evidence and primary sources select one cheap test
+  that uses saved labels.
+- Question: Can the student keep semantic neighborhoods without matching the
+  teacher coordinate system?
+- Current Marin result: Arctic point alignment improves the student health but
+  loses semantic quality. Qwen 1,024-dimensional alignment through a learned
+  projection gives 140 source failures at 750K rows.
+- Current Marin result: Qwen 1,024-dimensional vectors give the best tested
+  Qwen code and multilingual probe values. The 750K saved training labels are
+  available.
+- [Similarity-Preserving Knowledge Distillation](https://arxiv.org/abs/1907.09682)
+  trains a student to keep pair relations without copying teacher coordinates.
+- [DistillCSE](https://aclanthology.org/2023.findings-emnlp.547/) reports weak
+  standard distillation when teacher contrastive logits have high variance. It
+  uses contrastive and multi-teacher controls.
+- [Improving Text Embeddings with Large Language Models](https://aclanthology.org/2024.acl-long.642/)
+  shows that diverse synthetic pairs and a contrastive loss can train semantic
+  embeddings without a point-vector target.
+- [TALAS](https://aclanthology.org/2026.acl-long.1509/) reports that strict
+  point matching can transmit teacher noise across a large capacity gap.
+- Negative result: The current Gram-KL-only FastTransformer collapsed. A new
+  relation loss needs a direct vector-spread control.
+- Negative result: Same-source geometry loss reduced concentration failures but
+  reduced semantic probe quality. Source identity is not a training target.
+- Hypothesis: A sharp cross-source neighbor target from Qwen can keep semantic
+  pairs without the failed 256-to-1,024 projection.
+- Minimum test: Train the 64K and then 750K Qwen rungs. Use four cross-source
+  teacher neighbors for each row. Add variance and covariance controls.
+- Falsifier: Stop when the 64K model fails vector-health checks, or when the
+  750K model does not improve semantic quality over the prior Qwen student.
+- Risk: Batch neighbors are approximate. Qwen also has teacher failures. GLM
+  semantic pairs remain the next signal when this test fails.
+- Confidence: Exploratory. Primary work supports relation-only distillation,
+  but no cited paper uses this exact 9.3M-parameter student and corpus.
+
+### LUX-NEIGHBOR-001: Cross-source Qwen neighbor POC
+
+- Hypothesis: A relation-only Qwen objective can remove projection loss and
+  keep the FastTransformer vector space non-collapsed.
+- Commit Hash: `d8ea6f727`.
+- Config: Four Qwen-selected positives for each row, cross-source candidates
+  only, temperature 0.1, standard-deviation target 0.04, and covariance weight
+  0.1.
+- The production shape stays at 9.3M parameters, 256 input tokens, and 256
+  output numbers.
+- Test result: 23 focused FastTransformer tests pass. The required file checks
+  also pass.
+- Next action: Run the 64K H100 smoke test. Start the 750K rung only when all
+  three epoch audits stay finite, unique, variable, and above rank 2.
