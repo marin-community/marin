@@ -73,6 +73,7 @@ def _hero_profiler_config(start_step: int | None, num_steps: int) -> ProfilerCon
             host_tracer_level=1,
             python_tracer_level=0,
             enable_hlo_proto=False,
+            advanced_configuration={"gpu_num_chips_to_profile_per_task": 1},
         ),
     )
 
