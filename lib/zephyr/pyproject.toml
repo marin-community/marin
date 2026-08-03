@@ -14,7 +14,6 @@ dependencies = [
     "marin-fray",
     "click>=8.0",
     "cloudpickle>=3.0",
-    "connect-python>=0.9.0",
     "humanfriendly>=10.0",
     "msgspec>=0.18.0",
     "numpy>=2.0",
@@ -25,7 +24,6 @@ dependencies = [
     "xxhash>=3.4",
     "polars>=1.41.0",
     "psutil>=7.2.2",
-    "protobuf>=6",
     "starlette>=0.50.0",
 ]
 

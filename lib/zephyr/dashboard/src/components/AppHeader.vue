@@ -3,38 +3,38 @@ import { computed, onMounted, watch } from 'vue'
 import StateBadge from '@/components/StateBadge.vue'
 import { useAutoRefresh } from '@/composables/useAutoRefresh'
 import { selectedExecutionId, selectPipeline } from '@/composables/usePipelineSelection'
-import { useDashboardRpc } from '@/composables/useRpc'
-import type { ListPipelinesResponse, PipelineStatus } from '@/types/dashboard'
+import { useDashboardApi } from '@/composables/useApi'
+import type { PipelineList, PipelineStatus } from '@/types/dashboard'
 import { irisTaskHref } from '@/utils/formatting'
 
-const pipelinesRpc = useDashboardRpc<ListPipelinesResponse>('ListPipelines')
-const statusRpc = useDashboardRpc<PipelineStatus>('GetStatus', () => ({
-  executionId: selectedExecutionId.value,
+const pipelinesApi = useDashboardApi<PipelineList>('pipelines')
+const statusApi = useDashboardApi<PipelineStatus>('status', () => ({
+  execution_id: selectedExecutionId.value,
 }))
 
-const pipelines = computed(() => pipelinesRpc.data.value?.pipelines ?? [])
+const pipelines = computed(() => pipelinesApi.data.value?.pipelines ?? [])
 const selectedPipeline = computed(() =>
-  pipelines.value.find((pipeline) => pipeline.executionId === selectedExecutionId.value),
+  pipelines.value.find((pipeline) => pipeline.execution_id === selectedExecutionId.value),
 )
-const title = computed(() => selectedPipeline.value?.pipelineName || 'Zephyr coordinator')
+const title = computed(() => selectedPipeline.value?.pipeline_name || 'Zephyr coordinator')
 const subtitle = computed(() => {
   const pipeline = selectedPipeline.value
   if (!pipeline) return `${pipelines.value.length} active pipelines`
-  return `${pipeline.executionId} · ${pipelines.value.length} active pipeline${pipelines.value.length === 1 ? '' : 's'}`
+  return `${pipeline.execution_id} · ${pipelines.value.length} active pipeline${pipelines.value.length === 1 ? '' : 's'}`
 })
 
 async function refresh() {
-  await pipelinesRpc.refresh()
+  await pipelinesApi.refresh()
   const available = pipelines.value
-  if (!available.some((pipeline) => pipeline.executionId === selectedExecutionId.value)) {
-    selectPipeline(available[0]?.executionId ?? '')
+  if (!available.some((pipeline) => pipeline.execution_id === selectedExecutionId.value)) {
+    selectPipeline(available[0]?.execution_id ?? '')
   }
-  await statusRpc.refresh()
+  await statusApi.refresh()
 }
 
 const polling = useAutoRefresh(refresh)
 onMounted(refresh)
-watch(selectedExecutionId, () => void statusRpc.refresh())
+watch(selectedExecutionId, () => void statusApi.refresh())
 
 function toggleTheme() {
   const dark = document.documentElement.classList.toggle('dark')
@@ -49,7 +49,7 @@ function toggleTheme() {
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-3">
           <h1 class="truncate text-lg font-semibold">{{ title }}</h1>
-          <StateBadge :value="statusRpc.data.value?.phase" prefix="PIPELINE_PHASE_" />
+          <StateBadge :value="statusApi.data.value?.phase" />
         </div>
         <p class="truncate font-mono text-xs text-text-secondary">{{ subtitle }}</p>
       </div>
@@ -61,8 +61,8 @@ function toggleTheme() {
           @change="selectPipeline(($event.target as HTMLSelectElement).value)"
         >
           <option v-if="!pipelines.length" value="">No active pipelines</option>
-          <option v-for="pipeline in pipelines" :key="pipeline.executionId" :value="pipeline.executionId">
-            {{ pipeline.pipelineName || pipeline.executionId }} · {{ pipeline.currentStage || 'starting' }}
+          <option v-for="pipeline in pipelines" :key="pipeline.execution_id" :value="pipeline.execution_id">
+            {{ pipeline.pipeline_name || pipeline.execution_id }} · {{ pipeline.current_stage || 'starting' }}
           </option>
         </select>
       </label>
@@ -75,8 +75,8 @@ function toggleTheme() {
         {{ polling.active.value ? 'Live' : 'Paused' }}
       </button>
       <a
-        v-if="statusRpc.data.value?.coordinatorTaskId"
-        :href="irisTaskHref(statusRpc.data.value.coordinatorTaskId)"
+        v-if="statusApi.data.value?.coordinator_task_id"
+        :href="irisTaskHref(statusApi.data.value.coordinator_task_id)"
         target="_top"
         class="hidden rounded-lg border border-surface-border px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-sunken sm:block"
       >
