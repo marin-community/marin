@@ -743,6 +743,55 @@ def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
     assert result.returncode == 0, result.stderr
 
 
+def test_fixed_all_to_all_backward_has_no_scatter():
+    """The dispatch and combine custom VJPs exist to keep scatter out of the backward.
+
+    Their values match plain autodiff, so only the lowered backward distinguishes them:
+    dropping either defvjp restores XLA's generic scatter-add transpose.
+    """
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    tokens, hidden_dim, intermediate_dim, num_experts, topk = 8, 6, 8, 4, 2
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(17),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+
+    def routed(x, combine_weights, w_up_gate, w_down):
+        output, _ = _moe_mlp_ep_fixed_a2a_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=0.5,
+        )
+        return output
+
+    sharded = jax.shard_map(
+        routed,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P()),
+        out_specs=P(),
+        check_vma=False,
+    )
+    seed_cotangent = jax.random.normal(jax.random.key(19), (tokens, hidden_dim))
+    with jax.set_mesh(mesh):
+        _, pullback = jax.vjp(sharded, x, combine_weights, w_up_gate, w_down)
+        backward = jax.jit(pullback).lower(seed_cotangent)
+
+    assert "stablehlo.scatter" not in str(backward.compiler_ir(dialect="stablehlo"))
+
+
 def test_shard_a2a_params_uses_sender_side_output_offsets():
     shard_counts = jnp.array(
         [
