@@ -110,6 +110,7 @@ HEALTH_SAMPLING_PARAMETERS = {
     "return_token_ids": True,
     "return_tokens_as_token_ids": True,
 }
+VLLM_SERVER_DEV_MODE_ENVIRONMENT = {"VLLM_SERVER_DEV_MODE": "1"}
 REMOTE_ROOT = "/tmp/grugmoe-inference-preflight"
 LOG_TAIL_LINES = 400
 GLOO_CONTROL_INTERFACE = "enP6p3s0np0"
@@ -1887,6 +1888,7 @@ class LocalVllm:
     log_stream: TextIO
     log_path: Path
     command: list[str]
+    provenance_environment: dict[str, str]
 
 
 def _start_local_vllm(
@@ -1901,6 +1903,7 @@ def _start_local_vllm(
     r3_enabled: bool = True,
     max_num_batched_tokens: int = 8192,
     max_num_seqs: int = 64,
+    enable_dev_endpoints: bool = False,
 ) -> LocalVllm:
     interface = Path(f"/sys/class/net/{GLOO_CONTROL_INTERFACE}")
     if not interface.exists():
@@ -1920,9 +1923,13 @@ def _start_local_vllm(
     )
     log_path = local_dir / f"vllm-node-{node_index}.log"
     log_stream = log_path.open("w")
+    # vLLM exposes prefix-cache reset through its development router. Health
+    # workers run in isolated jobs and need that route between frozen arms.
+    provenance_environment = dict(VLLM_SERVER_DEV_MODE_ENVIRONMENT) if enable_dev_endpoints else {}
     environment = {
         **os.environ,
         **_cuda_uv_environment(local_dir.with_name(f"{local_dir.name}-cuda-uv-cache")),
+        **provenance_environment,
         "AWS_CONFIG_FILE": str(local_dir / "aws-config"),
         "GLOO_SOCKET_IFNAME": GLOO_CONTROL_INTERFACE,
         "PYTHONUNBUFFERED": "1",
@@ -1944,6 +1951,7 @@ def _start_local_vllm(
         log_stream=log_stream,
         log_path=log_path,
         command=command,
+        provenance_environment=provenance_environment,
     )
 
 
@@ -3636,6 +3644,7 @@ def run_health_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
                 r3_enabled=r3_enabled,
                 max_num_batched_tokens=args.max_num_batched_tokens,
                 max_num_seqs=max_num_seqs,
+                enable_dev_endpoints=True,
             )
             startup = {
                 "rank": rank,
@@ -3727,6 +3736,7 @@ def run_health_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "gpu_inventory": gpu_inventory,
             "rendezvous": rendezvous,
             "vllm_command": server.command if server is not None else None,
+            "vllm_environment": server.provenance_environment if server is not None else None,
             "vllm_alive_before_stop": alive_before_stop,
             "vllm_returncode_after_stop": server.process.returncode if server is not None else None,
             "error": worker_error,
@@ -3837,6 +3847,7 @@ def run_health_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "prefix_caching": True,
             "chunked_prefill": True,
             "cuda_graphs": True,
+            "vllm_environment": dict(VLLM_SERVER_DEV_MODE_ENVIRONMENT),
         },
         "workload": _health_workload_manifest(workload, concurrencies=concurrencies),
         "routing_fixture": {
@@ -5137,6 +5148,7 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
     )
     rank_provenance_matches = len(rank_records) == 4 and all(
         rank.get("vllm_command") == rank_commands.get(str(rank["rank"]))
+        and rank.get("vllm_environment") == server_settings.get("vllm_environment")
         and rank.get("marin_commit") == provenance["marin_commit"]
         and rank.get("vllm_commit") == provenance["vllm_commit"]
         and rank.get("task_image") == provenance["task_image"]
@@ -5166,6 +5178,7 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
             and server_settings["prefix_caching"] is True
             and server_settings["chunked_prefill"] is True
             and server_settings["cuda_graphs"] is True
+            and server_settings.get("vllm_environment") == VLLM_SERVER_DEV_MODE_ENVIRONMENT
             and int(server_settings["max_num_seqs"]) > 0
             and all(
                 int(concurrency) > 0 and int(concurrency) % 3 == 0 for concurrency in server_settings["concurrencies"]

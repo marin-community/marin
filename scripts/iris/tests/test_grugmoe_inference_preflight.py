@@ -141,6 +141,38 @@ def test_health_server_knobs_toggle_r3_and_batch_budget() -> None:
     assert disabled[disabled.index("--max-num-batched-tokens") + 1] == "8192"
 
 
+def test_health_server_enables_cache_reset_dev_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(command: list[str], **kwargs: object) -> FakeProcess:
+        captured["command"] = command
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(grug_preflight, "GLOO_CONTROL_INTERFACE", "lo")
+    monkeypatch.setattr(grug_preflight, "get_job_info", lambda: type("Info", (), {"advertise_host": "10.0.0.1"})())
+    monkeypatch.setattr(grug_preflight.subprocess, "Popen", fake_popen)
+    server = grug_preflight._start_local_vllm(
+        case=CASES["exact-reference-ep16"],
+        model_source="dummy",
+        model_dir="/model",
+        leader_ip="10.0.0.1",
+        node_index=0,
+        smoke=False,
+        local_dir=tmp_path,
+        enable_dev_endpoints=True,
+    )
+    server.log_stream.close()
+
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert environment["VLLM_SERVER_DEV_MODE"] == "1"
+    assert server.provenance_environment == {"VLLM_SERVER_DEV_MODE": "1"}
+
+
 def test_health_cli_freezes_worker_settings_and_three_way_concurrency() -> None:
     image = "example.invalid/task@sha256:" + "a" * 64
     args = parse_args(
@@ -1063,6 +1095,7 @@ def test_independent_reader_recomputes_aggregates_and_rejects_tampering(tmp_path
             "rank": rank,
             "gpu_inventory": [{"name": "NVIDIA GB200 NVL", "uuid": f"GPU-{rank}-{gpu}"} for gpu in range(4)],
             "vllm_command": rank_commands[str(rank)],
+            "vllm_environment": dict(grug_preflight.VLLM_SERVER_DEV_MODE_ENVIRONMENT),
             "marin_commit": marin_commit,
             "vllm_commit": grug_preflight.VLLM_SHA,
             "task_image": image,
@@ -1110,6 +1143,7 @@ def test_independent_reader_recomputes_aggregates_and_rejects_tampering(tmp_path
             "prefix_caching": True,
             "chunked_prefill": True,
             "cuda_graphs": True,
+            "vllm_environment": dict(grug_preflight.VLLM_SERVER_DEV_MODE_ENVIRONMENT),
         },
         "workload": workload_manifest,
         "routing_fixture": {
