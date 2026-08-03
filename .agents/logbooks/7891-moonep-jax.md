@@ -1098,3 +1098,11 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Limitation: The aggregated trace contains host events but no useful GPU operations or collectives. It cannot identify GPU hot spots.
 - Decision: Disable host tracing and GPU aggregation for the next capture. Keep the one-GPU filter and the 100,000 activity and callback caps.
 - Next gate: Remove one dispatch collective by packing each expert ID with its token payload, then repeat the rack correctness and timing test.
+
+### 2026-08-03 02:28 UTC - MNEP-061 packed dispatch contract
+
+- Run ID: `mnep-061-packed-dispatch-5-20260803-0228`.
+- Snapshot: `mnep-061-packed-dispatch-20260803-0228` at `eca29a26f`.
+- Treatment: Bit-pack each int32 expert ID into the token dtype and send both in one ragged all-to-all. This removes one dispatch collective from every MoE layer.
+- Local gate: Exact ID recovery passed for BF16, FP16, and FP32 payloads. The MoonEP planner and abstract distributed lowering tests passed.
+- Rack gate: Require five finite steps on attempt zero, no dropped assignments, and a lower steady step time than the 41-second MNEP-059 baseline.
