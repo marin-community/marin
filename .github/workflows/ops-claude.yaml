@@ -85,7 +85,9 @@ jobs:
        github.event.issue.author_association == 'MEMBER' ||
        github.event.issue.author_association == 'COLLABORATOR') &&
       !contains(github.event.issue.body, '@claude') &&
-      !contains(github.event.issue.title, '@claude')
+      !contains(github.event.issue.title, '@claude') &&
+      !contains(github.event.issue.body, '@weaverbot') &&
+      !contains(github.event.issue.title, '@weaverbot')
     timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
