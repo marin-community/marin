@@ -165,7 +165,7 @@ def _process_split(
         tokenized_ds = (
             Dataset.from_list(source_shards)
             .load_parquet(columns=["id", config.format.text_key], batch_mode=True)
-            .map_batches(
+            .map(
                 lambda batch, fmt=config.format, size=window_size: _tokenize_text_batch(
                     batch,
                     data_format=fmt,

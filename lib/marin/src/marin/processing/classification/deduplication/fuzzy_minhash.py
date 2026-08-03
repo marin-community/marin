@@ -16,6 +16,7 @@ these artifacts to produce duplicate markers.
 
 import logging
 import os
+from functools import partial
 
 import dupekit
 import pyarrow as pa
@@ -238,7 +239,7 @@ def compute_minhash_attrs(
     pipeline = (
         Dataset.from_list(source_shards)
         .load_parquet(columns=["id", "text"], batch_mode=True)
-        .map_batches(lambda batch, p=params: _minhash_batch(batch, p))
+        .map(partial(_minhash_batch, params=params))
         .write_parquet(_output_path, skip_existing=True)
     )
     outcome = ctx.execute(

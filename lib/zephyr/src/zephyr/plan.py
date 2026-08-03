@@ -31,7 +31,6 @@ from zephyr.dataset import (
     JoinOp,
     JoinType,
     LoadFileOp,
-    MapBatchesOp,
     MapOp,
     MapShardOp,
     ReduceOp,
@@ -229,7 +228,7 @@ def compose_map(operations: list) -> Callable[[Iterator], Iterator]:
                     include_file_paths=op.include_file_paths,
                     file_path_column=op.file_path_column,
                 )
-            elif isinstance(op, MapOp | MapBatchesOp):
+            elif isinstance(op, MapOp):
                 stream = _map_gen(stream, op.fn)
             elif isinstance(op, FilterOp):
                 stream = _filter_gen(stream, op.predicate)
@@ -424,7 +423,7 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
     """Fuse logical operations into physical stages.
 
     Transforms logical ops into physical ops:
-    - Fusible ops (MapOp, MapBatchesOp, FilterOp, LoadFileOp, etc.) → Map(fn=compose_map([...]))
+    - Fusible ops (MapOp, FilterOp, LoadFileOp, etc.) → Map(fn=compose_map([...]))
     - WriteOp → Write(...)
     - GroupByOp → Scatter + [shuffle] + Reduce
     - ReduceOp → Fold + [reshard to 1] + Fold
@@ -488,8 +487,8 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             )
 
         else:
-            # Fusible ops: LoadFileOp, MapOp, MapBatchesOp, FilterOp, FlatMapOp,
-            # MapShardOp, TakePerShardOp, WindowOp, SelectOp
+            # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp,
+            # TakePerShardOp, WindowOp, SelectOp
             state.pending_fusible.append(op)
 
     return state.finalize()
@@ -534,7 +533,7 @@ def _compute_file_pushdown(
             # later SelectOp pushdown could KeyError the lambda by dropping
             # columns it needs. Stop pushdown here.
             break
-        elif isinstance(op, (MapOp | MapBatchesOp | FlatMapOp)):
+        elif isinstance(op, (MapOp | FlatMapOp)):
             break  # Transform ops stop pushdown
         else:
             break
