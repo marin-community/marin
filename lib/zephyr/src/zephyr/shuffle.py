@@ -14,8 +14,9 @@ On the read side, each reducer scans only its target shard via
 ``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
 Polars predicate pushdown with row-group statistics skips non-matching row
 groups via byte-range GETs, so each reducer reads roughly 1/N of each file.
-The resulting LazyFrames are merged via ``external_sort_merge`` (two-pass
-fan-in merge with ``sink_parquet`` pass-1, fully streaming).
+The resulting LazyFrames are merged via ``external_sort_merge``: a fully
+streaming multi-pass merge that writes runs with ``sink_parquet`` and keeps
+every merge below ``_EXTERNAL_SORT_MAX_MERGE_FAN_IN`` inputs.
 
 Write-side memory is bounded by buffer estimated size: when the sum of
 ``DataFrame.estimated_size()`` across buffered frames exceeds
@@ -108,6 +109,8 @@ _SCATTER_READ_PYTHON_ROW_OVERHEAD = 2
 _PROGRESS_LOG_INTERVAL_SECONDS = 60.0
 # Polars streaming chunk size, important to avoid excessive memory usage during merge.
 _POLARS_STREAMING_CHUNK_SIZE = 10000
+# Maximum run files that Polars merges at one time during an external sort.
+_EXTERNAL_SORT_MAX_MERGE_FAN_IN = 32
 
 # Helper column names injected by _items_to_dataframe and stripped before
 # writing to disk.  Both are internal implementation details; user schemas must
@@ -123,14 +126,27 @@ _SORT_VALUE_TMP_COL = "__zephyr_sort_value_tmp__"
 
 # Python items consumed before creating a DataFrame.
 _DATAFRAME_ROW_COUNT = 1000
-# Flush all scatter buffers when the buffer's estimated size exceeds this fraction of available memory.
-_SCATTER_FLUSH_THRESHOLD = 0.75
+# Flush all scatter buffers when the buffer's estimated size exceeds this fraction of task memory.
+_SCATTER_FLUSH_THRESHOLD = 0.20
 # Empirically measured ratio of DataFrame.estimated_size() to actual per-shard process RSS growth,
 # across three datasets (nemotron: 0.54-0.60, skewed: 0.59-0.66, FineWeb-Edu: 0.66-0.70).
-# Applied to _SCATTER_FLUSH_THRESHOLD so the effective trigger is ~45% of available memory.
+# Applied to _SCATTER_FLUSH_THRESHOLD so the effective trigger is 12% of task memory. The 2.27x
+# flush peak was measured during the 2026-08-02 fuzzy-dedup incident: https://echo.oa.dev/wiki/68.
 _ESTIMATED_SIZE_CORRECTION_FACTOR = 0.60
 # Threshold for triggering a gc.collect() after a flush.
 _GC_FLUSH_SIZE_THRESHOLD_BYTES = 8 * 1024 * 1024
+
+
+def _task_memory_bytes() -> int:
+    ctx = _worker_ctx_var.get()
+    if ctx is not None and ctx.task_memory_bytes > 0:
+        return ctx.task_memory_bytes
+
+    memory_bytes = TaskResources.from_environment().memory_bytes
+    if memory_bytes <= 0:
+        logger.warning("No task memory is available. Using a 1 GiB memory budget.")
+        return 1024 * 1024 * 1024
+    return memory_bytes
 
 
 def _dataframe_to_items(df: pl.DataFrame) -> Iterator[Any]:
@@ -448,13 +464,7 @@ class ScatterReader:
             # Overhead per row in the Polars DataFrame plus the deserialized Python object.
             # Future Polars-only processing would remove the Python overhead.
             overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
-            ctx = _worker_ctx_var.get()
-            if ctx is not None and ctx.task_memory_bytes > 0:
-                memory_bytes = ctx.task_memory_bytes
-            else:
-                memory_bytes = TaskResources.from_environment().memory_bytes
-                if memory_bytes <= 0:
-                    memory_bytes = 1024 * 1024 * 1024
+            memory_bytes = _task_memory_bytes()
 
             if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
                 fan_in = math.ceil(math.sqrt(self.total_chunks))
@@ -474,6 +484,7 @@ class ScatterReader:
                     sort_key=_SORT_KEY_COL,
                     external_sort_dir=external_sort_dir,
                     fan_in=fan_in,
+                    max_merge_fan_in=_EXTERNAL_SORT_MAX_MERGE_FAN_IN,
                     shard=self._target_shard,
                 )
 
@@ -539,10 +550,7 @@ class ScatterWriter:
 
         self._source_shard = source_shard
         self._combiner_fn = combiner_fn
-        self._memory_available_bytes = TaskResources.from_environment().memory_bytes
-        if self._memory_available_bytes == 0:
-            logger.warning("No memory available for scatter write, defaulting to 1GB. This will likely fail.")
-            self._memory_available_bytes = 1024 * 1024 * 1024
+        self._memory_available_bytes = _task_memory_bytes()
         # estimated_size() measures only the buffer columns, not process overhead (Python runtime,
         # Arrow allocator, Parquet scan). The correction factor maps estimated_size to estimated RSS.
         self._flush_threshold_bytes = int(
