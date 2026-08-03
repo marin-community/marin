@@ -118,9 +118,12 @@ _MOE_KWARGS = dict(
     ],
     ids=["dense", "moe", "interleaved"],
 )
-def test_lm_flops_per_token_is_unchanged_for_existing_callers(kwargs, expected):
-    """The other callers price uniform-attention models through this signature. The values are
-    the megatron-lm estimate for each config."""
+def test_lm_flops_per_token_matches_pinned_values(kwargs, expected):
+    """Every grug and levanter model prices itself through this function, so an edit to its
+    arithmetic moves many reported MFU numbers at once. The cases cover full attention, a
+    mixture of experts with a shared expert, and interleaved sliding-window attention with
+    heterogeneous KV heads.
+    """
     assert lm_flops_per_token(**kwargs) == pytest.approx(expected, rel=1e-12)
 
 
