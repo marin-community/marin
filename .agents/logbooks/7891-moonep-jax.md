@@ -1944,9 +1944,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 
 - Method: Move the same balanced traffic at the EP64 token row shape (`524,288` rows of `5,120` BF16 elements) through each collective. Five repeats after one warm call.
 - Ragged all-to-all: `598.03 ms` median, or `6.7 GB/s`.
-- Padded standard all-to-all: `7.68 ms` median, or `524.1 GB/s`. This is `78` times faster.
+- Padded standard all-to-all: `7.68 ms` median, or `524.1 GB/s`.
 - Padded at factor `1.5`: `11.30 ms` median, or `534.5 GB/s`. The rate holds, so padding costs in proportion to the extra bytes.
-- Wheel: The development pod holds PJRT `bb72fa53`. The rack build reaches `101.9 GB/s` for the ragged path, so the XLA patches give a large gain. The standard collective is still about five times faster.
+- Wheel caveat: The development pod holds PJRT `bb72fa53`, which matches none of the 26 recorded artifacts.
+  Thus its ragged number does not represent the rack kernel, and the two rates are not an equal comparison.
+- Correct comparison: The rack build reaches `101.9 GB/s` for the ragged path, from the MNEP-093 trace.
+  The standard collective is about five times faster than that. Do not use the `78` times ratio.
 - Planning rate: Use `530 GB/s` for each GPU. The `1,546 GB` of exact traffic then needs `2.92 s`.
 - Revised budget: The exposed transport budget is `0.99 s`. A padded transport at factor `1.25` needs `3.65 s` and thus `73%` overlap. Factor `1.5` needs `77%`.
 - Conclusion: Overlap is the primary requirement, not a second-order gain. A cheap collective alone cannot pass the gate at any capacity factor.
