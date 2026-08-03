@@ -50,12 +50,8 @@ def validate_repair_inputs(config: dict[str, Any], documents: list[SampleDocumen
 def rebuilt_documents() -> list[SampleDocument]:
     """Return the deterministic training sample from its pinned inputs."""
     pilot_documents = [SampleDocument(**row) for row in read_jsonl(SOURCE_RUN_ROOT / "sample-private.jsonl.gz")]
-    evaluation_root = (
-        OUTPUT_ROOT / HIERARCHY_RUN_ID / HIERARCHY_VARIANT / EXCLUDED_EVALUATION_RUN_ID
-    )
-    evaluation_documents = [
-        SampleDocument(**row) for row in read_jsonl(evaluation_root / "sample-private.jsonl.gz")
-    ]
+    evaluation_root = OUTPUT_ROOT / HIERARCHY_RUN_ID / HIERARCHY_VARIANT / EXCLUDED_EVALUATION_RUN_ID
+    evaluation_documents = [SampleDocument(**row) for row in read_jsonl(evaluation_root / "sample-private.jsonl.gz")]
     return projection_training_documents(
         read_json(MANIFEST_URL), pilot_documents, evaluation_documents, EXPECTED_DOCUMENTS
     )
