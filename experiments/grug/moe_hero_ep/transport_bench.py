@@ -59,12 +59,25 @@ class TransportBenchConfig:
     row_counts: tuple[int, ...]
     row_elements: int
     capacity_factor: float
+    skew: float
     result_uri: str
 
 
-def _balanced_send_matrix(num_ranks: int, rows_per_rank: int) -> jax.Array:
-    rows_per_peer = rows_per_rank // num_ranks
-    return jnp.full((num_ranks, num_ranks), rows_per_peer, dtype=jnp.int32)
+def _send_matrix(num_ranks: int, rows_per_rank: int, skew: float) -> np.ndarray:
+    """Build a send matrix whose largest cell is ``skew`` times the mean cell.
+
+    Each sender gives one peer the large message and divides the rest equally.
+    Every row sums to ``rows_per_rank``, so the total traffic does not change.
+    """
+    mean = rows_per_rank // num_ranks
+    matrix = np.zeros((num_ranks, num_ranks), dtype=np.int32)
+    large = round(mean * skew)
+    for source in range(num_ranks):
+        rest = (rows_per_rank - large) // (num_ranks - 1)
+        matrix[source, :] = rest
+        matrix[source, (source + 1) % num_ranks] = large
+        matrix[source, source] += rows_per_rank - int(matrix[source].sum())
+    return matrix
 
 
 def _time_median(run, repeats: int) -> float:
@@ -84,8 +97,8 @@ def _benchmark(config: TransportBenchConfig, rows: int) -> dict[str, float]:
     mesh = Mesh(devices, axis_names=("expert",), axis_types=(AxisType.Explicit,))
     num_ranks = config.device_count
     elements = config.row_elements
-    rows_per_peer = rows // num_ranks
-    capacity = max(int(np.ceil(config.capacity_factor * rows / num_ranks)), 1)
+    send_matrix = _send_matrix(num_ranks, rows, config.skew)
+    capacity = max(int(np.ceil(config.capacity_factor * send_matrix.max())), 1)
 
     def _source(rank: jax.Array, total_rows: int) -> jax.Array:
         return jnp.broadcast_to(rank.astype(jnp.bfloat16), (total_rows, elements))
@@ -94,10 +107,19 @@ def _benchmark(config: TransportBenchConfig, rows: int) -> dict[str, float]:
     def ragged() -> jax.Array:
         rank = jax.lax.axis_index("expert")
         source = _source(rank, rows)
-        offsets = jnp.arange(num_ranks, dtype=jnp.int32) * rows_per_peer
-        sizes = jnp.full((num_ranks,), rows_per_peer, dtype=jnp.int32)
+        matrix = jnp.asarray(send_matrix)
+        local_sizes = matrix[rank]
+        send_offsets = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
+        recv_sizes = matrix[:, rank]
+        recv_offsets = jnp.cumsum(recv_sizes, dtype=jnp.int32) - recv_sizes
         received = jax.lax.ragged_all_to_all(
-            source, jnp.zeros_like(source), offsets, sizes, offsets, sizes, axis_name="expert"
+            source,
+            jnp.zeros_like(source),
+            send_offsets,
+            local_sizes,
+            recv_offsets,
+            recv_sizes,
+            axis_name="expert",
         )
         return jnp.sum(received[::8192, 0], dtype=jnp.float32)
 
@@ -114,7 +136,7 @@ def _benchmark(config: TransportBenchConfig, rows: int) -> dict[str, float]:
         source = _source(rank, rows)
         received = _static_padded_token_all_to_all(
             source,
-            _balanced_send_matrix(num_ranks, rows),
+            jnp.asarray(send_matrix),
             rank,
             capacity=capacity,
             num_rounds=1,
@@ -146,6 +168,7 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
         "ranks": num_ranks,
         "row_elements": config.row_elements,
         "capacity_factor": config.capacity_factor,
+        "skew": config.skew,
         "sweep": [],
     }
     for rows, results in sweep.items():
@@ -180,6 +203,13 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
 @click.option("--row-elements", type=click.IntRange(min=1), default=BENCH_ROW_ELEMENTS, show_default=True)
 @click.option("--capacity-factor", type=click.FloatRange(min=0.1), default=1.0, show_default=True)
 @click.option(
+    "--skew",
+    type=click.FloatRange(min=1.0),
+    default=1.0,
+    show_default=True,
+    help="Ratio of the largest peer message to the mean peer message.",
+)
+@click.option(
     "--moonep-jax-wheel-build",
     type=click.Choice([build.value for build in MoonEPJaxWheelBuild]),
     required=True,
@@ -190,6 +220,7 @@ def main(
     rows_per_rank: str,
     row_elements: int,
     capacity_factor: float,
+    skew: float,
     moonep_jax_wheel_build: str,
 ) -> None:
     """Dispatch a transport benchmark on a GB200 gang."""
@@ -216,6 +247,7 @@ def main(
         row_counts=row_counts,
         row_elements=row_elements,
         capacity_factor=capacity_factor,
+        skew=skew,
         result_uri=f"{BENCH_RESULT_ROOT}/{run_id}.json",
     )
     _apply_hero_ep_runtime_defaults("moonep_jax", MoonEPTransport.DIRECT_DEVICE)
