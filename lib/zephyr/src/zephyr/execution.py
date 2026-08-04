@@ -43,10 +43,10 @@ from zephyr.dataset import Dataset
 from zephyr.memory_store import (
     MemoryStore,
     MemoryStoreActorStats,
-    _actor_result_with_recovery,
-    _MemoryTableRegistration,
-    _start_actor_calls,
-    _store_plan,
+    MemoryTableRegistration,
+    actor_result_with_recovery,
+    memory_store_plan,
+    start_actor_calls,
 )
 from zephyr.plan import PhysicalPlan, compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
@@ -369,10 +369,10 @@ class ZephyrContext:
         assert coordinator is not None
 
         table_id = uuid.uuid4().hex
-        registration = _MemoryTableRegistration(
+        registration = MemoryTableRegistration(
             table_id=table_id,
             name=name,
-            plan=_store_plan(dataset),
+            plan=memory_store_plan(dataset),
             hash_key=hash_key,
             worker_count=self.max_workers,
         )
@@ -385,9 +385,9 @@ class ZephyrContext:
                 position: lambda handle=handle: handle.load_memory_table.submit(registration)
                 for position, handle in enumerate(handles)
             }
-            futures = _start_actor_calls(calls)
+            futures = start_actor_calls(calls)
             return [
-                _actor_result_with_recovery(
+                actor_result_with_recovery(
                     calls[position],
                     futures[position],
                     position,

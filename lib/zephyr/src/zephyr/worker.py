@@ -16,10 +16,10 @@ from rigging.timing import ExponentialBackoff, RateLimiter
 from zephyr.coordinator import CoordinatorUnreachable, PullStatus, PullTask
 from zephyr.memory_store import (
     MemoryStoreActorStats,
-    _MemoryStoreService,
-    _MemoryTableLookup,
-    _MemoryTableRegistration,
-    _MemoryTableStatsResult,
+    MemoryStoreService,
+    MemoryTableLookup,
+    MemoryTableRegistration,
+    MemoryTableStatsResult,
 )
 from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResources, _stage_throughput
 from zephyr.stats import _push_iris_task_status
@@ -82,7 +82,7 @@ class ZephyrWorker:
         self._host_shutdown_event = self._actor_ctx.shutdown_event
         self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
         self._actor_handle = self._actor_ctx.handle
-        self._memory_store = _MemoryStoreService(self._actor_ctx.index)
+        self._memory_store = MemoryStoreService(self._actor_ctx.index)
 
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
@@ -204,7 +204,7 @@ class ZephyrWorker:
         if self._host_shutdown_event is not None:
             self._host_shutdown_event.set()
 
-    def load_memory_table(self, registration: _MemoryTableRegistration) -> MemoryStoreActorStats:
+    def load_memory_table(self, registration: MemoryTableRegistration) -> MemoryStoreActorStats:
         """Validate and load one table from its shard-local source data."""
         return self._memory_store.load(registration)
 
@@ -221,11 +221,11 @@ class ZephyrWorker:
             return None
         return stats
 
-    def lookup_memory_table(self, table_id: str, keys: list[Hashable]) -> _MemoryTableLookup:
+    def lookup_memory_table(self, table_id: str, keys: list[Hashable]) -> MemoryTableLookup:
         """Return values or structured state that lets the caller trigger reload."""
         return self._memory_store.lookup(table_id, keys)
 
-    def memory_table_stats(self, table_id: str) -> _MemoryTableStatsResult:
+    def memory_table_stats(self, table_id: str) -> MemoryTableStatsResult:
         """Return one worker's table state or load statistics."""
         return self._memory_store.stats(table_id)
 

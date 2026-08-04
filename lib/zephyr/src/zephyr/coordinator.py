@@ -22,7 +22,7 @@ from rigging import telemetry
 from rigging.filesystem import StoragePath
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
-from zephyr.memory_store import _MemoryTableRegistration
+from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
@@ -329,7 +329,7 @@ class ZephyrCoordinator:
         self._worker_counters: dict[str, CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
-        self._memory_tables: dict[str, _MemoryTableRegistration] = {}
+        self._memory_tables: dict[str, MemoryTableRegistration] = {}
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
         self._lock = threading.Lock()
@@ -356,7 +356,7 @@ class ZephyrCoordinator:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
         self._worker_group = worker_group
 
-    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> tuple[_MemoryTableRegistration, ...]:
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> tuple[MemoryTableRegistration, ...]:
         """Called by workers when they come online to register with coordinator.
 
         Handles re-registration from reconstructed workers (e.g. after node
@@ -381,14 +381,14 @@ class ZephyrCoordinator:
                 logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
             return tuple(self._memory_tables.values())
 
-    def register_memory_table(self, registration: _MemoryTableRegistration) -> None:
+    def register_memory_table(self, registration: MemoryTableRegistration) -> None:
         """Publish a table after every worker validates its source shards."""
         with self._lock:
             if registration.table_id in self._memory_tables:
                 raise ValueError(f"memory table {registration.table_id!r} is already registered")
             self._memory_tables[registration.table_id] = registration
 
-    def memory_table_registration(self, table_id: str) -> _MemoryTableRegistration | None:
+    def memory_table_registration(self, table_id: str) -> MemoryTableRegistration | None:
         """Return metadata needed to reload a table on a replacement worker."""
         with self._lock:
             return self._memory_tables.get(table_id)

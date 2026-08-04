@@ -29,8 +29,8 @@ from zephyr.memory_store import (
     MemoryStoreDestroyed,
     MemoryStorePartitionError,
     MemoryStoreUnavailable,
-    _MemoryTableLookup,
-    _MemoryTableStatus,
+    MemoryTableLookup,
+    MemoryTableStatus,
 )
 
 
@@ -267,7 +267,7 @@ def test_memory_store_retries_only_actor_unavailability():
     recovering_actor = _SequencedActor(
         [
             _TestActorFuture(error=ActorUnavailableError("restarting")),
-            _TestActorFuture(value=_MemoryTableLookup(_MemoryTableStatus.READY, [(True, "value")])),
+            _TestActorFuture(value=MemoryTableLookup(MemoryTableStatus.READY, [(True, "value")])),
         ]
     )
     assert _fake_store(recovering_actor).get("key") == "value"

@@ -58,13 +58,13 @@ def _source_partition(hash_key: Callable[[K], int], key: K, num_source_partition
 
 
 @dataclass(frozen=True)
-class _MemoryStorePlan:
+class MemoryStorePlan:
     source_items: tuple[SourceItem, ...]
     operations: tuple[PhysicalOp, ...]
     num_source_partitions: int
 
 
-def _store_plan(dataset: Dataset[tuple[K, V]]) -> _MemoryStorePlan:
+def memory_store_plan(dataset: Dataset[tuple[K, V]]) -> MemoryStorePlan:
     plan = compute_plan(dataset)
     num_source_partitions = plan.num_shards
     if num_source_partitions == 0:
@@ -88,7 +88,7 @@ def _store_plan(dataset: Dataset[tuple[K, V]]) -> _MemoryStorePlan:
             "join, reshard, reduce, or write operations before constructing the store"
         )
 
-    return _MemoryStorePlan(
+    return MemoryStorePlan(
         source_items=tuple(plan.source_items),
         operations=operations,
         num_source_partitions=num_source_partitions,
@@ -96,15 +96,15 @@ def _store_plan(dataset: Dataset[tuple[K, V]]) -> _MemoryStorePlan:
 
 
 @dataclass(frozen=True)
-class _MemoryTableRegistration:
+class MemoryTableRegistration:
     table_id: str
     name: str
-    plan: _MemoryStorePlan
+    plan: MemoryStorePlan
     hash_key: Callable[[Any], int] = field(repr=False)
     worker_count: int
 
 
-class _MemoryTableStatus(enum.StrEnum):
+class MemoryTableStatus(enum.StrEnum):
     READY = enum.auto()
     NOT_LOADED = enum.auto()
     UNKNOWN = enum.auto()
@@ -112,29 +112,29 @@ class _MemoryTableStatus(enum.StrEnum):
 
 
 @dataclass(frozen=True)
-class _MemoryTableLookup:
-    status: _MemoryTableStatus
+class MemoryTableLookup:
+    status: MemoryTableStatus
     values: list[tuple[bool, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
-class _MemoryTableStatsResult:
-    status: _MemoryTableStatus
+class MemoryTableStatsResult:
+    status: MemoryTableStatus
     stats: MemoryStoreActorStats | None = None
 
 
-type _MemoryTableResult = _MemoryTableLookup | _MemoryTableStatsResult
+type _MemoryTableResult = MemoryTableLookup | MemoryTableStatsResult
 
 
 @dataclass
 class _MemoryTableState:
-    registration: _MemoryTableRegistration
+    registration: MemoryTableRegistration
     load_lock: threading.Lock = field(default_factory=threading.Lock)
     values: dict[Hashable, Any] | None = None
     stats: MemoryStoreActorStats | None = None
 
 
-class _MemoryStoreService:
+class MemoryStoreService:
     """Worker-local service that owns several immutable memory tables."""
 
     def __init__(
@@ -146,7 +146,7 @@ class _MemoryStoreService:
         self._destroyed: set[str] = set()
         self._tables_lock = threading.Lock()
 
-    def _install(self, registration: _MemoryTableRegistration) -> _MemoryTableState:
+    def _install(self, registration: MemoryTableRegistration) -> _MemoryTableState:
         with self._tables_lock:
             if registration.table_id in self._destroyed:
                 raise MemoryStoreDestroyed(f"memory table {registration.name!r} has been destroyed")
@@ -157,7 +157,7 @@ class _MemoryStoreService:
             self._tables[registration.table_id] = state
             return state
 
-    def restore(self, registrations: tuple[_MemoryTableRegistration, ...]) -> None:
+    def restore(self, registrations: tuple[MemoryTableRegistration, ...]) -> None:
         """Install active table metadata without reading source data."""
         with self._tables_lock:
             for registration in registrations:
@@ -165,7 +165,7 @@ class _MemoryStoreService:
                     continue
                 self._tables[registration.table_id] = _MemoryTableState(registration=registration)
 
-    def _load_values(self, registration: _MemoryTableRegistration) -> tuple[dict[Hashable, Any], tuple[int, ...]]:
+    def _load_values(self, registration: MemoryTableRegistration) -> tuple[dict[Hashable, Any], tuple[int, ...]]:
         plan = registration.plan
         partitions = tuple(
             partition
@@ -202,7 +202,7 @@ class _MemoryStoreService:
                 values[key] = value
         return values, partitions
 
-    def load(self, registration: _MemoryTableRegistration) -> MemoryStoreActorStats:
+    def load(self, registration: MemoryTableRegistration) -> MemoryStoreActorStats:
         """Load one table, or return its existing load statistics."""
         state = self._install(registration)
         with state.load_lock:
@@ -238,34 +238,34 @@ class _MemoryStoreService:
             )
             return stats
 
-    def lookup(self, table_id: str, keys: list[Hashable]) -> _MemoryTableLookup:
+    def lookup(self, table_id: str, keys: list[Hashable]) -> MemoryTableLookup:
         """Return table state or values aligned with the requested keys."""
         with self._tables_lock:
             if table_id in self._destroyed:
-                return _MemoryTableLookup(_MemoryTableStatus.DESTROYED)
+                return MemoryTableLookup(MemoryTableStatus.DESTROYED)
             state = self._tables.get(table_id)
             if state is None:
-                return _MemoryTableLookup(_MemoryTableStatus.UNKNOWN)
+                return MemoryTableLookup(MemoryTableStatus.UNKNOWN)
             values = state.values
         if values is None:
-            return _MemoryTableLookup(_MemoryTableStatus.NOT_LOADED)
-        return _MemoryTableLookup(
-            _MemoryTableStatus.READY,
+            return MemoryTableLookup(MemoryTableStatus.NOT_LOADED)
+        return MemoryTableLookup(
+            MemoryTableStatus.READY,
             [(True, values[key]) if key in values else (False, None) for key in keys],
         )
 
-    def stats(self, table_id: str) -> _MemoryTableStatsResult:
+    def stats(self, table_id: str) -> MemoryTableStatsResult:
         """Return table state or immutable load statistics."""
         with self._tables_lock:
             if table_id in self._destroyed:
-                return _MemoryTableStatsResult(_MemoryTableStatus.DESTROYED)
+                return MemoryTableStatsResult(MemoryTableStatus.DESTROYED)
             state = self._tables.get(table_id)
             if state is None:
-                return _MemoryTableStatsResult(_MemoryTableStatus.UNKNOWN)
+                return MemoryTableStatsResult(MemoryTableStatus.UNKNOWN)
             stats = state.stats
         if stats is None:
-            return _MemoryTableStatsResult(_MemoryTableStatus.NOT_LOADED)
-        return _MemoryTableStatsResult(_MemoryTableStatus.READY, stats)
+            return MemoryTableStatsResult(MemoryTableStatus.NOT_LOADED)
+        return MemoryTableStatsResult(MemoryTableStatus.READY, stats)
 
     def destroy(self, table_id: str) -> None:
         """Tombstone one table and release its values."""
@@ -280,7 +280,7 @@ class _MemoryStoreService:
                 self._tables.pop(table_id, None)
 
 
-def _actor_result_with_recovery(
+def actor_result_with_recovery(
     call: Callable[[], ActorFuture],
     initial_future: ActorFuture | None,
     actor_index: int,
@@ -316,7 +316,7 @@ def _actor_result_with_recovery(
             time.sleep(delay)
 
 
-def _start_actor_calls(
+def start_actor_calls(
     calls: dict[int, Callable[[], ActorFuture]],
 ) -> dict[int, ActorFuture | None]:
     """Start actor calls, retaining unavailable endpoints for deadline-bound retry."""
@@ -355,7 +355,7 @@ class MemoryStore(Generic[K, V]):
             initial_future = call()
         except ActorUnavailableError:
             initial_future = None
-        stats = _actor_result_with_recovery(
+        stats = actor_result_with_recovery(
             call,
             initial_future,
             actor_index,
@@ -374,16 +374,16 @@ class MemoryStore(Generic[K, V]):
     ) -> _MemoryTableResult:
         future = initial_future
         while True:
-            result: _MemoryTableResult = _actor_result_with_recovery(
+            result: _MemoryTableResult = actor_result_with_recovery(
                 call,
                 future,
                 actor_index,
                 self.recovery_timeout,
                 deadline,
             )
-            if result.status is _MemoryTableStatus.READY:
+            if result.status is MemoryTableStatus.READY:
                 return result
-            if result.status is _MemoryTableStatus.DESTROYED:
+            if result.status is MemoryTableStatus.DESTROYED:
                 raise MemoryStoreDestroyed(f"memory table {self.name!r} has been destroyed")
             self._reload(actor_index, deadline)
             future = None
@@ -411,7 +411,7 @@ class MemoryStore(Generic[K, V]):
             for actor_index in requests
         }
         deadline = time.monotonic() + self.recovery_timeout
-        futures = _start_actor_calls(calls)
+        futures = start_actor_calls(calls)
 
         results: list[V | None] = [None] * len(keys)
         for actor_index, actor_requests in requests.items():
@@ -421,7 +421,7 @@ class MemoryStore(Generic[K, V]):
                 futures[actor_index],
                 deadline,
             )
-            assert isinstance(result, _MemoryTableLookup)
+            assert isinstance(result, MemoryTableLookup)
             lookup_results = result.values
             assert len(lookup_results) == len(actor_requests)
             for (position, key), (found, value) in zip(actor_requests, lookup_results, strict=True):
@@ -438,11 +438,11 @@ class MemoryStore(Generic[K, V]):
             for actor_index, actor in enumerate(self.actors)
         }
         deadline = time.monotonic() + self.recovery_timeout
-        futures = _start_actor_calls(calls)
+        futures = start_actor_calls(calls)
         stats: list[MemoryStoreActorStats] = []
         for actor_index in range(len(self.actors)):
             result = self._ready_result(actor_index, calls[actor_index], futures[actor_index], deadline)
-            assert isinstance(result, _MemoryTableStatsResult)
+            assert isinstance(result, MemoryTableStatsResult)
             assert result.stats is not None
             stats.append(result.stats)
         return tuple(sorted(stats, key=lambda stat: stat.actor_index))
@@ -458,15 +458,15 @@ class MemoryStore(Generic[K, V]):
             unregister_future = unregister()
         except ActorUnavailableError:
             unregister_future = None
-        _actor_result_with_recovery(unregister, unregister_future, -1, self.recovery_timeout, deadline)
+        actor_result_with_recovery(unregister, unregister_future, -1, self.recovery_timeout, deadline)
 
         calls = {
             actor_index: lambda actor=actor: actor.destroy_memory_table.remote(self.table_id)
             for actor_index, actor in enumerate(self.actors)
         }
-        futures = _start_actor_calls(calls)
+        futures = start_actor_calls(calls)
         for actor_index in range(len(self.actors)):
-            _actor_result_with_recovery(
+            actor_result_with_recovery(
                 calls[actor_index],
                 futures[actor_index],
                 actor_index,
