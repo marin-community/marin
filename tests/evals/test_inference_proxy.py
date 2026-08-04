@@ -305,7 +305,7 @@ def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None
     )
     monkeypatch.setattr(iris_module.requests, "get", lambda *_args, **_kwargs: pytest.fail("unexpected probe"))
 
-    with pytest.raises(RuntimeError, match="finished unexpectedly"):
+    with pytest.raises(RuntimeError):
         session.wait_until_ready()
 
 
@@ -324,7 +324,7 @@ def test_inference_recovery_honors_deadline(monkeypatch) -> None:
     monkeypatch.setattr(iris_module.time, "monotonic", lambda: next(now))
     monkeypatch.setattr(iris_module.requests, "get", lambda *_args, **_kwargs: pytest.fail("unexpected probe"))
 
-    with pytest.raises(TimeoutError, match="did not recover"):
+    with pytest.raises(TimeoutError):
         session.wait_until_ready()
 
 

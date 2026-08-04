@@ -49,6 +49,7 @@ _HARBOR_JOBS_SUBDIR = "harbor_jobs"
 # Trials normalize off independent per-trial reads on the remote job tree; fan them out so a
 # several-hundred-trial dataset is not a sequential round-trip per trial.
 _TRIAL_READ_WORKERS = 16
+_TRIAL_RESULT_GLOB = "*/result.json"
 _JOB_DATASET_LENGTH = 32
 _JOB_DIGEST_LENGTH = 12
 
@@ -147,7 +148,7 @@ def _read_trial(result_file: StoragePath) -> HarborTrial:
 
 def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
     """Read every finished trial under ``job_dir``, one parallel per-trial read each."""
-    result_files = sorted((job_dir / "*/result.json").glob(), key=lambda path: path.parent.name)
+    result_files = sorted((job_dir / _TRIAL_RESULT_GLOB).glob(), key=lambda path: path.parent.name)
     if not result_files:
         return []
     with ThreadPoolExecutor(max_workers=min(_TRIAL_READ_WORKERS, len(result_files))) as pool:
@@ -155,9 +156,9 @@ def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
 
 
 def _remove_unscored_trials(job_dir: StoragePath) -> int:
-    """Remove unscored exception results after an inference interruption so Harbor retries them."""
+    """Remove unscored exception results after an interruption; return the number removed."""
     removed = 0
-    for result_file in (job_dir / "*/result.json").glob():
+    for result_file in (job_dir / _TRIAL_RESULT_GLOB).glob():
         try:
             data = json.loads(result_file.read_text())
         except json.JSONDecodeError:

@@ -98,7 +98,11 @@ class RemoteInferenceSession:
                 raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
 
     def backends_ready(self) -> bool:
-        """Return whether every direct inference task can accept requests."""
+        """Return false only when Iris confirms a direct inference task is not running.
+
+        Controller transport failures leave readiness unknown, so they return true and do not
+        interrupt a Harbor process whose endpoint may still be healthy.
+        """
         if self.recovery_mode is InferenceRecoveryMode.NONE:
             return True
 

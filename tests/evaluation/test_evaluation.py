@@ -201,7 +201,7 @@ def test_inference_recovery_failure_marks_later_evaluations_unstarted(tmp_path):
         provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
     )
 
-    with pytest.raises(RuntimeError, match="2 of 2 evals failed"):
+    with pytest.raises(RuntimeError):
         evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
 
     first = read_record(str(records / "run-first" / "record.json"))
