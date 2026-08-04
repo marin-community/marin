@@ -2035,3 +2035,14 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Remaining gap: The rack run reaches `101.9 GB/s`, so a factor of about `2.4` is still unexplained.
 - Remaining candidates: 64 ranks against 16, and contention with the expert GEMM in the real training graph. The benchmark runs each collective alone.
 - Note: MNEP-110 failed with an out-of-memory error before this run. The padded capacity comes from the largest cell, so skew `1.99` at `524,288` rows asked for about `21 GB` of padded buffers.
+
+### 2026-08-04 00:55 UTC - MNEP-112 rejects GEMM contention
+
+- Setup: 16 GPUs on four nodes, skew `1.99`, `8,192` rows for each peer. The GEMM uses the rack expert shape `M=262144`, `K=5120`, `N=1280`.
+- Ragged alone: `4.90 ms`. GEMM alone: `1.93 ms`. Both in one call: `4.45 ms`.
+- Result: The combined call is not slower than the collective alone. The GEMM is completely hidden.
+- Conclusion: The hardware runs the direct device kernel and a large GEMM at the same time without a penalty. Contention for SMs does not explain the rack gap.
+- Consequence 1: The `2.4` times gap between `242 GB/s` and `101.9 GB/s` is not contention. Rank count is the one remaining candidate.
+- Consequence 2: MNEP-087 measured `0.000 s` of overlap between QuACK and ragged transport in the training graph. The hardware permits that overlap, so the training result comes from the graph or the scheduler, not from the devices.
+- Suspect: `MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT = 1` serializes every collective. The comment says this is a safety default until an EP64 overlap gate runs. That gate never ran.
+- Caveat: The combined call is `0.45 ms` faster than the collective alone, which is inside run-to-run noise. The safe statement is that the GEMM adds no measurable cost.
