@@ -1,13 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
 import numpy as np
 import pytest
 from levanter.data.text.formats import ChatProcessor
-from levanter.tokenizers import MarinTokenizer
-from transformers import AutoTokenizer
+from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from transformers import AutoTokenizer, PreTrainedTokenizer
 
-from experiments.marin_tokenizer import MARIN_CHAT_TEMPLATE, inject_special_tokens
+from experiments.marin_tokenizer import (
+    MARIN_CHAT_TEMPLATE,
+    MARIN_CUSTOM_SPECIAL_TOKENS,
+    create_marin_tokenizer,
+)
 
 REASONING_TRACE = (
     "<|start_think|>User is asking how am I doing. This should be straightforward. I should reply politely.<|end_think|>"
@@ -28,29 +34,54 @@ QUESTION = [
 _RESERVED_SPECIAL_TOKENS = ("<|reserved_special_token_0|>", "<|reserved_special_token_1|>")
 
 
-@pytest.fixture
-def marin_chat_tokenizer(gpt2_tokenizer) -> MarinTokenizer:
-    return gpt2_tokenizer.with_chat_template(MARIN_CHAT_TEMPLATE)
+@dataclass(frozen=True)
+class MarinTokenizerFixture:
+    path: str
+    token_renames: dict[int, str]
+
+
+@pytest.fixture(scope="module")
+def marin_tokenizer_fixture(gpt2_tokenizer_path, tmp_path_factory) -> MarinTokenizerFixture:
+    base = AutoTokenizer.from_pretrained(gpt2_tokenizer_path, local_files_only=True)
+    base.add_special_tokens({"additional_special_tokens": list(_RESERVED_SPECIAL_TOKENS)})
+    reserved_ids = base.convert_tokens_to_ids(list(_RESERVED_SPECIAL_TOKENS))
+    token_renames = dict(zip(reserved_ids, MARIN_CUSTOM_SPECIAL_TOKENS.values(), strict=True))
+
+    tokenizer = create_marin_tokenizer(base, token_renames)
+    output_dir = tmp_path_factory.mktemp("marin_tokenizer")
+    tokenizer.save_pretrained(output_dir)
+    return MarinTokenizerFixture(path=str(output_dir), token_renames=token_renames)
+
+
+@pytest.fixture(scope="module")
+def marin_tokenizer(marin_tokenizer_fixture) -> PreTrainedTokenizer:
+    return AutoTokenizer.from_pretrained(marin_tokenizer_fixture.path, local_files_only=True)
+
+
+@pytest.fixture(scope="module")
+def marin_chat_tokenizer(marin_tokenizer_fixture) -> MarinTokenizer:
+    return load_tokenizer(marin_tokenizer_fixture.path)
 
 
 def _decode(tokenizer, ids) -> str:
     return tokenizer.decode(list(ids), skip_special_tokens=False)
 
 
-def test_inject_special_tokens_renames_reserved_slots(gpt2_tokenizer_path):
+def test_create_marin_tokenizer_preserves_base_tokens_and_renames_slots(
+    gpt2_tokenizer_path,
+    marin_tokenizer_fixture,
+    marin_tokenizer,
+):
     base = AutoTokenizer.from_pretrained(gpt2_tokenizer_path, local_files_only=True)
-    base.add_special_tokens({"additional_special_tokens": list(_RESERVED_SPECIAL_TOKENS)})
-    reserved_ids = base.convert_tokens_to_ids(list(_RESERVED_SPECIAL_TOKENS))
     plain_text = "Hello, how are you?"
-    plain_ids = base.encode(plain_text, add_special_tokens=False)
 
-    replacements = dict(zip(reserved_ids, ["<|start_think|>", "<|end_think|>"], strict=True))
-    prepared = inject_special_tokens(base, replacements)
-
-    assert prepared.encode(plain_text, add_special_tokens=False) == plain_ids
-    for token_id, token_str in replacements.items():
-        assert prepared.encode(token_str, add_special_tokens=False) == [token_id]
-        assert prepared.decode([token_id]) == token_str
+    assert marin_tokenizer.encode(plain_text, add_special_tokens=False) == base.encode(
+        plain_text, add_special_tokens=False
+    )
+    assert marin_tokenizer.chat_template == MARIN_CHAT_TEMPLATE
+    for token_id, token_str in marin_tokenizer_fixture.token_renames.items():
+        assert marin_tokenizer.encode(token_str, add_special_tokens=False) == [token_id]
+        assert marin_tokenizer.decode([token_id]) == token_str
 
 
 def test_assistant_mask_covers_only_assistant_turns(marin_chat_tokenizer: MarinTokenizer):
