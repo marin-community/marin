@@ -1,55 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Scrape k8s node host + GPU hardware readings from the cluster's exporters.
-
-A Kubernetes cluster has no per-node Iris worker daemon, so nothing emits the
-host/device heartbeats the GCE/TPU worker daemon writes to ``iris.worker``.
-CoreWeave CKS instead runs the standard Prometheus exporters on every node — a
-``node-exporter`` DaemonSet (host CPU/memory/disk/network) and a
-``dcgm-exporter`` DaemonSet (per-GPU HBM, temperature, utilization, power). The
-controller scrapes those exporters directly and the cluster backend writes one
-``iris.worker`` row per node, giving k8s clusters the host/device time-series the
-worker-daemon clusters already get.
-
-There is no in-cluster Prometheus/VictoriaMetrics query endpoint to aggregate
-against — CoreWeave's is a scrape-only ``vmagent`` that forwards to a managed
-store — so the controller reads the raw ``/metrics`` endpoints itself:
-``node-exporter`` at the node IP's host port and ``dcgm-exporter`` at each
-exporter pod's IP. Scraping is best-effort: a node whose exporter does not
-answer simply has null utilization for that tick; its liveness and allocatable
-capacity still surface through the cluster status RPC.
-"""
+"""Collect node-exporter and DCGM telemetry beside a Kubernetes node."""
 
 from __future__ import annotations
 
 import logging
 import math
 import threading
+import time
 import urllib.request
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import NamedTuple
 
-from finelog.client.log_client import Table
-from rigging.timing import Timestamp
+from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
+from rigging import telemetry
 
-from iris.cluster.platforms.k8s.service import K8sService
-from iris.cluster.stats.emitter import PeriodicEmitter
-from iris.cluster.stats.tables import IrisWorkerStat, stats_timestamp
+from iris.cluster.config import IrisClusterConfig, load_config
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH, resolve_endpoint_uri
+from iris.cluster.node_agent import SERVICE_NAME
+from iris.cluster.node_agent.metrics import DeviceMetric, NodeMetrics, NodeTarget, publish_node_telemetry
+from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 
 logger = logging.getLogger(__name__)
 
-# The controller ticks reconcile at ~1s, but exporter scrapes are coarser: DCGM
-# and node-exporter update on their own scrape cadence, and the cpu-busy delta
-# wants a meaningful interval to difference over.
-DEFAULT_NODE_STATS_POLL_INTERVAL = 30.0
-
-# on_snapshot receives the freshly-scraped per-node metrics and the scrape time
-# (epoch ms), which the cluster status RPC folds into its live NodeStatus rows.
-SnapshotSink = Callable[[dict[str, "NodeMetrics"], int], None]
+DEFAULT_COLLECTION_INTERVAL = 30.0
+K8S_API_TIMEOUT = 2.0
+NODE_EXPORTER_ADDRESS = "127.0.0.1"
+_K8S_GPU_MODEL_LABELS = ("nvidia.com/gpu.product", "gpu.nvidia.com/model")
 
 # CoreWeave runs both exporters as DaemonSets in this namespace. node-exporter
 # binds a host port (reachable at the node IP); dcgm-exporter is pod-network
@@ -87,6 +70,10 @@ _VIRTUAL_IFACE_PREFIXES = (
 _MIB = 1024 * 1024
 _SCRAPE_TIMEOUT = 2.0
 _MAX_SCRAPE_WORKERS = 16
+_MAX_SCRAPE_BYTES = 16 << 20
+_MAX_DCGM_SAMPLES = 32_768
+_MAX_DCGM_DEVICES = 256
+_MAX_DCGM_EXPORTERS = 512
 
 # One injectable seam so tests exercise the parsing/aggregation without a network.
 Fetch = Callable[[str], str | None]
@@ -98,7 +85,11 @@ def _http_get(url: str, timeout: float = _SCRAPE_TIMEOUT) -> str | None:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             if resp.status != 200:
                 return None
-            return resp.read().decode("utf-8", errors="replace")
+            body = resp.read(_MAX_SCRAPE_BYTES + 1)
+            if len(body) > _MAX_SCRAPE_BYTES:
+                logger.warning("node-metrics scrape exceeded %d bytes for %s", _MAX_SCRAPE_BYTES, url)
+                return None
+            return body.decode("utf-8", errors="replace")
     except Exception as e:
         logger.debug("node-metrics scrape failed for %s: %s", url, e)
         return None
@@ -203,6 +194,82 @@ class HostSample:
     disk_used_bytes: int
     net_recv_bytes: int
     net_sent_bytes: int
+    boot_time_seconds: int | None
+
+
+@dataclass(frozen=True)
+class _DcgmMetricSpec:
+    name: str
+    unit: str = ""
+    scale: float = 1.0
+    temporality: str = telemetry.CURRENT_SNAPSHOT
+    attributes: tuple[tuple[str, str], ...] = ()
+    source_labels: tuple[str, ...] = ()
+
+
+_DCGM_METRICS = {
+    "DCGM_FI_DEV_FB_USED": _DcgmMetricSpec("gpu_memory_used_bytes", "By", _MIB),
+    "DCGM_FI_DEV_FB_TOTAL": _DcgmMetricSpec("gpu_memory_total_bytes", "By", _MIB),
+    "DCGM_FI_DEV_FB_FREE": _DcgmMetricSpec("gpu_memory_free_bytes", "By", _MIB),
+    "DCGM_FI_DEV_FB_RESERVED": _DcgmMetricSpec("gpu_memory_reserved_bytes", "By", _MIB),
+    "DCGM_FI_DEV_GPU_UTIL": _DcgmMetricSpec("gpu_utilization_percent", "%"),
+    "DCGM_FI_DEV_MEM_COPY_UTIL": _DcgmMetricSpec("gpu_memory_copy_utilization_percent", "%"),
+    "DCGM_FI_DEV_GPU_TEMP": _DcgmMetricSpec("gpu_temperature_celsius", "Cel"),
+    "DCGM_FI_DEV_MEMORY_TEMP": _DcgmMetricSpec("gpu_memory_temperature_celsius", "Cel"),
+    "DCGM_FI_DEV_POWER_USAGE": _DcgmMetricSpec("gpu_power_watts", "W"),
+    "DCGM_FI_DEV_POWER_MGMT_LIMIT": _DcgmMetricSpec("gpu_power_limit_watts", "W"),
+    "DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION": _DcgmMetricSpec(
+        "gpu_energy_millijoules", "mJ", temporality=telemetry.CUMULATIVE_SNAPSHOT
+    ),
+    "DCGM_FI_DEV_PCIE_REPLAY_COUNTER": _DcgmMetricSpec(
+        "gpu_pcie_replay_errors", "{error}", temporality=telemetry.CUMULATIVE_SNAPSHOT
+    ),
+    "DCGM_FI_DEV_XID_ERRORS": _DcgmMetricSpec("gpu_xid_error_code", source_labels=("err_code",)),
+    "DCGM_FI_DEV_CORRECTABLE_REMAPPED_ROWS": _DcgmMetricSpec(
+        "gpu_row_remapped_rows",
+        "{row}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
+        attributes=(("error_kind", "correctable"),),
+    ),
+    "DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS": _DcgmMetricSpec(
+        "gpu_row_remapped_rows",
+        "{row}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
+        attributes=(("error_kind", "uncorrectable"),),
+    ),
+    "DCGM_FI_DEV_ROW_REMAP_FAILURE": _DcgmMetricSpec("gpu_row_remap_failures", "{failure}"),
+    "DCGM_FI_PROF_GR_ENGINE_ACTIVE": _DcgmMetricSpec("gpu_graphics_engine_active_ratio", "1"),
+    "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE": _DcgmMetricSpec("gpu_tensor_active_ratio", "1"),
+    "DCGM_FI_PROF_DRAM_ACTIVE": _DcgmMetricSpec("gpu_dram_active_ratio", "1"),
+    "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL": _DcgmMetricSpec(
+        "gpu_nvlink_errors",
+        "{error}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
+        attributes=(("error_kind", "crc_flit"),),
+    ),
+    "DCGM_FI_DEV_NVLINK_CRC_DATA_ERROR_COUNT_TOTAL": _DcgmMetricSpec(
+        "gpu_nvlink_errors",
+        "{error}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
+        attributes=(("error_kind", "crc_data"),),
+    ),
+    "DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL": _DcgmMetricSpec(
+        "gpu_nvlink_errors",
+        "{error}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
+        attributes=(("error_kind", "replay"),),
+    ),
+    "DCGM_FI_DEV_NVLINK_RECOVERY_ERROR_COUNT_TOTAL": _DcgmMetricSpec(
+        "gpu_nvlink_errors",
+        "{error}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
+        attributes=(("error_kind", "recovery"),),
+    ),
+    "DCGM_EXP_GPU_HEALTH_STATUS": _DcgmMetricSpec(
+        "gpu_health_status",
+        source_labels=("health_watch", "health_error_code", "health_error_severity", "health_error_category"),
+    ),
+}
 
 
 @dataclass
@@ -222,6 +289,8 @@ class GpuSample:
     temp_c: float
     power_w: float
     power_limit_w: float
+    exporter_uid: str = ""
+    device_metrics: tuple[DeviceMetric, ...] = ()
 
 
 def parse_node_exporter(text: str, *, disk_mounts: tuple[str, ...] = _PREFERRED_DISK_MOUNTS) -> HostSample:
@@ -231,6 +300,7 @@ def parse_node_exporter(text: str, *, disk_mounts: tuple[str, ...] = _PREFERRED_
     fs_size: dict[str, int] = {}
     fs_avail: dict[str, int] = {}
     net_recv = net_sent = 0
+    boot_time: int | None = None
     for name, labels, value in parse_prometheus(text):
         if name == "node_cpu_seconds_total":
             cpu_total += value
@@ -248,6 +318,8 @@ def parse_node_exporter(text: str, *, disk_mounts: tuple[str, ...] = _PREFERRED_
             net_recv += int(value)
         elif name == "node_network_transmit_bytes_total" and _is_physical_iface(labels.get("device", "")):
             net_sent += int(value)
+        elif name == "node_boot_time_seconds":
+            boot_time = int(value)
 
     mount = next((m for m in disk_mounts if m in fs_size), "")
     disk_total = fs_size.get(mount, 0)
@@ -261,16 +333,33 @@ def parse_node_exporter(text: str, *, disk_mounts: tuple[str, ...] = _PREFERRED_
         disk_used_bytes=disk_used,
         net_recv_bytes=net_recv,
         net_sent_bytes=net_sent,
+        boot_time_seconds=boot_time,
     )
 
 
-def parse_dcgm(text: str) -> dict[str, GpuSample]:
+@dataclass
+class _DcgmDevice:
+    host: str
+    gpu_index: str
+    gpu_uuid: str = ""
+    pci_bus_id: str = ""
+    gpu_model: str = ""
+    driver_version: str = ""
+    metrics: dict[tuple[str, tuple[tuple[str, str], ...]], Sample] = field(default_factory=dict)
+
+
+def parse_dcgm(text: str, *, exporter_uid: str = "", node_name: str = "") -> dict[str, GpuSample]:
     """Parse ``dcgm-exporter`` text into one aggregate ``GpuSample`` per node.
 
-    Keys are the ``hostname`` label DCGM stamps on every series (the node name).
-    One dcgm pod reports only its own node, but merging by hostname keeps a
-    fleet-wide scrape correct regardless of which pod produced which series.
+    The node name normally comes from DCGM's hostname label and falls back to
+    the exporter pod's assigned node. Per-device telemetry requires the stable
+    UUID, PCI bus id, and exporter pod UID; aggregate dashboard readings remain
+    available when an older exporter omits those labels.
     """
+    parsed = list(parse_prometheus(text))
+    if len(parsed) > _MAX_DCGM_SAMPLES:
+        raise ValueError("dcgm sample limit exceeded")
+
     used: dict[str, dict[str, int]] = defaultdict(dict)
     total: dict[str, dict[str, int]] = defaultdict(dict)
     util: dict[str, dict[str, float]] = defaultdict(dict)
@@ -279,15 +368,26 @@ def parse_dcgm(text: str) -> dict[str, GpuSample]:
     power_limit: dict[str, dict[str, float]] = defaultdict(dict)
     model: dict[str, str] = {}
     gpus: dict[str, set[str]] = defaultdict(set)
+    devices: dict[tuple[str, str], _DcgmDevice] = {}
 
-    for name, labels, value in parse_prometheus(text):
-        host = labels.get("hostname") or labels.get("Hostname")
+    for sample in parsed:
+        name, labels, value = sample
+        host = labels.get("hostname") or labels.get("Hostname") or node_name
         gpu = labels.get("gpu")
         if not host or gpu is None:
             continue
         gpus[host].add(gpu)
+        key = (host, gpu)
+        device = devices.setdefault(key, _DcgmDevice(host=host, gpu_index=gpu))
+        device.gpu_uuid = labels.get("UUID") or labels.get("uuid") or device.gpu_uuid
+        device.pci_bus_id = labels.get("pci_bus_id") or device.pci_bus_id
+        device.gpu_model = labels.get("modelName") or device.gpu_model
+        device.driver_version = labels.get("DCGM_FI_DRIVER_VERSION") or device.driver_version
         if labels.get("modelName"):
             model[host] = labels["modelName"]
+        if spec := _DCGM_METRICS.get(name):
+            metric_labels = tuple((label, labels[label]) for label in spec.source_labels if labels.get(label))
+            device.metrics[(name, metric_labels)] = sample
         if name == "DCGM_FI_DEV_FB_USED":
             used[host][gpu] = int(value) * _MIB
         elif name == "DCGM_FI_DEV_FB_TOTAL":
@@ -300,6 +400,44 @@ def parse_dcgm(text: str) -> dict[str, GpuSample]:
             power[host][gpu] = value
         elif name == "DCGM_FI_DEV_POWER_MGMT_LIMIT":
             power_limit[host][gpu] = value
+
+    device_metrics: dict[str, list[DeviceMetric]] = defaultdict(list)
+    if len(devices) > _MAX_DCGM_DEVICES:
+        raise ValueError("dcgm device limit exceeded")
+    for device in devices.values():
+        if not (device.gpu_uuid and device.pci_bus_id and exporter_uid):
+            continue
+        inventory_attributes = {"device_kind": "gpu"}
+        if device.gpu_model:
+            inventory_attributes["gpu_model"] = device.gpu_model
+        if device.driver_version:
+            inventory_attributes["driver_version"] = device.driver_version
+        device_metrics[device.host].append(
+            DeviceMetric(
+                "hardware_inventory",
+                1.0,
+                "",
+                telemetry.CURRENT_SNAPSHOT,
+                device.gpu_index,
+                device.gpu_uuid,
+                device.pci_bus_id,
+                inventory_attributes,
+            )
+        )
+        for (source_name, metric_labels), sample in device.metrics.items():
+            spec = _DCGM_METRICS[source_name]
+            device_metrics[device.host].append(
+                DeviceMetric(
+                    spec.name,
+                    sample.value * spec.scale,
+                    spec.unit,
+                    spec.temporality,
+                    device.gpu_index,
+                    device.gpu_uuid,
+                    device.pci_bus_id,
+                    {**dict(spec.attributes), **dict(metric_labels)},
+                )
+            )
 
     samples: dict[str, GpuSample] = {}
     for host, gpu_ids in gpus.items():
@@ -314,54 +452,10 @@ def parse_dcgm(text: str) -> dict[str, GpuSample]:
             temp_c=max(temps) if temps else 0.0,
             power_w=sum(power[host].values()),
             power_limit_w=sum(power_limit[host].values()),
+            exporter_uid=exporter_uid,
+            device_metrics=tuple(device_metrics[host]),
         )
     return samples
-
-
-@dataclass
-class NodeTarget:
-    """A node to scrape, plus the identity its ``iris.worker`` row carries.
-
-    ``internal_ip`` is where the node-exporter is reached; the rest is static
-    node metadata (allocatable capacity, accelerator type, region) replicated
-    into every heartbeat row so the ``iris.worker`` table stays self-contained.
-    """
-
-    name: str
-    internal_ip: str
-    status: str = ""
-    device_type: str = ""
-    device_variant: str = ""
-    zone: str = ""
-    cpu_count: int = 0
-    memory_bytes: int = 0
-    running_pod_count: int = 0
-
-
-@dataclass
-class NodeMetrics:
-    """Computed per-node snapshot: host utilization + aggregate GPU hardware.
-
-    All fields are optional. Host fields are None when the node-exporter did not
-    answer (or, for ``cpu_pct``, when there is no prior sample to difference
-    against); GPU fields are None on a CPU node or when dcgm did not answer.
-    """
-
-    cpu_pct: float | None = None
-    mem_used_bytes: int | None = None
-    mem_total_bytes: int | None = None
-    disk_used_bytes: int | None = None
-    disk_total_bytes: int | None = None
-    net_recv_bytes: int | None = None
-    net_sent_bytes: int | None = None
-    gpu_count: int | None = None
-    gpu_model: str = ""
-    hbm_used_bytes: int | None = None
-    hbm_total_bytes: int | None = None
-    gpu_util_pct: float | None = None
-    gpu_temp_c: float | None = None
-    gpu_power_w: float | None = None
-    gpu_power_limit_w: float | None = None
 
 
 class NodeStatsScraper:
@@ -395,7 +489,7 @@ class NodeStatsScraper:
         if not targets:
             return {}
         host_samples = self._scrape_hosts(targets)
-        gpu_samples = self._scrape_gpus()
+        gpu_samples = self._scrape_gpus({target.name for target in targets})
         names = {t.name for t in targets}
         self._prune_prev(names)
 
@@ -405,6 +499,10 @@ class NodeStatsScraper:
             gpu = gpu_samples.get(target.name)
             metrics = NodeMetrics()
             if host is not None:
+                metrics.host_available = True
+                metrics.host_source_replica_uid = target.node_uid
+                if host.boot_time_seconds is not None:
+                    metrics.host_source_replica_uid += f":{host.boot_time_seconds}"
                 metrics.cpu_pct = self._cpu_pct(target.name, host)
                 metrics.mem_used_bytes = host.mem_used_bytes
                 metrics.mem_total_bytes = host.mem_total_bytes
@@ -413,6 +511,9 @@ class NodeStatsScraper:
                 metrics.net_recv_bytes = host.net_recv_bytes
                 metrics.net_sent_bytes = host.net_sent_bytes
             if gpu is not None:
+                metrics.dcgm_available = True
+                metrics.dcgm_exporter_uid = gpu.exporter_uid
+                metrics.device_metrics = gpu.device_metrics
                 metrics.gpu_count = gpu.gpu_count
                 metrics.gpu_model = gpu.gpu_model
                 metrics.hbm_used_bytes = gpu.hbm_used_bytes
@@ -444,24 +545,36 @@ class NodeStatsScraper:
         texts = self._fetch_all(urls)
         return {name: parse_node_exporter(text) for name, text in texts.items()}
 
-    def _scrape_gpus(self) -> dict[str, GpuSample]:
+    def _scrape_gpus(self, node_names: set[str]) -> dict[str, GpuSample]:
         try:
             pods = self._kubectl.list_pods_in_namespace(self._ns)
         except Exception as e:
             logger.debug("node-metrics: listing dcgm exporters in %s failed: %s", self._ns, e)
             return {}
-        urls: dict[str, str] = {}
-        for pod in pods:
-            labels = pod.get("metadata", {}).get("labels", {})
-            if labels.get(_DCGM_NAME_LABEL) != _DCGM_NAME_VALUE:
-                continue
+        dcgm_pods = [
+            pod
+            for pod in pods
+            if pod.get("metadata", {}).get("labels", {}).get(_DCGM_NAME_LABEL) == _DCGM_NAME_VALUE
+            and pod.get("spec", {}).get("nodeName", "") in node_names
+        ]
+        if len(dcgm_pods) > _MAX_DCGM_EXPORTERS:
+            logger.warning("dcgm exporter count exceeded %d", _MAX_DCGM_EXPORTERS)
+        exporters: dict[str, tuple[str, str, str]] = {}
+        for pod in dcgm_pods[:_MAX_DCGM_EXPORTERS]:
             pod_ip = pod.get("status", {}).get("podIP")
             name = pod.get("metadata", {}).get("name", "")
+            uid = pod.get("metadata", {}).get("uid", "")
+            node_name = pod.get("spec", {}).get("nodeName", "")
             if pod_ip and name:
-                urls[name] = f"http://{pod_ip}:{self._dcgm_port}/metrics"
+                exporters[name] = (f"http://{pod_ip}:{self._dcgm_port}/metrics", uid, node_name)
         merged: dict[str, GpuSample] = {}
-        for text in self._fetch_all(urls).values():
-            merged.update(parse_dcgm(text))
+        urls = {name: endpoint[0] for name, endpoint in exporters.items()}
+        for name, text in self._fetch_all(urls).items():
+            _, uid, node_name = exporters[name]
+            try:
+                merged.update(parse_dcgm(text, exporter_uid=uid, node_name=node_name))
+            except ValueError as error:
+                logger.warning("could not parse dcgm exporter %s: %s", name, error)
         return merged
 
     def _fetch_all(self, urls: dict[str, str]) -> dict[str, str]:
@@ -473,100 +586,62 @@ class NodeStatsScraper:
         return {k: body for k, body in zip(keys, bodies, strict=True) if body is not None}
 
 
-def build_node_stat(target: NodeTarget, metrics: NodeMetrics | None) -> IrisWorkerStat:
-    """Build one ``iris.worker`` row for a node from its identity and scraped metrics.
+def _telemetry_endpoint(cluster_config: IrisClusterConfig) -> str:
+    spec = cluster_config.endpoints.get(LOG_SERVER_ENDPOINT_NAME)
+    if cluster_config.finelog.config:
+        if spec is not None:
+            raise ValueError("cluster config cannot set both finelog.config and /system/log-server")
+        uri, metadata = derive_endpoint_uri(load_finelog_config(cluster_config.finelog.config))
+    elif spec is not None:
+        uri, metadata = spec.uri, dict(spec.metadata)
+    else:
+        raise ValueError("node telemetry requires an external /system/log-server endpoint")
+    return resolve_endpoint_uri(uri, metadata).rstrip("/") + TELEMETRY_ENDPOINT_PATH
 
-    A k8s node has no worker daemon to emit its heartbeat, so the controller
-    writes the row instead — worker_id is the node name, host utilization comes
-    from node-exporter, and the GPU-hardware columns from dcgm-exporter. Missing
-    metrics (``metrics is None`` on a tick with no successful scrape, or a null
-    field) leave those columns null; identity and allocatable capacity always
-    populate, so the node still shows in the fleet.
-    """
-    m = metrics or NodeMetrics()
-    # Node GPU labels are unreliable on CoreWeave (some GPU nodes report an empty
-    # nvidia.com/gpu allocatable), so dcgm-exporter is the authoritative signal:
-    # fall back to it for the device type/variant when the node metadata is blank.
-    device_type = target.device_type or ("gpu" if (m.gpu_count or 0) > 0 else "cpu")
-    device_variant = target.device_variant or m.gpu_model
-    # Utilization ints are non-nullable on IrisWorkerStat (worker daemons always
-    # fill them); a node with no scrape reports 0 for the tick.
-    return IrisWorkerStat(
-        worker_id=target.name,
-        ts=stats_timestamp(),
-        status=target.status,
-        address=target.internal_ip,
-        cpu_pct=m.cpu_pct if m.cpu_pct is not None else 0.0,
-        mem_bytes=m.mem_used_bytes or 0,
-        mem_total_bytes=m.mem_total_bytes or 0,
-        disk_used_bytes=m.disk_used_bytes or 0,
-        disk_total_bytes=m.disk_total_bytes or 0,
-        running_task_count=target.running_pod_count,
-        total_process_count=0,
-        net_recv_bytes=m.net_recv_bytes or 0,
-        net_sent_bytes=m.net_sent_bytes or 0,
-        device_type=device_type,
-        device_variant=device_variant,
-        cpu_count=target.cpu_count,
-        memory_bytes=target.memory_bytes,
-        tpu_name="",
-        gce_instance_name="",
-        zone=target.zone,
-        gpu_count=m.gpu_count,
-        hbm_used_bytes=m.hbm_used_bytes,
-        hbm_total_bytes=m.hbm_total_bytes,
-        gpu_util_pct=m.gpu_util_pct,
-        gpu_temp_c=m.gpu_temp_c,
-        gpu_power_w=m.gpu_power_w,
-        gpu_power_limit_w=m.gpu_power_limit_w,
+
+def _node_target(k8s: CloudK8sService, node_name: str) -> NodeTarget:
+    node = k8s.get_json(K8sResource.NODES, node_name)
+    if node is None:
+        raise ConnectionError(f"Kubernetes node {node_name!r} is not visible")
+    metadata = node.get("metadata", {})
+    node_uid = metadata.get("uid", "")
+    if not node_uid:
+        raise ValueError(f"Kubernetes node {node_name!r} has no metadata.uid")
+    labels = metadata.get("labels", {})
+    allocatable = node.get("status", {}).get("allocatable", {})
+    gpu_count = int(allocatable.get("nvidia.com/gpu", 0))
+    gpu_model = next((labels[name] for name in _K8S_GPU_MODEL_LABELS if labels.get(name)), "")
+    return NodeTarget(
+        name=node_name,
+        node_uid=node_uid,
+        internal_ip=NODE_EXPORTER_ADDRESS,
+        device_type="gpu" if gpu_count or gpu_model else "cpu",
+        device_variant=gpu_model,
     )
 
 
-class NodeStatsCollector:
-    """Periodic emitter that scrapes node metrics and writes ``iris.worker`` rows.
+def collect_once(scraper: NodeStatsScraper, target: NodeTarget) -> None:
+    """Publish one same-node exporter collection pass."""
+    metrics = scraper.scrape([target])[target.name]
+    publish_node_telemetry(target, metrics, time.time())
+    telemetry.record_runtime_health()
 
-    The reconcile loop declares the current node set via :meth:`set_nodes` once
-    per cluster-scan cycle. Each ``poll_interval`` the collector scrapes those
-    nodes' exporters, appends one ``IrisWorkerStat`` per node to the
-    ``iris.worker`` table, and hands the latest snapshot to ``on_snapshot`` so
-    the cluster status RPC can serve current utilization without re-scraping.
-    """
 
-    def __init__(
-        self,
-        kubectl: K8sService,
-        node_stats_table: Table,
-        *,
-        exporters_namespace: str = CW_EXPORTERS_NAMESPACE,
-        poll_interval: float = DEFAULT_NODE_STATS_POLL_INTERVAL,
-        on_snapshot: SnapshotSink | None = None,
-    ) -> None:
-        self._scraper = NodeStatsScraper(kubectl, exporters_namespace=exporters_namespace)
-        self._table = node_stats_table
-        self._on_snapshot = on_snapshot
-        self._targets: list[NodeTarget] = []
-        self._lock = threading.Lock()
-        self._emitter = PeriodicEmitter(self.collect_once, interval=poll_interval, name="node-stats-collector")
-
-    def set_nodes(self, targets: list[NodeTarget]) -> None:
-        """Declare the authoritative node set to scrape (called once per sync cycle)."""
-        with self._lock:
-            self._targets = list(targets)
-
-    def collect_once(self) -> None:
-        with self._lock:
-            targets = list(self._targets)
-        if not targets:
-            return
-        metrics = self._scraper.scrape(targets)
-        rows = [build_node_stat(t, metrics.get(t.name)) for t in targets]
-        # A failed write still hands the snapshot to the status RPC below.
-        try:
-            self._table.write(rows)
-        except Exception:
-            logger.debug("node-stats table write failed", exc_info=True)
-        if self._on_snapshot is not None:
-            self._on_snapshot(metrics, Timestamp.now().epoch_ms())
-
-    def close(self) -> None:
-        self._emitter.close()
+def run(config_path: Path, node_name: str, namespace: str, stop: threading.Event) -> None:
+    """Collect telemetry until the process receives a shutdown signal."""
+    config = load_config(config_path)
+    endpoint = _telemetry_endpoint(config)
+    k8s = CloudK8sService(namespace=namespace, timeout=K8S_API_TIMEOUT)
+    target = _node_target(k8s, node_name)
+    telemetry.configure(
+        endpoint=endpoint,
+        service=SERVICE_NAME,
+        attributes={"node_name": target.name, "node_uid": target.node_uid, "role": str(telemetry.TelemetryRole.WORKER)},
+    )
+    scraper = NodeStatsScraper(k8s)
+    try:
+        while not stop.is_set():
+            collect_once(scraper, target)
+            stop.wait(DEFAULT_COLLECTION_INTERVAL)
+    finally:
+        telemetry.shutdown(5.0)

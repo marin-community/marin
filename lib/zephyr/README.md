@@ -49,12 +49,13 @@ ctx.execute(pipeline)
 ### Read-only memory stores
 
 `ZephyrContext.load_memory_store()` loads an existing partitioned dataset into
-a context-owned group of read-only actors. The handle is picklable, so later
-pipelines and child jobs can use `get()` or order-preserving `get_many()`
-lookups without copying the table into every worker.
+the workers of an entered context. Every worker starts an empty multi-table
+service; pipelines that do not load a table perform no source reads. The table
+handle is picklable, so later pipelines and child jobs can use `get()` or
+order-preserving `get_many()` lookups without copying the table into every task.
 
 ```python
-from fray.types import ActorConfig, ResourceConfig
+from fray.types import ResourceConfig
 
 
 def document_partition(key: tuple[int, str]) -> int:
@@ -66,20 +67,18 @@ documents = Dataset.from_files("s3://bucket/documents/*.parquet").load_parquet()
     lambda row: ((row["file_index"], row["id"]), row["text"])
 )
 
-ctx = ZephyrContext(max_workers=100)
-try:
+with ZephyrContext(
+    max_workers=16,
+    resources=ResourceConfig(cpu=2, ram="8g"),
+) as ctx:
     document_store = ctx.load_memory_store(
         documents,
         name="documents",
         hash_key=document_partition,
-        num_actors=16,
-        actor_resources=ResourceConfig(cpu=2, ram="8g"),
-        actor_config=ActorConfig(max_task_retries=1_000),
         recovery_timeout=900,
     )
     result = ctx.execute(Dataset.from_list(document_keys).map(document_store.get))
-finally:
-    ctx.shutdown()
+    document_store.destroy()
 ```
 
 For `P` source shards, every key must already satisfy
@@ -93,9 +92,15 @@ picklable for remote calls; Python's salted `hash()` is not stable enough to
 serve as the partition function for string or byte keys. Actors retain the
 loaded Python objects directly, and `store.stats()` reports item counts and
 load time. Invalid input fails the load call without consuming actor restart
-retries. Iris reconstructs a preempted actor from the same source shards, and
-lookups wait for their owner up to `recovery_timeout`. Calling `shutdown()` on
-the creating context stops its stores.
+retries. Multiple tables can share the worker process. In this initial API,
+Zephyr does not reserve, limit, or evict table memory; size the context's worker
+RAM for the combined tables and pipeline workload.
+
+Iris reconstructs a preempted worker at the same endpoint. The first table
+lookup on that replacement reloads its immutable source shards, and all worker
+responses and reconstruction share one `recovery_timeout` deadline. Destroying
+one table leaves other tables active. Exiting the creating context stops the
+worker pool and invalidates its table handles.
 
 ## Real Usage
 

@@ -80,9 +80,8 @@ kubernetes_provider:
   cache_dir: /mnt/local/iris-cache
   controller_address: http://iris-ci-controller-svc.iris-ci.svc.cluster.local:10000
   kueue:
-    # The K8s backend admits every pod through Kueue. ClusterQueue + ResourceFlavors
-    # are admin-provisioned out of band (scripts/install_kueue.py --with-queues
-    # --cpu-flavor-node-label ...); Iris reconciles the namespaced LocalQueue.
+    # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
+    # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
 
 controller:

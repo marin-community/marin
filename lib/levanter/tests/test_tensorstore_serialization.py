@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -17,7 +18,21 @@ from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.models.gpt2 import Gpt2Mlp
-from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore, tree_serialize_leaves_tensorstore
+from levanter.tensorstore_serialization import (
+    _transfer_shard_to_pageable_host,
+    tree_deserialize_leaves_tensorstore,
+    tree_serialize_leaves_tensorstore,
+)
+
+
+def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
+    source = jnp.arange(8, dtype=jnp.float32)
+
+    staged = asyncio.run(_transfer_shard_to_pageable_host(source.addressable_shards[0]))
+
+    source_host = np.asarray(source)
+    np.testing.assert_array_equal(staged, source_host)
+    assert not np.shares_memory(staged, source_host)
 
 
 def test_tensorstore_checkpoint_simple():

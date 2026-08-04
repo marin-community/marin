@@ -53,13 +53,15 @@ class RecordingTelemetryTransport:
 
     def __init__(self) -> None:
         self.records: list[dict[str, Any]] = []
+        self.resources: list[dict[str, Any]] = []
         self.condition = threading.Condition()
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> _TelemetryResponse:
         del endpoint, timeout
-        records = json.loads(body)["records"]
+        payload = json.loads(body)
         with self.condition:
-            self.records.extend(records)
+            self.records.extend(payload["records"])
+            self.resources.append(payload["resource"])
             self.condition.notify_all()
         return _TelemetryResponse(batch_id)
 
@@ -95,3 +97,50 @@ class RecordingTelemetryTransport:
                 ),
                 timeout=5,
             )
+
+
+def nccl_ras_payload() -> dict[str, object]:
+    """Return a representative NCCL verbose-status response for downstream tests."""
+    return {
+        "nccl_version": "2.29.1",
+        "cuda_runtime_version": 13000,
+        "cuda_driver_version": 13000,
+        "communicators_count": 1,
+        "communicators": [
+            {
+                "hash": "0xae94423cfbb2ef4a",
+                "secondary_hash": "0xb7e7187447156001:0xb8242ed28a71381e",
+                "size": 2,
+                "ranks_count": 1,
+                "missing_ranks_count": 1,
+                "ranks": [
+                    {
+                        "rank": 0,
+                        "host": "10.0.0.1",
+                        "pid": 1234,
+                        "cuda_dev": 0,
+                        "nvml_dev": 3,
+                        "status": {
+                            "init_state": 0,
+                            "async_error": 0,
+                            "finalize_called": False,
+                            "destroy_flag": False,
+                            "abort_flag": False,
+                        },
+                        "collective_counts": {"AllReduce": 12},
+                    }
+                ],
+                "missing_ranks": [
+                    {
+                        "rank": 1,
+                        "host": "10.0.0.2",
+                        "pid": 5678,
+                        "cuda_dev": 0,
+                        "nvml_dev": 1,
+                        "status": {"unresponsive": True, "considered_dead": False},
+                    }
+                ],
+            }
+        ],
+        "ras": {"collection_time_sec": 0.125, "timeouts_count": 2},
+    }

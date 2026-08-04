@@ -19,6 +19,7 @@ from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.runtime.jax_init import (
+    _JAX_DIST_HEARTBEAT_TIMEOUT,
     _JAX_DIST_INIT_TIMEOUT,
     _poll_for_coordinator,
     configure_jax_compilation_cache,
@@ -101,7 +102,11 @@ def test_initialize_jax_single_task(
 
     initialize_jax()
 
-    mock_jax_init.assert_called_once_with("10.0.0.1:8476", num_processes=1, process_id=0)
+    mock_jax_init.assert_called_once_with(
+        "10.0.0.1:8476",
+        num_processes=1,
+        process_id=0,
+    )
     mock_iris_ctx.assert_not_called()
 
 
@@ -133,8 +138,20 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
 
     assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
     assert mock_jax_init.call_args_list == [
-        call("10.0.0.1:8476", 2, 0, initialization_timeout=_JAX_DIST_INIT_TIMEOUT),
-        call("10.0.0.1:8476", 2, 1, initialization_timeout=_JAX_DIST_INIT_TIMEOUT),
+        call(
+            "10.0.0.1:8476",
+            2,
+            0,
+            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+            heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+        ),
+        call(
+            "10.0.0.1:8476",
+            2,
+            1,
+            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+            heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+        ),
     ]
 
 
@@ -172,10 +189,16 @@ def test_initialize_jax_task0_registers(
     fake_ctx = FakeContext()
     mock_iris_ctx.return_value = fake_ctx
 
-    initialize_jax(port=9999)
+    initialize_jax(port=9999, heartbeat_timeout=37)
 
     assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:9999")]
-    mock_jax_init.assert_called_once_with("10.0.0.1:9999", 4, 0, initialization_timeout=_JAX_DIST_INIT_TIMEOUT)
+    mock_jax_init.assert_called_once_with(
+        "10.0.0.1:9999",
+        4,
+        0,
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        heartbeat_timeout_seconds=37,
+    )
     mock_atexit.register.assert_called_once_with(fake_ctx.registry.unregister, "endpoint-1")
 
 
@@ -199,7 +222,13 @@ def test_initialize_jax_task0_uses_iris_port(
     initialize_jax(port=9999)
 
     assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:12345")]
-    mock_jax_init.assert_called_once_with("10.0.0.1:12345", 2, 0, initialization_timeout=_JAX_DIST_INIT_TIMEOUT)
+    mock_jax_init.assert_called_once_with(
+        "10.0.0.1:12345",
+        2,
+        0,
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+    )
 
 
 @patch("jax.distributed.initialize")
@@ -224,7 +253,13 @@ def test_initialize_jax_taskN_polls(
     initialize_jax(poll_timeout=10.0, poll_interval=0.01)
 
     assert fake_ctx.resolver.call_count >= 3
-    mock_jax_init.assert_called_once_with("10.0.0.1:8476", 4, 2, initialization_timeout=_JAX_DIST_INIT_TIMEOUT)
+    mock_jax_init.assert_called_once_with(
+        "10.0.0.1:8476",
+        4,
+        2,
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
+    )
 
 
 @patch("jax.distributed.initialize")
@@ -268,7 +303,12 @@ def test_initialize_jax_supervised_single_host(
     initialize_jax()
 
     mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476", 8, 3, local_device_ids=[3], initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+        "10.0.0.1:8476",
+        8,
+        3,
+        local_device_ids=[3],
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
     )
     mock_iris_ctx.assert_not_called()
 
@@ -296,7 +336,12 @@ def test_initialize_jax_supervised_global_rank0_registers(
 
     assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
     mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476", 16, 0, local_device_ids=[0], initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+        "10.0.0.1:8476",
+        16,
+        0,
+        local_device_ids=[0],
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
     )
 
 
@@ -324,7 +369,12 @@ def test_initialize_jax_supervised_other_host_polls(
     initialize_jax()
 
     mock_jax_init.assert_called_once_with(
-        "10.0.0.9:8476", 16, 8, local_device_ids=[0], initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+        "10.0.0.9:8476",
+        16,
+        8,
+        local_device_ids=[0],
+        initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        heartbeat_timeout_seconds=_JAX_DIST_HEARTBEAT_TIMEOUT,
     )
     assert fake_ctx.registry.registered == []
 

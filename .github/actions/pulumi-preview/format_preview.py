@@ -3,7 +3,9 @@
 
 Moves Pulumi's indented ``+/-/~`` markers to column 0 so GitHub's diff
 highlighter applies (``~`` becomes ``!``). Also parses change counts into
-meta.json for the aggregate comment's status icons.
+meta.json for the aggregate comment's status icons, and redacts human
+`user:<email>` principals so personal addresses never reach the public PR
+comment (`serviceAccount:`/`group:`/other pseudo-principals are left alone).
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ _COUNT_RE = re.compile(
     re.IGNORECASE,
 )
 _UNCHANGED_RE = re.compile(r"(\d+)\s+unchanged", re.IGNORECASE)
+_USER_MEMBER_RE = re.compile(r"user:[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_REDACTED_MEMBER = "user:[redacted]"
 
 
 @dataclass
@@ -46,6 +50,23 @@ class ResourceCounts:
 
 def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
+
+
+def _resource_slug(identifier: str) -> str:
+    """Mirrors infra/pulumi/src/iac/gcp/cloud_run.py's `resource_slug`, duplicated here
+    (not imported) so this formatter stays a standalone, dependency-free script."""
+    return re.sub(r"[^a-z0-9]+", "-", identifier.lower()).strip("-")
+
+
+def redact_user_emails(text: str) -> str:
+    """Redact human `user:<email>` principals in both their literal and Pulumi
+    resource-name-slugged forms (e.g. `user:a@b.com` and `...-user-a-b-com`).
+    `serviceAccount:`/`group:`/other pseudo-principals are never matched."""
+    members = sorted(set(_USER_MEMBER_RE.findall(text)), key=len, reverse=True)
+    for member in members:
+        text = text.replace(member, _REDACTED_MEMBER)
+        text = text.replace(_resource_slug(member), _resource_slug(_REDACTED_MEMBER))
+    return text
 
 
 def transform_line(line: str) -> str:
@@ -121,6 +142,7 @@ def main() -> None:
 
     ok = args.ok == "true"
     raw = strip_ansi(args.input.read_text(encoding="utf-8", errors="replace"))
+    raw = redact_user_emails(raw)
     counts = parse_counts(raw)
     sev = severity(ok, counts)
     transformed = transform_preview(raw)

@@ -8,13 +8,14 @@ import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from typing import Any, cast
 
 import cloudpickle
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from fray.actor import ActorUnavailableError
-from fray.types import ActorConfig, ResourceConfig
+from fray.actor import ActorHandle, ActorUnavailableError
+from fray.types import ResourceConfig
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import SentinelFile
@@ -24,18 +25,21 @@ from zephyr.execution import ZephyrContext
 from zephyr.memory_store import (
     DuplicateMemoryStoreKey,
     MemoryStore,
+    MemoryStoreDestroyed,
     MemoryStorePartitionError,
     MemoryStoreUnavailable,
+    _MemoryTableLookup,
+    _MemoryTableStatus,
 )
 
 
 class _TestActorFuture:
-    def __init__(self, value=None, error: Exception | None = None):
+    def __init__(self, value: Any = None, error: Exception | None = None):
         self.value = value
         self.error = error
         self.timeouts: list[float | None] = []
 
-    def result(self, timeout=None):
+    def result(self, timeout: float | None = None) -> Any:
         self.timeouts.append(timeout)
         if self.error is not None:
             raise self.error
@@ -51,7 +55,7 @@ class _SequencedActorMethod:
         self.futures = futures
         self.call_count = 0
 
-    def remote(self, *args, **kwargs):
+    def remote(self, *args: Any, **kwargs: Any) -> _TestActorFuture:
         del args, kwargs
         future = self.futures[self.call_count]
         self.call_count += 1
@@ -60,7 +64,7 @@ class _SequencedActorMethod:
 
 class _SequencedActor:
     def __init__(self, futures: list[_TestActorFuture]):
-        self.lookup = _SequencedActorMethod(futures)
+        self.lookup_memory_table = _SequencedActorMethod(futures)
 
 
 def _partition_rows(rows):
@@ -80,30 +84,50 @@ def _parquet_pair(row: dict) -> tuple[tuple[int, str], str]:
 
 
 @contextmanager
-def _store_context(local_client, tmp_path) -> Iterator[ZephyrContext]:
+def _store_context(client, tmp_path, *, max_workers: int = 2) -> Iterator[ZephyrContext]:
     context = ZephyrContext(
-        client=local_client,
-        max_workers=2,
+        client=client,
+        max_workers=max_workers,
         resources=ResourceConfig(cpu=1, ram="256m"),
         chunk_storage_prefix=str(tmp_path / "chunks"),
         name="memory-store-test",
     )
-    try:
+    with context:
         yield context
-    finally:
-        context.shutdown()
 
 
-def _load_store(context: ZephyrContext, dataset: Dataset, *, hash_key=_key_partition, recovery_timeout=10):
+def _load_store(
+    context: ZephyrContext,
+    dataset: Dataset,
+    *,
+    name: str = "documents",
+    hash_key=_key_partition,
+    recovery_timeout: float = 10,
+):
     return context.load_memory_store(
         dataset,
-        name="documents",
+        name=name,
         hash_key=hash_key,
-        num_actors=2,
-        actor_resources=ResourceConfig(cpu=1, ram="256m"),
-        actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
         recovery_timeout=recovery_timeout,
     )
+
+
+def _fake_store(actor: _SequencedActor, recovery_timeout: float = 1) -> MemoryStore[str, str]:
+    return MemoryStore(
+        table_id="table",
+        name="table",
+        actors=(cast(ActorHandle, actor),),
+        coordinator=cast(ActorHandle, object()),
+        hash_key=lambda _key: 0,
+        num_source_partitions=1,
+        recovery_timeout=recovery_timeout,
+    )
+
+
+def _worker_task_id(context: ZephyrContext, actor_index: int) -> JobName:
+    assert context._pool is not None
+    worker_group = cast(Any, context._pool.worker_group)
+    return JobName.from_wire(f"{worker_group._job_id}/{actor_index}")
 
 
 def test_memory_store_routes_existing_partitions_and_preserves_lookup_order(local_client, tmp_path):
@@ -146,37 +170,54 @@ def test_memory_store_rejects_hash_that_disagrees_with_existing_partition(local_
 
 
 @pytest.mark.requires_cluster
-def test_memory_store_invalid_input_does_not_consume_actor_retries(iris_integration_client, tmp_path):
+def test_memory_store_invalid_input_does_not_restart_workers(iris_integration_client, tmp_path):
     dataset = Dataset.from_list([[((0, "a"), "value")], [((1, "b"), "value")]]).flat_map(_partition_rows)
 
     with _store_context(iris_integration_client, tmp_path) as context:
+        task_ids = [_worker_task_id(context, actor_index) for actor_index in range(2)]
+        attempts_before = [
+            iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids
+        ]
+
         with pytest.raises(MemoryStorePartitionError):
-            context.load_memory_store(
-                dataset,
-                name="invalid-partition",
-                hash_key=_wrong_key_partition,
-                num_actors=2,
-                actor_resources=ResourceConfig(cpu=1, ram="256m"),
-                actor_config=ActorConfig(max_concurrency=8, max_task_retries=1_000),
-                recovery_timeout=10,
-                ready_timeout=45,
-            )
+            _load_store(context, dataset, name="invalid-partition", hash_key=_wrong_key_partition)
+
+        attempts_after = [
+            iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids
+        ]
+        assert attempts_after == attempts_before
 
 
-def test_memory_store_rejects_duplicate_key(local_client, tmp_path):
-    dataset = Dataset.from_list([[((0, "same"), "first"), ((0, "same"), "second")]]).flat_map(_partition_rows)
+def test_memory_store_rejects_duplicate_key_without_poisoning_worker(local_client, tmp_path):
+    duplicate = Dataset.from_list([[((0, "same"), "first"), ((0, "same"), "second")]]).flat_map(
+        _partition_rows
+    )
+    valid = Dataset.from_list([((0, "valid"), "value")])
 
     with _store_context(local_client, tmp_path) as context:
         with pytest.raises(DuplicateMemoryStoreKey):
-            context.load_memory_store(
-                dataset,
-                name="duplicates",
-                hash_key=_key_partition,
-                num_actors=1,
-                actor_resources=ResourceConfig(cpu=1, ram="256m"),
-                actor_config=ActorConfig(max_concurrency=8, max_task_retries=10),
-                recovery_timeout=10,
-            )
+            _load_store(context, duplicate, name="duplicates")
+
+        store = _load_store(context, valid, name="valid")
+        assert store.get((0, "valid")) == "value"
+
+
+def test_memory_store_multiple_tables_have_independent_lifetimes(local_client, tmp_path):
+    first_dataset = Dataset.from_list([((0, "key"), "first")])
+    second_dataset = Dataset.from_list([((0, "key"), "second")])
+
+    with _store_context(local_client, tmp_path) as context:
+        first = _load_store(context, first_dataset, name="first")
+        second = _load_store(context, second_dataset, name="second")
+
+        assert first.get((0, "key")) == "first"
+        assert second.get((0, "key")) == "second"
+
+        first.destroy()
+        first.destroy()
+        with pytest.raises(MemoryStoreDestroyed):
+            first.get((0, "key"))
+        assert second.get((0, "key")) == "second"
 
 
 def test_memory_store_pickle_round_trip_works_in_later_pipelines(local_client, tmp_path):
@@ -230,37 +271,19 @@ def test_memory_store_retries_only_actor_unavailability():
     recovering_actor = _SequencedActor(
         [
             _TestActorFuture(error=ActorUnavailableError("restarting")),
-            _TestActorFuture(value=[(True, "value")]),
+            _TestActorFuture(value=_MemoryTableLookup(_MemoryTableStatus.READY, [(True, "value")])),
         ]
     )
-    recovering_store = MemoryStore(
-        actors=(recovering_actor,),
-        hash_key=lambda _key: 0,
-        num_source_partitions=1,
-        recovery_timeout=1,
-    )
-
-    assert recovering_store.get("key") == "value"
+    assert _fake_store(recovering_actor).get("key") == "value"
 
     failing_actor = _SequencedActor([_TestActorFuture(error=_ApplicationError())])
-    failing_store = MemoryStore(
-        actors=(failing_actor,),
-        hash_key=lambda _key: 0,
-        num_source_partitions=1,
-        recovery_timeout=1,
-    )
     with pytest.raises(_ApplicationError):
-        failing_store.get("key")
+        _fake_store(failing_actor).get("key")
 
 
 def test_memory_store_bounds_actor_call_by_recovery_timeout():
     timed_out_future = _TestActorFuture(error=TimeoutError("actor call exceeded its deadline"))
-    store = MemoryStore(
-        actors=(_SequencedActor([timed_out_future]),),
-        hash_key=lambda _key: 0,
-        num_source_partitions=1,
-        recovery_timeout=1,
-    )
+    store = _fake_store(_SequencedActor([timed_out_future]))
 
     with pytest.raises(MemoryStoreUnavailable, match="did not respond within 1 seconds"):
         store.get("key")
@@ -270,19 +293,22 @@ def test_memory_store_bounds_actor_call_by_recovery_timeout():
     assert 0 < timed_out_future.timeouts[0] <= 1
 
 
+def test_memory_store_requires_an_entered_owning_context(local_client, tmp_path):
+    context = ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+    )
+
+    with pytest.raises(RuntimeError):
+        _load_store(context, Dataset.from_list([((0, "a"), "value")]))
+
+
 def test_context_shutdown_makes_store_unavailable(local_client, tmp_path):
     dataset = Dataset.from_list([((0, "a"), "value")])
 
     with _store_context(local_client, tmp_path) as context:
-        store = context.load_memory_store(
-            dataset,
-            name="shutdown",
-            hash_key=_key_partition,
-            num_actors=1,
-            actor_resources=ResourceConfig(cpu=1, ram="256m"),
-            actor_config=ActorConfig(max_concurrency=8, max_task_retries=1),
-            recovery_timeout=0.01,
-        )
+        store = _load_store(context, dataset, name="shutdown", recovery_timeout=0.01)
         assert store.get((0, "a")) == "value"
 
     with pytest.raises(MemoryStoreUnavailable):
@@ -305,8 +331,7 @@ def test_memory_store_recovers_partition_after_iris_preemption(iris_integration_
 
     with _store_context(iris_integration_client, tmp_path) as context:
         store = _load_store(context, dataset, hash_key=lambda key: key[0], recovery_timeout=15)
-        group = context._memory_store_groups[0]
-        task_id = JobName.from_wire(f"{group._job_id}/0")
+        task_id = _worker_task_id(context, 0)
         initial_attempt = iris_integration_client._iris.task_status(task_id).current_attempt_id
         gate_reload.signal()
 
@@ -350,12 +375,4 @@ def test_memory_store_rejects_pipeline_with_shuffle(local_client, tmp_path):
 
     with _store_context(local_client, tmp_path) as context:
         with pytest.raises(ValueError):
-            context.load_memory_store(
-                dataset,
-                name="shuffled",
-                hash_key=_key_partition,
-                num_actors=1,
-                actor_resources=ResourceConfig(cpu=1, ram="256m"),
-                actor_config=ActorConfig(max_concurrency=8, max_task_retries=10),
-                recovery_timeout=10,
-            )
+            _load_store(context, dataset, name="shuffled")

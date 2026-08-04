@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
+from marin.evaluation.harbor import runner
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborDatasetKind,
@@ -14,8 +15,8 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
     HarborTrial,
-    _restore_completed_trials,
-    _upload_trials,
+    _read_trials,
+    _sample_for,
     _write_samples,
 )
 from marin.evaluation.records import RunStatus
@@ -117,7 +118,7 @@ def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp
 
 
 def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
-    trial = HarborTrial(task_id="task-one", reward=0.0, status="completed", trajectory=None, error=None)
+    trial = HarborTrial(task_id="task-one", reward=0.0, status="completed", trajectory_uri=None, error=None)
 
     path = _write_samples([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
 
@@ -125,12 +126,49 @@ def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
     assert Path(path).exists()
 
 
-@pytest.mark.parametrize("protocol", ["gs", "s3"])
-def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, monkeypatch):
+def test_read_trials_references_trajectory_in_place(tmp_path):
+    """A trial's trajectory is referenced at its durable job-tree path, not copied elsewhere."""
+    job_dir = tmp_path / "harbor_jobs" / "job"
+    with_trajectory = job_dir / "trial-one"
+    (with_trajectory / "agent").mkdir(parents=True)
+    (with_trajectory / "result.json").write_text(
+        json.dumps({"task_name": "task-one", "verifier_result": {"rewards": {"reward": 1.0}}})
+    )
+    (with_trajectory / "agent" / "trajectory.json").write_text('{"steps": []}')
+    without_trajectory = job_dir / "trial-two"
+    without_trajectory.mkdir(parents=True)
+    (without_trajectory / "result.json").write_text(json.dumps({"task_name": "task-two"}))
+
+    trials = _read_trials(StoragePath(str(job_dir)))
+
+    by_task = {trial.task_id: trial for trial in trials}
+    assert by_task["task-one"].trajectory_uri == str(with_trajectory / "agent" / "trajectory.json")
+    assert by_task["task-two"].trajectory_uri is None
+    # The sample carries the in-place URI; no separate trajectories/ copy is written.
+    sample = _sample_for(by_task["task-one"], "aime")
+    assert sample.trajectory_uri == str(with_trajectory / "agent" / "trajectory.json")
+
+
+def _memory_remote(protocol: str, monkeypatch) -> None:
+    """Route ``protocol://`` reads and writes to a fresh in-memory filesystem.
+
+    Patches both the ``StoragePath`` factory (glob/read/write verbs) and the ``url_to_fs`` bound in
+    the runner (the sample-parquet writer), so the whole executor path stays off real object storage.
+    """
+
     class RemoteMemoryFileSystem(MemoryFileSystem):
-        pass
+        @classmethod
+        def _strip_protocol(cls, path):
+            # s3fs/gcsfs strip their scheme from a full URL; MemoryFileSystem only strips
+            # ``memory://``. Match the real backends so a ``s3://``/``gs://`` URL and a bare
+            # ``bucket/key`` resolve to the same store key.
+            if isinstance(path, str) and path.startswith(f"{protocol}://"):
+                path = path[len(f"{protocol}://") :]
+            return MemoryFileSystem._strip_protocol(path)
 
     RemoteMemoryFileSystem.protocol = protocol
+    RemoteMemoryFileSystem.store = {}
+    RemoteMemoryFileSystem.pseudo_dirs = [""]
     remote_fs = RemoteMemoryFileSystem()
 
     def remote_url_to_fs(url: str, **_kwargs):
@@ -138,26 +176,60 @@ def test_harbor_trials_round_trip_through_remote_storage(protocol, tmp_path, mon
         assert path.scheme == protocol
         return remote_fs, "/".join(part for part in (path.netloc, path.key) if part)
 
+    def remote_open_url(url: str, mode: str = "rb", **kwargs):
+        fs, path = remote_url_to_fs(url)
+        return fs.open(path, mode, **kwargs)
+
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.open_url", remote_open_url)
+    monkeypatch.setattr(runner, "url_to_fs", remote_url_to_fs)
 
-    trial_dir = tmp_path / "source" / "trial-one"
-    (trial_dir / "agent").mkdir(parents=True)
-    (trial_dir / "result.json").write_text('{"task_name": "trial-one"}')
-    (trial_dir / "agent" / "trajectory.json").write_text('{"steps": []}')
-    incomplete_dir = tmp_path / "source" / "incomplete"
-    incomplete_dir.mkdir()
-    (incomplete_dir / "partial.json").write_text("{}")
 
-    output_dir = f"{protocol}://eval-bucket/run"
-    _upload_trials(trial_dir.parent, output_dir)
+@pytest.mark.parametrize("protocol", ["gs", "s3"])
+def test_completed_trial_is_durable_across_driver_termination_and_restored(protocol, tmp_path, monkeypatch):
+    """A trial that finishes before the driver dies is durable at the remote path and restored intact.
 
-    restored_dir = tmp_path / "restored"
-    restored = _restore_completed_trials(output_dir, restored_dir)
+    Harbor writes each trial straight to the ``output_dir`` jobs tree, so a driver killed before it
+    returns leaves the completed trial on durable storage. A resumed run whose driver produces nothing
+    new must still report that trial, proving the runner reads it back from the durable path rather
+    than depending on a clean full-job return or a post-run upload sweep.
+    """
+    _memory_remote(protocol, monkeypatch)
+    output_dir = f"{protocol}://eval-bucket-{tmp_path.name}/run"
+    executor = _harbor_executor(f"resume-{tmp_path.name}")
 
-    assert restored == 1
-    assert (restored_dir / "trial-one" / "result.json").read_text() == '{"task_name": "trial-one"}'
-    assert (restored_dir / "trial-one" / "agent" / "trajectory.json").read_text() == '{"steps": []}'
-    assert not (restored_dir / "incomplete").exists()
+    captured: dict = {}
+
+    def dying_driver(config, overlay, driver_env) -> None:
+        captured["jobs_dir"] = overlay.jobs_dir
+        captured["job_name"] = overlay.job_name
+        trial = StoragePath(overlay.jobs_dir) / overlay.job_name / "trial-one"
+        (trial / "result.json").write_text(
+            json.dumps({"task_name": "trial-one", "verifier_result": {"rewards": {"reward": 1.0}}})
+        )
+        (trial / "agent" / "trajectory.json").write_text('{"steps": []}')
+        raise RuntimeError("preempted before seal")
+
+    monkeypatch.setattr(runner, "run_harbor_driver", dying_driver)
+    with pytest.raises(EvaluationError) as exc_info:
+        executor(_running_model(), output_dir, {})
+    assert exc_info.value.status is RunStatus.FAILED
+
+    durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
+    assert durable.exists()
+
+    def resumed_driver(config, overlay, driver_env) -> None:
+        # Harbor's own resume finds the durable trial and writes nothing new this run.
+        return None
+
+    monkeypatch.setattr(runner, "run_harbor_driver", resumed_driver)
+    outcome = executor(_running_model(), output_dir, {})
+
+    # The resumed driver produced no trials, so total==1 means the durable trial was read back.
+    assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
+    assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
+    assert StoragePath(f"{output_dir}/samples_harbor.parquet").exists()
+    assert StoragePath(f"{output_dir}/harbor_result.json").exists()
 
 
 def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch):

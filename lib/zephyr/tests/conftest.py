@@ -23,9 +23,10 @@ from iris.cluster.config import load_config, make_local_config
 from iris.cluster.lifecycle import connect_cluster
 from iris.cluster.types import Entrypoint, ResourceSpec
 from rigging.timing import ExponentialBackoff
-from zephyr.execution import ZephyrContext, ZephyrCoordinator
+from zephyr.coordinator import ZephyrCoordinator, _PipelineExecution
+from zephyr.execution import ZephyrContext
 from zephyr.readers import load_file
-from zephyr.stage_io import ZephyrTaskResources
+from zephyr.stage_io import ShardTask, ZephyrTaskResources
 
 # Path to zephyr root (from tests/conftest.py -> tests -> lib/zephyr)
 ZEPHYR_ROOT = Path(__file__).resolve().parents[1]
@@ -145,11 +146,32 @@ def integration_ctx(integration_client, tmp_path_factory):
 _TEST_WORKER_RAM = 1 << 30
 _TEST_TASK_COST = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
 _TEST_WORKER_AVAILABLE = ZephyrTaskResources(cpu=1.0, memory=_TEST_WORKER_RAM)
+_TEST_EXECUTION_ID = "test-exec"
 
 
 def _make_test_coordinator(tmp_path, **kwargs) -> ZephyrCoordinator:
     prefix = str(tmp_path / "chunks")
-    return ZephyrCoordinator(prefix, _TEST_TASK_COST, _TEST_TASK_COST, **kwargs)
+    return ZephyrCoordinator(prefix, _TEST_WORKER_AVAILABLE, **kwargs)
+
+
+def start_test_stage(
+    coordinator: ZephyrCoordinator,
+    tasks: list[ShardTask],
+    *,
+    stage_name: str = "test",
+    is_last_stage: bool = False,
+    execution_id: str = _TEST_EXECUTION_ID,
+) -> _PipelineExecution:
+    """Register an execution on the coordinator and load one stage of tasks.
+
+    Coordinator protocol tests drive pull_task and report methods directly.
+    This mirrors the run_pipeline registration step
+    and returns the execution state for assertions.
+    """
+    run = _PipelineExecution(execution_id=execution_id, map_cost=_TEST_TASK_COST, reduce_cost=_TEST_TASK_COST)
+    coordinator._executions[execution_id] = run
+    coordinator._start_stage(run, stage_name, 0, tasks, is_last_stage=is_last_stage)
+    return run
 
 
 @pytest.fixture

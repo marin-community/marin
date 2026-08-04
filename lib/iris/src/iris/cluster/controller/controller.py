@@ -109,6 +109,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 from iris.cluster.controller.service import CapabilityUrlConfig, ControllerServiceImpl, PendingKick
 from iris.cluster.controller.task_state_stats import TaskStateCollector
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.endpoints import TELEMETRY_ENDPOINT_PATH
 from iris.cluster.federation.availability import Promotion, QueuedCandidate
 from iris.cluster.federation.manager import (
     DEFAULT_HEARTBEAT_INTERVAL,
@@ -760,7 +761,7 @@ class Controller:
             json.dumps(asdict(self._native_proxy_auth_config())),
         )
         telemetry.configure(
-            endpoint=self._log_service_address.rstrip("/") + "/v1/telemetry",
+            endpoint=self._log_service_address.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
             service="iris-controller",
             attributes={"role": "controller"},
         )

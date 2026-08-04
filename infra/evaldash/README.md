@@ -2,14 +2,23 @@
 
 A leaderboard and browsable run log over every Marin eval run.
 
-Eval runs write one canonical JSON record per run to an object-store prefix —
-`gs://marin-eval-metadata/runs/<run_id>/record.json` for GCP runs,
-`s3://marin-us-east-02a/marin/eval-metadata/runs/...` (CoreWeave object storage) for CW GPU
-runs. A background loop scans every prefix in `RECORDS_PREFIXES` (CW credentials come from
-Secret Manager; endpoint/addressing via `rigging.filesystem.s3_compat`) and upserts records
-into a Cloud SQL Postgres index (`hai-gcp-models:us-central1:marin-metadata`, database
-`evals`). A Starlette app serves a JSON API over that index and the built Vue SPA. Served at
-https://evaldash.oa.dev.
+Eval runs write one canonical JSON record per run under `gs://marin-eval-metadata/evals` for GCP or
+`s3://marin-us-east-02a/marin/evals` for CoreWeave. The run directory also contains the evaluator's
+results and per-sample artifacts. A background loop scans the roots in `RECORDS_PREFIXES` (CW
+credentials come from Secret Manager; endpoint/addressing via
+`rigging.filesystem.s3_compat`) and upserts records into a Cloud SQL Postgres index
+(`hai-gcp-models:us-central1:marin-metadata`, database `evals`). A Starlette app serves a JSON API over
+that index and the built Vue SPA. Served at https://evaldash.oa.dev.
+
+The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
+`s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
+Canonical `evals` roots have precedence when the same migrated `run_id` exists in both locations.
+
+Record discovery uses a delimiter-based directory listing and checks only `*/record.json`. It does not
+recursively enumerate results, samples, trajectories, or other evaluator payloads. It reads candidate
+record bodies with up to 16 concurrent object-store requests. Successful records are cached by
+immutable object path, so later ingest passes fetch only new records; directory listings still detect
+additions and deletions.
 
 The SPA has four views: leaderboard (per-model mean score over its latest version cohort, a
 colour-scaled model x task heatmap with model-comparison bars and score-over-time charts,

@@ -16,7 +16,7 @@ import click
 from iris.cli.connect import open_iris_client
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
-from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
 from marin.evaluation.runner import EvaluationBatch, wait_and_report
 from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
@@ -166,7 +166,7 @@ def launch(
     "--prefix",
     "prefixes",
     multiple=True,
-    default=(DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX),
+    default=DEFAULT_SCAN_PREFIXES,
     show_default=True,
     help="Object-store prefix(es) to scan for records; repeatable.",
 )

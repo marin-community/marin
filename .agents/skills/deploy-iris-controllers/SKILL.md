@@ -22,6 +22,8 @@ red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 1. Never run `iris cluster restart` (no `controller`). It kills every worker and
    every job. `iris cluster controller restart` is the deploy — seconds of
    control-plane downtime, workers unaffected.
+   It does not reconcile Pulumi-managed Kueue charts, ResourceFlavors,
+   ClusterQueues, or CoreWeave NodePools.
 2. Treat an explicit rollout request as approval for its cluster set. Use its
    order when given. Otherwise, use the order from `plan`. Ask only when the
    scope is missing or ambiguous.
@@ -144,7 +146,10 @@ Do this loop for one cluster. After a passed final gate, start the next cluster.
    downtime. If the gate passes, restart without waiting for operator input.
 3. **Restart.** `iris --cluster=<name> cluster controller restart`. Add
    `--skip-checkpoint` only if the checkpoint step times out. On a Kubernetes dev
-   cluster with amd64 nodes only, add `--image-platform linux/amd64`.
+   cluster with amd64 nodes only, add `--image-platform linux/amd64`. To reuse a
+   build, pass `--prebuilt-tag <tag>`; the command requires amd64 and arm64
+   manifests for both images and pins their resolved manifest digests before it
+   stops the old controller.
 4. **Start the smoke.** `smoke --cluster <name>` submits one `echo hello world`
    job at interactive priority and waits for it. Start it **as a background task,
    right after the restart**, so the watch runs while it waits. A cluster with no
@@ -158,6 +163,8 @@ Do this loop for one cluster. After a passed final gate, start the next cluster.
    node, or 5% of that backend's baseline healthy count, whichever is larger. A
    loss within this tolerance is a note in the gate evidence. Do not shorten the
    watch.
+   When `--prebuilt-tag` points at an image built from another working tree, add
+   `--expect-tree-hash <image-tree-hash>`.
 6. **Collect the smoke.** Read the background task. If it is still waiting, keep
    waiting — the timeout is 30 minutes and a scale-up is the expected reason.
 7. **Final gate.** Report the verify samples, the verdict, and the smoke job
@@ -168,6 +175,29 @@ The restart writes `rollout-record.json` under the cluster's
 `storage.remote_state_dir` and health-checks the new controller, rolling back
 automatically if it does not come up. `verify` proves which tree is running, so
 read the record only when you need the rollback coordinates by hand.
+
+## Kueue changes
+
+Controller restarts apply Iris-owned runtime objects, including the controller,
+node-agent DaemonSet, PriorityClasses, ConfigMap, Secrets, and LocalQueue. Kueue
+and CoreWeave NodePools remain in the Pulumi stack.
+
+When the approved rollout includes a Kueue or NodePool change, complete the
+controller verify and smoke gates first. Then inspect and apply that cluster's
+stack:
+
+```bash
+KUBECONFIG=~/.kube/coreweave-iris uv run pulumi preview \
+  --cwd infra/pulumi --stack <cluster> --diff --non-interactive
+KUBECONFIG=~/.kube/coreweave-iris uv run pulumi up \
+  --cwd infra/pulumi --stack <cluster> --yes --skip-preview --non-interactive
+```
+
+Before `pulumi up`, inspect unadmitted Workloads and reject previews that replace
+or delete a NodePool unless the operator explicitly approved that action. After
+the update, verify the ClusterQueue is active, the intended ResourceFlavors
+exist, and the expected nodes have the new labels. Run `smoke --cluster <name>`
+again so the final gate exercises the reconciled Kueue configuration.
 
 ## Rollback
 

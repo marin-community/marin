@@ -12,6 +12,11 @@ _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
 _TASK_STATE_LOOKBACK = timedelta(hours=1)
 _TELEMETRY_LOOKBACK = timedelta(days=1)
+# Levanter republishes `phase` every 60s, so enrollment is always recent and this
+# scan can be bounded. Unbounded, it read every telemetry_v1 row once a minute and
+# saturated the finelog hub. Keep this many multiples above that heartbeat:
+# telemetry is best-effort, and a few dropped batches must not un-enroll a live job.
+_ENROLLMENT_LOOKBACK = timedelta(minutes=15)
 
 _STEP_METRIC = "step"
 _PROGRESS_TIME_METRIC = "progress_time_seconds"
@@ -51,6 +56,7 @@ def task_state_query(now: datetime) -> str:
 def telemetry_query(now: datetime) -> str:
     """Return latest retained enrollment and bounded progress per root job."""
     start = _sql_timestamp(now - _TELEMETRY_LOOKBACK)
+    enrolled_since = _sql_timestamp(now - _ENROLLMENT_LOOKBACK)
     end = _sql_timestamp(now)
     progress_names = f"'{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
@@ -60,6 +66,7 @@ def telemetry_query(now: datetime) -> str:
         "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
         'FROM "telemetry_v1" '
         f"WHERE service = 'levanter' AND name = '{_PHASE_METRIC}' "
+        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{enrolled_since}') * 1000 AS BIGINT) "
         f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
         "), recent_progress AS ("
         "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "

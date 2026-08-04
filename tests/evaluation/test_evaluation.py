@@ -417,3 +417,23 @@ def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, mon
     assert "eval=mmlu-smoke" in result.output
     assert "eval=first-policy" in result.output
     assert "eval=second-policy" in result.output
+
+
+def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=("mmlu-smoke",),
+        harbor_configs=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix=None,
+        cluster="marin",
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert batch.records_prefix == "gs://marin-eval-metadata/evals"
+    evaluation = batch.evaluations[0]
+    assert evaluation.identity.output_dir == f"{batch.records_prefix}/{evaluation.identity.run_id}/results"

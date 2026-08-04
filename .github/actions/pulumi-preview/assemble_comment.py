@@ -10,6 +10,12 @@ from pathlib import Path
 
 MARKER = "<!-- iac-preview -->"
 
+# GitHub rejects an issue/PR comment body over 65536 characters. This repo previews at
+# most 5 stacks in one comment, so capping each stack's embedded diff at 10k chars keeps
+# the total body safely under the limit even if every stack's diff were maxed out at
+# once; the full plan always remains available in the uploaded artifact.
+_MAX_DIFF_CHARS = 10_000
+
 _SEVERITY_ICON = {
     "none": "✅",
     "change": "⚠️",
@@ -42,7 +48,15 @@ def load_stacks(previews_dir: Path) -> list[StackPreview]:
     return stacks
 
 
-def render_comment(stacks: list[StackPreview]) -> str:
+def _truncate_diff(diff: str, run_url: str | None) -> str:
+    if len(diff) <= _MAX_DIFF_CHARS:
+        return diff
+    omitted = len(diff) - _MAX_DIFF_CHARS
+    where = f" — full plan in the `iac-preview-*` artifact on {run_url}" if run_url else " — see the `iac-preview-*` artifact for the full plan"
+    return f"{diff[:_MAX_DIFF_CHARS]}\n... ({omitted} more characters truncated{where})"
+
+
+def render_comment(stacks: list[StackPreview], run_url: str | None) -> str:
     lines = [MARKER, "## IaC preview", ""]
     for item in stacks:
         icon = _SEVERITY_ICON.get(item.severity, "🚨")
@@ -56,7 +70,7 @@ def render_comment(stacks: list[StackPreview]) -> str:
         lines.append(f"<summary>{item.stack}</summary>")
         lines.append("")
         lines.append("```diff")
-        lines.append(item.diff)
+        lines.append(_truncate_diff(item.diff, run_url))
         lines.append("```")
         lines.append("")
         lines.append("</details>")
@@ -74,12 +88,17 @@ def main() -> None:
         help="Directory containing downloaded iac-preview-* artifacts.",
     )
     parser.add_argument("--out", type=Path, required=True, help="Write comment body here.")
+    parser.add_argument(
+        "--run-url",
+        default=None,
+        help="Workflow run URL, linked when a stack's diff is truncated for size.",
+    )
     args = parser.parse_args()
 
     stacks = load_stacks(args.previews_dir)
     if not stacks:
         raise SystemExit(f"no preview artifacts under {args.previews_dir}")
-    args.out.write_text(render_comment(stacks), encoding="utf-8")
+    args.out.write_text(render_comment(stacks, args.run_url), encoding="utf-8")
 
 
 if __name__ == "__main__":

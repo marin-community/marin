@@ -3,12 +3,28 @@
 
 """Define CoreWeave NodePool manifests for node- and rack-based instances."""
 
-from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE, is_rack_based
+from iris.cluster.platforms.k8s.coreweave_topology import (
+    CW_MULTINODE_TOPOLOGY_LABELS,
+    RACK_SIZE,
+    is_rack_based,
+)
 from iris.cluster.platforms.types import Labels
 
 # NodePool spec.nodeLabels key that pins system pods (Konnectivity, monitoring) to
 # always-on nodes so GPU pools can scale to zero. Applied only when min_nodes > 0.
 SYSTEM_CRITICAL_LABEL = "cks.coreweave.cloud/system-critical"
+
+# Stable scheduling label shared with the Kueue ResourceFlavor.
+KUEUE_NODE_LABEL = "iris.kueue"
+
+# Kueue includes a node in a TAS flavor only when it carries every level in the
+# referenced Topology. CPU nodes have no physical IB/NVLink hierarchy, so give
+# them an explicit synthetic branch. Accelerator requests still exclude this
+# branch by node allocatable resources.
+CPU_TOPOLOGY_DOMAIN = "iris-cpu-only"
+CPU_TOPOLOGY_NODE_LABELS = tuple(
+    (topology_label, CPU_TOPOLOGY_DOMAIN) for topology_label in CW_MULTINODE_TOPOLOGY_LABELS
+)
 
 
 def nodepool_name(label_prefix: str, scale_group: str) -> str:
@@ -16,10 +32,21 @@ def nodepool_name(label_prefix: str, scale_group: str) -> str:
     return f"{label_prefix}-{scale_group}".replace("_", "-").lower()
 
 
-def nodepool_node_labels(label_prefix: str, scale_group: str, *, min_nodes: int) -> dict[str, str]:
-    """The managed + scale-group labels a NodePool's spec.nodeLabels carries."""
+def nodepool_node_labels(
+    label_prefix: str,
+    scale_group: str,
+    *,
+    min_nodes: int,
+    topology_node_labels: tuple[tuple[str, str], ...],
+) -> dict[str, str]:
+    """Return the scheduling and ownership labels for a CoreWeave NodePool."""
     labels = Labels(label_prefix)
-    node_labels = {labels.iris_managed: "true", labels.iris_scale_group: scale_group}
+    node_labels = {
+        labels.iris_managed: "true",
+        labels.iris_scale_group: scale_group,
+        KUEUE_NODE_LABEL: "true",
+    }
+    node_labels.update(topology_node_labels)
     if min_nodes > 0:
         node_labels[SYSTEM_CRITICAL_LABEL] = "true"
     return node_labels

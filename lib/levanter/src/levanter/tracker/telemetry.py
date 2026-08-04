@@ -5,15 +5,20 @@
 
 import dataclasses
 import logging
+import os
 import re
+import threading
 from collections.abc import Mapping
 from enum import IntEnum
 from time import time
 from typing import Any, Optional
 
+import jax
 import numpy as np
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
+from rigging.telemetry.probes import nccl, nccl_client
+from rigging.telemetry.probes.runner import PeriodicProbe
 
 from levanter.tracker import Tracker, TrackerConfig
 from levanter.tracker.histogram import SummaryStats
@@ -21,7 +26,6 @@ from levanter.tracker.histogram import SummaryStats
 logger = logging.getLogger(__name__)
 
 _CURRENT = telemetry.snapshot_attributes("gauge", telemetry.CURRENT_SNAPSHOT)
-_CURRENT_HISTOGRAM = telemetry.snapshot_attributes("histogram", telemetry.CURRENT_SNAPSHOT)
 
 
 class TrainingPhase(IntEnum):
@@ -40,9 +44,68 @@ def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> N
     telemetry.gauge(_metric_name(name)).set(value, attributes=attributes)
 
 
+# Keep this well under the reader's enrollment window. Telemetry is best-effort and
+# drops records under queue pressure, so several missed beats must not un-enroll a
+# live job. The reader's window lives in infra/grafana/src/training_stalls.py.
+_PHASE_HEARTBEAT_SECONDS = 60.0
+_NCCL_RAS_POLL_SECONDS = 2 * 60.0
+
+
+class _PhaseHeartbeat:
+    """Republishes the current training phase until the run finishes.
+
+    Stalled-training detection finds a job by its newest `phase` row. Written only
+    on transition, a job that hangs before its first step has one row, from process
+    start, and the reader must scan all of history to find it. Republishing keeps
+    that row recent so the reader can bound its scan.
+    """
+
+    def __init__(self, interval: float = _PHASE_HEARTBEAT_SECONDS) -> None:
+        self._interval = interval
+        self._lock = threading.Lock()
+        self._phase: TrainingPhase | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._thread is not None
+
+    def publish(self, phase: TrainingPhase) -> None:
+        with self._lock:
+            self._phase = phase
+        _set("phase", float(phase))
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None:
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, name="levanter-phase-heartbeat", daemon=True)
+            self._thread.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            thread, self._thread = self._thread, None
+            self._stop.set()
+        if thread is not None:
+            thread.join(timeout=self._interval * 2)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            with self._lock:
+                phase = self._phase
+            if phase is not None:
+                _set("phase", float(phase))
+
+
+_HEARTBEAT = _PhaseHeartbeat()
+
+
 def set_training_phase(phase: TrainingPhase) -> None:
     """Publish the current training phase for stalled-training detection."""
-    _set("phase", float(phase))
+    _HEARTBEAT.publish(phase)
 
 
 def _as_scalar(value: Any) -> float | None:
@@ -58,14 +121,30 @@ def _as_scalar(value: Any) -> float | None:
     return float(array)
 
 
+def _start_nccl_ras_probe() -> PeriodicProbe | None:
+    try:
+        if not telemetry.runtime_status().configured:
+            return None
+        if os.environ.get(nccl_client.NCCL_RAS_ENABLE_ENV, "1") == "0":
+            return None
+        if jax.default_backend() != "gpu" or jax.process_index() != 0:
+            return None
+        return nccl.start(interval=_NCCL_RAS_POLL_SECONDS)
+    except RuntimeError:
+        logger.warning("could not start NCCL RAS telemetry", exc_info=True)
+        return None
+
+
 class TelemetryTracker(Tracker):
-    """Exports scalar and pre-aggregated training snapshots as gauges."""
+    """Export training snapshots and phase transitions."""
 
     name: str = "telemetry"
 
     def __init__(self) -> None:
+        self._nccl_ras_probe = _start_nccl_ras_probe()
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
+        _HEARTBEAT.start()
 
     def _publish(self, metrics: Mapping[str, object]) -> None:
         for key, value in metrics.items():
@@ -77,24 +156,23 @@ class TelemetryTracker(Tracker):
                 _set(key, scalar)
 
     def _publish_summary(self, key: str, stats: SummaryStats) -> None:
-        for field in ("mean", "min", "max", "variance", "rms"):
-            scalar = _as_scalar(getattr(stats, field))
+        """Export a summary's reduced moments as gauges."""
+        # Histogram buckets stay out. A row per bin, per metric, per step is a row
+        # count the telemetry store does not absorb — a six-layer MoE router emitted
+        # 774 a step. The W&B tracker still records the full bucket shape.
+        reduced = {
+            "mean": stats.mean,
+            "min": stats.min,
+            "max": stats.max,
+            "variance": stats.variance,
+            "rms": stats.rms,
+            "count": stats.num,
+            "sum": stats.sum,
+        }
+        for suffix, value in reduced.items():
+            scalar = _as_scalar(value)
             if scalar is not None:
-                _set(f"{key}_{field}", scalar)
-        if stats.histogram is None:
-            return
-        counts, limits = stats.histogram.to_numpy_histogram()
-        cumulative = np.cumsum(counts)
-        for index, count in enumerate(cumulative):
-            _set(
-                f"{key}_bucket",
-                float(count),
-                attributes={**_CURRENT_HISTOGRAM, "le": str(limits[index + 1])},
-            )
-        total = float(cumulative[-1]) if len(cumulative) else 0.0
-        _set(f"{key}_bucket", total, attributes={**_CURRENT_HISTOGRAM, "le": "+Inf"})
-        _set(f"{key}_count", total, attributes=_CURRENT_HISTOGRAM)
-        _set(f"{key}_sum", float(stats.sum), attributes=_CURRENT_HISTOGRAM)
+                _set(f"{key}_{suffix}", scalar)
 
     def log_hyperparameters(self, hparams: dict[str, Any]):
         pass
@@ -115,13 +193,28 @@ class TelemetryTracker(Tracker):
         pass
 
     def finish(self):
+        if self._nccl_ras_probe is not None:
+            try:
+                self._nccl_ras_probe.shutdown()
+            except Exception:
+                logger.warning("could not stop NCCL RAS telemetry", exc_info=True)
         set_training_phase(TrainingPhase.FINISHED)
+        # The run is over, so there is nothing left to keep enrolled. FINISHED is
+        # already published above, and republishing it for the process's remaining
+        # lifetime tells the reader nothing new.
+        _HEARTBEAT.stop()
 
 
 @TrackerConfig.register_subclass("telemetry")
 @dataclasses.dataclass
 class TelemetryConfig(TrackerConfig):
+    """Configure direct training telemetry."""
+
     def init(self, run_id: Optional[str]) -> Tracker:
-        attributes = {"run": run_id} if run_id is not None else None
-        runtime_telemetry.configure("levanter", attributes=attributes)
+        process_index = jax.process_index()
+        runtime_telemetry.configure(
+            "levanter",
+            root_run_uid=run_id,
+            process_index=process_index,
+        )
         return TelemetryTracker()
