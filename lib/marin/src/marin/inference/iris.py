@@ -101,10 +101,12 @@ class RemoteInferenceSession:
         state = InferenceBackendState.READY
         client = iris_ctx().client
         for job in self.jobs:
-            status = client.status(JobName.from_string(str(job.job_id)))
+            job_id = JobName.from_string(str(job.job_id))
+            status = client.status(job_id)
             if is_job_finished(status.state):
                 return InferenceBackendState.FINISHED
-            if not status.tasks or any(task.state != job_pb2.TASK_STATE_RUNNING for task in status.tasks):
+            tasks = client.list_tasks(job_id)
+            if not tasks or any(task.state != job_pb2.TASK_STATE_RUNNING for task in tasks):
                 state = InferenceBackendState.RECOVERING
         if state is InferenceBackendState.READY and not client.list_endpoint_instances(self.endpoint_name):
             state = InferenceBackendState.RECOVERING

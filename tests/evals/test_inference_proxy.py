@@ -256,10 +256,8 @@ def test_direct_inference_session_reports_backend_state(
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                status=lambda job_id: SimpleNamespace(
-                    state=job_pb2.JOB_STATE_RUNNING,
-                    tasks=[SimpleNamespace(task_id=f"{job_id}/0", state=task_state)],
-                ),
+                status=lambda _job_id: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                list_tasks=lambda job_id: [SimpleNamespace(task_id=f"{job_id}/0", state=task_state)],
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()] * endpoint_count,
             )
         ),
@@ -293,10 +291,8 @@ def test_inference_recovery_waits_for_tasks_to_run(monkeypatch) -> None:
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                status=lambda *_args: SimpleNamespace(
-                    state=job_pb2.JOB_STATE_RUNNING,
-                    tasks=[SimpleNamespace(state=next(states))],
-                ),
+                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                list_tasks=lambda _job_id: [SimpleNamespace(state=next(states))],
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
             )
         ),
