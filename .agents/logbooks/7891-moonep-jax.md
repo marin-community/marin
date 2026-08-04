@@ -2157,3 +2157,14 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Gain: `9.6` times end to end, and `12.3` times on kernel time.
 - Control: The plain padded all-to-all is `397` and `427 GB/s` in the two runs, so the environment is equal.
 - Consequence: The device kernel is a large gain. Training at `106 GB/s` is still `3.3` times above the stock path.
+
+### 2026-08-04 08:33 UTC - Host CPU count is a small lever
+
+- Basis: A JAX discussion reports that `ragged_all_to_all` was 50 times slower with one CPU for each task, and that eight CPUs for each task recovered it.
+- Setup: 16 GPUs on four nodes, `8,192` rows for each peer, balanced, one wheel. Only the worker CPU count changes.
+- Result: `2` CPUs give `306.9 GB/s`, `8` CPUs give `310.8 GB/s`, and `32` CPUs give `332.3 GB/s`.
+- Gain: `6.9%` from `8` to `32` CPUs, and the trend is monotonic.
+- Control: The padded collective moves the same way, from `383.6` to `416.8 GB/s`. Thus the effect is general host work, not a property of the ragged path.
+- Conclusion: The reported 50-times effect does not occur here. This work sits far above the starvation point, because it uses two CPUs for each GPU and not one CPU for each task.
+- Gap: `332.3 GB/s` against `106 GB/s` in training is still `3.1` times. CPU count does not explain the training gap.
+- Cost: The 32-CPU job waited 48 minutes for four nodes. The 2-CPU job ran in two minutes. A 16-node gang at 32 CPUs is worse. Keep eight CPUs.
