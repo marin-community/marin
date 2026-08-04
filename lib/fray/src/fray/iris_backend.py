@@ -172,6 +172,32 @@ def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
 
 
+NSYS_TASKS_ENV = "IRIS_NSYS_TASKS"
+
+
+def wrap_nsys(entrypoint: IrisEntrypoint) -> IrisEntrypoint:
+    """Run the entrypoint under ``nsys profile`` when ``IRIS_NSYS_TASKS`` is set.
+
+    Nsight injects CUDA tracing through ``CUDA_INJECTION64_PATH``, which the driver
+    reads once at ``cuInit``, so the wrapper has to be composed at submit time.
+    ``iris.hooks.nsys_main`` execs the command unchanged on unselected tasks, so an
+    unselected task pays nothing. The value of the variable is the ``--tasks`` spec:
+    ``first``, ``all``, or a comma-separated list of task indices.
+    """
+    tasks = os.environ.get(NSYS_TASKS_ENV)
+    if not tasks:
+        return entrypoint
+    inner = " ".join(entrypoint.command[2:]) if entrypoint.command[:2] == ["bash", "-c"] else None
+    if inner is None:
+        raise ValueError(f"cannot compose the nsys hook into command {entrypoint.command!r}")
+    wrapped = f"exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks {tasks} -- {inner.removeprefix('exec ')}"
+    return IrisEntrypoint(
+        command=["bash", "-c", wrapped],
+        workdir_files=entrypoint.workdir_files,
+        workdir_file_refs=entrypoint.workdir_file_refs,
+    )
+
+
 def wrap_multiprocess(entrypoint: IrisEntrypoint, resources: ResourceSpec, processes_per_task: int) -> IrisEntrypoint:
     """Prepend the multigpu supervisor so each task runs ``processes_per_task`` GPU processes.
 
@@ -637,6 +663,7 @@ class FrayIrisClient:
         iris_entrypoint = convert_entrypoint(request.entrypoint)
         if request.processes_per_task > 1:
             iris_entrypoint = wrap_multiprocess(iris_entrypoint, iris_resources, request.processes_per_task)
+        iris_entrypoint = wrap_nsys(iris_entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
