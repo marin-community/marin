@@ -49,6 +49,7 @@ from rigging.log_setup import configure_logging
 from experiments.build_pdf_source.classify import classify_step, model_step, routing_keys
 from experiments.build_pdf_source.common import LayoutModelData, PdfClassificationData, PdfSourceData
 from experiments.build_pdf_source.docling_extract.model_spec import LayoutBackend, TableBackend
+from experiments.build_pdf_source.docling_extract.service import build_handler
 from experiments.build_pdf_source.extract_fleet import MODEL_ID, build_pool_config, convert_document
 from experiments.build_pdf_source.fetch import fetch_step
 from experiments.build_pdf_source.layout_model import layout_model_step
@@ -180,7 +181,7 @@ def _arm_options(arm: str, layout_model: LayoutModelData):
 def _run_arm(arm: str, rows: list[dict], layout_model: LayoutModelData, output_path: str) -> ArmStats:
     """Convert the whole corpus through one arm's fleet and persist its texts."""
     pool_config = replace(
-        build_pool_config(_arm_options(arm, layout_model)),
+        build_pool_config(partial(build_handler, _arm_options(arm, layout_model))),
         model_id=f"{MODEL_ID}-{arm.replace('_', '-')}",
         instances=_POOL_INSTANCES,
         processes_per_instance=_PROCESSES_PER_INSTANCE,

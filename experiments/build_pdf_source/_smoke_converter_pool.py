@@ -21,6 +21,7 @@ Run on the same x86 cluster as the extraction comparisons::
 """
 
 import logging
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -37,18 +38,21 @@ from rigging.filesystem import url_to_fs
 from rigging.log_setup import configure_logging
 
 from experiments.build_pdf_source.classify import classify_step, model_step, routing_keys
-from experiments.build_pdf_source.common import PdfClassificationData, PdfSourceData
-from experiments.build_pdf_source.docling_extract.service import build_handler
-from experiments.build_pdf_source.extract import LAYOUT_BACKEND, TABLE_BACKEND
+from experiments.build_pdf_source.common import LayoutModelData, PdfClassificationData, PdfSourceData
+from experiments.build_pdf_source.docling_extract.service import build_arch_adaptive_handler
 from experiments.build_pdf_source.extract_fleet import (
     _LEASE_TIMEOUT,
     _PROXY_READINESS_TIMEOUT,
     _PROXY_REQUEST_TIMEOUT,
     _WORKER_REQUEST_TIMEOUT,
+    ARM_LAYOUT_BACKEND,
     MODEL_ID,
+    TABLE_BACKEND,
+    X86_LAYOUT_BACKEND,
     convert_document,
 )
 from experiments.build_pdf_source.fetch import fetch_step
+from experiments.build_pdf_source.layout_model import layout_model_step
 from experiments.build_pdf_source.plan import plan_step
 
 logger = logging.getLogger(__name__)
@@ -63,17 +67,18 @@ _DRIVER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
 _POOL_RESOURCES = ResourceConfig(cpu=2, ram="16g", disk="16g")
 
 
-def _pool_config() -> ConverterPoolConfig:
+def _pool_config(layout_model: LayoutModelData) -> ConverterPoolConfig:
     from experiments.build_pdf_source.docling_extract.converter import ExtractionOptions  # noqa: PLC0415
 
-    options = ExtractionOptions(
+    x86_options = ExtractionOptions(
         table_backend=TABLE_BACKEND,
-        layout_backend=LAYOUT_BACKEND,
-        layout_model_path=None,
-        layout_label_map={},
+        layout_backend=X86_LAYOUT_BACKEND,
+        layout_model_path=layout_model.model_path,
+        layout_label_map=layout_model.label_map,
     )
+    arm_options = ExtractionOptions(table_backend=TABLE_BACKEND, layout_backend=ARM_LAYOUT_BACKEND)
     return ConverterPoolConfig(
-        handler_factory=partial(build_handler, options),
+        handler_factory=partial(build_arch_adaptive_handler, x86_options, arm_options),
         model_id=MODEL_ID,
         instances=2,
         processes_per_instance=2,
@@ -98,11 +103,20 @@ class SmokeReport(BaseModel):
     p50_seconds: float
     max_seconds: float
     poison_status: str
+    # How placement split the fleet between layout backends -- the observable proof that the
+    # arch-adaptive factory picked per node.
+    backends: dict[str, int]
 
 
-def smoke(output_path: str, source_output_path: str, classification_output_path: str) -> SmokeReport:
+def smoke(
+    output_path: str,
+    source_output_path: str,
+    classification_output_path: str,
+    layout_model_output_path: str,
+) -> SmokeReport:
     source = read_artifact(source_output_path, PdfSourceData)
     classification = read_artifact(classification_output_path, PdfClassificationData)
+    layout_model = read_artifact(layout_model_output_path, LayoutModelData)
     keys = routing_keys(classification.main_output_dir, needs_ocr=False)
 
     filesystem, path = url_to_fs(source.main_output_dir)
@@ -113,7 +127,7 @@ def smoke(output_path: str, source_output_path: str, classification_output_path:
     if len(rows) < _DOCUMENTS:
         raise RuntimeError(f"Only {len(rows)} text-extractable documents in {shard}")
 
-    with remote_converter_pool(_pool_config()) as session:
+    with remote_converter_pool(_pool_config(layout_model)) as session:
         base_url = session.endpoint.base_url
         logger.info("Pool ready at %s; converting %d documents", base_url, len(rows))
         with ThreadPoolExecutor(max_workers=_THREADS) as pool:
@@ -138,6 +152,8 @@ def smoke(output_path: str, source_output_path: str, classification_output_path:
     for document in failures:
         logger.info("Failure: %s", document.error)
     logger.info("Poison payload came back status=%s error=%s", poison.status, poison.error)
+    backends = dict(Counter(document.backend for document in documents))
+    logger.info("Backend split: %s", backends)
 
     if not successes:
         raise RuntimeError("No document converted successfully")
@@ -152,19 +168,22 @@ def smoke(output_path: str, source_output_path: str, classification_output_path:
         p50_seconds=seconds[len(seconds) // 2],
         max_seconds=seconds[-1],
         poison_status=poison.status,
+        backends=backends,
     )
 
 
-def smoke_step(source: StepSpec, classification: StepSpec) -> StepSpec:
+def smoke_step(source: StepSpec, classification: StepSpec, layout_model: StepSpec) -> StepSpec:
     return StepSpec(
         name="data/datakit/validate/converter_pool_smoke",
-        deps=[source, classification],
-        hash_attrs={"documents": _DOCUMENTS, "attempt": 1},
+        deps=[source, classification, layout_model],
+        # 2: the fleet became arch-adaptive (INT8 on x86, FP32 torch elsewhere, TableFormer on).
+        hash_attrs={"documents": _DOCUMENTS, "attempt": 2},
         fn=remote(
             partial(
                 smoke,
                 source_output_path=source.output_path,
                 classification_output_path=classification.output_path,
+                layout_model_output_path=layout_model.output_path,
             ),
             resources=_DRIVER_RESOURCES,
             pip_dependency_groups=["datakit"],
@@ -177,7 +196,8 @@ def main() -> None:
     plan = plan_step()
     fetch = fetch_step(plan)
     classify = classify_step(fetch, model_step())
-    StepRunner().run([smoke_step(fetch, classify)])
+    layout_model = layout_model_step(fetch)
+    StepRunner().run([layout_model, smoke_step(fetch, classify, layout_model)])
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ pay for docling.
 """
 
 import json
+import platform
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -34,7 +35,12 @@ SOURCE_URL_HEADER = "x-marin-source-url"
 
 @dataclass(frozen=True)
 class ConvertedDocument:
-    """One document's conversion result, exactly as it crosses the wire."""
+    """One document's conversion result, exactly as it crosses the wire.
+
+    ``backend`` names the layout backend that actually ran. Under an arch-adaptive fleet the
+    same document converts differently depending on the node its converter landed on, so the
+    backend is per-response provenance, not fleet-wide configuration.
+    """
 
     text: str
     num_pages: int
@@ -42,11 +48,28 @@ class ConvertedDocument:
     status: str
     error: str | None
     seconds: float
+    backend: str
 
 
 def parse_converted(payload: bytes) -> ConvertedDocument:
     """Parse the handler's JSON response body."""
     return ConvertedDocument(**json.loads(payload))
+
+
+def build_arch_adaptive_handler(
+    x86_options: "ExtractionOptions",  # noqa: F821
+    arm_options: "ExtractionOptions",  # noqa: F821
+) -> Callable[[InferenceRequest], InferenceResponse]:
+    """Pick the layout backend for the node this converter actually landed on.
+
+    CPU pods carry no architecture constraint, so a fleet's converters can land on x86 and ARM
+    nodes in the same run. The INT8 OpenVINO graph is 2.7x faster than FP32 torch where VNNI
+    exists and ~10x slower where it does not (OpenVINO's ARM plugin does not take the INT8 path),
+    so the only placement-safe way to use it is to decide per process, after placement: INT8 on
+    x86_64, FP32 torch anywhere else. The torch path never imports OpenVINO and runs on any arch.
+    """
+    options = x86_options if platform.machine() == "x86_64" else arm_options
+    return build_handler(options)
 
 
 def build_handler(options: "ExtractionOptions") -> Callable[[InferenceRequest], InferenceResponse]:  # noqa: F821
@@ -71,6 +94,7 @@ def build_handler(options: "ExtractionOptions") -> Callable[[InferenceRequest], 
             return inference_error_response(request, 405, f"{CONVERT_PATH} only accepts POST")
 
         name = urllib.parse.unquote(dict(request.headers).get(SOURCE_URL_HEADER, "document.pdf"))
+        backend = str(options.layout_backend)
         start = time.perf_counter()
         try:
             extracted = extract_text(converter, request.payload, options, name=name)
@@ -82,6 +106,7 @@ def build_handler(options: "ExtractionOptions") -> Callable[[InferenceRequest], 
                 "status": "failure",
                 "error": f"{type(exc).__name__}: {exc}",
                 "seconds": time.perf_counter() - start,
+                "backend": backend,
             }
         else:
             body = {
@@ -91,6 +116,7 @@ def build_handler(options: "ExtractionOptions") -> Callable[[InferenceRequest], 
                 "status": extracted.status,
                 "error": extracted.extraction_error,
                 "seconds": time.perf_counter() - start,
+                "backend": backend,
             }
         return InferenceResponse(
             request_id=request.request_id,

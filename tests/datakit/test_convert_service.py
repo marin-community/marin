@@ -24,9 +24,11 @@ from marin.inference.types import InferenceRequest
 
 import experiments.build_pdf_source.docling_extract.converter as converter_module
 from experiments.build_pdf_source.docling_extract.converter import ExtractedText, ExtractionOptions
+from experiments.build_pdf_source.docling_extract.model_spec import LayoutBackend
 from experiments.build_pdf_source.docling_extract.service import (
     CONVERT_PATH,
     SOURCE_URL_HEADER,
+    build_arch_adaptive_handler,
     build_handler,
     parse_converted,
 )
@@ -76,6 +78,7 @@ def test_a_converted_document_round_trips_through_the_wire_format(handler) -> No
     assert document.status == "success"
     assert document.error is None
     assert document.seconds >= 0.0
+    assert document.backend == str(LayoutBackend.TORCH_HERON)
 
 
 def test_an_unconvertible_document_is_a_failure_payload_not_an_error_status(handler) -> None:
@@ -96,6 +99,33 @@ def test_the_source_url_header_is_unquoted_into_the_converter_name(handler) -> N
     handler(_convert_request(b"%PDF", headers=((SOURCE_URL_HEADER, quoted),)))
 
     assert handler.seen_names == [url]
+
+
+@pytest.mark.parametrize(
+    ("machine", "expected_backend"),
+    [("x86_64", LayoutBackend.INT8), ("aarch64", LayoutBackend.TORCH_HERON)],
+)
+def test_the_adaptive_handler_picks_the_backend_for_the_arch_it_lands_on(
+    monkeypatch: pytest.MonkeyPatch, machine: str, expected_backend: LayoutBackend
+) -> None:
+    """The INT8 graph is only usable where VNNI exists, so the choice must follow placement."""
+    monkeypatch.setattr(converter_module, "build_converter", lambda options: object())
+    monkeypatch.setattr(
+        converter_module,
+        "extract_text",
+        lambda converter, pdf, options, name: ExtractedText(
+            text="hello", num_pages=1, page_offsets=[5], status="success", extraction_error=None
+        ),
+    )
+    monkeypatch.setattr("platform.machine", lambda: machine)
+
+    x86_options = ExtractionOptions(
+        layout_backend=LayoutBackend.INT8, layout_model_path="unused", layout_label_map={0: "text"}
+    )
+    handle = build_arch_adaptive_handler(x86_options, ExtractionOptions())
+    document = parse_converted(handle(_convert_request(b"%PDF")).payload)
+
+    assert document.backend == str(expected_backend)
 
 
 def test_unexpected_routes_get_the_error_envelope_without_reaching_the_converter(handler) -> None:
