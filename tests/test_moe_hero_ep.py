@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import os
 import subprocess
 import sys
@@ -13,7 +14,37 @@ import jax.numpy as jnp
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
-from experiments.grug.moe_hero_ep import grugmuon_hero, train
+from experiments.grug.moe_hero_ep import grugmuon_hero, launch, train
+from experiments.grug.moe_hero_ep.heuristic import HERO_SHAPE_SPECS, HeroShape
+from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs as build_fsdp_hero_configs
+
+# Fields the FSDP hero shape cannot keep on an expert-parallel mesh: `sonic_cute` has no EP
+# collectives, and `moe_mlp` rejects expert_chunks > 1 once the expert axis exceeds one.
+_EXPECTED_EP_DELTAS = {"moe_implementation": "fixed_all_to_all", "expert_chunks": 1}
+
+
+def test_fsdp_shape_matches_the_fsdp_hero_apart_from_ep_deltas():
+    fsdp_model, _ = build_fsdp_hero_configs(num_train_steps=25, batch_size=1024)
+    ep_mesh_model = HERO_SHAPE_SPECS[HeroShape.FSDP].model
+
+    reference = dataclasses.asdict(fsdp_model)
+    measured = dataclasses.asdict(ep_mesh_model)
+    assert set(reference) == set(measured)
+
+    differing = {name: measured[name] for name in reference if measured[name] != reference[name]}
+    assert differing == _EXPECTED_EP_DELTAS
+    assert reference["moe_implementation"] == "sonic_cute"
+    assert reference["expert_chunks"] == 4
+
+
+def test_fsdp_shape_fits_the_ep64_mesh_and_offloads_the_optimizer_state():
+    spec = HERO_SHAPE_SPECS[HeroShape.FSDP]
+
+    # 128 experts over a 64-way expert axis is two whole experts per device; a shape that does not
+    # divide the axis fails inside `moe_mlp` only after the rack is already allocated.
+    assert spec.model.num_experts % launch.HERO_EP_EXPERT_AXIS_SIZE == 0
+    assert launch.HERO_EP_EXPERT_AXIS_SIZE == 64
+    assert spec.offload_opt_state
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):

@@ -653,3 +653,28 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Logbook finding: No rewrite because this research logbook is append-only.
 - Tests: The default Grug MoE and EP hero suites pass with 20 tests and 6 skips. The set now includes the four-device fixed all-to-all forward and gradient test. The 200-step dry run still resolves EP64, capacity 1.0, fixed all-to-all, batch 1024, and the recorded optimizer values.
 - Checks: The full changed-file pre-commit and Pyrefly checks pass. The one required advisory rule-catalog review reports no findings.
+
+### 2026-08-04 18:28 UTC - MHEP-009 FSDP-shape local gate passed
+
+- Hypothesis: The FSDP hero model shape runs on the EP64 mesh, and its MFU is directly comparable
+  to the FSDP hero result because the analytic FLOP count depends only on the model config.
+- Motive: The recorded FSDP reference has a different model shape, thus the baseline section calls
+  it out as no EP control. One shape on two sharding strategies removes that limit.
+- Change: `heuristic.py` gets a `HeroShape` selector and the FSDP hero model spec. `launch.py` gets
+  `--shape` and takes host offload of the optimizer state from the selected shape.
+- Forced deltas: `moe_implementation` becomes `fixed_all_to_all` because `sonic_cute` has no EP
+  collectives, and `expert_chunks` becomes 1 because `moe_mlp` rejects a larger value when the
+  expert axis is larger than one. All other model fields stay equal to the FSDP hero.
+- Capacity note: The local FSDP backend computes every assignment. EP drops each assignment above
+  its fixed cell capacity, thus the EP drop fraction is part of the result.
+- Memory: A 64-device shape check reports 359.64 B parameters, 24.59 GiB of parameters per device,
+  and 27.78 GiB of optimizer state per device. With host offload the resident estimate is about 106
+  GiB per device. The measured d5120 EP shape estimates about 110 GiB per device without offload,
+  thus 128 experts on 64 devices fit with margin. Two whole experts land on each device.
+- Mesh selection: EP64 is the lowest-memory mesh for this shape on 64 GPUs. A hybrid mesh such as
+  EP32 with two-way FSDP replicates each expert twice, because the EP path shards expert weights
+  on the expert axis only. Thus no hybrid mesh was selected.
+- Tests: The eight EP-hero and FSDP-hero tests pass. The new parity test fails if the two model
+  specs drift apart in more fields than the two forced deltas.
+- Dry run: The plan resolves d6144, 128 experts, top-4, two shared experts, SConv, sliding window
+  512, EP64, capacity 1.0, batch 1024, and 16 workers with four GB200 GPUs each.

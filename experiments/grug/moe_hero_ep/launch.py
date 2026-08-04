@@ -22,7 +22,7 @@ from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 
-from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
+from experiments.grug.moe_hero_ep.heuristic import HERO_SHAPE_SPECS, HeroShape, build_hero_configs
 from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
 
@@ -58,14 +58,16 @@ class HeroThroughputResult(Artifact):
     """
 
 
-def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
-    """Build the one-rack EP64 hero throughput run."""
+def build_hero_run(
+    *, run_id: str, num_steps: int, shape: HeroShape = HeroShape.EP, version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build the one-rack EP64 hero throughput run for one model shape."""
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
-    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=HERO_EP_BATCH_SIZE)
+    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=HERO_EP_BATCH_SIZE, shape=shape)
     if model.moe_implementation is None:
         raise ValueError("the EP hero requires an explicit MoE implementation")
     backend_tag = model.moe_implementation.replace("_", "-")
@@ -76,7 +78,7 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
         log_every=1,
         ema_beta=None,
         z_loss_weight=1e-4,
-        offload_opt_state=False,
+        offload_opt_state=HERO_SHAPE_SPECS[shape].offload_opt_state,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
         replica_axis_size=1,
         sharding_dump_path=None,
@@ -109,6 +111,7 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
                     "moe",
                     "hero",
                     "ep",
+                    f"shape-{shape.value}",
                     backend_tag,
                     capacity_tag,
                     "gb200",
@@ -153,9 +156,16 @@ def build_hero_run(*, run_id: str, num_steps: int, version: str | None = None) -
     show_default=True,
     help="Number of training steps.",
 )
+@click.option(
+    "--shape",
+    type=click.Choice([member.value for member in HeroShape]),
+    default=HeroShape.EP.value,
+    show_default=True,
+    help="Model shape to run on the EP64 mesh: the native EP hero or the FSDP hero shape.",
+)
 @build_options
-def main(run_id: str, num_steps: int) -> ArtifactStep[HeroThroughputResult]:
-    return build_hero_run(run_id=run_id, num_steps=num_steps)
+def main(run_id: str, num_steps: int, shape: str) -> ArtifactStep[HeroThroughputResult]:
+    return build_hero_run(run_id=run_id, num_steps=num_steps, shape=HeroShape(shape))
 
 
 if __name__ == "__main__":

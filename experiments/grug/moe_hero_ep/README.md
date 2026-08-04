@@ -9,6 +9,25 @@ It starts from the FSDP hero at PR 7876 and changes only the parts that EP64 req
 increase MFU, so they are not in the final code. `MHEP-008` passed the 200-step gate with 23.6969% median
 MFU, 382,902 last-sample tokens/s, 7.4113% final MoE drop rate, and 3.3119 final loss.
 
+## Model shapes
+
+`--shape` selects which model shape runs on the EP64 mesh:
+
+- `ep` (default): the native EP hero shape below.
+- `fsdp`: the `experiments/grug/moe_hero_fsdp` shape, for a transport comparison at one model shape.
+
+The `fsdp` shape keeps every field of the FSDP hero model except the two that expert parallelism
+cannot honor. `sonic_cute` is a local grouped-GEMM backend with no EP collectives, thus the run uses
+`fixed_all_to_all`. `moe_mlp` rejects `expert_chunks` greater than one when the expert axis is
+larger than one, because EP shards the expert bank instead of a gather of it. As a result, both
+sharding strategies keep the same analytic FLOP count, and their MFU values are directly comparable.
+The `fsdp` shape also keeps the FSDP hero's host offload of the optimizer state.
+`tests/test_moe_hero_ep.py` fails if the two model specs drift apart in more fields.
+
+Capacity is the one behavior that the transport changes: the local FSDP backend computes every
+assignment, but EP drops each assignment above the fixed cell capacity. Read the drop fraction with
+the MFU value.
+
 ## Configuration
 
 - Model: d5120, 48 layers, 256 routed experts, top-8 routing, and one shared expert.
@@ -33,6 +52,12 @@ python -m experiments.grug.moe_hero_ep.launch \
   --run-id mhep-008-final-200 \
   --num-steps 200 \
   --version 2026.08.02
+
+python -m experiments.grug.moe_hero_ep.launch \
+  --run-id mhep-009-fsdp-shape-25 \
+  --num-steps 25 \
+  --shape fsdp \
+  --version 2026.08.04
 ```
 
 Submit the one-rack gate through the Marin Iris controller:
