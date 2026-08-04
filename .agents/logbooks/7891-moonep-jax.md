@@ -1988,3 +1988,17 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Basis: A padded call is a standard collective on the communication stream, so the XLA latency-hiding scheduler can overlap it without an annotation. The custom ragged call needs the annotation because the scheduler does not treat it as a collective.
 - Tests: 74 local tests pass, and 12 GPU cases skip.
 - Value: This removes a compile failure from the next rack gate before that gate uses an admission.
+
+### 2026-08-04 00:14 UTC - MNEP-105 measures capacity and rejects the padded speed premise
+
+- Admission: The gang waited 34 minutes, then completed five steps on attempt zero. The final loss was `8.18`.
+- Capacity result: `max_cell` was `16,303` against a `mean_cell` of `8,192`. Thus a padded transport needs a capacity factor of `1.99` for zero drops.
+- Memory consequence: Factor `2.0` needs a `20.0 GiB` collective pool. MNEP-104 already failed at a `15.93 GiB` request.
+- Throughput result: Steady steps took `26.0 s`. Rank zero reached step three at `167 s` and step five at `219 s`.
+- Comparison: MNEP-102 reached `26.170 s` for each step with the exact ragged transport. The padded transport gave no gain.
+- Stronger form: This run dropped a large share of assignments, so its expert compute was smaller than MNEP-102. Even with less compute, the step did not improve.
+- Falsified: The four-GPU rate of `524 GB/s` does not predict the rack step time. Do not plan from that number alone.
+- Limit of the earlier probe: The bandwidth probe moved a plain buffer through one collective. The real padded path adds a gather before the collective and a scatter after it, and the probe did not measure either.
+- Candidate causes: The standard collective may be slower across 16 nodes than inside one tray. The padding gather and scatter may cost more than the collective saves.
+- Defect: `moe/drop_fraction` reported `1.11567`, which is above one. The overflow counter adds both the dispatch and the combine call, and the psum spans more axes than intended. The capacity result does not depend on this counter.
+- Next: Separate the collective cost from the layout cost before another rack gate.
