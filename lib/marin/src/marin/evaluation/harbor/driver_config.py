@@ -22,7 +22,8 @@ from marin.inference.iris import InferenceBackendState
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _OWNER_ONLY_MODE = 0o600
-_BACKEND_POLL_SECONDS = 60.0
+# Harbor can exhaust a trial's upstream retry budget in tens of seconds when an endpoint disappears.
+_BACKEND_POLL_SECONDS = 5.0
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
