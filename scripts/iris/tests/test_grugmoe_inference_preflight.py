@@ -255,23 +255,34 @@ def test_health_manifest_freezes_representative_disjoint_warmup_inputs() -> None
     roots = warm_up["root_copies"]
     records = warm_up["by_concurrency"]["24"]
     assert warm_up["rolling_passes"] == grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert warm_up["successor_waves_after_final_pass"] == grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES
     assert len(roots) == 3 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
-    assert len(records) == 24 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert len(records) == 24 * (
+        grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+        + grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES
+    )
     assert {record["pass"] for record in records} == set(range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES))
+    final_pass = grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES - 1
+    assert {record["wave"] for record in records if record["pass"] < final_pass} == {0}
+    assert {record["wave"] for record in records if record["pass"] == final_pass} == {0, 1}
     assert {record["slot_id"] for record in records} == set(range(24))
     assert {record["data_parallel_rank"] for record in records} == {0, 1, 2}
     assert {record["max_tokens"] for record in records} == {2}
     assert {record["token_count"] for record in records} == {5, 6, 7}
     assert all(record["disjoint_from_measured_roots"] for record in records)
     assert all(record["shared_root_graph"] for record in records)
-    assert len({record["token_ids_sha256"] for record in records}) == len(records)
+    assert len({record["token_ids_sha256"] for record in records}) == (
+        24 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    )
     assert len({record["token_ids_sha256"] for record in roots}) == len(roots)
     assert all(record["disjoint_from_measured_roots"] for record in roots)
     assert all(record["disjoint_from_other_passes"] for record in roots)
     for pass_index in range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES):
         pass_records = [record for record in records if record["pass"] == pass_index]
-        sharing = {root: sum(record["root"] == root for record in pass_records) for root in range(3)}
-        assert sharing == {0: 8, 1: 8, 2: 8}
+        for wave_index in {record["wave"] for record in pass_records}:
+            wave_records = [record for record in pass_records if record["wave"] == wave_index]
+            sharing = {root: sum(record["root"] == root for record in wave_records) for root in range(3)}
+            assert sharing == {0: 8, 1: 8, 2: 8}
         warm_workload = grug_preflight._health_warm_workload(workload, pass_index=pass_index)
         requests_by_id = {request["request_id"]: request for request in workload["requests"]}
         assert all(
@@ -284,9 +295,27 @@ def test_health_manifest_freezes_representative_disjoint_warmup_inputs() -> None
             )
             for record in pass_records
         )
+    first_wave = {
+        record["slot_id"]: record for record in records if record["pass"] == final_pass and record["wave"] == 0
+    }
+    successor_wave = {
+        record["slot_id"]: record for record in records if record["pass"] == final_pass and record["wave"] == 1
+    }
+    assert first_wave.keys() == successor_wave.keys()
+    assert all(
+        (
+            first_wave[slot_id]["manifest_request_id"],
+            first_wave[slot_id]["token_ids_sha256"],
+        )
+        == (
+            successor_wave[slot_id]["manifest_request_id"],
+            successor_wave[slot_id]["token_ids_sha256"],
+        )
+        for slot_id in first_wave
+    )
 
 
-def test_health_warmup_populates_shared_roots_and_barriers_each_pass(
+def test_health_warmup_populates_shared_roots_and_barriers_each_wave_including_successor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cohorts = ("short", "medium", "long")
@@ -306,20 +335,28 @@ def test_health_warmup_populates_shared_roots_and_barriers_each_pass(
             for root, cohort in enumerate(cohorts)
         ],
     }
-    barriers = [threading.Barrier(3) for _ in range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES)]
+    final_pass = grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES - 1
+    barriers = {
+        (pass_index, wave_index): threading.Barrier(3)
+        for pass_index in range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES)
+        for wave_index in range(
+            1 + (grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES if pass_index == final_pass else 0)
+        )
+    }
     events: list[str] = []
     lock = threading.Lock()
 
     def completion(*_: object, request_id: str, data_parallel_rank: int, **__: object) -> dict[str, object]:
         with lock:
             events.append(f"start:{request_id}")
-        if "-slot-" in request_id:
+        if "-wave-" in request_id:
             pass_index = next(
                 index
                 for index in range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES)
-                if f"-warm-pass-{index:02d}-slot-" in request_id
+                if f"-warm-pass-{index:02d}-wave-" in request_id
             )
-            barriers[pass_index].wait(timeout=2)
+            wave_index = next(index for index in range(2) if f"-wave-{index:02d}-slot-" in request_id)
+            barriers[pass_index, wave_index].wait(timeout=2)
         with lock:
             events.append(f"finish:{request_id}")
         return {"data_parallel_rank": data_parallel_rank, "route_array": None}
@@ -336,28 +373,34 @@ def test_health_warmup_populates_shared_roots_and_barriers_each_pass(
     )
 
     passes = grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
-    assert len(branches) == 3 * passes
+    assert len(branches) == 3 * (passes + grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES)
     assert len(roots) == 3 * passes
     for pass_index in range(passes):
         root_marker = f"-warm-pass-{pass_index:02d}-populate-root-"
-        branch_marker = f"-warm-pass-{pass_index:02d}-slot-"
         root_finishes = [
             index for index, event in enumerate(events) if event.startswith("finish:") and root_marker in event
         ]
-        branch_starts = [
-            index for index, event in enumerate(events) if event.startswith("start:") and branch_marker in event
-        ]
-        branch_finishes = [
-            index for index, event in enumerate(events) if event.startswith("finish:") and branch_marker in event
-        ]
-        assert len(root_finishes) == len(branch_starts) == len(branch_finishes) == 3
-        assert max(root_finishes) < min(branch_starts)
+        previous_finishes = root_finishes
+        wave_count = 1 + (
+            grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES if pass_index == final_pass else 0
+        )
+        for wave_index in range(wave_count):
+            branch_marker = f"-warm-pass-{pass_index:02d}-wave-{wave_index:02d}-slot-"
+            branch_starts = [
+                index for index, event in enumerate(events) if event.startswith("start:") and branch_marker in event
+            ]
+            branch_finishes = [
+                index for index, event in enumerate(events) if event.startswith("finish:") and branch_marker in event
+            ]
+            assert len(previous_finishes) == len(branch_starts) == len(branch_finishes) == 3
+            assert max(previous_finishes) < min(branch_starts)
+            previous_finishes = branch_finishes
         if pass_index + 1 < passes:
             next_root_marker = f"-warm-pass-{pass_index + 1:02d}-populate-root-"
             next_root_starts = [
                 index for index, event in enumerate(events) if event.startswith("start:") and next_root_marker in event
             ]
-            assert max(branch_finishes) < min(next_root_starts)
+            assert max(previous_finishes) < min(next_root_starts)
 
 
 def test_health_repeatability_gates_only_identical_settings() -> None:
@@ -837,18 +880,23 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
     )
     events.close()
 
-    assert warm_requests == 3 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert warm_requests == 3 * (
+        grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+        + grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES
+    )
     assert arm["warm_up"] == {
         "requests": warm_requests + 18 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
         "branch_requests": warm_requests,
         "root_population_requests": 18 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
         "root_copies": 18 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
         "rolling_passes": grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
+        "successor_waves_after_final_pass": grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES,
         "target_concurrency": 3,
         "max_tokens_per_request": 1,
         "data_parallel_ranks_covered": list(range(16)),
         "shared_root_graph": True,
         "full_pass_barrier": True,
+        "full_wave_barrier": True,
         "distinct_root_copy_per_pass": True,
         "disjoint_from_measured_roots": True,
         "excluded_from_measurement": True,

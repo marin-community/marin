@@ -103,6 +103,7 @@ ACCEPTANCE_COUNTER_SAMPLE_SECONDS = 60.0
 HEALTH_MINIMUM_SECONDS = 120
 HEALTH_MINIMUM_GENERATED_TOKENS = 250_000
 HEALTH_REPRESENTATIVE_WARM_UP_PASSES = 4
+HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES = 1
 HEALTH_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/inference-bench/grugmoe-architecture/experiment-0"
 HEALTH_SAMPLING_PARAMETERS = {
     "temperature": 0.0,
@@ -2330,30 +2331,39 @@ def _health_warm_up_schedule(
     slots = frozen_cohort_slots(workload["requests"], target_concurrency=target_concurrency)
     for pass_index in range(HEALTH_REPRESENTATIVE_WARM_UP_PASSES):
         warm_workload = _health_warm_workload(workload, pass_index=pass_index)
-        for slot in slots:
-            request = slot.next_request()
-            prompt = materialize_prompt(warm_workload, request)
-            root_index = int(request["root"])
-            root_prompt = list(warm_workload["roots"][root_index]["prefix_token_ids"])
-            schedule.append(
-                {
-                    "pass": pass_index,
-                    "slot_id": int(slot.slot_id),
-                    "cohort": str(slot.cohort),
-                    "manifest_request_id": str(request["request_id"]),
-                    "root": root_index,
-                    "branch": int(request["branch"]),
-                    "root_token_count": len(root_prompt),
-                    "root_token_ids_sha256": _sha256_json(root_prompt),
-                    "token_count": len(prompt),
-                    "token_ids_sha256": _sha256_json(prompt),
-                    "max_tokens": int(request["max_tokens"]),
-                    "sampling_seed": _frozen_health_seed(f"warm:{target_concurrency}:{pass_index}:{slot.slot_id}"),
-                    "data_parallel_rank": root_index % 16,
-                    "disjoint_from_measured_roots": True,
-                    "shared_root_graph": True,
-                }
-            )
+        wave_count = 1 + (
+            HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES
+            if pass_index == HEALTH_REPRESENTATIVE_WARM_UP_PASSES - 1
+            else 0
+        )
+        for wave_index in range(wave_count):
+            for slot in slots:
+                request = slot.next_request()
+                prompt = materialize_prompt(warm_workload, request)
+                root_index = int(request["root"])
+                root_prompt = list(warm_workload["roots"][root_index]["prefix_token_ids"])
+                schedule.append(
+                    {
+                        "pass": pass_index,
+                        "wave": wave_index,
+                        "slot_id": int(slot.slot_id),
+                        "cohort": str(slot.cohort),
+                        "manifest_request_id": str(request["request_id"]),
+                        "root": root_index,
+                        "branch": int(request["branch"]),
+                        "root_token_count": len(root_prompt),
+                        "root_token_ids_sha256": _sha256_json(root_prompt),
+                        "token_count": len(prompt),
+                        "token_ids_sha256": _sha256_json(prompt),
+                        "max_tokens": int(request["max_tokens"]),
+                        "sampling_seed": _frozen_health_seed(
+                            f"warm:{target_concurrency}:{pass_index}:{wave_index}:{slot.slot_id}"
+                        ),
+                        "data_parallel_rank": root_index % 16,
+                        "disjoint_from_measured_roots": True,
+                        "shared_root_graph": True,
+                    }
+                )
     return schedule
 
 
@@ -2367,11 +2377,11 @@ def _health_warm_up(
     arm_id: str,
     target_concurrency: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Warm copied root graphs and branch waves, with one barrier per pass."""
+    """Warm copied root graphs, then exercise a same-slot successor wave."""
     schedule = _health_warm_up_schedule(workload, target_concurrency=target_concurrency)
-    records_by_pass: dict[int, list[dict[str, Any]]] = {}
+    records_by_wave: dict[tuple[int, int], list[dict[str, Any]]] = {}
     for record in schedule:
-        records_by_pass.setdefault(int(record["pass"]), []).append(record)
+        records_by_wave.setdefault((int(record["pass"]), int(record["wave"])), []).append(record)
     requests_by_id = {str(request["request_id"]): request for request in workload["requests"]}
     branch_results: list[dict[str, Any]] = []
     root_results: list[dict[str, Any]] = []
@@ -2389,39 +2399,45 @@ def _health_warm_up(
             retain_routes_for_alignment=False,
         )
         root_results.extend(populated)
-        pass_records = records_by_pass[pass_index]
-        if len(pass_records) != target_concurrency:
-            raise AssertionError(f"warm-up pass {pass_index} has {len(pass_records)} branches")
+        wave_count = 1 + (
+            HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES
+            if pass_index == HEALTH_REPRESENTATIVE_WARM_UP_PASSES - 1
+            else 0
+        )
+        for wave_index in range(wave_count):
+            wave_records = records_by_wave[pass_index, wave_index]
+            if len(wave_records) != target_concurrency:
+                raise AssertionError(f"warm-up pass {pass_index} wave {wave_index} has {len(wave_records)} branches")
 
-        def one(
-            record: dict[str, Any],
-            pass_workload: dict[str, Any] = warm_workload,
-        ) -> dict[str, Any]:
-            request = requests_by_id[str(record["manifest_request_id"])]
-            prompt = materialize_prompt(pass_workload, request)
-            if _sha256_json(prompt) != record["token_ids_sha256"]:
-                raise AssertionError("warm-up branch changed after its manifest was frozen")
-            result = _health_completion(
-                base_url,
-                model,
-                prompt,
-                case=case,
-                max_tokens=int(record["max_tokens"]),
-                data_parallel_rank=int(record["data_parallel_rank"]),
-                request_id=(
-                    f"{arm_id}-warm-pass-{record['pass']:02d}-slot-{record['slot_id']:03d}-"
-                    f"{record['manifest_request_id']}"
-                ),
-                sampling_seed=int(record["sampling_seed"]),
-                r3_enabled=r3_enabled,
-            )
-            result.pop("route_array", None)
-            return result
+            def one(
+                record: dict[str, Any],
+                pass_workload: dict[str, Any] = warm_workload,
+            ) -> dict[str, Any]:
+                request = requests_by_id[str(record["manifest_request_id"])]
+                prompt = materialize_prompt(pass_workload, request)
+                if _sha256_json(prompt) != record["token_ids_sha256"]:
+                    raise AssertionError("warm-up branch changed after its manifest was frozen")
+                result = _health_completion(
+                    base_url,
+                    model,
+                    prompt,
+                    case=case,
+                    max_tokens=int(record["max_tokens"]),
+                    data_parallel_rank=int(record["data_parallel_rank"]),
+                    request_id=(
+                        f"{arm_id}-warm-pass-{record['pass']:02d}-wave-{record['wave']:02d}-"
+                        f"slot-{record['slot_id']:03d}-{record['manifest_request_id']}"
+                    ),
+                    sampling_seed=int(record["sampling_seed"]),
+                    r3_enabled=r3_enabled,
+                )
+                result.pop("route_array", None)
+                return result
 
-        # Recreate the pool only after the whole branch wave completes. This is
-        # the pass barrier; no fast slot can enter the next pass early.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=target_concurrency) as executor:
-            branch_results.extend(executor.map(one, pass_records))
+            # Recreate the pool only after the whole branch wave completes. This
+            # is the wave barrier; no fast slot can submit its successor early.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=target_concurrency) as executor:
+                branch_results.extend(executor.map(one, wave_records))
     return branch_results, root_results
 
 
@@ -3194,6 +3210,7 @@ def _run_rolling_health_arm(
             "root_population_requests": len(warm_roots),
             "root_copies": len(workload["roots"]) * HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
             "rolling_passes": HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
+            "successor_waves_after_final_pass": HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES,
             "target_concurrency": target_concurrency,
             "max_tokens_per_request": max(int(request["max_tokens"]) for request in workload["requests"]),
             "data_parallel_ranks_covered": sorted(
@@ -3205,6 +3222,7 @@ def _run_rolling_health_arm(
             ),
             "shared_root_graph": True,
             "full_pass_barrier": True,
+            "full_wave_barrier": True,
             "distinct_root_copy_per_pass": True,
             "disjoint_from_measured_roots": True,
             "excluded_from_measurement": True,
@@ -3339,10 +3357,11 @@ def _health_slot_schedule(workload: dict[str, Any], *, target_concurrency: int) 
 def _health_workload_manifest(workload: dict[str, Any], *, concurrencies: list[int]) -> dict[str, Any]:
     warm_up = {
         "kind": (
-            "excluded measured-shape shared-root preconditioning with a full pass barrier, "
-            "followed by a prefix-cache reset"
+            "excluded measured-shape shared-root preconditioning with full pass and wave barriers, "
+            "including a same-slot successor wave before the prefix-cache reset"
         ),
         "rolling_passes": HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
+        "successor_waves_after_final_pass": HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES,
         "root_copies": _health_warm_root_schedule(workload),
         "by_concurrency": {
             str(concurrency): _health_warm_up_schedule(workload, target_concurrency=concurrency)
