@@ -2119,3 +2119,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Pattern: This is the fourth step-two NaN in this work. MNEP-068 (runtime collective branch), MNEP-080 (overlap without a remote-write fence), and MNEP-094 (reserved QuACK clusters) all failed the same way. Every case changed the collective schedule around the direct device kernel.
 - Consequence: The two-bucket schedule is a requirement of the current wheel, not a free choice. A one-bucket run needs either the multi-context wheel or a new kernel gate.
 - Standing comparison: MNEP-074 reached `10.004%` MFU with one bucket on the multi-context wheel. MNEP-102 reached `9.937%` with two buckets on the one-CTA wheel. The best result in this work is still MNEP-074.
+
+### 2026-08-04 06:13 UTC - The one-bucket path is broken in current code
+
+- MNEP-118: one bucket, one-remote-CTA wheel, no nsys. Non-finite loss at step two.
+- MNEP-119: one bucket, multi-context GIN wheel, under nsys. Non-finite loss at step two.
+- Inference: Two different wheels give the same failure, so the fault is in the code path and not in the kernel build. MNEP-118 had no nsys, so nsys is not necessary to produce it.
+- Correction: The earlier statement that two buckets are a requirement of the current wheel is wrong. Two buckets are a requirement of the current code.
+- Regression: MNEP-074 reached `10.004%` MFU on the multi-context wheel before the bucket parameter existed. The receive-order layout, the ordered-dispatch barrier, and the sonic layout kernels all landed after it. The one-bucket graph today is not the MNEP-074 graph.
+- Consequence: MNEP-074 is not reproducible with current code. The best reproducible result is MNEP-102 at `9.937%`.
+- Open bug: `token_buckets=1` with `eager_dispatch` produces non-finite gradients at EP64 while passing the four-GPU gate.
