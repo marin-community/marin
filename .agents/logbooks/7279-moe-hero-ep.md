@@ -699,3 +699,26 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
 - Next action: Monitor to a terminal state, read `tracker_metrics.jsonl`, then run the one-rack FSDP
   control at the same shape and batch.
+
+### 2026-08-04 18:38 UTC - MHEP-010 one-rack FSDP control submitted
+
+- Purpose: Give MHEP-009 a same-shape, same-day control. The recorded FSDP reference is a two-rack
+  200-step average, thus it mixes a topology change into the transport comparison.
+- Run ID: `mhep-010-fsdp-control-25-20260804-1838`.
+- Job: `/rav/mhep-010-fsdp-control-25-20260804-1838-coord`.
+- Command: The same coordinator form as MHEP-009, but `python -m experiments.grug.moe_hero_fsdp.launch
+  --run-id mhep-010-fsdp-control-25-20260804-1838 --dp-racks 1 --num-steps 25 --no-save-checkpoints
+  --version 2026.08.04 --run`.
+- Code snapshot: `8a055fec1`; clean tree.
+- Change to the FSDP hero: `--no-save-checkpoints` makes this gate metrics-only. The forced
+  completion checkpoint writes the parameters and the offloaded optimizer state, about 2.7 TiB at
+  this shape, which an MFU gate does not need. All other hero settings stay unchanged.
+- Matched between the two gates: model shape, batch 1024, sequence 4096, 25 steps, capacity 1.0,
+  MuonH with the same compute-scaled values, host offload of the optimizer state, mixed precision,
+  SlimPajama-6B at `2026.06.28`, and 16 workers with four GB200 GPUs each.
+- Not matched: the MoE backend, `expert_chunks`, the mesh, and each hero's own runtime environment.
+  PGLE is on for FSDP and off for EP. Each variant keeps the runtime that its own gates selected,
+  thus this compares two tuned strategies, not one isolated variable.
+- Comparison anchor: A prior EP64 arm at d6144, 4-of-128, sliding window 2048, and 120 steps
+  measured 24.842% median MFU and 274,954 tokens/s (issue 7279 comment 5095217108). That arm is not
+  this shape, but it bounds the expected range.
