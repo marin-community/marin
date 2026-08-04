@@ -2002,3 +2002,18 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Candidate causes: The standard collective may be slower across 16 nodes than inside one tray. The padding gather and scatter may cost more than the collective saves.
 - Defect: `moe/drop_fraction` reported `1.11567`, which is above one. The overflow counter adds both the dispatch and the combine call, and the psum spans more axes than intended. The capacity result does not depend on this counter.
 - Next: Separate the collective cost from the layout cost before another rack gate.
+
+### 2026-08-04 00:33 UTC - MNEP-108 separates the collective cost from the layout cost
+
+- Setup: 16 GPUs on four nodes, one wheel (`lsa-nccl-2307-one-remote-cta-20260803`), balanced traffic at the real row shape, five repeats.
+- Ragged device kernel: `15.081 ms`, or `333.7 GB/s`.
+- Padded collective alone: `9.262 ms`, or `543.4 GB/s`.
+- Padded collective with the real gather and scatter: `19.035 ms`, or `264.4 GB/s`.
+- Layout cost: `9.773 ms`, against a collective saving of `5.82 ms`.
+- Conclusion 1: The padded path is `26%` slower than the ragged path for each call. The layout work costs more than the faster collective saves. This explains the flat `26.0 s` step of MNEP-105.
+- Conclusion 2: Reject the padded transport. The layout gather and scatter, not the collective, decide the result.
+- Conclusion 3: The patched ragged kernel is not slow. It reaches `333.7 GB/s`, which is `61%` of the standard collective rate, not the `5` times gap that the earlier mixed-wheel numbers implied.
+- Correction: The `6.7 GB/s` figure from the development pod was a wheel artifact. Discard it.
+- New question: The rack training run reaches only `101.9 GB/s` with the same kernel. At `333.7 GB/s` the same traffic would take `4.63 s`, which gives a `15.6 s` step and about `16.6%` MFU.
+- Candidate causes for the rack gap: 64 ranks against 16, skewed message sizes against balanced, and `MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT = 1`, which serializes every collective.
+- Next: Measure the ragged rate against rank count and against message skew. Then test the serialization limit.
