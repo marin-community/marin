@@ -12,9 +12,12 @@ from enum import IntEnum
 from time import time
 from typing import Any, Optional
 
+import jax
 import numpy as np
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
+from rigging.telemetry.probes import nccl
+from rigging.telemetry.probes.runner import PeriodicProbe
 
 from levanter.tracker import Tracker, TrackerConfig
 from levanter.tracker.histogram import SummaryStats
@@ -44,6 +47,7 @@ def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> N
 # drops records under queue pressure, so several missed beats must not un-enroll a
 # live job. The reader's window lives in infra/grafana/src/training_stalls.py.
 _PHASE_HEARTBEAT_SECONDS = 60.0
+_NCCL_RAS_POLL_SECONDS = 2 * 60.0
 
 
 class _PhaseHeartbeat:
@@ -116,12 +120,27 @@ def _as_scalar(value: Any) -> float | None:
     return float(array)
 
 
+def _start_nccl_ras_probe() -> PeriodicProbe | None:
+    try:
+        if not telemetry.runtime_status().configured:
+            return None
+        if os.environ.get("NCCL_RAS_ENABLE", "1") == "0":
+            return None
+        if jax.default_backend() != "gpu" or jax.process_index() != 0:
+            return None
+        return nccl.start(interval=_NCCL_RAS_POLL_SECONDS)
+    except Exception:
+        logger.warning("could not start NCCL RAS telemetry", exc_info=True)
+        return None
+
+
 class TelemetryTracker(Tracker):
     """Export training snapshots and phase transitions."""
 
     name: str = "telemetry"
 
     def __init__(self) -> None:
+        self._nccl_ras_probe = _start_nccl_ras_probe()
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
         _HEARTBEAT.start()
@@ -173,6 +192,11 @@ class TelemetryTracker(Tracker):
         pass
 
     def finish(self):
+        if self._nccl_ras_probe is not None:
+            try:
+                self._nccl_ras_probe.shutdown()
+            except Exception:
+                logger.warning("could not stop NCCL RAS telemetry", exc_info=True)
         set_training_phase(TrainingPhase.FINISHED)
         # The run is over, so there is nothing left to keep enrolled. FINISHED is
         # already published above, and republishing it for the process's remaining
@@ -186,8 +210,10 @@ class TelemetryConfig(TrackerConfig):
     """Configure direct training telemetry."""
 
     def init(self, run_id: Optional[str]) -> Tracker:
+        process_index = jax.process_index()
         runtime_telemetry.configure(
             "levanter",
             root_run_uid=run_id,
+            process_index=process_index,
         )
         return TelemetryTracker()

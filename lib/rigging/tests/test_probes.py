@@ -69,6 +69,10 @@ def _nccl_payload() -> dict[str, object]:
                 "ranks": [
                     {
                         "rank": 0,
+                        "host": "10.0.0.1",
+                        "pid": 1234,
+                        "cuda_dev": 0,
+                        "nvml_dev": 3,
                         "status": {
                             "init_state": 0,
                             "async_error": 0,
@@ -82,6 +86,10 @@ def _nccl_payload() -> dict[str, object]:
                 "missing_ranks": [
                     {
                         "rank": 1,
+                        "host": "10.0.0.2",
+                        "pid": 5678,
+                        "cuda_dev": 0,
+                        "nvml_dev": 1,
                         "status": {"unresponsive": True, "considered_dead": False},
                     }
                 ],
@@ -134,13 +142,72 @@ def test_nccl_probe_emits_only_communicator_evidence(
         {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "1"},
     )
     collective = transport.record("collective_operations", {"collective": "AllReduce", "rank": "0"})
+    available = transport.record("ras_available", {"outcome": "success"})
+    poll_duration = transport.record("ras_poll_duration_seconds", {"outcome": "success"})
     session.shutdown()
 
     assert rank["attributes"]["rank_state"] == "missing"
     assert rank["attributes"]["unresponsive"] == "true"
+    assert rank["attributes"]["rank_host"] == "10.0.0.2"
+    assert rank["attributes"]["process_id"] == "5678"
+    assert rank["attributes"]["cuda_device"] == "0"
+    assert rank["attributes"]["nvml_device"] == "1"
     assert collective["value"] == 12
+    assert collective["attributes"]["rank_host"] == "10.0.0.1"
+    assert collective["attributes"]["process_id"] == "1234"
+    assert collective["attributes"]["cuda_device"] == "0"
+    assert collective["attributes"]["nvml_device"] == "3"
     assert collective["attributes"]["source_temporality"] == telemetry.CUMULATIVE_SNAPSHOT
+    assert available["value"] == 1
+    assert poll_duration["kind"] == "histogram"
     assert not any(record["name"] == "hardware_inventory" for record in transport.records)
+
+
+def test_nccl_probe_records_unavailable_service(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_commands(
+        monkeypatch,
+        tmp_path,
+        nvidia_source="raise SystemExit(2)",
+        nccl_source="raise SystemExit(2)",
+    )
+    transport = _configure(monkeypatch)
+
+    session = nccl.start()
+    available = transport.record("ras_available", {"outcome": "nonzero_exit"})
+    failures = transport.record("ras_poll_failures", {"failure_kind": "nonzero_exit"})
+    session.shutdown()
+
+    assert available["value"] == 0
+    assert failures["kind"] == "counter"
+    assert failures["value"] == 1
+    assert failures["attributes"]["source_temporality"] == telemetry.CUMULATIVE_SNAPSHOT
+
+
+def test_nccl_probe_records_outer_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_commands(
+        monkeypatch,
+        tmp_path,
+        nvidia_source="raise SystemExit(2)",
+        nccl_source="import threading\nthreading.Event().wait(60)",
+    )
+    monkeypatch.setattr(nccl, "TIMEOUT", 0.05)
+    transport = _configure(monkeypatch)
+
+    session = nccl.start()
+    available = transport.record("ras_available", {"outcome": "deadline_exceeded"})
+    timeouts = transport.record("ras_poll_timeouts", {})
+    session.shutdown()
+
+    assert available["value"] == 0
+    assert timeouts["kind"] == "counter"
+    assert timeouts["value"] == 1
+    assert not any(record["name"] == "communicators" for record in transport.records)
 
 
 def test_nvidia_probe_falls_back_to_stable_inventory_fields(

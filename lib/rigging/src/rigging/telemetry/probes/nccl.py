@@ -7,12 +7,14 @@ import json
 import logging
 import math
 from collections.abc import Mapping
+from time import monotonic
 from typing import NamedTuple
 
 from rigging import telemetry
-from rigging.telemetry.probes.runner import BoundedCommandRunner, PeriodicProbe
+from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandStatus, PeriodicProbe
 
 TIMEOUT = 8.0
+_DEFAULT_INTERVAL = 10 * 60.0
 _MAX_COMMUNICATORS = 256
 _MAX_RANKS_PER_COMMUNICATOR = 2_048
 _MAX_COLLECTIVES_PER_RANK = 64
@@ -23,9 +25,9 @@ _MAX_EXACT_COUNT = 2**53 - 1
 logger = logging.getLogger(__name__)
 
 
-def start() -> PeriodicProbe:
+def start(*, interval: float = _DEFAULT_INTERVAL) -> PeriodicProbe:
     """Collect NCCL RAS communicator evidence until shutdown."""
-    return PeriodicProbe("nccl_ras", collect)
+    return PeriodicProbe("nccl_ras", collect, interval=interval)
 
 
 class _Metric(NamedTuple):
@@ -37,6 +39,10 @@ class _Metric(NamedTuple):
 
 class _ReportedRank(NamedTuple):
     rank: int
+    host: str
+    pid: int
+    cuda_dev: int
+    nvml_dev: int
     init_state: int
     async_error: int
     finalized: bool
@@ -47,22 +53,59 @@ class _ReportedRank(NamedTuple):
 
 class _MissingRank(NamedTuple):
     rank: int
+    host: str
+    pid: int
+    cuda_dev: int
+    nvml_dev: int
     unresponsive: bool
     considered_dead: bool
 
 
 def collect(runner: BoundedCommandRunner) -> None:
     client_timeout = max(1, math.ceil(TIMEOUT * 0.75))
-    result = runner.run(("ncclras", "-v", "-t", str(client_timeout), "-f", "json"), TIMEOUT)
-    if result is None or result.returncode != 0:
+    started = monotonic()
+    command = runner.run_result(("ncclras", "-v", "-t", str(client_timeout), "-f", "json"), TIMEOUT)
+    duration = max(0.0, monotonic() - started)
+    if command.status is CommandStatus.CANCELLED:
         return
+    if command.output is None:
+        _record_poll(command.status.value, duration, failed=True)
+        if command.status is CommandStatus.DEADLINE_EXCEEDED:
+            telemetry.counter("ras_poll_timeouts", unit="{timeout}").add(
+                1,
+                attributes=telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT),
+            )
+        return
+    if command.output.returncode != 0:
+        _record_poll("nonzero_exit", duration, failed=True)
+        return
+
     try:
-        metrics = _metrics(json.loads(result.stdout))
+        metrics = _metrics(json.loads(command.output.stdout))
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
         logger.warning("could not parse NCCL RAS telemetry: %s", error)
+        _record_poll("invalid_payload", duration, failed=True)
         return
+    _record_poll("success", duration, failed=False)
     for metric in metrics:
         telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
+
+
+def _record_poll(outcome: str, duration: float, *, failed: bool) -> None:
+    current = {
+        "outcome": outcome,
+        **telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT),
+    }
+    telemetry.gauge("ras_available").set(0.0 if failed else 1.0, attributes=current)
+    telemetry.histogram("ras_poll_duration_seconds", unit="s").record(duration, attributes=current)
+    if failed:
+        telemetry.counter("ras_poll_failures", unit="{failure}").add(
+            1,
+            attributes={
+                "failure_kind": outcome,
+                **telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT),
+            },
+        )
 
 
 def _metrics(payload: object) -> list[_Metric]:
@@ -150,7 +193,7 @@ def _communicator_metrics(value: dict[str, object], current: dict[str, str]) -> 
     )
     cumulative = telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT)
     for rank in reported:
-        rank_identity = {**identity, "rank": str(rank.rank)}
+        rank_identity = {**identity, **_rank_identity(rank)}
         metrics.append(
             _Metric(
                 "communicator_rank_status",
@@ -184,7 +227,7 @@ def _communicator_metrics(value: dict[str, object], current: dict[str, str]) -> 
             "",
             {
                 **identity,
-                "rank": str(rank.rank),
+                **_rank_identity(rank),
                 "rank_state": "missing",
                 "unresponsive": str(rank.unresponsive).lower(),
                 "considered_dead": str(rank.considered_dead).lower(),
@@ -204,6 +247,10 @@ def _reported_rank(value: dict[str, object]) -> _ReportedRank:
     collectives = {_bounded_text(name): _nonnegative_integer(count) for name, count in counts.items()}
     return _ReportedRank(
         _count(value, "rank"),
+        _text(value, "host"),
+        _count(value, "pid"),
+        _count(value, "cuda_dev"),
+        _count(value, "nvml_dev"),
         _count(status, "init_state"),
         _count(status, "async_error"),
         _boolean(status, "finalize_called"),
@@ -217,9 +264,23 @@ def _missing_rank(value: dict[str, object]) -> _MissingRank:
     status = _mapping(value.get("status"), "missing rank status")
     return _MissingRank(
         _count(value, "rank"),
+        _text(value, "host"),
+        _count(value, "pid"),
+        _count(value, "cuda_dev"),
+        _count(value, "nvml_dev"),
         _boolean(status, "unresponsive"),
         _boolean(status, "considered_dead"),
     )
+
+
+def _rank_identity(rank: _ReportedRank | _MissingRank) -> dict[str, str]:
+    return {
+        "rank": str(rank.rank),
+        "rank_host": rank.host,
+        "process_id": str(rank.pid),
+        "cuda_device": str(rank.cuda_dev),
+        "nvml_device": str(rank.nvml_dev),
+    }
 
 
 def _lifecycle_state(reported: list[_ReportedRank], missing: list[_MissingRank]) -> str:
