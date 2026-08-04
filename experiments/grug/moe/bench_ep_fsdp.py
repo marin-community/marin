@@ -137,7 +137,10 @@ def _segments(log_path: str) -> list[dict]:
             if begin:
                 index = int(begin.group(1))
                 current[task] = index
-                segments.setdefault(index, {"arm": begin.group(2), "layouts": set(), "series": {}})
+                # Reset rather than reuse. A preempted gang is retried from scratch, so the
+                # log holds the abandoned attempt's partial steps for this same index;
+                # merging them in would mix two runs into one median.
+                segments[index] = {"arm": begin.group(2), "layouts": set(), "series": {}}
                 continue
 
             index = current.get(task)
