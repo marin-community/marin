@@ -3975,6 +3975,7 @@ deploy = [
 [package.dev-dependencies]
 test = [
     { name = "pytest" },
+    { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 
@@ -3997,6 +3998,7 @@ provides-extras = ["deploy"]
 [package.metadata.requires-dev]
 test = [
     { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 
