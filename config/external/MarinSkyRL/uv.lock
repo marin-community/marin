@@ -16,4 +16,4 @@ requires-dist = [{ name = "skyrl", git = "https://github.com/marin-community/Mar
 [[package]]
 name = "skyrl"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#49fbef2dc2d83d626875801018f6f690992d5a1f" }
+source = { git = "https://github.com/marin-community/MarinSkyRL.git?branch=main#85fb233d11c6fe719c727fbbf308a639fc18d6ee" }

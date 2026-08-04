@@ -23,6 +23,7 @@ from marin.processing.classification.consolidate import (
     consolidate,
 )
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
@@ -80,7 +81,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
     deduped = StepSpec(
         name="datakit-smoke/fuzzy_dups",
         deps=[minhash],
-        hash_attrs={"cc_max_iterations": 3},
+        hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
         fn=lambda output_path: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(minhash.output_path, MinHashAttrData)],
             output_path=output_path,
@@ -104,9 +105,9 @@ def build_steps(run_id: str) -> list[StepSpec]:
                 # keep_if_missing=True passes them through.
                 FilterConfig(
                     type=FilterType.KEEP_DOC,
-                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData)
-                    .sources[read_artifact(normalized.output_path, NormalizedData).main_output_dir]
-                    .attr_dir,
+                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData).attr_dir_for_source(
+                        read_artifact(normalized.output_path, NormalizedData).main_output_dir
+                    ),
                     name="is_cluster_canonical",
                     attribute_filetype="parquet",
                     keep_if_missing=True,

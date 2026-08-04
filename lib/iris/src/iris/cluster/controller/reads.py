@@ -666,57 +666,25 @@ def bulk_get_job_configs(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, di
     return {row["job_id"]: dict(row) for row in rows}
 
 
-def _build_priority_bands_stmt():
-    """Build the recursive-CTE statement once with an expanding bindparam.
-
-    Walks parent_job_id chain until a non-UNSPECIFIED priority_band is found.
-    """
-    j = jobs_table.alias("j")
-    jc = job_config_table.alias("jc")
-    base_q = (
-        select(
-            j.c.job_id.label("input_id"),
-            j.c.job_id.label("current_id"),
-            jc.c.priority_band.label("current_band"),
-            j.c.parent_job_id.label("parent_id"),
-        )
-        .select_from(j.join(jc, jc.c.job_id == j.c.job_id))
-        .where(j.c.job_id.in_(bindparam("job_ids", expanding=True)))
-    )
-    chain = base_q.cte("chain", recursive=True)
-    j2 = jobs_table.alias("j2")
-    jc2 = job_config_table.alias("jc2")
-    recursive_q = (
-        select(
-            chain.c.input_id,
-            j2.c.job_id.label("current_id"),
-            jc2.c.priority_band.label("current_band"),
-            j2.c.parent_job_id.label("parent_id"),
-        )
-        .select_from(chain.join(j2, j2.c.job_id == chain.c.parent_id).join(jc2, jc2.c.job_id == j2.c.job_id))
-        .where(chain.c.current_band == 0)
-    )
-    full_chain = chain.union_all(recursive_q)
-    return select(full_chain.c.input_id, full_chain.c.current_band).where(full_chain.c.current_band != 0)
-
-
-_PRIORITY_BANDS_STMT = _build_priority_bands_stmt()
+_PRIORITY_BANDS_STMT = select(job_config_table.c.job_id, job_config_table.c.priority_band).where(
+    job_config_table.c.job_id.in_(bindparam("job_ids", expanding=True))
+)
 
 
 def get_priority_bands(tx: Tx, job_ids: Iterable[JobName]) -> dict[JobName, int]:
-    """Return ``{job_id: resolved priority_band}`` for the given jobs.
+    """Return ``{job_id: priority_band}`` for the given jobs.
 
-    Walks the parent_job_id chain for jobs with UNSPECIFIED (0) band until a
-    non-zero band is found. Jobs whose entire ancestor chain is UNSPECIFIED
-    fall back to ``PRIORITY_BAND_INTERACTIVE``.
+    ``job_config.priority_band`` is the band submit resolved — an explicit request,
+    else the parent's band (see :func:`ops.job.resolve_priority_band`) — so this is a
+    plain read, not an inheritance walk. It is the band the job asked for, never the
+    one the scheduler later stamped on ``tasks``. A job whose config row is gone
+    (removed concurrently) falls back to ``PRIORITY_BAND_INTERACTIVE``.
     """
     ids = list(job_ids)
     if not ids:
         return {}
     rows = tx.execute(_PRIORITY_BANDS_STMT, {"job_ids": ids}).all()
-    resolved: dict[JobName, int] = {}
-    for row in rows:
-        resolved[row.input_id] = int(row.current_band)
+    resolved = {row.job_id: int(row.priority_band) for row in rows}
     for jid in ids:
         resolved.setdefault(jid, int(job_pb2.PRIORITY_BAND_INTERACTIVE))
     return resolved
@@ -2079,18 +2047,23 @@ def has_received_job_from_peer(tx: Tx, peer_id: str, job_id: JobName) -> bool:
 
 
 def parent_mirror_seed(tx: Tx, parent_job_id: JobName):
-    """The ``submitting_user`` and ``root_submitted_at_ms`` of an existing parent row.
+    """The mirror-inherited columns of an existing parent row.
 
     Seeds a mirrored child job — one born on a peer under a received root and
     reported back over sync — from its already-present parent: the whole federated
-    subtree shares the root's submitter and root submit time. Returns the SA Row
-    (``.submitting_user``, ``.root_submitted_at_ms``) or ``None`` when the parent is
-    absent (a delta arrived out of order).
+    subtree shares the root's submitter, root submit time, and priority band (the
+    peer resolves the child's band by the same inheritance rule). Returns the SA Row
+    (``.submitting_user``, ``.root_submitted_at_ms``, ``.priority_band``) or ``None``
+    when the parent is absent (a delta arrived out of order).
     """
     return tx.execute(
-        select(jobs_table.c.submitting_user, jobs_table.c.root_submitted_at_ms).where(
-            jobs_table.c.job_id == bindparam("job_id")
-        ),
+        select(
+            jobs_table.c.submitting_user,
+            jobs_table.c.root_submitted_at_ms,
+            job_config_table.c.priority_band,
+        )
+        .select_from(jobs_table.join(job_config_table, job_config_table.c.job_id == jobs_table.c.job_id))
+        .where(jobs_table.c.job_id == bindparam("job_id")),
         {"job_id": parent_job_id},
     ).first()
 

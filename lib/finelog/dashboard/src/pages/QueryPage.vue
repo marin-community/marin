@@ -13,7 +13,7 @@ interface QueryResponse {
 
 const route = useRoute()
 const sql = ref<string>(typeof route.query.sql === 'string' ? route.query.sql : 'SELECT 1')
-const result = ref<ArrowResult>({ columns: [], rows: [] })
+const result = ref<ArrowResult>({ columns: [], types: {}, rows: [] })
 const rowCount = ref<number>(0)
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -32,7 +32,7 @@ async function execute() {
     rowCount.value = Number(resp.rowCount ?? result.value.rows.length)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
-    result.value = { columns: [], rows: [] }
+    result.value = { columns: [], types: {}, rows: [] }
     rowCount.value = 0
   } finally {
     loading.value = false
@@ -53,7 +53,7 @@ onMounted(() => {
 
 <template>
   <div class="space-y-3">
-    <InfoCard title="SQL · Postgres-flavored DuckDB">
+    <InfoCard title="SQL · DataFusion">
       <textarea
         v-model="sql"
         class="w-full font-mono text-sm bg-surface-sunken border border-surface-border rounded p-3 min-h-[120px] focus:outline-none focus:border-accent"

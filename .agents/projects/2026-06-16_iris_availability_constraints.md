@@ -39,9 +39,9 @@ To achieve that one goal it carries a large, brittle apparatus:
 
 ### And it actively hurts
 
-`.agents/ops/2026-06-08-canary-ferry-reservation-taint-timeouts.md`: the daily TPU
-canary was **red for 8 consecutive runs**. Two failure modes, both reservation
-apparatus:
+[The 2026-06-08 canary ferry incident](https://echo.oa.dev/wiki/14): the daily
+TPU canary was **red for 8 consecutive runs**. Two failure modes, both
+reservation apparatus:
 
 1. The `:reservation:` holder inherited the parent's `preemptible=false` and hunted
    for a non-existent non-preemptible v5p-8 group → stuck PENDING for 3.5h.

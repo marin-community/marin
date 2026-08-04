@@ -20,7 +20,7 @@ interface GetTableSchemaResponse {
 }
 
 const schema = ref<ProtoSchema | null>(null)
-const sample = ref<ArrowResult>({ columns: [], rows: [] })
+const sample = ref<ArrowResult>({ columns: [], types: {}, rows: [] })
 const loading = ref(false)
 const error = ref<string | null>(null)
 

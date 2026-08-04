@@ -3,9 +3,9 @@
 
 """SQLAlchemy Core schema for the controller database.
 
-Mirrors the on-disk schema produced by ``controller/migrations/``. Auth tables
-live on a separate ``auth_metadata`` because they are stored in the attached
-``auth.sqlite3`` database, not the main controller DB.
+Mirrors the on-disk schema produced by ``controller/migrations/``. Every table
+lives in the main controller DB; the attached ``auth.sqlite3`` holds none (see
+``db._install_pragmas``).
 
 ``server_default`` holds the literal value to store, not a SQL fragment:
 SQLAlchemy quotes it into the DDL, so a string must be passed unquoted (``""``
@@ -221,7 +221,6 @@ class JSONDict(TypeDecorator):
 
 
 metadata = MetaData()
-auth_metadata = MetaData()
 
 
 schema_migrations_table = Table(
@@ -662,13 +661,4 @@ federation_changelog_table = Table(
     # AUTOINCREMENT: seq is a cursor watermark, so it must never be reused after a
     # delete (a plain rowid alias can reuse the max after a delete).
     sqlite_autoincrement=True,
-)
-
-
-auth_controller_secrets_table = Table(
-    "controller_secrets",
-    auth_metadata,
-    Column("key", String, primary_key=True),
-    Column("value", String, nullable=False),
-    Column("created_at_ms", TimestampMsType, nullable=False),
 )

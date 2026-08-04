@@ -83,7 +83,7 @@ independent job state machine.
 | `KILLED` | 6 | Yes | No | Controller: job cancellation (`_on_job_cancelled`), job failure cascade (`_mark_remaining_tasks_killed`), per-task timeout | `killed` (grey) |
 | `WORKER_FAILED` | 7 | Yes | Yes | Controller: worker death cascade (`ops.worker.fail`) | `worker_failed` (purple) |
 | `UNSCHEDULABLE` | 8 | Yes | No | Controller: scheduling timeout expired (`apply_terminal_decisions_batch`) | `unschedulable` (red) |
-| `PREEMPTED` | 10 | Yes | Yes | Controller: priority preemption with budget exhausted (`apply_terminal_decisions_batch`) | `preempted` (orange) |
+| `PREEMPTED` | 10 | Yes | Yes | Controller: priority preemption with budget exhausted (`apply_terminal_decisions_batch`); K8s backend: control-plane disruption of the pod | `preempted` (orange) |
 | `COSCHED_FAILED` | 11 | Yes | No | Controller: coscheduled sibling cascade (`_terminate_coscheduled_siblings`) | `cosched_failed` (red) |
 
 
@@ -191,6 +191,16 @@ from hanging on collective operations.
 Set by the controller when a higher-priority task evicts a lower-priority
 running task. The preemption pass (`apply_preemptions`) selects victims
 from lower priority bands and submits them to `apply_terminal_decisions_batch`.
+
+Also reported by the K8s backend when the cluster control plane disrupts an
+attempt's pod, marked by a `DisruptionTarget` or Kueue `TerminationTarget` pod
+condition (scheduler preemption, Kueue workload eviction, node drain, API
+eviction). Kueue deletes the pod it evicts, so the condition is readable only
+while the pod terminates; the backend caches it and reports it as the attempt's
+`terminal_reason` once the pod is gone. A pod that vanishes with no disruption
+ever observed is reported `WORKER_FAILED` instead — same preemption budget,
+without claiming a cause. These updates run through `apply_one_transition` and
+do cascade coscheduled siblings.
 
 Retry evaluation uses `_resolve_task_failure_state` with the preemption budget:
 

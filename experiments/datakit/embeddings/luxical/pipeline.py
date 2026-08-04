@@ -39,6 +39,7 @@ import pyarrow as pa
 from fray.types import ResourceConfig
 from huggingface_hub import hf_hub_download
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import write_artifact
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, marin_temp_bucket
@@ -50,6 +51,7 @@ from zephyr.runners import InlineRunner
 from zephyr.worker_context import zephyr_worker_ctx
 
 logger = logging.getLogger(__name__)
+EMBEDDING_ATTR_DATA_VERSION = 2
 
 LUXICAL_REPO = "DatologyAI/luxical-one"
 LUXICAL_WEIGHTS_FILE = "luxical_one_rc4.npz"
@@ -93,7 +95,7 @@ class EmbeddingAttrData(BaseModel):
 
     Attributes:
         output_dir: Directory containing the per-shard parquet outputs.
-        source_main_dir: ``NormalizedData.main_output_dir`` this mirrors.
+        source_key: Prefix-relative identity of the ``NormalizedData.main_output_dir`` this mirrors.
             Co-partitioning means consumers can join ``(basename, row_idx)``
             without an id index.
         model_name: HuggingFace model id.
@@ -105,9 +107,9 @@ class EmbeddingAttrData(BaseModel):
         counters: Aggregated zephyr counters from the embed pipeline.
     """
 
-    version: str = "v1"
-    output_dir: str
-    source_main_dir: str
+    version: str = f"v{EMBEDDING_ATTR_DATA_VERSION}"
+    output_dir: DatakitArtifactPath
+    source_key: str
     model_name: str
     model_revision: str = ""
     embedding_dim: int
@@ -293,7 +295,7 @@ def embed_source(
 
     artifact = EmbeddingAttrData(
         output_dir=output_path,
-        source_main_dir=normalized.main_output_dir,
+        source_key=datakit_source_key(normalized.main_output_dir),
         model_name=f"{repo_id}/{weights_filename}",
         model_revision=revision,
         embedding_dim=LUXICAL_DIM,

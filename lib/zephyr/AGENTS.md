@@ -6,14 +6,16 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 
 - `README.md` — overview, API reference, quick start
 - `OPS.md` — debugging pipelines: dashboard, observability, profiling, diagnostic patterns (also used by skills: `debug`, `babysit-zephyr`)
-- `.agents/ops/YYYY-MM-DD-<slug>.md` — durable incident and debugging records;
-  use `write-ops-log` after an infrastructure investigation
+- Echo — durable incident and debugging records; use `write-ops-log` after an
+  infrastructure investigation and link the canonical Echo URL
 - Archived: `.agents/projects/20260130_fray_lite_design.md` — Fray backend design (implemented; read `lib/fray/src/fray/` instead)
 
 ## Source Layout
 
 - `src/zephyr/dataset.py` — `Dataset` class, `ShardInfo`, all transformation operations including `group_by`, `deduplicate`, `sorted_merge_join`
-- `src/zephyr/execution.py` — `ZephyrContext`, `ZephyrCoordinator`, `ZephyrWorker`, `CounterSnapshot`, execution control flow
+- `src/zephyr/execution.py`: `ZephyrContext` and worker-pool lifecycle
+- `src/zephyr/coordinator.py`: pipeline state, task scheduling, counters, and result storage
+- `src/zephyr/worker.py`: worker polling, task threads, and heartbeats
 - `src/zephyr/plan.py` — `compute_plan`, `PhysicalPlan`, operation fusion
 - `src/zephyr/readers.py` — `load_jsonl`, `load_parquet`, `load_vortex`, `InputFileSpec`
 - `src/zephyr/writers.py` — `write_jsonl_file`, `write_parquet_file`, `write_vortex_file`, Levanter cache writer

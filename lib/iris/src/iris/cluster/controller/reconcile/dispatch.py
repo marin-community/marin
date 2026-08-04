@@ -53,7 +53,7 @@ class DispatchBatch:
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 
-DISPATCH_PROMOTION_RATE = 128
+DISPATCH_PROMOTION_RATE = 512
 """Token bucket capacity for task promotion (pods per minute).
 
 The direct provider relies on the Kubernetes scheduler (and the cloud
@@ -366,7 +366,6 @@ def drain_for_dispatch(
         RunningTaskEntry(
             task_id=row.task_id,
             attempt_id=row.current_attempt_id,
-            coscheduled=row.has_coscheduling,
             attempt_uid=uids.get((row.task_id, row.current_attempt_id), ""),
         )
         for row in running_rows

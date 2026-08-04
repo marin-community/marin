@@ -5,7 +5,8 @@
 cache's coalescing and eviction contract."""
 
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pyarrow as pa
 from cache import TtlCache
@@ -18,8 +19,9 @@ from k8s_source import K8sFleet
 from loom_alerts import LoomAlertClient, LoomAlertDeliveryError
 from server import create_app, workload_overview
 from starlette.testclient import TestClient
-from training_stalls import training_stall_alert_rows
+from training_stalls import telemetry_query, training_stall_alert_rows
 from wandb_source import WandbSource
+from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 
 # 2026-07-17T03:00:00Z and +1h, as Grafana sends them.
 FROM_MS = 1_784_257_200_000
@@ -138,6 +140,42 @@ def test_oversized_result_is_a_400_with_guidance():
     assert "narrow the time range" in resp.json()["error"]
 
 
+def test_overview_provisioning_returns_latest_cycle_summary():
+    source = FakeSource(
+        finelog_result(
+            metric=["provision_ready", "provision_outcomes", "provision_success_ratio"],
+            value=[8.0, 10.0, 0.8],
+            labels=['{"scope": "fleet"}'] * 3,
+            collected_at=[datetime(2026, 7, 17, 3, 0, tzinfo=UTC)] * 3,
+        )
+    )
+
+    response = _client(source).get("/overview/provisioning")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "scope": "fleet",
+            "collected_at": FROM_MS,
+            "resource_type": "",
+            "scale_group": "",
+            "zone": "",
+            "ready": 8.0,
+            "stockout": 0,
+            "error": 0,
+            "preempted": 0,
+            "outcomes": 10.0,
+            "success_ratio": 0.8,
+            "pools_placing": 0,
+            "pools_no_ready_outcome": 0,
+            "latency_p50_seconds": None,
+            "latency_p95_seconds": None,
+            "window_hours": None,
+        }
+    ]
+    assert "SELECT MAX(collected_at)" in source.queries[0]
+
+
 def test_repeated_identical_panels_hit_finelog_once():
     source = FakeSource(_ONE_ROW)
     client = _client(source)
@@ -173,7 +211,7 @@ def test_json_labels_flatten_into_columns():
 
 
 def test_native_map_labels_flatten_into_columns():
-    # A native Map<Utf8,Utf8> column (telltale metrics) arrives as list[(k, v)].
+    # A native Map<Utf8,Utf8> column arrives as list[(k, v)].
     table = pa.table(
         {"value": [3.0], "labels": [[("region", "us-east5"), ("scope", "pool")]]},
         schema=pa.schema([("value", pa.float64()), ("labels", pa.map_(pa.string(), pa.string()))]),
@@ -208,16 +246,16 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
             datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
         ],
     )
-    telltale_metrics = finelog_result(
+    telemetry_metrics = finelog_result(
         cluster=["cw-a", "cw-a", "cw-a", "cw-b", "cw-b", "cw-b"],
         job=["/u/stale", "/u/stale", "/u/initializing", "/u/healthy", "/u/healthy", "/u/starting"],
         name=[
-            "levanter_phase",
-            "levanter_progress_time_seconds",
-            "levanter_phase",
-            "levanter_phase",
-            "levanter_progress_time_seconds",
-            "levanter_phase",
+            "phase",
+            "progress_time_seconds",
+            "phase",
+            "phase",
+            "progress_time_seconds",
+            "phase",
         ],
         value=[
             1.0,
@@ -230,7 +268,7 @@ def test_training_stall_alerts_distinguish_stale_missing_and_healthy_progress():
         ts=[now] * 6,
     )
 
-    assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
+    assert training_stall_alert_rows(task_states, telemetry_metrics, now) == [
         {
             "cluster": "cw-a",
             "job": "/u/stale",
@@ -269,11 +307,9 @@ def test_training_stall_alert_does_not_warn_on_a_producer_that_predates_phase():
         job=["/u/legacy"],
         running_since=[datetime(2026, 7, 28, 10, 0, tzinfo=UTC)],
     )
-    telltale_metrics = finelog_result(
-        cluster=["cw-a"], job=["/u/legacy"], name=["levanter_step"], value=[5669.0], ts=[now]
-    )
+    telemetry_metrics = finelog_result(cluster=["cw-a"], job=["/u/legacy"], name=["step"], value=[5669.0], ts=[now])
 
-    assert training_stall_alert_rows(task_states, telltale_metrics, now) == [
+    assert training_stall_alert_rows(task_states, telemetry_metrics, now) == [
         {"cluster": "cw-a", "job": "/u/legacy", "phase": "unknown", "reason": "producer_missing", "value": 0}
     ]
 
@@ -282,6 +318,93 @@ def test_training_stall_alert_returns_explicit_zero_without_running_jobs():
     assert training_stall_alert_rows(pa.table({}), pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
         {"cluster": "fleet", "job": "", "phase": "idle", "reason": "healthy", "value": 0}
     ]
+
+
+def test_zephyr_stall_alert_distinguishes_stale_healthy_and_expired_producers():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    progress = finelog_result(
+        cluster=["cw-a", "cw-a", "cw-a"],
+        job=["/user/stale", "/user/healthy", "/user/expired"],
+        execution=["run-stale", "run-healthy", "run-expired"],
+        progress_time=[
+            now.timestamp() - 46 * 60,
+            now.timestamp() - 44 * 60,
+            now.timestamp() - 60 * 60,
+        ],
+        producer_at=[
+            now - timedelta(seconds=20),
+            now - timedelta(seconds=20),
+            now - timedelta(minutes=2),
+        ],
+    )
+
+    assert zephyr_stall_alert_rows(progress, now) == [
+        {
+            "cluster": "cw-a",
+            "job": "/user/stale",
+            "execution": "run-stale",
+            "reason": "shard_progress_stale",
+            "value": 1,
+        },
+        {
+            "cluster": "cw-a",
+            "job": "/user/healthy",
+            "execution": "run-healthy",
+            "reason": "healthy",
+            "value": 0,
+        },
+    ]
+
+
+def test_zephyr_stall_alert_returns_explicit_zero_without_active_pipelines():
+    assert zephyr_stall_alert_rows(pa.table({}), datetime(2026, 7, 28, tzinfo=UTC)) == [
+        {"cluster": "fleet", "job": "", "execution": "", "reason": "healthy", "value": 0}
+    ]
+
+
+def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
+    now = datetime(2026, 7, 28, 12, tzinfo=UTC)
+    for sql in (telemetry_query(now), zephyr_progress_query(now)):
+        assert 'FROM "telemetry_v1"' in sql
+        assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
+        assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '" in sql
+        assert "* 1000 AS BIGINT)" in sql
+        assert "to_timestamp_millis(timestamp_ms)" in sql
+        assert "AS origin_cluster" in sql
+        assert "PARTITION BY origin_cluster" in sql
+        assert "ORDER BY timestamp_ms DESC, seq DESC" in sql
+        assert "json_get(" in sql
+        assert "json_get_string" not in sql
+        assert "timestamp_ms >= TIMESTAMP" not in sql
+
+
+def test_training_stall_query_bounds_enrollment_to_the_phase_heartbeat_window():
+    """Unbounded, this CTE scanned every telemetry_v1 row once a minute.
+
+    Levanter republishes `phase` every 60s, so a live job always has an
+    enrollment row inside this window and the scan can prune by time.
+    """
+    sql = telemetry_query(datetime(2026, 7, 28, 12, tzinfo=UTC))
+    phase_enrollment, recent_progress = sql.split("), recent_progress AS (")
+
+    assert "name = 'phase'" in phase_enrollment
+    assert (
+        "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:45:00') * 1000 AS BIGINT)" in phase_enrollment
+    )
+    assert "name IN ('step', 'progress_time_seconds')" in recent_progress
+    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql
+
+
+def test_training_dashboard_uses_constant_foldable_macro_boundaries():
+    dashboard = (Path(__file__).parents[1] / "dashboards" / "training.json").read_text()
+    assert 'FROM \\"telemetry_v1\\"' in dashboard
+    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)" in dashboard
+    assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)" in dashboard
+    assert "timestamp_ms >= {{from}}" not in dashboard
+    assert "json_get(attributes_json, 'run')" not in dashboard
+    assert "json_get(resource_attributes_json, 'run')" in dashboard
+    assert "name = 'throughput_tokens_per_second'" in dashboard
+    assert "name = 'throughput'" not in dashboard
 
 
 class FakeLoomAlerts(LoomAlertClient):

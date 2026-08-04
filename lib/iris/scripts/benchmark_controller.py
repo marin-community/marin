@@ -2526,7 +2526,13 @@ def _build_synthetic_reconcile_state(
     health.heartbeat(worker_ids, now.epoch_ms())
 
     with db.transaction() as cur:
-        ops.job.submit(cur, job_id=job_id, request=request, ts=now)
+        ops.job.submit(
+            cur,
+            job_id=job_id,
+            request=request,
+            ts=now,
+            priority_band=ops.job.resolve_priority_band(int(request.priority_band), None),
+        )
 
     with db.read_snapshot() as tx:
         task_rows = tx.execute(

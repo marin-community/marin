@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 # Logical registry name for the finelog log/stats server. Clients resolve this
 # via the controller's endpoint registry to the concrete finelog address.
 LOG_SERVER_ENDPOINT_NAME = "/system/log-server"
+TELEMETRY_ENDPOINT_PATH = "/v1/telemetry"
 
 SchemeResolver = Callable[[str, dict[str, str]], str]
 

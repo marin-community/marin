@@ -15,13 +15,68 @@ The cluster project retains the `marin-iac` Pulumi name so this directory's move
 
 Stacks: one per cluster, each a `Pulumi.<cluster>.yaml` pointer to the cluster name. CoreWeave —
 `cw-us-west-04a`, `cw-us-east-02a`, `cw-rno2a`, `cw-us-east-08a` (GB200), all adopted into
-`gs://marin-iac-state`. GCP — `marin`, which so far declares only the reserved
-federation-egress static IPs (`GcpStaticAddresses`, the GCP arm's first slice).
+`gs://marin-iac-state/`. GCP — `marin`, which declares the reserved
+federation-egress static IPs (`GcpStaticAddresses`) and every non-authoritative GCP IAM grant
+on `hai-gcp-models` (`GcpIam`, driven by `src/iac/gcp/iam_data.yaml`; see "User grants" below).
 
 Beyond cluster prerequisites, the `iac` package also carries the reusable *service* components
 other `infra/<service>/` Pulumi projects build on: `iac.gcp.cloud_run` (IAP-gated Cloud Run,
-used by `infra/grafana`) and `iac.iris` (always-on Iris service jobs via a `local.Command`
-around the `iac.iris.deploy` CLI, used by `infra/ducky` and `infra/xprof`).
+used by `infra/echo`, `infra/evaldash`, and `infra/grafana`) and `iac.iris` (always-on Iris
+service jobs via a `local.Command` around the `iac.iris.deploy` CLI, used by `infra/ducky` and
+`infra/xprof`). Every `CloudRunService` grants `roles/iap.httpsResourceAccessor` to the
+OpenAthena Workspace domain and the Loom VM service account. It also registers the shared Marin
+desktop OAuth client as a programmatic audience. The `iap_members` and
+`iap_programmatic_clients` arguments are only for service-specific exceptions.
+
+### Cloud Run IAP access
+
+For an access report on a component-managed service, compare the live IAP policy and settings:
+
+```bash
+gcloud iap web get-iam-policy \
+  --project=hai-gcp-models \
+  --resource-type=cloud-run \
+  --region=us-central1 \
+  --service=marin-evaldash
+gcloud iap settings get \
+  --project=hai-gcp-models \
+  --resource-type=cloud-run \
+  --region=us-central1 \
+  --service=marin-evaldash
+```
+
+`domain:openathena.ai` and
+`serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com` must be present. The settings
+must include `rigging.auth.MARIN_DESKTOP_OAUTH_CLIENT` under `programmaticClients`, so human
+CLIs and service accounts use the same audience across Cloud Run sites and Iris.
+
+An unauthenticated `curl -I` to each vanity host shows the browser OAuth client in the redirect
+URL. IAP error code 9 is a failed OAuth redirect, not an IAM denial. If the policy and client
+match a working site, the request failed before Cloud Run and will not appear in application
+logs. An existing IAP cookie also lets one site work without exercising a fresh OAuth redirect.
+Retry the failing login in a private window; for a persistent code 9, capture the browser
+redirect trace and follow [Google's IAP troubleshooting guide](https://cloud.google.com/iap/docs/faq#error_codes).
+
+### User grants
+
+A user grant is either a GCP IAM binding in `src/iac/gcp/iam_data.yaml` (applied by the `marin`
+stack) or an IAP `viewers` entry in a service's `infra/<service>/Pulumi.marin-<service>.yaml`
+(plaintext, applied by that service's own stack). The IAM YAML declares each human principal's
+KMS ciphertext once under an opaque `human-NNN` ID; grants reference that ID so one person's
+ciphertext cannot drift across roles. Two agent skills drive the flow so no personal email
+lands in this public repo unencrypted:
+
+- **`add-grant`** — collect the request (locally or from a GitHub issue), encrypt the
+  principal, edit the right surface, and open a reviewable PR.
+- **`review-grant`** — decrypt a grant PR's changed principals into the real emails and grants,
+  confirm with a human, then approve, merge, and run `pulumi up`.
+
+For project roles, `iam_principal.py grant <email> --project-role <role>` finds and reuses an
+existing encrypted principal or creates one, then updates every requested role in one
+deterministic YAML edit. `iam_principal.py decrypt --diff` resolves changed opaque IDs for
+review. `iam_audit.py` bulk-rotates the principals declared in `iam_data.yaml`. Granting,
+decrypting, or applying needs `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the marin-iac
+key ("Backend").
 
 GitHub organization and repository resources live in the independent
 [`github`](github/README.md) Pulumi project. Its stack YAML declares existing Actions secrets
@@ -81,7 +136,6 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   DNS-only Cloudflare token straight from Secret Manager (`cloudflare-oa-dns-token` in
   `hai-gcp-models`, the same one `infra/grafana` uses) under your GCP credentials above — no
   separate export needed, just `roles/secretmanager.secretAccessor` on that secret.
-- **Backend login**: `pulumi login gs://marin-iac-state`.
 - **Cluster access** (for the k8s dry-run): export `KUBECONFIG` with the CoreWeave kubeconfig
   path (typically `~/.kube/coreweave-iris`). The provider keeps this execution credential out
   of Pulumi configuration and state.
@@ -100,11 +154,6 @@ or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fle
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
 Once the preview is clean, `pulumi up`.
 
-`__main__.py` requires `KUBECONFIG` but does not pass it as a provider input, so Pulumi state
-contains neither the machine-local path nor the credential contents. The provider still uses
-the cluster's declared `platform.coreweave.kube_context`; it never relies on the kubeconfig's
-current context.
-
 ### Adopting a new cluster
 
 A cluster whose RBAC/NodePools/Kueue/Traefik already exist live (the normal case — the CKS
@@ -113,7 +162,6 @@ takes ownership of the existing objects instead of planning creates for them. Se
 `marin-iac:import=true` stamps `import_=<live id>` on every resource the program declares:
 
 ```bash
-pulumi login gs://marin-iac-state
 pulumi stack init <cluster> \
   --secrets-provider="gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
 #    (on later runs, just: pulumi stack select <cluster>)
@@ -142,7 +190,7 @@ pulumi up       # normal run, adopt=false now — creates the remaining componen
 ```
 
 A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). Append it to
-`grafana_observer_rbac.usernames` in all three cluster configs and run a normal preview/up for
+`grafana_observer_rbac.usernames` in all four cluster configs and run a normal preview/up for
 each stack before switching Grafana to the new token. Remove the old username and update the
 stacks again only after the new Grafana revision passes its bridge checks.
 
@@ -151,7 +199,7 @@ stacks again only after the new Grafana revision passes its bridge checks.
 The shared backend is a GCS bucket + a GCP KMS secrets provider, both in `hai-gcp-models`,
 already provisioned:
 
-- **State bucket**: `gs://marin-iac-state` (us-central1, uniform bucket-level access, versioned).
+- **State bucket**: `gs://marin-iac-state/` (us-central1, uniform bucket-level access, versioned).
 - **Secrets provider**: the KMS key
   `gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key`.
   Access is asymmetric, not a shared passphrase: preview-only CI holds
@@ -167,7 +215,10 @@ already provisioned:
 
 ## CI preview
 
-`.github/workflows/ops-iac-preview.yaml` posts `pulumi preview` for every stack as a PR comment.
+`.github/workflows/ops-iac-preview.yaml` runs `pulumi preview` for every stack in parallel and
+posts one aggregated PR comment (status list plus per-stack diffs). Manual
+`workflow_dispatch` accepts an optional `pr_number` to preview that PR's head and
+comment there; omit it for a drift check against the selected ref with no comment.
 **CI never runs `pulumi up`** — see `spec.md §9`. It authenticates as
 `pulumi-ci@hai-gcp-models.iam.gserviceaccount.com`, granted preview-only (decrypt/read, never
 write) access in [`infra/permissions`](../permissions/README.md).

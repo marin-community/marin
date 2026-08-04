@@ -49,7 +49,7 @@ from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.base.model import GrugModelConfig, Transformer
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import init_weights_only_from_checkpoint, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -482,6 +482,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
             allow_partial=trainer.allow_partial_checkpoint,
         )
+        if trainer.initialize_from is not None:
+            state = init_weights_only_from_checkpoint(
+                state,
+                trainer.initialize_from,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+            )
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,

@@ -173,7 +173,9 @@ class ReservationLedger:
             del self._reserved[key]
 
 
-ANY_BAND = 0  # PRIORITY_BAND_UNSPECIFIED: outranks every real band, so nothing is off-limits
+# Sentinel for "no band restriction": ranks above every real band, so nothing is off-limits.
+# Not a submittable band — PriorityBand's own 0 is INHERIT, which LaunchJob resolves away.
+ANY_BAND = 0
 
 
 @dataclass

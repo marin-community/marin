@@ -33,11 +33,7 @@ def task_stats_table() -> FakeStatsTable:
 def provider(k8s, task_stats_table):
     p = K8sTaskProvider(
         kubectl=k8s,
-        namespace="iris",
-        default_image="myrepo/iris:latest",
-        cache_dir="/cache",
-        # Kueue is mandatory on the K8s backend, so every provider carries a LocalQueue.
-        local_queue="iris-lq",
+        pods=pod_config(),
         task_stats_table=task_stats_table,
         resource_poll_interval=0.05,
         cluster_scan_interval=0.0,
@@ -70,7 +66,7 @@ def make_run_req(
     cpu_mc: int = 1000,
     num_tasks: int = 0,
     coscheduling_group_by: str = "",
-    priority: int = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    priority: int = job_pb2.PRIORITY_BAND_INHERIT,
     attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
@@ -91,14 +87,7 @@ def make_run_req(
 def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTaskProvider:
     """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
     kwargs.setdefault("cluster_scan_interval", 0.0)
-    return K8sTaskProvider(
-        kubectl=k8s,
-        namespace="iris",
-        default_image="myrepo/iris:latest",
-        cache_dir="/cache",
-        local_queue=local_queue,
-        **kwargs,
-    )
+    return K8sTaskProvider(kubectl=k8s, pods=pod_config(local_queue=local_queue), **kwargs)
 
 
 def make_batch(

@@ -85,7 +85,7 @@ const recordedFallback = computed<string[]>(() => props.logTails[role.value] ?? 
           :disabled="loading"
           @click="refresh"
         >
-          {{ loading ? 'Loading…' : 'Refresh' }}
+          {{ loading ? 'Loading…' : 'Reload' }}
         </button>
       </div>
 

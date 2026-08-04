@@ -1,38 +1,56 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Resolve Harbor datasets stored as local or Hugging Face task directories."""
+"""Resolve Marin-owned Harbor dataset sources."""
 
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
+from rigging.config_discovery import find_project_root
 
-_HF_URL_PREFIX = "hf://"
+from marin.evaluation.harbor.driver_config import HarborDatasetKind, ValidatedHarborConfig
+
+
+def _local_dataset_path(config: ValidatedHarborConfig) -> Path:
+    workspace_root = find_project_root()
+    if workspace_root is None:
+        raise ValueError("Harbor local datasets require a Marin workspace")
+    if config.workspace_dataset_path is None:
+        raise ValueError("Harbor local dataset metadata has no workspace-relative path")
+    return workspace_root / config.workspace_dataset_path
+
+
+def validate_harbor_dataset_source(config: ValidatedHarborConfig) -> None:
+    """Fail before submission when a relative local source is not a directory."""
+    if config.dataset_kind != HarborDatasetKind.LOCAL:
+        return
+    path = _local_dataset_path(config)
+    if not path.exists():
+        raise ValueError(f"Harbor local dataset path does not exist: {path}")
+    if not path.is_dir():
+        raise ValueError(f"Harbor local dataset path must be a directory: {path}")
 
 
 def materialize_harbor_dataset(
-    dataset: str,
-    revision: str,
+    config: ValidatedHarborConfig,
     workdir: Path,
     *,
     hf_token: str | None,
 ) -> Path | None:
     """Return a local Harbor task directory, or ``None`` for a registry-backed dataset.
 
-    ``hf://org/repo`` identifies a Hugging Face dataset repository whose root contains Harbor task
-    directories. An existing local directory is returned unchanged. Every other value remains a
-    Harbor registry name.
+    Hugging Face sources are downloaded on the evaluation worker. Relative local
+    sources resolve against the policy file. Harbor registry selectors remain in
+    the opaque policy and need no materialized path.
     """
-    dataset_path = Path(dataset).expanduser()
-    if dataset.startswith(_HF_URL_PREFIX):
-        repo_id = dataset.removeprefix(_HF_URL_PREFIX)
+    if config.dataset_kind == HarborDatasetKind.HUGGING_FACE:
         local_dir = workdir / "hf_dataset"
         local_dir.mkdir(parents=True, exist_ok=True)
         root = Path(
             snapshot_download(
-                repo_id=repo_id,
+                repo_id=config.dataset_selector,
                 repo_type="dataset",
-                revision=revision,
+                revision=config.dataset_revision,
                 local_dir=str(local_dir),
                 cache_dir=str(workdir / "hf_cache"),
                 token=hf_token or False,
@@ -43,8 +61,10 @@ def materialize_harbor_dataset(
             gitattributes.unlink()
         return root
 
-    if not dataset_path.exists():
+    if config.dataset_kind == HarborDatasetKind.HARBOR_REGISTRY:
         return None
+
+    dataset_path = _local_dataset_path(config)
     if not dataset_path.is_dir():
-        raise ValueError(f"Harbor dataset path must be a directory, got: {dataset_path}")
+        raise ValueError(f"Harbor local dataset path must be a directory: {dataset_path}")
     return dataset_path

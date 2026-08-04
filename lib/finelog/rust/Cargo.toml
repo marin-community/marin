@@ -6,22 +6,22 @@
 members = ["pyext"]
 resolver = "2"
 
-# Thin LTO + parallel codegen. Within ~1% of fat-LTO runtime, but builds in a
-# fraction of the time: fat LTO + codegen-units=1 is a single-threaded
-# multi-minute link over the whole datafusion/arrow tree. Applies to every
-# workspace member — the finelog-server binary and the finelog/pyext cdylib.
+# Optimized production profile with parallel codegen and no LTO. Finelog's
+# DataFusion/Arrow dependency graph makes even thin LTO add several minutes to
+# small server changes, while ordinary opt-level 3 remains representative for
+# deployment. Applies to every workspace member: the finelog-server binary and
+# the finelog/pyext cdylib.
 [profile.release]
-lto = "thin"
+lto = false
 codegen-units = 16
 strip = "symbols"
 
-# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): drops LTO
-# entirely and opt-level to 2 on top of release's parallel codegen. Still
-# optimized enough to be representative. The deploy Dockerfile passes
+# Even-faster iteration profile for dev/test deploys (e.g. marin-dev): lowers
+# opt-level to 2 on top of release's parallel codegen. Still optimized enough
+# to be representative. The deploy Dockerfile passes
 # `--build-arg CARGO_PROFILE=fast`.
 [profile.fast]
 inherits = "release"
-lto = false
 opt-level = 2
 
 [package]
@@ -130,6 +130,8 @@ url = "2"
 # sqlite). Distinct file from Python's DuckDB registry — never aliased.
 rusqlite = { version = "0.32", features = ["bundled"] }
 regex = "1"
+sha2 = "0.10"
+uuid = "1"
 
 # Process allocator (see the `#[global_allocator]` in `main.rs`). The default
 # glibc malloc retains freed query-buffer pages in its per-CPU arenas instead of
@@ -139,6 +141,9 @@ regex = "1"
 # tracks real usage. Unix-only; the deploy target is Linux.
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.6", features = ["background_threads"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
 
 [build-dependencies]
 connectrpc-build = "0.6"

@@ -28,11 +28,13 @@ from zephyr.dataset import Dataset
 from zephyr.execution import ZephyrContext
 
 from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import DatakitArtifactPath, datakit_source_key
 from marin.execution.artifact import read_artifact
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.dedup_commons import _load_batches
 
 logger = logging.getLogger(__name__)
+MINHASH_ATTR_DATA_VERSION = 3
 
 
 class MinHashParams(BaseModel):
@@ -65,18 +67,18 @@ class MinHashAttrData(BaseModel):
     Attributes:
         version: Schema version of this artifact.
         params: MinHash params; downstream jobs require these to match.
-        source_main_dir: Source ``NormalizedData.main_output_dir`` whose shards
-            this dataset mirrors 1:1.
+        source_key: Prefix-relative identity of the ``NormalizedData.main_output_dir``
+            whose shards this dataset mirrors 1:1.
         attr_dir: Directory containing per-shard attr Parquet files. Filenames
             mirror the source shards. Each row has ``id: str`` and
             ``buckets: list[str]``.
         counters: Aggregated zephyr counters.
     """
 
-    version: str = "v2"
+    version: str = f"v{MINHASH_ATTR_DATA_VERSION}"
     params: MinHashParams
-    source_main_dir: str
-    attr_dir: str
+    source_key: str
+    attr_dir: DatakitArtifactPath
     counters: dict[str, int | float]
 
 
@@ -162,6 +164,7 @@ def compute_minhash_attrs(
     max_workers: int | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> MinHashAttrData:
     """Compute MinHash bucket attributes for *source* and persist as Parquet.
 
@@ -192,6 +195,7 @@ def compute_minhash_attrs(
         max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
         map_task_resources: ResourceConfig for map-stage tasks.
         reduce_task_resources: ResourceConfig for reduce-stage tasks.
+        zephyr_context: Optional shared Zephyr context.
 
     Returns:
         :class:`MinHashAttrData` describing the attr directory and counters.
@@ -220,17 +224,15 @@ def compute_minhash_attrs(
         params,
     )
 
+    resources = worker_resources or ResourceConfig(cpu=5, ram="32g", disk="5g")
     ctx_kwargs: dict = {
         "name": "minhash-attrs",
-        "resources": worker_resources or ResourceConfig(cpu=5, ram="32g", disk="5g"),
+        "resources": resources,
     }
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
-    if map_task_resources is not None:
-        ctx_kwargs["map_task_resources"] = map_task_resources
-    if reduce_task_resources is not None:
-        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
-    ctx = ZephyrContext(**ctx_kwargs)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    map_resources = map_task_resources or resources
 
     # Preserve source basenames; zephyr's `{basename}` placeholder is synthetic.
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
@@ -243,11 +245,16 @@ def compute_minhash_attrs(
         .flat_map(lambda path, p=params: _shard_attr_records(path, p))
         .write_parquet(_output_path, skip_existing=True)
     )
-    outcome = ctx.execute(pipeline, verbose=True)
+    outcome = ctx.execute(
+        pipeline,
+        verbose=True,
+        map_task_resources=map_resources,
+        reduce_task_resources=reduce_task_resources,
+    )
 
     return MinHashAttrData(
         params=params,
-        source_main_dir=source.main_output_dir,
+        source_key=datakit_source_key(source.main_output_dir),
         attr_dir=attr_dir,
         counters=dict(outcome.counters),
     )
@@ -282,6 +289,7 @@ def compute_minhash_attrs_step(
             max_workers=max_workers,
         ),
         hash_attrs={
+            "artifact_version": MINHASH_ATTR_DATA_VERSION,
             "num_perms": num_perms,
             "num_bands": num_bands,
             "ngram_size": ngram_size,

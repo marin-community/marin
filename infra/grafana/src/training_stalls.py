@@ -11,11 +11,16 @@ _TASK_STATE_FRESHNESS = timedelta(seconds=90)
 _TRAINING_STALL_AGE = timedelta(minutes=15)
 _INITIALIZING_STALL_AGE = timedelta(minutes=45)
 _TASK_STATE_LOOKBACK = timedelta(hours=1)
-_TELLTALE_LOOKBACK = timedelta(days=1)
+_TELEMETRY_LOOKBACK = timedelta(days=1)
+# Levanter republishes `phase` every 60s, so enrollment is always recent and this
+# scan can be bounded. Unbounded, it read every telemetry_v1 row once a minute and
+# saturated the finelog hub. Keep this many multiples above that heartbeat:
+# telemetry is best-effort, and a few dropped batches must not un-enroll a live job.
+_ENROLLMENT_LOOKBACK = timedelta(minutes=15)
 
-_STEP_METRIC = "levanter_step"
-_PROGRESS_TIME_METRIC = "levanter_progress_time_seconds"
-_PHASE_METRIC = "levanter_phase"
+_STEP_METRIC = "step"
+_PROGRESS_TIME_METRIC = "progress_time_seconds"
+_PHASE_METRIC = "phase"
 
 _INITIALIZING_PHASE = 0
 _TRAINING_PHASE = 1
@@ -48,22 +53,39 @@ def task_state_query(now: datetime) -> str:
     )
 
 
-def telltale_query(now: datetime) -> str:
-    """Return the bounded query for the latest progress metrics per root job."""
-    start = _sql_timestamp(now - _TELLTALE_LOOKBACK)
-    names = f"'{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}', '{_PHASE_METRIC}'"
+def telemetry_query(now: datetime) -> str:
+    """Return latest retained enrollment and bounded progress per root job."""
+    start = _sql_timestamp(now - _TELEMETRY_LOOKBACK)
+    enrolled_since = _sql_timestamp(now - _ENROLLMENT_LOOKBACK)
+    end = _sql_timestamp(now)
+    progress_names = f"'{_STEP_METRIC}', '{_PROGRESS_TIME_METRIC}'"
     return (
-        "WITH recent AS ("
-        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS cluster, job_id AS job, "
-        "name, value, ts, "
+        "WITH phase_enrollment AS ("
+        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
+        "json_get(resource_attributes_json, 'job_id') AS job, name, value, "
+        "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
+        'FROM "telemetry_v1" '
+        f"WHERE service = 'levanter' AND name = '{_PHASE_METRIC}' "
+        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{enrolled_since}') * 1000 AS BIGINT) "
+        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
+        "), recent_progress AS ("
+        "SELECT COALESCE(NULLIF(cluster,''),'unknown') AS origin_cluster, "
+        "json_get(resource_attributes_json, 'job_id') AS job, name, value, "
+        "timestamp_ms, seq, to_timestamp_millis(timestamp_ms) AS ts "
+        'FROM "telemetry_v1" '
+        f"WHERE service = 'levanter' AND name IN ({progress_names}) "
+        f"AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '{start}') * 1000 AS BIGINT) "
+        f"AND timestamp_ms < CAST(EXTRACT(EPOCH FROM TIMESTAMP '{end}') * 1000 AS BIGINT)"
+        "), filtered AS ("
+        "SELECT * FROM phase_enrollment UNION ALL SELECT * FROM recent_progress"
+        "), recent AS ("
+        "SELECT origin_cluster, job, name, value, ts, "
         "ROW_NUMBER() OVER ("
-        "PARTITION BY COALESCE(NULLIF(cluster,''),'unknown'), job_id, name ORDER BY ts DESC"
+        "PARTITION BY origin_cluster, job, name ORDER BY timestamp_ms DESC, seq DESC"
         ") AS rn "
-        'FROM "telltale" '
-        f"WHERE job_id IS NOT NULL AND job_id <> '' AND name IN ({names}) "
-        f"AND ts >= TIMESTAMP '{start}'"
+        "FROM filtered WHERE job IS NOT NULL AND job <> ''"
         ") "
-        "SELECT cluster, job, name, value, ts FROM recent WHERE rn = 1"
+        "SELECT origin_cluster AS cluster, job, name, value, ts FROM recent WHERE rn = 1"
     )
 
 
@@ -87,16 +109,16 @@ def _row(cluster: str, job: str, phase: str, reason: str, value: int) -> dict:
     return {"cluster": cluster, "job": job, "phase": phase, "reason": reason, "value": value}
 
 
-def training_stall_alert_rows(task_states: pa.Table, telltale_metrics: pa.Table, now: datetime) -> list[dict]:
+def training_stall_alert_rows(task_states: pa.Table, telemetry_metrics: pa.Table, now: datetime) -> list[dict]:
     """Project active jobs and progress metrics into Grafana warning rows.
 
     Each row has string labels and exactly one numeric value. A job enrolls on
-    `levanter_phase`; without it the row reports `producer_missing` at zero
+    `phase`; without it the row reports `producer_missing` at zero
     rather than a stall. Absent progress is itself evidence once a job is
     enrolled.
     """
     metrics_by_job: dict[tuple[str, str], dict[str, float]] = {}
-    for row in telltale_metrics.to_pylist():
+    for row in telemetry_metrics.to_pylist():
         key = (str(row["cluster"]), str(row["job"]))
         metrics_by_job.setdefault(key, {})[str(row["name"])] = float(row["value"])
 
@@ -113,7 +135,7 @@ def training_stall_alert_rows(task_states: pa.Table, telltale_metrics: pa.Table,
         raw_phase = metrics.get(_PHASE_METRIC)
         if raw_phase is None:
             # A producer old enough to predate the phase and progress metrics
-            # still emits levanter_step. Judging it against progress it cannot
+            # still emits step. Judging it against progress it cannot
             # report would call every healthy job stalled, so report the gap.
             rows.append(_row(cluster, job, _phase_name(None), "producer_missing", 0))
             continue

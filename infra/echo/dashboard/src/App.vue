@@ -1,24 +1,23 @@
-<script setup lang="ts"></script>
-
 <template>
   <div class="min-h-screen">
-    <header class="border-b border-line/80 bg-cream/75 backdrop-blur">
-      <div class="mx-auto flex max-w-6xl items-center justify-between px-5 py-5 sm:px-8">
-        <router-link class="flex items-center gap-3" to="/">
-          <div class="grid size-10 place-items-center rounded-xl bg-moss text-lg font-semibold text-white shadow-card">E</div>
-          <div>
-            <p class="text-lg font-semibold tracking-tight">Echo</p>
-            <p class="text-xs text-ink/55">Marin activity and wiki search</p>
-          </div>
+    <header class="border-b border-line bg-cream/90">
+      <div class="mx-auto flex max-w-6xl flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+        <router-link class="flex items-baseline gap-2" to="/">
+          <span class="text-xl font-semibold tracking-tight">Echo</span>
+          <span class="text-xs text-ink/45">Marin search</span>
         </router-link>
-        <div class="flex items-center gap-5">
-          <router-link class="text-sm font-medium text-moss hover:text-fern" to="/wiki">Wiki</router-link>
-          <a class="text-sm font-medium text-moss hover:text-fern" href="/docs">API docs</a>
-        </div>
+        <nav class="flex items-center gap-1 overflow-x-auto text-sm" aria-label="Echo areas">
+          <router-link class="quick-tab" to="/">Search</router-link>
+          <a class="quick-tab" href="/?domain=file">Files</a>
+          <router-link class="quick-tab" to="/wiki">Wiki</router-link>
+          <a class="quick-tab" href="/?domain=pr&domain=issue">GitHub</a>
+          <a class="quick-tab" href="/?domain=discord">Discord</a>
+          <a class="quick-tab" href="/docs">API</a>
+        </nav>
       </div>
     </header>
 
-    <main class="mx-auto max-w-6xl px-5 pb-16 pt-12 sm:px-8 sm:pt-16">
+    <main class="mx-auto max-w-6xl px-5 pb-16 pt-8 sm:px-8 sm:pt-10">
       <router-view />
     </main>
   </div>

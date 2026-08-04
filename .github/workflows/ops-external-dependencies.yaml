@@ -77,6 +77,7 @@ jobs:
       - name: Resolve external dependency heads
         id: update
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BODY: ${{ runner.temp }}/external-dependencies.md
           UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
         run: |
@@ -150,4 +151,5 @@ jobs:
               --add-label agent-generated \
               --add-label dependencies >/dev/null
           fi
+          gh pr merge "$pr_url" --auto --squash
           echo "Updated $pr_url"

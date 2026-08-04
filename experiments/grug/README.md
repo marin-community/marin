@@ -100,8 +100,13 @@ Useful flags:
 ## Checkpoints and resume
 
 - Checkpoints are written to `<output_path>/checkpoints` by default in `base/launch.py`.
-- `run_grug` restores from `trainer.load_checkpoint_path` when set, otherwise tries the run checkpoint path.
-- If `trainer.load_checkpoint=True` and no checkpoint is found, startup fails; otherwise it starts from scratch.
+- An own-run checkpoint resumes the complete state, including the optimizer and step, and takes precedence over
+  `trainer.initialize_from`.
+- `trainer.initialize_from` initializes a new phase from external model weights when no own-run checkpoint was loaded.
+  The optimizer and step remain fresh. MoE runs also load `pending_qb_betas`; EMA starts from the loaded parameters.
+- `trainer.load_checkpoint_path` is a complete-state resume, not a phase-chaining input.
+- If `trainer.load_checkpoint=True` and no resume checkpoint is found, startup fails. With no resume checkpoint and no
+  `trainer.initialize_from`, the run starts from scratch.
 
 ## Environment variables you will likely use
 

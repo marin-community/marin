@@ -35,13 +35,13 @@ script as their downloaded JSON secrets files:
 
 The same pair of clients can protect every cluster's backend service.
 
-Every resource is a single ``gcloud`` create guarded by an existence probe, so
-the whole rollout — or any single stage — is safe to re-run. ``deploy`` runs the
-stages in dependency order; the per-stage subcommands (``address``, ``cert``,
-``backend``, ``iap``, ``frontend``, ``route``, ``grant``, ``firewall``,
-``token-proxy``, ``finelog``) expose each on its own. ``status`` reports what
-exists; ``teardown`` removes a cluster's backend and ``finelog-teardown`` a
-finelog's route off-VPC.
+Resource creation is guarded by existence probes, so the whole rollout or any
+single stage is safe to re-run. Iris backend-service request timeouts are also
+reconciled on existing resources. ``deploy`` runs the stages in dependency
+order; the per-stage subcommands (``address``, ``cert``, ``backend``, ``iap``,
+``frontend``, ``route``, ``grant``, ``firewall``, ``token-proxy``, ``finelog``)
+expose each on its own. ``status`` reports what exists; ``teardown`` removes a
+cluster's backend and ``finelog-teardown`` a finelog's route off-VPC.
 
 The ``firewall`` stage is kept separate and is *not* run by ``deploy`` unless
 ``--with-firewall`` is passed: its allow-rule is a prerequisite for the LB health
@@ -93,12 +93,14 @@ from pathlib import Path
 import click
 import yaml
 from finelog.deploy.config import find_finelog_config, load_finelog_config
+from iris.cluster.controller.native_proxy import PROXY_RELAY_TIMEOUT_SECONDS
 
 logger = logging.getLogger("iap-gclb")
 
 DEFAULT_PROJECT = "hai-gcp-models"
 DEFAULT_ZONE = "us-central1-a"
 CONTROLLER_PORT = 10000
+FINELOG_BACKEND_TIMEOUT_SECONDS = 120
 
 # Path prefix opened past IAP by the token-proxy stage. Only capability URLs
 # (``/proxy/t/<token>/<endpoint>/...``, carrying the scoped token in the path)
@@ -609,6 +611,21 @@ def _backend_has_neg(project: str, service: str, neg: str) -> bool:
     return neg in (result.stdout or "")
 
 
+def _reconcile_backend_timeout(project: str, service: str, timeout_seconds: int, *, dry_run: bool) -> None:
+    logger.info("→ setting backend service %s timeout to %ds", service, timeout_seconds)
+    _run(
+        _compute(
+            project,
+            "backend-services",
+            "update",
+            service,
+            "--global",
+            f"--timeout={timeout_seconds}s",
+        ),
+        dry_run=dry_run,
+    )
+
+
 def _ensure_neg_backend(
     *,
     project: str,
@@ -619,6 +636,7 @@ def _ensure_neg_backend(
     instance: str,
     ip: str,
     port: int,
+    timeout_seconds: int,
     dry_run: bool,
 ) -> None:
     """Build a zonal NEG -> VM endpoint -> health check -> backend service -> attachment.
@@ -691,7 +709,7 @@ def _ensure_neg_backend(
             "--protocol=HTTP",
             "--port-name=http",
             f"--health-checks={health_check}",
-            "--timeout=120s",
+            f"--timeout={timeout_seconds}s",
             "--load-balancing-scheme=EXTERNAL_MANAGED",
         ),
         dry_run=dry_run,
@@ -728,6 +746,13 @@ def ensure_backend(backend: Backend, controller_name: str, controller_ip: str, *
         instance=controller_name,
         ip=controller_ip,
         port=CONTROLLER_PORT,
+        timeout_seconds=PROXY_RELAY_TIMEOUT_SECONDS,
+        dry_run=dry_run,
+    )
+    _reconcile_backend_timeout(
+        backend.project,
+        backend.service,
+        PROXY_RELAY_TIMEOUT_SECONDS,
         dry_run=dry_run,
     )
 
@@ -1023,9 +1048,15 @@ def ensure_token_proxy_backend(backend: Backend, *, dry_run: bool) -> None:
             "--protocol=HTTP",
             "--port-name=http",
             f"--health-checks={backend.health_check}",
-            "--timeout=120s",
+            f"--timeout={PROXY_RELAY_TIMEOUT_SECONDS}s",
             "--load-balancing-scheme=EXTERNAL_MANAGED",
         ),
+        dry_run=dry_run,
+    )
+    _reconcile_backend_timeout(
+        backend.project,
+        backend.proxy_service,
+        PROXY_RELAY_TIMEOUT_SECONDS,
         dry_run=dry_run,
     )
 
@@ -1776,6 +1807,7 @@ def finelog_cmd(
         instance=finelog.vm,
         ip=vm_ip,
         port=finelog.port,
+        timeout_seconds=FINELOG_BACKEND_TIMEOUT_SECONDS,
         dry_run=dry_run,
     )
     ensure_armor_policy(finelog, ranges, dry_run=dry_run)

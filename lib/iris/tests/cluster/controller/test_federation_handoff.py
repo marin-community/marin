@@ -1110,7 +1110,7 @@ def test_admit_persists_a_queued_handle_and_is_idempotent(tmp_path, log_client):
             peer_id="cw",
             owner_principal=_USER,
             submitting_user=_USER,
-            request=make_direct_job_request("fed-job", replicas=1),
+            request=make_direct_job_request("fed-job", replicas=1, priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE),
         )
 
         # Admission parks the job in the controller-side queue; the control tick promotes

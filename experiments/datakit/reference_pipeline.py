@@ -19,20 +19,20 @@ Per source::
               → minhash
 
 Then:
+    global_exact_dedup([<normalized source>])
     fuzzy_dups([<minhash per source>])
-    build_clustered_store(tokenize, decontam, cluster_assign, quality, dedup)
+    build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, dedup)
     one ``datakit/report/<stage>`` step per stage -- a single self-contained
     HTML page built from that stage's counters + site/sample outputs
     (:mod:`experiments.datakit.reports`)
 
-Every stage keeps one step per source with its own output dir; only dedup and
-the store combine sources, by design.
+Most stages keep one step per source with a separate output directory. Global
+exact dedup, fuzzy dedup, the decontamination DF filter, and the store combine sources.
 
-Worker fleet: every stage runs its pipeline on its own dedicated Zephyr
-coordinator + workers (vanilla ``ZephyrContext``, built inside the stage
-functions), sized by one :class:`PoolConfig` (``n_workers`` x ``worker``) shared
-across the stages -- so the *only* resource knob is that fleet.
-``--max-concurrent`` bounds how many stages the StepRunner walks at once.
+Worker fleet: subprocess-compatible stages share one Zephyr coordinator and
+worker group. Steps that require process-local model caches use dedicated
+``InlineRunner`` contexts. One :class:`PoolConfig` sets the worker count and
+worker shape. ``--max-concurrent`` limits concurrent StepRunner steps.
 
 Public API: :func:`reference_datakit_steps`. Pass ``sources`` (a ``{name:
 normalize_step}`` mapping), a ``quality_model`` dir, and optionally pre-staged
@@ -99,10 +99,12 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
+    FUZZY_DUPS_ATTR_DATA_VERSION,
     FuzzyDupsAttrData,
     compute_fuzzy_dups_attrs,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
+    MINHASH_ATTR_DATA_VERSION,
     MinHashAttrData,
     compute_minhash_attrs,
 )
@@ -112,8 +114,11 @@ from marin.processing.tokenize.attributes import (
 )
 from rigging.filesystem import StoragePath, marin_prefix
 from rigging.log_setup import configure_logging
+from zephyr.execution import ZephyrContext
+from zephyr.runners import SubprocessRunner
 
 from experiments.datakit.cluster.domain.v0.assign import (
+    ASSIGNMENT_ATTR_DATA_VERSION,
     AssignmentAttrData,
     assign_source,
 )
@@ -131,11 +136,17 @@ from experiments.datakit.decontam.config import (
 )
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.embeddings.luxical.pipeline import (
+    EMBEDDING_ATTR_DATA_VERSION,
     LUXICAL_REPO,
     LUXICAL_REVISION,
     LUXICAL_WEIGHTS_FILE,
     EmbeddingAttrData,
     embed_source,
+)
+from experiments.datakit.global_exact_dedup import (
+    GLOBAL_EXACT_DEDUP_DATA_VERSION,
+    GlobalExactDedupData,
+    global_exact_deduplicate,
 )
 from experiments.datakit.reports.decontam import decontam_report
 from experiments.datakit.reports.dedup import dedup_report
@@ -220,13 +231,12 @@ DRIVER_RESOURCES = ResourceConfig(cpu=1, ram="2g")
 
 @dataclass(frozen=True)
 class PoolConfig:
-    """The dedicated Zephyr worker fleet each stage runs on.
+    """The Zephyr worker fleet for the reference pipeline.
 
-    ``n_workers`` workers, each sized ``worker`` (cpu / ram / disk). Every stage
-    spins up its own coordinator with this fleet and takes one whole worker per
-    task, so ``n_workers`` is the per-stage task concurrency and ``worker`` must
-    be large enough for the heaviest per-shard stage (embed model load, minhash /
-    dedup / store buffers).
+    ``n_workers`` sets the shared pool size. ``worker`` sets each worker shape.
+    Subprocess-compatible stages share this pool. Inline stages create a
+    dedicated pool with the same settings. The worker must fit the largest
+    task that can use the pool.
     """
 
     n_workers: int = 512
@@ -333,7 +343,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
             "luxical_weights": LUXICAL_WEIGHTS_FILE,
             "luxical_revision": LUXICAL_REVISION,
             "batch_size": scale.embed_batch_size,
-            "v": 1,
+            "v": EMBEDDING_ATTR_DATA_VERSION,
         },
         fn=remote(
             lambda output_path, np=normalize_step.output_path: embed_source(
@@ -498,6 +508,7 @@ def reference_datakit_steps(
     domain_centroids: str | StepSpec | None = None,
     centroids_version: str | None = None,
     scale: PipelineScale = DEFAULT_SCALE,
+    zephyr_context: ZephyrContext | None = None,
 ) -> DatakitSteps:
     """Build the reference Datakit DAG over the given normalize steps.
 
@@ -534,9 +545,24 @@ def reference_datakit_steps(
         scale: K / fan-out sizing plus the per-stage worker :class:`PoolConfig`.
             ``DEFAULT_SCALE`` is the production full-fleet shape; ``SMOKE_SCALE``
             runs the same DAG end-to-end on a testbed sample.
+        zephyr_context: Optional shared context for subprocess-compatible stages.
     """
     cluster = scale.cluster
     mh = scale.minhash
+
+    source_names = sorted(sources)
+    exact_dedup = StepSpec(
+        name="datakit/global_exact_dedup",
+        deps=[sources[name] for name in source_names],
+        hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
+        fn=lambda output_path: global_exact_deduplicate(
+            sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
+            output_path=output_path,
+            worker_resources=scale.pool.worker,
+            max_workers=scale.pool.n_workers,
+            zephyr_context=zephyr_context,
+        ),
+    )
     embed_steps = build_per_source_embed_steps(sources, scale)
     if domain_centroids is None:
         domain_centroids = build_train_centroids_step(embed_steps, scale)
@@ -580,6 +606,7 @@ def reference_datakit_steps(
         global_common_min_sources=GLOBAL_DF_COMMON_MIN_SOURCES,
         worker_resources=scale.pool.worker,
         max_workers=scale.pool.n_workers,
+        zephyr_context=zephyr_context,
     )
 
     # ---- Per-source steps ------------------------------------------------------
@@ -597,6 +624,7 @@ def reference_datakit_steps(
             tokenizer_revision=TOKENIZER_REVISION,
             max_workers=scale.pool.n_workers,
             worker_resources=scale.pool.worker,
+            zephyr_context=zephyr_context,
         )
 
         # Domain assign: consumes the embed + the (given or trained) centroids.
@@ -610,7 +638,7 @@ def reference_datakit_steps(
                 "k_train": cluster.k_train,
                 "k_views": list(cluster.k_views),
                 "batch_size": scale.assign_batch_size,
-                "v": 1,
+                "v": ASSIGNMENT_ATTR_DATA_VERSION,
             },
             fn=remote(
                 lambda output_path, ep=embed.output_path: assign_source(
@@ -656,6 +684,7 @@ def reference_datakit_steps(
             false_positive_rate=FALSE_POSITIVE_RATE,
             flagged_sample_size=FLAGGED_SAMPLE_SIZE,
             worker_resources=scale.pool.worker,
+            zephyr_context=zephyr_context,
         )
 
         minhash = StepSpec(
@@ -667,7 +696,7 @@ def reference_datakit_steps(
                 "ngram_size": mh.ngram_size,
                 "text_cap_chars": mh.text_cap_chars,
                 "seed": mh.seed,
-                "v": 1,
+                "v": MINHASH_ATTR_DATA_VERSION,
             },
             fn=lambda op, n=normalize_step: compute_minhash_attrs(
                 source=read_artifact(n.output_path, NormalizedData),
@@ -678,6 +707,7 @@ def reference_datakit_steps(
                 text_cap_chars=mh.text_cap_chars,
                 seed=mh.seed,
                 worker_resources=scale.pool.worker,
+                zephyr_context=zephyr_context,
             ),
         )
         minhash_steps.append(minhash)
@@ -698,17 +728,18 @@ def reference_datakit_steps(
     dedup = StepSpec(
         name="datakit/dedup",
         deps=minhash_steps,
-        hash_attrs={"v": 1},
+        hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
         fn=lambda op: compute_fuzzy_dups_attrs(
             inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
             output_path=op,
             max_parallelism=scale.dedup_max_parallelism,
             cc_resume=True,
             worker_resources=scale.pool.worker,
+            zephyr_context=zephyr_context,
         ),
     )
 
-    # ---- Final store: 5-way join + per-bucket Levanter cache ------------------
+    # ---- Final store: attribute join + per-bucket Levanter cache ---------------
     def _store_fn(output_path: str) -> ClusteredStoreData:
         return build_clustered_store(
             tokenize={n: read_artifact(s["tokenize"].output_path, TokenizedAttrData) for n, s in per_source.items()},
@@ -717,6 +748,7 @@ def reference_datakit_steps(
                 n: read_artifact(s["assign"].output_path, AssignmentAttrData) for n, s in per_source.items()
             },
             quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
+            exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
             dedup=read_artifact(dedup.output_path, FuzzyDupsAttrData),
             output_path=output_path,
             cluster_view=cluster.cluster_view,
@@ -728,12 +760,13 @@ def reference_datakit_steps(
             target_tokens_per_subshard=scale.store.target_tokens_per_subshard,
             max_subshards=scale.store.max_subshards,
             default_subshards=scale.store.default_subshards,
+            zephyr_context=zephyr_context,
         )
 
     store_deps: list[StepSpec] = []
     for s in per_source.values():
         store_deps += [s["tokenize"], s["decontam"], s["assign"], s["quality"]]
-    store_deps.append(dedup)
+    store_deps += [exact_dedup, dedup]
 
     # Hash output-shaping values read directly by the store. ``shards_per_task``
     # and ``reduce_shards`` only schedule the shuffle, so they intentionally do
@@ -814,7 +847,7 @@ def reference_datakit_steps(
         ),
     ]
 
-    all_steps: list[StepSpec] = [decon_bloom_step, decon_drop_sets]
+    all_steps: list[StepSpec] = [exact_dedup, decon_bloom_step, decon_drop_sets]
     if isinstance(domain_centroids, StepSpec):
         all_steps.append(domain_centroids)
     for s in per_source.values():
@@ -824,7 +857,20 @@ def reference_datakit_steps(
 
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
-QUALITY_MODEL = "s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2"
+
+QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2"
+"""Pooled fast-transformer scorer directory, relative to ``MARIN_PREFIX``."""
+
+
+def quality_model_path() -> str:
+    """Resolve :data:`QUALITY_MODEL` against the active cluster prefix.
+
+    Kept a call, not a module constant, so importing this module never reads the
+    environment: a caller that sets ``MARIN_PREFIX`` after import still gets the
+    prefix it asked for.
+    """
+    return f"{marin_prefix()}/{QUALITY_MODEL}"
+
 
 # A content-diverse subset of a testbed sample (wiki / academic / reference /
 # code / math / multilingual / web / sft / agent-trajectory), small enough for a
@@ -912,7 +958,9 @@ def main() -> None:
         help="full: registry sources, K=5000. sample: a pre-built testbed sample (see --sample-prefix), K=64.",
     )
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX, help="testbed sample root (--mode sample)")
-    parser.add_argument("--quality-model", default=QUALITY_MODEL, help="pooled fast-transformer scorer + calib dir")
+    parser.add_argument(
+        "--quality-model", default=quality_model_path(), help="pooled fast-transformer scorer + calib dir"
+    )
     parser.add_argument(
         "--domain-centroids",
         default=None,
@@ -940,7 +988,7 @@ def main() -> None:
         default=None,
         help="comma-separated source names, or 'all' for every source. Omit: full=all, sample=curated subset.",
     )
-    parser.add_argument("--pool-workers", type=int, default=None, help="per-stage worker count (override scale)")
+    parser.add_argument("--pool-workers", type=int, default=None, help="Zephyr worker count (override scale)")
     parser.add_argument("--pool-cpu", type=float, default=None, help="per-worker CPUs (override scale)")
     parser.add_argument("--pool-ram", default=None, help="per-worker RAM, e.g. 16g (override scale)")
     parser.add_argument("--pool-disk", default=None, help="per-worker disk, e.g. 16g (override scale)")
@@ -957,19 +1005,22 @@ def main() -> None:
     scale = _apply_pool_overrides(SMOKE_SCALE if args.mode == "sample" else DEFAULT_SCALE, args)
     sources = _select_pipeline_sources(args)
 
-    # Each stage runs its pipeline on its own dedicated Zephyr coordinator +
-    # worker fleet (vanilla ``ZephyrContext``, built inside the stage functions),
-    # sized by ``scale.pool``. ``--max-concurrent`` bounds how many stages the
-    # StepRunner walks at once.
-    result = reference_datakit_steps(
-        sources,
-        quality_model=args.quality_model,
-        quality_model_version=args.quality_model_version,
-        domain_centroids=args.domain_centroids,
-        centroids_version=args.domain_centroids_version,
-        scale=scale,
-    )
-    StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
+    with ZephyrContext(
+        name="datakit-reference",
+        resources=scale.pool.worker,
+        max_workers=scale.pool.n_workers,
+        stage_runner_factory=SubprocessRunner,
+    ) as zephyr_context:
+        result = reference_datakit_steps(
+            sources,
+            quality_model=args.quality_model,
+            quality_model_version=args.quality_model_version,
+            domain_centroids=args.domain_centroids,
+            centroids_version=args.domain_centroids_version,
+            scale=scale,
+            zephyr_context=zephyr_context,
+        )
+        StepRunner().run(result.all_steps, max_concurrent=args.max_concurrent)
 
 
 if __name__ == "__main__":

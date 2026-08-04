@@ -1888,6 +1888,7 @@ dependencies = [
  "futures",
  "http",
  "http-body",
+ "http-body-util",
  "hyper",
  "hyper-rustls",
  "hyper-util",
@@ -1900,6 +1901,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "tikv-jemallocator",
  "tokio",
  "tower",
@@ -1907,6 +1909,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "webpki-roots",
 ]
 

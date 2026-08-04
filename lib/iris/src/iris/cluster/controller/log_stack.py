@@ -58,9 +58,7 @@ class LogStack:
     task_event_table: Table
     profile_table: Table
     provisioning_table: Table
-    # iris.worker table for the k8s backend's per-node heartbeats. On worker-daemon
-    # clusters the daemons register and write this themselves; the controller holds
-    # the handle so the k8s backend (which has no daemon) can write node rows.
+    # iris.worker rows are emitted by worker-daemon clusters.
     worker_stats_table: Table
     # iris.task_state rows from the controller's periodic per-root-job aggregate.
     task_state_table: Table

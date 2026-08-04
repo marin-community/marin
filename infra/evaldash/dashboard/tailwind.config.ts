@@ -11,6 +11,17 @@ export default {
         mono: ['"Noto Sans Mono Variable"', '"SF Mono"', 'Menlo', 'monospace'],
       },
       colors: {
+        page: 'var(--c-page)',
+        best: 'var(--c-best)',
+        score: {
+          1: 'var(--c-score-1)',
+          2: 'var(--c-score-2)',
+          3: 'var(--c-score-3)',
+          4: 'var(--c-score-4)',
+          5: 'var(--c-score-5)',
+          6: 'var(--c-score-6)',
+          7: 'var(--c-score-7)',
+        },
         surface: {
           DEFAULT: 'var(--c-surface)',
           raised: 'var(--c-surface-raised)',

@@ -5,8 +5,8 @@
 
 Deploys this directory (Grafana + the finelog bridge) as an IAP-gated Cloud Run service
 through the reusable `iac.gcp.cloud_run.CloudRunService` component. Grafana's fixed shape
-— project, region, one warm instance — lives here; the list of people admitted through
-IAP is stack config (`marin-grafana:viewers`).
+— project, region, one warm instance — lives here. The shared component owns the common
+IAP access policy; additional members are stack config (`marin-grafana:viewers`).
 
 Runs on the shared repo venv (plain `python` runtime), which is where `iac` and the Pulumi
 GCP/Docker providers live; `uv sync --all-packages` first. See README.md.
@@ -71,7 +71,7 @@ def main() -> None:
     # to the container listener and links point to localhost:8080.
     custom_domain = config.get("custom_domain")
     loom_alerts_enabled = config.get_bool("loom_alerts") or False
-    # IAM members admitted through IAP, e.g. group:marin@…; set with
+    # Additional IAM members admitted through IAP, e.g. group:marin@…; set with
     #   pulumi config set --path 'viewers[0]' group:someone@example.com
     viewers = config.get_object("viewers") or []
 
@@ -145,6 +145,7 @@ def main() -> None:
             # Grafana 13's apiserver and search indexers run between requests and need CPU
             # while idle; the dashboards list hangs on them otherwise.
             cpu_always_allocated=True,
+            cpu="1",
             # The bridge lists finelog and controller VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
             env=env,

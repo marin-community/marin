@@ -6,7 +6,7 @@ import { formatRelativeTime, formatBytes } from '@/utils/formatting'
 import { decodeArrowIpc } from '@/utils/arrow'
 import InfoCard from '@/components/shared/InfoCard.vue'
 
-interface TelltaleRow {
+interface TelemetryRow {
   name?: string
   value?: number
   ts?: string
@@ -21,31 +21,30 @@ interface TelltaleRow {
 }
 
 const METRIC_NAMES = {
-  requests: 'iris_rpc_requests_total',
-  responses: 'iris_rpc_responses_total',
-  inFlight: 'iris_rpc_in_flight',
-  durationBucket: 'iris_rpc_duration_seconds_bucket',
-  durationSum: 'iris_rpc_duration_seconds_sum',
-  durationCount: 'iris_rpc_duration_seconds_count',
+  requests: 'rpc_requests_total',
+  responses: 'rpc_responses_total',
+  inFlight: 'rpc_in_flight',
+  durationBucket: 'rpc_duration_seconds_bucket',
+  durationSum: 'rpc_duration_seconds_sum',
+  durationCount: 'rpc_duration_seconds_count',
 } as const
 
 const PROXY_METRIC_NAMES = {
-  requests: 'iris_proxy_requests_total',
-  responses: 'iris_proxy_responses_total',
-  inFlight: 'iris_proxy_in_flight',
-  durationBucket: 'iris_proxy_duration_seconds_bucket',
-  durationSum: 'iris_proxy_duration_seconds_sum',
-  durationCount: 'iris_proxy_duration_seconds_count',
-  requestBytes: 'iris_proxy_request_bytes_total',
-  responseBytes: 'iris_proxy_response_bytes_total',
+  requests: 'proxy_requests_total',
+  responses: 'proxy_responses_total',
+  inFlight: 'proxy_in_flight',
+  durationBucket: 'proxy_duration_seconds_bucket',
+  durationSum: 'proxy_duration_seconds_sum',
+  durationCount: 'proxy_duration_seconds_count',
+  requestBytes: 'proxy_request_bytes_total',
+  responseBytes: 'proxy_response_bytes_total',
 } as const
 
 // Trailing window: only series written in the last five minutes are shown, so a retired
 // method or a gone endpoint (its last row now older than the window) drops out
 // instead of lingering forever as the latest row for its label set. DataFusion
-// folds now() to a timestamp literal, which exposes the direct ts predicate to
-// Parquet row-group pruning.
-const RECENT_STATS_FILTER = "ts >= now() - INTERVAL '5 minutes'"
+// uses the raw epoch-millisecond column so Parquet min/max pruning remains available.
+const RECENT_STATS_FILTER = () => `timestamp_ms >= ${Date.now() - 5 * 60 * 1000}`
 
 // Scope to this cluster's own rows. A hub finelog also holds child rows stamped
 // with their origin cluster; local writes leave `cluster` empty/NULL, so this
@@ -55,42 +54,51 @@ const LOCAL_CLUSTER_FILTER = "(cluster IS NULL OR cluster = '')"
 function statsSql(): string {
   const names = Object.values(METRIC_NAMES).map((name) => `'${name}'`).join(', ')
   return `
-SELECT name, value, ts,
-       json_get(labels, 'service') AS service,
-       json_get(labels, 'method') AS method,
-       json_get(labels, 'upstream') AS upstream,
-       json_get(labels, 'status') AS status,
-       json_get(labels, 'le') AS le
-FROM telltale
-WHERE source = 'iris' AND name IN (${names})
-  AND ${RECENT_STATS_FILTER}
-  AND ${LOCAL_CLUSTER_FILTER}
+WITH filtered AS (
+  SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+         name, value, timestamp_ms, seq,
+         json_get(attributes_json, 'service') AS rpc_service,
+         json_get(attributes_json, 'method') AS method,
+         json_get(attributes_json, 'upstream') AS upstream,
+         json_get(attributes_json, 'status') AS status,
+         json_get(attributes_json, 'le') AS le
+  FROM telemetry_v1
+  WHERE service = 'iris-controller' AND name IN (${names})
+    AND ${RECENT_STATS_FILTER()}
+    AND ${LOCAL_CLUSTER_FILTER}
+)
+SELECT name, value, to_timestamp_millis(timestamp_ms) AS ts,
+       rpc_service AS service, method, upstream, status, le
+FROM filtered
 QUALIFY row_number() OVER (
-  PARTITION BY name, json_get(labels, 'service'), json_get(labels, 'method'),
-               json_get(labels, 'upstream'), json_get(labels, 'status'), json_get(labels, 'le')
-  ORDER BY ts DESC
+  PARTITION BY origin_cluster, name, rpc_service, method, upstream, status, le
+  ORDER BY timestamp_ms DESC, seq DESC
 ) = 1`.trim()
 }
 
 function proxySql(): string {
   const names = Object.values(PROXY_METRIC_NAMES).map((name) => `'${name}'`).join(', ')
   return `
-SELECT name, value, ts,
-       json_get(labels, 'scope') AS scope,
-       json_get(labels, 'endpoint') AS endpoint,
-       json_get(labels, 'method') AS method,
-       json_get(labels, 'route_kind') AS route_kind,
-       json_get(labels, 'status') AS status,
-       json_get(labels, 'le') AS le
-FROM telltale
-WHERE source = 'iris' AND name IN (${names})
-  AND ${RECENT_STATS_FILTER}
-  AND ${LOCAL_CLUSTER_FILTER}
+WITH filtered AS (
+  SELECT COALESCE(NULLIF(cluster, ''), 'local') AS origin_cluster,
+         name, value, timestamp_ms, seq,
+         json_get(attributes_json, 'scope') AS scope,
+         json_get(attributes_json, 'endpoint') AS endpoint,
+         json_get(attributes_json, 'method') AS method,
+         json_get(attributes_json, 'route_kind') AS route_kind,
+         json_get(attributes_json, 'status') AS status,
+         json_get(attributes_json, 'le') AS le
+  FROM telemetry_v1
+  WHERE service = 'iris-controller' AND name IN (${names})
+    AND ${RECENT_STATS_FILTER()}
+    AND ${LOCAL_CLUSTER_FILTER}
+)
+SELECT name, value, to_timestamp_millis(timestamp_ms) AS ts,
+       scope, endpoint, method, route_kind, status, le
+FROM filtered
 QUALIFY row_number() OVER (
-  PARTITION BY name, json_get(labels, 'scope'), json_get(labels, 'endpoint'),
-               json_get(labels, 'method'), json_get(labels, 'route_kind'),
-               json_get(labels, 'status'), json_get(labels, 'le')
-  ORDER BY ts DESC
+  PARTITION BY origin_cluster, name, scope, endpoint, method, route_kind, status, le
+  ORDER BY timestamp_ms DESC, seq DESC
 ) = 1`.trim()
 }
 
@@ -160,7 +168,7 @@ function finalizeHistogram(row: MethodRow): void {
 }
 
 const rows = computed<MethodRow[]>(() => {
-  const metrics = decodeArrowIpc(data.value?.arrowIpc).rows as TelltaleRow[]
+  const metrics = decodeArrowIpc(data.value?.arrowIpc).rows as TelemetryRow[]
   const byMethod = new Map<string, MethodRow>()
   for (const metric of metrics) {
     if (!metric.service || !metric.method || !metric.upstream) continue
@@ -205,7 +213,7 @@ function emptyProxyRow(key: string, endpoint: string, routeKind: string): ProxyR
   }
 }
 
-function applyProxySample(row: ProxyRow, metric: TelltaleRow): void {
+function applyProxySample(row: ProxyRow, metric: TelemetryRow): void {
   row.last = Math.max(row.last, new Date(metric.ts ?? 0).getTime())
   const value = Number(metric.value ?? 0)
   if (metric.name === PROXY_METRIC_NAMES.requests) row.count = value
@@ -226,7 +234,7 @@ function applyProxySample(row: ProxyRow, metric: TelltaleRow): void {
 // scope=total is the exact aggregate over all proxied traffic; scope=endpoint is
 // the bounded per-endpoint breakdown the native proxy emits.
 const proxyParsed = computed<{ total: ProxyRow | null; endpoints: ProxyRow[] }>(() => {
-  const metrics = decodeArrowIpc(proxyData.value?.arrowIpc).rows as TelltaleRow[]
+  const metrics = decodeArrowIpc(proxyData.value?.arrowIpc).rows as TelemetryRow[]
   let total: ProxyRow | null = null
   const byEndpoint = new Map<string, ProxyRow>()
   for (const metric of metrics) {
@@ -403,7 +411,7 @@ function avgMs(row: MethodRow): number {
     <InfoCard title="RPC Methods">
       <p class="text-xs text-text-muted mb-3">
         Native-proxy counters, statuses, in-flight requests, and latency histograms,
-        queried from Telltale snapshots in the controller log server. Counters are
+        queried from telemetry snapshots in the controller log server. Counters are
         lifetime totals for the current native-proxy process and reset when it restarts.
       </p>
 

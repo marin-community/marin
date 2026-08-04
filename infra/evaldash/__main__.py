@@ -6,8 +6,8 @@
 Deploys this directory as an IAP-gated Cloud Run service through the reusable
 ``iac.gcp.cloud_run.CloudRunService`` component. The service's fixed shape — project,
 region, one warm instance for the background ingest loop, the CloudSQL connection, and
-the record bucket — lives here; who is admitted through IAP is stack config
-(``marin-evaldash:viewers``).
+the record bucket — lives here. The shared component owns the common IAP access policy;
+additional members are stack config (``marin-evaldash:viewers``).
 
 The image build context is the repo root (the runtime image copies the eval record/DB
 modules from ``lib/marin``), so ``build_context`` points there and ``dockerfile`` is the
@@ -23,6 +23,7 @@ import pulumi
 import pulumi_cloudflare as cloudflare
 import pulumi_gcp as gcp
 from iac.gcp.cloud_run import CloudRunService, CloudRunServiceArgs, SecretEnv
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES
 
 PROJECT = "hai-gcp-models"
 REGION = "us-central1"
@@ -35,10 +36,8 @@ CLOUD_RUN_FRONTEND = "ghs.googlehosted.com"
 # admin API + the runtime SA's roles/cloudsql.client grant, so no VPC path is needed.
 CLOUDSQL_INSTANCE = "hai-gcp-models:us-central1:marin-metadata"
 
-# Canonical per-run records the ingest loop lists and upserts.
-# Both record stores the ingest loop scans: the GCS default plus the CoreWeave object store
-# that CW GPU runs (whose workers have no GCP credentials) record to.
-RECORDS_PREFIXES = "gs://marin-eval-metadata/runs,s3://marin-us-east-02a/marin/eval-metadata/runs"
+# Canonical roots come first so they win when a migrated run also exists in a legacy root.
+RECORDS_PREFIXES = ",".join(DEFAULT_SCAN_PREFIXES)
 EVAL_DB_NAME = "evals"
 EVAL_DB_USER = "evals"
 
@@ -50,7 +49,7 @@ DOCKERFILE = "infra/evaldash/Dockerfile"
 
 def main() -> None:
     config = pulumi.Config()
-    # IAM members admitted through IAP, e.g. group:marin@…; set with
+    # Additional IAM members admitted through IAP, e.g. group:marin@…; set with
     #   pulumi config set --path 'viewers[0]' group:someone@example.com
     viewers = config.get_object("viewers") or []
 
@@ -66,6 +65,7 @@ def main() -> None:
             # The ingest loop lists GCS and upserts to Postgres between requests, so CPU must
             # stay allocated while idle.
             cpu_always_allocated=True,
+            cpu="1",
             env={
                 "RECORDS_PREFIXES": RECORDS_PREFIXES,
                 "EVAL_DB_INSTANCE": CLOUDSQL_INSTANCE,
