@@ -13,17 +13,16 @@ from enum import StrEnum
 from pathlib import Path
 
 from rigging.config_discovery import find_project_root
-from rigging.timing import RateLimiter
 from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.external_dependencies import HARBOR
+from marin.inference.iris import InferenceBackendState
 
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _OWNER_ONLY_MODE = 0o600
-_DRIVER_POLL_SECONDS = 1.0
-_DEPENDENCY_CHECK_SECONDS = 15.0
+_BACKEND_POLL_SECONDS = 60.0
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
@@ -174,37 +173,37 @@ def _capture_driver(command: list[str]) -> subprocess.CompletedProcess[str]:
 def _stream_driver(
     command: list[str],
     driver_env: Mapping[str, str],
-    backends_ready: Callable[[], bool] | None = None,
+    backend_state: Callable[[], InferenceBackendState],
 ) -> None:
     process = subprocess.Popen(
         command,
         env=_driver_environment(driver_env),
         start_new_session=True,
     )
-    backend_checks = RateLimiter(_DEPENDENCY_CHECK_SECONDS)
-    backend_checks.mark_run()
     try:
         while True:
             try:
-                return_code = process.wait(timeout=_DRIVER_POLL_SECONDS)
+                return_code = process.wait(timeout=_BACKEND_POLL_SECONDS)
                 break
             except subprocess.TimeoutExpired:
                 if process.poll() is not None:
                     continue
-                if backends_ready is not None and backend_checks.should_run() and not backends_ready():
-                    return_code = process.poll()
-                    if return_code == 0:
-                        break
-                    raise HarborBackendsUnavailable("inference backends are not ready") from None
+                _raise_for_backend_state(backend_state())
     except BaseException:
         terminate_process_group(process, grace_period=_DRIVER_TERMINATION_GRACE_SECONDS)
         raise
 
     if return_code:
-        if backends_ready is not None and not backends_ready():
-            raise HarborBackendsUnavailable("inference backends are not ready")
+        _raise_for_backend_state(backend_state())
         exc = subprocess.CalledProcessError(return_code, command)
         raise _driver_failure(exc) from exc
+
+
+def _raise_for_backend_state(state: InferenceBackendState) -> None:
+    if state is InferenceBackendState.RECOVERING:
+        raise HarborBackendsUnavailable("inference backends are not ready")
+    if state is InferenceBackendState.FINISHED:
+        raise RuntimeError("inference backend finished while Harbor was running")
 
 
 def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
@@ -293,7 +292,7 @@ def run_harbor_driver(
     config: ValidatedHarborConfig,
     overlay: HarborRuntimeOverlay,
     driver_env: Mapping[str, str],
-    backends_ready: Callable[[], bool] | None = None,
+    backend_state: Callable[[], InferenceBackendState],
 ) -> None:
     """Apply a runtime overlay and run one Harbor job in the isolated environment."""
     runtime = {"version": HARBOR.version, "commit": HARBOR.commit}
@@ -319,4 +318,4 @@ def run_harbor_driver(
         overlay_path.chmod(_OWNER_ONLY_MODE)
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
-        _stream_driver(command, driver_env, backends_ready)
+        _stream_driver(command, driver_env, backend_state)

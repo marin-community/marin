@@ -8,7 +8,6 @@ import hashlib
 import importlib
 import json
 import os
-import signal
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -363,36 +362,9 @@ def _preflight(request_path: Path) -> None:
     sys.stdout.write(json.dumps(results, ensure_ascii=False, separators=(",", ":")))
 
 
-async def _run(config: JobConfig) -> int:
-    """Run one Harbor job and return zero or the conventional 128-plus-signal exit status."""
-    loop = asyncio.get_running_loop()
-    run_task = asyncio.current_task()
-    assert run_task is not None
-    received_signal: asyncio.Future[signal.Signals] = loop.create_future()
-
-    def cancel_job(signum: signal.Signals) -> None:
-        if received_signal.done():
-            return
-        received_signal.set_result(signum)
-        run_task.cancel()
-
-    handled_signals = (signal.SIGINT, signal.SIGTERM)
-    for signum in handled_signals:
-        loop.add_signal_handler(signum, cancel_job, signum)
-    try:
-        job = await Job.create(config)
-        await job.run()
-    except asyncio.CancelledError:
-        if not received_signal.done():
-            raise
-        run_task.uncancel()
-    finally:
-        for signum in handled_signals:
-            loop.remove_signal_handler(signum)
-
-    if received_signal.done():
-        return 128 + received_signal.result().value
-    return 0
+async def _run(config: JobConfig) -> None:
+    job = await Job.create(config)
+    await job.run()
 
 
 def effective_job_config(policy_path: Path, overlay_path: Path) -> JobConfig:
@@ -422,9 +394,7 @@ def main() -> None:
     except (IndexError, json.JSONDecodeError, OSError, TypeError, ValueError, ValidationError) as exc:
         print(_diagnostic(exc), file=sys.stderr)
         raise SystemExit(2) from exc
-    exit_code = asyncio.run(_run(config))
-    if exit_code:
-        raise SystemExit(exit_code)
+    asyncio.run(_run(config))
 
 
 if __name__ == "__main__":

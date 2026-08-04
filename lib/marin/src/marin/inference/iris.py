@@ -13,7 +13,6 @@ from enum import StrEnum
 from typing import cast
 
 import requests
-from connectrpc.errors import ConnectError
 from fray.client import JobHandle
 from fray.current_client import current_client
 from fray.types import ActorConfig, CpuConfig, Entrypoint, JobRequest, JobStatus
@@ -21,10 +20,9 @@ from iris.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import PROXY_TIMEOUT_METADATA_KEY, EndpointAccess, JobName, is_job_finished
 from iris.rpc import job_pb2
-from iris.rpc.errors import is_retryable_error
 from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
-from rigging.timing import Deadline, Duration
+from rigging.timing import Duration
 
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.broker import InferenceBroker
@@ -52,8 +50,7 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
-_DEPENDENCY_RECOVERY_POLL_SECONDS = 1.0
-_DEPENDENCY_PROBE_TIMEOUT_SECONDS = 10.0
+_BACKEND_POLL_SECONDS = 60.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
@@ -72,20 +69,19 @@ class RemoteInferenceStartupError(RuntimeError):
         self.jobs = jobs
 
 
-class InferenceRecoveryMode(StrEnum):
-    """How an inference endpoint participates in dependent process recovery."""
+class InferenceBackendState(StrEnum):
+    """Aggregate lifecycle state of the jobs serving an inference endpoint."""
 
-    NONE = "none"
-    DIRECT_TASK_RETRY = "direct_task_retry"
+    READY = "ready"
+    RECOVERING = "recovering"
+    FINISHED = "finished"
 
 
 @dataclass(frozen=True)
 class RemoteInferenceSession:
     model: RunningModel
     jobs: tuple[JobHandle, ...]
-    recovery_mode: InferenceRecoveryMode
-    recovery_timeout_seconds: float | None
-    recovery_attempt_limit: int
+    endpoint_name: str
     streaming: bool
     tensor_parallel_size: int
     backend_name: str
@@ -97,74 +93,33 @@ class RemoteInferenceSession:
             if JobStatus.finished(status):
                 raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
 
-    def backends_ready(self) -> bool:
-        """Return false only when Iris confirms a direct inference task is not running.
+    def backend_state(self) -> InferenceBackendState:
+        """Return the aggregate state Iris reports for the serving jobs and their tasks."""
+        if not self.jobs:
+            return InferenceBackendState.READY
 
-        Controller transport failures leave readiness unknown, so they return true and do not
-        interrupt a Harbor process whose endpoint may still be healthy.
-        """
-        if self.recovery_mode is InferenceRecoveryMode.NONE:
-            return True
-
-        unavailable: list[str] = []
-        try:
-            client = iris_ctx().client
-            for job in self.jobs:
-                job_name = JobName.from_string(str(job.job_id))
-                job_state = client.job_state(job_name)
-                if is_job_finished(job_state):
-                    state = job_pb2.JobState.Name(job_state).removeprefix("JOB_STATE_")
-                    raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {state}")
-                tasks = client.list_tasks(job_name)
-                if not tasks:
-                    unavailable.append(f"{job.job_id} has no tasks")
-                    continue
-                for task in tasks:
-                    if task.state != job_pb2.TASK_STATE_RUNNING:
-                        state = job_pb2.TaskState.Name(task.state).removeprefix("TASK_STATE_")
-                        unavailable.append(f"{task.task_id} is {state}")
-        except ConnectError as exc:
-            if not is_retryable_error(exc):
-                raise
-            logger.warning("Could not verify inference task readiness: %s", exc)
-            return True
-        except ConnectionError as exc:
-            logger.warning("Could not verify inference task readiness: %s", exc)
-            return True
-        if unavailable:
-            logger.warning("Inference backends are not ready: %s", "; ".join(unavailable))
-            return False
-        return True
+        state = InferenceBackendState.READY
+        client = iris_ctx().client
+        for job in self.jobs:
+            status = client.status(JobName.from_string(str(job.job_id)))
+            if is_job_finished(status.state):
+                return InferenceBackendState.FINISHED
+            if not status.tasks or any(task.state != job_pb2.TASK_STATE_RUNNING for task in status.tasks):
+                state = InferenceBackendState.RECOVERING
+        if state is InferenceBackendState.READY and not client.list_endpoint_instances(self.endpoint_name):
+            state = InferenceBackendState.RECOVERING
+        return state
 
     def wait_until_ready(self) -> None:
-        """Wait for direct inference tasks and their OpenAI endpoint to recover."""
-        if self.recovery_mode is InferenceRecoveryMode.NONE:
-            return
-        assert self.recovery_timeout_seconds is not None
-
-        deadline = Deadline.from_seconds(self.recovery_timeout_seconds)
-        last_error = "inference dependency is unavailable"
-        while not deadline.expired():
-            try:
-                if not self.backends_ready():
-                    last_error = "inference tasks are not running"
-                    time.sleep(min(_DEPENDENCY_RECOVERY_POLL_SECONDS, deadline.remaining_seconds()))
-                    continue
-                with requests.get(
-                    self.model.endpoint.url("models"),
-                    timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS,
-                ) as response:
-                    response.raise_for_status()
+        """Wait for Iris to report that every serving task is running again."""
+        while True:
+            state = self.backend_state()
+            if state is InferenceBackendState.READY:
                 return
-            except requests.RequestException as exc:
-                last_error = str(exc)
-                remaining = deadline.remaining_seconds()
-                if remaining > 0:
-                    time.sleep(min(_DEPENDENCY_RECOVERY_POLL_SECONDS, remaining))
-
-        raise TimeoutError(
-            f"Inference dependency did not recover within {self.recovery_timeout_seconds:.0f}s: {last_error}"
-        )
+            if state is InferenceBackendState.FINISHED:
+                raise RuntimeError("Inference backend finished before becoming ready")
+            logger.warning("Inference backend is recovering; checking again in %.0fs", _BACKEND_POLL_SECONDS)
+            time.sleep(_BACKEND_POLL_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -479,15 +434,7 @@ def _start_direct_inference(
                 else running_model
             ),
             jobs=(job,),
-            recovery_mode=(
-                InferenceRecoveryMode.DIRECT_TASK_RETRY
-                if config.capability_origin is not None
-                else InferenceRecoveryMode.NONE
-            ),
-            recovery_timeout_seconds=(
-                iris.endpoint_ready_timeout_seconds if config.capability_origin is not None else None
-            ),
-            recovery_attempt_limit=iris.max_retries_failure + iris.max_retries_preemption,
+            endpoint_name=endpoint_name,
             streaming=True,
             tensor_parallel_size=tensor_parallel_size,
             backend_name=backend_name,
@@ -612,9 +559,7 @@ def _expose_brokered_inference(
             yield RemoteInferenceSession(
                 model=exposed_model,
                 jobs=tuple(worker_jobs),
-                recovery_mode=InferenceRecoveryMode.NONE,
-                recovery_timeout_seconds=None,
-                recovery_attempt_limit=0,
+                endpoint_name=endpoint_name,
                 streaming=False,
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 backend_name=worker_metadata.backend_name,

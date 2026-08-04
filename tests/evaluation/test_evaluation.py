@@ -22,13 +22,12 @@ from marin.evaluation.runner import (
     EvaluationError,
     EvaluationIdentity,
     EvaluationOutcome,
-    InferenceDependencyError,
     LaunchProvenance,
     evaluate_batch,
     submit_evaluation_batch,
 )
 from marin.external_dependencies import EVALCHEMY
-from marin.inference.iris import InferenceRecoveryMode, RemoteInferenceSession
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
@@ -114,9 +113,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
             tokenizer="tokenizer",
         ),
         jobs=(),
-        recovery_mode=InferenceRecoveryMode.DIRECT_TASK_RETRY,
-        recovery_timeout_seconds=1800,
-        recovery_attempt_limit=10,
+        endpoint_name="/serve/test",
         streaming=True,
         tensor_parallel_size=1,
         backend_name="vllm",
@@ -155,60 +152,6 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
     assert succeeded.provenance.eval_runtime == "test-runtime"
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
-
-
-def test_inference_recovery_failure_marks_later_evaluations_unstarted(tmp_path):
-    records = tmp_path / "records"
-    session = RemoteInferenceSession(
-        model=RunningModel(
-            endpoint=OpenAIEndpoint(base_url="https://iris.example/proxy/t/token/inference/v1", model="model")
-        ),
-        jobs=(),
-        recovery_mode=InferenceRecoveryMode.DIRECT_TASK_RETRY,
-        recovery_timeout_seconds=1800,
-        recovery_attempt_limit=10,
-        streaming=True,
-        tensor_parallel_size=1,
-        backend_name="vllm",
-    )
-
-    class UnrecoverableExecutor:
-        def __call__(self, _session, _output_dir, _env_vars):
-            raise InferenceDependencyError(
-                "inference dependency did not recover",
-                status=RunStatus.INFRA_FAILED,
-            )
-
-    batch = EvaluationBatch(
-        group_id="recovery-failure",
-        user="tester",
-        version=None,
-        description=None,
-        records_prefix=str(records),
-        model=ModelConfig(
-            name="model",
-            location="org/model",
-            tokenizer="tokenizer",
-            resource_hint=ResourceHint(hbm_gb=3),
-        ),
-        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
-        capability_origin="https://iris.example",
-        api_model="model",
-        evaluations=(
-            _evaluation(tmp_path, "first", UnrecoverableExecutor()),
-            _evaluation(tmp_path, "later", _successful_evaluation),
-        ),
-        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
-    )
-
-    with pytest.raises(RuntimeError):
-        evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
-
-    first = read_record(str(records / "run-first" / "record.json"))
-    later = read_record(str(records / "run-later" / "record.json"))
-    assert first.status is RunStatus.INFRA_FAILED
-    assert later.status is RunStatus.INFRA_FAILED
-    assert not (tmp_path / "later" / "endpoint.txt").exists()
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):
@@ -389,7 +332,7 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
 
     captured: dict = {}
 
-    def run_driver(config, overlay, driver_env, _backends_ready) -> None:
+    def run_driver(config, overlay, driver_env, _backend_state) -> None:
         assert driver_env["DAYTONA_API_KEY"] == "daytona-key"
         captured["config"] = config
         captured["overlay"] = overlay
@@ -409,9 +352,7 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
                 )
             ),
             jobs=(),
-            recovery_mode=InferenceRecoveryMode.NONE,
-            recovery_timeout_seconds=None,
-            recovery_attempt_limit=0,
+            endpoint_name="/serve/test",
             streaming=True,
             tensor_parallel_size=1,
             backend_name="vllm",

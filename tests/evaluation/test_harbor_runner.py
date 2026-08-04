@@ -23,7 +23,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
-from marin.inference.iris import InferenceRecoveryMode, RemoteInferenceSession
+from marin.inference.iris import InferenceBackendState, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
@@ -41,9 +41,7 @@ def _inference_session() -> RemoteInferenceSession:
     return RemoteInferenceSession(
         model=_running_model(),
         jobs=(),
-        recovery_mode=InferenceRecoveryMode.NONE,
-        recovery_timeout_seconds=None,
-        recovery_attempt_limit=0,
+        endpoint_name="/serve/test",
         streaming=True,
         tensor_parallel_size=1,
         backend_name="vllm",
@@ -216,7 +214,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
     captured: dict = {}
 
-    def dying_driver(config, overlay, driver_env, _backends_ready) -> None:
+    def dying_driver(config, overlay, driver_env, _backend_state) -> None:
         captured["jobs_dir"] = overlay.jobs_dir
         captured["job_name"] = overlay.job_name
         trial = StoragePath(overlay.jobs_dir) / overlay.job_name / "trial-one"
@@ -234,7 +232,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
     assert durable.exists()
 
-    def resumed_driver(config, overlay, driver_env, _backends_ready) -> None:
+    def resumed_driver(config, overlay, driver_env, _backend_state) -> None:
         # Harbor's own resume finds the durable trial and writes nothing new this run.
         return None
 
@@ -254,13 +252,13 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
 
     class RecoveringSession:
         model = _running_model()
-        recovery_mode = InferenceRecoveryMode.DIRECT_TASK_RETRY
-        recovery_attempt_limit = 10
         recovery_waits = 0
         unavailable = True
 
-        def backends_ready(self) -> bool:
-            return not self.unavailable
+        def backend_state(self) -> InferenceBackendState:
+            if self.unavailable:
+                return InferenceBackendState.RECOVERING
+            return InferenceBackendState.READY
 
         def wait_until_ready(self) -> None:
             self.recovery_waits += 1
@@ -269,7 +267,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     session = RecoveringSession()
     driver_starts = 0
 
-    def run_driver(_config, overlay, _driver_env, backends_ready) -> None:
+    def run_driver(_config, overlay, _driver_env, backend_state) -> None:
         nonlocal driver_starts
         driver_starts += 1
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
@@ -285,29 +283,27 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
             zero_reward_result.write_text(
                 json.dumps({"task_name": "trial-three", "verifier_result": {"rewards": {"reward": 0.0}}})
             )
-        transport_result = job_dir / "trial-two" / "result.json"
+        interrupted_result = job_dir / "trial-two" / "result.json"
         if driver_starts == 1:
-            transport_result.parent.mkdir(parents=True, exist_ok=True)
-            transport_result.write_text(
+            interrupted_result.parent.mkdir(parents=True, exist_ok=True)
+            interrupted_result.write_text(
                 json.dumps(
                     {
                         "task_name": "trial-two",
-                        "exception_info": {
-                            "exception_type": "InternalServerError",
-                            "exception_message": "502 upstream transport error: client error (Connect)",
-                        },
+                        "verifier_result": None,
+                        "exception_info": {"exception_type": "InternalServerError"},
                     }
                 )
             )
         else:
             assert completed_result.exists()
             assert zero_reward_result.exists()
-            assert not transport_result.exists()
-            transport_result.parent.mkdir(parents=True, exist_ok=True)
-            transport_result.write_text(
+            assert not interrupted_result.exists()
+            interrupted_result.parent.mkdir(parents=True, exist_ok=True)
+            interrupted_result.write_text(
                 json.dumps({"task_name": "trial-two", "verifier_result": {"rewards": {"reward": 1.0}}})
             )
-        if not backends_ready():
+        if backend_state() is InferenceBackendState.RECOVERING:
             raise HarborBackendsUnavailable("inference backends are not ready")
 
     monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
@@ -334,11 +330,10 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
 
     monkeypatch.setattr(driver_config, "terminate_process_group", terminate)
     monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["sleep", "60"])
-    monkeypatch.setattr(driver_config, "_DRIVER_POLL_SECONDS", 0.01)
-    monkeypatch.setattr(driver_config, "_DEPENDENCY_CHECK_SECONDS", 0.01)
+    monkeypatch.setattr(driver_config, "_BACKEND_POLL_SECONDS", 0.01)
 
-    def backends_ready() -> bool:
-        return False
+    def backend_state() -> InferenceBackendState:
+        return InferenceBackendState.RECOVERING
 
     with pytest.raises(HarborBackendsUnavailable):
         driver_config.run_harbor_driver(
@@ -353,7 +348,7 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
                 model_agent_kwargs={},
             ),
             {},
-            backends_ready,
+            backend_state,
         )
 
     assert len(terminated_return_codes) == 1
@@ -363,8 +358,8 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
 def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):
     monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["false"])
 
-    def backends_ready() -> bool:
-        return False
+    def backend_state() -> InferenceBackendState:
+        return InferenceBackendState.RECOVERING
 
     with pytest.raises(HarborBackendsUnavailable):
         driver_config.run_harbor_driver(
@@ -379,47 +374,14 @@ def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_p
                 model_agent_kwargs={},
             ),
             {},
-            backends_ready,
+            backend_state,
         )
-
-
-def test_managed_harbor_bounds_repeated_dependency_recovery(tmp_path, monkeypatch):
-    class FlappingSession:
-        model = _running_model()
-        recovery_mode = InferenceRecoveryMode.DIRECT_TASK_RETRY
-        recovery_attempt_limit = 1
-        recovery_waits = 0
-
-        def backends_ready(self) -> bool:
-            return False
-
-        def wait_until_ready(self) -> None:
-            self.recovery_waits += 1
-
-    session = FlappingSession()
-    driver_starts = 0
-
-    def run_driver(_config, _overlay, _driver_env, backends_ready) -> None:
-        nonlocal driver_starts
-        driver_starts += 1
-        if not backends_ready():
-            raise HarborBackendsUnavailable("inference backends are not ready")
-
-    monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
-    executor = _harbor_executor(f"flapping-{tmp_path.name}")
-
-    with pytest.raises(EvaluationError) as exc_info:
-        executor(session, str(tmp_path / "run"), {})
-
-    assert exc_info.value.status is RunStatus.INFRA_FAILED
-    assert session.recovery_waits == 1
-    assert driver_starts == 2
 
 
 def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch):
     captured: dict = {}
 
-    def run_driver(config, overlay, driver_env, _backends_ready) -> None:
+    def run_driver(config, overlay, driver_env, _backend_state) -> None:
         captured["config"] = config
         captured["overlay"] = overlay
         captured["env"] = driver_env
@@ -472,7 +434,7 @@ def _harbor_executor(dataset: str) -> HarborExecutor:
 
 
 def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
-    def run_driver(_config, overlay, driver_env, _backends_ready) -> None:
+    def run_driver(_config, overlay, driver_env, _backend_state) -> None:
         assert isinstance(driver_env, dict)
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
@@ -501,7 +463,7 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
 
 
 def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, monkeypatch):
-    def run_driver(_config, overlay, driver_env, _backends_ready) -> None:
+    def run_driver(_config, overlay, driver_env, _backend_state) -> None:
         assert isinstance(driver_env, dict)
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)

@@ -63,10 +63,6 @@ class EvaluationError(RuntimeError):
         self.log_tails = log_tails or {}
 
 
-class InferenceDependencyError(EvaluationError):
-    """An evaluation stopped because its managed inference endpoint could not recover."""
-
-
 class EvalExecutor(Protocol):
     """Execute one evaluation mechanism against an inference session."""
 
@@ -263,8 +259,6 @@ def _run_one_evaluation(
             status = exc.status
             jobs |= exc.jobs
             tails = exc.log_tails
-            if isinstance(exc, InferenceDependencyError):
-                inference_failure = exc
         else:
             logger.exception("unexpected failure in evaluation %s", evaluation.identity.eval_ref.name)
             status = RunStatus.FAILED

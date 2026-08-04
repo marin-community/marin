@@ -34,9 +34,9 @@ from marin.evaluation.harbor.driver_config import (
     run_harbor_driver,
 )
 from marin.evaluation.records import RunStatus
-from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceDependencyError
+from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
-from marin.inference.iris import InferenceRecoveryMode, RemoteInferenceSession
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,6 @@ _HARBOR_JOBS_SUBDIR = "harbor_jobs"
 # Trials normalize off independent per-trial reads on the remote job tree; fan them out so a
 # several-hundred-trial dataset is not a sequential round-trip per trial.
 _TRIAL_READ_WORKERS = 16
-_TRIAL_RESULT_GLOB = "*/result.json"
 _JOB_DATASET_LENGTH = 32
 _JOB_DIGEST_LENGTH = 12
 
@@ -148,32 +147,26 @@ def _read_trial(result_file: StoragePath) -> HarborTrial:
 
 def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
     """Read every finished trial under ``job_dir``, one parallel per-trial read each."""
-    result_files = sorted((job_dir / _TRIAL_RESULT_GLOB).glob(), key=lambda path: path.parent.name)
+    result_files = sorted((job_dir / "*/result.json").glob(), key=lambda path: path.parent.name)
     if not result_files:
         return []
     with ThreadPoolExecutor(max_workers=min(_TRIAL_READ_WORKERS, len(result_files))) as pool:
         return list(pool.map(_read_trial, result_files))
 
 
-def _remove_unscored_trials(job_dir: StoragePath) -> int:
-    """Remove unscored exception results after an interruption; return the number removed."""
-    removed = 0
-    for result_file in (job_dir / _TRIAL_RESULT_GLOB).glob():
+def _remove_unscored_trials(job_dir: StoragePath) -> None:
+    """Remove incomplete results so Harbor reruns them after a confirmed interruption."""
+    for result_file in (job_dir / "*/result.json").glob():
         try:
-            data = json.loads(result_file.read_text())
-        except json.JSONDecodeError:
-            logger.warning("leaving unreadable Harbor result in place during inference recovery: %s", result_file)
+            result = json.loads(result_file.read_text())
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "removing unreadable Harbor trial result after inference interruption: %s (%s)", result_file, exc
+            )
+            result_file.parent.rmtree()
             continue
-        if not isinstance(data, Mapping):
-            continue
-        exception_info = data.get("exception_info")
-        if data.get("verifier_result") is not None or not isinstance(exception_info, Mapping):
-            continue
-        result_file.parent.rmtree()
-        removed += 1
-    if removed:
-        logger.info("removed %d unscored Harbor trial(s) before inference recovery resume", removed)
-    return removed
+        if result.get("verifier_result") is None:
+            result_file.parent.rmtree()
 
 
 def _sample_for(trial: HarborTrial, dataset: str) -> EvalSample:
@@ -233,34 +226,18 @@ def _run_harbor_job(
     environment: str,
     output_dir: str,
     driver_env: Mapping[str, str],
-    inference_session: RemoteInferenceSession | None = None,
+    inference_session: RemoteInferenceSession,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
-    recovery_count = 0
     while True:
         try:
-            backends_ready = inference_session.backends_ready if inference_session is not None else None
-            run_harbor_driver(config, overlay, driver_env, backends_ready)
+            run_harbor_driver(config, overlay, driver_env, inference_session.backend_state)
             break
         except HarborBackendsUnavailable as exc:
-            if inference_session is None:
-                raise
-            if recovery_count >= inference_session.recovery_attempt_limit:
-                raise InferenceDependencyError(
-                    f"inference dependency exceeded {inference_session.recovery_attempt_limit} recovery attempt(s)",
-                    status=RunStatus.INFRA_FAILED,
-                ) from exc
-            recovery_count += 1
             logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
             _remove_unscored_trials(job_dir)
-            try:
-                inference_session.wait_until_ready()
-            except Exception as recovery_exc:
-                raise InferenceDependencyError(
-                    f"inference dependency failed to recover: {recovery_exc}",
-                    status=RunStatus.INFRA_FAILED,
-                ) from recovery_exc
+            inference_session.wait_until_ready()
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     trials = _read_trials(job_dir)
@@ -293,8 +270,6 @@ def _run_harbor_job(
 def _evaluation_outcome(run: Callable[[], HarborRunResult], output_dir: str) -> EvaluationOutcome:
     try:
         result = run()
-    except EvaluationError:
-        raise
     except Exception as exc:
         raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
     if not result.total_trials:
@@ -326,7 +301,7 @@ class HarborExecutor:
         output_dir: str,
         hf_token: str | None,
         driver_env: Mapping[str, str],
-        inference_session: RemoteInferenceSession | None = None,
+        inference_session: RemoteInferenceSession,
     ) -> HarborRunResult:
         dataset = self.config.record_dataset
         job_name = _job_name(
@@ -370,8 +345,7 @@ class HarborExecutor:
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token
-        inference_session = session if session.recovery_mode is not InferenceRecoveryMode.NONE else None
         return _evaluation_outcome(
-            lambda: self._run(session.model, output_dir, hf_token, driver_env, inference_session),
+            lambda: self._run(session.model, output_dir, hf_token, driver_env, session),
             output_dir,
         )
