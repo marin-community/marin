@@ -40,7 +40,14 @@ from zephyr.coordinator import (
     _try_read_coordinator_result,
 )
 from zephyr.dataset import Dataset
-from zephyr.memory_store import MemoryStore, _actor_result_with_recovery, _MemoryTableRegistration, _store_plan
+from zephyr.memory_store import (
+    MemoryStore,
+    MemoryStoreActorStats,
+    _actor_result_with_recovery,
+    _MemoryTableRegistration,
+    _start_actor_calls,
+    _store_plan,
+)
 from zephyr.plan import PhysicalPlan, compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stage_io import (
@@ -338,12 +345,12 @@ class ZephyrContext:
             dataset: Shard-local Dataset yielding `(key, value)` tuples.
             name: Descriptive table name used in logs and errors.
             hash_key: Stable, picklable key hash used by the existing partitioning.
-            recovery_timeout: Seconds a lookup, stats, or destroy call waits for a worker
-                response or recovery.
+            recovery_timeout: Overall deadline for a lookup, stats, or destroy
+                operation, including ordinary responses and worker recovery.
             ready_timeout: Seconds to wait for every worker to validate and load the table.
 
-        Tables share each worker's process memory in this initial API. Size the
-        worker resource request for the tables and pipeline tasks it will host.
+        Tables share each worker's process memory. Size the worker resource
+        request for the tables and pipeline tasks it will host.
         """
         if not name:
             raise ValueError("memory store name must not be empty")
@@ -373,17 +380,12 @@ class ZephyrContext:
         deadline = time.monotonic() + ready_timeout
         handles = pool.worker_group.wait_ready(count=self.max_workers, timeout=ready_timeout)
 
-        def load_pass() -> list[Any]:
+        def load_pass() -> list[MemoryStoreActorStats]:
             calls = {
                 position: lambda handle=handle: handle.load_memory_table.submit(registration)
                 for position, handle in enumerate(handles)
             }
-            futures: dict[int, ActorFuture | None] = {}
-            for position, call in calls.items():
-                try:
-                    futures[position] = call()
-                except ActorUnavailableError:
-                    futures[position] = None
+            futures = _start_actor_calls(calls)
             return [
                 _actor_result_with_recovery(
                     calls[position],
@@ -408,15 +410,21 @@ class ZephyrContext:
                 raise RuntimeError("memory-store actor group did not report every actor index")
             actors = tuple(handle for handle in actors_by_index if handle is not None)
         except BaseException:
-            with suppress(Exception):
+            try:
                 coordinator.unregister_memory_table.remote(table_id).result(timeout=10.0)
-            destroy_futures: list[ActorFuture] = []
-            for handle in handles:
-                with suppress(ActorUnavailableError):
-                    destroy_futures.append(handle.destroy_memory_table.remote(table_id))
-            for future in destroy_futures:
-                with suppress(Exception):
+            except Exception:
+                logger.warning("Failed to unregister memory table %s after load failure", table_id, exc_info=True)
+            destroy_futures: list[tuple[int, ActorFuture]] = []
+            for worker_index, handle in enumerate(handles):
+                try:
+                    destroy_futures.append((worker_index, handle.destroy_memory_table.remote(table_id)))
+                except ActorUnavailableError:
+                    logger.warning("Worker %d unavailable while cleaning up memory table %s", worker_index, table_id)
+            for worker_index, future in destroy_futures:
+                try:
                     future.result(timeout=10.0)
+                except Exception:
+                    logger.warning("Worker %d failed to clean up memory table %s", worker_index, table_id, exc_info=True)
             raise
 
         return MemoryStore(

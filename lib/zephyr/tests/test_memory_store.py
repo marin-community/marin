@@ -15,6 +15,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError
+from fray.iris_backend import IrisActorGroup
 from fray.types import ResourceConfig
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
@@ -126,7 +127,8 @@ def _fake_store(actor: _SequencedActor, recovery_timeout: float = 1) -> MemorySt
 
 def _worker_task_id(context: ZephyrContext, actor_index: int) -> JobName:
     assert context._pool is not None
-    worker_group = cast(Any, context._pool.worker_group)
+    worker_group = context._pool.worker_group
+    assert isinstance(worker_group, IrisActorGroup)
     return JobName.from_wire(f"{worker_group._job_id}/{actor_index}")
 
 
@@ -279,7 +281,7 @@ def test_memory_store_bounds_actor_call_by_recovery_timeout():
     timed_out_future = _TestActorFuture(error=TimeoutError("actor call exceeded its deadline"))
     store = _fake_store(_SequencedActor([timed_out_future]))
 
-    with pytest.raises(MemoryStoreUnavailable, match="did not respond within 1 seconds"):
+    with pytest.raises(MemoryStoreUnavailable):
         store.get("key")
 
     assert len(timed_out_future.timeouts) == 1

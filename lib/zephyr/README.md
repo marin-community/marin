@@ -92,9 +92,9 @@ picklable for remote calls; Python's salted `hash()` is not stable enough to
 serve as the partition function for string or byte keys. Actors retain the
 loaded Python objects directly, and `store.stats()` reports item counts and
 load time. Invalid input fails the load call without consuming actor restart
-retries. Multiple tables can share the worker process. In this initial API,
-Zephyr does not reserve, limit, or evict table memory; size the context's worker
-RAM for the combined tables and pipeline workload.
+retries. Multiple tables can share the worker process. Zephyr does not reserve,
+limit, or evict table memory; size the context's worker RAM for the combined
+tables and pipeline workload.
 
 Iris reconstructs a preempted worker at the same endpoint. The first table
 lookup on that replacement reloads its immutable source shards, and all worker

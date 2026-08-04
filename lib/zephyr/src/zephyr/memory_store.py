@@ -32,11 +32,11 @@ class DuplicateMemoryStoreKey(ValueError):
 
 
 class MemoryStoreUnavailable(RuntimeError):
-    """Raised when a memory-store worker does not recover before its timeout."""
+    """Raised when a memory-table operation cannot complete before its deadline."""
 
 
 class MemoryStoreDestroyed(RuntimeError):
-    """Raised when a lookup uses a table that has been destroyed."""
+    """Raised when a destroyed table reference is queried for values or statistics."""
 
 
 @dataclass(frozen=True)
@@ -316,6 +316,19 @@ def _actor_result_with_recovery(
             time.sleep(delay)
 
 
+def _start_actor_calls(
+    calls: dict[int, Callable[[], ActorFuture]],
+) -> dict[int, ActorFuture | None]:
+    """Start actor calls, retaining unavailable endpoints for deadline-bound retry."""
+    futures: dict[int, ActorFuture | None] = {}
+    for actor_index, call in calls.items():
+        try:
+            futures[actor_index] = call()
+        except ActorUnavailableError:
+            futures[actor_index] = None
+    return futures
+
+
 @dataclass(frozen=True)
 class MemoryStore(Generic[K, V]):
     """Picklable reference to one table hosted by a Zephyr worker pool."""
@@ -398,12 +411,7 @@ class MemoryStore(Generic[K, V]):
             for actor_index in requests
         }
         deadline = time.monotonic() + self.recovery_timeout
-        futures: dict[int, ActorFuture | None] = {}
-        for actor_index, call in calls.items():
-            try:
-                futures[actor_index] = call()
-            except ActorUnavailableError:
-                futures[actor_index] = None
+        futures = _start_actor_calls(calls)
 
         results: list[V | None] = [None] * len(keys)
         for actor_index, actor_requests in requests.items():
@@ -430,12 +438,7 @@ class MemoryStore(Generic[K, V]):
             for actor_index, actor in enumerate(self.actors)
         }
         deadline = time.monotonic() + self.recovery_timeout
-        futures: dict[int, ActorFuture | None] = {}
-        for actor_index, call in calls.items():
-            try:
-                futures[actor_index] = call()
-            except ActorUnavailableError:
-                futures[actor_index] = None
+        futures = _start_actor_calls(calls)
         stats: list[MemoryStoreActorStats] = []
         for actor_index in range(len(self.actors)):
             result = self._ready_result(actor_index, calls[actor_index], futures[actor_index], deadline)
@@ -461,12 +464,7 @@ class MemoryStore(Generic[K, V]):
             actor_index: lambda actor=actor: actor.destroy_memory_table.remote(self.table_id)
             for actor_index, actor in enumerate(self.actors)
         }
-        futures: dict[int, ActorFuture | None] = {}
-        for actor_index, call in calls.items():
-            try:
-                futures[actor_index] = call()
-            except ActorUnavailableError:
-                futures[actor_index] = None
+        futures = _start_actor_calls(calls)
         for actor_index in range(len(self.actors)):
             _actor_result_with_recovery(
                 calls[actor_index],

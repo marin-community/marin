@@ -389,7 +389,7 @@ class ZephyrCoordinator:
             self._memory_tables[registration.table_id] = registration
 
     def memory_table_registration(self, table_id: str) -> _MemoryTableRegistration | None:
-        """Return one active table registration."""
+        """Return metadata needed to reload a table on a replacement worker."""
         with self._lock:
             return self._memory_tables.get(table_id)
 

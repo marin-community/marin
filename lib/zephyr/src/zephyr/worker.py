@@ -209,7 +209,7 @@ class ZephyrWorker:
         return self._memory_store.load(registration)
 
     def reload_memory_table(self, table_id: str) -> MemoryStoreActorStats | None:
-        """Reload one active table without affecting worker task execution."""
+        """Reload one active table, or return `None` if it was destroyed."""
         registration = self._coordinator.memory_table_registration.remote(table_id).result()
         if registration is None:
             self._memory_store.destroy(table_id)
@@ -222,7 +222,7 @@ class ZephyrWorker:
         return stats
 
     def lookup_memory_table(self, table_id: str, keys: list[Hashable]) -> _MemoryTableLookup:
-        """Fetch keys from one worker-local table."""
+        """Return values or structured state that lets the caller trigger reload."""
         return self._memory_store.lookup(table_id, keys)
 
     def memory_table_stats(self, table_id: str) -> _MemoryTableStatsResult:
