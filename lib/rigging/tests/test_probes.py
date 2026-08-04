@@ -59,7 +59,8 @@ def _install_commands(
 
 def _nccl_source(payload: dict[str, object]) -> str:
     report = nccl_ras.reduce_response(json.dumps(payload).encode(), detail=nccl_ras.RasDetail.PERIODIC)
-    return f"import sys\nsys.stdout.write({nccl_ras.serialize_success(report).decode()!r})"
+    output = nccl_ras.NcclRasClientOutput.success(report).to_bytes().decode()
+    return f"import sys\nsys.stdout.write({output!r})"
 
 
 class _RasConnection:
@@ -174,7 +175,11 @@ def test_nccl_client_queries_documented_json_status(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(nccl_client.socket, "create_connection", connect)
 
-    response = nccl_client.query_nccl_ras(address="localhost:28028", timeout=1.2)
+    response = nccl_client.query_nccl_ras(
+        address="localhost:28028",
+        timeout=1.2,
+        detail=nccl_ras.RasDetail.STALL,
+    )
 
     assert connected_to == [(("localhost", 28028), 1.2)]
     assert connection.request == b"TIMEOUT 2\nSET FORMAT json\nVERBOSE STATUS\n"
@@ -187,7 +192,11 @@ def test_nccl_client_bounds_one_shot_response(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(nccl_client, "MAX_RESPONSE_BYTES", 8)
 
     with pytest.raises(nccl_client.ResponseTooLargeError) as raised:
-        nccl_client.query_nccl_ras(address="localhost:28028", timeout=1)
+        nccl_client.query_nccl_ras(
+            address="localhost:28028",
+            timeout=1,
+            detail=nccl_ras.RasDetail.STALL,
+        )
 
     assert raised.value.observed_bytes == len(b"oversized")
     assert raised.value.limit_bytes == 8
@@ -197,7 +206,11 @@ def test_nccl_client_uses_nonverbose_status_for_periodic_collection(monkeypatch:
     connection = _RasConnection([json.dumps(nccl_ras_payload()).encode(), b""])
     monkeypatch.setattr(nccl_client.socket, "create_connection", lambda *_args, **_kwargs: connection)
 
-    nccl_client.query_nccl_ras(address="localhost:28028", timeout=1, verbose=False)
+    nccl_client.query_nccl_ras(
+        address="localhost:28028",
+        timeout=1,
+        detail=nccl_ras.RasDetail.PERIODIC,
+    )
 
     assert connection.request == b"TIMEOUT 1\nSET FORMAT json\nSTATUS\n"
 
@@ -226,8 +239,9 @@ def test_nccl_client_reduces_512_rank_response_before_runner_output_limit() -> N
     assert result.output is not None
     assert result.output.returncode == 0
     assert len(result.output.stdout) < MAX_OUTPUT_BYTES
-    client_result = nccl_ras.parse_client_result(result.output.stdout)
-    assert isinstance(client_result, nccl_ras.NcclRasSuccess)
+    client_result = nccl_ras.NcclRasClientOutput.from_bytes(result.output.stdout)
+    assert client_result.result is nccl_ras.NcclRasResult.SUCCESS
+    assert client_result.report is not None
     assert client_result.report.input_communicators == 77
     assert client_result.report.invalid_communicators == 0
     assert client_result.report.rank_observations == ()
@@ -292,41 +306,50 @@ def test_nccl_stall_report_bounds_derived_outlier_reason_by_utf8_bytes() -> None
     assert len(reason.encode()) == nccl_ras.MAX_FIELD_BYTES
 
 
-def test_nccl_reduced_output_preserves_anomalies_before_progress_detail() -> None:
+def test_nccl_collection_preserves_complete_reduced_report_above_default_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     report = nccl_ras.reduce_response(
         json.dumps(nccl_ras_payload()).encode(),
         detail=nccl_ras.RasDetail.STALL,
     )
-    observation = report.rank_observations[0]
-    observations = tuple(observation.model_copy(update={"rank": rank}) for rank in range(100))
+    field_width = nccl_ras.MAX_FIELD_BYTES
     progress = tuple(
         nccl_ras.CollectiveProgress(
-            communicator_hash=f"0x{index:016x}",
-            secondary_hash=f"0x{index:016x}:0x{index + 1:016x}",
-            collective=f"Collective{index}",
+            communicator_hash="c" * field_width,
+            secondary_hash="s" * field_width,
+            collective=f"{index:03d}" + "x" * (field_width - 3),
             minimum=index,
             maximum=index + 1,
         )
-        for index in range(nccl_ras.MAX_PROGRESS_SUMMARIES)
+        for index in range(350)
     )
     report = report.model_copy(
         update={
             "input_progress_summaries": len(progress),
             "omitted_progress_summaries": 0,
-            "input_rank_observations": len(observations),
-            "omitted_rank_observations": 0,
             "progress": progress,
-            "rank_observations": observations,
         }
     )
 
-    payload = nccl_ras.serialize_success(report)
-    parsed = nccl_ras.parse_client_result(payload)
+    payload = nccl_ras.NcclRasClientOutput.success(report).to_bytes()
+    assert len(payload) > MAX_OUTPUT_BYTES
+    assert nccl_ras.NcclRasClientOutput.from_bytes(payload).report == report
+    command = tmp_path / "nccl-client"
+    _executable(command, f"import sys\nsys.stdout.write({payload.decode()!r})")
+    monkeypatch.setattr(nccl, "_CLIENT_COMMAND", (str(command),))
+    transport = _configure(monkeypatch)
 
-    assert len(payload) <= nccl_ras.MAX_CLIENT_OUTPUT_BYTES
-    assert isinstance(parsed, nccl_ras.NcclRasSuccess)
-    assert len(parsed.report.rank_observations) == len(observations)
-    assert parsed.report.omitted_progress_summaries > 0
+    session = nccl.start()
+    available = transport.record("ras_available", {"outcome": "success"})
+    session.shutdown()
+
+    assert available["value"] == 1
+    assert not any(
+        record["name"] == "ras_poll_failures" and record["attributes"]["failure_kind"] == "runner_output_limit"
+        for record in transport.records
+    )
 
 
 def test_nvidia_probe_emits_only_stable_hardware_evidence(
@@ -530,14 +553,15 @@ def test_nccl_parent_output_limit_records_which_boundary_failed(
         nvidia_source="raise SystemExit(2)",
         nccl_source="import os\nos.write(1, b'x' * 300_000)",
     )
-    transport = _configure(monkeypatch)
+    result = nccl.collect_ras(
+        BoundedCommandRunner(max_output_bytes=MAX_OUTPUT_BYTES),
+        detail=nccl_ras.RasDetail.PERIODIC,
+        timeout=3,
+    )
 
-    session = nccl.start()
-    failure = transport.record("ras_poll_failures", {"failure_kind": "runner_output_limit"})
-    session.shutdown()
-
-    assert failure["attributes"]["observed_bytes"] == str(MAX_OUTPUT_BYTES + 1)
-    assert failure["attributes"]["limit_bytes"] == str(MAX_OUTPUT_BYTES)
+    assert result.client_output.result is nccl_ras.NcclRasResult.RUNNER_OUTPUT_LIMIT
+    assert result.client_output.observed_bytes == MAX_OUTPUT_BYTES + 1
+    assert result.client_output.limit_bytes == MAX_OUTPUT_BYTES
 
 
 def test_shutdown_cancels_and_reaps_active_probe_processes(

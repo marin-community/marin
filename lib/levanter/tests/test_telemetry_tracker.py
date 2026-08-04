@@ -17,7 +17,7 @@ from rigging.testing import RecordingTelemetryTransport, nccl_ras_payload
 
 from levanter.callbacks import ProgressEvent
 from levanter.callbacks.progress_watchdog import ProgressTimeout
-from levanter.tracker import current_tracker, telemetry as tracker_telemetry
+from levanter.tracker import BackgroundTracker, current_tracker, telemetry as tracker_telemetry
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.telemetry import TelemetryTracker, TrainingPhase
 
@@ -40,13 +40,21 @@ def _install_nccl_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, mar
     marker_write = (
         f"with open({str(marker)!r}, 'a') as marker_file:\n    marker_file.write('started\\n')\n" if marker else ""
     )
-    report = nccl_ras.reduce_response(
-        json.dumps(nccl_ras_payload()).encode(),
-        detail=nccl_ras.RasDetail.PERIODIC,
-    )
-    output = nccl_ras.serialize_success(report).decode()
+    outputs = {
+        detail.value: nccl_ras.NcclRasClientOutput.success(
+            nccl_ras.reduce_response(json.dumps(nccl_ras_payload()).encode(), detail=detail)
+        )
+        .to_bytes()
+        .decode()
+        for detail in nccl_ras.RasDetail
+    }
     command = tmp_path / "nccl-client"
-    command.write_text(f"#!{sys.executable}\n{marker_write}import sys\nsys.stdout.write({output!r})")
+    command.write_text(
+        f"#!{sys.executable}\n{marker_write}import sys\n"
+        f"outputs = {outputs!r}\n"
+        "detail = sys.argv[sys.argv.index('--detail') + 1]\n"
+        "sys.stdout.write(outputs[detail])\n"
+    )
     command.chmod(command.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setattr(tracker_telemetry.nccl, "_CLIENT_COMMAND", (str(command),))
 
@@ -185,24 +193,25 @@ def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, mo
     assert not any(record["name"] == "communicators" for record in exported.records)
 
 
-def test_stall_diagnostic_stops_periodic_collection_and_flushes(exported, monkeypatch):
-    captures: list[float] = []
-
-    class FakeRasSession:
-        def capture_stall(self, timeout: float) -> None:
-            captures.append(timeout)
-
-        def shutdown(self, timeout: float = 2.0) -> None:
-            del timeout
-
-    monkeypatch.setattr(tracker_telemetry, "_start_nccl_ras_probe", FakeRasSession)
-    tracker = TelemetryTracker()
+def test_stall_diagnostic_exports_fresh_detail_without_disabling_telemetry(exported, monkeypatch, tmp_path):
+    _install_nccl_client(monkeypatch, tmp_path)
+    monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
+    monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
+    tracker = BackgroundTracker(TelemetryTracker())
 
     with current_tracker(tracker):
         tracker_telemetry.capture_stall_diagnostics(
             ProgressTimeout(ProgressEvent.TRAIN_STEP_STARTED, timedelta(minutes=15).total_seconds(), 900)
         )
 
-    assert len(captures) == 1
-    assert 0 < captures[0] < 20
-    assert not telemetry.runtime_status().configured
+    stall = next(
+        record
+        for record in exported.records
+        if record["name"] == "communicators"
+        and record["attributes"].get("trigger") == "stall"
+        and record["attributes"].get("detail") == "stall"
+    )
+    assert stall["value"] == 1
+    assert telemetry.runtime_status().configured
+    tracker.finish()

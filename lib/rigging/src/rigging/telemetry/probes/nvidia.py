@@ -6,6 +6,8 @@
 import csv
 import io
 import logging
+from dataclasses import dataclass
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,18 +44,30 @@ _EXTENDED_FIELDS = (
     "remapped_rows.failure",
 )
 _NOT_AVAILABLE = frozenset({"", "n/a", "[n/a]", "not supported", "[not supported]", "unknown error"})
-_ERROR_FIELDS = (
-    "ecc_uncorrected",
-    "retired_single_bit",
-    "retired_double_bit",
-    "retired_pending",
-    "remapped_correctable",
-    "remapped_uncorrectable",
-    "remapped_pending",
-    "remapped_failure",
-)
-
 logger = logging.getLogger(__name__)
+
+
+class NvidiaOutcome(StrEnum):
+    """Terminal outcome of one NVIDIA telemetry query."""
+
+    SUCCESS = "success"
+    SUCCESS_BASELINE = "success_baseline"
+    START_FAILED = "start_failed"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
+    OUTPUT_LIMIT = "output_limit"
+    OUTPUT_FAILED = "output_failed"
+    INVALID_TIMEOUT = "invalid_timeout"
+    NONZERO_EXIT = "nonzero_exit"
+    INVALID_PAYLOAD = "invalid_payload"
+
+
+_COMMAND_FAILURES = {
+    CommandStatus.START_FAILED: NvidiaOutcome.START_FAILED,
+    CommandStatus.DEADLINE_EXCEEDED: NvidiaOutcome.DEADLINE_EXCEEDED,
+    CommandStatus.OUTPUT_LIMIT: NvidiaOutcome.OUTPUT_LIMIT,
+    CommandStatus.OUTPUT_FAILED: NvidiaOutcome.OUTPUT_FAILED,
+    CommandStatus.INVALID_TIMEOUT: NvidiaOutcome.INVALID_TIMEOUT,
+}
 
 
 class NvidiaDevice(BaseModel):
@@ -81,7 +95,25 @@ class NvidiaDevice(BaseModel):
 
     @property
     def abnormal(self) -> bool:
-        return any((getattr(self, field) or 0) > 0 for field in _ERROR_FIELDS)
+        error_counts = (
+            self.ecc_uncorrected,
+            self.retired_single_bit,
+            self.retired_double_bit,
+            self.retired_pending,
+            self.remapped_correctable,
+            self.remapped_uncorrectable,
+            self.remapped_pending,
+            self.remapped_failure,
+        )
+        return any((value or 0) > 0 for value in error_counts)
+
+
+@dataclass(frozen=True)
+class NvidiaSample:
+    """Validated devices and query outcome for one NVIDIA sample."""
+
+    outcome: NvidiaOutcome
+    devices: tuple[NvidiaDevice, ...] = ()
 
 
 class _NvidiaCollector:
@@ -90,9 +122,18 @@ class _NvidiaCollector:
         self._publisher = MetricSnapshotPublisher(max_records=_MAX_METRICS)
 
     def collect(self, runner: BoundedCommandRunner) -> None:
-        include_inventory = self._inventory_limiter.should_run()
-        collected = _collect(runner, include_inventory=include_inventory, publisher=self._publisher)
-        if include_inventory and not collected:
+        inventory_due = self._inventory_limiter.should_run()
+        sample = _sample(runner)
+        if sample is None:
+            if inventory_due:
+                self._inventory_limiter.reset()
+            return
+        _publish_summary(sample)
+        snapshots = [snapshot for device in sample.devices for snapshot in _error_snapshots(device)]
+        if inventory_due:
+            snapshots.extend(snapshot for device in sample.devices for snapshot in _inventory_snapshots(device))
+        self._publisher.publish(snapshots)
+        if inventory_due and not sample.devices:
             self._inventory_limiter.reset()
 
 
@@ -104,33 +145,32 @@ def start() -> PeriodicProbe:
 
 def collect(runner: BoundedCommandRunner) -> None:
     """Collect one sample, including slow-changing inventory."""
-    _collect(runner, include_inventory=True, publisher=MetricSnapshotPublisher(max_records=_MAX_METRICS))
+    sample = _sample(runner)
+    if sample is None:
+        return
+    _publish_summary(sample)
+    snapshots = [snapshot for device in sample.devices for snapshot in _error_snapshots(device)]
+    snapshots.extend(snapshot for device in sample.devices for snapshot in _inventory_snapshots(device))
+    MetricSnapshotPublisher(max_records=_MAX_METRICS).publish(snapshots)
 
 
-def _collect(
-    runner: BoundedCommandRunner,
-    *,
-    include_inventory: bool,
-    publisher: MetricSnapshotPublisher,
-) -> bool:
+def _sample(runner: BoundedCommandRunner) -> NvidiaSample | None:
     deadline = Deadline.from_seconds(TIMEOUT)
     result = _query(runner, _EXTENDED_FIELDS, deadline)
     if result.status is CommandStatus.CANCELLED:
-        return False
+        return None
     fields = _EXTENDED_FIELDS
-    outcome = "success"
+    outcome = NvidiaOutcome.SUCCESS
     if result.output is not None and result.output.returncode != 0:
         result = _query(runner, _BASELINE_FIELDS, deadline)
         fields = _BASELINE_FIELDS
-        outcome = "success_baseline"
+        outcome = NvidiaOutcome.SUCCESS_BASELINE
     if result.status is CommandStatus.CANCELLED:
-        return False
+        return None
     if result.output is None:
-        _record_health(result.status.value)
-        return False
+        return NvidiaSample(_COMMAND_FAILURES[result.status])
     if result.output.returncode != 0:
-        _record_health("nonzero_exit")
-        return False
+        return NvidiaSample(NvidiaOutcome.NONZERO_EXIT)
 
     try:
         parsed_rows = csv.reader(io.StringIO(result.output.stdout.decode()))
@@ -142,22 +182,24 @@ def _collect(
         devices = tuple(_parse_device(row, fields) for row in rows)
     except (UnicodeDecodeError, ValueError) as error:
         logger.warning("could not parse nvidia-smi telemetry: %s", error)
-        _record_health("invalid_payload")
-        return False
+        return NvidiaSample(NvidiaOutcome.INVALID_PAYLOAD)
 
-    _record_health(outcome)
+    return NvidiaSample(outcome, devices)
+
+
+def _publish_summary(sample: NvidiaSample) -> None:
+    _record_health(sample.outcome)
+    if not sample.devices:
+        return
     current = telemetry.snapshot_attributes("nvidia_smi", telemetry.CURRENT_SNAPSHOT)
-    healthy = sum(not device.abnormal for device in devices) if fields == _EXTENDED_FIELDS else 0
-    abnormal = sum(device.abnormal for device in devices) if fields == _EXTENDED_FIELDS else 0
-    states = {"total": len(devices), "healthy": healthy, "abnormal": abnormal}
-    if fields == _BASELINE_FIELDS:
-        states["unknown"] = len(devices)
+    extended = sample.outcome is NvidiaOutcome.SUCCESS
+    healthy = sum(not device.abnormal for device in sample.devices) if extended else 0
+    abnormal = sum(device.abnormal for device in sample.devices) if extended else 0
+    states = {"total": len(sample.devices), "healthy": healthy, "abnormal": abnormal}
+    if not extended:
+        states["unknown"] = len(sample.devices)
     for state, count in states.items():
         telemetry.gauge("gpu_devices", unit="{device}").set(float(count), attributes={"device_state": state, **current})
-
-    metrics = [metric for device in devices for metric in _device_metrics(device, include_inventory=include_inventory)]
-    publisher.publish(metrics)
-    return True
 
 
 def _query(
@@ -204,121 +246,121 @@ def _parse_device(row: list[str], fields: tuple[str, ...]) -> NvidiaDevice:
     return NvidiaDevice.model_validate(parsed)
 
 
-def _device_metrics(device: NvidiaDevice, *, include_inventory: bool) -> list[MetricSnapshot]:
+def _inventory_snapshots(device: NvidiaDevice) -> list[MetricSnapshot]:
     identity = {"gpu_uuid": device.uuid, "pci_bus_id": device.pci_bus_id}
-    metrics: list[MetricSnapshot] = []
-    if include_inventory:
-        inventory = {
-            **identity,
-            "device_kind": "gpu",
-            "gpu_model": device.model,
-            "driver_version": device.driver_version,
-        }
-        for name, value in (
-            ("compute_mode", device.compute_mode),
-            ("mig_mode", device.mig_mode),
-            ("vbios_version", device.vbios_version),
-        ):
-            if value is not None:
-                inventory[name] = value
-        metrics.extend(
-            (
-                _snapshot("hardware_inventory", 1.0, "", inventory),
-                _snapshot("gpu_memory_total_bytes", device.memory_total_mib * 1024**2, "By", identity),
+    inventory = {
+        **identity,
+        "device_kind": "gpu",
+        "gpu_model": device.model,
+        "driver_version": device.driver_version,
+    }
+    for name, value in (
+        ("compute_mode", device.compute_mode),
+        ("mig_mode", device.mig_mode),
+        ("vbios_version", device.vbios_version),
+    ):
+        if value is not None:
+            inventory[name] = value
+    snapshots = [
+        MetricSnapshot(
+            name="hardware_inventory",
+            value=1.0,
+            unit="",
+            attributes=inventory,
+            source_kind="nvidia_smi",
+            source_temporality=telemetry.CURRENT_SNAPSHOT,
+        ),
+        MetricSnapshot(
+            name="gpu_memory_total_bytes",
+            value=device.memory_total_mib * 1024**2,
+            unit="By",
+            attributes=identity,
+            source_kind="nvidia_smi",
+            source_temporality=telemetry.CURRENT_SNAPSHOT,
+        ),
+    ]
+    if device.power_limit_watts is not None:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_power_limit_watts",
+                value=device.power_limit_watts,
+                unit="W",
+                attributes=identity,
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CURRENT_SNAPSHOT,
             )
         )
-        if device.power_limit_watts is not None:
-            metrics.append(_snapshot("gpu_power_limit_watts", device.power_limit_watts, "W", identity))
+    return snapshots
 
-    _append_positive(
-        metrics,
-        "gpu_ecc_uncorrected_errors",
-        device.ecc_uncorrected,
-        identity,
-        unit="{error}",
-        temporality=telemetry.CUMULATIVE_SNAPSHOT,
+
+def _error_snapshots(device: NvidiaDevice) -> list[MetricSnapshot]:
+    identity = {"gpu_uuid": device.uuid, "pci_bus_id": device.pci_bus_id}
+    errors: tuple[tuple[str, float | None, str, dict[str, str], str], ...] = (
+        (
+            "gpu_ecc_uncorrected_errors",
+            device.ecc_uncorrected,
+            "{error}",
+            identity,
+            telemetry.CUMULATIVE_SNAPSHOT,
+        ),
+        (
+            "gpu_retired_pages",
+            device.retired_single_bit,
+            "{page}",
+            {**identity, "error_kind": "single_bit_ecc"},
+            telemetry.CUMULATIVE_SNAPSHOT,
+        ),
+        (
+            "gpu_retired_pages",
+            device.retired_double_bit,
+            "{page}",
+            {**identity, "error_kind": "double_bit_ecc"},
+            telemetry.CUMULATIVE_SNAPSHOT,
+        ),
+        ("gpu_retired_pages_pending", device.retired_pending, "", identity, telemetry.CURRENT_SNAPSHOT),
+        (
+            "gpu_row_remapped_rows",
+            device.remapped_correctable,
+            "{row}",
+            {**identity, "error_kind": "correctable"},
+            telemetry.CUMULATIVE_SNAPSHOT,
+        ),
+        (
+            "gpu_row_remapped_rows",
+            device.remapped_uncorrectable,
+            "{row}",
+            {**identity, "error_kind": "uncorrectable"},
+            telemetry.CUMULATIVE_SNAPSHOT,
+        ),
+        ("gpu_row_remap_pending", device.remapped_pending, "", identity, telemetry.CURRENT_SNAPSHOT),
+        ("gpu_row_remap_failures", device.remapped_failure, "{failure}", identity, telemetry.CURRENT_SNAPSHOT),
     )
-    _append_positive(
-        metrics,
-        "gpu_retired_pages",
-        device.retired_single_bit,
-        {**identity, "error_kind": "single_bit_ecc"},
-        unit="{page}",
-        temporality=telemetry.CUMULATIVE_SNAPSHOT,
-    )
-    _append_positive(
-        metrics,
-        "gpu_retired_pages",
-        device.retired_double_bit,
-        {**identity, "error_kind": "double_bit_ecc"},
-        unit="{page}",
-        temporality=telemetry.CUMULATIVE_SNAPSHOT,
-    )
-    _append_positive(metrics, "gpu_retired_pages_pending", device.retired_pending, identity)
-    _append_positive(
-        metrics,
-        "gpu_row_remapped_rows",
-        device.remapped_correctable,
-        {**identity, "error_kind": "correctable"},
-        unit="{row}",
-        temporality=telemetry.CUMULATIVE_SNAPSHOT,
-    )
-    _append_positive(
-        metrics,
-        "gpu_row_remapped_rows",
-        device.remapped_uncorrectable,
-        {**identity, "error_kind": "uncorrectable"},
-        unit="{row}",
-        temporality=telemetry.CUMULATIVE_SNAPSHOT,
-    )
-    _append_positive(metrics, "gpu_row_remap_pending", device.remapped_pending, identity)
-    _append_positive(metrics, "gpu_row_remap_failures", device.remapped_failure, identity, unit="{failure}")
-    return metrics
+    return [
+        MetricSnapshot(
+            name=name,
+            value=value,
+            unit=unit,
+            attributes=attributes,
+            source_kind="nvidia_smi",
+            source_temporality=temporality,
+        )
+        for name, value, unit, attributes, temporality in errors
+        if value is not None and value > 0
+    ]
 
 
-def _append_positive(
-    metrics: list[MetricSnapshot],
-    name: str,
-    value: float | None,
-    attributes: dict[str, str],
-    *,
-    unit: str = "",
-    temporality: str = telemetry.CURRENT_SNAPSHOT,
-) -> None:
-    if value is not None and value > 0:
-        metrics.append(_snapshot(name, value, unit, attributes, temporality=temporality))
-
-
-def _snapshot(
-    name: str,
-    value: float,
-    unit: str,
-    attributes: dict[str, str],
-    *,
-    temporality: str = telemetry.CURRENT_SNAPSHOT,
-) -> MetricSnapshot:
-    return MetricSnapshot(
-        name=name,
-        value=value,
-        unit=unit,
-        attributes=attributes,
-        source_kind="nvidia_smi",
-        source_temporality=temporality,
-    )
-
-
-def _record_health(outcome: str) -> None:
+def _record_health(outcome: NvidiaOutcome) -> None:
     current = {
-        "outcome": outcome,
+        "outcome": outcome.value,
         **telemetry.snapshot_attributes("nvidia_smi", telemetry.CURRENT_SNAPSHOT),
     }
-    available = outcome in {"success", "success_baseline"}
+    available = outcome in {NvidiaOutcome.SUCCESS, NvidiaOutcome.SUCCESS_BASELINE}
     telemetry.gauge("nvidia_health_available").set(float(available), attributes=current)
     if not available:
         telemetry.counter("nvidia_health_failures", unit="{failure}").add(
             1,
             attributes={
-                "failure_kind": outcome,
+                "failure_kind": outcome.value,
                 **telemetry.snapshot_attributes("nvidia_smi", telemetry.CUMULATIVE_SNAPSHOT),
             },
         )

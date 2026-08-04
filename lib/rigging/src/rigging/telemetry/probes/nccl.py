@@ -15,21 +15,28 @@ from pydantic import ValidationError
 from rigging import telemetry
 from rigging.telemetry.metrics import MetricSnapshot, MetricSnapshotPublisher
 from rigging.telemetry.probes import nccl_client, nccl_ras
-from rigging.telemetry.probes.runner import MAX_OUTPUT_BYTES, BoundedCommandRunner, CommandStatus, PeriodicProbe
+from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandStatus, PeriodicProbe
 
 TIMEOUT = 8.0
 _DEFAULT_INTERVAL = 10 * 60.0
 _MAX_METRICS = 4_096
-_SUCCESS_OUTCOME = "success"
+_MAX_CLIENT_RESULT_BYTES = 32 * 1024 * 1024
 _METRIC_RECORDS_NAME = "ras_metric_records"
 _CLIENT_COMMAND = (sys.executable, "-m", nccl_client.__name__)
 _CLIENT_FAILURES = {
-    nccl_client.TIMEOUT_EXIT_CODE: "client_timeout",
-    nccl_client.UNAVAILABLE_EXIT_CODE: "unavailable",
-    nccl_client.INVALID_CONFIG_EXIT_CODE: "invalid_client_config",
-    nccl_client.OUTPUT_LIMIT_EXIT_CODE: "client_response_limit",
-    nccl_client.INVALID_PAYLOAD_EXIT_CODE: "invalid_payload",
-    nccl_client.REDUCED_OUTPUT_LIMIT_EXIT_CODE: "reduced_output_limit",
+    nccl_client.TIMEOUT_EXIT_CODE: nccl_ras.NcclRasResult.CLIENT_TIMEOUT,
+    nccl_client.UNAVAILABLE_EXIT_CODE: nccl_ras.NcclRasResult.UNAVAILABLE,
+    nccl_client.INVALID_CONFIG_EXIT_CODE: nccl_ras.NcclRasResult.INVALID_CLIENT_CONFIG,
+    nccl_client.OUTPUT_LIMIT_EXIT_CODE: nccl_ras.NcclRasResult.CLIENT_RESPONSE_LIMIT,
+    nccl_client.INVALID_PAYLOAD_EXIT_CODE: nccl_ras.NcclRasResult.INVALID_PAYLOAD,
+}
+_RUNNER_FAILURES = {
+    CommandStatus.CANCELLED: nccl_ras.NcclRasResult.CANCELLED,
+    CommandStatus.START_FAILED: nccl_ras.NcclRasResult.START_FAILED,
+    CommandStatus.DEADLINE_EXCEEDED: nccl_ras.NcclRasResult.DEADLINE_EXCEEDED,
+    CommandStatus.OUTPUT_LIMIT: nccl_ras.NcclRasResult.RUNNER_OUTPUT_LIMIT,
+    CommandStatus.OUTPUT_FAILED: nccl_ras.NcclRasResult.OUTPUT_FAILED,
+    CommandStatus.INVALID_TIMEOUT: nccl_ras.NcclRasResult.INVALID_TIMEOUT,
 }
 
 logger = logging.getLogger(__name__)
@@ -43,14 +50,11 @@ class RasTrigger(StrEnum):
 
 
 @dataclass(frozen=True)
-class RasCollectionResult:
-    """Result of one client subprocess invocation."""
+class NcclRasCollection:
+    """Validated client output and parent-observed collection duration."""
 
-    outcome: str
-    duration: float
-    report: nccl_ras.NcclRasReport | None = None
-    observed_bytes: int | None = None
-    limit_bytes: int | None = None
+    client_output: nccl_ras.NcclRasClientOutput
+    duration_seconds: float
 
 
 class NcclRasSession:
@@ -58,36 +62,46 @@ class NcclRasSession:
 
     def __init__(self, *, interval: float, max_publish_records: int) -> None:
         self._publisher = MetricSnapshotPublisher(max_records=max_publish_records)
-        self._periodic = PeriodicProbe("nccl_ras", self._collect_periodic, interval=interval)
+        self._periodic = PeriodicProbe(
+            "nccl_ras",
+            self._collect_periodic,
+            interval=interval,
+            max_output_bytes=_MAX_CLIENT_RESULT_BYTES,
+        )
 
     def _collect_periodic(self, runner: BoundedCommandRunner) -> None:
         result = collect_ras(runner, detail=nccl_ras.RasDetail.PERIODIC, timeout=TIMEOUT)
         self._publish(result, RasTrigger.PERIODIC)
 
-    def capture_stall(self, timeout: float) -> RasCollectionResult:
+    def capture_stall(self, timeout: float) -> NcclRasCollection:
         """Stop periodic work, run one fresh detailed query, and publish its summary."""
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("stall capture timeout must be positive and finite")
         self._periodic.shutdown(min(2.0, timeout))
-        result = collect_ras(BoundedCommandRunner(), detail=nccl_ras.RasDetail.STALL, timeout=timeout)
+        runner = BoundedCommandRunner(max_output_bytes=_MAX_CLIENT_RESULT_BYTES)
+        result = collect_ras(runner, detail=nccl_ras.RasDetail.STALL, timeout=timeout)
         self._publish(result, RasTrigger.STALL)
         return result
 
-    def _publish(self, result: RasCollectionResult, trigger: RasTrigger) -> None:
-        if result.outcome == CommandStatus.CANCELLED.value:
+    def _publish(self, collection: NcclRasCollection, trigger: RasTrigger) -> None:
+        result = collection.client_output
+        if result.result is nccl_ras.NcclRasResult.CANCELLED:
             return
         _record_poll(
-            result.outcome,
-            result.duration,
+            result.result,
+            collection.duration_seconds,
             trigger,
             observed_bytes=result.observed_bytes,
             limit_bytes=result.limit_bytes,
         )
-        if result.outcome in {"client_timeout", CommandStatus.DEADLINE_EXCEEDED.value}:
+        if result.result in {
+            nccl_ras.NcclRasResult.CLIENT_TIMEOUT,
+            nccl_ras.NcclRasResult.DEADLINE_EXCEEDED,
+        }:
             _record_timeout(trigger)
         if result.report is None:
             return
-        snapshots = ras_snapshots(result, trigger=trigger)
+        snapshots = ras_snapshots(result.report, trigger=trigger)
         published = self._publisher.publish(snapshots)
         attributes = {
             "trigger": trigger.value,
@@ -122,7 +136,7 @@ def collect_ras(
     *,
     detail: nccl_ras.RasDetail,
     timeout: float,
-) -> RasCollectionResult:
+) -> NcclRasCollection:
     """Run the bounded client and return its validated compact result."""
     client_timeout = max(1, math.ceil(timeout * 0.75))
     started = monotonic()
@@ -132,62 +146,83 @@ def collect_ras(
     )
     duration = max(0.0, monotonic() - started)
     if command.output is None:
-        outcome = "runner_output_limit" if command.status is CommandStatus.OUTPUT_LIMIT else command.status.value
-        limit_bytes = MAX_OUTPUT_BYTES if command.status is CommandStatus.OUTPUT_LIMIT else None
-        return RasCollectionResult(
-            outcome,
-            duration,
+        client_output = nccl_ras.NcclRasClientOutput.failure(
+            _RUNNER_FAILURES[command.status],
+            f"NCCL RAS client runner ended with {command.status.value}",
             observed_bytes=command.observed_output_bytes,
-            limit_bytes=limit_bytes,
+            limit_bytes=runner.max_output_bytes if command.status is CommandStatus.OUTPUT_LIMIT else None,
         )
-    if command.output.returncode != 0:
-        outcome = _CLIENT_FAILURES.get(command.output.returncode, "nonzero_exit")
+    elif command.output.returncode != 0:
+        fallback_result = _CLIENT_FAILURES.get(command.output.returncode, nccl_ras.NcclRasResult.NONZERO_EXIT)
         try:
-            failure = nccl_ras.parse_client_result(command.output.stdout)
-            if isinstance(failure, nccl_ras.NcclRasFailure):
-                outcome = failure.failure_kind
-                return RasCollectionResult(
-                    outcome,
-                    duration,
-                    observed_bytes=failure.observed_bytes,
-                    limit_bytes=failure.limit_bytes,
-                )
-        except (ValidationError, ValueError):
-            pass
-        return RasCollectionResult(outcome, duration)
+            client_output = nccl_ras.NcclRasClientOutput.from_bytes(command.output.stdout)
+        except (ValidationError, ValueError) as error:
+            logger.warning(
+                "could not parse NCCL RAS client failure for exit code %d: %s",
+                command.output.returncode,
+                error,
+            )
+            client_output = nccl_ras.NcclRasClientOutput.failure(
+                fallback_result, f"client exited {command.output.returncode}"
+            )
+        if client_output.result is nccl_ras.NcclRasResult.SUCCESS:
+            client_output = nccl_ras.NcclRasClientOutput.failure(
+                nccl_ras.NcclRasResult.INVALID_CLIENT_OUTPUT,
+                f"client returned success payload with exit code {command.output.returncode}",
+            )
+    else:
+        try:
+            client_output = nccl_ras.NcclRasClientOutput.from_bytes(command.output.stdout)
+        except (ValidationError, ValueError) as error:
+            logger.warning("could not parse NCCL RAS client result: %s", error)
+            client_output = nccl_ras.NcclRasClientOutput.failure(
+                nccl_ras.NcclRasResult.INVALID_CLIENT_OUTPUT, str(error)
+            )
+    return NcclRasCollection(client_output=client_output, duration_seconds=duration)
 
-    try:
-        client_result = nccl_ras.parse_client_result(command.output.stdout)
-    except (ValidationError, ValueError) as error:
-        logger.warning("could not parse NCCL RAS client result: %s", error)
-        return RasCollectionResult("invalid_client_output", duration)
-    if isinstance(client_result, nccl_ras.NcclRasFailure):
-        return RasCollectionResult(client_result.failure_kind, duration)
-    return RasCollectionResult(_SUCCESS_OUTCOME, duration, client_result.report)
 
-
-def ras_snapshots(result: RasCollectionResult, *, trigger: RasTrigger) -> tuple[MetricSnapshot, ...]:
+def ras_snapshots(report: nccl_ras.NcclRasReport, *, trigger: RasTrigger) -> tuple[MetricSnapshot, ...]:
     """Translate one compact report into bounded, independently publishable snapshots."""
-    report = result.report
-    if report is None:
-        return ()
-    current = {"trigger": trigger.value, "detail": report.detail.value}
-    snapshots = [
-        _snapshot("communicators", report.input_communicators, "{communicator}", current),
-        _snapshot(
-            "runtime_inventory",
-            1,
-            "",
-            {
+    snapshots: list[MetricSnapshot] = [
+        MetricSnapshot(
+            name="communicators",
+            value=float(report.input_communicators),
+            unit="{communicator}",
+            attributes={"trigger": trigger.value, "detail": report.detail.value},
+            source_kind="nccl_ras",
+            source_temporality=telemetry.CURRENT_SNAPSHOT,
+        ),
+        MetricSnapshot(
+            name="runtime_inventory",
+            value=1.0,
+            unit="",
+            attributes={
                 "runtime_kind": "nccl",
                 "nccl_version": report.nccl_version,
                 "cuda_runtime_version": report.cuda_runtime_version,
                 "cuda_driver_version": report.cuda_driver_version,
-                **current,
+                "trigger": trigger.value,
+                "detail": report.detail.value,
             },
+            source_kind="nccl_ras",
+            source_temporality=telemetry.CURRENT_SNAPSHOT,
         ),
-        _snapshot("ras_collection_duration_seconds", report.collection_time_seconds, "s", current),
-        _snapshot("ras_collection_timeouts", report.ras_timeouts, "{timeout}", current),
+        MetricSnapshot(
+            name="ras_collection_duration_seconds",
+            value=report.collection_time_seconds,
+            unit="s",
+            attributes={"trigger": trigger.value, "detail": report.detail.value},
+            source_kind="nccl_ras",
+            source_temporality=telemetry.CURRENT_SNAPSHOT,
+        ),
+        MetricSnapshot(
+            name="ras_collection_timeouts",
+            value=float(report.ras_timeouts),
+            unit="{timeout}",
+            attributes={"trigger": trigger.value, "detail": report.detail.value},
+            source_kind="nccl_ras",
+            source_temporality=telemetry.CURRENT_SNAPSHOT,
+        ),
     ]
     reduction_counts = {
         "communicators_input": report.input_communicators,
@@ -200,25 +235,32 @@ def ras_snapshots(result: RasCollectionResult, *, trigger: RasTrigger) -> tuple[
         "rank_observations_omitted": report.omitted_rank_observations,
     }
     snapshots.extend(
-        _snapshot("ras_reduction_records", count, "{record}", {**current, "record_state": state})
+        MetricSnapshot(
+            name="ras_reduction_records",
+            value=float(count),
+            unit="{record}",
+            attributes={"record_state": state, "trigger": trigger.value, "detail": report.detail.value},
+            source_kind="nccl_ras",
+            source_temporality=telemetry.CURRENT_SNAPSHOT,
+        )
         for state, count in reduction_counts.items()
     )
     for communicator in report.communicators:
-        identity = {
-            "communicator_hash": communicator.communicator_hash,
-            "secondary_hash": communicator.secondary_hash,
-            **current,
-        }
         snapshots.append(
-            _snapshot(
-                "communicator_state",
-                1,
-                "",
-                {
-                    **identity,
+            MetricSnapshot(
+                name="communicator_state",
+                value=1.0,
+                unit="",
+                attributes={
+                    "communicator_hash": communicator.communicator_hash,
+                    "secondary_hash": communicator.secondary_hash,
                     "lifecycle_state": communicator.lifecycle_state,
                     "collective_mismatch": str(communicator.collective_mismatch).lower(),
+                    "trigger": trigger.value,
+                    "detail": report.detail.value,
                 },
+                source_kind="nccl_ras",
+                source_temporality=telemetry.CURRENT_SNAPSHOT,
             )
         )
         rank_counts = {
@@ -229,16 +271,29 @@ def ras_snapshots(result: RasCollectionResult, *, trigger: RasTrigger) -> tuple[
             "considered_dead": communicator.considered_dead_ranks,
         }
         snapshots.extend(
-            _snapshot("communicator_ranks", count, "{rank}", {**identity, "rank_state": state})
+            MetricSnapshot(
+                name="communicator_ranks",
+                value=float(count),
+                unit="{rank}",
+                attributes={
+                    "communicator_hash": communicator.communicator_hash,
+                    "secondary_hash": communicator.secondary_hash,
+                    "rank_state": state,
+                    "trigger": trigger.value,
+                    "detail": report.detail.value,
+                },
+                source_kind="nccl_ras",
+                source_temporality=telemetry.CURRENT_SNAPSHOT,
+            )
             for state, count in rank_counts.items()
         )
     for rank in report.rank_observations:
         snapshots.append(
-            _snapshot(
-                "communicator_rank_status",
-                float(rank.rank_state == "reported"),
-                "",
-                {
+            MetricSnapshot(
+                name="communicator_rank_status",
+                value=float(rank.rank_state == "reported"),
+                unit="",
+                attributes={
                     "communicator_hash": rank.communicator_hash,
                     "secondary_hash": rank.secondary_hash,
                     "rank": str(rank.rank),
@@ -255,54 +310,49 @@ def ras_snapshots(result: RasCollectionResult, *, trigger: RasTrigger) -> tuple[
                     "abort_flag": str(rank.abort_flag).lower(),
                     "unresponsive": str(rank.unresponsive).lower(),
                     "considered_dead": str(rank.considered_dead).lower(),
-                    **current,
+                    "trigger": trigger.value,
+                    "detail": report.detail.value,
                 },
+                source_kind="nccl_ras",
+                source_temporality=telemetry.CURRENT_SNAPSHOT,
             )
         )
     for progress in report.progress:
-        identity = {
-            "communicator_hash": progress.communicator_hash,
-            "secondary_hash": progress.secondary_hash,
-            "collective": progress.collective,
-            **current,
-        }
         snapshots.extend(
             (
-                _snapshot(
-                    "collective_operations",
-                    progress.minimum,
-                    "{operation}",
-                    {**identity, "rank_statistic": "minimum"},
-                    temporality=telemetry.CUMULATIVE_SNAPSHOT,
+                MetricSnapshot(
+                    name="collective_operations",
+                    value=float(progress.minimum),
+                    unit="{operation}",
+                    attributes={
+                        "communicator_hash": progress.communicator_hash,
+                        "secondary_hash": progress.secondary_hash,
+                        "collective": progress.collective,
+                        "rank_statistic": "minimum",
+                        "trigger": trigger.value,
+                        "detail": report.detail.value,
+                    },
+                    source_kind="nccl_ras",
+                    source_temporality=telemetry.CUMULATIVE_SNAPSHOT,
                 ),
-                _snapshot(
-                    "collective_operations",
-                    progress.maximum,
-                    "{operation}",
-                    {**identity, "rank_statistic": "maximum"},
-                    temporality=telemetry.CUMULATIVE_SNAPSHOT,
+                MetricSnapshot(
+                    name="collective_operations",
+                    value=float(progress.maximum),
+                    unit="{operation}",
+                    attributes={
+                        "communicator_hash": progress.communicator_hash,
+                        "secondary_hash": progress.secondary_hash,
+                        "collective": progress.collective,
+                        "rank_statistic": "maximum",
+                        "trigger": trigger.value,
+                        "detail": report.detail.value,
+                    },
+                    source_kind="nccl_ras",
+                    source_temporality=telemetry.CUMULATIVE_SNAPSHOT,
                 ),
             )
         )
     return tuple(snapshots)
-
-
-def _snapshot(
-    name: str,
-    value: int | float,
-    unit: str,
-    attributes: dict[str, str],
-    *,
-    temporality: str = telemetry.CURRENT_SNAPSHOT,
-) -> MetricSnapshot:
-    return MetricSnapshot(
-        name=name,
-        value=float(value),
-        unit=unit,
-        attributes=attributes,
-        source_kind="nccl_ras",
-        source_temporality=temporality,
-    )
 
 
 def _record_timeout(trigger: RasTrigger) -> None:
@@ -316,16 +366,16 @@ def _record_timeout(trigger: RasTrigger) -> None:
 
 
 def _record_poll(
-    outcome: str,
+    outcome: nccl_ras.NcclRasResult,
     duration: float,
     trigger: RasTrigger,
     *,
     observed_bytes: int | None = None,
     limit_bytes: int | None = None,
 ) -> None:
-    available = outcome == _SUCCESS_OUTCOME
+    available = outcome is nccl_ras.NcclRasResult.SUCCESS
     current = {
-        "outcome": outcome,
+        "outcome": outcome.value,
         "trigger": trigger.value,
         **telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT),
     }
@@ -340,7 +390,7 @@ def _record_poll(
         telemetry.counter("ras_poll_failures", unit="{failure}").add(
             1,
             attributes={
-                "failure_kind": outcome,
+                "failure_kind": outcome.value,
                 "trigger": trigger.value,
                 **limit_attributes,
                 **telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT),

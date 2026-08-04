@@ -20,7 +20,7 @@ from rigging import telemetry
 from rigging.telemetry.probes import nccl, nccl_client
 
 from levanter.callbacks.progress_watchdog import ProgressTimeout
-from levanter.tracker import BackgroundTracker, Tracker, TrackerConfig, get_tracker
+from levanter.tracker import Tracker, TrackerConfig, get_tracker
 from levanter.tracker.histogram import SummaryStats
 
 logger = logging.getLogger(__name__)
@@ -144,11 +144,6 @@ def capture_stall_diagnostics(timeout: ProgressTimeout) -> None:
     except KeyError:
         logger.warning("No telemetry tracker is available for stalled-training diagnostics")
         return
-    if isinstance(tracker, BackgroundTracker):
-        tracker = tracker.wrapped
-    if not isinstance(tracker, TelemetryTracker):
-        logger.warning("The active telemetry tracker does not support stalled-training diagnostics")
-        return
     logger.error(
         "Capturing NCCL RAS after %s made no progress for %.1f seconds",
         timeout.event.value,
@@ -230,7 +225,8 @@ class TelemetryTracker(Tracker):
         """Stop periodic RAS polling, publish a fresh stall sample, and flush telemetry."""
         if self._nccl_ras_probe is not None:
             self._nccl_ras_probe.capture_stall(_NCCL_STALL_CAPTURE_SECONDS)
-        telemetry.shutdown(_STALL_TELEMETRY_FLUSH_SECONDS)
+        if not telemetry.flush(_STALL_TELEMETRY_FLUSH_SECONDS):
+            logger.warning("Telemetry did not flush within the stalled-training diagnostic budget")
 
 
 @TrackerConfig.register_subclass("telemetry")

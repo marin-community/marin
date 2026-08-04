@@ -5,17 +5,15 @@
 
 import json
 from collections import Counter
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
-    TypeAdapter,
     ValidationError,
     field_validator,
     model_validator,
@@ -28,7 +26,6 @@ MAX_RANK_OBSERVATIONS = 512
 MAX_PROGRESS_SUMMARIES = 3_072
 MAX_FIELD_BYTES = 256
 MAX_EXACT_COUNT = 2**53 - 1
-MAX_CLIENT_OUTPUT_BYTES = 192 * 1024
 _MAX_FAILURE_MESSAGE_CHARS = 1_024
 _COLLECTIVE_OUTLIER_PREFIX = "collective_outlier:"
 _RUNNING_INIT_STATE = 0
@@ -57,6 +54,25 @@ class RasDetail(StrEnum):
 
     PERIODIC = "periodic"
     STALL = "stall"
+
+
+class NcclRasResult(StrEnum):
+    """Terminal outcome of one NCCL RAS collection attempt."""
+
+    SUCCESS = "success"
+    CLIENT_TIMEOUT = "client_timeout"
+    UNAVAILABLE = "unavailable"
+    INVALID_CLIENT_CONFIG = "invalid_client_config"
+    CLIENT_RESPONSE_LIMIT = "client_response_limit"
+    INVALID_PAYLOAD = "invalid_payload"
+    NONZERO_EXIT = "nonzero_exit"
+    INVALID_CLIENT_OUTPUT = "invalid_client_output"
+    RUNNER_OUTPUT_LIMIT = "runner_output_limit"
+    CANCELLED = "cancelled"
+    START_FAILED = "start_failed"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
+    OUTPUT_FAILED = "output_failed"
+    INVALID_TIMEOUT = "invalid_timeout"
 
 
 class _Model(BaseModel):
@@ -223,25 +239,60 @@ class NcclRasReport(_Model):
     rank_observations: tuple[RankObservation, ...]
 
 
-class NcclRasSuccess(_Model):
-    """Successful client result containing reduced RAS evidence."""
+class NcclRasClientOutput(_Model):
+    """Typed wire result emitted by the NCCL RAS client subprocess."""
 
-    kind: Literal["success"] = "success"
-    report: NcclRasReport
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-
-class NcclRasFailure(_Model):
-    """Failure returned by the client instead of a reduced report."""
-
-    kind: Literal["failure"] = "failure"
-    failure_kind: BoundedText
-    message: str = Field(max_length=_MAX_FAILURE_MESSAGE_CHARS)
+    result: NcclRasResult
+    report: NcclRasReport | None = None
+    message: str | None = Field(default=None, max_length=_MAX_FAILURE_MESSAGE_CHARS)
     observed_bytes: Count | None = None
     limit_bytes: Count | None = None
 
+    @model_validator(mode="after")
+    def _validate_result(self) -> Self:
+        if self.result is NcclRasResult.SUCCESS:
+            if self.report is None:
+                raise ValueError("successful NCCL RAS result requires a report")
+            if self.message is not None or self.observed_bytes is not None or self.limit_bytes is not None:
+                raise ValueError("successful NCCL RAS result must not contain failure context")
+        elif self.report is not None or self.message is None:
+            raise ValueError("failed NCCL RAS result requires a message and must not contain a report")
+        return self
 
-NcclRasClientResult = Annotated[NcclRasSuccess | NcclRasFailure, Field(discriminator="kind")]
-_CLIENT_RESULT_ADAPTER = TypeAdapter(NcclRasClientResult)
+    @classmethod
+    def success(cls, report: NcclRasReport) -> Self:
+        """Return a successful result for ``report``."""
+        return cls(result=NcclRasResult.SUCCESS, report=report)
+
+    @classmethod
+    def failure(
+        cls,
+        result: NcclRasResult,
+        message: str,
+        *,
+        observed_bytes: int | None = None,
+        limit_bytes: int | None = None,
+    ) -> Self:
+        """Return a failed result with bounded diagnostic context."""
+        if result is NcclRasResult.SUCCESS:
+            raise ValueError("failure result must not be success")
+        return cls(
+            result=result,
+            message=message[:_MAX_FAILURE_MESSAGE_CHARS],
+            observed_bytes=observed_bytes,
+            limit_bytes=limit_bytes,
+        )
+
+    def to_bytes(self) -> bytes:
+        """Serialize this result for the client subprocess boundary."""
+        return self.model_dump_json().encode()
+
+    @classmethod
+    def from_bytes(cls, payload: bytes) -> Self:
+        """Validate a result returned by the client subprocess."""
+        return cls.model_validate_json(payload)
 
 
 def reduce_response(response: bytes, *, detail: RasDetail) -> NcclRasReport:
@@ -294,93 +345,6 @@ def reduce_response(response: bytes, *, detail: RasDetail) -> NcclRasReport:
         progress=tuple(progress),
         rank_observations=tuple(observations),
     )
-
-
-def serialize_success(report: NcclRasReport) -> bytes:
-    """Serialize a success result, dropping progress before anomalous-rank detail."""
-    payload = _success_payload(report)
-    if len(payload) <= MAX_CLIENT_OUTPUT_BYTES:
-        return payload
-
-    progress_count = _largest_fitting_prefix(
-        len(report.progress),
-        lambda count: _bounded_report(report, progress_count=count, observation_count=len(report.rank_observations)),
-    )
-    bounded = _bounded_report(
-        report,
-        progress_count=progress_count,
-        observation_count=len(report.rank_observations),
-    )
-    payload = _success_payload(bounded)
-    if len(payload) <= MAX_CLIENT_OUTPUT_BYTES:
-        return payload
-
-    observation_count = _largest_fitting_prefix(
-        len(report.rank_observations),
-        lambda count: _bounded_report(report, progress_count=0, observation_count=count),
-    )
-    bounded = _bounded_report(report, progress_count=0, observation_count=observation_count)
-    payload = _success_payload(bounded)
-    if len(payload) > MAX_CLIENT_OUTPUT_BYTES:
-        raise ValueError("NCCL RAS reduced report exceeds client output limit")
-    return payload
-
-
-def _largest_fitting_prefix(length: int, report_for_length: Callable[[int], NcclRasReport]) -> int:
-    low = 0
-    high = length
-    while low < high:
-        candidate = (low + high + 1) // 2
-        if len(_success_payload(report_for_length(candidate))) <= MAX_CLIENT_OUTPUT_BYTES:
-            low = candidate
-        else:
-            high = candidate - 1
-    return low
-
-
-def _bounded_report(
-    report: NcclRasReport,
-    *,
-    progress_count: int,
-    observation_count: int,
-) -> NcclRasReport:
-    return report.model_copy(
-        update={
-            "progress": report.progress[:progress_count],
-            "omitted_progress_summaries": report.input_progress_summaries - progress_count,
-            "rank_observations": report.rank_observations[:observation_count],
-            "omitted_rank_observations": report.input_rank_observations - observation_count,
-        }
-    )
-
-
-def _success_payload(report: NcclRasReport) -> bytes:
-    return NcclRasSuccess(report=report).model_dump_json().encode()
-
-
-def serialize_failure(
-    failure_kind: str,
-    message: str,
-    *,
-    observed_bytes: int | None = None,
-    limit_bytes: int | None = None,
-) -> bytes:
-    """Serialize one typed client failure."""
-    return (
-        NcclRasFailure(
-            failure_kind=failure_kind,
-            message=message[:_MAX_FAILURE_MESSAGE_CHARS],
-            observed_bytes=observed_bytes,
-            limit_bytes=limit_bytes,
-        )
-        .model_dump_json()
-        .encode()
-    )
-
-
-def parse_client_result(payload: bytes) -> NcclRasSuccess | NcclRasFailure:
-    """Validate one compact result emitted by :mod:`nccl_client`."""
-    return _CLIENT_RESULT_ADAPTER.validate_json(payload)
 
 
 def _reduce_communicator(
