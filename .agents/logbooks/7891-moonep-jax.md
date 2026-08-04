@@ -2017,3 +2017,21 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - New question: The rack training run reaches only `101.9 GB/s` with the same kernel. At `333.7 GB/s` the same traffic would take `4.63 s`, which gives a `15.6 s` step and about `16.6%` MFU.
 - Candidate causes for the rack gap: 64 ranks against 16, skewed message sizes against balanced, and `MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT = 1`, which serializes every collective.
 - Next: Measure the ragged rate against rank count and against message skew. Then test the serialization limit.
+
+### 2026-08-04 00:45 UTC - MNEP-109 rejects message size as the cause
+
+- Setup: 16 GPUs on four nodes, balanced traffic, one wheel, four message sizes.
+- Ragged rate: `304.7 GB/s` at `4,096` rows for each peer, and `333.8 GB/s` at `32,768` rows.
+- Result: The kernel loses only `9%` across an eight-times size change. Training uses `4,096` rows for each peer.
+- Conclusion: Message size does not explain the gap between `333.7 GB/s` and the `101.9 GB/s` of the rack run.
+- Side result: The padded collective loses `32%` across the same range, from `531.9` to `360.3 GB/s`. At the training message size the two collectives are much closer than the large-message numbers imply.
+
+### 2026-08-04 00:51 UTC - MNEP-111 measures the skew penalty
+
+- Setup: 16 GPUs, `8,192` rows for each peer on average, and a largest message `1.99` times the mean. This is the ratio that MNEP-105 measured on real routing.
+- Ragged rate: `257.1 GB/s` with skew, against `323.4 GB/s` balanced. The penalty is `21%`.
+- Interpretation: The kernel is not bound by the largest message. A pure maximum bound predicts `162 GB/s`.
+- Combined estimate: Size and skew together give about `242 GB/s` at the training shape.
+- Remaining gap: The rack run reaches `101.9 GB/s`, so a factor of about `2.4` is still unexplained.
+- Remaining candidates: 64 ranks against 16, and contention with the expert GEMM in the real training graph. The benchmark runs each collective alone.
+- Note: MNEP-110 failed with an out-of-memory error before this run. The padded capacity comes from the largest cell, so skew `1.99` at `524,288` rows asked for about `21 GB` of padded buffers.
