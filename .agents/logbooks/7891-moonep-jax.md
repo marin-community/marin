@@ -2129,3 +2129,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Regression: MNEP-074 reached `10.004%` MFU on the multi-context wheel before the bucket parameter existed. The receive-order layout, the ordered-dispatch barrier, and the sonic layout kernels all landed after it. The one-bucket graph today is not the MNEP-074 graph.
 - Consequence: MNEP-074 is not reproducible with current code. The best reproducible result is MNEP-102 at `9.937%`.
 - Open bug: `token_buckets=1` with `eager_dispatch` produces non-finite gradients at EP64 while passing the four-GPU gate.
+
+### 2026-08-04 06:20 UTC - MNEP-120 nsys profile of the best reproducible config
+
+- Treatment: Repeat MNEP-102 exactly (two buckets, compute-overlap schedule, exact MoonEP, ragged direct-device transport, one-remote-CTA wheel) under `nsys profile`.
+- Hook: `IRIS_NSYS_TASKS=first` selects task zero. The fray backend composes `iris.hooks.nsys_main` into the callable entrypoint.
+- Scope: One report for task zero, which covers its four GPUs. The other 15 tasks exec unprofiled and pay nothing.
+- Second measure: `--xla_dump_to` writes the HLO, which gives the operand shape of each `ragged-all-to-all` call. The traffic figure of `1,546 GB` for each GPU is currently a calculation from model shapes, not an observation.
+- Questions: Whether the 136,275 fusion launches and 24,716 device copies are launch-bound, and where the transport kernel sits against the API calls that enqueue it.
+- Gate: Require five finite steps, zero dropped assignments, one nsys report, and one HLO dump.
+- Risk: Report delivery on termination is best-effort. A large report can lose a race with SIGKILL after SIGTERM.
