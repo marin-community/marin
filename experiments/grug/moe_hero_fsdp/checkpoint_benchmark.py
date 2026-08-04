@@ -17,6 +17,7 @@ import click
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
 from levanter.tracker.telemetry import TelemetryConfig
@@ -35,8 +36,9 @@ from experiments.grug.moe_hero_fsdp.launch import (
     HERO_FSDP_BATCH_SIZE,
     HERO_MIXED_PRECISION,
     HERO_NODES_PER_RACK,
+    HERO_PROCESS_STALL_TIMEOUT,
     HERO_PROCESSES_PER_TASK,
-    HERO_TRAINING_STALL_TIMEOUT,
+    HERO_TRAIN_STEP_TIMEOUT,
     _slimpajama_6b_dataset,
 )
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
@@ -154,8 +156,12 @@ def build_checkpoint_benchmark_run(
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
-            tracker=TelemetryConfig(training_stall_timeout=HERO_TRAINING_STALL_TIMEOUT),
+            tracker=TelemetryConfig(),
             watch=WatchConfig(interval=20),
+            progress_watchdog=ProgressWatchdogConfig(
+                step_timeout=HERO_TRAIN_STEP_TIMEOUT,
+                process_timeout=HERO_PROCESS_STALL_TIMEOUT,
+            ),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
