@@ -2168,3 +2168,22 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Conclusion: The reported 50-times effect does not occur here. This work sits far above the starvation point, because it uses two CPUs for each GPU and not one CPU for each task.
 - Gap: `332.3 GB/s` against `106 GB/s` in training is still `3.1` times. CPU count does not explain the training gap.
 - Cost: The 32-CPU job waited 48 minutes for four nodes. The 2-CPU job ran in two minutes. A 16-node gang at 32 CPUs is worse. Keep eight CPUs.
+
+### 2026-08-04 10:15 UTC - MNEP-120 nsys result and the CTA-per-peer hypothesis
+
+- Report: `s3://marin-us-east-02a/tmp/ttl=30d/iris-profiles/rav/mnep-120-.../r00000-s1nrxs64.nsys-rep`, 353 MB, exported to SQLite on an aarch64 task pod because no local nsys exists.
+- Launch behavior: The delay from the launch call to the kernel start is `48.95 ms` at p50 and `213.9 ms` at p90. The host runs ahead of the device, so the 200,770 launches in each step do not limit the step.
+- Device copies: 136,268 device-to-device copies move `7,818 GB` across five steps. Only `7.8 GB` of that overlaps the ragged window, which is `0.1 GB/s`. Memory contention does not explain the gap.
+- Overlap: Other kernels occupy `16.35 s` of the `59.74 s` ragged window, which is `27%`.
+- Grid: The kernel always launches with `grid:64,1,1` and `block:512,1,1`, independent of rank count.
+- Hypothesis: The kernel gives about four CTAs to each peer at 16 ranks and about one CTA to each peer at 64 ranks. If per-peer bandwidth follows the CTA count, this is a candidate for the whole gap.
+- Support: Every earlier test held rank count at 16 or 32. MNEP-116 at 32 ranks gives two CTAs for each peer and shows no loss.
+- Distinct from the earlier idea: Patch `0023` changes remote completion, not the transfer grid, so MNEP-102 being faster than MNEP-092c does not contradict this.
+
+### 2026-08-04 10:16 UTC - MNEP-124 64-rank transport contract
+
+- Treatment: Run the transport benchmark on 16 nodes, which is 64 ranks, with the one-remote-CTA wheel.
+- Shape: `524,288` rows for each rank, which gives `8,192` rows for each peer and matches the 16-rank and 32-rank points.
+- Comparison: 16 ranks give `310.8 GB/s` and 32 ranks give `335.9 GB/s` at this peer message size.
+- Prediction: A rate near `100 GB/s` supports the CTA-per-peer hypothesis and explains the training gap. A rate near `300 GB/s` rejects it and moves the cause into the training graph.
+- Gate: One complete result file with all three variants.
