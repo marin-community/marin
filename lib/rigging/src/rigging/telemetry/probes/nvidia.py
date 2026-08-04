@@ -1,19 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Collect stable NVIDIA inventory and slow-health metrics."""
+"""Collect sparse NVIDIA inventory and health summaries."""
 
 import csv
 import io
 import logging
-from typing import NamedTuple
+from time import monotonic
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from rigging import telemetry
-from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandOutput, PeriodicProbe
+from rigging.telemetry.metrics import MetricSnapshot, MetricSnapshotPublisher
+from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandResult, CommandStatus, PeriodicProbe
 from rigging.timing import Deadline
 
 TIMEOUT = 5.0
+_INVENTORY_INTERVAL = 60 * 60.0
 _MAX_DEVICES = 256
+_MAX_METRICS = 4_096
 _BASELINE_FIELDS = (
     "uuid",
     "pci.bus_id",
@@ -37,51 +42,130 @@ _EXTENDED_FIELDS = (
     "remapped_rows.failure",
 )
 _NOT_AVAILABLE = frozenset({"", "n/a", "[n/a]", "not supported", "[not supported]", "unknown error"})
+_ERROR_FIELDS = (
+    "ecc_uncorrected",
+    "retired_single_bit",
+    "retired_double_bit",
+    "retired_pending",
+    "remapped_correctable",
+    "remapped_uncorrectable",
+    "remapped_pending",
+    "remapped_failure",
+)
 
 logger = logging.getLogger(__name__)
 
 
+class NvidiaDevice(BaseModel):
+    """Validated values parsed from one nvidia-smi CSV row."""
+
+    model_config = ConfigDict(frozen=True)
+
+    uuid: str = Field(min_length=1, max_length=256)
+    pci_bus_id: str = Field(min_length=1, max_length=256)
+    model: str = Field(min_length=1, max_length=256)
+    driver_version: str = Field(min_length=1, max_length=256)
+    memory_total_mib: float = Field(ge=0, allow_inf_nan=False)
+    compute_mode: str | None = Field(default=None, max_length=256)
+    mig_mode: str | None = Field(default=None, max_length=256)
+    power_limit_watts: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    vbios_version: str | None = Field(default=None, max_length=256)
+    ecc_uncorrected: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    retired_single_bit: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    retired_double_bit: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    retired_pending: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    remapped_correctable: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    remapped_uncorrectable: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    remapped_pending: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    remapped_failure: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+    @property
+    def abnormal(self) -> bool:
+        return any((getattr(self, field) or 0) > 0 for field in _ERROR_FIELDS)
+
+
+class _NvidiaCollector:
+    def __init__(self) -> None:
+        self._last_inventory = float("-inf")
+        self._publisher = MetricSnapshotPublisher(max_records=_MAX_METRICS)
+
+    def collect(self, runner: BoundedCommandRunner) -> None:
+        now = monotonic()
+        include_inventory = now - self._last_inventory >= _INVENTORY_INTERVAL
+        if _collect(runner, include_inventory=include_inventory, publisher=self._publisher):
+            if include_inventory:
+                self._last_inventory = now
+
+
 def start() -> PeriodicProbe:
-    """Collect NVIDIA inventory and slow-health evidence until shutdown."""
-    return PeriodicProbe("nvidia_smi", collect)
-
-
-class _Metric(NamedTuple):
-    name: str
-    value: float
-    unit: str
-    attributes: dict[str, str]
+    """Collect NVIDIA summary health and sparse detail until shutdown."""
+    collector = _NvidiaCollector()
+    return PeriodicProbe("nvidia_smi", collector.collect)
 
 
 def collect(runner: BoundedCommandRunner) -> None:
+    """Collect one sample, including slow-changing inventory."""
+    _collect(runner, include_inventory=True, publisher=MetricSnapshotPublisher(max_records=_MAX_METRICS))
+
+
+def _collect(
+    runner: BoundedCommandRunner,
+    *,
+    include_inventory: bool,
+    publisher: MetricSnapshotPublisher,
+) -> bool:
     deadline = Deadline.from_seconds(TIMEOUT)
     result = _query(runner, _EXTENDED_FIELDS, deadline)
-    if result is None:
-        return
+    if result.status is CommandStatus.CANCELLED:
+        return False
     fields = _EXTENDED_FIELDS
-    if result.returncode != 0:
+    outcome = "success"
+    if result.output is not None and result.output.returncode != 0:
         result = _query(runner, _BASELINE_FIELDS, deadline)
         fields = _BASELINE_FIELDS
-    if result is None or result.returncode != 0:
-        return
+        outcome = "success_baseline"
+    if result.status is CommandStatus.CANCELLED:
+        return False
+    if result.output is None:
+        _record_health(result.status.value)
+        return False
+    if result.output.returncode != 0:
+        _record_health("nonzero_exit")
+        return False
 
     try:
-        rows = [row for row in csv.reader(io.StringIO(result.stdout.decode())) if any(value.strip() for value in row)]
+        parsed_rows = csv.reader(io.StringIO(result.output.stdout.decode()))
+        rows = [row for row in parsed_rows if any(value.strip() for value in row)]
+        if not rows:
+            raise ValueError("nvidia-smi returned no devices")
         if len(rows) > _MAX_DEVICES:
             raise ValueError("nvidia-smi device limit exceeded")
-        metrics = [metric for row in rows for metric in _row_metrics(row, fields)]
+        devices = tuple(_parse_device(row, fields) for row in rows)
     except (UnicodeDecodeError, ValueError) as error:
         logger.warning("could not parse nvidia-smi telemetry: %s", error)
-        return
-    for metric in metrics:
-        telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
+        _record_health("invalid_payload")
+        return False
+
+    _record_health(outcome)
+    current = telemetry.snapshot_attributes("nvidia_smi", telemetry.CURRENT_SNAPSHOT)
+    healthy = sum(not device.abnormal for device in devices) if fields == _EXTENDED_FIELDS else 0
+    abnormal = sum(device.abnormal for device in devices) if fields == _EXTENDED_FIELDS else 0
+    states = {"total": len(devices), "healthy": healthy, "abnormal": abnormal}
+    if fields == _BASELINE_FIELDS:
+        states["unknown"] = len(devices)
+    for state, count in states.items():
+        telemetry.gauge("gpu_devices", unit="{device}").set(float(count), attributes={"device_state": state, **current})
+
+    metrics = [metric for device in devices for metric in _device_metrics(device, include_inventory=include_inventory)]
+    publisher.publish(metrics)
+    return True
 
 
 def _query(
     runner: BoundedCommandRunner,
     fields: tuple[str, ...],
     deadline: Deadline,
-) -> CommandOutput | None:
+) -> CommandResult:
     return runner.run_result(
         (
             "nvidia-smi",
@@ -89,89 +173,156 @@ def _query(
             "--format=csv,noheader,nounits",
         ),
         deadline.remaining_seconds(),
-    ).output
+    )
 
 
-def _row_metrics(row: list[str], fields: tuple[str, ...]) -> list[_Metric]:
+def _parse_device(row: list[str], fields: tuple[str, ...]) -> NvidiaDevice:
     if len(row) != len(fields):
         raise ValueError("unexpected nvidia-smi column count")
     values = {field: value.strip() for field, value in zip(fields, row, strict=True)}
-    identity = {
-        "gpu_uuid": _required(values["uuid"]),
+    parsed: dict[str, object] = {
+        "uuid": _required(values["uuid"]),
         "pci_bus_id": _required(values["pci.bus_id"]),
-    }
-    current = {**identity, **telemetry.snapshot_attributes("nvidia_smi", telemetry.CURRENT_SNAPSHOT)}
-    inventory = {
-        **current,
-        "device_kind": "gpu",
-        "gpu_model": _required(values["name"]),
+        "model": _required(values["name"]),
         "driver_version": _required(values["driver_version"]),
+        "memory_total_mib": _required_number(values["memory.total"]),
     }
     if fields == _EXTENDED_FIELDS:
-        _add_optional(inventory, "compute_mode", values["compute_mode"])
-        _add_optional(inventory, "mig_mode", values["mig.mode.current"])
-        _add_optional(inventory, "vbios_version", values["vbios_version"])
+        parsed.update(
+            compute_mode=_available_text(values["compute_mode"]),
+            mig_mode=_available_text(values["mig.mode.current"]),
+            power_limit_watts=_available_number(values["power.limit"]),
+            vbios_version=_available_text(values["vbios_version"]),
+            ecc_uncorrected=_available_number(values["ecc.errors.uncorrected.volatile.total"]),
+            retired_single_bit=_available_number(values["retired_pages.single_bit_ecc.count"]),
+            retired_double_bit=_available_number(values["retired_pages.double_bit_ecc.count"]),
+            retired_pending=_available_number(values["retired_pages.pending"]),
+            remapped_correctable=_available_number(values["remapped_rows.correctable"]),
+            remapped_uncorrectable=_available_number(values["remapped_rows.uncorrectable"]),
+            remapped_pending=_available_number(values["remapped_rows.pending"]),
+            remapped_failure=_available_number(values["remapped_rows.failure"]),
+        )
+    return NvidiaDevice.model_validate(parsed)
 
-    metrics: list[_Metric] = [_Metric("hardware_inventory", 1.0, "", inventory)]
-    _append(metrics, "gpu_memory_total_bytes", values["memory.total"], current, scale=1024**2, unit="By")
-    if fields == _BASELINE_FIELDS:
-        return metrics
 
-    _append(metrics, "gpu_power_limit_watts", values["power.limit"], current, unit="W")
-    cumulative = {**identity, **telemetry.snapshot_attributes("nvidia_smi", telemetry.CUMULATIVE_SNAPSHOT)}
-    _append(
+def _device_metrics(device: NvidiaDevice, *, include_inventory: bool) -> list[MetricSnapshot]:
+    identity = {"gpu_uuid": device.uuid, "pci_bus_id": device.pci_bus_id}
+    metrics: list[MetricSnapshot] = []
+    if include_inventory:
+        inventory = {
+            **identity,
+            "device_kind": "gpu",
+            "gpu_model": device.model,
+            "driver_version": device.driver_version,
+        }
+        for name, value in (
+            ("compute_mode", device.compute_mode),
+            ("mig_mode", device.mig_mode),
+            ("vbios_version", device.vbios_version),
+        ):
+            if value is not None:
+                inventory[name] = value
+        metrics.extend(
+            (
+                _snapshot("hardware_inventory", 1.0, "", inventory),
+                _snapshot("gpu_memory_total_bytes", device.memory_total_mib * 1024**2, "By", identity),
+            )
+        )
+        if device.power_limit_watts is not None:
+            metrics.append(_snapshot("gpu_power_limit_watts", device.power_limit_watts, "W", identity))
+
+    _append_positive(
         metrics,
         "gpu_ecc_uncorrected_errors",
-        values["ecc.errors.uncorrected.volatile.total"],
-        cumulative,
+        device.ecc_uncorrected,
+        identity,
         unit="{error}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
     )
-    _append(
+    _append_positive(
         metrics,
         "gpu_retired_pages",
-        values["retired_pages.single_bit_ecc.count"],
-        {**cumulative, "error_kind": "single_bit_ecc"},
+        device.retired_single_bit,
+        {**identity, "error_kind": "single_bit_ecc"},
         unit="{page}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
     )
-    _append(
+    _append_positive(
         metrics,
         "gpu_retired_pages",
-        values["retired_pages.double_bit_ecc.count"],
-        {**cumulative, "error_kind": "double_bit_ecc"},
+        device.retired_double_bit,
+        {**identity, "error_kind": "double_bit_ecc"},
         unit="{page}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
     )
-    _append(metrics, "gpu_retired_pages_pending", values["retired_pages.pending"], current)
-    _append(
+    _append_positive(metrics, "gpu_retired_pages_pending", device.retired_pending, identity)
+    _append_positive(
         metrics,
         "gpu_row_remapped_rows",
-        values["remapped_rows.correctable"],
-        {**cumulative, "error_kind": "correctable"},
+        device.remapped_correctable,
+        {**identity, "error_kind": "correctable"},
         unit="{row}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
     )
-    _append(
+    _append_positive(
         metrics,
         "gpu_row_remapped_rows",
-        values["remapped_rows.uncorrectable"],
-        {**cumulative, "error_kind": "uncorrectable"},
+        device.remapped_uncorrectable,
+        {**identity, "error_kind": "uncorrectable"},
         unit="{row}",
+        temporality=telemetry.CUMULATIVE_SNAPSHOT,
     )
-    _append(metrics, "gpu_row_remap_pending", values["remapped_rows.pending"], current)
-    _append(metrics, "gpu_row_remap_failures", values["remapped_rows.failure"], current, unit="{failure}")
+    _append_positive(metrics, "gpu_row_remap_pending", device.remapped_pending, identity)
+    _append_positive(metrics, "gpu_row_remap_failures", device.remapped_failure, identity, unit="{failure}")
     return metrics
 
 
-def _append(
-    metrics: list[_Metric],
+def _append_positive(
+    metrics: list[MetricSnapshot],
     name: str,
-    raw_value: str,
+    value: float | None,
     attributes: dict[str, str],
     *,
-    scale: float = 1.0,
     unit: str = "",
+    temporality: str = telemetry.CURRENT_SNAPSHOT,
 ) -> None:
-    value = _available_number(raw_value)
-    if value is not None:
-        metrics.append(_Metric(name, value * scale, unit, attributes))
+    if value is not None and value > 0:
+        metrics.append(_snapshot(name, value, unit, attributes, temporality=temporality))
+
+
+def _snapshot(
+    name: str,
+    value: float,
+    unit: str,
+    attributes: dict[str, str],
+    *,
+    temporality: str = telemetry.CURRENT_SNAPSHOT,
+) -> MetricSnapshot:
+    return MetricSnapshot(
+        name=name,
+        value=value,
+        unit=unit,
+        attributes=attributes,
+        source_kind="nvidia_smi",
+        source_temporality=temporality,
+    )
+
+
+def _record_health(outcome: str) -> None:
+    current = {
+        "outcome": outcome,
+        **telemetry.snapshot_attributes("nvidia_smi", telemetry.CURRENT_SNAPSHOT),
+    }
+    available = outcome in {"success", "success_baseline"}
+    telemetry.gauge("nvidia_health_available").set(float(available), attributes=current)
+    if not available:
+        telemetry.counter("nvidia_health_failures", unit="{failure}").add(
+            1,
+            attributes={
+                "failure_kind": outcome,
+                **telemetry.snapshot_attributes("nvidia_smi", telemetry.CUMULATIVE_SNAPSHOT),
+            },
+        )
 
 
 def _available_number(value: str) -> float | None:
@@ -185,12 +336,19 @@ def _available_number(value: str) -> float | None:
     return float(value)
 
 
+def _required_number(value: str) -> float:
+    number = _available_number(value)
+    if number is None:
+        raise ValueError("required nvidia-smi numeric field is unavailable")
+    return number
+
+
 def _required(value: str) -> str:
-    if value.strip().lower() in _NOT_AVAILABLE:
+    available = _available_text(value)
+    if available is None:
         raise ValueError("required nvidia-smi identity field is unavailable")
-    return value
+    return available
 
 
-def _add_optional(attributes: dict[str, str], name: str, value: str) -> None:
-    if value.strip().lower() not in _NOT_AVAILABLE:
-        attributes[name] = value
+def _available_text(value: str) -> str | None:
+    return None if value.strip().lower() in _NOT_AVAILABLE else value

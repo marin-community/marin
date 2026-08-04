@@ -76,7 +76,7 @@ from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
 from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct_values, value_at_step
 from levanter.tracker import TrackerConfig, capture_time
-from levanter.tracker.telemetry import TelemetryConfig
+from levanter.tracker.telemetry import TelemetryConfig, capture_stall_diagnostics
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils
@@ -610,7 +610,10 @@ class Trainer:
         return info
 
     def _add_default_hooks(self):
-        progress_watchdog = self.config.progress_watchdog.create()
+        progress_watchdog = self.config.progress_watchdog.create(
+            process_index=jax.process_index(),
+            diagnostic=capture_stall_diagnostics,
+        )
         if progress_watchdog is not None:
             self.add_hook(progress_watchdog, every=1)
 

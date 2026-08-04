@@ -48,6 +48,7 @@ class CommandResult:
 
     status: CommandStatus
     output: CommandOutput | None = None
+    observed_output_bytes: int | None = None
 
 
 class BoundedCommandRunner:
@@ -99,7 +100,7 @@ class BoundedCommandRunner:
                         output.extend(chunk)
                         if len(output) > MAX_OUTPUT_BYTES:
                             self._terminate(process)
-                            return CommandResult(CommandStatus.OUTPUT_LIMIT)
+                            return CommandResult(CommandStatus.OUTPUT_LIMIT, observed_output_bytes=len(output))
             except OSError as error:
                 logger.warning("telemetry probe output failed for process %s: %s", process.pid, error)
                 self._terminate(process)

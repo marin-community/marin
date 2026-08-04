@@ -4,16 +4,20 @@
 import json
 import stat
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from rigging import telemetry
+from rigging.telemetry.probes import nccl_ras
 from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.testing import RecordingTelemetryTransport, nccl_ras_payload
 
 from levanter.tracker import telemetry as tracker_telemetry
+from levanter.callbacks import ProgressEvent
+from levanter.callbacks.progress_watchdog import ProgressTimeout
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.telemetry import TelemetryTracker, TrainingPhase
 
@@ -36,8 +40,13 @@ def _install_nccl_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, mar
     marker_write = (
         f"with open({str(marker)!r}, 'a') as marker_file:\n    marker_file.write('started\\n')\n" if marker else ""
     )
+    report = nccl_ras.reduce_response(
+        json.dumps(nccl_ras_payload()).encode(),
+        detail=nccl_ras.RasDetail.PERIODIC,
+    )
+    output = nccl_ras.serialize_success(report).decode()
     command = tmp_path / "nccl-client"
-    command.write_text(f"#!{sys.executable}\n{marker_write}print({json.dumps(nccl_ras_payload())!r})")
+    command.write_text(f"#!{sys.executable}\n{marker_write}import sys\nsys.stdout.write({output!r})")
     command.chmod(command.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setattr(tracker_telemetry.nccl, "_CLIENT_COMMAND", (str(command),))
 
@@ -151,12 +160,12 @@ def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch
     tracker = TelemetryTracker()
     rank = exported.record(
         "communicator_rank_status",
-        {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "0"},
+        {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "1"},
     )
 
     tracker.finish()
 
-    assert rank["attributes"]["rank_host"] == "10.0.0.1"
+    assert rank["attributes"]["rank_host"] == "10.0.0.2"
     assert marker.read_text() == "started\n"
 
 
@@ -174,3 +183,24 @@ def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, mo
     tracker.finish()
 
     assert not any(record["name"] == "communicators" for record in exported.records)
+
+
+def test_stall_diagnostic_stops_periodic_collection_and_flushes(exported, monkeypatch):
+    captures: list[float] = []
+
+    class FakeRasSession:
+        def capture_stall(self, timeout: float) -> None:
+            captures.append(timeout)
+
+        def shutdown(self, timeout: float = 2.0) -> None:
+            del timeout
+
+    monkeypatch.setattr(tracker_telemetry, "_start_nccl_ras_probe", FakeRasSession)
+    TelemetryTracker()
+
+    tracker_telemetry.capture_stall_diagnostics(
+        ProgressTimeout(ProgressEvent.TRAIN_STEP_STARTED, timedelta(minutes=15).total_seconds(), 900)
+    )
+
+    assert captures == [tracker_telemetry._NCCL_STALL_CAPTURE_SECONDS]
+    assert not telemetry.runtime_status().configured

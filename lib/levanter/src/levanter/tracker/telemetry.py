@@ -18,8 +18,8 @@ import numpy as np
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
 from rigging.telemetry.probes import nccl, nccl_client
-from rigging.telemetry.probes.runner import PeriodicProbe
 
+from levanter.callbacks.progress_watchdog import ProgressTimeout
 from levanter.tracker import Tracker, TrackerConfig
 from levanter.tracker.histogram import SummaryStats
 
@@ -48,7 +48,9 @@ def _set(name: str, value: float, *, attributes: dict[str, str] = _CURRENT) -> N
 # drops records under queue pressure, so several missed beats must not un-enroll a
 # live job. The reader's window lives in infra/grafana/src/training_stalls.py.
 _PHASE_HEARTBEAT_SECONDS = 60.0
-_NCCL_RAS_POLL_SECONDS = 2 * 60.0
+_NCCL_RAS_POLL_SECONDS = 10 * 60.0
+_NCCL_STALL_CAPTURE_SECONDS = 8.0
+_STALL_TELEMETRY_FLUSH_SECONDS = 5.0
 
 
 class _PhaseHeartbeat:
@@ -121,7 +123,7 @@ def _as_scalar(value: Any) -> float | None:
     return float(array)
 
 
-def _start_nccl_ras_probe() -> PeriodicProbe | None:
+def _start_nccl_ras_probe() -> nccl.NcclRasSession | None:
     try:
         if not telemetry.runtime_status().configured:
             return None
@@ -135,13 +137,32 @@ def _start_nccl_ras_probe() -> PeriodicProbe | None:
         return None
 
 
+_ACTIVE_TELEMETRY_TRACKER: "TelemetryTracker | None" = None
+
+
+def capture_stall_diagnostics(timeout: ProgressTimeout) -> None:
+    """Capture bounded process-zero diagnostics immediately before watchdog exit."""
+    tracker = _ACTIVE_TELEMETRY_TRACKER
+    if tracker is None:
+        logger.warning("No telemetry tracker is available for stalled-training diagnostics")
+        return
+    logger.error(
+        "Capturing NCCL RAS after %s made no progress for %.1f seconds",
+        timeout.event.value,
+        timeout.elapsed,
+    )
+    tracker.capture_stall_diagnostics()
+
+
 class TelemetryTracker(Tracker):
     """Export training snapshots and phase transitions."""
 
     name: str = "telemetry"
 
     def __init__(self) -> None:
+        global _ACTIVE_TELEMETRY_TRACKER
         self._nccl_ras_probe = _start_nccl_ras_probe()
+        _ACTIVE_TELEMETRY_TRACKER = self
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
         _HEARTBEAT.start()
@@ -193,6 +214,7 @@ class TelemetryTracker(Tracker):
         pass
 
     def finish(self):
+        global _ACTIVE_TELEMETRY_TRACKER
         if self._nccl_ras_probe is not None:
             try:
                 self._nccl_ras_probe.shutdown()
@@ -203,6 +225,14 @@ class TelemetryTracker(Tracker):
         # already published above, and republishing it for the process's remaining
         # lifetime tells the reader nothing new.
         _HEARTBEAT.stop()
+        if _ACTIVE_TELEMETRY_TRACKER is self:
+            _ACTIVE_TELEMETRY_TRACKER = None
+
+    def capture_stall_diagnostics(self) -> None:
+        """Stop periodic RAS polling, publish a fresh stall sample, and flush telemetry."""
+        if self._nccl_ras_probe is not None:
+            self._nccl_ras_probe.capture_stall(_NCCL_STALL_CAPTURE_SECONDS)
+        telemetry.shutdown(_STALL_TELEMETRY_FLUSH_SECONDS)
 
 
 @TrackerConfig.register_subclass("telemetry")

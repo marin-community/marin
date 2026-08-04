@@ -4,8 +4,10 @@
 from datetime import timedelta
 from threading import Event
 
+import pytest
+
 from levanter.callbacks import ProgressEvent, progress_watchdog as progress_watchdog_module
-from levanter.callbacks.progress_watchdog import ProgressWatchdog, STALLED_TRAINING_EXIT_CODE
+from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig, STALLED_TRAINING_EXIT_CODE
 
 
 def test_watchdog_ignores_first_compile_then_times_out_a_steady_state_step(monkeypatch):
@@ -76,3 +78,63 @@ def test_watchdog_terminates_an_evaluation_that_stops_progress(monkeypatch):
     assert terminated.wait(timeout=1)
     watchdog.stop()
     assert exit_codes == [STALLED_TRAINING_EXIT_CODE]
+
+
+def test_watchdog_runs_diagnostic_before_exit(monkeypatch):
+    exited = Event()
+    order: list[str] = []
+
+    def diagnostic(_timeout) -> None:
+        order.append("diagnostic")
+
+    def record_exit(_exit_code: int) -> None:
+        order.append("exit")
+        exited.set()
+
+    monkeypatch.setattr(progress_watchdog_module.os, "_exit", record_exit)
+    watchdog = ProgressWatchdog(
+        step_timeout=timedelta(milliseconds=30),
+        process_timeout=timedelta(seconds=1),
+        diagnostic=diagnostic,
+        diagnostic_timeout=timedelta(milliseconds=100),
+        poll_interval=0.005,
+    )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+
+    assert exited.wait(timeout=1)
+    watchdog.stop()
+    assert order == ["diagnostic", "exit"]
+
+
+def test_watchdog_diagnostic_cannot_postpone_exit(monkeypatch):
+    exited = Event()
+    never_returns = Event()
+
+    monkeypatch.setattr(progress_watchdog_module.os, "_exit", lambda _exit_code: exited.set())
+    watchdog = ProgressWatchdog(
+        step_timeout=timedelta(milliseconds=30),
+        process_timeout=timedelta(seconds=1),
+        diagnostic=lambda _timeout: never_returns.wait(),
+        diagnostic_timeout=timedelta(milliseconds=30),
+        poll_interval=0.005,
+    )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+
+    assert exited.wait(timeout=1)
+    watchdog.stop()
+
+
+def test_watchdog_config_with_diagnostic_timeout_only_arms_process_zero() -> None:
+    config = ProgressWatchdogConfig(
+        step_timeout=timedelta(seconds=1),
+        diagnostic_timeout=timedelta(seconds=1),
+    )
+
+    assert config.create(process_index=1, diagnostic=lambda _timeout: None) is None
+    with pytest.raises(ValueError, match="diagnostic is required"):
+        config.create(process_index=0)
+    watchdog = config.create(process_index=0, diagnostic=lambda _timeout: None)
+    assert watchdog is not None
+    watchdog.stop()
