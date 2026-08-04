@@ -36,19 +36,23 @@ def test_watchdog_ignores_first_compile_then_times_out_a_steady_state_step(monke
 
 def test_watchdog_uses_process_timeout_during_evaluation(monkeypatch):
     terminated = Event()
+    current_time = 0.0
 
     monkeypatch.setattr(progress_watchdog_module.os, "_exit", lambda _exit_code: terminated.set())
+    monkeypatch.setattr(progress_watchdog_module, "monotonic", lambda: current_time)
     watchdog = ProgressWatchdog(
         step_timeout=timedelta(milliseconds=30),
-        process_timeout=timedelta(milliseconds=500),
+        process_timeout=timedelta(seconds=1),
         poll_interval=0.005,
     )
     watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
     watchdog.on_event(ProgressEvent.EVALUATION_STARTED)
 
-    assert not terminated.wait(timeout=0.06), "evaluation must not inherit the train-step deadline"
+    current_time = 0.75
+    assert not terminated.wait(timeout=0.03), "evaluation must not inherit the train-step deadline"
     watchdog.on_event(ProgressEvent.EVALUATION_FINISHED)
-    assert not terminated.wait(timeout=0.06), "evaluation completion must reset process progress"
+    current_time = 1.25
+    assert not terminated.wait(timeout=0.03), "evaluation completion must reset process progress"
     watchdog.stop()
 
 

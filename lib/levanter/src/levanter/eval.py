@@ -24,7 +24,7 @@ import haliax as hax
 from haliax.partitioning import ResourceMapping
 
 import levanter.tracker
-from levanter.callbacks import ProgressEvent, StepInfo
+from levanter.callbacks import ProgressEvent, StepInfo, progress_event_scope
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.text.examples import (
@@ -337,8 +337,11 @@ def cb_tagged_lm_evaluate(
     def eval_callback(step: StepInfo):
         step_count = step.step
         metrics_to_write = {}
-        step.emit_event(ProgressEvent.EVALUATION_STARTED)
-        try:
+        with progress_event_scope(
+            step.emit_event,
+            ProgressEvent.EVALUATION_STARTED,
+            ProgressEvent.EVALUATION_FINISHED,
+        ):
             if eval_current:
                 log_dict = eval_model(evaluator, step.model, prefix=prefix)
                 levanter.tracker.log(log_dict, step=step_count)
@@ -375,8 +378,6 @@ def cb_tagged_lm_evaluate(
                     record = {"step": int(step_count), **serializable_metrics}
                     content += json.dumps(record, sort_keys=True) + "\n"
                     f.write(content)
-        finally:
-            step.emit_event(ProgressEvent.EVALUATION_FINISHED)
 
     return eval_callback
 
@@ -404,8 +405,11 @@ def cb_tagged_evaluate(
         if last_eval_step == step_count:
             return
 
-        step.emit_event(ProgressEvent.EVALUATION_STARTED)
-        try:
+        with progress_event_scope(
+            step.emit_event,
+            ProgressEvent.EVALUATION_STARTED,
+            ProgressEvent.EVALUATION_FINISHED,
+        ):
             if eval_current:
                 log_dict = eval_model(evaluator, step.model, prefix=prefix)
                 levanter.tracker.log(log_dict, step=step_count)
@@ -413,10 +417,7 @@ def cb_tagged_evaluate(
             if eval_ema:
                 log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
                 levanter.tracker.log(log_dict, step=step_count)
-
             last_eval_step = step_count
-        finally:
-            step.emit_event(ProgressEvent.EVALUATION_FINISHED)
 
     return eval_callback
 

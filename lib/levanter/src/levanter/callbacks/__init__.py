@@ -16,7 +16,15 @@ from rigging.filesystem import StoragePath
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
-from levanter.callbacks._core import Callback, CBInfo, JitCallback, LambdaCallback, ProgressEvent, StepInfo
+from levanter.callbacks._core import (
+    Callback,
+    CBInfo,
+    JitCallback,
+    LambdaCallback,
+    ProgressEvent,
+    StepInfo,
+    progress_event_scope,
+)
 from levanter.callbacks._metrics import (
     _tqdm_logging_one_time_setup,
     log_performance_stats,
@@ -107,8 +115,11 @@ def compute_validation_loss(
     name: Optional[str] = None,
 ):
     def compute_loss(info: StepInfo):
-        info.emit_event(ProgressEvent.EVALUATION_STARTED)
-        try:
+        with progress_event_scope(
+            info.emit_event,
+            ProgressEvent.EVALUATION_STARTED,
+            ProgressEvent.EVALUATION_FINISHED,
+        ):
             loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
 
             prefix = "eval"
@@ -126,10 +137,7 @@ def compute_validation_loss(
                 logger.info(f"{name} validation loss: {loss:.3f}")
             else:
                 logger.info(f"validation loss: {loss:.3f}")
-
             return loss
-        finally:
-            info.emit_event(ProgressEvent.EVALUATION_FINISHED)
 
     return compute_loss
 
@@ -285,6 +293,7 @@ __all__ = [
     "ProgressWatchdog",
     "ProgressWatchdogConfig",
     "StepInfo",
+    "progress_event_scope",
     "log_performance_stats",
     "iris_status_reporter",
     "log_step_info",

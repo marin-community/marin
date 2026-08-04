@@ -53,7 +53,15 @@ import levanter.checkpoint
 import levanter.tracker
 import levanter.tracker.wandb
 import levanter.utils.logging
-from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, ProgressEvent, StepInfo
+from levanter.callbacks import (
+    Callback,
+    CBInfo,
+    JitCallback,
+    LambdaCallback,
+    ProgressEvent,
+    StepInfo,
+    progress_event_scope,
+)
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
@@ -392,13 +400,15 @@ class Trainer:
         # letting the background commit thread finish here also avoids it logging into the
         # already-closed tracker/stdout during teardown.
         if self._checkpointer is not None:
-            self.hooks.emit_event(ProgressEvent.CHECKPOINT_STARTED)
-            try:
-                self._checkpointer.wait_until_finished()
-            except Exception as e:
-                problems.append(e)
-            finally:
-                self.hooks.emit_event(ProgressEvent.CHECKPOINT_FINISHED)
+            with progress_event_scope(
+                self.hooks.emit_event,
+                ProgressEvent.CHECKPOINT_STARTED,
+                ProgressEvent.CHECKPOINT_FINISHED,
+            ):
+                try:
+                    self._checkpointer.wait_until_finished()
+                except Exception as e:
+                    problems.append(e)
 
         for cmanager in reversed(self._cmanagers):
             try:
@@ -613,11 +623,12 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
-            info.emit_event(ProgressEvent.CHECKPOINT_STARTED)
-            try:
+            with progress_event_scope(
+                info.emit_event,
+                ProgressEvent.CHECKPOINT_STARTED,
+                ProgressEvent.CHECKPOINT_FINISHED,
+            ):
                 checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
-            finally:
-                info.emit_event(ProgressEvent.CHECKPOINT_FINISHED)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 

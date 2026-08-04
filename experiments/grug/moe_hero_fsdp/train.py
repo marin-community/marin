@@ -629,11 +629,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:
-                    state_callbacks.emit_event(callbacks.ProgressEvent.CHECKPOINT_STARTED)
-                    try:
+                    with callbacks.progress_event_scope(
+                        state_callbacks.emit_event,
+                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                    ):
                         checkpointer.on_step(tree=state, step=int(state.step))
-                    finally:
-                        state_callbacks.emit_event(callbacks.ProgressEvent.CHECKPOINT_FINISHED)
         except BaseException:
             logger.exception(
                 "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
@@ -643,12 +644,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
             if checkpointer is not None:
-                state_callbacks.emit_event(callbacks.ProgressEvent.CHECKPOINT_STARTED)
-                try:
+                with callbacks.progress_event_scope(
+                    state_callbacks.emit_event,
+                    callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                    callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                ):
                     checkpointer.on_step(tree=state, step=int(state.step), force=True)
                     checkpointer.wait_until_finished()
-                finally:
-                    state_callbacks.emit_event(callbacks.ProgressEvent.CHECKPOINT_FINISHED)
         finally:
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 

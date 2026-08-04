@@ -4,9 +4,10 @@
 import abc
 import inspect
 from abc import ABC
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, Iterator, TypeVar
 
 from jaxtyping import PyTree
 
@@ -33,6 +34,20 @@ class ProgressEvent(StrEnum):
 
 def _ignore_progress_event(event: ProgressEvent) -> None:
     del event
+
+
+@contextmanager
+def progress_event_scope(
+    emit_event: Callable[[ProgressEvent], None],
+    started: ProgressEvent,
+    finished: ProgressEvent,
+) -> Iterator[None]:
+    """Emit paired lifecycle events around a block, including when it raises."""
+    emit_event(started)
+    try:
+        yield
+    finally:
+        emit_event(finished)
 
 
 @dataclass
