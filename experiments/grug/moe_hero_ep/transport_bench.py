@@ -67,6 +67,7 @@ class TransportBenchConfig:
     row_elements: int
     capacity_factor: float
     skew: float
+    source_mode: str
     profile: bool
     result_uri: str
 
@@ -109,7 +110,15 @@ def _benchmark(config: TransportBenchConfig, rows: int) -> dict[str, float]:
     capacity = max(int(np.ceil(config.capacity_factor * send_matrix.max())), 1)
 
     def _source(rank: jax.Array, total_rows: int) -> jax.Array:
-        return jnp.broadcast_to(rank.astype(jnp.bfloat16), (total_rows, elements))
+        base = jnp.broadcast_to(rank.astype(jnp.bfloat16), (total_rows, elements))
+        if config.source_mode == "broadcast":
+            return base
+        # Training builds the send buffer with a row gather, so the operand is a
+        # produced value in the regular pool rather than a trivially materialized
+        # constant. This reproduces that provenance.
+        order = jnp.arange(total_rows, dtype=jnp.int32)
+        order = jnp.roll(order, 1)
+        return base[order]
 
     @partial(shard_map, mesh=mesh, in_specs=(), out_specs=P(), check_rep=False)
     def ragged() -> jax.Array:
@@ -233,6 +242,7 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
         "row_elements": config.row_elements,
         "capacity_factor": config.capacity_factor,
         "skew": config.skew,
+        "source_mode": config.source_mode,
         "sweep": [],
     }
     for rows, results in sweep.items():
@@ -266,6 +276,13 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
 )
 @click.option("--row-elements", type=click.IntRange(min=1), default=BENCH_ROW_ELEMENTS, show_default=True)
 @click.option("--capacity-factor", type=click.FloatRange(min=0.1), default=1.0, show_default=True)
+@click.option(
+    "--source-mode",
+    type=click.Choice(["broadcast", "gather"]),
+    default="broadcast",
+    show_default=True,
+    help="How the send buffer is produced. 'gather' matches the training operand.",
+)
 @click.option("--worker-cpu", type=click.IntRange(min=1), default=BENCH_WORKER_CPU, show_default=True)
 @click.option("--profile", is_flag=True, default=False, help="Capture a JAX profile of the timed section.")
 @click.option(
@@ -286,6 +303,7 @@ def main(
     rows_per_rank: str,
     row_elements: int,
     capacity_factor: float,
+    source_mode: str,
     worker_cpu: int,
     profile: bool,
     skew: float,
@@ -316,6 +334,7 @@ def main(
         row_elements=row_elements,
         capacity_factor=capacity_factor,
         skew=skew,
+        source_mode=source_mode,
         profile=profile,
         result_uri=f"{BENCH_RESULT_ROOT}/{run_id}.json",
     )
