@@ -7,13 +7,20 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from contextlib import suppress
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
 from rigging.timing import ExponentialBackoff, RateLimiter
 
 from zephyr.coordinator import CoordinatorUnreachable, PullStatus, PullTask
+from zephyr.memory_store import (
+    MemoryStoreActorStats,
+    MemoryStoreService,
+    MemoryTableLookup,
+    MemoryTableRegistration,
+    MemoryTableStatsResult,
+)
 from zephyr.stage_io import ShardTask, StageRunner, TaskResult, ZephyrTaskResources, _stage_throughput
 from zephyr.stats import _push_iris_task_status
 from zephyr.worker_context import CounterEntry, CounterSnapshot, merge_counter_entries
@@ -75,6 +82,7 @@ class ZephyrWorker:
         self._host_shutdown_event = self._actor_ctx.shutdown_event
         self._worker_id = f"{self._actor_ctx.group_name}-{self._actor_ctx.index}"
         self._actor_handle = self._actor_ctx.handle
+        self._memory_store = MemoryStoreService(self._actor_ctx.index)
 
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
@@ -100,7 +108,10 @@ class ZephyrWorker:
         """
         logger.info("[%s] Poll loop starting", self._worker_id)
         try:
-            self._coordinator.register_worker.remote(self._worker_id, self._actor_handle).result(timeout=30.0)
+            registrations = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle).result(
+                timeout=30.0
+            )
+            self._memory_store.restore(registrations)
         except Exception:
             logger.error("[%s] Failed to register with coordinator", self._worker_id, exc_info=True)
             self._shutdown_event.set()
@@ -192,6 +203,35 @@ class ZephyrWorker:
         self._shutdown_event.set()
         if self._host_shutdown_event is not None:
             self._host_shutdown_event.set()
+
+    def load_memory_table(self, registration: MemoryTableRegistration) -> MemoryStoreActorStats:
+        """Validate and load one table from its shard-local source data."""
+        return self._memory_store.load(registration)
+
+    def reload_memory_table(self, table_id: str) -> MemoryStoreActorStats | None:
+        """Reload one active table, or return `None` if it was destroyed."""
+        registration = self._coordinator.memory_table_registration.remote(table_id).result()
+        if registration is None:
+            self._memory_store.destroy(table_id)
+            return None
+
+        stats = self._memory_store.load(registration)
+        if self._coordinator.memory_table_registration.remote(table_id).result() is None:
+            self._memory_store.destroy(table_id)
+            return None
+        return stats
+
+    def lookup_memory_table(self, table_id: str, keys: list[Hashable]) -> MemoryTableLookup:
+        """Return values or structured state that lets the caller trigger reload."""
+        return self._memory_store.lookup(table_id, keys)
+
+    def memory_table_stats(self, table_id: str) -> MemoryTableStatsResult:
+        """Return one worker's table state or load statistics."""
+        return self._memory_store.stats(table_id)
+
+    def destroy_memory_table(self, table_id: str) -> None:
+        """Tombstone one table and release its values."""
+        self._memory_store.destroy(table_id)
 
     def _task_thread(
         self,
