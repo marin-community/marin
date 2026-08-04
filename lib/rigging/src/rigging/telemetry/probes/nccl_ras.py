@@ -5,11 +5,21 @@
 
 import json
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Any, Callable, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
-from pydantic import model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 MAX_COMMUNICATORS = 256
 MAX_RANKS_PER_COMMUNICATOR = 2_048
@@ -19,6 +29,10 @@ MAX_PROGRESS_SUMMARIES = 3_072
 MAX_FIELD_BYTES = 256
 MAX_EXACT_COUNT = 2**53 - 1
 MAX_CLIENT_OUTPUT_BYTES = 192 * 1024
+_MAX_FAILURE_MESSAGE_CHARS = 1_024
+_RUNNING_INIT_STATE = 0
+_INITIALIZING_INIT_STATE = 7
+
 
 def _bounded_text(value: str) -> str:
     if not value or len(value.encode()) > MAX_FIELD_BYTES:
@@ -31,7 +45,7 @@ Count = Annotated[int, Field(strict=True, ge=0, le=MAX_EXACT_COUNT)]
 
 
 class RasDetail(StrEnum):
-    """Amount of diagnostic evidence retained from one full RAS response."""
+    """Amount of diagnostic evidence retained from one RAS response."""
 
     PERIODIC = "periodic"
     STALL = "stall"
@@ -172,8 +186,15 @@ class CommunicatorSummary(_Model):
     collective_mismatch: bool
 
 
+@dataclass(frozen=True)
+class _CommunicatorReduction:
+    summary: CommunicatorSummary
+    progress: list[CollectiveProgress]
+    observations: list[RankObservation]
+
+
 class NcclRasReport(_Model):
-    """Compact, bounded representation of a full NCCL RAS response."""
+    """Compact, bounded representation of one NCCL RAS response."""
 
     detail: RasDetail
     nccl_version: BoundedText
@@ -202,11 +223,11 @@ class NcclRasSuccess(_Model):
 
 
 class NcclRasFailure(_Model):
-    """Client-side failure that happened before a report could be produced."""
+    """Failure returned by the client instead of a reduced report."""
 
     kind: Literal["failure"] = "failure"
     failure_kind: BoundedText
-    message: str = Field(max_length=1_024)
+    message: str = Field(max_length=_MAX_FAILURE_MESSAGE_CHARS)
     observed_bytes: Count | None = None
     limit_bytes: Count | None = None
 
@@ -216,7 +237,7 @@ _CLIENT_RESULT_ADAPTER = TypeAdapter(NcclRasClientResult)
 
 
 def reduce_response(response: bytes, *, detail: RasDetail) -> NcclRasReport:
-    """Parse one full verbose response and retain only bounded diagnostic evidence."""
+    """Parse one JSON status response and retain only bounded diagnostic evidence."""
     object_start = response.find(b"{")
     if object_start < 0:
         raise ValueError("NCCL RAS response did not contain JSON")
@@ -234,10 +255,10 @@ def reduce_response(response: bytes, *, detail: RasDetail) -> NcclRasReport:
         except ValidationError:
             invalid_communicators += 1
             continue
-        summary, communicator_progress, communicator_observations = _reduce_communicator(communicator, detail)
-        summaries.append(summary)
-        progress.extend(communicator_progress)
-        observations.extend(communicator_observations)
+        reduced = _reduce_communicator(communicator, detail)
+        summaries.append(reduced.summary)
+        progress.extend(reduced.progress)
+        observations.extend(reduced.observations)
 
     input_progress = len(progress)
     input_observations = len(observations)
@@ -268,7 +289,7 @@ def reduce_response(response: bytes, *, detail: RasDetail) -> NcclRasReport:
 
 
 def serialize_success(report: NcclRasReport) -> bytes:
-    """Serialize a success result while preserving anomalous ranks under the output cap."""
+    """Serialize a success result, dropping progress before anomalous-rank detail."""
     payload = _success_payload(report)
     if len(payload) <= MAX_CLIENT_OUTPUT_BYTES:
         return payload
@@ -337,12 +358,16 @@ def serialize_failure(
     limit_bytes: int | None = None,
 ) -> bytes:
     """Serialize one typed client failure."""
-    return NcclRasFailure(
-        failure_kind=failure_kind,
-        message=message[:1_024],
-        observed_bytes=observed_bytes,
-        limit_bytes=limit_bytes,
-    ).model_dump_json().encode()
+    return (
+        NcclRasFailure(
+            failure_kind=failure_kind,
+            message=message[:_MAX_FAILURE_MESSAGE_CHARS],
+            observed_bytes=observed_bytes,
+            limit_bytes=limit_bytes,
+        )
+        .model_dump_json()
+        .encode()
+    )
 
 
 def parse_client_result(payload: bytes) -> NcclRasSuccess | NcclRasFailure:
@@ -353,7 +378,7 @@ def parse_client_result(payload: bytes) -> NcclRasSuccess | NcclRasFailure:
 def _reduce_communicator(
     communicator: _Communicator,
     detail: RasDetail,
-) -> tuple[CommunicatorSummary, list[CollectiveProgress], list[RankObservation]]:
+) -> _CommunicatorReduction:
     collective_names = sorted(set().union(*(rank.collective_counts for rank in communicator.ranks)))
     progress = [
         CollectiveProgress(
@@ -374,14 +399,14 @@ def _reduce_communicator(
             reasons.append("async_error")
         if rank.status.abort_flag:
             reasons.append("aborted")
-        if rank.status.init_state not in {0, 7}:
+        if rank.status.init_state not in {_RUNNING_INIT_STATE, _INITIALIZING_INIT_STATE}:
             reasons.append("unexpected_init_state")
         reasons.extend(outliers.get(rank.rank, ()))
         if reasons:
             observations.append(_reported_observation(communicator, rank, tuple(reasons)))
 
-    return (
-        CommunicatorSummary(
+    return _CommunicatorReduction(
+        summary=CommunicatorSummary(
             communicator_hash=communicator.hash,
             secondary_hash=communicator.secondary_hash,
             size=communicator.size,
@@ -392,8 +417,8 @@ def _reduce_communicator(
             lifecycle_state=_lifecycle_state(communicator),
             collective_mismatch=mismatch,
         ),
-        progress,
-        observations,
+        progress=progress,
+        observations=observations,
     )
 
 
@@ -441,9 +466,9 @@ def _lifecycle_state(
         return "incomplete"
     if any(rank.status.finalize_called or rank.status.destroy_flag for rank in communicator.ranks):
         return "finalizing"
-    if any(rank.status.init_state == 7 for rank in communicator.ranks):
+    if any(rank.status.init_state == _INITIALIZING_INIT_STATE for rank in communicator.ranks):
         return "initializing"
-    if communicator.ranks and all(rank.status.init_state == 0 for rank in communicator.ranks):
+    if communicator.ranks and all(rank.status.init_state == _RUNNING_INIT_STATE for rank in communicator.ranks):
         return "running"
     return "error"
 

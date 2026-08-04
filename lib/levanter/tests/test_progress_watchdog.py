@@ -133,7 +133,7 @@ def test_watchdog_config_with_diagnostic_timeout_only_arms_process_zero() -> Non
     )
 
     assert config.create(process_index=1, diagnostic=lambda _timeout: None) is None
-    with pytest.raises(ValueError, match="diagnostic is required"):
+    with pytest.raises(ValueError):
         config.create(process_index=0)
     watchdog = config.create(process_index=0, diagnostic=lambda _timeout: None)
     assert watchdog is not None

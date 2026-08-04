@@ -21,6 +21,7 @@ TIMEOUT = 8.0
 _DEFAULT_INTERVAL = 10 * 60.0
 _MAX_METRICS = 4_096
 _SUCCESS_OUTCOME = "success"
+_METRIC_RECORDS_NAME = "ras_metric_records"
 _CLIENT_COMMAND = (sys.executable, "-m", nccl_client.__name__)
 _CLIENT_FAILURES = {
     nccl_client.TIMEOUT_EXIT_CODE: "client_timeout",
@@ -92,17 +93,17 @@ class NcclRasSession:
             "trigger": trigger.value,
             **telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT),
         }
-        telemetry.gauge("ras_metric_records", unit="{record}").set(
+        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
             float(len(snapshots)), attributes={**attributes, "record_state": "input"}
         )
-        telemetry.gauge("ras_metric_records", unit="{record}").set(
+        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
             float(published.enqueued_records), attributes={**attributes, "record_state": "enqueued"}
         )
-        telemetry.gauge("ras_metric_records", unit="{record}").set(
+        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
             float(published.sample_limit_dropped_records),
             attributes={**attributes, "record_state": "sample_limit_dropped"},
         )
-        telemetry.gauge("ras_metric_records", unit="{record}").set(
+        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
             float(published.telemetry_lost_records), attributes={**attributes, "record_state": "telemetry_lost"}
         )
 

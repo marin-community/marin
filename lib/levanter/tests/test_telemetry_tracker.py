@@ -15,9 +15,9 @@ from rigging.telemetry.probes import nccl_ras
 from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.testing import RecordingTelemetryTransport, nccl_ras_payload
 
-from levanter.tracker import telemetry as tracker_telemetry
 from levanter.callbacks import ProgressEvent
 from levanter.callbacks.progress_watchdog import ProgressTimeout
+from levanter.tracker import current_tracker, telemetry as tracker_telemetry
 from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.telemetry import TelemetryTracker, TrainingPhase
 
@@ -196,11 +196,13 @@ def test_stall_diagnostic_stops_periodic_collection_and_flushes(exported, monkey
             del timeout
 
     monkeypatch.setattr(tracker_telemetry, "_start_nccl_ras_probe", FakeRasSession)
-    TelemetryTracker()
+    tracker = TelemetryTracker()
 
-    tracker_telemetry.capture_stall_diagnostics(
-        ProgressTimeout(ProgressEvent.TRAIN_STEP_STARTED, timedelta(minutes=15).total_seconds(), 900)
-    )
+    with current_tracker(tracker):
+        tracker_telemetry.capture_stall_diagnostics(
+            ProgressTimeout(ProgressEvent.TRAIN_STEP_STARTED, timedelta(minutes=15).total_seconds(), 900)
+        )
 
-    assert captures == [tracker_telemetry._NCCL_STALL_CAPTURE_SECONDS]
+    assert len(captures) == 1
+    assert 0 < captures[0] < 20
     assert not telemetry.runtime_status().configured

@@ -6,19 +6,19 @@
 import csv
 import io
 import logging
-from time import monotonic
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from rigging import telemetry
 from rigging.telemetry.metrics import MetricSnapshot, MetricSnapshotPublisher
 from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandResult, CommandStatus, PeriodicProbe
-from rigging.timing import Deadline
+from rigging.timing import Deadline, RateLimiter
 
 TIMEOUT = 5.0
 _INVENTORY_INTERVAL = 60 * 60.0
 _MAX_DEVICES = 256
 _MAX_METRICS = 4_096
+_MAX_FIELD_CHARS = 256
 _BASELINE_FIELDS = (
     "uuid",
     "pci.bus_id",
@@ -61,15 +61,15 @@ class NvidiaDevice(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    uuid: str = Field(min_length=1, max_length=256)
-    pci_bus_id: str = Field(min_length=1, max_length=256)
-    model: str = Field(min_length=1, max_length=256)
-    driver_version: str = Field(min_length=1, max_length=256)
+    uuid: str = Field(min_length=1, max_length=_MAX_FIELD_CHARS)
+    pci_bus_id: str = Field(min_length=1, max_length=_MAX_FIELD_CHARS)
+    model: str = Field(min_length=1, max_length=_MAX_FIELD_CHARS)
+    driver_version: str = Field(min_length=1, max_length=_MAX_FIELD_CHARS)
     memory_total_mib: float = Field(ge=0, allow_inf_nan=False)
-    compute_mode: str | None = Field(default=None, max_length=256)
-    mig_mode: str | None = Field(default=None, max_length=256)
+    compute_mode: str | None = Field(default=None, max_length=_MAX_FIELD_CHARS)
+    mig_mode: str | None = Field(default=None, max_length=_MAX_FIELD_CHARS)
     power_limit_watts: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    vbios_version: str | None = Field(default=None, max_length=256)
+    vbios_version: str | None = Field(default=None, max_length=_MAX_FIELD_CHARS)
     ecc_uncorrected: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     retired_single_bit: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     retired_double_bit: float | None = Field(default=None, ge=0, allow_inf_nan=False)
@@ -86,15 +86,14 @@ class NvidiaDevice(BaseModel):
 
 class _NvidiaCollector:
     def __init__(self) -> None:
-        self._last_inventory = float("-inf")
+        self._inventory_limiter = RateLimiter(_INVENTORY_INTERVAL)
         self._publisher = MetricSnapshotPublisher(max_records=_MAX_METRICS)
 
     def collect(self, runner: BoundedCommandRunner) -> None:
-        now = monotonic()
-        include_inventory = now - self._last_inventory >= _INVENTORY_INTERVAL
-        if _collect(runner, include_inventory=include_inventory, publisher=self._publisher):
-            if include_inventory:
-                self._last_inventory = now
+        include_inventory = self._inventory_limiter.should_run()
+        collected = _collect(runner, include_inventory=include_inventory, publisher=self._publisher)
+        if include_inventory and not collected:
+            self._inventory_limiter.reset()
 
 
 def start() -> PeriodicProbe:

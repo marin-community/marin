@@ -20,7 +20,7 @@ from rigging import telemetry
 from rigging.telemetry.probes import nccl, nccl_client
 
 from levanter.callbacks.progress_watchdog import ProgressTimeout
-from levanter.tracker import Tracker, TrackerConfig
+from levanter.tracker import BackgroundTracker, Tracker, TrackerConfig, get_tracker
 from levanter.tracker.histogram import SummaryStats
 
 logger = logging.getLogger(__name__)
@@ -137,14 +137,17 @@ def _start_nccl_ras_probe() -> nccl.NcclRasSession | None:
         return None
 
 
-_ACTIVE_TELEMETRY_TRACKER: "TelemetryTracker | None" = None
-
-
 def capture_stall_diagnostics(timeout: ProgressTimeout) -> None:
     """Capture bounded process-zero diagnostics immediately before watchdog exit."""
-    tracker = _ACTIVE_TELEMETRY_TRACKER
-    if tracker is None:
+    try:
+        tracker = get_tracker("telemetry")
+    except KeyError:
         logger.warning("No telemetry tracker is available for stalled-training diagnostics")
+        return
+    if isinstance(tracker, BackgroundTracker):
+        tracker = tracker.wrapped
+    if not isinstance(tracker, TelemetryTracker):
+        logger.warning("The active telemetry tracker does not support stalled-training diagnostics")
         return
     logger.error(
         "Capturing NCCL RAS after %s made no progress for %.1f seconds",
@@ -160,9 +163,7 @@ class TelemetryTracker(Tracker):
     name: str = "telemetry"
 
     def __init__(self) -> None:
-        global _ACTIVE_TELEMETRY_TRACKER
         self._nccl_ras_probe = _start_nccl_ras_probe()
-        _ACTIVE_TELEMETRY_TRACKER = self
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
         _HEARTBEAT.start()
@@ -214,7 +215,6 @@ class TelemetryTracker(Tracker):
         pass
 
     def finish(self):
-        global _ACTIVE_TELEMETRY_TRACKER
         if self._nccl_ras_probe is not None:
             try:
                 self._nccl_ras_probe.shutdown()
@@ -225,8 +225,6 @@ class TelemetryTracker(Tracker):
         # already published above, and republishing it for the process's remaining
         # lifetime tells the reader nothing new.
         _HEARTBEAT.stop()
-        if _ACTIVE_TELEMETRY_TRACKER is self:
-            _ACTIVE_TELEMETRY_TRACKER = None
 
     def capture_stall_diagnostics(self) -> None:
         """Stop periodic RAS polling, publish a fresh stall sample, and flush telemetry."""

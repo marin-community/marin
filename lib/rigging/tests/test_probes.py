@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 from rigging import telemetry
@@ -234,10 +235,8 @@ def test_nccl_client_reduces_512_rank_response_before_runner_output_limit() -> N
 
 def test_nccl_client_reports_invalid_communicator_without_dropping_valid_peers() -> None:
     payload = _large_healthy_nccl_ras_payload()
-    communicators = payload["communicators"]
-    assert isinstance(communicators, list)
+    communicators = cast(list[dict[str, object]], payload["communicators"])
     first = communicators[0]
-    assert isinstance(first, dict)
     first["ranks_count"] = 999
     raw_response = b"OK\nOK\n" + json.dumps(payload).encode()
 
@@ -250,21 +249,16 @@ def test_nccl_client_reports_invalid_communicator_without_dropping_valid_peers()
 
 def test_nccl_stall_report_retains_only_the_unique_progress_outlier() -> None:
     payload = _large_healthy_nccl_ras_payload()
-    communicators = payload["communicators"]
-    assert isinstance(communicators, list)
+    communicators = cast(list[dict[str, object]], payload["communicators"])
     payload["communicators"] = communicators[:1]
     payload["communicators_count"] = 1
     communicator = communicators[0]
-    assert isinstance(communicator, dict)
-    ranks = communicator["ranks"]
-    assert isinstance(ranks, list)
+    ranks = cast(list[dict[str, object]], communicator["ranks"])
     communicator["ranks"] = ranks[:4]
     communicator["size"] = 4
     communicator["ranks_count"] = 4
     outlier = ranks[3]
-    assert isinstance(outlier, dict)
-    counts = outlier["collective_counts"]
-    assert isinstance(counts, dict)
+    counts = cast(dict[str, int], outlier["collective_counts"])
     counts["AllReduce"] = 199
     response = json.dumps(payload).encode()
 

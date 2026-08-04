@@ -62,7 +62,7 @@ def _parse_address(address: str) -> tuple[str, int]:
 
 
 def query_nccl_ras(*, address: str, timeout: float, verbose: bool = True) -> bytes:
-    """Return one verbose JSON response from NCCL's local RAS service."""
+    """Return one JSON status response from NCCL's local RAS service."""
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("NCCL RAS timeout must be positive and finite")
 
