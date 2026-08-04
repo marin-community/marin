@@ -34,6 +34,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
+from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
@@ -538,7 +539,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             eval_model_getter=lambda s: s.ema_params if s.ema_params is not None else s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
-        progress_watchdog = trainer.progress_watchdog.create()
+        progress_watchdog = trainer.progress_watchdog.create(
+            process_index=jax.process_index(),
+            diagnostic=capture_stall_diagnostics,
+        )
         if progress_watchdog is not None:
             state_callbacks.add_hook(progress_watchdog, every=1)
         state_callbacks.add_hook(
