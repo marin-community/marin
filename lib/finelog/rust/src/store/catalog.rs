@@ -42,6 +42,13 @@ pub struct SavedDashboard {
     pub updated_at_ms: i64,
 }
 
+/// Result of deleting a dashboard definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DashboardDeleteOutcome {
+    Deleted,
+    NotFound,
+}
+
 struct CatalogInner {
     conn: Connection,
     live: BTreeMap<String, RegisteredNamespace>,
@@ -86,6 +93,15 @@ fn row_to_segment(row: &rusqlite::Row) -> rusqlite::Result<SegmentRow> {
         min_key_value: row.get(8)?,
         max_key_value: row.get(9)?,
         location: SegmentLocation::parse_str(&loc).unwrap_or(SegmentLocation::Local),
+    })
+}
+
+fn row_to_saved_dashboard(row: &rusqlite::Row) -> rusqlite::Result<SavedDashboard> {
+    Ok(SavedDashboard {
+        dashboard_id: row.get(0)?,
+        definition_json: row.get(1)?,
+        created_at_ms: row.get(2)?,
+        updated_at_ms: row.get(3)?,
     })
 }
 
@@ -245,14 +261,7 @@ impl Catalog {
             )
             .map_err(sqlite_err)?;
         let rows = stmt
-            .query_map([], |row| {
-                Ok(SavedDashboard {
-                    dashboard_id: row.get(0)?,
-                    definition_json: row.get(1)?,
-                    created_at_ms: row.get(2)?,
-                    updated_at_ms: row.get(3)?,
-                })
-            })
+            .query_map([], row_to_saved_dashboard)
             .map_err(sqlite_err)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_err)
     }
@@ -266,14 +275,7 @@ impl Catalog {
                 "SELECT dashboard_id, definition_json, created_at_ms, updated_at_ms \
                  FROM dashboards WHERE dashboard_id = ?1",
                 [dashboard_id],
-                |row| {
-                    Ok(SavedDashboard {
-                        dashboard_id: row.get(0)?,
-                        definition_json: row.get(1)?,
-                        created_at_ms: row.get(2)?,
-                        updated_at_ms: row.get(3)?,
-                    })
-                },
+                row_to_saved_dashboard,
             )
             .optional()
             .map_err(sqlite_err)
@@ -307,20 +309,16 @@ impl Catalog {
                 "SELECT dashboard_id, definition_json, created_at_ms, updated_at_ms \
                  FROM dashboards WHERE dashboard_id = ?1",
                 [dashboard_id],
-                |row| {
-                    Ok(SavedDashboard {
-                        dashboard_id: row.get(0)?,
-                        definition_json: row.get(1)?,
-                        created_at_ms: row.get(2)?,
-                        updated_at_ms: row.get(3)?,
-                    })
-                },
+                row_to_saved_dashboard,
             )
             .map_err(sqlite_err)
     }
 
-    /// Delete one shared dashboard, returning whether a row existed.
-    pub fn delete_dashboard(&self, dashboard_id: &str) -> Result<bool, StatsError> {
+    /// Delete one shared dashboard definition.
+    pub fn delete_dashboard(
+        &self,
+        dashboard_id: &str,
+    ) -> Result<DashboardDeleteOutcome, StatsError> {
         let inner = self.inner.lock().unwrap();
         let deleted = inner
             .conn
@@ -329,7 +327,11 @@ impl Catalog {
                 [dashboard_id],
             )
             .map_err(sqlite_err)?;
-        Ok(deleted > 0)
+        Ok(if deleted > 0 {
+            DashboardDeleteOutcome::Deleted
+        } else {
+            DashboardDeleteOutcome::NotFound
+        })
     }
 
     // ----- forward watermark ---------------------------------------------

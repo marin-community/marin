@@ -25,13 +25,15 @@ interface PanelExecution {
 
 type SourceKind = 'builtin' | 'saved' | 'new'
 
+const MINUTE_MS = 60_000
+
 function cloneDefinition(definition: DashboardDefinition): DashboardDefinition {
   return structuredClone(definition)
 }
 
 function inputDateTime(timestampMs: number): string {
   const date = new Date(timestampMs)
-  return new Date(timestampMs - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+  return new Date(timestampMs - date.getTimezoneOffset() * MINUTE_MS).toISOString().slice(0, 16)
 }
 
 const now = Date.now()
@@ -41,7 +43,7 @@ const sourceKind = ref<SourceKind>('builtin')
 const current = ref<DashboardDefinition>(cloneDefinition(BUILT_IN_DASHBOARDS[0]))
 const variableValues = ref<Record<string, string>>({})
 const executions = ref<Record<string, PanelExecution>>({})
-const fromInput = ref(inputDateTime(now - 30 * 60_000))
+const fromInput = ref(inputDateTime(now - 30 * MINUTE_MS))
 const toInput = ref(inputDateTime(now))
 const editorOpen = ref(false)
 const loadingSaved = ref(false)
@@ -314,10 +316,10 @@ onMounted(async () => {
             <input v-model="toInput" type="datetime-local" class="block mt-1 text-xs font-mono bg-surface-sunken border border-surface-border rounded px-2 py-1.5">
           </label>
           <div class="flex gap-1">
-            <button class="px-2 py-1.5 text-xs rounded border border-surface-border hover:bg-surface-raised" @click="setRange(15 * 60_000)">15m</button>
-            <button class="px-2 py-1.5 text-xs rounded border border-surface-border hover:bg-surface-raised" @click="setRange(60 * 60_000)">1h</button>
-            <button class="px-2 py-1.5 text-xs rounded border border-surface-border hover:bg-surface-raised" @click="setRange(6 * 60 * 60_000)">6h</button>
-            <button class="px-2 py-1.5 text-xs rounded border border-surface-border hover:bg-surface-raised" @click="setRange(24 * 60 * 60_000)">24h</button>
+            <button class="px-2 py-1.5 text-xs rounded border border-surface-border hover:bg-surface-raised" @click="setRange(15 * MINUTE_MS)">15m</button>
+            <button class="px-2 py-1.5 text-xs rounded border border-surface-border hover:bg-surface-raised" @click="setRange(60 * MINUTE_MS)">1h</button>
+            <button class="px-2 py-1.5 text-xs rounded border border-surface-border hover:bg-surface-raised" @click="setRange(6 * 60 * MINUTE_MS)">6h</button>
+            <button class="px-2 py-1.5 text-xs rounded border border-surface-border hover:bg-surface-raised" @click="setRange(24 * 60 * MINUTE_MS)">24h</button>
           </div>
           <label v-for="variable in current.variables" :key="variable.name" class="text-xs text-text-secondary min-w-[220px] flex-1">
             {{ variable.label }}

@@ -13,7 +13,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::server::auth::{auth_gate, AuthPolicy};
-use crate::store::catalog::SavedDashboard;
+use crate::store::catalog::{DashboardDeleteOutcome, SavedDashboard};
 use crate::store::Store;
 
 const MAX_BODY_BYTES: usize = 256 << 10;
@@ -331,14 +331,14 @@ async fn delete_dashboard(
     Path(dashboard_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let requested_id = dashboard_id.clone();
-    let deleted = tokio::task::spawn_blocking(move || store.delete_dashboard(&dashboard_id))
+    let outcome = tokio::task::spawn_blocking(move || store.delete_dashboard(&dashboard_id))
         .await
         .map_err(|error| ApiError::internal(format!("delete dashboard task failed: {error}")))?
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    if !deleted {
-        return Err(ApiError::not_found(&requested_id));
+    match outcome {
+        DashboardDeleteOutcome::Deleted => Ok(StatusCode::NO_CONTENT),
+        DashboardDeleteOutcome::NotFound => Err(ApiError::not_found(&requested_id)),
     }
-    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Build authenticated dashboard routes backed by the Finelog catalog.

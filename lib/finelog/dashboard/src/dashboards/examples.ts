@@ -1,4 +1,34 @@
-import type { DashboardDefinition } from '@/types/dashboard'
+import type { DashboardDefinition, DashboardPanel, DashboardPanelWidth } from '@/types/dashboard'
+
+const COUNTER_LOOKBACK_MS = 300_000
+
+function trainingMetricPanel(
+  id: string,
+  title: string,
+  description: string,
+  metricName: string,
+  series: string,
+  width: DashboardPanelWidth,
+): DashboardPanel {
+  return {
+    id,
+    title,
+    kind: 'timeseries',
+    width,
+    description,
+    sql: `SELECT date_bin(INTERVAL '{{interval_ms}} milliseconds', to_timestamp_millis(timestamp_ms)) AS t,
+       '${series}' AS series,
+       AVG(value) AS value
+FROM telemetry_v1
+WHERE service = 'levanter'
+  AND name = '${metricName}'
+  AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
+  AND timestamp_ms >= {{from_ms}}
+  AND timestamp_ms < {{to_ms}}
+GROUP BY 1
+ORDER BY 1`,
+  }
+}
 
 const HARDWARE_AND_COMMUNICATIONS: DashboardDefinition = {
   version: 1,
@@ -64,7 +94,7 @@ LIMIT 500`,
            ORDER BY timestamp_ms, seq
          ) AS previous_value
   FROM telemetry_v1
-  WHERE timestamp_ms >= {{from_ms}} - 300000
+  WHERE timestamp_ms >= {{from_ms}} - ${COUNTER_LOOKBACK_MS}
     AND timestamp_ms < {{to_ms}}
     AND name IN ('gpu_pcie_replay_errors', 'gpu_nvlink_errors')
 ), increments AS (
@@ -113,7 +143,7 @@ ORDER BY 1, 2`,
          ) AS previous_timestamp_ms
   FROM telemetry_v1
   WHERE service = 'node'
-    AND timestamp_ms >= {{from_ms}} - 300000
+    AND timestamp_ms >= {{from_ms}} - ${COUNTER_LOOKBACK_MS}
     AND timestamp_ms < {{to_ms}}
     AND name IN ('node_network_receive_bytes', 'node_network_transmit_bytes')
 ), node_bins AS (
@@ -147,60 +177,30 @@ const TRAINING_RUN: DashboardDefinition = {
   description: 'A deliberately small view of Levanter progress, throughput, and utilization.',
   variables: [{ name: 'job_id', label: 'Iris job ID', default: '' }],
   panels: [
-    {
-      id: 'throughput',
-      title: 'Training throughput',
-      kind: 'timeseries',
-      width: 'half',
-      description: 'Mean tokens per second across workers reporting for the job.',
-      sql: `SELECT date_bin(INTERVAL '{{interval_ms}} milliseconds', to_timestamp_millis(timestamp_ms)) AS t,
-       'tokens/s' AS series,
-       AVG(value) AS value
-FROM telemetry_v1
-WHERE service = 'levanter'
-  AND name = 'throughput_tokens_per_second'
-  AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
-  AND timestamp_ms >= {{from_ms}}
-  AND timestamp_ms < {{to_ms}}
-GROUP BY 1
-ORDER BY 1`,
-    },
-    {
-      id: 'mfu',
-      title: 'Mean MFU',
-      kind: 'timeseries',
-      width: 'half',
-      description: 'Mean model-flop utilization percentage across workers.',
-      sql: `SELECT date_bin(INTERVAL '{{interval_ms}} milliseconds', to_timestamp_millis(timestamp_ms)) AS t,
-       'MFU %' AS series,
-       AVG(value) AS value
-FROM telemetry_v1
-WHERE service = 'levanter'
-  AND name = 'throughput_mean_mfu'
-  AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
-  AND timestamp_ms >= {{from_ms}}
-  AND timestamp_ms < {{to_ms}}
-GROUP BY 1
-ORDER BY 1`,
-    },
-    {
-      id: 'loss',
-      title: 'Training loss',
-      kind: 'timeseries',
-      width: 'full',
-      description: 'Mean train/loss snapshots for the selected job.',
-      sql: `SELECT date_bin(INTERVAL '{{interval_ms}} milliseconds', to_timestamp_millis(timestamp_ms)) AS t,
-       'train loss' AS series,
-       AVG(value) AS value
-FROM telemetry_v1
-WHERE service = 'levanter'
-  AND name = 'train_loss'
-  AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
-  AND timestamp_ms >= {{from_ms}}
-  AND timestamp_ms < {{to_ms}}
-GROUP BY 1
-ORDER BY 1`,
-    },
+    trainingMetricPanel(
+      'throughput',
+      'Training throughput',
+      'Mean tokens per second across workers reporting for the job.',
+      'throughput_tokens_per_second',
+      'tokens/s',
+      'half',
+    ),
+    trainingMetricPanel(
+      'mfu',
+      'Mean MFU',
+      'Mean model-flop utilization percentage across workers.',
+      'throughput_mean_mfu',
+      'MFU %',
+      'half',
+    ),
+    trainingMetricPanel(
+      'loss',
+      'Training loss',
+      'Mean train/loss snapshots for the selected job.',
+      'train_loss',
+      'train loss',
+      'full',
+    ),
   ],
 }
 
@@ -258,7 +258,7 @@ ORDER BY 1, 2`,
   WHERE service = 'vllm'
     AND name IN ('time_to_first_token_seconds_sum', 'time_to_first_token_seconds_count')
     AND json_get(resource_attributes_json, 'job_id') = {{job_id}}
-    AND timestamp_ms >= {{from_ms}} - 300000
+    AND timestamp_ms >= {{from_ms}} - ${COUNTER_LOOKBACK_MS}
     AND timestamp_ms < {{to_ms}}
 ), deltas AS (
   SELECT timestamp_ms,
