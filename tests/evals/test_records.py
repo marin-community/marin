@@ -54,6 +54,24 @@ _RECORD = EvalRunRecord(
 )
 
 
+class _CachedListingFileSystem:
+    def __init__(self):
+        self._listings = {}
+
+    def ls(self, path, detail):
+        if path not in self._listings:
+            self._listings[path] = [
+                {"name": str(child), "type": "directory" if child.is_dir() else "file"} for child in Path(path).iterdir()
+            ]
+        return self._listings[path]
+
+    def invalidate_cache(self, path):
+        self._listings.pop(path, None)
+
+    def unstrip_protocol(self, path):
+        return path
+
+
 def test_write_read_record_round_trip(tmp_path):
     path = write_record(_RECORD, str(tmp_path))
 
@@ -164,6 +182,22 @@ def test_scan_records_cache_detects_added_and_deleted_runs(tmp_path):
     refreshed = scan_records(str(evals), initial.records_by_path)
 
     assert [record.run_id for record in refreshed.records] == ["second-run"]
+
+
+def test_scan_records_invalidates_filesystem_listing_cache(tmp_path, monkeypatch):
+    evals = tmp_path / "evals"
+    write_record(_RECORD.model_copy(update={"run_id": "first-run"}), str(evals))
+    filesystem = _CachedListingFileSystem()
+    monkeypatch.setattr(
+        "marin.evaluation.records.url_to_fs",
+        lambda prefix: (filesystem, prefix),
+    )
+    initial = scan_records(str(evals))
+
+    write_record(_RECORD.model_copy(update={"run_id": "second-run"}), str(evals))
+    refreshed = scan_records(str(evals), initial.records_by_path)
+
+    assert [record.run_id for record in refreshed.records] == ["first-run", "second-run"]
 
 
 def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_path):
