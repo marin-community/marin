@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
+from pathlib import Path
 from typing import Sequence
 
 import numpy as np
@@ -22,10 +24,8 @@ from levanter.data.text.trace_chat import (
     dataset_for_trace_chat_format,
 )
 from levanter.store.cache import SerialCacheWriter
-from levanter.tokenizers import MarinTokenizer, load_tokenizer
+from levanter.tokenizers import MarinTokenizer
 
-
-MODEL_NAME = "marin-community/marin-tokenizer"
 
 ALT_TEMPLATE = """{{ bos_token }}
 {%- if enable_thinking is defined -%}
@@ -107,12 +107,23 @@ MULTI_TOOL_TEMPLATE = """{{ bos_token }}
 
 
 @pytest.fixture(scope="module")
-def tokenizer() -> MarinTokenizer:
-    try:
-        return load_tokenizer(MODEL_NAME)
-    except Exception as e:  # noqa
-        pytest.skip(f"Could not load tokenizer {MODEL_NAME}: {e}", allow_module_level=True)
-        raise NotImplementedError("unreachable")
+def tokenizer(local_gpt2_tokenizer: MarinTokenizer) -> MarinTokenizer:
+    return local_gpt2_tokenizer
+
+
+@pytest.fixture(
+    params=[
+        # Filenames pin the Hugging Face model revision that supplied each template.
+        ("mistral", "mistral-7b-instruct-v0.2-63a8b08.jinja", {}),
+        ("gemma3", "gemma-3-4b-it-093f9f3.jinja", {}),
+        ("gpt-oss", "gpt-oss-20b-6cee5e8.jinja", {"tools": None, "builtin_tools": None}),
+    ],
+    ids=lambda case: case[0],
+)
+def upstream_chat_template(request) -> tuple[str, str, dict]:
+    case_name, filename, template_kwargs = request.param
+    path = Path(__file__).parent / "data" / "chat_templates" / filename
+    return case_name, path.read_text(), template_kwargs
 
 
 def decode_sequence(tokenizer: MarinTokenizer, tensor: Sequence[int]) -> str:
@@ -332,6 +343,44 @@ def test_chat_template_with_masks_returns_message_spans(tokenizer: MarinTokenize
     tool_start, tool_end = spans[2]
     tool_text = decode_sequence(tokenizer, result["input_ids"][0][tool_start:tool_end])
     assert '{"result": 5}' in tool_text
+
+
+def test_upstream_chat_template_message_spans(tokenizer: MarinTokenizer, upstream_chat_template):
+    case_name, chat_template, template_kwargs = upstream_chat_template
+    conversation = [
+        {"role": "user", "content": f"{case_name} alpha prompt."},
+        {"role": "assistant", "content": f"{case_name} beta answer."},
+        {"role": "user", "content": f"{case_name} gamma prompt."},
+        {"role": "assistant", "content": f"{case_name} delta answer."},
+    ]
+
+    result = tokenizer.apply_chat_template_with_masks(
+        [conversation],
+        chat_template=chat_template,
+        return_message_spans=True,
+        **template_kwargs,
+    )
+
+    input_ids = result["input_ids"][0]
+    spans = result["message_spans"][0]
+    assert len(spans) == len(conversation)
+    assert all(start < end for start, end in spans)
+    assert all(left[1] <= right[0] for left, right in pairwise(spans))
+    for message, (start, end) in zip(conversation, spans, strict=True):
+        span_text = tokenizer.decode(input_ids[start:end], skip_special_tokens=False)
+        assert message["content"] in span_text
+
+
+def test_trace_chat_processor_rejects_upstream_template_without_generation_block(
+    tokenizer: MarinTokenizer, upstream_chat_template
+):
+    _, chat_template, _ = upstream_chat_template
+    with pytest.raises(ValueError, match="generation"):
+        TraceChatProcessor(
+            tokenizer,
+            chat_template=chat_template,
+            loss_tags=("assistant", "tool_call", "observation", "final_assistant"),
+        )
 
 
 NO_GENERATION_TEMPLATE = """{{ bos_token }}

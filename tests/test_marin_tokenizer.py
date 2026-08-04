@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from itertools import pairwise
 
 import numpy as np
 import pytest
 from levanter.data.text.formats import ChatProcessor
+from levanter.data.text.trace_chat import (
+    TRACE_LABEL_ASSISTANT_TOOL_CALL,
+    TRACE_LABEL_FINAL_ASSISTANT,
+    TRACE_LABEL_OBSERVATION,
+    TraceChatProcessor,
+)
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
@@ -94,6 +101,60 @@ def test_assistant_mask_covers_only_assistant_turns(marin_chat_tokenizer: MarinT
     assert "Great!" in masked
     assert "Hello, how are you?" not in masked
     assert "That's good to hear!" not in masked
+
+
+def test_message_spans_cover_each_marin_chat_turn(marin_chat_tokenizer: MarinTokenizer):
+    result = marin_chat_tokenizer.apply_chat_template_with_masks([CONVERSATION], return_message_spans=True)
+
+    input_ids = result["input_ids"][0]
+    spans = result["message_spans"][0]
+    assert len(spans) == len(CONVERSATION)
+    assert all(start < end for start, end in spans)
+    assert all(left[1] <= right[0] for left, right in pairwise(spans))
+    for message, (start, end) in zip(CONVERSATION, spans, strict=True):
+        rendered_turn = marin_chat_tokenizer.decode(input_ids[start:end], skip_special_tokens=False)
+        assert message["content"] in rendered_turn
+
+
+def test_trace_chat_processor_labels_marin_tool_trace(marin_chat_tokenizer: MarinTokenizer):
+    processor = TraceChatProcessor(
+        marin_chat_tokenizer,
+        loss_tags=("assistant", "tool_call", "observation", "final_assistant"),
+    )
+    result = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Call the lookup tool."},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_lookup",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": {"key": "marin"}},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "content": '{"result": 3}'},
+                    {"role": "assistant", "content": "The final answer is done."},
+                ]
+            }
+        ]
+    )[0]
+
+    labels = result["loss_labels"]
+    input_ids = result["input_ids"]
+    tool_call_text = _decode(marin_chat_tokenizer, input_ids[labels == TRACE_LABEL_ASSISTANT_TOOL_CALL])
+    observation_text = _decode(marin_chat_tokenizer, input_ids[labels == TRACE_LABEL_OBSERVATION])
+    final_text = _decode(marin_chat_tokenizer, input_ids[labels == TRACE_LABEL_FINAL_ASSISTANT])
+
+    assert "lookup" in tool_call_text
+    assert "marin" in tool_call_text
+    assert "result" in observation_text
+    assert "3" in observation_text
+    assert "The final answer is done." in final_text
 
 
 def test_generation_prompt(marin_chat_tokenizer: MarinTokenizer):
