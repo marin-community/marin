@@ -62,9 +62,25 @@ _LAYOUT_LINE = re.compile(r"BENCH_FSDP_LAYOUT resolved fsdp=(\(.*?\)) lm_head=(\
 _LAUNCHER_RESOURCES = ("--cpu", "2", "--memory", "8GB", "--disk", "30GB", "--enable-extra-resources")
 
 
+def _sweep_arms(args) -> list[str]:
+    """The arm sequence to run, in order.
+
+    `--arms` overrides the paired default. Order matters under preemption: a gang that is
+    evicted restarts the sweep from the beginning, so an arm placed second may never be
+    reached, and an arm that fails fast still burns its predecessor's compile first.
+    """
+    if args.arms:
+        arms = [arm.strip() for arm in args.arms.split(",") if arm.strip()]
+        unknown = sorted(set(arms) - set(_ARMS))
+        if unknown:
+            raise SystemExit(f"--arms names unknown arms {unknown}; known arms are {list(_ARMS)}")
+        return arms
+    return list(_ARMS) * args.repeats
+
+
 def _sweep_env(args) -> dict[str, str]:
     return {
-        "SCALE_FSDP_SWEEP": ",".join(_ARMS * args.repeats),
+        "SCALE_FSDP_SWEEP": ",".join(_sweep_arms(args)),
         "SCALE_DEVICE": args.device,
         "SCALE_GPU_REPLICAS": str(args.nodes),
         "SCALE_EXPERT_AXIS": str(args.expert),
@@ -246,6 +262,7 @@ def main() -> None:
     run.add_argument("--batch", type=int, default=512)
     run.add_argument("--steps", type=int, default=80)
     run.add_argument("--repeats", type=int, default=3, help="paired before/after draws")
+    run.add_argument("--arms", default="", help="explicit arm order, e.g. 'after' or 'after,before'")
     run.add_argument("--run-id", default="ep-fsdp-sweep")
     # The GB200 fleet is reached through the federation controller with --target-cluster,
     # the shape experiments/grug/moe_hero_ep/README.md uses for the one-rack gate.
