@@ -47,6 +47,7 @@ from rigging.filesystem import StoragePath, open_url, url_to_fs
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.external_sort import external_sort_merge
+from zephyr.polars_io import scan_parquet_chunk
 from zephyr.shard_keys import deterministic_hash
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
@@ -383,7 +384,7 @@ class ScatterReader:
 
     def get_frames(self) -> list[pl.LazyFrame]:
         frames = [
-            pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
+            scan_parquet_chunk(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
             for _, chunk_paths in self._files
             for path in chunk_paths
         ]

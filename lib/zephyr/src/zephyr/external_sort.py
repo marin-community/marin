@@ -23,6 +23,8 @@ from collections.abc import Iterator
 import polars as pl
 from rigging.filesystem import open_url, url_to_fs
 
+from zephyr.polars_io import scan_parquet_chunk
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +85,7 @@ def external_sort_merge(
 
         logger.info("[shard %d] External sort: pass-2 merging %d run files", shard, len(spill_files))
 
-        merged = pl.merge_sorted([pl.scan_parquet(p) for p in spill_files], key=sort_key)
+        merged = pl.merge_sorted([scan_parquet_chunk(p) for p in spill_files], key=sort_key)
         yield from merged.collect_batches()
     finally:
         if spill_files:
