@@ -2,14 +2,30 @@
 
 ## Dashboard
 
-See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and `dashboard-proxy`. The proxy serves a locally-built frontend against the remote controller — restart it after frontend changes.
+The Zephyr coordinator serves a read-only pipeline dashboard on its actor
+endpoint. Open the coordinator task in the Iris dashboard, then open its
+endpoint link. Iris authenticates the browser and proxies the dashboard and its
+JSON API requests to the coordinator. The browser does not need direct access to
+the Zephyr network.
+
+The pipeline selector lists active executions on the shared coordinator. Plan,
+status, counter, and metric views apply to the selected execution. The worker
+view covers the complete coordinator pool and labels each active shard with its
+execution ID. Completed executions disappear after the driver reads the result
+and releases coordinator state.
+
+See `lib/iris/OPS.md` → "Cluster Lifecycle" for `iris cluster dashboard` and
+`dashboard-proxy` commands.
 
 ## Architecture
 
 Pull-based coordinator/worker model. Coordinator queues tasks per stage; workers poll `pull_task()`, execute shards, report results. Stages are sequential barriers — all shards in a stage must complete before the next starts (`_wait_for_stage`).
 
 Key files:
-- `src/zephyr/execution.py` — coordinator loop, worker poll loop, shard execution
+- `src/zephyr/coordinator.py` — coordinator state, task dispatch, and dashboard data
+- `src/zephyr/worker.py` — worker polling and per-execution heartbeats
+- `src/zephyr/execution.py` — pool lifecycle and pipeline submission
+- `src/zephyr/dashboard.py` — coordinator dashboard payloads and HTTP application
 - `src/zephyr/plan.py` — pipeline plan, scatter/reduce, k-way merge
 
 Child job naming: `<hash>-p<pipeline>-a<attempt>-{coord,workers}`. Focus on the latest attempt.

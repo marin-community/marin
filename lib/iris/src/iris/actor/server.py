@@ -19,7 +19,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, NewType
+from typing import Any, NewType, Protocol, runtime_checkable
 
 import cloudpickle
 import uvicorn
@@ -29,6 +29,7 @@ from connectrpc.request import RequestContext
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from starlette.applications import Starlette
 from starlette.routing import Mount
+from starlette.types import ASGIApp
 
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import actor_pb2
@@ -41,6 +42,14 @@ ACTOR_SERVER_STARTUP_TIMEOUT = Duration.from_seconds(5.0)
 
 # Type aliases
 ActorId = NewType("ActorId", str)
+
+
+@runtime_checkable
+class ActorWebApplication(Protocol):
+    """Actor that supplies an HTTP application on its registered endpoint."""
+
+    @property
+    def web_application(self) -> ASGIApp: ...
 
 
 @dataclass
@@ -109,6 +118,7 @@ class ActorServer:
         self._host = host
         self._port = port
         self._actors: dict[str, RegisteredActor] = {}
+        self._web_application: ASGIApp | None = None
         self._app: Starlette | None = None
         self._actual_port: int | None = None
         self._threads = threads if threads is not None else get_thread_container()
@@ -136,8 +146,21 @@ class ActorServer:
         """
         if name in self._actors:
             raise ValueError(f"Actor '{name}' is already registered")
+        if isinstance(actor, ActorWebApplication):
+            if self._app is not None:
+                raise RuntimeError("Register actor web applications before the actor server starts")
+            if self._web_application is not None:
+                raise ValueError("ActorServer supports one actor web application")
+            self._web_application = actor.web_application
         actor_id = ActorId(f"{name}-{uuid.uuid4().hex[:8]}")
-        methods = {m: getattr(actor, m) for m in dir(actor) if not m.startswith("_") and callable(getattr(actor, m))}
+        methods = {
+            method_name: getattr(actor, method_name)
+            for method_name in dir(actor)
+            # The dashboard property supplies an ASGI app; it is not an actor RPC.
+            if method_name != "web_application"
+            and not method_name.startswith("_")
+            and callable(getattr(actor, method_name))
+        }
         self._actors[name] = RegisteredActor(
             name=name,
             actor_id=actor_id,
@@ -306,7 +329,10 @@ class ActorServer:
 
     def _create_app(self) -> Starlette:
         rpc_app = ActorServiceASGIApplication(service=self, compressions=IRIS_RPC_COMPRESSIONS)
-        return Starlette(routes=[Mount(rpc_app.path, app=rpc_app)])
+        routes = [Mount(rpc_app.path, app=rpc_app)]
+        if self._web_application is not None:
+            routes.append(Mount("/", app=self._web_application))
+        return Starlette(routes=routes)
 
     def serve_background(self, port: int | None = None) -> int:
         """Start server in background thread.

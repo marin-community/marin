@@ -361,6 +361,7 @@ class ZephyrContext:
             max_shard_infra_failures=self.max_shard_infra_failures,
             drain_idle_workers=idle_policy is _IdleWorkerPolicy.DRAIN,
             max_concurrent_pipelines=self.max_concurrent_pipelines,
+            expected_workers=worker_count,
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,
@@ -421,6 +422,7 @@ class ZephyrContext:
             coordinator.run_pipeline.submit(
                 plan,
                 execution_id,
+                self.name,
                 ZephyrTaskResources.from_resource_config(map_task_resources),
                 ZephyrTaskResources.from_resource_config(reduce_task_resources),
             ).result()

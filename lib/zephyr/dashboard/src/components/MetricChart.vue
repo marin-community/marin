@@ -1,0 +1,64 @@
+<script setup lang="ts">
+import * as Plot from '@observablehq/plot'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { MetricPoint } from '@/types/dashboard'
+
+const props = defineProps<{
+  title: string
+  points: MetricPoint[]
+  field: 'item_rate' | 'byte_rate' | 'cpu_cores' | 'memory_bytes'
+  unit: string
+}>()
+
+const root = ref<HTMLElement | null>(null)
+let observer: ResizeObserver | null = null
+
+function render() {
+  if (!root.value) return
+  const width = Math.max(root.value.clientWidth, 320)
+  const rows = props.points.map((point) => ({
+    time: new Date(point.timestamp_ms),
+    stage: point.stage || 'pipeline',
+    value: point[props.field] ?? 0,
+  }))
+  const chart = Plot.plot({
+    width,
+    height: 230,
+    marginLeft: 56,
+    marginBottom: 36,
+    style: { background: 'transparent', color: 'var(--c-text-secondary)', fontSize: '11px' },
+    x: { type: 'utc', label: null, grid: false },
+    y: { label: props.unit, grid: true, nice: true },
+    color: { legend: rows.some((row) => row.stage !== rows[0]?.stage) },
+    marks: [
+      Plot.ruleY([0], { stroke: 'var(--c-border)' }),
+      Plot.lineY(rows, { x: 'time', y: 'value', stroke: 'stage', strokeWidth: 2, tip: true }),
+      Plot.dot(rows, { x: 'time', y: 'value', fill: 'stage', r: 2 }),
+    ],
+  })
+  root.value.replaceChildren(chart)
+}
+
+watch(() => [props.points, props.field], render, { deep: true, flush: 'post' })
+watch(root, (element, previous) => {
+  if (previous) observer?.unobserve(previous)
+  if (element) observer?.observe(element)
+  render()
+}, { flush: 'post' })
+onMounted(() => {
+  observer = new ResizeObserver(render)
+  if (root.value) observer.observe(root.value)
+  render()
+})
+onBeforeUnmount(() => observer?.disconnect())
+</script>
+
+<template>
+  <section class="card overflow-hidden">
+    <div class="border-b border-surface-border px-5 py-3">
+      <h2 class="text-sm font-semibold">{{ title }}</h2>
+    </div>
+    <div v-if="points.length" ref="root" class="plot min-h-[230px] w-full px-2 py-3" />
+    <div v-else class="grid h-[230px] place-items-center text-sm text-text-muted">No samples yet</div>
+  </section>
+</template>
