@@ -30,6 +30,7 @@ MAX_FIELD_BYTES = 256
 MAX_EXACT_COUNT = 2**53 - 1
 MAX_CLIENT_OUTPUT_BYTES = 192 * 1024
 _MAX_FAILURE_MESSAGE_CHARS = 1_024
+_COLLECTIVE_OUTLIER_PREFIX = "collective_outlier:"
 _RUNNING_INIT_STATE = 0
 _INITIALIZING_INIT_STATE = 7
 
@@ -38,6 +39,13 @@ def _bounded_text(value: str) -> str:
     if not value or len(value.encode()) > MAX_FIELD_BYTES:
         raise ValueError("field exceeds string limit")
     return value
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    encoded = value.encode()
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode(errors="ignore")
 
 
 BoundedText = Annotated[str, AfterValidator(_bounded_text)]
@@ -433,7 +441,9 @@ def _progress_outliers(communicator: _Communicator) -> dict[int, tuple[str, ...]
         expected = most_common[0][0]
         for rank in communicator.ranks:
             if rank.collective_counts.get(collective, 0) != expected:
-                reasons.setdefault(rank.rank, []).append(f"collective_outlier:{collective}")
+                collective_budget = MAX_FIELD_BYTES - len(_COLLECTIVE_OUTLIER_PREFIX.encode())
+                bounded_collective = _truncate_utf8(collective, collective_budget)
+                reasons.setdefault(rank.rank, []).append(f"{_COLLECTIVE_OUTLIER_PREFIX}{bounded_collective}")
     return {rank: tuple(rank_reasons) for rank, rank_reasons in reasons.items()}
 
 

@@ -271,6 +271,27 @@ def test_nccl_stall_report_retains_only_the_unique_progress_outlier() -> None:
     assert stall.rank_observations[0].reasons == ("collective_outlier:AllReduce",)
 
 
+def test_nccl_stall_report_bounds_derived_outlier_reason_by_utf8_bytes() -> None:
+    payload = _large_healthy_nccl_ras_payload()
+    communicators = cast(list[dict[str, object]], payload["communicators"])
+    payload["communicators"] = communicators[:1]
+    payload["communicators_count"] = 1
+    communicator = communicators[0]
+    ranks = cast(list[dict[str, object]], communicator["ranks"])
+    communicator["ranks"] = ranks[:4]
+    communicator["size"] = 4
+    communicator["ranks_count"] = 4
+    collective = "界" * 85
+    counts = cast(dict[str, int], ranks[3]["collective_counts"])
+    counts[collective] = 1
+
+    report = nccl_ras.reduce_response(json.dumps(payload).encode(), detail=nccl_ras.RasDetail.STALL)
+
+    reason = report.rank_observations[0].reasons[0]
+    assert reason.startswith("collective_outlier:")
+    assert len(reason.encode()) == nccl_ras.MAX_FIELD_BYTES
+
+
 def test_nccl_reduced_output_preserves_anomalies_before_progress_detail() -> None:
     report = nccl_ras.reduce_response(
         json.dumps(nccl_ras_payload()).encode(),
