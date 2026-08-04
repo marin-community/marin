@@ -266,6 +266,7 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
 )
 @click.option("--row-elements", type=click.IntRange(min=1), default=BENCH_ROW_ELEMENTS, show_default=True)
 @click.option("--capacity-factor", type=click.FloatRange(min=0.1), default=1.0, show_default=True)
+@click.option("--worker-cpu", type=click.IntRange(min=1), default=BENCH_WORKER_CPU, show_default=True)
 @click.option("--profile", is_flag=True, default=False, help="Capture a JAX profile of the timed section.")
 @click.option(
     "--skew",
@@ -285,6 +286,7 @@ def main(
     rows_per_rank: str,
     row_elements: int,
     capacity_factor: float,
+    worker_cpu: int,
     profile: bool,
     skew: float,
     moonep_jax_wheel_build: str,
@@ -301,7 +303,7 @@ def main(
     resources = ResourceConfig.with_gpu(
         "GB200",
         count=BENCH_GPUS_PER_NODE,
-        cpu=BENCH_WORKER_CPU,
+        cpu=worker_cpu,
         ram=BENCH_WORKER_RAM,
         disk=BENCH_WORKER_DISK,
         replicas=nodes,
