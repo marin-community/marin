@@ -101,6 +101,22 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
+def test_terminus_policies_retry_transient_endpoint_errors(checked_policies):
+    expected_retry = {
+        "max_retries": 10,
+        "include_exceptions": ["APIConnectionError", "APITimeoutError", "InternalServerError"],
+        "exclude_exceptions": [],
+        "wait_multiplier": 2.0,
+        "min_wait_sec": 1.0,
+        "max_wait_sec": 60.0,
+    }
+
+    for payload in checked_policies.values():
+        policy = json.loads(payload["stable_policy_json"])
+        if policy["agents"][0]["name"] == "terminus-2":
+            assert policy["retry"] == expected_retry
+
+
 def test_local_source_is_rebased_onto_worker_workspace(tmp_path, monkeypatch):
     with tempfile.TemporaryDirectory(prefix=".harbor-local-", dir=_ROOT) as launch_dir_string:
         launch_dir = Path(launch_dir_string)
