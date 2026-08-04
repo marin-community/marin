@@ -108,7 +108,8 @@ def _rows_flat(
     The registry names in ``counts`` must match the keys returned by
     ``factory()``. Rows whose registry name isn't in ``counts`` are skipped.
     """
-    return tuple((name, lambda f=factory, n=name: f()[n], count) for name, count in counts.items())
+    cached_factory = cache(factory)
+    return tuple((name, lambda f=cached_factory, n=name: f()[n], count) for name, count in counts.items())
 
 
 def _rows_nemotron(
