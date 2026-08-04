@@ -742,3 +742,26 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Comparison anchors: A prior EP64 arm at d6144, 4-of-128, and sliding window 2048 measured 24.842%
   median MFU. The native d5120 EP hero measured 23.6969% at 200 steps. This shape is above both.
 - Next action: Read the MHEP-010 control when it completes, then report the same-shape comparison.
+
+### 2026-08-05 00:00 UTC - MHEP-010 control gives the same-shape EP versus FSDP result
+
+- Completion: All 16 GPU tasks succeeded with exit 0 and zero failures. The run completed all 25
+  steps after seven preemptions, on the same rack allocation window as MHEP-009.
+- Performance: Median MFU is 19.3951%, mean MFU is 16.7629%, p10 MFU is 2.9288%, and p90 MFU is
+  19.6933% over 26 samples. The last sample is 19.6144% MFU, 235,125 tokens/s, and 17.8386 seconds.
+- Training: Final loss is 6.0754. Final MoE drop fraction is 1.8779%, or 15,122,972 assignments.
+- Result: At one rack and this exact model shape, EP64 measures 8.3593 percentage points more median
+  MFU than FSDP64, or 43.1% relative. Last-sample throughput is 34.6% higher.
+- Correction to the MHEP-009 entry: The local `sonic_cute` backend does drop assignments. It dropped
+  1.8779%, not zero. The earlier claim that the FSDP path computes every assignment is wrong.
+- Adjusted comparison: EP completed 90.03% of assignments and FSDP completed 98.12%. A first-order
+  correction of the EP median for the work it did not do gives about 25.5% against 19.4%. Thus the
+  EP lead is about 6 percentage points, not 8.4, and it survives the correction.
+- Variance limit: Both runs have a wide spread because 26 samples include compile and warmup. The
+  FSDP p10 of 2.9288% is a warmup sample, not steady state. Use the medians. The 200-step EP hero
+  gate had a 0.5656 deviation against 5.5456 and 6.5623 here.
+- Cost record: The pair took 5 hours and 30 minutes from submit to result, of which about 20 minutes
+  was GPU work. Fifteen preemptions across both jobs, none of which reached step 0.
+- Next action: MHEP-012 (capacity sweep) is now necessary rather than optional, because the drop
+  gap of 8.1 percentage points funds part of the EP lead. MHEP-011 (FSDP at expert_chunks=1) remains
+  the cheapest way to attribute the rest.
