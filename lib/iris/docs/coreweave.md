@@ -150,6 +150,35 @@ namespace scope in
 [`KueueAddon`](../../../infra/pulumi/src/iac/coreweave/kueue.py); do not replace
 that release with an ad hoc cluster-wide install.
 
+#### TAS preemption and CPU spillover
+
+All Iris Pods use the topology-aware `cw-tas` ResourceFlavor. Its
+`iris.kueue=true` selector covers every Iris-managed NodePool. Accelerator-free
+Pods request unconstrained TAS, so Kueue records their per-node CPU reservations
+in the same flavor as GPU gangs. `preemption.withinClusterQueue: LowerPriority`
+can then remove a lower-priority CPU Workload from the topology snapshot before
+retrying a blocked GPU gang's fit.
+
+Accelerator-free jobs use any compatible node by default. Iris does not expose
+a CPU-only placement constraint; rare jobs that require hard CPU-node placement
+must use Kubernetes-native scheduling outside Iris. GPU and RDMA resource
+requests exclude CPU nodes without an additional selector.
+
+Kueue requires every node in a TAS flavor to carry every level in the referenced
+Topology. CoreWeave supplies the physical hierarchy on accelerator nodes. Iris
+labels CPU NodePools with a synthetic `iris-cpu-only` fabric, superpod,
+leafgroup, and NVLink domain so unconstrained TAS can assign them at the hostname
+level. The synthetic values do not advertise GPU or RDMA resources.
+
+This layout replaces the selectorless, non-TAS `cw-cpu` flavor that caused
+[#7916](https://github.com/marin-community/marin/issues/7916). Kueue v0.18 could
+not reclaim those Pods during `cw-ib` topology fit; the general upstream case is
+tracked by
+[kubernetes-sigs/kueue#9992](https://github.com/kubernetes-sigs/kueue/issues/9992).
+When migrating from the split flavors, apply the NodePool labels before
+switching the ClusterQueue to `cw-tas`, then verify CPU nodes appear in Kueue's
+topology cache.
+
 ## Resource ownership
 
 | Resource | Owner |

@@ -22,6 +22,7 @@ from rigging import telemetry
 from rigging.filesystem import StoragePath
 from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
+from zephyr.memory_store import MemoryTableRegistration
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
 from zephyr.stage_io import (
@@ -296,6 +297,7 @@ class ZephyrCoordinator:
         max_shard_failures: int = MAX_SHARD_FAILURES,
         max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES,
         drain_idle_workers: bool = False,
+        max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES,
     ) -> None:
         # Pipeline executions keyed by execution_id, insertion-ordered. All
         # per-pipeline state lives in the _PipelineExecution values.
@@ -320,12 +322,14 @@ class ZephyrCoordinator:
         self._heartbeat_timeout = heartbeat_timeout
         self._max_shard_failures = max_shard_failures
         self._max_shard_infra_failures = max_shard_infra_failures
+        self._max_concurrent_pipelines = max_concurrent_pipelines
         # Per-worker in-flight counter snapshots. Each snapshot carries a
         # monotonic generation so the coordinator can discard stale or
         # out-of-order heartbeats.
         self._worker_counters: dict[str, CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
+        self._memory_tables: dict[str, MemoryTableRegistration] = {}
         self._coordinator_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
         self._lock = threading.Lock()
@@ -352,13 +356,13 @@ class ZephyrCoordinator:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
         self._worker_group = worker_group
 
-    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> None:
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> tuple[MemoryTableRegistration, ...]:
         """Called by workers when they come online to register with coordinator.
 
         Handles re-registration from reconstructed workers (e.g. after node
-        preemption) by updating the stale handle and resetting worker state.
-
-        Returns the current stage epoch.
+        preemption) by updating the stale handle and resetting worker state. The
+        returned table registrations let the worker restore table metadata
+        before it polls for tasks. Table data is reloaded lazily on first use.
         """
         with self._lock:
             if worker_id in self._worker_handles:
@@ -375,6 +379,24 @@ class ZephyrCoordinator:
                 self._worker_states[worker_id] = WorkerState.ACTIVE
                 self._last_seen[worker_id] = time.monotonic()
                 logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+            return tuple(self._memory_tables.values())
+
+    def register_memory_table(self, registration: MemoryTableRegistration) -> None:
+        """Publish a table after every worker validates its source shards."""
+        with self._lock:
+            if registration.table_id in self._memory_tables:
+                raise ValueError(f"memory table {registration.table_id!r} is already registered")
+            self._memory_tables[registration.table_id] = registration
+
+    def memory_table_registration(self, table_id: str) -> MemoryTableRegistration | None:
+        """Return metadata needed to reload a table on a replacement worker."""
+        with self._lock:
+            return self._memory_tables.get(table_id)
+
+    def unregister_memory_table(self, table_id: str) -> None:
+        """Remove a table from future worker recovery."""
+        with self._lock:
+            self._memory_tables.pop(table_id, None)
 
     def deregister_worker(self, worker_id: str) -> None:
         """Remove a sub-worker that has finished its stage pool."""
@@ -1106,9 +1128,10 @@ class ZephyrCoordinator:
                 owns_execution = False
             else:
                 active = sum(1 for r in self._executions.values() if not r.done)
-                if active >= MAX_CONCURRENT_PIPELINES:
+                if active >= self._max_concurrent_pipelines:
                     raise RuntimeError(
-                        f"Coordinator already runs {active} concurrent pipelines (max {MAX_CONCURRENT_PIPELINES})"
+                        f"Coordinator already runs {active} concurrent pipelines "
+                        f"(max {self._max_concurrent_pipelines})"
                     )
                 run = _PipelineExecution(
                     execution_id=execution_id,

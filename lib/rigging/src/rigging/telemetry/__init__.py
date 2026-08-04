@@ -261,6 +261,11 @@ class _Runtime:
             self._condition.notify_all()
         self._thread.join(max(0.0, timeout))
 
+    def flush(self, timeout: float) -> bool:
+        """Wait until all resident records settle without stopping the exporter."""
+        with self._condition:
+            return self._condition.wait_for(lambda: self._resident_records == 0, timeout=timeout)
+
     def _run(self) -> None:
         try:
             while True:
@@ -377,6 +382,7 @@ class _Runtime:
             if lost:
                 self._lost_records += batch.record_count
             self._oldest_queued_at = self._records[0].enqueued_at if self._records else None
+            self._condition.notify_all()
 
     def _abandon_remaining(self) -> None:
         with self._condition:
@@ -386,6 +392,7 @@ class _Runtime:
             self._resident_bytes = 0
             self._lost_records += abandoned
             self._oldest_queued_at = None
+            self._condition.notify_all()
 
     def _stopping(self) -> bool:
         with self._condition:
@@ -493,6 +500,12 @@ def shutdown(timeout: float = 5.0) -> None:
             runtime.stop(budget)
         except Exception:
             _warn("telemetry exporter failed during shutdown")
+
+
+def flush(timeout: float = 5.0) -> bool:
+    """Wait for queued telemetry to settle without disabling the exporter."""
+    runtime = _runtime
+    return runtime is None or runtime.flush(timeout)
 
 
 def runtime_status() -> TelemetryStatus:

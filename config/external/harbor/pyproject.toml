@@ -4,7 +4,9 @@ version = "0"
 requires-python = "==3.12.*"
 dependencies = [
     "daytona==0.200.2",
+    "gcsfs",
     "harbor",
+    "s3fs",
 ]
 
 [tool.uv]

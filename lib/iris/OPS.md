@@ -263,6 +263,17 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 
 GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
 
+GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every two minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
+
+For a read-only one-shot check, first confirm the target task is `RUNNING`; a `BUILDING` task has no NCCL listener. Query from the task's own container and network namespace:
+
+```bash
+iris --cluster=<cluster> task exec <task-id> --timeout 15 -- \
+  python -m rigging.telemetry.probes.nccl_client --timeout 8
+```
+
+The command sends one status request, does not retry or write inside the task, and limits both socket time and response size. Exit code 3 means the task-local listener was unavailable. Do not restart, signal, or otherwise modify the task to make this check succeed.
+
 ## Scheduler & Autoscaler
 
 ```bash

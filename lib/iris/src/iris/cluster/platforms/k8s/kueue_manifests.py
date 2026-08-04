@@ -14,13 +14,10 @@ from collections.abc import Sequence
 import yaml
 
 from iris.cluster.platforms.k8s.coreweave_topology import (
-    CW_FLAVOR_INFINIBAND,
-    CW_LABEL_FABRIC,
-    CW_LABEL_FLAVOR,
-    CW_LABEL_LEAFGROUP,
-    CW_LABEL_NVLINK_DOMAIN,
-    CW_LABEL_SUPERPOD,
+    CW_INFINIBAND_TOPOLOGY_LABELS,
+    CW_MULTINODE_TOPOLOGY_LABELS,
 )
+from iris.cluster.platforms.k8s.nodepool_manifests import KUEUE_NODE_LABEL
 
 # --------------------------------------------------------------------------
 # Variants
@@ -74,19 +71,8 @@ _K8S_HOSTNAME_LABEL = "kubernetes.io/hostname"
 # ds.coreweave.com/nvlink.domain — both are levels here, so TAS can satisfy the
 # podset-topology annotations Iris stamps. Label keys come from coreweave_topology
 # so the provider, this script, and the kind smoke share one source.
-INFINIBAND_LEVELS = [
-    CW_LABEL_FABRIC,
-    CW_LABEL_SUPERPOD,
-    CW_LABEL_LEAFGROUP,
-    _K8S_HOSTNAME_LABEL,
-]
-MULTINODE_NVLINK_IB_LEVELS = [
-    CW_LABEL_FABRIC,
-    CW_LABEL_SUPERPOD,
-    CW_LABEL_LEAFGROUP,
-    CW_LABEL_NVLINK_DOMAIN,
-    _K8S_HOSTNAME_LABEL,
-]
+INFINIBAND_LEVELS = [*CW_INFINIBAND_TOPOLOGY_LABELS, _K8S_HOSTNAME_LABEL]
+MULTINODE_NVLINK_IB_LEVELS = [*CW_MULTINODE_TOPOLOGY_LABELS, _K8S_HOSTNAME_LABEL]
 INFINIBAND_TOPOLOGY_NAME = "infiniband"
 MULTINODE_TOPOLOGY_NAME = "multinode-nvlink-ib"
 TOPOLOGIES = {
@@ -95,13 +81,11 @@ TOPOLOGIES = {
 }
 
 TOPOLOGY_CRD = "topologies.kueue.x-k8s.io"
-RESOURCE_FLAVOR_NAME = "cw-ib"
-# Node selector for the cw-ib ResourceFlavor. Kueue requires a topology-aware
-# flavor (spec.topologyName set) to carry at least one nodeLabel; CoreWeave stamps
-# backend.coreweave.cloud/flavor=infiniband on every IB-fabric node, which is
-# exactly the capacity this flavor represents. On kind the smoke harness stamps
-# the same label on its worker nodes.
-RESOURCE_FLAVOR_NODE_LABELS = {CW_LABEL_FLAVOR: CW_FLAVOR_INFINIBAND}
+RESOURCE_FLAVOR_NAME = "cw-tas"
+# One TAS ResourceFlavor spans every Iris-managed CoreWeave NodePool. CPU
+# NodePools carry synthetic topology levels so Kueue can assign them at the
+# hostname level; GPU/RDMA requests exclude those nodes by allocatable capacity.
+RESOURCE_FLAVOR_NODE_LABELS = {KUEUE_NODE_LABEL: "true"}
 
 # Resources the ClusterQueue covers when --with-queues is set. A Kueue
 # ClusterQueue can only admit a workload if *every* resource the pods request is
@@ -116,10 +100,10 @@ RESOURCE_FLAVOR_NODE_LABELS = {CW_LABEL_FLAVOR: CW_FLAVOR_INFINIBAND}
 # capacity authority stays the scheduler/autoscaler.
 #
 # It DOES use Kueue for preemption (see build_cluster_queue's preemption stanza).
-# The pressure signal is Topology-Aware Scheduling, not quota: when TAS cannot place
-# a higher-priority Workload on real nodes, Kueue preempts lower-priority Workloads
-# occupying the topology to free room. Quota stays non-binding precisely so this
-# stays TAS-driven and does not fight the autoscaler.
+# The pressure signal is Topology-Aware Scheduling, not quota. Every Iris Pod
+# uses the same TAS flavor so simulated victim removal can reclaim lower-priority
+# CPU reservations before retrying a GPU gang's topology fit. Quota stays
+# non-binding so it does not fight the autoscaler.
 NON_BINDING_QUOTA = {
     # Use "1G" not "1000000000" because the Kubernetes API server canonicalizes to 1G
     # and always returns that, which causes a perpetual, cosmetic `pulumi preview` diff
@@ -131,17 +115,12 @@ NON_BINDING_QUOTA = {
 }
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
 
-# cw-cpu shares one resourceGroup with cw-ib but zeroes the accelerator quotas, so a
-# GPU pod (requesting nvidia.com/gpu + rdma/ib) can never be admitted under it and
-# falls through to cw-ib, while a CPU-only pod matches cw-cpu. Listed first so CPU pods
-# pick it before the GPU flavor.
-CPU_RESOURCE_FLAVOR_NAME = "cw-cpu"
-CPU_FLAVOR_QUOTA = {**NON_BINDING_QUOTA, "nvidia.com/gpu": "0", "rdma/ib": "0"}
-
 
 # --------------------------------------------------------------------------
 # Pure builders (return plain dicts; no I/O).
 # --------------------------------------------------------------------------
+
+
 def build_controller_manager_config(
     pod_namespaces: Sequence[str] = DEFAULT_POD_NAMESPACES,
     *,
@@ -289,40 +268,20 @@ def build_topology_cr(name: str, levels: list[str], api_version: str) -> dict:
 def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict:
     """Return the cluster-scoped ResourceFlavor tied to the named Kueue Topology.
 
-    Defaults to the InfiniBand topology (fabric/superpod/leafgroup) — the only
-    levels real H100 IB nodes carry. Pass ``multinode-nvlink-ib`` to also expose
-    the nvlink.domain level (the kind smoke does this to mock a GB200 layout and
-    exercise the hard/required nvlink.domain placement).
+    Defaults to the InfiniBand topology (fabric/superpod/leafgroup). CPU
+    NodePools carry a synthetic value for these levels; pass
+    ``multinode-nvlink-ib`` to also expose nvlink.domain for GB200 placement.
     """
     return {
         "apiVersion": "kueue.x-k8s.io/v1beta1",
         "kind": "ResourceFlavor",
         "metadata": {"name": RESOURCE_FLAVOR_NAME},
         "spec": {
-            # nodeLabels select the nodes this flavor represents (the IB fabric).
-            # Required by Kueue whenever topologyName is set.
+            # Kueue requires at least one nodeLabel when topologyName is set.
             "nodeLabels": RESOURCE_FLAVOR_NODE_LABELS,
             # Tie the flavor to the Topology so podset-topology annotations resolve.
             "topologyName": topology_name,
         },
-    }
-
-
-def build_cpu_resource_flavor(node_label: tuple[str, str] | None = None) -> dict:
-    """Return the cluster-scoped CPU ResourceFlavor (cw-cpu), no topology.
-
-    ``node_label`` as ``(key, value)`` selects those nodes; omitted (the default)
-    leaves the spec empty, so Kueue injects no nodeSelector for admitted CPU pods. No
-    ``topologyName``: CPU jobs need no topology-aware placement.
-    """
-    spec: dict = {}
-    if node_label is not None:
-        spec["nodeLabels"] = {node_label[0]: node_label[1]}
-    return {
-        "apiVersion": "kueue.x-k8s.io/v1beta1",
-        "kind": "ResourceFlavor",
-        "metadata": {"name": CPU_RESOURCE_FLAVOR_NAME},
-        "spec": spec,
     }
 
 
@@ -332,19 +291,12 @@ def build_cluster_queue(name: str) -> dict:
     Covers every resource Iris pods request (COVERED_RESOURCES) with a non-binding
     nominalQuota (NON_BINDING_QUOTA) — Kueue does not enforce capacity here (the Iris
     autoscaler does). It DOES enforce priority: ``preemption.withinClusterQueue:
-    LowerPriority`` lets a higher-priority pending Workload evict lower-priority
-    admitted ones when it cannot otherwise be admitted — including when TAS cannot
-    place it (topology pressure), which is how a higher-priority gang reclaims nodes
-    from running batch gangs even though quota never binds.
-
-    Both flavors sit in one resourceGroup, cw-cpu first, so CPU pods match cw-cpu and
-    GPU pods fall through to cw-ib.
+    LowerPriority`` lets a higher-priority pending Workload evict compatible
+    lower-priority admitted Workloads when it cannot otherwise be admitted. One
+    flavor covers all resources and nodes so CPU reservations on accelerator
+    nodes are compatible preemption candidates for GPU gangs.
     """
     flavors = [
-        {
-            "name": CPU_RESOURCE_FLAVOR_NAME,
-            "resources": [{"name": r, "nominalQuota": CPU_FLAVOR_QUOTA[r]} for r in COVERED_RESOURCES],
-        },
         {
             "name": RESOURCE_FLAVOR_NAME,
             "resources": [{"name": r, "nominalQuota": NON_BINDING_QUOTA[r]} for r in COVERED_RESOURCES],

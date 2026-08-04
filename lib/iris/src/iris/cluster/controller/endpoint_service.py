@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from threading import RLock
 from typing import Any
+from urllib.parse import urlsplit
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -46,6 +47,7 @@ ENDPOINT_LEASE = Duration.from_minutes(10)
 # Floor on a granted lease: bounds how often a client may force the controller to
 # re-register by capping the renewal rate a short requested lease can ask for.
 MIN_ENDPOINT_LEASE = Duration.from_minutes(3)
+SYSTEM_PROXY_ENDPOINT_PREFIX = "system:"
 
 
 def proxy_name_to_endpoint_names(proxy_name: str) -> tuple[str, str]:
@@ -116,6 +118,15 @@ class ProxyRegistrySnapshot:
     endpoints: tuple[ProxyEndpointMapping, ...]
 
 
+def _proxyable_address(address: str) -> bool:
+    candidate = address if "://" in address else f"http://{address}"
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
 class EndpointServiceImpl:
     """Leased service-discovery registry over the shared endpoints projection."""
 
@@ -140,9 +151,10 @@ class EndpointServiceImpl:
             if self._system_endpoints.get(name) == address:
                 return
             self._system_endpoints[name] = address
+        mapping = self._system_proxy_mapping(name, address)
         self._publish_proxy_delta(
-            upserts=(self._system_proxy_mapping(name, address),),
-            deletes=(),
+            upserts=(mapping,) if mapping is not None else (),
+            deletes=() if mapping is not None else (f"{SYSTEM_PROXY_ENDPOINT_PREFIX}{name}",),
         )
 
     def subscribe_proxy_updates(self, listener: Callable[[ProxyMappingDelta | ProxyRegistryReset], None]) -> None:
@@ -156,17 +168,29 @@ class EndpointServiceImpl:
             generation = self._proxy_generation
             system_endpoints = tuple(self._system_endpoints.items())
             task_endpoints = tuple(self._db.caches[EndpointsProjection].all())
-        mappings = tuple(self._task_proxy_mapping(row) for row in task_endpoints)
-        mappings += tuple(self._system_proxy_mapping(name, address) for name, address in system_endpoints)
+        mappings = tuple(mapping for row in task_endpoints if (mapping := self._task_proxy_mapping(row)) is not None)
+        mappings += tuple(
+            mapping
+            for name, address in system_endpoints
+            if (mapping := self._system_proxy_mapping(name, address)) is not None
+        )
         return ProxyRegistrySnapshot(generation=generation, endpoints=mappings)
 
     def _endpoint_mutated(self, mutation: EndpointDelta | EndpointReset) -> None:
         if isinstance(mutation, EndpointReset):
             self._publish_proxy_reset()
             return
+        upserts: list[ProxyEndpointMapping] = []
+        deletes = list(mutation.deletes)
+        for row in mutation.upserts:
+            mapping = self._task_proxy_mapping(row)
+            if mapping is None:
+                deletes.append(row.endpoint_id)
+            else:
+                upserts.append(mapping)
         self._publish_proxy_delta(
-            upserts=tuple(self._task_proxy_mapping(row) for row in mutation.upserts),
-            deletes=mutation.deletes,
+            upserts=tuple(upserts),
+            deletes=tuple(deletes),
         )
 
     def _publish_proxy_delta(
@@ -197,7 +221,9 @@ class EndpointServiceImpl:
             listener(ProxyRegistryReset())
 
     @staticmethod
-    def _task_proxy_mapping(row: EndpointRow) -> ProxyEndpointMapping:
+    def _task_proxy_mapping(row: EndpointRow) -> ProxyEndpointMapping | None:
+        if not _proxyable_address(row.address):
+            return None
         return ProxyEndpointMapping(
             endpoint_id=row.endpoint_id,
             name=row.name,
@@ -210,9 +236,11 @@ class EndpointServiceImpl:
         )
 
     @staticmethod
-    def _system_proxy_mapping(name: str, address: str) -> ProxyEndpointMapping:
+    def _system_proxy_mapping(name: str, address: str) -> ProxyEndpointMapping | None:
+        if not _proxyable_address(address):
+            return None
         return ProxyEndpointMapping(
-            endpoint_id=f"system:{name}",
+            endpoint_id=f"{SYSTEM_PROXY_ENDPOINT_PREFIX}{name}",
             name=name,
             address=address,
             link_access=False,
