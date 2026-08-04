@@ -473,6 +473,11 @@ def ocr_pdf_text(
         max_workers=max_workers,
         stage_runner_factory=SubprocessRunner,
         heartbeat_timeout=_HEARTBEAT_TIMEOUT,
+        # Not the 1 GB default: a shared-pool coordinator holds both executions' shard, retry, and
+        # result state, and at a full partition's scale (161 shards, ~380 tasks) the default was
+        # OOM-killed (exit 137) at the end of the reduce -- after every output shard was written,
+        # so the step failed with its work complete on disk.
+        coordinator_resources=ResourceConfig(cpu=1, ram="8g", preemptible=False),
     ) as pool:
         raw_shards_present = len(raw_filesystem.glob(f"{raw_path}/*.parquet"))
         if raw_shards_present < num_shards:
