@@ -47,6 +47,10 @@ BENCH_WORKER_DISK = "64g"
 BENCH_ROWS_PER_RANK = 524_288
 BENCH_ROW_ELEMENTS = 5_120
 BENCH_REPEATS = 5
+# The rack expert GEMM shape from MNEP-094: M=262144, K=5120, N=1280.
+BENCH_GEMM_M = 262_144
+BENCH_GEMM_K = 5_120
+BENCH_GEMM_N = 1_280
 BENCH_RESULT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/transport_bench"
 
 
@@ -143,12 +147,45 @@ def _benchmark(config: TransportBenchConfig, rows: int) -> dict[str, float]:
         )
         return jnp.sum(received[::8192, 0], dtype=jnp.float32)
 
+    @partial(shard_map, mesh=mesh, in_specs=(), out_specs=P(), check_rep=False)
+    def gemm() -> jax.Array:
+        rank = jax.lax.axis_index("expert")
+        left = jnp.full((BENCH_GEMM_M, BENCH_GEMM_K), rank.astype(jnp.bfloat16))
+        right = jnp.full((BENCH_GEMM_K, BENCH_GEMM_N), jnp.bfloat16(1))
+        return jnp.sum(left @ right, dtype=jnp.float32)
+
+    @partial(shard_map, mesh=mesh, in_specs=(), out_specs=P(), check_rep=False)
+    def ragged_with_gemm() -> jax.Array:
+        rank = jax.lax.axis_index("expert")
+        source = _source(rank, rows)
+        matrix = jnp.asarray(send_matrix)
+        local_sizes = matrix[rank]
+        send_offsets = jnp.cumsum(local_sizes, dtype=jnp.int32) - local_sizes
+        recv_sizes = matrix[:, rank]
+        recv_offsets = jnp.cumsum(recv_sizes, dtype=jnp.int32) - recv_sizes
+        received = jax.lax.ragged_all_to_all(
+            source,
+            jnp.zeros_like(source),
+            send_offsets,
+            local_sizes,
+            recv_offsets,
+            recv_sizes,
+            axis_name="expert",
+        )
+        # The GEMM does not depend on the transfer, so the scheduler is free to
+        # run both at the same time.
+        left = jnp.full((BENCH_GEMM_M, BENCH_GEMM_K), rank.astype(jnp.bfloat16))
+        right = jnp.full((BENCH_GEMM_K, BENCH_GEMM_N), jnp.bfloat16(1))
+        return jnp.sum(received[::8192, 0], dtype=jnp.float32) + jnp.sum(left @ right, dtype=jnp.float32)
+
     results = {}
     with jax.set_mesh(mesh):
         for label, fn in (
             ("ragged", ragged),
             ("padded_collective", padded_collective),
             ("padded_full", padded_full),
+            ("gemm", gemm),
+            ("ragged_with_gemm", ragged_with_gemm),
         ):
             compiled = jax.jit(fn)
             results[label] = _time_median(compiled, BENCH_REPEATS)
@@ -180,7 +217,7 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
             "measurements": {},
         }
         for label, seconds in results.items():
-            moved = exact_bytes if label == "ragged" else padded_bytes
+            moved = padded_bytes if label.startswith("padded") else exact_bytes
             entry["measurements"][label] = {
                 "median_ms": round(seconds * 1e3, 3),
                 "gigabytes": round(moved / 1e9, 3),
