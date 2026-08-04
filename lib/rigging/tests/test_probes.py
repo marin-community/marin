@@ -59,7 +59,7 @@ def _install_commands(
 
 def _nccl_source(payload: dict[str, object]) -> str:
     report = nccl_ras.reduce_response(json.dumps(payload).encode(), detail=nccl_ras.RasDetail.PERIODIC)
-    output = nccl_ras.NcclRasClientOutput.success(report).to_bytes().decode()
+    output = nccl_ras.NcclRasClientOutput.success(report).to_string()
     return f"import sys\nsys.stdout.write({output!r})"
 
 
@@ -244,6 +244,7 @@ def test_nccl_client_reduces_512_rank_response_before_runner_output_limit() -> N
     assert client_result.report is not None
     assert client_result.report.input_communicators == 77
     assert client_result.report.invalid_communicators == 0
+    assert client_result.report.progress == ()
     assert client_result.report.rank_observations == ()
 
 
@@ -279,6 +280,8 @@ def test_nccl_stall_report_retains_only_the_unique_progress_outlier() -> None:
     periodic = nccl_ras.reduce_response(response, detail=nccl_ras.RasDetail.PERIODIC)
     stall = nccl_ras.reduce_response(response, detail=nccl_ras.RasDetail.STALL)
 
+    assert [(item.collective, item.minimum, item.maximum) for item in periodic.progress] == [("AllReduce", 199, 200)]
+    assert len(stall.progress) == 5
     assert periodic.rank_observations == ()
     assert len(stall.rank_observations) == 1
     assert stall.rank_observations[0].rank == 3
@@ -327,17 +330,15 @@ def test_nccl_collection_preserves_complete_reduced_report_above_default_limit(
     )
     report = report.model_copy(
         update={
-            "input_progress_summaries": len(progress),
-            "omitted_progress_summaries": 0,
             "progress": progress,
         }
     )
 
-    payload = nccl_ras.NcclRasClientOutput.success(report).to_bytes()
-    assert len(payload) > MAX_OUTPUT_BYTES
-    assert nccl_ras.NcclRasClientOutput.from_bytes(payload).report == report
+    output = nccl_ras.NcclRasClientOutput.success(report).to_string()
+    assert len(output.encode()) > MAX_OUTPUT_BYTES
+    assert nccl_ras.NcclRasClientOutput.from_bytes(output.encode()).report == report
     command = tmp_path / "nccl-client"
-    _executable(command, f"import sys\nsys.stdout.write({payload.decode()!r})")
+    _executable(command, f"import sys\nsys.stdout.write({output!r})")
     monkeypatch.setattr(nccl, "_CLIENT_COMMAND", (str(command),))
     transport = _configure(monkeypatch)
 
@@ -394,10 +395,6 @@ def test_nccl_probe_emits_only_communicator_evidence(
         "communicator_rank_status",
         {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "1"},
     )
-    collective = transport.record(
-        "collective_operations",
-        {"collective": "AllReduce", "rank_statistic": "minimum"},
-    )
     available = transport.record("ras_available", {"outcome": "success"})
     poll_duration = transport.record("ras_poll_duration_seconds", {"outcome": "success"})
     session.shutdown()
@@ -408,11 +405,10 @@ def test_nccl_probe_emits_only_communicator_evidence(
     assert rank["attributes"]["process_id"] == "5678"
     assert rank["attributes"]["cuda_device"] == "0"
     assert rank["attributes"]["nvml_device"] == "1"
-    assert collective["value"] == 12
-    assert collective["attributes"]["source_temporality"] == telemetry.CUMULATIVE_SNAPSHOT
     assert available["value"] == 1
     assert poll_duration["kind"] == "histogram"
     assert not any(record["name"] == "hardware_inventory" for record in transport.records)
+    assert not any(record["name"] == "collective_operations" for record in transport.records)
 
 
 def test_nvidia_probe_summarizes_healthy_devices_without_zero_error_rows(

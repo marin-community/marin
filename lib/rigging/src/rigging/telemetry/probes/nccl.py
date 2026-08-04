@@ -19,7 +19,6 @@ from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandStatus,
 
 TIMEOUT = 8.0
 _DEFAULT_INTERVAL = 10 * 60.0
-_MAX_METRICS = 4_096
 _MAX_CLIENT_RESULT_BYTES = 32 * 1024 * 1024
 _METRIC_RECORDS_NAME = "ras_metric_records"
 _CLIENT_COMMAND = (sys.executable, "-m", nccl_client.__name__)
@@ -60,8 +59,7 @@ class NcclRasCollection:
 class NcclRasSession:
     """Own periodic collection and provide one serialized stall capture path."""
 
-    def __init__(self, *, interval: float, max_publish_records: int) -> None:
-        self._publisher = MetricSnapshotPublisher(max_records=max_publish_records)
+    def __init__(self, *, interval: float) -> None:
         self._periodic = PeriodicProbe(
             "nccl_ras",
             self._collect_periodic,
@@ -102,7 +100,7 @@ class NcclRasSession:
         if result.report is None:
             return
         snapshots = ras_snapshots(result.report, trigger=trigger)
-        published = self._publisher.publish(snapshots)
+        published = MetricSnapshotPublisher(max_records=len(snapshots)).publish(snapshots)
         attributes = {
             "trigger": trigger.value,
             **telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT),
@@ -114,10 +112,6 @@ class NcclRasSession:
             float(published.enqueued_records), attributes={**attributes, "record_state": "enqueued"}
         )
         telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
-            float(published.sample_limit_dropped_records),
-            attributes={**attributes, "record_state": "sample_limit_dropped"},
-        )
-        telemetry.gauge(_METRIC_RECORDS_NAME, unit="{record}").set(
             float(published.telemetry_lost_records), attributes={**attributes, "record_state": "telemetry_lost"}
         )
 
@@ -126,9 +120,9 @@ class NcclRasSession:
         self._periodic.shutdown(timeout)
 
 
-def start(*, interval: float = _DEFAULT_INTERVAL, max_publish_records: int = _MAX_METRICS) -> NcclRasSession:
+def start(*, interval: float = _DEFAULT_INTERVAL) -> NcclRasSession:
     """Collect NCCL RAS summaries until shutdown."""
-    return NcclRasSession(interval=interval, max_publish_records=max_publish_records)
+    return NcclRasSession(interval=interval)
 
 
 def collect_ras(
@@ -229,10 +223,6 @@ def ras_snapshots(report: nccl_ras.NcclRasReport, *, trigger: RasTrigger) -> tup
         "communicators_emitted": report.emitted_communicators,
         "communicators_invalid": report.invalid_communicators,
         "communicators_omitted": report.omitted_communicators,
-        "progress_input": report.input_progress_summaries,
-        "progress_omitted": report.omitted_progress_summaries,
-        "rank_observations_input": report.input_rank_observations,
-        "rank_observations_omitted": report.omitted_rank_observations,
     }
     snapshots.extend(
         MetricSnapshot(

@@ -20,10 +20,6 @@ from pydantic import (
 )
 
 MAX_COMMUNICATORS = 256
-MAX_RANKS_PER_COMMUNICATOR = 2_048
-MAX_COLLECTIVES_PER_RANK = 64
-MAX_RANK_OBSERVATIONS = 512
-MAX_PROGRESS_SUMMARIES = 3_072
 MAX_FIELD_BYTES = 256
 MAX_EXACT_COUNT = 2**53 - 1
 _MAX_FAILURE_MESSAGE_CHARS = 1_024
@@ -101,12 +97,6 @@ class _ReportedRank(_Model):
     status: _ReportedStatus
     collective_counts: dict[BoundedText, Count]
 
-    @model_validator(mode="after")
-    def _bound_collectives(self) -> "_ReportedRank":
-        if len(self.collective_counts) > MAX_COLLECTIVES_PER_RANK:
-            raise ValueError("too many collective kinds")
-        return self
-
 
 class _MissingRank(_Model):
     rank: Count
@@ -120,11 +110,11 @@ class _MissingRank(_Model):
 class _Communicator(_Model):
     hash: BoundedText
     secondary_hash: BoundedText
-    size: Annotated[int, Field(strict=True, ge=0, le=MAX_RANKS_PER_COMMUNICATOR)]
+    size: Count
     ranks_count: Count
     missing_ranks_count: Count
-    ranks: Annotated[tuple[_ReportedRank, ...], Field(max_length=MAX_RANKS_PER_COMMUNICATOR)]
-    missing_ranks: Annotated[tuple[_MissingRank, ...], Field(max_length=MAX_RANKS_PER_COMMUNICATOR)]
+    ranks: tuple[_ReportedRank, ...]
+    missing_ranks: tuple[_MissingRank, ...]
 
     @model_validator(mode="after")
     def _validate_ranks(self) -> "_Communicator":
@@ -230,10 +220,6 @@ class NcclRasReport(_Model):
     emitted_communicators: Count
     invalid_communicators: Count
     omitted_communicators: Count
-    input_progress_summaries: Count
-    omitted_progress_summaries: Count
-    input_rank_observations: Count
-    omitted_rank_observations: Count
     communicators: tuple[CommunicatorSummary, ...]
     progress: tuple[CollectiveProgress, ...]
     rank_observations: tuple[RankObservation, ...]
@@ -285,9 +271,13 @@ class NcclRasClientOutput(_Model):
             limit_bytes=limit_bytes,
         )
 
+    def to_string(self) -> str:
+        """Serialize this result as JSON text."""
+        return self.model_dump_json()
+
     def to_bytes(self) -> bytes:
-        """Serialize this result for the client subprocess boundary."""
-        return self.model_dump_json().encode()
+        """Serialize this result for a binary subprocess stream."""
+        return self.to_string().encode()
 
     @classmethod
     def from_bytes(cls, payload: bytes) -> Self:
@@ -319,13 +309,9 @@ def reduce_response(response: bytes, *, detail: RasDetail) -> NcclRasReport:
         progress.extend(reduced.progress)
         observations.extend(reduced.observations)
 
-    input_progress = len(progress)
-    input_observations = len(observations)
     summaries.sort(key=lambda summary: (summary.communicator_hash, summary.secondary_hash))
     progress.sort(key=lambda item: (item.communicator_hash, item.secondary_hash, item.collective))
-    observations.sort(key=_observation_sort_key)
-    progress = progress[:MAX_PROGRESS_SUMMARIES]
-    observations = observations[:MAX_RANK_OBSERVATIONS]
+    observations.sort(key=lambda item: (item.communicator_hash, item.secondary_hash, item.rank))
     return NcclRasReport(
         detail=detail,
         nccl_version=envelope.nccl_version,
@@ -337,10 +323,6 @@ def reduce_response(response: bytes, *, detail: RasDetail) -> NcclRasReport:
         emitted_communicators=len(summaries),
         invalid_communicators=invalid_communicators,
         omitted_communicators=max(0, len(envelope.communicators) - len(selected)),
-        input_progress_summaries=input_progress,
-        omitted_progress_summaries=input_progress - len(progress),
-        input_rank_observations=input_observations,
-        omitted_rank_observations=input_observations - len(observations),
         communicators=tuple(summaries),
         progress=tuple(progress),
         rank_observations=tuple(observations),
@@ -389,7 +371,7 @@ def _reduce_communicator(
             lifecycle_state=_lifecycle_state(communicator),
             collective_mismatch=mismatch,
         ),
-        progress=progress,
+        progress=progress if detail is RasDetail.STALL else [item for item in progress if item.minimum != item.maximum],
         observations=observations,
     )
 
@@ -409,26 +391,6 @@ def _progress_outliers(communicator: _Communicator) -> dict[int, tuple[str, ...]
                 bounded_collective = _truncate_utf8(collective, collective_budget)
                 reasons.setdefault(rank.rank, []).append(f"{_COLLECTIVE_OUTLIER_PREFIX}{bounded_collective}")
     return {rank: tuple(rank_reasons) for rank, rank_reasons in reasons.items()}
-
-
-def _observation_sort_key(observation: RankObservation) -> tuple[int, str, str, int]:
-    severities = []
-    if observation.considered_dead:
-        severities.append(0)
-    if observation.unresponsive:
-        severities.append(1)
-    if observation.rank_state == "missing":
-        severities.append(2)
-    if observation.async_error:
-        severities.append(3)
-    if observation.abort_flag:
-        severities.append(4)
-    if "unexpected_init_state" in observation.reasons:
-        severities.append(5)
-    if any(reason.startswith("collective_outlier:") for reason in observation.reasons):
-        severities.append(6)
-    severity = min(severities, default=7)
-    return severity, observation.communicator_hash, observation.secondary_hash, observation.rank
 
 
 def _lifecycle_state(

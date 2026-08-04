@@ -294,59 +294,112 @@ def _inventory_snapshots(device: NvidiaDevice) -> list[MetricSnapshot]:
 
 
 def _error_snapshots(device: NvidiaDevice) -> list[MetricSnapshot]:
-    identity = {"gpu_uuid": device.uuid, "pci_bus_id": device.pci_bus_id}
-    errors: tuple[tuple[str, float | None, str, dict[str, str], str], ...] = (
-        (
-            "gpu_ecc_uncorrected_errors",
-            device.ecc_uncorrected,
-            "{error}",
-            identity,
-            telemetry.CUMULATIVE_SNAPSHOT,
-        ),
-        (
-            "gpu_retired_pages",
-            device.retired_single_bit,
-            "{page}",
-            {**identity, "error_kind": "single_bit_ecc"},
-            telemetry.CUMULATIVE_SNAPSHOT,
-        ),
-        (
-            "gpu_retired_pages",
-            device.retired_double_bit,
-            "{page}",
-            {**identity, "error_kind": "double_bit_ecc"},
-            telemetry.CUMULATIVE_SNAPSHOT,
-        ),
-        ("gpu_retired_pages_pending", device.retired_pending, "", identity, telemetry.CURRENT_SNAPSHOT),
-        (
-            "gpu_row_remapped_rows",
-            device.remapped_correctable,
-            "{row}",
-            {**identity, "error_kind": "correctable"},
-            telemetry.CUMULATIVE_SNAPSHOT,
-        ),
-        (
-            "gpu_row_remapped_rows",
-            device.remapped_uncorrectable,
-            "{row}",
-            {**identity, "error_kind": "uncorrectable"},
-            telemetry.CUMULATIVE_SNAPSHOT,
-        ),
-        ("gpu_row_remap_pending", device.remapped_pending, "", identity, telemetry.CURRENT_SNAPSHOT),
-        ("gpu_row_remap_failures", device.remapped_failure, "{failure}", identity, telemetry.CURRENT_SNAPSHOT),
-    )
-    return [
-        MetricSnapshot(
-            name=name,
-            value=value,
-            unit=unit,
-            attributes=attributes,
-            source_kind="nvidia_smi",
-            source_temporality=temporality,
+    snapshots = []
+    if device.ecc_uncorrected:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_ecc_uncorrected_errors",
+                value=device.ecc_uncorrected,
+                unit="{error}",
+                attributes={"gpu_uuid": device.uuid, "pci_bus_id": device.pci_bus_id},
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CUMULATIVE_SNAPSHOT,
+            )
         )
-        for name, value, unit, attributes, temporality in errors
-        if value is not None and value > 0
-    ]
+    if device.retired_single_bit:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_retired_pages",
+                value=device.retired_single_bit,
+                unit="{page}",
+                attributes={
+                    "gpu_uuid": device.uuid,
+                    "pci_bus_id": device.pci_bus_id,
+                    "error_kind": "single_bit_ecc",
+                },
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CUMULATIVE_SNAPSHOT,
+            )
+        )
+    if device.retired_double_bit:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_retired_pages",
+                value=device.retired_double_bit,
+                unit="{page}",
+                attributes={
+                    "gpu_uuid": device.uuid,
+                    "pci_bus_id": device.pci_bus_id,
+                    "error_kind": "double_bit_ecc",
+                },
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CUMULATIVE_SNAPSHOT,
+            )
+        )
+    if device.retired_pending:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_retired_pages_pending",
+                value=device.retired_pending,
+                unit="",
+                attributes={"gpu_uuid": device.uuid, "pci_bus_id": device.pci_bus_id},
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CURRENT_SNAPSHOT,
+            )
+        )
+    if device.remapped_correctable:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_row_remapped_rows",
+                value=device.remapped_correctable,
+                unit="{row}",
+                attributes={
+                    "gpu_uuid": device.uuid,
+                    "pci_bus_id": device.pci_bus_id,
+                    "error_kind": "correctable",
+                },
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CUMULATIVE_SNAPSHOT,
+            )
+        )
+    if device.remapped_uncorrectable:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_row_remapped_rows",
+                value=device.remapped_uncorrectable,
+                unit="{row}",
+                attributes={
+                    "gpu_uuid": device.uuid,
+                    "pci_bus_id": device.pci_bus_id,
+                    "error_kind": "uncorrectable",
+                },
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CUMULATIVE_SNAPSHOT,
+            )
+        )
+    if device.remapped_pending:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_row_remap_pending",
+                value=device.remapped_pending,
+                unit="",
+                attributes={"gpu_uuid": device.uuid, "pci_bus_id": device.pci_bus_id},
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CURRENT_SNAPSHOT,
+            )
+        )
+    if device.remapped_failure:
+        snapshots.append(
+            MetricSnapshot(
+                name="gpu_row_remap_failures",
+                value=device.remapped_failure,
+                unit="{failure}",
+                attributes={"gpu_uuid": device.uuid, "pci_bus_id": device.pci_bus_id},
+                source_kind="nvidia_smi",
+                source_temporality=telemetry.CURRENT_SNAPSHOT,
+            )
+        )
+    return snapshots
 
 
 def _record_health(outcome: NvidiaOutcome) -> None:

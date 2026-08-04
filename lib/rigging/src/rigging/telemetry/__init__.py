@@ -264,7 +264,7 @@ class _Runtime:
     def flush(self, timeout: float) -> bool:
         """Wait until all resident records settle without stopping the exporter."""
         with self._condition:
-            return self._condition.wait_for(lambda: self._resident_records == 0, timeout=max(0.0, timeout))
+            return self._condition.wait_for(lambda: self._resident_records == 0, timeout=timeout)
 
     def _run(self) -> None:
         try:
@@ -504,14 +504,8 @@ def shutdown(timeout: float = 5.0) -> None:
 
 def flush(timeout: float = 5.0) -> bool:
     """Wait for queued telemetry to settle without disabling the exporter."""
-    try:
-        budget = float(timeout)
-    except (TypeError, ValueError, OverflowError):
-        raise ValueError("telemetry flush timeout must be nonnegative and finite") from None
-    if not math.isfinite(budget) or budget < 0:
-        raise ValueError("telemetry flush timeout must be nonnegative and finite")
     runtime = _runtime
-    return runtime is None or runtime.flush(min(budget, _MAX_SHUTDOWN_TIMEOUT))
+    return runtime is None or runtime.flush(timeout)
 
 
 def runtime_status() -> TelemetryStatus:

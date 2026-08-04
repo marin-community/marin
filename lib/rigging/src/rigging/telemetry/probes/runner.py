@@ -55,7 +55,7 @@ class BoundedCommandRunner:
     """Run probe commands with bounded output, deadlines, and cancellation."""
 
     def __init__(self, *, max_output_bytes: int = MAX_OUTPUT_BYTES) -> None:
-        if isinstance(max_output_bytes, bool) or not isinstance(max_output_bytes, int) or max_output_bytes <= 0:
+        if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be a positive integer")
         self._max_output_bytes = max_output_bytes
         self._lock = threading.Lock()

@@ -36,25 +36,15 @@ def _values(records: list[dict]) -> dict[str, float]:
     return {record["name"]: record["value"] for record in records}
 
 
-def _install_nccl_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, marker: Path | None = None) -> None:
-    marker_write = (
-        f"with open({str(marker)!r}, 'a') as marker_file:\n    marker_file.write('started\\n')\n" if marker else ""
-    )
-    outputs = {
-        detail.value: nccl_ras.NcclRasClientOutput.success(
-            nccl_ras.reduce_response(json.dumps(nccl_ras_payload()).encode(), detail=detail)
-        )
-        .to_bytes()
-        .decode()
-        for detail in nccl_ras.RasDetail
-    }
+def _install_fake_nccl_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    detail: nccl_ras.RasDetail,
+) -> None:
+    report = nccl_ras.reduce_response(json.dumps(nccl_ras_payload()).encode(), detail=detail)
+    output = nccl_ras.NcclRasClientOutput.success(report).to_string()
     command = tmp_path / "nccl-client"
-    command.write_text(
-        f"#!{sys.executable}\n{marker_write}import sys\n"
-        f"outputs = {outputs!r}\n"
-        "detail = sys.argv[sys.argv.index('--detail') + 1]\n"
-        "sys.stdout.write(outputs[detail])\n"
-    )
+    command.write_text(f"#!{sys.executable}\nprint({output!r})\n")
     command.chmod(command.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setattr(tracker_telemetry.nccl, "_CLIENT_COMMAND", (str(command),))
 
@@ -159,8 +149,7 @@ def test_finish_stops_the_phase_heartbeat(exported, fast_heartbeat):
 
 
 def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch, tmp_path):
-    marker = tmp_path / "ncclras-started"
-    _install_nccl_client(monkeypatch, tmp_path, marker=marker)
+    _install_fake_nccl_client(monkeypatch, tmp_path, nccl_ras.RasDetail.PERIODIC)
     monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
     monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
@@ -174,7 +163,6 @@ def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch
     tracker.finish()
 
     assert rank["attributes"]["rank_host"] == "10.0.0.2"
-    assert marker.read_text() == "started\n"
 
 
 def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, monkeypatch):
@@ -194,7 +182,7 @@ def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, mo
 
 
 def test_stall_diagnostic_exports_fresh_detail_without_disabling_telemetry(exported, monkeypatch, tmp_path):
-    _install_nccl_client(monkeypatch, tmp_path)
+    _install_fake_nccl_client(monkeypatch, tmp_path, nccl_ras.RasDetail.STALL)
     monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
     monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
