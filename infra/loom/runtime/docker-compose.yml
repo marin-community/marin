@@ -22,6 +22,7 @@ services:
   loom:
     image: ${LOOM_IMAGE:?LOOM_IMAGE is required}
     restart: unless-stopped
+    working_dir: /home/app
     env_file: .env
     environment:
       RUST_BACKTRACE: "1"

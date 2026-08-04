@@ -8,6 +8,7 @@ from dataclasses import replace
 
 import pulumi
 import pytest
+import yaml
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
@@ -62,7 +63,6 @@ def deployment_config() -> DeploymentConfig:
         vm_service_account_name="loom-vm",
         machine_type="e2-highmem-4",
         boot_disk_gb=100,
-        data_disk_gb=500,
         dotenv_secret_version=3,
         snapshot_retention_days=14,
         vm_project_roles=("roles/cloudsql.client", "roles/cloudsql.instanceUser"),
@@ -200,14 +200,23 @@ def test_deployment_models_durable_resources_without_secret_payloads():
 
         vm = by_name(mocks, "loom")
         attached = field(vm.inputs, "attached_disks", "attachedDisks")
-        assert attached is not None
-        assert len(attached) == 1
-        assert field(attached[0], "device_name", "deviceName") == "loom-data"
-        assert field(attached[0], "auto_delete", "autoDelete") is not True
-        assert vm.inputs["metadata"]["dotenv-secret-version"] == "3"
-        assert "startup-script" in vm.inputs["metadata"]
-        assert "loom-compose" in vm.inputs["metadata"]
-        assert "loom-caddyfile" in vm.inputs["metadata"]
+        assert not attached
+        boot_disk = field(vm.inputs, "boot_disk", "bootDisk")
+        assert field(boot_disk, "auto_delete", "autoDelete") is False
+        assert not any(resource.typ == "gcp:compute/disk:Disk" for resource in mocks.resources)
+        snapshot_attachment = by_name(mocks, "loom-snapshot-policy")
+        assert snapshot_attachment.inputs["disk"] == "loom"
+        metadata = vm.inputs["metadata"]
+        assert metadata["dotenv-secret-version"] == "3"
+        assert json.loads(metadata["docker-daemon-config"]) == {
+            "data-root": "/var/lib/docker",
+            "default-ulimits": {"core": {"Name": "core", "Hard": 0, "Soft": 0}},
+        }
+        assert yaml.safe_load(metadata["loom-compose"])["services"]["loom"]["working_dir"] == "/home/app"
+        assert "data-disk-device" not in metadata
+        assert "startup-script" in metadata
+        assert "loom-compose" in metadata
+        assert "loom-caddyfile" in metadata
         assert "metadataStartupScript" not in vm.inputs
         assert "metadata_startup_script" not in vm.inputs
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
@@ -227,7 +236,7 @@ def test_deployment_models_durable_resources_without_secret_payloads():
             "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
         )
 
-    return infrastructure.instance.id.apply(check)
+    return infrastructure.activation.id.apply(check)
 
 
 @pulumi.runtime.test
