@@ -18,7 +18,7 @@ The difference between the last two is the layout cost. The difference between
 the first two is the collective cost.
 """
 
-import logging
+import json
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -33,6 +33,7 @@ from jax.sharding import AxisType, Mesh
 from jax.sharding import PartitionSpec as P
 from levanter.distributed import DistributedConfig
 from levanter.grug._moe.ep_moonep import _static_padded_token_all_to_all
+from rigging.filesystem import StoragePath
 
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild, moonep_jax_setup_scripts
@@ -46,6 +47,7 @@ BENCH_WORKER_DISK = "64g"
 BENCH_ROWS_PER_RANK = 524_288
 BENCH_ROW_ELEMENTS = 5_120
 BENCH_REPEATS = 5
+BENCH_RESULT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/transport_bench"
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class TransportBenchConfig:
     rows_per_rank: int
     row_elements: int
     capacity_factor: float
+    result_uri: str
 
 
 def _balanced_send_matrix(num_ranks: int, rows_per_rank: int) -> jax.Array:
@@ -139,19 +142,25 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
     num_ranks = config.device_count
     exact_bytes = config.rows_per_rank * config.row_elements * 2 * (num_ranks - 1) / num_ranks
     padded_bytes = exact_bytes * config.capacity_factor
-    # The worker runs this function through the callable runner, which does not
-    # configure the root logger. Write the result to stdout so that the job log
-    # keeps it.
-    lines = [f"transport_bench ranks={num_ranks}"]
+    # This dispatch path does not deliver worker stdout or worker logs to the
+    # job log stream, so write the result to object storage instead.
+    report = {
+        "run_id": config.run_id,
+        "ranks": num_ranks,
+        "rows_per_rank": config.rows_per_rank,
+        "row_elements": config.row_elements,
+        "capacity_factor": config.capacity_factor,
+        "measurements": {},
+    }
     for label, seconds in results.items():
         moved = exact_bytes if label == "ragged" else padded_bytes
-        lines.append(
-            f"transport_bench label={label} median_ms={seconds * 1e3:.3f} "
-            f"gigabytes={moved / 1e9:.3f} gigabytes_per_second={moved / seconds / 1e9:.1f}"
-        )
-    layout = results["padded_full"] - results["padded_collective"]
-    lines.append(f"transport_bench layout_cost_ms={layout * 1e3:.3f}")
-    print("\n".join(lines), flush=True)
+        report["measurements"][label] = {
+            "median_ms": round(seconds * 1e3, 3),
+            "gigabytes": round(moved / 1e9, 3),
+            "gigabytes_per_second": round(moved / seconds / 1e9, 1),
+        }
+    report["layout_cost_ms"] = round((results["padded_full"] - results["padded_collective"]) * 1e3, 3)
+    StoragePath(config.result_uri).write_text(json.dumps(report, indent=2))
 
 
 @click.command()
@@ -195,6 +204,7 @@ def main(
         rows_per_rank=rows_per_rank,
         row_elements=row_elements,
         capacity_factor=capacity_factor,
+        result_uri=f"{BENCH_RESULT_ROOT}/{run_id}.json",
     )
     _apply_hero_ep_runtime_defaults("moonep_jax", MoonEPTransport.DIRECT_DEVICE)
     dispatch_grug_training_run(
@@ -209,5 +219,4 @@ def main(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     main()
