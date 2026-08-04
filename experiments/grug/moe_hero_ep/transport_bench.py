@@ -38,8 +38,6 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_ep.jax_wheel_setup import MoonEPJaxWheelBuild, moonep_jax_setup_scripts
 from experiments.grug.moe_hero_ep.train import MoonEPTransport, _apply_hero_ep_runtime_defaults
 
-logger = logging.getLogger(__name__)
-
 BENCH_GPUS_PER_NODE = 4
 BENCH_WORKER_CPU = 8
 BENCH_WORKER_RAM = "64g"
@@ -141,18 +139,19 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
     num_ranks = config.device_count
     exact_bytes = config.rows_per_rank * config.row_elements * 2 * (num_ranks - 1) / num_ranks
     padded_bytes = exact_bytes * config.capacity_factor
-    logger.info("Transport benchmark on %d ranks", num_ranks)
+    # The worker runs this function through the callable runner, which does not
+    # configure the root logger. Write the result to stdout so that the job log
+    # keeps it.
+    lines = [f"transport_bench ranks={num_ranks}"]
     for label, seconds in results.items():
         moved = exact_bytes if label == "ragged" else padded_bytes
-        logger.info(
-            "transport_bench label=%s median_ms=%.3f gigabytes=%.3f gigabytes_per_second=%.1f",
-            label,
-            seconds * 1e3,
-            moved / 1e9,
-            moved / seconds / 1e9,
+        lines.append(
+            f"transport_bench label={label} median_ms={seconds * 1e3:.3f} "
+            f"gigabytes={moved / 1e9:.3f} gigabytes_per_second={moved / seconds / 1e9:.1f}"
         )
     layout = results["padded_full"] - results["padded_collective"]
-    logger.info("transport_bench layout_cost_ms=%.3f", layout * 1e3)
+    lines.append(f"transport_bench layout_cost_ms={layout * 1e3:.3f}")
+    print("\n".join(lines), flush=True)
 
 
 @click.command()
