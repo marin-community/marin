@@ -28,6 +28,7 @@ from rigging.filesystem import StoragePath, prefix_join
 
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
+    HarborBackendsUnavailable,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
     run_harbor_driver,
@@ -44,6 +45,7 @@ from marin.evaluation.samples import (
     sample_to_archive_row,
     trajectory_step_rows,
 )
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -161,6 +163,21 @@ def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
         return list(pool.map(_read_trial, result_files))
 
 
+def _remove_unscored_trials(job_dir: StoragePath) -> None:
+    """Remove incomplete results so Harbor reruns them after a confirmed interruption."""
+    for result_file in (job_dir / "*/result.json").glob():
+        try:
+            result = json.loads(result_file.read_text())
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "removing unreadable Harbor trial result after inference interruption: %s (%s)", result_file, exc
+            )
+            result_file.parent.rmtree()
+            continue
+        if result.get("verifier_result") is None:
+            result_file.parent.rmtree()
+
+
 def _sample_for(trial: HarborTrial, dataset: str, *, trajectory_uri: str | None) -> EvalSample:
     """Normalize one trial into an agentic :class:`EvalSample`, referencing its archived trajectory."""
     solved = trial.reward >= SOLVED_REWARD
@@ -244,10 +261,19 @@ def _run_harbor_job(
     environment: str,
     output_dir: str,
     driver_env: Mapping[str, str],
+    inference_session: RemoteInferenceSession,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
-    run_harbor_driver(config, overlay, driver_env)
+    while True:
+        try:
+            run_harbor_driver(config, overlay, driver_env, inference_session.backend_state)
+            break
+        except HarborBackendsUnavailable as exc:
+            logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
+            _remove_unscored_trials(job_dir)
+            inference_session.wait_until_ready()
+            logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     trials = _read_trials(job_dir)
     samples_path = _write_archive(trials, dataset, output_dir)
@@ -310,6 +336,7 @@ class HarborExecutor:
         output_dir: str,
         hf_token: str | None,
         driver_env: Mapping[str, str],
+        inference_session: RemoteInferenceSession,
     ) -> HarborRunResult:
         dataset = self.config.record_dataset
         job_name = _job_name(
@@ -339,19 +366,21 @@ class HarborExecutor:
             environment=self.config.environment,
             output_dir=output_dir,
             driver_env=driver_env,
+            inference_session=inference_session,
         )
 
     def __call__(
         self,
-        model: RunningModel,
+        session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
+        """Run Harbor while supervising a managed inference dependency."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token
         return _evaluation_outcome(
-            lambda: self._run(model, output_dir, hf_token, driver_env),
+            lambda: self._run(session.model, output_dir, hf_token, driver_env, session),
             output_dir,
         )
