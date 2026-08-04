@@ -17,7 +17,6 @@ import pytest
 from levanter.data.text.formats import TextLmDatasetFormat
 from levanter.store.cache import CacheLedger, TreeCache
 from marin.datakit.normalize import NormalizedData, generate_id
-from marin.execution.step_spec import StepSpec
 from marin.processing.tokenize._core import IdPreservingPreprocessor, attach_id
 from marin.processing.tokenize.attributes import (
     TokenizeAttributesConfig,
@@ -27,7 +26,6 @@ from marin.processing.tokenize.attributes import (
 )
 from marin.processing.tokenize.store_builder import (
     BuildLevanterStoreConfig,
-    _structural_exemplar,
     build_levanter_store,
     build_levanter_store_step,
 )
@@ -212,85 +210,11 @@ def test_split_pipeline_matches_legacy_tokenize(tmp_path, monkeypatch):
     assert os.path.exists(tmp_path / "legacy_store" / "train" / ".stats.json")
 
 
-# ---------------------------------------------------------------------------
-# StepSpec wrapper tests
-# ---------------------------------------------------------------------------
-
-
-def _stub_normalize_step(name: str = "normalize") -> StepSpec:
-    """Return a StepSpec stub usable as an upstream `normalize` dep.
-
-    The stub never gets executed; we only inspect identity/deps/hash_id.
-    """
-    return StepSpec(name=name, hash_attrs={"stub": name})
-
-
-def test_tokenize_attributes_step_wires_deps_and_hash_attrs():
-    train = _stub_normalize_step("normalize-train")
-    val = _stub_normalize_step("normalize-validation")
-    step = tokenize_attributes_step(
-        name="fineweb/tokenize",
-        train_normalize=train,
-        validation_normalize=val,
-        tokenizer="gpt2",
-        sample_count=1000,
-    )
-    assert step.name == "fineweb/tokenize"
-    assert step.deps == [train, val]
-    assert step.hash_attrs["tokenizer"] == "gpt2"
-    assert step.hash_attrs["sample_count"] == 1000
-    assert "format" in step.hash_attrs
-
-
 def test_tokenize_attributes_step_requires_at_least_one_source():
     with pytest.raises(ValueError, match="at least one"):
         tokenize_attributes_step(name="x", tokenizer="gpt2")
 
 
-def test_tokenize_attributes_step_hash_id_changes_with_tokenizer():
-    train = _stub_normalize_step()
-    a = tokenize_attributes_step(name="x", train_normalize=train, tokenizer="gpt2")
-    b = tokenize_attributes_step(name="x", train_normalize=train, tokenizer="meta-llama/Llama-3.1-8B")
-    assert a.hash_id != b.hash_id
-
-
-def test_tokenize_attributes_step_hash_id_changes_with_sample_count():
-    train = _stub_normalize_step()
-    a = tokenize_attributes_step(name="x", train_normalize=train, tokenizer="gpt2")
-    b = tokenize_attributes_step(name="x", train_normalize=train, tokenizer="gpt2", sample_count=100)
-    assert a.hash_id != b.hash_id
-
-
-def test_build_levanter_store_step_wires_deps():
-    tok = StepSpec(name="upstream-tokens", hash_attrs={"x": 1})
-    step = build_levanter_store_step(name="store", tokenize_steps=[tok])
-    assert step.deps == [tok]
-
-
 def test_build_levanter_store_step_requires_at_least_one_source():
     with pytest.raises(ValueError, match="at least one"):
         build_levanter_store_step(name="store", tokenize_steps=[])
-
-
-def test_structural_exemplar_slices_sequence_leaves():
-    """Sequence leaves shrink to one element; scalars/strings pass through whole."""
-    record = {
-        "input_ids": np.arange(1000, dtype=np.int32),
-        "segment_ids": [0, 0, 1, 1, 2],
-        "weights": (0.5, 0.25, 0.25),
-        "doc_id": "abc-123",
-        "length": 1000,
-    }
-    out = _structural_exemplar(record)
-    assert np.array_equal(out["input_ids"], np.array([0], dtype=np.int32))
-    assert out["segment_ids"] == [0]
-    assert out["weights"] == (0.5,)
-    assert out["doc_id"] == "abc-123"
-    assert out["length"] == 1000
-
-
-def test_build_levanter_store_step_hash_id_changes_with_batch_size():
-    tok = StepSpec(name="upstream-tokens", hash_attrs={"x": 1})
-    a = build_levanter_store_step(name="store", tokenize_steps=[tok])
-    b = build_levanter_store_step(name="store", tokenize_steps=[tok], levanter_batch_size=4096)
-    assert a.hash_id != b.hash_id

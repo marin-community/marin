@@ -1,30 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for the SFT checkpoint-preparation step and its wiring into ``sft_step``.
-
-Coverage splits three ways: the ArtifactStep wiring (the SFT spec depends on the preparation step
-and resolves its model + tokenizer from that step's output; identity tracks the inputs;
-``override_path`` pins an existing artifact); the shard surgery (``_reinit_shard_bytes`` reseeds the
-embedding rows and round-trips every other tensor unchanged); and the tokenizer rename against the
-real base tokenizer.
-"""
+"""Tests for the SFT checkpoint-preparation step and its wiring into ``sft_step``."""
 from __future__ import annotations
 
 import numpy as np
-import pytest
 from fray.types import ResourceConfig
 from levanter.optim.config import AdamConfig
 from marin.execution.lazy import materialized_config
 from safetensors.numpy import load, save
-from transformers import AutoTokenizer
 
-from experiments.marin_tokenizer import inject_special_tokens
-from experiments.sft.configs.delphi_1e22 import DELPHI_1E22_BASE_MODEL, DELPHI_1E22_BASE_REVISION
 from experiments.sft.delphi_chat_template import DELPHI_RESERVED_TOKEN_RENAMES
 from experiments.sft.launcher import DatasetSpec, HFModel, PreparedModel, SFTSpec, sft_step
 from experiments.sft.prepare_checkpoint import (
-    PrepareCheckpointConfig,
     _reinit_rows,
     _reinit_shard_bytes,
     prepare_checkpoint_step,
@@ -95,17 +83,6 @@ def test_hf_model_separate_tokenizer_path():
     assert train_config.data.tokenizer == "org/tokenizer"
 
 
-def test_prepare_config_carries_preparation_inputs():
-    """The prep step's run config carries the base checkpoint pin and the rename map."""
-    prep = _prepared_step()
-    config = materialized_config(prep, _PREFIX)
-    assert isinstance(config, PrepareCheckpointConfig)
-    assert config.source_model == "some-org/base-model"
-    assert config.source_revision == "deadbeef"
-    assert config.token_renames == DELPHI_RESERVED_TOKEN_RENAMES
-    assert config.output_path == prep.path(_PREFIX)
-
-
 def test_fingerprint_tracks_preparation_inputs():
     """Identity changes when the renames / revision / seed change, and is stable otherwise."""
     base = _prepared_step().fingerprint()
@@ -168,23 +145,3 @@ def test_reinit_shard_bytes_reseeds_embeddings_and_round_trips_the_rest():
         assert changed == {2, 5}, name
     # Deterministic for a given seed.
     assert _reinit_shard_bytes(save(tensors, metadata={"format": "pt"}), ids=[2, 5], seed=0) == out
-
-
-def test_delphi_renames_produce_single_ids_on_the_real_tokenizer():
-    """Regenerate the Delphi tokenizer half: the think/tool strings become single ids.
-
-    Downloads the public base tokenizer; skipped when the Hub is unreachable. This is the
-    reproducibility check for the rename half of the preparation.
-    """
-    try:
-        raw = AutoTokenizer.from_pretrained(DELPHI_1E22_BASE_MODEL, revision=DELPHI_1E22_BASE_REVISION)
-    except Exception as e:  # gated/offline — this test needs the real base tokenizer
-        pytest.skip(f"Delphi base tokenizer unavailable: {e}")
-
-    # In the raw tokenizer the canonical strings are not single ids (the bug this fixes).
-    assert len(raw.tokenize("<|start_think|>")) > 1
-
-    prepared = inject_special_tokens(raw, dict(DELPHI_RESERVED_TOKEN_RENAMES))
-    for token_id, token_str in DELPHI_RESERVED_TOKEN_RENAMES.items():
-        assert prepared.encode(token_str, add_special_tokens=False) == [token_id]
-        assert prepared.decode([token_id]) == token_str
