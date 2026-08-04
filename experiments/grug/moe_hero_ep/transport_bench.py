@@ -56,7 +56,7 @@ class TransportBenchConfig:
 
     run_id: str
     device_count: int
-    rows_per_rank: int
+    row_counts: tuple[int, ...]
     row_elements: int
     capacity_factor: float
     result_uri: str
@@ -77,13 +77,12 @@ def _time_median(run, repeats: int) -> float:
     return sorted(times)[len(times) // 2]
 
 
-def _benchmark(config: TransportBenchConfig) -> dict[str, float]:
+def _benchmark(config: TransportBenchConfig, rows: int) -> dict[str, float]:
     devices = np.asarray(jax.devices())
     if devices.size != config.device_count:
         raise ValueError(f"benchmark requires {config.device_count} devices, got {devices.size}")
     mesh = Mesh(devices, axis_names=("expert",), axis_types=(AxisType.Explicit,))
     num_ranks = config.device_count
-    rows = config.rows_per_rank
     elements = config.row_elements
     rows_per_peer = rows // num_ranks
     capacity = max(int(np.ceil(config.capacity_factor * rows / num_ranks)), 1)
@@ -136,37 +135,48 @@ def _benchmark(config: TransportBenchConfig) -> dict[str, float]:
 
 def _run_benchmark_local(config: TransportBenchConfig) -> None:
     DistributedConfig().initialize()
-    results = _benchmark(config)
+    num_ranks = config.device_count
+    sweep = {rows: _benchmark(config, rows) for rows in config.row_counts}
     if jax.process_index() != 0:
         return
-    num_ranks = config.device_count
-    exact_bytes = config.rows_per_rank * config.row_elements * 2 * (num_ranks - 1) / num_ranks
-    padded_bytes = exact_bytes * config.capacity_factor
     # This dispatch path does not deliver worker stdout or worker logs to the
     # job log stream, so write the result to object storage instead.
     report = {
         "run_id": config.run_id,
         "ranks": num_ranks,
-        "rows_per_rank": config.rows_per_rank,
         "row_elements": config.row_elements,
         "capacity_factor": config.capacity_factor,
-        "measurements": {},
+        "sweep": [],
     }
-    for label, seconds in results.items():
-        moved = exact_bytes if label == "ragged" else padded_bytes
-        report["measurements"][label] = {
-            "median_ms": round(seconds * 1e3, 3),
-            "gigabytes": round(moved / 1e9, 3),
-            "gigabytes_per_second": round(moved / seconds / 1e9, 1),
+    for rows, results in sweep.items():
+        exact_bytes = rows * config.row_elements * 2 * (num_ranks - 1) / num_ranks
+        padded_bytes = exact_bytes * config.capacity_factor
+        entry = {
+            "rows_per_rank": rows,
+            "rows_per_peer": rows // num_ranks,
+            "measurements": {},
         }
-    report["layout_cost_ms"] = round((results["padded_full"] - results["padded_collective"]) * 1e3, 3)
+        for label, seconds in results.items():
+            moved = exact_bytes if label == "ragged" else padded_bytes
+            entry["measurements"][label] = {
+                "median_ms": round(seconds * 1e3, 3),
+                "gigabytes": round(moved / 1e9, 3),
+                "gigabytes_per_second": round(moved / seconds / 1e9, 1),
+            }
+        entry["layout_cost_ms"] = round((results["padded_full"] - results["padded_collective"]) * 1e3, 3)
+        report["sweep"].append(entry)
     StoragePath(config.result_uri).write_text(json.dumps(report, indent=2))
 
 
 @click.command()
 @click.option("--run-id", required=True, help="Iris job identifier.")
 @click.option("--nodes", type=click.IntRange(min=1), required=True, help="GB200 nodes to reserve.")
-@click.option("--rows-per-rank", type=click.IntRange(min=1), default=BENCH_ROWS_PER_RANK, show_default=True)
+@click.option(
+    "--rows-per-rank",
+    default=str(BENCH_ROWS_PER_RANK),
+    show_default=True,
+    help="Comma-separated row counts for each rank. Each value gives one sweep point.",
+)
 @click.option("--row-elements", type=click.IntRange(min=1), default=BENCH_ROW_ELEMENTS, show_default=True)
 @click.option("--capacity-factor", type=click.FloatRange(min=0.1), default=1.0, show_default=True)
 @click.option(
@@ -177,7 +187,7 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
 def main(
     run_id: str,
     nodes: int,
-    rows_per_rank: int,
+    rows_per_rank: str,
     row_elements: int,
     capacity_factor: float,
     moonep_jax_wheel_build: str,
@@ -186,8 +196,10 @@ def main(
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     device_count = nodes * BENCH_GPUS_PER_NODE
-    if rows_per_rank % device_count != 0:
-        raise ValueError(f"rows_per_rank={rows_per_rank} must be divisible by {device_count} ranks")
+    row_counts = tuple(int(value) for value in rows_per_rank.split(","))
+    for rows in row_counts:
+        if rows % device_count != 0:
+            raise ValueError(f"rows_per_rank={rows} must be divisible by {device_count} ranks")
 
     resources = ResourceConfig.with_gpu(
         "GB200",
@@ -201,7 +213,7 @@ def main(
     config = TransportBenchConfig(
         run_id=run_id,
         device_count=device_count,
-        rows_per_rank=rows_per_rank,
+        row_counts=row_counts,
         row_elements=row_elements,
         capacity_factor=capacity_factor,
         result_uri=f"{BENCH_RESULT_ROOT}/{run_id}.json",
