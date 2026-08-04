@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, toRaw } from 'vue'
+import { computed, ref, toRaw } from 'vue'
 
 import DashboardEditor from '@/components/dashboard/DashboardEditor.vue'
 import DashboardPanelView from '@/components/dashboard/DashboardPanelView.vue'
 import { statsRpcCall } from '@/composables/useRpc'
 import { BUILT_IN_DASHBOARDS } from '@/dashboards/examples'
-import { deleteSavedDashboard, listSavedDashboards, saveDashboard } from '@/services/dashboards'
-import type { DashboardDefinition, SavedDashboard } from '@/types/dashboard'
+import type { DashboardDefinition } from '@/types/dashboard'
 import { decodeArrowIpc, type ArrowResult } from '@/utils/arrow'
 import { dashboardIntervalMs, expandDashboardSql } from '@/utils/dashboardSql'
 
@@ -23,7 +22,7 @@ interface PanelExecution {
   elapsedMs: number | null
 }
 
-type SourceKind = 'builtin' | 'saved' | 'new'
+type SourceKind = 'builtin' | 'draft'
 
 const MINUTE_MS = 60_000
 
@@ -37,7 +36,6 @@ function inputDateTime(timestampMs: number): string {
 }
 
 const now = Date.now()
-const saved = ref<SavedDashboard[]>([])
 const selectedKey = ref(`builtin:${BUILT_IN_DASHBOARDS[0].id}`)
 const sourceKind = ref<SourceKind>('builtin')
 const current = ref<DashboardDefinition>(cloneDefinition(BUILT_IN_DASHBOARDS[0]))
@@ -46,23 +44,17 @@ const executions = ref<Record<string, PanelExecution>>({})
 const fromInput = ref(inputDateTime(now - 30 * MINUTE_MS))
 const toInput = ref(inputDateTime(now))
 const editorOpen = ref(false)
-const loadingSaved = ref(false)
-const pageError = ref<string | null>(null)
-const saving = ref(false)
 const macroHelp = 'Use {{from_ms}}, {{to_ms}}, {{interval_ms}}, or a declared variable.'
 
-const sourceLabel = computed(() => {
-  if (sourceKind.value === 'builtin') return 'Built-in example'
-  if (sourceKind.value === 'saved') return 'Shared dashboard'
-  return 'Unsaved dashboard'
-})
+const sourceLabel = computed(() => (
+  sourceKind.value === 'builtin' ? 'Built-in example' : 'In-memory draft · not saved'
+))
 
 function resetRuntimeState() {
   variableValues.value = Object.fromEntries(
     current.value.variables.map((variable) => [variable.name, variable.default]),
   )
   executions.value = {}
-  pageError.value = null
 }
 
 function selectBuiltIn(definition: DashboardDefinition) {
@@ -73,39 +65,20 @@ function selectBuiltIn(definition: DashboardDefinition) {
   resetRuntimeState()
 }
 
-function selectSaved(item: SavedDashboard) {
-  selectedKey.value = `saved:${item.definition.id}`
-  sourceKind.value = 'saved'
-  current.value = cloneDefinition(item.definition)
-  editorOpen.value = false
-  resetRuntimeState()
-}
-
-function uniqueCopyId(sourceId: string): string {
-  const occupied = new Set([
-    ...BUILT_IN_DASHBOARDS.map((definition) => definition.id),
-    ...saved.value.map((item) => item.definition.id),
-  ])
-  let candidate = `${sourceId}-copy`
-  let suffix = 2
-  while (occupied.has(candidate)) candidate = `${sourceId}-copy-${suffix++}`
-  return candidate
-}
-
 function cloneCurrent() {
   const definition = cloneDefinition(current.value)
-  definition.id = uniqueCopyId(definition.id)
+  definition.id = `${definition.id}-copy`
   definition.title = `${definition.title} copy`
-  selectedKey.value = 'new'
-  sourceKind.value = 'new'
+  selectedKey.value = 'draft'
+  sourceKind.value = 'draft'
   current.value = definition
   editorOpen.value = true
   resetRuntimeState()
 }
 
 function newDashboard() {
-  selectedKey.value = 'new'
-  sourceKind.value = 'new'
+  selectedKey.value = 'draft'
+  sourceKind.value = 'draft'
   current.value = {
     version: 1,
     id: `dashboard-${Date.now()}`,
@@ -191,50 +164,7 @@ function setRange(durationMs: number) {
   toInput.value = inputDateTime(end)
 }
 
-async function refreshSaved() {
-  loadingSaved.value = true
-  try {
-    saved.value = await listSavedDashboards()
-  } catch (error) {
-    pageError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    loadingSaved.value = false
-  }
-}
-
-async function saveCurrent() {
-  saving.value = true
-  pageError.value = null
-  try {
-    const item = await saveDashboard(current.value)
-    await refreshSaved()
-    sourceKind.value = 'saved'
-    selectedKey.value = `saved:${item.definition.id}`
-    current.value = cloneDefinition(item.definition)
-    editorOpen.value = false
-  } catch (error) {
-    pageError.value = error instanceof Error ? error.message : String(error)
-  } finally {
-    saving.value = false
-  }
-}
-
-async function removeCurrent() {
-  if (sourceKind.value !== 'saved') return
-  if (!window.confirm(`Delete shared dashboard “${current.value.title}”?`)) return
-  try {
-    await deleteSavedDashboard(current.value.id)
-    await refreshSaved()
-    selectBuiltIn(BUILT_IN_DASHBOARDS[0])
-  } catch (error) {
-    pageError.value = error instanceof Error ? error.message : String(error)
-  }
-}
-
-onMounted(async () => {
-  resetRuntimeState()
-  await refreshSaved()
-})
+resetRuntimeState()
 </script>
 
 <template>
@@ -254,27 +184,9 @@ onMounted(async () => {
           @click="selectBuiltIn(definition)"
         >{{ definition.title }}</button>
       </section>
-
-      <section>
-        <h2 class="px-2 mb-1 text-[11px] font-semibold uppercase tracking-wider text-text-muted">Shared</h2>
-        <div v-if="loadingSaved" class="px-2 py-2 text-xs text-text-muted">Loading…</div>
-        <div v-else-if="saved.length === 0" class="px-2 py-2 text-xs text-text-muted">No saved dashboards.</div>
-        <button
-          v-for="item in saved"
-          :key="item.definition.id"
-          class="w-full text-left px-2.5 py-2 text-sm rounded transition-colors"
-          :class="selectedKey === `saved:${item.definition.id}` ? 'bg-accent-subtle text-text' : 'hover:bg-surface-raised text-text-secondary'"
-          @click="selectSaved(item)"
-        >{{ item.definition.title }}</button>
-      </section>
     </aside>
 
     <div class="min-w-0 space-y-4">
-      <div
-        v-if="pageError"
-        class="px-4 py-3 text-sm text-status-danger bg-status-danger-bg border border-status-danger-border rounded-lg"
-      >{{ pageError }}</div>
-
       <header class="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div class="text-[11px] font-semibold uppercase tracking-wider text-accent">{{ sourceLabel }}</div>
@@ -287,21 +199,11 @@ onMounted(async () => {
             class="px-3 py-1.5 text-sm rounded border border-surface-border hover:bg-surface-raised"
             @click="cloneCurrent"
           >Clone to edit</button>
-          <template v-else>
-            <button class="px-3 py-1.5 text-sm rounded border border-surface-border hover:bg-surface-raised" @click="editorOpen = !editorOpen">
-              {{ editorOpen ? 'Close editor' : 'Edit' }}
-            </button>
-            <button
-              class="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent-hover disabled:opacity-50"
-              :disabled="saving"
-              @click="saveCurrent"
-            >{{ saving ? 'Saving…' : 'Save' }}</button>
-            <button
-              v-if="sourceKind === 'saved'"
-              class="px-3 py-1.5 text-sm rounded border border-status-danger-border text-status-danger hover:bg-status-danger-bg"
-              @click="removeCurrent"
-            >Delete</button>
-          </template>
+          <button
+            v-else
+            class="px-3 py-1.5 text-sm rounded border border-surface-border hover:bg-surface-raised"
+            @click="editorOpen = !editorOpen"
+          >{{ editorOpen ? 'Close editor' : 'Edit' }}</button>
         </div>
       </header>
 
@@ -342,7 +244,7 @@ onMounted(async () => {
           <h2 class="font-semibold">Dashboard editor</h2>
           <span class="text-xs text-text-muted">{{ macroHelp }}</span>
         </div>
-        <DashboardEditor :definition="current" :id-locked="sourceKind === 'saved'" @run="runPanel" />
+        <DashboardEditor :definition="current" @run="runPanel" />
       </section>
 
       <div class="grid md:grid-cols-2 gap-4 items-start">

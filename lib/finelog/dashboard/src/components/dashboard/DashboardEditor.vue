@@ -3,7 +3,6 @@ import type { DashboardDefinition, DashboardPanel, DashboardVariable } from '@/t
 
 const props = defineProps<{
   definition: DashboardDefinition
-  idLocked: boolean
 }>()
 
 const emit = defineEmits<{
@@ -32,20 +31,12 @@ function addPanel() {
 
 <template>
   <div class="space-y-5">
-    <section class="grid md:grid-cols-2 gap-3">
-      <label class="text-xs text-text-secondary">
-        Dashboard ID
-        <input
-          v-model="definition.id"
-          :disabled="idLocked"
-          class="mt-1 w-full font-mono text-sm bg-surface-sunken border border-surface-border rounded px-2.5 py-2 disabled:opacity-60"
-        >
-      </label>
+    <section class="space-y-3">
       <label class="text-xs text-text-secondary">
         Title
         <input v-model="definition.title" class="mt-1 w-full text-sm bg-surface-sunken border border-surface-border rounded px-2.5 py-2">
       </label>
-      <label class="md:col-span-2 text-xs text-text-secondary">
+      <label class="block text-xs text-text-secondary">
         Description
         <input v-model="definition.description" class="mt-1 w-full text-sm bg-surface-sunken border border-surface-border rounded px-2.5 py-2">
       </label>

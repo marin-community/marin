@@ -24,13 +24,3 @@ export interface DashboardDefinition {
   variables: DashboardVariable[]
   panels: DashboardPanel[]
 }
-
-export interface SavedDashboard {
-  definition: DashboardDefinition
-  createdAtMs: number
-  updatedAtMs: number
-}
-
-export interface DashboardListResponse {
-  dashboards: SavedDashboard[]
-}
