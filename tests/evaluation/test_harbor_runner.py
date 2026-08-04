@@ -42,7 +42,7 @@ def _inference_session() -> RemoteInferenceSession:
         model=_running_model(),
         jobs=(),
         endpoint_name="/serve/test",
-        endpoint_ready_timeout_seconds=1800.0,
+        endpoint_health_timeout_seconds=1800.0,
         streaming=True,
         tensor_parallel_size=1,
         backend_name="vllm",

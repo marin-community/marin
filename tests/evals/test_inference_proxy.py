@@ -231,7 +231,7 @@ def _remote_session(job_status: JobStatus = JobStatus.RUNNING) -> RemoteInferenc
         model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
         jobs=(_SessionJob(job_status),),
         endpoint_name="/serve/inference",
-        endpoint_ready_timeout_seconds=1800.0,
+        endpoint_health_timeout_seconds=1800.0,
         streaming=True,
         tensor_parallel_size=1,
         backend_name="vllm",

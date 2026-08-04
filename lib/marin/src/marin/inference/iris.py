@@ -82,7 +82,7 @@ class RemoteInferenceSession:
     model: RunningModel
     jobs: tuple[JobHandle, ...]
     endpoint_name: str
-    endpoint_ready_timeout_seconds: float
+    endpoint_health_timeout_seconds: float
     streaming: bool
     tensor_parallel_size: int
     backend_name: str
@@ -126,15 +126,15 @@ class RemoteInferenceSession:
                 continue
 
             if endpoint_deadline is None:
-                endpoint_deadline = Deadline.from_seconds(self.endpoint_ready_timeout_seconds)
+                endpoint_deadline = Deadline.from_seconds(self.endpoint_health_timeout_seconds)
                 logger.info(
                     "Inference tasks are running; probing endpoint %s for up to %.0fs",
                     self.endpoint_name,
-                    self.endpoint_ready_timeout_seconds,
+                    self.endpoint_health_timeout_seconds,
                 )
             timeout_message = (
                 f"Inference endpoint {self.endpoint_name!r} did not become healthy within "
-                f"{self.endpoint_ready_timeout_seconds}s"
+                f"{self.endpoint_health_timeout_seconds}s"
             )
             endpoint_deadline.raise_if_expired(timeout_message)
             try:
@@ -466,7 +466,7 @@ def _start_direct_inference(
             ),
             jobs=(job,),
             endpoint_name=endpoint_name,
-            endpoint_ready_timeout_seconds=iris.endpoint_ready_timeout_seconds,
+            endpoint_health_timeout_seconds=iris.endpoint_health_timeout_seconds,
             streaming=True,
             tensor_parallel_size=tensor_parallel_size,
             backend_name=backend_name,
@@ -592,7 +592,7 @@ def _expose_brokered_inference(
                 model=exposed_model,
                 jobs=tuple(worker_jobs),
                 endpoint_name=endpoint_name,
-                endpoint_ready_timeout_seconds=iris.endpoint_ready_timeout_seconds,
+                endpoint_health_timeout_seconds=iris.endpoint_health_timeout_seconds,
                 streaming=False,
                 tensor_parallel_size=worker_metadata.tensor_parallel_size,
                 backend_name=worker_metadata.backend_name,
