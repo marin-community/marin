@@ -63,9 +63,14 @@ class HeroThroughputResult(Artifact):
 
 
 def build_hero_run(
-    *, run_id: str, dp_racks: int, num_steps: int, version: str | None = None
+    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build the rack-local FSDP hero throughput run."""
+    """Build the rack-local FSDP hero throughput run.
+
+    A short throughput gate sets ``save_checkpoints=False``. The final forced checkpoint writes the
+    parameters and the offloaded optimizer state, about 2.7 TiB at the hero shape, which a run that
+    only reports MFU does not need.
+    """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if dp_racks <= 0:
@@ -82,7 +87,7 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=True,
-        save_checkpoints=True,
+        save_checkpoints=save_checkpoints,
         expert_axis_size=1,
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
@@ -168,9 +173,15 @@ def build_hero_run(
     show_default=True,
     help="Number of training steps.",
 )
+@click.option(
+    "--save-checkpoints/--no-save-checkpoints",
+    default=True,
+    show_default=True,
+    help="Write resumable checkpoints. Use --no-save-checkpoints for a metrics-only throughput gate.",
+)
 @build_options
-def main(run_id: str, dp_racks: int, num_steps: int) -> ArtifactStep[HeroThroughputResult]:
-    return build_hero_run(run_id=run_id, dp_racks=dp_racks, num_steps=num_steps)
+def main(run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool) -> ArtifactStep[HeroThroughputResult]:
+    return build_hero_run(run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, save_checkpoints=save_checkpoints)
 
 
 if __name__ == "__main__":
