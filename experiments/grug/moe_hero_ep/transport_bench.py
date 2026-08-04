@@ -18,7 +18,10 @@ The difference between the last two is the layout cost. The difference between
 the first two is the collective cost.
 """
 
+import glob
 import json
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -64,6 +67,7 @@ class TransportBenchConfig:
     row_elements: int
     capacity_factor: float
     skew: float
+    profile: bool
     result_uri: str
 
 
@@ -192,10 +196,27 @@ def _benchmark(config: TransportBenchConfig, rows: int) -> dict[str, float]:
     return results
 
 
+def _upload_profile(local_dir: str, config: TransportBenchConfig) -> None:
+    base = config.result_uri.removesuffix(".json") + "_profile"
+    for path in glob.glob(os.path.join(local_dir, "**", "*"), recursive=True):
+        if not os.path.isfile(path):
+            continue
+        name = os.path.relpath(path, local_dir)
+        with open(path, "rb") as handle:
+            StoragePath(f"{base}/{name}").write_bytes(handle.read())
+
+
 def _run_benchmark_local(config: TransportBenchConfig) -> None:
     DistributedConfig().initialize()
     num_ranks = config.device_count
-    sweep = {rows: _benchmark(config, rows) for rows in config.row_counts}
+    if config.profile:
+        with tempfile.TemporaryDirectory() as tmp:
+            with jax.profiler.trace(tmp):
+                sweep = {rows: _benchmark(config, rows) for rows in config.row_counts}
+            if jax.process_index() == 0:
+                _upload_profile(tmp, config)
+    else:
+        sweep = {rows: _benchmark(config, rows) for rows in config.row_counts}
     if jax.process_index() != 0:
         return
     # This dispatch path does not deliver worker stdout or worker logs to the
@@ -239,6 +260,7 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
 )
 @click.option("--row-elements", type=click.IntRange(min=1), default=BENCH_ROW_ELEMENTS, show_default=True)
 @click.option("--capacity-factor", type=click.FloatRange(min=0.1), default=1.0, show_default=True)
+@click.option("--profile", is_flag=True, default=False, help="Capture a JAX profile of the timed section.")
 @click.option(
     "--skew",
     type=click.FloatRange(min=1.0),
@@ -257,6 +279,7 @@ def main(
     rows_per_rank: str,
     row_elements: int,
     capacity_factor: float,
+    profile: bool,
     skew: float,
     moonep_jax_wheel_build: str,
 ) -> None:
@@ -285,6 +308,7 @@ def main(
         row_elements=row_elements,
         capacity_factor=capacity_factor,
         skew=skew,
+        profile=profile,
         result_uri=f"{BENCH_RESULT_ROOT}/{run_id}.json",
     )
     _apply_hero_ep_runtime_defaults("moonep_jax", MoonEPTransport.DIRECT_DEVICE)
