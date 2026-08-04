@@ -235,30 +235,29 @@ def _run_harbor_job(
     environment: str,
     output_dir: str,
     driver_env: Mapping[str, str],
-    dependency_check: Callable[[], None] | None = None,
-    wait_until_ready: Callable[[], None] | None = None,
-    dependency_recovery_limit: int = 0,
+    inference_session: RemoteInferenceSession | None = None,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
     recovery_count = 0
     while True:
         try:
+            dependency_check = inference_session.check_ready if inference_session is not None else None
             run_harbor_driver(config, overlay, driver_env, dependency_check)
             break
         except InferenceTemporarilyUnavailable as exc:
-            if wait_until_ready is None:
+            if inference_session is None:
                 raise
-            if recovery_count >= dependency_recovery_limit:
+            if recovery_count >= inference_session.recovery_attempt_limit:
                 raise InferenceDependencyError(
-                    f"inference dependency exceeded {dependency_recovery_limit} recovery attempt(s)",
+                    f"inference dependency exceeded {inference_session.recovery_attempt_limit} recovery attempt(s)",
                     status=RunStatus.INFRA_FAILED,
                 ) from exc
             recovery_count += 1
             logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
             _remove_unscored_trials(job_dir)
             try:
-                wait_until_ready()
+                inference_session.wait_until_ready()
             except Exception as recovery_exc:
                 raise InferenceDependencyError(
                     f"inference dependency failed to recover: {recovery_exc}",
@@ -329,9 +328,7 @@ class HarborExecutor:
         output_dir: str,
         hf_token: str | None,
         driver_env: Mapping[str, str],
-        dependency_check: Callable[[], None] | None = None,
-        wait_until_ready: Callable[[], None] | None = None,
-        dependency_recovery_limit: int = 0,
+        inference_session: RemoteInferenceSession | None = None,
     ) -> HarborRunResult:
         dataset = self.config.record_dataset
         job_name = _job_name(
@@ -361,49 +358,22 @@ class HarborExecutor:
             environment=self.config.environment,
             output_dir=output_dir,
             driver_env=driver_env,
-            dependency_check=dependency_check,
-            wait_until_ready=wait_until_ready,
-            dependency_recovery_limit=dependency_recovery_limit,
+            inference_session=inference_session,
         )
 
     def __call__(
-        self,
-        model: RunningModel,
-        output_dir: str,
-        env_vars: Mapping[str, str],
-    ) -> EvaluationOutcome:
-        driver_env = {key: env_vars[key] for key in self.secret_env_keys}
-        hf_token = env_vars.get("HF_TOKEN")
-        if hf_token:
-            driver_env["HF_TOKEN"] = hf_token
-        return _evaluation_outcome(
-            lambda: self._run(model, output_dir, hf_token, driver_env),
-            output_dir,
-        )
-
-    def run_with_inference(
         self,
         session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
         """Run Harbor while supervising a managed inference dependency."""
-        if session.recovery_mode is InferenceRecoveryMode.NONE:
-            return self(session.model, output_dir, env_vars)
-
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token
+        inference_session = session if session.recovery_mode is not InferenceRecoveryMode.NONE else None
         return _evaluation_outcome(
-            lambda: self._run(
-                session.model,
-                output_dir,
-                hf_token,
-                driver_env,
-                session.check_ready,
-                session.wait_until_ready,
-                session.recovery_attempt_limit,
-            ),
+            lambda: self._run(session.model, output_dir, hf_token, driver_env, inference_session),
             output_dir,
         )

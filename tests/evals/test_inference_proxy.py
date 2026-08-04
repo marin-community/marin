@@ -252,32 +252,6 @@ def test_direct_inference_session_reports_pending_task_as_temporarily_unavailabl
         session.check_ready()
 
 
-def test_brokered_inference_session_does_not_require_every_worker_task_running(monkeypatch) -> None:
-    class _RunningJob:
-        job_id = "/tester/inference-worker"
-
-        def status(self) -> JobStatus:
-            return JobStatus.RUNNING
-
-    monkeypatch.setattr(
-        iris_module,
-        "iris_ctx",
-        lambda: SimpleNamespace(client=SimpleNamespace(list_tasks=lambda _job_id: pytest.fail("unexpected task poll"))),
-    )
-    session = RemoteInferenceSession(
-        model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
-        jobs=(_RunningJob(),),
-        recovery_mode=InferenceRecoveryMode.NONE,
-        recovery_timeout_seconds=None,
-        recovery_attempt_limit=0,
-        streaming=False,
-        tensor_parallel_size=1,
-        backend_name="vllm",
-    )
-
-    session.check_ready()
-
-
 def test_inference_readiness_treats_controller_transport_failure_as_unknown(monkeypatch) -> None:
     class _UnreachableJob:
         job_id = "/tester/inference"

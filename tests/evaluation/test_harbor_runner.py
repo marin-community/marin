@@ -23,7 +23,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
-from marin.inference.iris import InferenceRecoveryMode, InferenceTemporarilyUnavailable
+from marin.inference.iris import InferenceRecoveryMode, InferenceTemporarilyUnavailable, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
@@ -34,6 +34,19 @@ def _running_model() -> RunningModel:
             base_url="https://iris.example/proxy/t/token/serve.model/v1",
             model="qwen3-0.6b",
         )
+    )
+
+
+def _inference_session() -> RemoteInferenceSession:
+    return RemoteInferenceSession(
+        model=_running_model(),
+        jobs=(),
+        recovery_mode=InferenceRecoveryMode.NONE,
+        recovery_timeout_seconds=None,
+        recovery_attempt_limit=0,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
     )
 
 
@@ -215,7 +228,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
     monkeypatch.setattr(runner, "run_harbor_driver", dying_driver)
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_running_model(), output_dir, {})
+        executor(_inference_session(), output_dir, {})
     assert exc_info.value.status is RunStatus.FAILED
 
     durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
@@ -226,7 +239,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
         return None
 
     monkeypatch.setattr(runner, "run_harbor_driver", resumed_driver)
-    outcome = executor(_running_model(), output_dir, {})
+    outcome = executor(_inference_session(), output_dir, {})
 
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
@@ -257,7 +270,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     session = RecoveringSession()
     driver_starts = 0
 
-    def run_driver(config, overlay, driver_env, dependency_check) -> None:
+    def run_driver(_config, overlay, _driver_env, dependency_check) -> None:
         nonlocal driver_starts
         driver_starts += 1
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
@@ -299,7 +312,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
 
     monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
 
-    outcome = executor.run_with_inference(session, output_dir, {})
+    outcome = executor(session, output_dir, {})
 
     assert session.recovery_waits == 1
     assert driver_starts == 2
@@ -400,7 +413,7 @@ def test_managed_harbor_bounds_repeated_dependency_recovery(tmp_path, monkeypatc
     session = FlappingSession()
     driver_starts = 0
 
-    def run_driver(config, overlay, driver_env, dependency_check) -> None:
+    def run_driver(_config, _overlay, _driver_env, dependency_check) -> None:
         nonlocal driver_starts
         driver_starts += 1
         dependency_check()
@@ -409,7 +422,7 @@ def test_managed_harbor_bounds_repeated_dependency_recovery(tmp_path, monkeypatc
     executor = _harbor_executor(f"flapping-{tmp_path.name}")
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor.run_with_inference(session, str(tmp_path / "run"), {})
+        executor(session, str(tmp_path / "run"), {})
 
     assert exc_info.value.status is RunStatus.INFRA_FAILED
     assert session.recovery_waits == 1
@@ -436,7 +449,8 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
 
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-harbor")
-    model = _running_model()
+    session = _inference_session()
+    model = session.model
 
     executor = HarborExecutor(
         _validated_config(
@@ -447,7 +461,7 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         secret_env_keys=("DAYTONA_API_KEY",),
     )
     outcome = executor(
-        model,
+        session,
         str(tmp_path),
         {"DAYTONA_API_KEY": "daytona-key"},
     )
@@ -492,7 +506,7 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
     executor = _harbor_executor(f"failed-{tmp_path.name}")
 
     with pytest.raises(EvaluationError) as exc_info:
-        executor(_running_model(), str(tmp_path), {})
+        executor(_inference_session(), str(tmp_path), {})
 
     assert exc_info.value.status is RunStatus.FAILED
     result = json.loads((tmp_path / "harbor_result.json").read_text())
@@ -516,7 +530,7 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
     executor = _harbor_executor(f"zero-{tmp_path.name}")
 
-    outcome = executor(_running_model(), str(tmp_path), {})
+    outcome = executor(_inference_session(), str(tmp_path), {})
 
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())

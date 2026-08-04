@@ -69,18 +69,18 @@ def _write_harbor_config(path: Path) -> Path:
 
 
 def _successful_evaluation(
-    model: RunningModel,
+    session: RemoteInferenceSession,
     output_dir: str,
     _env_vars: Mapping[str, str],
 ) -> EvaluationOutcome:
     output = StoragePath(output_dir)
     output.mkdirs()
-    (output / "endpoint.txt").write_text(model.endpoint.base_url)
+    (output / "endpoint.txt").write_text(session.model.endpoint.base_url)
     return EvaluationOutcome(metrics={"task": {"accuracy": 0.75}}, jobs={"eval": "/eval/success"})
 
 
 def _failed_evaluation(
-    _model: RunningModel,
+    _session: RemoteInferenceSession,
     _output_dir: str,
     _env_vars: Mapping[str, str],
 ) -> EvaluationOutcome:
@@ -157,55 +157,6 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
 
 
-def test_evaluate_batch_passes_managed_inference_session_to_opt_in_executor(tmp_path):
-    records = tmp_path / "records"
-    session = RemoteInferenceSession(
-        model=RunningModel(
-            endpoint=OpenAIEndpoint(base_url="https://iris.example/proxy/t/token/inference/v1", model="model"),
-            tokenizer="tokenizer",
-        ),
-        jobs=(),
-        recovery_mode=InferenceRecoveryMode.DIRECT_TASK_RETRY,
-        recovery_timeout_seconds=1800,
-        recovery_attempt_limit=10,
-        streaming=True,
-        tensor_parallel_size=1,
-        backend_name="vllm",
-    )
-
-    class ManagedExecutor:
-        def __call__(self, model, output_dir, env_vars):
-            raise AssertionError("managed executor must receive the inference session")
-
-        def run_with_inference(self, received_session, output_dir, env_vars):
-            assert received_session is session
-            return EvaluationOutcome(metrics={"managed": {"accuracy": 1.0}})
-
-    batch = EvaluationBatch(
-        group_id="managed-group",
-        user="tester",
-        version=None,
-        description=None,
-        records_prefix=str(records),
-        model=ModelConfig(
-            name="model",
-            location="org/model",
-            tokenizer="tokenizer",
-            resource_hint=ResourceHint(hbm_gb=3),
-        ),
-        accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
-        capability_origin="https://iris.example",
-        api_model="model",
-        evaluations=(_evaluation(tmp_path, "managed", ManagedExecutor()),),
-        provenance=LaunchProvenance(git_sha="abc", launch_host="host"),
-    )
-
-    paths = evaluate_batch(batch, session, orchestrator_job_id="/orchestrator", env_vars={})
-
-    assert paths == [str(records / "run-managed" / "record.json")]
-    assert read_record(paths[0]).metrics == {"managed": {"accuracy": 1.0}}
-
-
 def test_inference_recovery_failure_marks_later_evaluations_unstarted(tmp_path):
     records = tmp_path / "records"
     session = RemoteInferenceSession(
@@ -222,10 +173,7 @@ def test_inference_recovery_failure_marks_later_evaluations_unstarted(tmp_path):
     )
 
     class UnrecoverableExecutor:
-        def __call__(self, model, output_dir, env_vars):
-            raise AssertionError("managed executor must receive the inference session")
-
-        def run_with_inference(self, received_session, output_dir, env_vars):
+        def __call__(self, _session, _output_dir, _env_vars):
             raise InferenceDependencyError(
                 "inference dependency did not recover",
                 status=RunStatus.INFRA_FAILED,
@@ -453,11 +401,20 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
     output_dir = tmp_path / "results"
     output_dir.mkdir()
     outcome = evaluation.executor(
-        RunningModel(
-            endpoint=OpenAIEndpoint(
-                base_url="https://iris.example/capability/v1",
-                model="served-qwen3-8b",
-            )
+        RemoteInferenceSession(
+            model=RunningModel(
+                endpoint=OpenAIEndpoint(
+                    base_url="https://iris.example/capability/v1",
+                    model="served-qwen3-8b",
+                )
+            ),
+            jobs=(),
+            recovery_mode=InferenceRecoveryMode.NONE,
+            recovery_timeout_seconds=None,
+            recovery_attempt_limit=0,
+            streaming=True,
+            tensor_parallel_size=1,
+            backend_name="vllm",
         ),
         str(output_dir),
         {"DAYTONA_API_KEY": "daytona-key"},

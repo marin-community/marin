@@ -6,7 +6,7 @@
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 from fray.client import JobHandle
 from iris.client import IrisClient, Job, iris_ctx
@@ -31,7 +31,6 @@ from marin.evaluation.records import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
-from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -69,21 +68,9 @@ class InferenceDependencyError(EvaluationError):
 
 
 class EvalExecutor(Protocol):
-    """Execute one evaluation mechanism against an already-running OpenAI endpoint."""
+    """Execute one evaluation mechanism against an inference session."""
 
     def __call__(
-        self,
-        model: RunningModel,
-        output_dir: str,
-        env_vars: Mapping[str, str],
-    ) -> EvaluationOutcome: ...
-
-
-@runtime_checkable
-class ManagedInferenceExecutor(Protocol):
-    """An evaluator that can supervise the lifecycle of its inference session."""
-
-    def run_with_inference(
         self,
         session: RemoteInferenceSession,
         output_dir: str,
@@ -268,14 +255,7 @@ def _run_one_evaluation(
         session.check_alive()
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
-        if isinstance(evaluation.executor, ManagedInferenceExecutor):
-            outcome = evaluation.executor.run_with_inference(
-                session,
-                evaluation.identity.output_dir,
-                evaluation_env,
-            )
-        else:
-            outcome = evaluation.executor(session.model, evaluation.identity.output_dir, evaluation_env)
+        outcome = evaluation.executor(session, evaluation.identity.output_dir, evaluation_env)
         metrics = outcome.metrics
         jobs |= outcome.jobs
     except Exception as exc:

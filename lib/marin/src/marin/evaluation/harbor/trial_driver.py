@@ -364,6 +364,7 @@ def _preflight(request_path: Path) -> None:
 
 
 async def _run(config: JobConfig) -> int:
+    """Run one Harbor job and return zero or the conventional 128-plus-signal exit status."""
     loop = asyncio.get_running_loop()
     run_task = asyncio.current_task()
     assert run_task is not None
