@@ -15,7 +15,8 @@ shards one model across every device instead.
 
 Env knobs (all optional; defaults give the full 90B run on 256 H100):
 
-    SCALE_GPU_REPLICAS  number of 8xH100 nodes (default 32 -> 256 GPUs)
+    SCALE_DEVICE        H100 (default, 8 GPUs/node) or GB200 (4 GPUs/node, cw-us-east-08a)
+    SCALE_GPU_REPLICAS  number of nodes (default 32; 32 x 8 H100 = 256 GPUs)
     SCALE_EXPERT_AXIS   expert-parallel axis size, intra-node (default 8)
     SCALE_REPLICA_AXIS  cross-node replication; 1 = pure FSDP (default 1)
     SCALE_PROCESSES_PER_TASK  GPU processes per node: 1 = one process per node
@@ -67,7 +68,14 @@ from experiments.llama import llama3_tokenizer_vocab_size
 # head_dim is fixed at 128; hidden_dim must be a multiple of it.
 HEAD_DIM = 128
 VOCAB_SIZE = llama3_tokenizer_vocab_size
-GPUS_PER_NODE = 8  # H100s per gd-8xh100ib node; the batch-shard math and with_gpu(count=...) must track
+# Per-node accelerator shape, keyed by SCALE_DEVICE. `gpus_per_node` feeds both the
+# batch-shard math and with_gpu(count=...), so the two cannot drift. GB200 nodes carry four
+# Blackwell GPUs behind Grace CPUs rather than eight H100s; the cpu/ram/disk figures match
+# experiments/grug/moe_hero_ep/launch.py, which runs the one-rack gate on that fleet.
+_DEVICE_SHAPES: dict[str, dict] = {
+    "H100": {"gpus_per_node": 8, "cpu": 32, "ram": "256g", "disk": "256g"},
+    "GB200": {"gpus_per_node": 4, "cpu": 120, "ram": "850g", "disk": "1t"},
+}
 # Default seq for the 90B run. FSDP reshards the [batch, seq, hidden] activation
 # through a fully-replicated intermediate (an XLA SPMD limitation, pending Shardy),
 # so peak memory scales with batch*seq; at the default 89.7B model, batch 256 x
@@ -166,14 +174,27 @@ def build_scale_checkpoint(*, version: str | None = None) -> ArtifactStep[Levant
     if model.num_experts % expert_axis != 0:
         raise ValueError(f"num_experts={model.num_experts} must be divisible by SCALE_EXPERT_AXIS={expert_axis}")
 
-    # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the
-    # rest of the 8*replicas devices. Require the global batch to cover every shard.
-    data_axis = (replicas * GPUS_PER_NODE) // (replica_axis * expert_axis)
+    device = os.environ.get("SCALE_DEVICE", "H100").upper()
+    if device not in _DEVICE_SHAPES:
+        raise ValueError(f"SCALE_DEVICE={device!r} must be one of {sorted(_DEVICE_SHAPES)}")
+    shape = _DEVICE_SHAPES[device]
+    gpus_per_node = shape["gpus_per_node"]
+
+    # Batch is sharded over the (replica_dcn, data, expert) axes; data absorbs the rest of
+    # the gpus_per_node*replicas devices. Require the global batch to cover every shard.
+    data_axis = (replicas * gpus_per_node) // (replica_axis * expert_axis)
     batch_shards = replica_axis * data_axis * expert_axis
     if batch_size % batch_shards != 0:
         raise ValueError(f"SCALE_BATCH={batch_size} must be divisible by batch shards={batch_shards}")
 
-    resources = ResourceConfig.with_gpu("H100", count=GPUS_PER_NODE, cpu=32, ram="256g", disk="256g", replicas=replicas)
+    resources = ResourceConfig.with_gpu(
+        device,
+        count=gpus_per_node,
+        cpu=shape["cpu"],
+        ram=shape["ram"],
+        disk=shape["disk"],
+        replicas=replicas,
+    )
 
     use_wandb = os.environ.get("SCALE_TRACKER", "json_logger").lower() == "wandb"
     json_logger_name = os.environ.get("SCALE_JSON_LOGGER", "grug_moe_scale.metrics")

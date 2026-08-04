@@ -65,6 +65,7 @@ _LAUNCHER_RESOURCES = ("--cpu", "2", "--memory", "8GB", "--disk", "30GB", "--ena
 def _sweep_env(args) -> dict[str, str]:
     return {
         "SCALE_FSDP_SWEEP": ",".join(_ARMS * args.repeats),
+        "SCALE_DEVICE": args.device,
         "SCALE_GPU_REPLICAS": str(args.nodes),
         "SCALE_EXPERT_AXIS": str(args.expert),
         "SCALE_REPLICA_AXIS": "1",
@@ -91,15 +92,26 @@ def submit(args) -> None:
         "uv",
         "run",
         "iris",
-        f"--cluster={args.cluster}",
+        "--config",
+        args.iris_config,
         "job",
         "run",
+        "--target-cluster",
+        args.target_cluster,
         "--job-name",
         args.run_id,
         "--user",
         args.user,
+        "--priority",
+        "interactive",
+        "--timeout",
+        str(args.timeout),
         "--no-wait",
         *_LAUNCHER_RESOURCES,
+        # The sandbox blocks streaming to W&B; the benchmark reads the job log anyway.
+        "-e",
+        "WANDB_MODE",
+        "offline",
     ]
     for key, value in env.items():
         command += ["-e", key, value]
@@ -219,19 +231,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("submit", help="launch the sweep on the CoreWeave H100 cluster")
-    run.add_argument("--nodes", type=int, default=4, help="8 H100 per node")
-    run.add_argument("--expert", type=int, default=8)
+    run = sub.add_parser("submit", help="launch the sweep on a CoreWeave GPU cluster")
+    run.add_argument("--device", default="GB200", choices=("GB200", "H100"))
+    run.add_argument("--nodes", type=int, default=16, help="GB200: 4 GPUs/node, one rack = 16 nodes")
+    run.add_argument("--expert", type=int, default=64, help="expert-parallel axis; 64 is one full GB200 rack")
     run.add_argument("--hidden-dim", type=int, default=3072)
-    run.add_argument("--num-layers", type=int, default=12)
+    run.add_argument("--num-layers", type=int, default=48)
     run.add_argument("--num-experts", type=int, default=128)
     run.add_argument("--top-k", type=int, default=4)
     run.add_argument("--seq-len", type=int, default=2048)
-    run.add_argument("--batch", type=int, default=64)
+    run.add_argument("--batch", type=int, default=512)
     run.add_argument("--steps", type=int, default=80)
     run.add_argument("--repeats", type=int, default=3, help="paired before/after draws")
     run.add_argument("--run-id", default="ep-fsdp-sweep")
-    run.add_argument("--cluster", default="cw-us-east-02a")
+    # The GB200 fleet is reached through the federation controller with --target-cluster,
+    # the shape experiments/grug/moe_hero_ep/README.md uses for the one-rack gate.
+    run.add_argument("--iris-config", default="lib/iris/config/marin.yaml")
+    run.add_argument("--target-cluster", default="cw-us-east-08a")
+    run.add_argument("--timeout", type=int, default=21600, help="launcher job timeout")
     run.add_argument("--user", default="mwittmann", help="iris user prefix for the job")
     run.add_argument("--version", default="2026.08.03", help="artifact calendar version")
     run.set_defaults(func=submit)
