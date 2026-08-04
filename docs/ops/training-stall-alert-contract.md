@@ -17,11 +17,13 @@ The required `service=levanter` telemetry records are `step`, `progress_time_sec
 
 ## NCCL RAS snapshots
 
-GPU Levanter runs poll NCCL RAS from JAX process 0 every two minutes. NCCL returns a job-global communicator view, so one collector avoids repeating the same query from every rank. The collector runs on a daemon thread, gives `ncclras` an eight-second outer deadline, and stops during normal tracker shutdown. `NCCL_RAS_ENABLE=0` disables collection.
+GPU Levanter runs poll NCCL RAS from JAX process 0 every two minutes. NCCL returns a job-global communicator view, so one collector avoids repeating the same query from every rank. The collector runs NCCL's documented text protocol in a bounded Python subprocess, gives it an eight-second outer deadline, and stops during normal tracker shutdown. It does not depend on the separately packaged `ncclras` executable. `NCCL_RAS_ENABLE=0` disables collection.
+
+Iris's Kubernetes sidecar ships task logs and does not poll RAS. The Iris node-agent NVIDIA probe records host hardware separately. Leave both enabled; neither duplicates these communicator snapshots.
 
 Every row carries the collector's Iris `task_id`, attempt/execution identity, node, `process_index=0`, and `root_run_uid`. Rank rows add NCCL's `rank_host`, `process_id`, `cuda_device`, and `nvml_device`; those fields identify the process represented by a global RAS rank instead of treating the collector task as the rank owner.
 
-`ras_available=1` records a parsed response. `ras_available=0` includes an `outcome` such as `start_failed`, `nonzero_exit`, `deadline_exceeded`, `output_limit`, or `invalid_payload`. `ras_poll_failures` and `ras_poll_timeouts` are counter deltas; sum them over the query window. `ras_poll_duration_seconds` is the client-side latency, while `ras_collection_duration_seconds` and `ras_collection_timeouts` come from NCCL's successful response.
+`ras_available=1` records a parsed response. `ras_available=0` includes an `outcome` such as `unavailable`, `client_timeout`, `deadline_exceeded`, `output_limit`, or `invalid_payload`. `ras_poll_failures` and `ras_poll_timeouts` are counter deltas; sum them over the query window. `ras_poll_duration_seconds` is the client-side latency, while `ras_collection_duration_seconds` and `ras_collection_timeouts` come from NCCL's successful response.
 
 Query a root run with a bounded timestamp range:
 

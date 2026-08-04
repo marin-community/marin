@@ -32,7 +32,7 @@ def _values(records: list[dict]) -> dict[str, float]:
     return {record["name"]: record["value"] for record in records}
 
 
-def _install_ncclras(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, marker: Path | None = None) -> None:
+def _install_nccl_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, marker: Path | None = None) -> None:
     payload = {
         "nccl_version": "2.29.1",
         "cuda_runtime_version": 13000,
@@ -70,9 +70,10 @@ def _install_ncclras(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, marker:
     marker_write = (
         f"with open({str(marker)!r}, 'a') as marker_file:\n    marker_file.write('started\\n')\n" if marker else ""
     )
-    command = tmp_path / "ncclras"
+    command = tmp_path / "nccl-client"
     command.write_text(f"#!{sys.executable}\n{marker_write}print({json.dumps(payload)!r})")
     command.chmod(command.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(tracker_telemetry.nccl, "_CLIENT_COMMAND", (str(command),))
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
 
 
@@ -177,7 +178,7 @@ def test_finish_stops_the_phase_heartbeat(exported, fast_heartbeat):
 
 def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch, tmp_path):
     marker = tmp_path / "ncclras-started"
-    _install_ncclras(monkeypatch, tmp_path, marker=marker)
+    _install_nccl_client(monkeypatch, tmp_path, marker=marker)
     monkeypatch.setenv("NCCL_RAS_ENABLE", "1")
     monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
@@ -196,7 +197,7 @@ def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch
 
 def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, monkeypatch, tmp_path):
     marker = tmp_path / "ncclras-started"
-    _install_ncclras(monkeypatch, tmp_path, marker=marker)
+    _install_nccl_client(monkeypatch, tmp_path, marker=marker)
     monkeypatch.setenv("NCCL_RAS_ENABLE", "1")
     monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 1)

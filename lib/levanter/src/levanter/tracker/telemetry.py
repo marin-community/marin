@@ -5,6 +5,7 @@
 
 import dataclasses
 import logging
+import os
 import re
 import threading
 from collections.abc import Mapping

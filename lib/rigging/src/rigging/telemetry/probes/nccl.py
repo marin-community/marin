@@ -6,11 +6,13 @@
 import json
 import logging
 import math
+import sys
 from collections.abc import Mapping
 from time import monotonic
 from typing import NamedTuple
 
 from rigging import telemetry
+from rigging.telemetry.probes import nccl_client
 from rigging.telemetry.probes.runner import BoundedCommandRunner, CommandStatus, PeriodicProbe
 
 TIMEOUT = 8.0
@@ -21,6 +23,13 @@ _MAX_COLLECTIVES_PER_RANK = 64
 _MAX_METRICS = 4_096
 _MAX_FIELD_BYTES = 256
 _MAX_EXACT_COUNT = 2**53 - 1
+_CLIENT_COMMAND = (sys.executable, "-m", nccl_client.__name__)
+_CLIENT_FAILURES = {
+    nccl_client.TIMEOUT_EXIT_CODE: "client_timeout",
+    nccl_client.UNAVAILABLE_EXIT_CODE: "unavailable",
+    nccl_client.INVALID_CONFIG_EXIT_CODE: "invalid_client_config",
+    nccl_client.OUTPUT_LIMIT_EXIT_CODE: "output_limit",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -64,24 +73,24 @@ class _MissingRank(NamedTuple):
 def collect(runner: BoundedCommandRunner) -> None:
     client_timeout = max(1, math.ceil(TIMEOUT * 0.75))
     started = monotonic()
-    command = runner.run_result(("ncclras", "-v", "-t", str(client_timeout), "-f", "json"), TIMEOUT)
+    command = runner.run_result((*_CLIENT_COMMAND, "--timeout", str(client_timeout)), TIMEOUT)
     duration = max(0.0, monotonic() - started)
     if command.status is CommandStatus.CANCELLED:
         return
     if command.output is None:
         _record_poll(command.status.value, duration)
         if command.status is CommandStatus.DEADLINE_EXCEEDED:
-            telemetry.counter("ras_poll_timeouts", unit="{timeout}").add(
-                1,
-                attributes=telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT),
-            )
+            _record_timeout()
         return
     if command.output.returncode != 0:
-        _record_poll("nonzero_exit", duration)
+        outcome = _CLIENT_FAILURES.get(command.output.returncode, "nonzero_exit")
+        _record_poll(outcome, duration)
+        if command.output.returncode == nccl_client.TIMEOUT_EXIT_CODE:
+            _record_timeout()
         return
 
     try:
-        metrics = _metrics(json.loads(command.output.stdout))
+        metrics = _metrics(_json_response(command.output.stdout))
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
         logger.warning("could not parse NCCL RAS telemetry: %s", error)
         _record_poll("invalid_payload", duration)
@@ -89,6 +98,20 @@ def collect(runner: BoundedCommandRunner) -> None:
     _record_poll("success", duration)
     for metric in metrics:
         telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
+
+
+def _json_response(response: bytes) -> object:
+    object_start = response.find(b"{")
+    if object_start < 0:
+        raise ValueError("NCCL RAS response did not contain JSON")
+    return json.loads(response[object_start:])
+
+
+def _record_timeout() -> None:
+    telemetry.counter("ras_poll_timeouts", unit="{timeout}").add(
+        1,
+        attributes=telemetry.snapshot_attributes("nccl_ras", telemetry.CUMULATIVE_SNAPSHOT),
+    )
 
 
 def _record_poll(outcome: str, duration: float) -> None:

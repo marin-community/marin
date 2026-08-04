@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from rigging import telemetry
-from rigging.telemetry.probes import nccl, nvidia
+from rigging.telemetry.probes import nccl, nccl_client, nvidia
 from rigging.testing import RecordingTelemetryTransport
 
 
@@ -49,7 +49,8 @@ def _install_commands(
     nccl_source: str,
 ) -> None:
     _executable(tmp_path / "nvidia-smi", nvidia_source)
-    _executable(tmp_path / "ncclras", nccl_source)
+    _executable(tmp_path / "nccl-client", nccl_source)
+    monkeypatch.setattr(nccl, "_CLIENT_COMMAND", (str(tmp_path / "nccl-client"),))
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
 
 
@@ -97,6 +98,56 @@ def _nccl_payload() -> dict[str, object]:
         ],
         "ras": {"collection_time_sec": 0.125, "timeouts_count": 2},
     }
+
+
+class _RasConnection:
+    def __init__(self, responses: list[bytes]) -> None:
+        self._responses = iter(responses)
+        self.request = b""
+
+    def __enter__(self) -> "_RasConnection":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        pass
+
+    def sendall(self, request: bytes) -> None:
+        self.request += request
+
+    def shutdown(self, _how: int) -> None:
+        pass
+
+    def settimeout(self, _timeout: float) -> None:
+        pass
+
+    def recv(self, _size: int) -> bytes:
+        return next(self._responses)
+
+
+def test_nccl_client_queries_documented_json_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _RasConnection([b"OK\nOK\n", json.dumps(_nccl_payload()).encode(), b""])
+    connected_to: list[tuple[tuple[str, int], float]] = []
+
+    def connect(address: tuple[str, int], timeout: float) -> _RasConnection:
+        connected_to.append((address, timeout))
+        return connection
+
+    monkeypatch.setattr(nccl_client.socket, "create_connection", connect)
+
+    response = nccl_client.query_nccl_ras(address="localhost:28028", timeout=1.2)
+
+    assert connected_to == [(("localhost", 28028), 1.2)]
+    assert connection.request == b"TIMEOUT 2\nSET FORMAT json\nVERBOSE STATUS\n"
+    assert response == b"OK\nOK\n" + json.dumps(_nccl_payload()).encode()
+
+
+def test_nccl_client_bounds_one_shot_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    connection = _RasConnection([b"oversized"])
+    monkeypatch.setattr(nccl_client.socket, "create_connection", lambda *_args, **_kwargs: connection)
+    monkeypatch.setattr(nccl_client, "MAX_RESPONSE_BYTES", 8)
+
+    with pytest.raises(nccl_client.ResponseTooLargeError):
+        nccl_client.query_nccl_ras(address="localhost:28028", timeout=1)
 
 
 def test_nvidia_probe_emits_only_stable_hardware_evidence(
@@ -171,13 +222,13 @@ def test_nccl_probe_records_unavailable_service(
         monkeypatch,
         tmp_path,
         nvidia_source="raise SystemExit(2)",
-        nccl_source="raise SystemExit(2)",
+        nccl_source=f"raise SystemExit({nccl_client.UNAVAILABLE_EXIT_CODE})",
     )
     transport = _configure(monkeypatch)
 
     session = nccl.start()
-    available = transport.record("ras_available", {"outcome": "nonzero_exit"})
-    failures = transport.record("ras_poll_failures", {"failure_kind": "nonzero_exit"})
+    available = transport.record("ras_available", {"outcome": "unavailable"})
+    failures = transport.record("ras_poll_failures", {"failure_kind": "unavailable"})
     session.shutdown()
 
     assert available["value"] == 0
@@ -266,12 +317,13 @@ pathlib.Path(os.environ['PROBE_PID_PATH']).write_text(str(os.getpid()))
 threading.Event().wait(60)
 """
     _executable(tmp_path / "nvidia-smi", blocking_source)
-    _executable(tmp_path / "ncclras", blocking_source)
+    _executable(tmp_path / "nccl-client", blocking_source)
+    monkeypatch.setattr(nccl, "_CLIENT_COMMAND", (str(tmp_path / "nccl-client"),))
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
     monkeypatch.setenv("PROBE_PID_PATH", str(nvidia_pid))
 
     # Give each command a distinct output path while retaining the real process boundary.
-    nccl_command = tmp_path / "ncclras"
+    nccl_command = tmp_path / "nccl-client"
     nccl_command.write_text(nccl_command.read_text().replace("PROBE_PID_PATH", "NCCL_PID_PATH"))
     monkeypatch.setenv("NCCL_PID_PATH", str(nccl_pid))
 
