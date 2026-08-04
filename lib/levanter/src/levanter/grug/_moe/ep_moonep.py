@@ -605,6 +605,29 @@ def _exchange_remote_weights_impl(
     )
 
 
+def _exchange_remote_weight_pair(
+    w13: jax.Array,
+    w2: jax.Array,
+    experts_to_copy: Int[Array, "R B"],
+    rank: Int[Array, ""],
+) -> tuple[jax.Array, jax.Array]:
+    """Exchange both expert weight tensors through one collective.
+
+    The two tensors share the same peer offsets and sizes, because both come from
+    ``experts_to_copy``. One packed transfer halves the weight call count. The
+    MNEP-120 profile shows that the weight exchange carries `1.46%` of the token
+    bytes but uses `20%` of all ragged time, so its cost is call count and not
+    volume.
+    """
+    experts = w13.shape[0]
+    split = w13.shape[1] * w13.shape[2]
+    packed = jnp.concatenate((w13.reshape(experts, -1), w2.reshape(experts, -1)), axis=1)
+    received = _exchange_remote_weights(packed, experts_to_copy, rank)
+    remote_w13 = received[:, :split].reshape(-1, *w13.shape[1:])
+    remote_w2 = received[:, split:].reshape(-1, *w2.shape[1:])
+    return remote_w13, remote_w2
+
+
 def _return_remote_weight_gradients(
     remote_gradients: jax.Array,
     experts_to_copy: Int[Array, "R B"],
@@ -747,8 +770,7 @@ def _moe_mlp_ep_moonep_exact_local(
         )
 
     with jax.named_scope("moonep_weight_exchange"):
-        remote_w13 = _exchange_remote_weights(moe_w13_local, plan.experts_to_copy, rank)
-        remote_w2 = _exchange_remote_weights(moe_w2_local, plan.experts_to_copy, rank)
+        remote_w13, remote_w2 = _exchange_remote_weight_pair(moe_w13_local, moe_w2_local, plan.experts_to_copy, rank)
         group_w13 = jnp.concatenate((moe_w13_local, remote_w13), axis=0)
         group_w2 = jnp.concatenate((moe_w2_local, remote_w2), axis=0)
 
