@@ -142,5 +142,5 @@ sessions are live because it removes their shared network.
 
 To roll back, check out the prior Loom tree, restore its numbered
 `dotenvSecretVersion` when necessary, and run the normal preview and update.
-The persistent root disk is not auto-deleted with the VM and has scheduled
-snapshots.
+The separately managed persistent root disk is protected, is not auto-deleted
+with the VM, and has scheduled snapshots.

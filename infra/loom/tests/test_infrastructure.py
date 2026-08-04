@@ -202,8 +202,12 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         attached = field(vm.inputs, "attached_disks", "attachedDisks")
         assert not attached
         boot_disk = field(vm.inputs, "boot_disk", "bootDisk")
+        assert boot_disk is not None
         assert field(boot_disk, "auto_delete", "autoDelete") is False
-        assert not any(resource.typ == "gcp:compute/disk:Disk" for resource in mocks.resources)
+        root_disk = by_name(mocks, "loom-root")
+        assert root_disk.typ == "gcp:compute/disk:Disk"
+        assert root_disk.inputs["name"] == "loom"
+        assert boot_disk["source"] == "loom-root_id"
         snapshot_attachment = by_name(mocks, "loom-snapshot-policy")
         assert snapshot_attachment.inputs["disk"] == "loom"
         metadata = vm.inputs["metadata"]

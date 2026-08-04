@@ -559,10 +559,23 @@ def _create_network(config: DeploymentConfig, apis: list[gcp.projects.Service]) 
     return NetworkResources(web_firewall, ssh_firewall, address, dns_record)
 
 
+def _create_root_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> gcp.compute.Disk:
+    return gcp.compute.Disk(
+        "loom-root",
+        project=config.project,
+        zone=config.zone,
+        name=config.instance_name,
+        image="debian-cloud/debian-12",
+        type=DEFAULT_DISK_TYPE,
+        size=config.boot_disk_gb,
+        opts=pulumi.ResourceOptions(depends_on=apis, protect=True, ignore_changes=["image"]),
+    )
+
+
 def _create_boot_disk_snapshots(
     config: DeploymentConfig,
     apis: list[gcp.projects.Service],
-    instance: gcp.compute.Instance,
+    root_disk: gcp.compute.Disk,
 ) -> gcp.compute.DiskResourcePolicyAttachment:
     snapshot_policy = gcp.compute.ResourcePolicy(
         "loom-snapshots",
@@ -583,9 +596,9 @@ def _create_boot_disk_snapshots(
         "loom-snapshot-policy",
         project=config.project,
         zone=config.zone,
-        disk=instance.name,
+        disk=root_disk.name,
         name=snapshot_policy.name,
-        opts=pulumi.ResourceOptions(depends_on=[instance]),
+        opts=pulumi.ResourceOptions(depends_on=[root_disk]),
     )
 
 
@@ -784,6 +797,7 @@ def _create_instance(
     vm_account: gcp.serviceaccount.Account,
     vm_log_writer: gcp.projects.IAMMember,
     network: NetworkResources,
+    root_disk: gcp.compute.Disk,
     image: ImageResources,
     secrets: SecretResources,
     runtime_policy: RuntimePolicyResources,
@@ -805,6 +819,7 @@ def _create_instance(
         network.web_firewall,
         network.ssh_firewall,
         network.dns_record,
+        root_disk,
         secrets.secret,
         secrets.vm_reader,
         image.vm_reader,
@@ -821,11 +836,7 @@ def _create_instance(
         tags=[WEB_FIREWALL_TAG, SSH_FIREWALL_TAG],
         boot_disk={
             "auto_delete": False,
-            "initialize_params": {
-                "image": "debian-cloud/debian-12",
-                "size": config.boot_disk_gb,
-                "type": DEFAULT_DISK_TYPE,
-            },
+            "source": root_disk.id,
         },
         network_interfaces=[
             {
@@ -947,18 +958,20 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
     runtime_policy = _create_runtime_policy(config, api_options)
     image = _create_image(config, apis, vm_account)
     network = _create_network(config, apis)
+    root_disk = _create_root_disk(config, apis)
     secrets = _create_secrets(config, apis, api_options, vm_account, runtime_policy.profile_secret_refs)
     instance = _create_instance(
         config,
         vm_account,
         vm_log_writer,
         network,
+        root_disk,
         image,
         secrets,
         runtime_policy,
         vm_permissions,
     )
-    snapshot_attachment = _create_boot_disk_snapshots(config, apis, instance.instance)
+    snapshot_attachment = _create_boot_disk_snapshots(config, apis, root_disk)
     activation = _create_activation(config, instance, network.dns_record, snapshot_attachment)
     _export_outputs(config, instance.instance, network, image, runtime_policy)
     return Infrastructure(instance.instance, activation)
