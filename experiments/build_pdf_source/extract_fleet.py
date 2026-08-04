@@ -15,6 +15,15 @@ The unit of work stays the whole document, not the page: cross-page paragraph me
 boilerplate removal are document-scoped, so splitting a document across converters would change
 the text that comes out.
 
+**The step runs in two phases, holding the fleet only for the first.** Phase 1 converts documents
+and writes raw per-source-shard parquet -- no shuffle -- while the converter pool is up. Phase 2
+reads the raw shards back and runs the one legitimate shuffle (the normalized format's global sort
+by content-hash ``id``) on a plain CPU pool. The raw directory is also the checkpoint: phase 1
+writes with ``skip_existing``, so a retried step re-converts only the shards whose raw file never
+landed, and with every raw shard present the fleet is never started. This is the same split the
+OCR route uses, and for the same reason: the shuffle's scatter data lives in TTL'd tmp storage
+that zephyr deletes on a failed attempt, and losing a shuffle must never cost a conversion pass.
+
 **The fleet is elastic.** Each pool instance is an independent Iris job and the broker's queue is
 pull-based, so the run starts converting as soon as the first converter is up, ramps as capacity
 is allocated, and shrinks through preemptions without losing the run -- request more pods than the
@@ -157,6 +166,9 @@ _BROKER_RESOURCES = ResourceConfig.with_cpu(cpu=4, ram="32g", disk="20g", preemp
 # A task is almost entirely blocked on the proxy, but it holds up to 2 x _REQUEST_THREADS whole
 # PDFs in flight and tail PDFs run to tens of MB.
 _MAP_TASK_RESOURCES = ResourceConfig(cpu=1, ram="6g", disk="4g")
+# Phase 2's tasks read raw text shards and merge-sort them -- no PDFs, no request threads. The
+# same one-CPU shape as the senders so the packing math is identical on the same worker size.
+_NORMALIZE_TASK_RESOURCES = ResourceConfig(cpu=1, ram="6g", disk="4g")
 _WORKER_RESOURCES = ResourceConfig(cpu=_TASKS_PER_WORKER, ram="48g", disk="32g")
 # A sender task blocked on its oldest in-flight future -- a whale, possibly redelivered after a
 # preemption -- can legitimately go quiet for the full proxy budget, so the heartbeat must outlast
@@ -170,6 +182,11 @@ _HEARTBEAT_TIMEOUT = _PROXY_REQUEST_TIMEOUT + 300.0
 _FLEET_DRIVER_RESOURCES = ResourceConfig(cpu=12, ram="96g", disk="32g")
 
 _COUNTER_PREFIX = "focus_crawl_pdf_fleet"
+
+# Phase 1's durable output: one raw parquet per source shard, named by the source shard index so a
+# task retry or a step rerun rewrites (or skips) exactly the same file. The glob source is sorted
+# at plan time, so the index-to-shard mapping is stable across attempts.
+_RAW_SHARD_PATTERN = "part-{shard:05d}-of-{total:05d}.parquet"
 
 # One FLEET-STATS JSON line per interval in the driver log: broker depth, converter registration,
 # throughput, and pool-job states. The run watcher (_watch_fleet.py) tails these lines; zephyr
@@ -352,6 +369,75 @@ def _record(row: dict, document: ConvertedDocument, boilerplate: BoilerplateOpti
     }
 
 
+def convert_pipeline(source_dir: str, raw_dir: str, *, keys: frozenset, skipped_counter: str, base_url: str) -> Dataset:
+    """Phase 1: convert every routed document and write durable raw parquet, one file per source shard.
+
+    No shuffle. The raw file carries the complete output record (including ``layout_backend``), so
+    phase 2 needs neither the converter fleet nor the classification keys. ``skip_existing`` plus
+    the writer's atomic rename make the write idempotent per source shard: a task retry rewrites
+    the same file, a rerun skips shards whose file already landed.
+    """
+    return (
+        Dataset.from_files(prefix_join(source_dir, "*.parquet"))
+        .load_parquet(columns=_SOURCE_COLUMNS, batch_mode=True)
+        .map_shard(
+            partial(
+                convert_shard,
+                keys=keys,
+                skipped_counter=skipped_counter,
+                base_url=base_url,
+                boilerplate=BOILERPLATE_OPTIONS,
+            )
+        )
+        .write_parquet(
+            prefix_join(raw_dir, _RAW_SHARD_PATTERN),
+            schema=_FLEET_OUTPUT_SCHEMA,
+            skip_existing=True,
+        )
+    )
+
+
+def normalize_pipeline(raw_dir: str, output_path: str, num_shards: int) -> Dataset:
+    """Phase 2: the one legitimate shuffle -- group by content-hash id and fan out to main/dups."""
+    return (
+        Dataset.from_files(prefix_join(raw_dir, "*.parquet"))
+        .load_parquet()
+        .group_by(
+            key=lambda record: record["id"],
+            reducer=_keep_all,
+            sort_by=lambda record: record["id"],
+            num_output_shards=num_shards,
+        )
+        .map_shard(make_split_writer(output_path, output_schema=_FLEET_OUTPUT_SCHEMA))
+    )
+
+
+def _check_alive_bounded(session: ConverterPoolSession, timeout_seconds: float = 120.0) -> None:
+    """``session.check_alive()``, bounded.
+
+    ``check_alive`` makes one controller RPC per pool job, and the OCR campaign's driver hung for
+    over an hour after a completed run somewhere between this call and teardown -- with the whole
+    idle fleet still billed. The check is advisory (it distinguishes lost capacity from lost
+    documents); an answer that cannot arrive within the bound is not worth holding the fleet for.
+    """
+    outcome: list[BaseException | None] = [None]
+
+    def probe() -> None:
+        try:
+            session.check_alive()
+        except BaseException as error:
+            outcome[0] = error
+
+    prober = threading.Thread(target=probe, name="check-alive", daemon=True)
+    prober.start()
+    prober.join(timeout_seconds)
+    if prober.is_alive():
+        logger.warning("check_alive did not return within %.0fs; proceeding to fleet teardown", timeout_seconds)
+        return
+    if outcome[0] is not None:
+        raise outcome[0]
+
+
 def _log_fleet_stats(session: ConverterPoolSession, stop: threading.Event) -> None:
     """Emit a FLEET-STATS line every minute until the run releases the fleet.
 
@@ -389,7 +475,21 @@ def fleet_extract(
     *,
     needs_ocr: bool,
 ) -> NormalizedData:
-    """Run one routing side of the corpus against a converter fleet held for the duration.
+    """Run one routing side of the corpus in two phases, holding the fleet only for the first.
+
+    Phase 1 converts documents and writes **raw per-source-shard parquet** -- no shuffle --
+    inside the ``remote_converter_pool`` context, so the fleet is released the moment the last
+    document lands. Phase 2 reads the raw shards back and runs the one legitimate shuffle (the
+    normalized format's global sort by content-hash ``id``) on a fresh CPU-only worker pool; this
+    branch's zephyr tears its workers down with each ``execute()``, so the second phase gets its
+    own context rather than reusing warm workers. Holding converters through the shuffle would buy
+    nothing: the sort key is a hash computed after conversion, so the repartition is
+    CPU-and-storage work by construction.
+
+    The raw directory is also the checkpoint. Phase 1 writes with ``skip_existing``, so a retry of
+    this step re-converts only the shards whose raw file never landed, and a phase-2 failure --
+    shuffle-storage trouble burned two conversion passes already -- costs no converter time at
+    all: with every raw shard present the fleet is never started.
 
     ``needs_ocr=False`` is the production text route. ``needs_ocr=True`` converts the router's
     OCR-route complement instead, so the union of the two runs is a docling conversion of every
@@ -424,57 +524,71 @@ def fleet_extract(
     if not num_shards:
         raise RuntimeError(f"No fetched PDFs under {source.main_output_dir}")
 
-    with remote_converter_pool(build_pool_config(handler_factory)) as session:
-        logger.info("Converter pool ready at %s (%d converters requested)", session.endpoint.base_url, _CONVERTERS)
-        stop_stats = threading.Event()
-        threading.Thread(target=_log_fleet_stats, args=(session, stop_stats), name="fleet-stats", daemon=True).start()
-        pipeline = (
-            Dataset.from_files(prefix_join(source.main_output_dir, "*.parquet"))
-            .load_parquet(columns=_SOURCE_COLUMNS, batch_mode=True)
-            .map_shard(
-                partial(
-                    convert_shard,
-                    keys=keys,
-                    skipped_counter=skipped_counter,
-                    base_url=session.endpoint.base_url,
-                    boilerplate=BOILERPLATE_OPTIONS,
+    raw_dir = prefix_join(output_path, "raw")
+    raw_filesystem, raw_path = url_to_fs(raw_dir)
+    tallies: dict[str, int | float] = {}
+
+    raw_shards_present = len(raw_filesystem.glob(f"{raw_path}/*.parquet"))
+    if raw_shards_present < num_shards:
+        with remote_converter_pool(build_pool_config(handler_factory)) as session:
+            logger.info("Converter pool ready at %s (%d converters requested)", session.endpoint.base_url, _CONVERTERS)
+            stop_stats = threading.Event()
+            threading.Thread(
+                target=_log_fleet_stats, args=(session, stop_stats), name="fleet-stats", daemon=True
+            ).start()
+            try:
+                outcome = ZephyrContext(
+                    name="focus-crawl-pdf-extract-fleet",
+                    resources=_WORKER_RESOURCES,
+                    max_workers=_MAX_WORKERS,
+                    stage_runner_factory=SubprocessRunner,
+                    map_task_resources=_MAP_TASK_RESOURCES,
+                    heartbeat_timeout=_HEARTBEAT_TIMEOUT,
+                ).execute(
+                    convert_pipeline(
+                        source.main_output_dir,
+                        raw_dir,
+                        keys=keys,
+                        skipped_counter=skipped_counter,
+                        base_url=session.endpoint.base_url,
+                    )
                 )
-            )
-            .group_by(
-                key=lambda record: record["id"],
-                reducer=_keep_all,
-                sort_by=lambda record: record["id"],
-                num_output_shards=num_shards,
-            )
-            .map_shard(make_split_writer(output_path, output_schema=_FLEET_OUTPUT_SCHEMA))
-        )
-        try:
-            outcome = ZephyrContext(
-                name="focus-crawl-pdf-extract-fleet",
-                resources=_WORKER_RESOURCES,
-                max_workers=_MAX_WORKERS,
-                stage_runner_factory=SubprocessRunner,
-                map_task_resources=_MAP_TASK_RESOURCES,
-                heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-            ).execute(pipeline)
-        finally:
-            stop_stats.set()
-        # A pool job that died partway through shows up as failed requests, not as an error, so the
-        # corpus would be quietly short. Surface that -- but only when it actually cost something:
-        # an instance exiting after the last shard landed is not a reason to lose a complete run.
-        lost_documents = int(outcome.counters.get(f"{_COUNTER_PREFIX}/convert_request_failed", 0))
-        try:
-            session.check_alive()
-        except Exception as error:
-            if lost_documents:
-                raise
-            logger.warning("A converter pool job ended before the fleet was released: %s", error)
-            logger.warning("No convert request failed, so the extracted corpus is complete.")
+            finally:
+                stop_stats.set()
+            tallies.update(outcome.counters)
+            # A pool job that died partway through shows up as failed requests, not as an error, so
+            # the corpus would be quietly short. Surface that -- but only when it actually cost
+            # something: an instance exiting after the last shard landed is not a reason to lose a
+            # complete run.
+            lost_documents = int(outcome.counters.get(f"{_COUNTER_PREFIX}/convert_request_failed", 0))
+            try:
+                _check_alive_bounded(session)
+            except Exception as error:
+                if lost_documents:
+                    raise
+                logger.warning("A converter pool job ended before the fleet was released: %s", error)
+                logger.warning("No convert request failed, so the extracted corpus is complete.")
+    else:
+        logger.info("All %d raw shards already written under %s; skipping the conversion phase", num_shards, raw_dir)
+
+    # The fleet is gone; a plain CPU pool runs the shuffle over the durable raw shards.
+    outcome = ZephyrContext(
+        name="focus-crawl-pdf-normalize-fleet",
+        resources=_WORKER_RESOURCES,
+        max_workers=_MAX_WORKERS,
+        stage_runner_factory=SubprocessRunner,
+        map_task_resources=_NORMALIZE_TASK_RESOURCES,
+        # Not the 1 GB default: the OCR campaign's coordinator was OOM-killed (exit 137) at the end
+        # of the reduce at comparable scale -- after every output shard was written, so the step
+        # failed with its work complete on disk.
+        coordinator_resources=ResourceConfig(cpu=1, ram="8g", preemptible=False),
+    ).execute(normalize_pipeline(raw_dir, output_path, num_shards))
+    tallies.update(outcome.counters)
 
     return NormalizedData(
         main_output_dir=prefix_join(output_path, "outputs/main"),
         dup_output_dir=prefix_join(output_path, "outputs/dups"),
-        counters=dict(outcome.counters),
+        counters=tallies,
     )
 
 
