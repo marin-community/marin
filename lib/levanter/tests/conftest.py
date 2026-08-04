@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from tokenizers import Tokenizer as HfBaseTokenizer
 
+from levanter.testing import stage_gpt2_tokenizer
 from levanter.tokenizers import HfMarinTokenizer, load_tokenizer
-from test_support.tokenizers import stage_gpt2_tokenizer
 
 pytest_plugins = ["tests.test_utils"]
 
@@ -18,7 +18,9 @@ pytest_plugins = ["tests.test_utils"]
 @pytest.fixture(scope="session")
 def local_gpt2_tokenizer(tmp_path_factory):
     """Load a GPT2 MarinTokenizer from a local directory to avoid network downloads."""
-    tmpdir = stage_gpt2_tokenizer(tmp_path_factory)
+    source_dir = Path(__file__).parent
+    output_dir = tmp_path_factory.mktemp("gpt2_tokenizer")
+    tmpdir = stage_gpt2_tokenizer(source_dir, output_dir)
     return load_tokenizer(str(tmpdir))
 
 
@@ -29,7 +31,9 @@ def local_gpt2_tokenizer_path(tmp_path_factory) -> str:
     Lets HF roundtrip tests build an ``HFCheckpointConverter`` with a local
     tokenizer (and no ``reference_checkpoint``) so they never reach the Hub.
     """
-    return str(stage_gpt2_tokenizer(tmp_path_factory))
+    source_dir = Path(__file__).parent
+    output_dir = tmp_path_factory.mktemp("gpt2_tokenizer")
+    return str(stage_gpt2_tokenizer(source_dir, output_dir))
 
 
 @pytest.fixture(scope="session")

@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from levanter.testing import stage_gpt2_tokenizer
 from levanter.tokenizers import load_tokenizer
-
-from test_support.tokenizers import stage_gpt2_tokenizer
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
@@ -16,7 +16,9 @@ DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 @pytest.fixture(scope="session")
 def gpt2_tokenizer_path(tmp_path_factory) -> str:
-    return str(stage_gpt2_tokenizer(tmp_path_factory))
+    source_dir = Path(__file__).resolve().parents[1] / "lib" / "levanter" / "tests"
+    output_dir = tmp_path_factory.mktemp("gpt2_tokenizer")
+    return str(stage_gpt2_tokenizer(source_dir, output_dir))
 
 
 @pytest.fixture(scope="session")
