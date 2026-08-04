@@ -236,14 +236,22 @@ class RemoteClusterClient:
 
         Args:
             job_ids: Job identifiers to query.
-            retry_max_elapsed: Optional controller RPC retry deadline.
+            retry_max_elapsed: Optional controller retry deadline, which also
+                caps each RPC attempt.
         """
+
+        rpc_timeout_ms = (
+            None if retry_max_elapsed is None else min(self._timeout_ms, max(1, int(retry_max_elapsed * 1000)))
+        )
 
         def _call():
             request = controller_pb2.Controller.GetJobStateRequest(
                 job_ids=[jid.to_wire() for jid in job_ids],
             )
-            response = self._client.get_job_state(request)
+            if rpc_timeout_ms is None:
+                response = self._client.get_job_state(request)
+            else:
+                response = self._client.get_job_state(request, timeout_ms=rpc_timeout_ms)
             return dict(response.states)
 
         if retry_max_elapsed is None:
@@ -549,15 +557,23 @@ class RemoteClusterClient:
 
         Args:
             job_id: Job ID to query tasks for
-            retry_max_elapsed: Optional controller RPC retry deadline.
+            retry_max_elapsed: Optional controller retry deadline, which also
+                caps each RPC attempt.
 
         Returns:
             List of TaskStatus protos, one per task in the job
         """
 
+        rpc_timeout_ms = (
+            None if retry_max_elapsed is None else min(self._timeout_ms, max(1, int(retry_max_elapsed * 1000)))
+        )
+
         def _call():
             request = controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
-            response = self._client.list_tasks(request)
+            if rpc_timeout_ms is None:
+                response = self._client.list_tasks(request)
+            else:
+                response = self._client.list_tasks(request, timeout_ms=rpc_timeout_ms)
             return list(response.tasks)
 
         if retry_max_elapsed is None:
