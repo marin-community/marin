@@ -90,6 +90,23 @@ def test_vllm_resource_exposes_serving_job_join(monkeypatch: pytest.MonkeyPatch)
     assert attributes["root_run_uid"] == "/alice/serve"
 
 
+def test_configure_stamps_explicit_distributed_process_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    info = JobInfo(task_id=JobName.from_wire("/alice/train/7"), worker_id="w-1", attempt_id=2)
+    monkeypatch.setattr(telemetry, "get_job_info", lambda: info)
+    monkeypatch.setattr(telemetry, "get_iris_ctx", lambda: _FakeCtx())
+    transport = _transport(monkeypatch)
+
+    telemetry.configure("levanter", root_run_uid="run-42", process_index=0)
+    rigging_telemetry.gauge("identity_probe").set(1)
+    transport.record("identity_probe", {})
+
+    attributes = transport.resources[-1]["attributes"]
+    assert attributes["task_id"] == "/alice/train/7"
+    assert attributes["attempt"] == "2"
+    assert attributes["root_run_uid"] == "run-42"
+    assert attributes["process_index"] == "0"
+
+
 @pytest.mark.parametrize("ambiguous_name", ["run", "run_id"])
 def test_configure_rejects_ambiguous_identity(monkeypatch: pytest.MonkeyPatch, ambiguous_name: str) -> None:
     info = JobInfo(task_id=JobName.from_wire("/alice/train/0"), worker_id="w-1", attempt_id=0)

@@ -15,6 +15,54 @@ The bridge joins the durable streams by `(cluster, root job ID)`: `iris.task_sta
 
 The required `service=levanter` telemetry records are `step`, `progress_time_seconds`, and numeric `phase` (`initializing=0`, `training=1`, `finished=2`). `TelemetryTracker` initializes phase and progress, records wall time after its completed-step `train/loss` callback, and marks a finished run.
 
+## NCCL RAS snapshots
+
+GPU Levanter runs poll NCCL RAS from JAX process 0 every two minutes. NCCL returns a job-global communicator view, so one collector avoids repeating the same query from every rank. The collector runs NCCL's documented text protocol in a bounded Python subprocess, gives it an eight-second outer deadline, and stops during normal tracker shutdown. It does not depend on the separately packaged `ncclras` executable. `NCCL_RAS_ENABLE=0` disables collection.
+
+Iris's Kubernetes sidecar ships task logs and does not poll RAS. The Iris node-agent NVIDIA probe records host hardware separately. Leave both enabled; neither duplicates these communicator snapshots.
+
+Every row carries the collector's Iris `task_id`, attempt/execution identity, node, `process_index=0`, and `root_run_uid`. Rank rows add NCCL's `rank_host`, `process_id`, `cuda_device`, and `nvml_device`; those fields identify the process represented by a global RAS rank instead of treating the collector task as the rank owner.
+
+`ras_available=1` records a parsed response. `ras_available=0` includes an `outcome` such as `unavailable`, `client_timeout`, `deadline_exceeded`, `output_limit`, or `invalid_payload`. `ras_poll_failures` and `ras_poll_timeouts` are counter deltas; sum them over the query window. `ras_poll_duration_seconds` is the client-side latency, while `ras_collection_duration_seconds` and `ras_collection_timeouts` come from NCCL's successful response.
+
+Query a root run with a bounded timestamp range:
+
+```sql
+SELECT
+  cluster,
+  to_timestamp_millis(timestamp_ms) AS ts,
+  json_get(resource_attributes_json, 'root_run_uid') AS root_run_uid,
+  json_get(resource_attributes_json, 'task_id') AS collector_task_id,
+  name,
+  kind,
+  value,
+  json_get(attributes_json, 'outcome') AS outcome,
+  json_get(attributes_json, 'communicator_hash') AS communicator_hash,
+  json_get(attributes_json, 'rank') AS rank,
+  json_get(attributes_json, 'rank_host') AS rank_host,
+  json_get(attributes_json, 'collective') AS collective
+FROM "telemetry_v1"
+WHERE service = 'levanter'
+  AND json_get(resource_attributes_json, 'root_run_uid') = '<run-id>'
+  AND name IN (
+    'ras_available',
+    'ras_poll_duration_seconds',
+    'ras_poll_failures',
+    'ras_poll_timeouts',
+    'communicators',
+    'communicator_state',
+    'communicator_ranks',
+    'communicator_rank_status',
+    'collective_operations',
+    'ras_collection_duration_seconds',
+    'ras_collection_timeouts'
+  )
+  AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '30 minutes') * 1000 AS BIGINT)
+ORDER BY timestamp_ms, name;
+```
+
+Repeated, unchanged `collective_operations` values during stale optimizer progress are evidence of a stationary communicator. A one-sample count mismatch is not a hang verdict because ranks may be briefly offset while collectives are active. No retained RAS rows means collection or delivery is unverified; `ras_available=0` proves the collector ran and could not obtain a valid response.
+
 GPU utilization, power, and power-limit metrics remain diagnostic evidence available in finelog and the capture bundle; they do not gate or classify this warning. This avoids hiding a stalled job when node attribution is unavailable.
 
 The rule currently covers CoreWeave controllers whose active root-job state is forwarded into the `marin` finelog hub. GCE controllers do not emit `iris.task_state`, so their jobs are not evaluated by this rule.

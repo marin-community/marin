@@ -28,6 +28,7 @@ from rigging.filesystem import StoragePath, TransferBudgetExceeded, marin_temp_b
 from rigging.timing import ExponentialBackoff
 
 from zephyr.coordinator import (
+    MAX_CONCURRENT_PIPELINES,
     MAX_SHARD_FAILURES,
     MAX_SHARD_INFRA_FAILURES,
     ZephyrCoordinator,
@@ -227,6 +228,9 @@ class ZephyrContext:
         heartbeat_timeout: Maximum time between worker heartbeats.
         max_shard_failures: Maximum task failures for one shard.
         max_shard_infra_failures: Maximum worker failures while one shard is active.
+        max_concurrent_pipelines: Maximum pipelines one pool runs at the same
+            time. A pipeline past the limit is rejected, not queued. Raise it
+            for a driver that fans many pipelines onto one shared pool.
     """
 
     client: Client | None = None
@@ -243,6 +247,7 @@ class ZephyrContext:
     heartbeat_timeout: float = 120.0
     max_shard_failures: int = MAX_SHARD_FAILURES
     max_shard_infra_failures: int = MAX_SHARD_INFRA_FAILURES
+    max_concurrent_pipelines: int = MAX_CONCURRENT_PIPELINES
 
     _shared_data: ContextVar[dict[str, Any] | None] = field(init=False, repr=False)
     _state: _ContextState = field(init=False, default=_ContextState.NEW, repr=False)
@@ -348,11 +353,14 @@ class ZephyrContext:
             ZephyrCoordinator,
             self.chunk_storage_prefix,
             ZephyrTaskResources.from_resource_config(self.resources),
-            self.no_workers_timeout,
-            self.heartbeat_timeout,
-            self.max_shard_failures,
-            self.max_shard_infra_failures,
-            idle_policy is _IdleWorkerPolicy.DRAIN,
+            # By keyword: the coordinator takes a run of same-typed limits that
+            # a positional list would silently rebind on reorder.
+            no_workers_timeout=self.no_workers_timeout,
+            heartbeat_timeout=self.heartbeat_timeout,
+            max_shard_failures=self.max_shard_failures,
+            max_shard_infra_failures=self.max_shard_infra_failures,
+            drain_idle_workers=idle_policy is _IdleWorkerPolicy.DRAIN,
+            max_concurrent_pipelines=self.max_concurrent_pipelines,
             name=coordinator_name,
             count=1,
             resources=self.coordinator_resources,

@@ -857,7 +857,20 @@ def reference_datakit_steps(
 
 
 SAMPLE_PREFIX = "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7"
-QUALITY_MODEL = "s3://marin-us-east-02a/marin/user/rav/quality/pooled_junkgate2"
+
+QUALITY_MODEL = "datakit/models/quality/pooled_junkgate2"
+"""Pooled fast-transformer scorer directory, relative to ``MARIN_PREFIX``."""
+
+
+def quality_model_path() -> str:
+    """Resolve :data:`QUALITY_MODEL` against the active cluster prefix.
+
+    Kept a call, not a module constant, so importing this module never reads the
+    environment: a caller that sets ``MARIN_PREFIX`` after import still gets the
+    prefix it asked for.
+    """
+    return f"{marin_prefix()}/{QUALITY_MODEL}"
+
 
 # A content-diverse subset of a testbed sample (wiki / academic / reference /
 # code / math / multilingual / web / sft / agent-trajectory), small enough for a
@@ -945,7 +958,9 @@ def main() -> None:
         help="full: registry sources, K=5000. sample: a pre-built testbed sample (see --sample-prefix), K=64.",
     )
     parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX, help="testbed sample root (--mode sample)")
-    parser.add_argument("--quality-model", default=QUALITY_MODEL, help="pooled fast-transformer scorer + calib dir")
+    parser.add_argument(
+        "--quality-model", default=quality_model_path(), help="pooled fast-transformer scorer + calib dir"
+    )
     parser.add_argument(
         "--domain-centroids",
         default=None,

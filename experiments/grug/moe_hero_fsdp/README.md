@@ -25,6 +25,20 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
 W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass
 `-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
 
+Checkpoint staging benchmark:
+
+```bash
+python -m experiments.grug.moe_hero_fsdp.checkpoint_benchmark \
+  --run-id checkpoint-52b-1rack --dp-racks 1 --num-steps 12 \
+  --checkpoint-every-steps 8 --version dev
+```
+
+This uses a 52.85B-total, approximately 1.71B-active top-1 MoE. It offloads the optimizer state,
+writes a deterministic checkpoint at step 8 and another at clean completion, and records the
+synchronous host-staging and asynchronous commit phases without enabling Python allocation tracing.
+The entire artifact is pinned under `marin_temp_bucket(ttl_days=1)`, so it is disposable and covered
+by the one-day lifecycle policy.
+
 ## Files
 
 | file | contents |
@@ -89,6 +103,10 @@ W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pa
 - **25 steps**, batch **1024 per rack**, seq **4096**, SlimPajama-6B, Llama-3 tokenizer, vocab
   128256.
 - Mixed precision: params fp32, compute/output bf16.
-- Checkpointing and eval are **off for this run** but the machinery is retained for later.
+- Eval is off. Training writes a resumable checkpoint every 30 minutes and at clean completion;
+  a restarted gang resumes from the latest fully committed checkpoint.
+- After the first completed step, a process-local watchdog terminates training with exit code 124
+  if no subsequent loss is logged for 15 minutes. This is a fallback for collectives that fail to
+  honor XLA's 10-minute NCCL termination timeout; Iris treats it as a failure and retries the gang.
 - FA4 metadata constants are explicitly replicated before batch sharding. This prevents the
   compiler from routing each attention metadata transfer through device 0 on a multi-rack run.

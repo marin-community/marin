@@ -35,7 +35,7 @@ _RESERVED_RESOURCE_ATTRIBUTES = frozenset(
 )
 
 
-def _identity(job_info: JobInfo) -> dict[str, str]:
+def _identity(job_info: JobInfo, process_index: int | None) -> dict[str, str]:
     identity = {
         "job_id": str(job_info.job_id),
         "task_id": str(job_info.task_id),
@@ -45,9 +45,19 @@ def _identity(job_info: JobInfo) -> dict[str, str]:
         identity["worker"] = job_info.worker_id
     if job_info.worker_region:
         identity["region"] = job_info.worker_region
-    process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
+    env_process_index = os.environ.get(IRIS_MULTIGPU_PROCESS_INDEX_ENV)
     if process_index is not None:
-        identity["process_index"] = process_index
+        if isinstance(process_index, bool) or process_index < 0:
+            raise ValueError("process_index must be a nonnegative integer")
+        resolved_process_index = str(process_index)
+        if env_process_index is not None and env_process_index != resolved_process_index:
+            raise ValueError(
+                f"process_index {resolved_process_index} conflicts with {IRIS_MULTIGPU_PROCESS_INDEX_ENV}="
+                f"{env_process_index}"
+            )
+        identity["process_index"] = resolved_process_index
+    elif env_process_index is not None:
+        identity["process_index"] = env_process_index
     if node_name := os.environ.get(IRIS_NODE_NAME_ENV):
         identity["node_name"] = node_name
     return identity
@@ -62,6 +72,7 @@ def configure(
     *,
     root_run_uid: str | None = None,
     execution_uid: str | None = None,
+    process_index: int | None = None,
     attributes: Mapping[str, str] | None = None,
 ) -> None:
     """Configure telemetry once for an owning application running under Iris."""
@@ -76,7 +87,7 @@ def configure(
         if conflicts := _RESERVED_RESOURCE_ATTRIBUTES.intersection(extra):
             names = ", ".join(sorted(conflicts))
             raise ValueError(f"Iris owns canonical telemetry attributes: {names}")
-        resource = _identity(job_info)
+        resource = _identity(job_info, process_index)
         resource.update(extra)
         resource["root_run_uid"] = root_run_uid or str(job_info.job_id)
         resource["execution_uid"] = execution_uid or _execution_uid(job_info)

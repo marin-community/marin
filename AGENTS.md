@@ -104,6 +104,9 @@ uv run pytest
   and implementation inventories; put extended history in a linked issue,
   design doc, logbook, or artifact. Follow the `commit` skill
   (`.agents/skills/commit/SKILL.md`) when committing, pushing, or opening a PR.
+- PR monitoring is part of the `commit` skill. After opening or updating a PR,
+  follow its `wait_for.py` loop through an exit condition. Do not substitute
+  `gh pr checks --watch`, repeated `gh pr view` calls, or handoff at green CI.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
 
 ## Code Style
