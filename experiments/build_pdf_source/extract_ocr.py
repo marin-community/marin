@@ -453,9 +453,8 @@ def ocr_pdf_text(
             resources=_WORKER_RESOURCES,
             max_workers=max_workers,
             stage_runner_factory=SubprocessRunner,
-            map_task_resources=_MAP_TASK_RESOURCES,
             heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-        ).execute(pipeline)
+        ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
         # A fleet that died partway through would show up as failed pages rather than as an error,
         # so the corpus would be quietly short. Surface that -- but only when it actually cost
         # something. An instance that exits after the last shard has landed is not a reason to throw

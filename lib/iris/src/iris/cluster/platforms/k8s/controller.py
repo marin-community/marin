@@ -30,9 +30,10 @@ from iris.cluster.config import (
     assert_no_inlined_secrets,
     config_to_dict,
 )
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
+from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
-from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
 from iris.cluster.platforms.k8s.rbac_manifests import cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -44,6 +45,7 @@ from iris.cluster.platforms.k8s.types import (
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
+from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,10 @@ _CONTROLLER_ARCH = "amd64"
 # queued behind a reconcile tick under heavy load.
 _CONTROLLER_PROBE_TIMEOUT_SECONDS = 10
 _CONTROLLER_PROBE_FAILURE_THRESHOLD = 6
+# Node agents are independently recoverable and briefly unavailable during an
+# image change. A percentage budget keeps large clusters from taking one pod at
+# a time while bounding the number of nodes without fresh telemetry.
+_NODE_AGENT_MAX_UNAVAILABLE = "10%"
 # Secret holding the controller's own credentials, projected into the controller
 # container alone. Held apart from iris-task-env, which every task pod also mounts:
 # a task must never be able to mint its cluster's tokens.
@@ -300,6 +306,63 @@ def _build_controller_deployment(
     }
 
 
+def _build_node_agent_daemonset(*, namespace: str, image: str) -> dict:
+    """Run the Iris physical-node collector once on every Kubernetes node."""
+    return {
+        "apiVersion": "apps/v1",
+        "kind": "DaemonSet",
+        "metadata": {"name": _NODE_AGENT_NAME, "namespace": namespace},
+        "spec": {
+            "selector": {"matchLabels": {"app": _NODE_AGENT_NAME}},
+            "updateStrategy": {
+                "type": "RollingUpdate",
+                "rollingUpdate": {"maxUnavailable": _NODE_AGENT_MAX_UNAVAILABLE},
+            },
+            "template": {
+                "metadata": {"labels": {"app": _NODE_AGENT_NAME}},
+                "spec": {
+                    "serviceAccountName": "iris-controller",
+                    "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
+                    "hostNetwork": True,
+                    "dnsPolicy": "ClusterFirstWithHostNet",
+                    "terminationGracePeriodSeconds": 10,
+                    "tolerations": [{"operator": "Exists"}],
+                    "containers": [
+                        {
+                            "name": _NODE_AGENT_NAME,
+                            "image": image,
+                            "imagePullPolicy": "Always",
+                            "command": [
+                                ".venv/bin/python",
+                                "-m",
+                                "iris.cluster.node_agent",
+                                "k8s",
+                                "--config=/etc/iris/config.json",
+                            ],
+                            "env": [
+                                {
+                                    "name": IRIS_NODE_NAME_ENV,
+                                    "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
+                                },
+                                {
+                                    "name": IRIS_NAMESPACE_ENV,
+                                    "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}},
+                                },
+                            ],
+                            "resources": {
+                                "requests": {"cpu": "50m", "memory": "64Mi"},
+                                "limits": {"cpu": "1", "memory": "512Mi"},
+                            },
+                            "volumeMounts": [{"name": "config", "mountPath": "/etc/iris", "readOnly": True}],
+                        }
+                    ],
+                    "volumes": [{"name": "config", "configMap": {"name": "iris-cluster-config"}}],
+                },
+            },
+        },
+    }
+
+
 def _build_controller_state_pvc(*, namespace: str) -> dict:
     """Build the PVC that stores the controller SQLite state."""
     return {
@@ -444,6 +507,14 @@ class K8sControllerProvider:
 
         self.ensure_kueue_queues(config)
         self.ensure_priority_classes()
+        if config.finelog.config or LOG_SERVER_ENDPOINT_NAME in config.endpoints:
+            self._kubectl.apply_json(
+                _build_node_agent_daemonset(namespace=self._namespace, image=config.controller.image)
+            )
+            logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
+        else:
+            self._kubectl.delete(K8sResource.DAEMONSETS, _NODE_AGENT_NAME)
+            logger.info("Node telemetry is unconfigured; DaemonSet %s is absent", _NODE_AGENT_NAME)
         if local_state_hostpath:
             logger.info("controller local state uses node-local hostPath %s (no PVC)", state_mount_path)
         else:
@@ -559,6 +630,7 @@ class K8sControllerProvider:
         service_name = cw.service_name or "iris-controller-svc"
 
         self._kubectl.delete(K8sResource.DEPLOYMENTS, "iris-controller")
+        self._kubectl.delete(K8sResource.DAEMONSETS, _NODE_AGENT_NAME)
         self._kubectl.delete(K8sResource.SERVICES, service_name)
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
@@ -647,10 +719,10 @@ class K8sControllerProvider:
 
         Presence-only (not exact spec): the Namespace, iris-controller ServiceAccount,
         namespace-qualified ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
-        scale group, the Kueue ClusterQueue + ResourceFlavor, and (best-effort) the
-        IngressClass. All of these are provisioned by `infra/pulumi`'s Pulumi program
-        (spec.md §4) — this method creates nothing. Raises PrerequisitesNotProvisionedError
-        enumerating every missing object if any are absent.
+        scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, and
+        (best-effort) the IngressClass. All of these are provisioned by `infra/pulumi`'s
+        Pulumi program (spec.md §4) — this method creates nothing. Raises
+        PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
 
@@ -673,11 +745,19 @@ class K8sControllerProvider:
             if self._kubectl.get_json(K8sResource.NODE_POOLS, pool_name) is None:
                 missing.append(f"NodePool/{pool_name}")
 
-        cluster_queue = config.kubernetes_provider.kueue.cluster_queue
-        if cluster_queue and self._kubectl.get_json(K8sResource.CLUSTER_QUEUES, cluster_queue) is None:
-            missing.append(f"ClusterQueue/{cluster_queue}")
-        if self._kubectl.get_json(K8sResource.RESOURCE_FLAVORS, RESOURCE_FLAVOR_NAME) is None:
-            missing.append(f"ResourceFlavor/{RESOURCE_FLAVOR_NAME}")
+        cluster_queue_name = config.kubernetes_provider.kueue.cluster_queue
+        cluster_queue = self._kubectl.get_json(K8sResource.CLUSTER_QUEUES, cluster_queue_name)
+        if cluster_queue is None:
+            missing.append(f"ClusterQueue/{cluster_queue_name}")
+        else:
+            flavor_names = {
+                flavor["name"]
+                for resource_group in cluster_queue["spec"]["resourceGroups"]
+                for flavor in resource_group["flavors"]
+            }
+            for flavor_name in sorted(flavor_names):
+                if self._kubectl.get_json(K8sResource.RESOURCE_FLAVORS, flavor_name) is None:
+                    missing.append(f"ResourceFlavor/{flavor_name}")
 
         ingress_class = _ingress_class_from_provisioning(config)
         if ingress_class and self._kubectl.get_json(K8sResource.INGRESS_CLASSES, ingress_class) is None:

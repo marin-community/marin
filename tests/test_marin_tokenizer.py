@@ -1,18 +1,25 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import tempfile
+from dataclasses import dataclass
+from itertools import pairwise
 
 import numpy as np
 import pytest
 from levanter.data.text.formats import ChatProcessor
+from levanter.data.text.trace_chat import (
+    TRACE_LABEL_ASSISTANT_TOOL_CALL,
+    TRACE_LABEL_FINAL_ASSISTANT,
+    TRACE_LABEL_OBSERVATION,
+    TraceChatProcessor,
+)
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from transformers import AutoTokenizer, PreTrainedTokenizer
 
 from experiments.marin_tokenizer import (
+    MARIN_CHAT_TEMPLATE,
     MARIN_CUSTOM_SPECIAL_TOKENS,
     create_marin_tokenizer,
-    load_llama3_tokenizer,
 )
 
 REASONING_TRACE = (
@@ -31,72 +38,127 @@ QUESTION = [
     {"role": "assistant", "content": "The answer is 4."},
 ]
 
+_RESERVED_SPECIAL_TOKENS = ("<|reserved_special_token_0|>", "<|reserved_special_token_1|>")
+
+
+@dataclass(frozen=True)
+class MarinTokenizerFixture:
+    path: str
+    token_renames: dict[int, str]
+
 
 @pytest.fixture(scope="module")
-def marin_tokenizer_dir():
-    """Build the marin tokenizer once per module and save it to disk.
+def marin_tokenizer_fixture(gpt2_tokenizer_path, tmp_path_factory) -> MarinTokenizerFixture:
+    base = AutoTokenizer.from_pretrained(gpt2_tokenizer_path, local_files_only=True)
+    base.add_special_tokens({"additional_special_tokens": list(_RESERVED_SPECIAL_TOKENS)})
+    reserved_ids = base.convert_tokens_to_ids(list(_RESERVED_SPECIAL_TOKENS))
+    token_renames = dict(zip(reserved_ids, MARIN_CUSTOM_SPECIAL_TOKENS.values(), strict=True))
 
-    The base llama3 tokenizer is gated on the Hugging Face Hub; skip the whole
-    module when it (or the network) is unavailable - these tests exercise our
-    tokenizer surgery, not HF auth.
-    """
-    try:
-        base = load_llama3_tokenizer()
-    except Exception as e:
-        pytest.skip(f"Llama 3 tokenizer is unavailable (gated repo or no network): {e}")
-    with tempfile.TemporaryDirectory() as path:
-        create_marin_tokenizer(base).save_pretrained(path)
-        yield path
+    tokenizer = create_marin_tokenizer(base, token_renames)
+    output_dir = tmp_path_factory.mktemp("marin_tokenizer")
+    tokenizer.save_pretrained(output_dir)
+    return MarinTokenizerFixture(path=str(output_dir), token_renames=token_renames)
 
 
-@pytest.fixture
-def marin_tokenizer(marin_tokenizer_dir) -> PreTrainedTokenizer:
-    """The marin tokenizer as a Hugging Face PreTrainedTokenizer."""
-    return AutoTokenizer.from_pretrained(marin_tokenizer_dir, local_files_only=True)
+@pytest.fixture(scope="module")
+def marin_tokenizer(marin_tokenizer_fixture) -> PreTrainedTokenizer:
+    return AutoTokenizer.from_pretrained(marin_tokenizer_fixture.path, local_files_only=True)
 
 
-@pytest.fixture
-def marin_chat_tokenizer(marin_tokenizer_dir) -> MarinTokenizer:
-    """The marin tokenizer wrapped as a levanter MarinTokenizer, for ChatProcessor tests."""
-    load_tokenizer.cache_clear()
-    return load_tokenizer(marin_tokenizer_dir)
+@pytest.fixture(scope="module")
+def marin_chat_tokenizer(marin_tokenizer_fixture) -> MarinTokenizer:
+    return load_tokenizer(marin_tokenizer_fixture.path)
 
 
 def _decode(tokenizer, ids) -> str:
     return tokenizer.decode(list(ids), skip_special_tokens=False)
 
 
-def test_special_tokens_injection(marin_tokenizer: PreTrainedTokenizer):
-    """The reserved llama3 slots decode to the marin think tokens and round-trip back."""
-    for token_id, token_str in MARIN_CUSTOM_SPECIAL_TOKENS.items():
-        assert marin_tokenizer.decode(token_id) == token_str
-        assert marin_tokenizer.convert_tokens_to_ids([token_str]) == [token_id]
+def test_create_marin_tokenizer_preserves_base_tokens_and_renames_slots(
+    gpt2_tokenizer_path,
+    marin_tokenizer_fixture,
+    marin_tokenizer,
+):
+    base = AutoTokenizer.from_pretrained(gpt2_tokenizer_path, local_files_only=True)
+    plain_text = "Hello, how are you?"
 
-
-def test_base_tokenization_preserved(marin_tokenizer: PreTrainedTokenizer):
-    """Plain-text tokenization is unchanged from the base llama3 tokenizer."""
-    assert marin_tokenizer.tokenize("Hello, how are you?") == load_llama3_tokenizer().tokenize("Hello, how are you?")
-
-
-def test_assistant_mask_covers_assistant_turns(marin_tokenizer: PreTrainedTokenizer):
-    """The assistant mask selects exactly the assistant turns and decodes back to them."""
-    out = marin_tokenizer.apply_chat_template(
-        CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
+    assert marin_tokenizer.encode(plain_text, add_special_tokens=False) == base.encode(
+        plain_text, add_special_tokens=False
     )
+    assert marin_tokenizer.chat_template == MARIN_CHAT_TEMPLATE
+    for token_id, token_str in marin_tokenizer_fixture.token_renames.items():
+        assert marin_tokenizer.encode(token_str, add_special_tokens=False) == [token_id]
+        assert marin_tokenizer.decode([token_id]) == token_str
 
-    expected_length = len(marin_tokenizer(REASONING_TRACE + "I'm doing well, thanks!")["input_ids"]) + len(
-        marin_tokenizer("Great!")["input_ids"]
+
+def test_assistant_mask_covers_only_assistant_turns(marin_chat_tokenizer: MarinTokenizer):
+    result = marin_chat_tokenizer.apply_chat_template_with_masks([CONVERSATION])
+    input_ids = np.array(result["input_ids"][0])
+    assistant_mask = np.array(result["assistant_masks"][0]).astype(bool)
+
+    masked = marin_chat_tokenizer.decode(input_ids[assistant_mask].tolist())
+    assert REASONING_TRACE + "I'm doing well, thanks!" in masked
+    assert "Great!" in masked
+    assert "Hello, how are you?" not in masked
+    assert "That's good to hear!" not in masked
+
+
+def test_message_spans_cover_each_marin_chat_turn(marin_chat_tokenizer: MarinTokenizer):
+    result = marin_chat_tokenizer.apply_chat_template_with_masks([CONVERSATION], return_message_spans=True)
+
+    input_ids = result["input_ids"][0]
+    spans = result["message_spans"][0]
+    assert len(spans) == len(CONVERSATION)
+    assert all(start < end for start, end in spans)
+    assert all(left[1] <= right[0] for left, right in pairwise(spans))
+    for message, (start, end) in zip(CONVERSATION, spans, strict=True):
+        rendered_turn = marin_chat_tokenizer.decode(input_ids[start:end], skip_special_tokens=False)
+        assert message["content"] in rendered_turn
+
+
+def test_trace_chat_processor_labels_marin_tool_trace(marin_chat_tokenizer: MarinTokenizer):
+    processor = TraceChatProcessor(
+        marin_chat_tokenizer,
+        loss_tags=("assistant", "tool_call", "observation", "final_assistant"),
     )
-    assert np.sum(out["assistant_masks"]) == expected_length
+    result = processor(
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "Call the lookup tool."},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_lookup",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": {"key": "marin"}},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "content": '{"result": 3}'},
+                    {"role": "assistant", "content": "The final answer is done."},
+                ]
+            }
+        ]
+    )[0]
 
-    ids = np.array(out["input_ids"])
-    masked = marin_tokenizer.decode(ids[np.array(out["assistant_masks"]).astype(bool)])
-    assert masked == REASONING_TRACE + "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
+    labels = result["loss_labels"]
+    input_ids = result["input_ids"]
+    tool_call_text = _decode(marin_chat_tokenizer, input_ids[labels == TRACE_LABEL_ASSISTANT_TOOL_CALL])
+    observation_text = _decode(marin_chat_tokenizer, input_ids[labels == TRACE_LABEL_OBSERVATION])
+    final_text = _decode(marin_chat_tokenizer, input_ids[labels == TRACE_LABEL_FINAL_ASSISTANT])
+
+    assert "lookup" in tool_call_text
+    assert "marin" in tool_call_text
+    assert "result" in observation_text
+    assert "3" in observation_text
+    assert "The final answer is done." in final_text
 
 
-def test_generation_prompt(marin_tokenizer: PreTrainedTokenizer):
-    """add_generation_prompt ends the render with an open assistant header."""
-    rendered = marin_tokenizer.apply_chat_template(CONVERSATION, tokenize=False, add_generation_prompt=True)
+def test_generation_prompt(marin_chat_tokenizer: MarinTokenizer):
+    rendered = marin_chat_tokenizer.apply_chat_template(CONVERSATION, tokenize=False, add_generation_prompt=True)
     assert rendered.endswith("<|start_header_id|>assistant<|end_header_id|>\n")
 
 
@@ -104,15 +166,13 @@ def test_generation_prompt(marin_tokenizer: PreTrainedTokenizer):
     "enable_thinking,expected",
     [(True, "Reasoning: /think"), (False, "Reasoning: /nothink"), ("experimental", "Reasoning: experimental")],
 )
-def test_reasoning_mode(marin_tokenizer: PreTrainedTokenizer, enable_thinking, expected):
-    """enable_thinking drives the Reasoning header in the system prompt."""
-    rendered = marin_tokenizer.apply_chat_template(QUESTION, tokenize=False, enable_thinking=enable_thinking)
+def test_reasoning_mode(marin_chat_tokenizer: MarinTokenizer, enable_thinking, expected):
+    rendered = marin_chat_tokenizer.apply_chat_template(QUESTION, tokenize=False, enable_thinking=enable_thinking)
     assert expected in rendered
 
 
-def test_tool_definitions_rendered(marin_tokenizer: PreTrainedTokenizer):
-    """xml_tools and python_tools are emitted in the Tools section of the system prompt."""
-    rendered = marin_tokenizer.apply_chat_template(
+def test_tool_definitions_rendered(marin_chat_tokenizer: MarinTokenizer):
+    rendered = marin_chat_tokenizer.apply_chat_template(
         QUESTION,
         tokenize=False,
         xml_tools=[
@@ -131,7 +191,6 @@ def test_tool_definitions_rendered(marin_tokenizer: PreTrainedTokenizer):
 
 
 def test_chat_processor_renders_tool_calls(marin_chat_tokenizer: MarinTokenizer):
-    """A tool-call turn and its tool response render through levanter's ChatProcessor."""
     processor = ChatProcessor(marin_chat_tokenizer, mask_user_turns=True)
     result = processor(
         [
@@ -163,7 +222,6 @@ def test_chat_processor_renders_tool_calls(marin_chat_tokenizer: MarinTokenizer)
 
 
 def test_chat_processor_renders_ipython_output(marin_chat_tokenizer: MarinTokenizer):
-    """An ipython tool-output turn renders through levanter's ChatProcessor."""
     processor = ChatProcessor(marin_chat_tokenizer, mask_user_turns=True)
     result = processor(
         [

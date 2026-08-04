@@ -242,9 +242,8 @@ def fetch_planned_pdfs(output_path: str, plan_output_path: str) -> PdfSourceData
         resources=_WORKER_RESOURCES,
         max_workers=min(_MAX_WORKERS, len(tasks)),
         stage_runner_factory=SubprocessRunner,
-        map_task_resources=_MAP_TASK_RESOURCES,
         heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-    ).execute(pipeline)
+    ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
     return PdfSourceData(main_output_dir=output_dir, counters=dict(outcome.counters))
 
 

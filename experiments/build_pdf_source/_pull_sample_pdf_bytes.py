@@ -82,10 +82,12 @@ def main() -> None:
         resources=_WORKER_RESOURCES,
         max_workers=len(chunks),
         stage_runner_factory=SubprocessRunner,
+    ).execute(
+        Dataset.from_list(chunks).map(process_chunk),
         # One chunk per worker: costing a map task at the full worker keeps zephyr from
         # packing every chunk onto a single worker.
         map_task_resources=_WORKER_RESOURCES,
-    ).execute(Dataset.from_list(chunks).map(process_chunk))
+    )
     logger.info("done: %s", dict(outcome.counters))
 
 

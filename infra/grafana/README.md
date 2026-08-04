@@ -65,6 +65,13 @@ time column without casting. finelog has JSON SQL UDFs, so a panel groups by a l
 `label_<key>` fields. The Kubernetes dashboard uses the hub datasource for a
 bounded recent view of `iris.task_event`, beside the live API server events.
 
+`v1/vllm/overview` backs the inference dashboard with a bounded, entity-scoped
+Finelog query. Operators select a job, root effort, or execution and a raw time
+window to compare token throughput, request pressure, KV-cache use,
+latency/outcomes, and worst-replica freshness after a serve exits; reset-aware
+deltas preserve replica identity, and an explicit no-data row distinguishes
+missing telemetry from healthy application silence.
+
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
 at or above 5 seconds is slow. The dedicated finelog dashboard adds effective pod

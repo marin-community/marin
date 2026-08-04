@@ -14,12 +14,14 @@ dependencies = [
     # does not depend on it, so the controller — its one consumer — pulls it in
     # explicitly.
     "marin-finelog >= 0.2.10",
-    "marin-finelog-server>=0.2.16.dev30657475018",
+    "marin-finelog-server>=0.2.17.dev30664483151",
     # Platform companion wheel containing the Rust-owned public proxy listener.
     "marin-iris-native>=0.1.5.dev30223685542",
     "click>=8.3.1",
     "cloudpickle>=3.1.2",
     "connect-python>=0.9.0",
+    # pyqwest 0.6.1 fixes SIGSEGV during interpreter shutdown with an active sync request.
+    "pyqwest>=0.6.1,<0.7",
     "fsspec>=2024.0.0",
     "gcsfs>=2024.0.0",
     "google-auth>=2.0",

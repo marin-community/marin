@@ -379,9 +379,8 @@ def compare(
         resources=_WORKER_RESOURCES,
         max_workers=min(_MAX_WORKERS, len(work)),
         stage_runner_factory=SubprocessRunner,
-        map_task_resources=_MAP_TASK_RESOURCES,
         heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-    ).execute(pipeline)
+    ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
 
     by_arm: dict[str, dict[str, dict]] = {arm: {} for arm in _ARMS}
     text_fs, text_path = url_to_fs(texts_dir)

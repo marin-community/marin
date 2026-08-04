@@ -192,9 +192,8 @@ def bench(output_path: str, source_output_path: str, classification_output_path:
             resources=_WORKER_RESOURCES,
             max_workers=MAX_WORKERS,
             stage_runner_factory=SubprocessRunner,
-            map_task_resources=_MAP_TASK_RESOURCES,
             heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-        ).execute(pipeline)
+        ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
         wall = time.monotonic() - pipeline_start
         lost_pages = int(outcome.counters.get("focus_crawl_pdf_ocr/page_request_failed", 0))
         try:

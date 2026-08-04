@@ -68,18 +68,18 @@ def _write_harbor_config(path: Path) -> Path:
 
 
 def _successful_evaluation(
-    model: RunningModel,
+    session: RemoteInferenceSession,
     output_dir: str,
     _env_vars: Mapping[str, str],
 ) -> EvaluationOutcome:
     output = StoragePath(output_dir)
     output.mkdirs()
-    (output / "endpoint.txt").write_text(model.endpoint.base_url)
+    (output / "endpoint.txt").write_text(session.model.endpoint.base_url)
     return EvaluationOutcome(metrics={"task": {"accuracy": 0.75}}, jobs={"eval": "/eval/success"})
 
 
 def _failed_evaluation(
-    _model: RunningModel,
+    _session: RemoteInferenceSession,
     _output_dir: str,
     _env_vars: Mapping[str, str],
 ) -> EvaluationOutcome:
@@ -113,6 +113,8 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
             tokenizer="tokenizer",
         ),
         jobs=(),
+        endpoint_name="/serve/test",
+        endpoint_health_timeout_seconds=1800.0,
         streaming=True,
         tensor_parallel_size=1,
         backend_name="vllm",
@@ -331,7 +333,7 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
 
     captured: dict = {}
 
-    def run_driver(config, overlay, driver_env) -> None:
+    def run_driver(config, overlay, driver_env, _backend_state) -> None:
         assert driver_env["DAYTONA_API_KEY"] == "daytona-key"
         captured["config"] = config
         captured["overlay"] = overlay
@@ -343,11 +345,19 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
     output_dir = tmp_path / "results"
     output_dir.mkdir()
     outcome = evaluation.executor(
-        RunningModel(
-            endpoint=OpenAIEndpoint(
-                base_url="https://iris.example/capability/v1",
-                model="served-qwen3-8b",
-            )
+        RemoteInferenceSession(
+            model=RunningModel(
+                endpoint=OpenAIEndpoint(
+                    base_url="https://iris.example/capability/v1",
+                    model="served-qwen3-8b",
+                )
+            ),
+            jobs=(),
+            endpoint_name="/serve/test",
+            endpoint_health_timeout_seconds=1800.0,
+            streaming=True,
+            tensor_parallel_size=1,
+            backend_name="vllm",
         ),
         str(output_dir),
         {"DAYTONA_API_KEY": "daytona-key"},
@@ -417,3 +427,23 @@ def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, mon
     assert "eval=mmlu-smoke" in result.output
     assert "eval=first-policy" in result.output
     assert "eval=second-policy" in result.output
+
+
+def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=("mmlu-smoke",),
+        harbor_configs=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix=None,
+        cluster="marin",
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert batch.records_prefix == "gs://marin-eval-metadata/evals"
+    evaluation = batch.evaluations[0]
+    assert evaluation.identity.output_dir == f"{batch.records_prefix}/{evaluation.identity.run_id}/results"

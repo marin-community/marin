@@ -31,6 +31,7 @@ deploy = [
     "pulumi-docker-build>=0.0.8,<1",
     "pulumi-cloudflare>=6,<7",
     "pulumi-command>=1,<2",
+    "google-cloud-kms>=2.24.0",
 ]
 
 # marin-iris / marin-rigging resolve via the root workspace [tool.uv.sources]

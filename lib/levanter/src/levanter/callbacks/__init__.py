@@ -16,7 +16,15 @@ from rigging.filesystem import StoragePath
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
-from levanter.callbacks._core import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks._core import (
+    Callback,
+    CBInfo,
+    JitCallback,
+    LambdaCallback,
+    ProgressEvent,
+    StepInfo,
+    progress_event_scope,
+)
 from levanter.callbacks._metrics import (
     _tqdm_logging_one_time_setup,
     log_performance_stats,
@@ -34,6 +42,7 @@ from levanter.callbacks.profiler import (
     profile,
     xprof_viewer_url as xprof_viewer_url,
 )
+from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset
 from levanter.schedule import BatchSchedule
@@ -106,25 +115,29 @@ def compute_validation_loss(
     name: Optional[str] = None,
 ):
     def compute_loss(info: StepInfo):
-        loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
+        with progress_event_scope(
+            info.emit_event,
+            ProgressEvent.EVALUATION_STARTED,
+            ProgressEvent.EVALUATION_FINISHED,
+        ):
+            loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
 
-        prefix = "eval"
-        if name:
-            prefix += "/" + name
+            prefix = "eval"
+            if name:
+                prefix += "/" + name
 
-        # Log loss and metrics. eval_loss_loop already namespaces its loop-timing
-        # keys under "eval/"; strip it so this prefix (e.g. "eval/<name>") is applied
-        # once, yielding "eval/<name>/timing/..." instead of "eval/eval/timing/...".
-        to_log = {f"{prefix}/loss": loss}
-        to_log.update({f"{prefix}/{k.removeprefix('eval/')}": v for k, v in metrics.items()})
-        levanter.tracker.log(to_log, step=info.step)
+            # Log loss and metrics. eval_loss_loop already namespaces its loop-timing
+            # keys under "eval/"; strip it so this prefix (e.g. "eval/<name>") is applied
+            # once, yielding "eval/<name>/timing/..." instead of "eval/eval/timing/...".
+            to_log = {f"{prefix}/loss": loss}
+            to_log.update({f"{prefix}/{k.removeprefix('eval/')}": v for k, v in metrics.items()})
+            levanter.tracker.log(to_log, step=info.step)
 
-        if name:
-            logger.info(f"{name} validation loss: {loss:.3f}")
-        else:
-            logger.info(f"validation loss: {loss:.3f}")
-
-        return loss
+            if name:
+                logger.info(f"{name} validation loss: {loss:.3f}")
+            else:
+                logger.info(f"validation loss: {loss:.3f}")
+            return loss
 
     return compute_loss
 
@@ -276,7 +289,11 @@ __all__ = [
     "CBInfo",
     "JitCallback",
     "LambdaCallback",
+    "ProgressEvent",
+    "ProgressWatchdog",
+    "ProgressWatchdogConfig",
     "StepInfo",
+    "progress_event_scope",
     "log_performance_stats",
     "iris_status_reporter",
     "log_step_info",

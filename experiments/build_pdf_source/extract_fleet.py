@@ -542,7 +542,6 @@ def fleet_extract(
                     resources=_WORKER_RESOURCES,
                     max_workers=_MAX_WORKERS,
                     stage_runner_factory=SubprocessRunner,
-                    map_task_resources=_MAP_TASK_RESOURCES,
                     heartbeat_timeout=_HEARTBEAT_TIMEOUT,
                 ).execute(
                     convert_pipeline(
@@ -551,7 +550,8 @@ def fleet_extract(
                         keys=keys,
                         skipped_counter=skipped_counter,
                         base_url=session.endpoint.base_url,
-                    )
+                    ),
+                    map_task_resources=_MAP_TASK_RESOURCES,
                 )
             finally:
                 stop_stats.set()
@@ -577,12 +577,14 @@ def fleet_extract(
         resources=_WORKER_RESOURCES,
         max_workers=_MAX_WORKERS,
         stage_runner_factory=SubprocessRunner,
-        map_task_resources=_NORMALIZE_TASK_RESOURCES,
         # Not the 1 GB default: the OCR campaign's coordinator was OOM-killed (exit 137) at the end
         # of the reduce at comparable scale -- after every output shard was written, so the step
         # failed with its work complete on disk.
         coordinator_resources=ResourceConfig(cpu=1, ram="8g", preemptible=False),
-    ).execute(normalize_pipeline(raw_dir, output_path, num_shards))
+    ).execute(
+        normalize_pipeline(raw_dir, output_path, num_shards),
+        map_task_resources=_NORMALIZE_TASK_RESOURCES,
+    )
     tallies.update(outcome.counters)
 
     return NormalizedData(

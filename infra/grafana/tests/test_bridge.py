@@ -378,12 +378,19 @@ def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
         assert "timestamp_ms >= TIMESTAMP" not in sql
 
 
-def test_training_stall_query_keeps_enrollment_past_the_progress_lookback():
+def test_training_stall_query_bounds_enrollment_to_the_phase_heartbeat_window():
+    """Unbounded, this CTE scanned every telemetry_v1 row once a minute.
+
+    Levanter republishes `phase` every 60s, so a live job always has an
+    enrollment row inside this window and the scan can prune by time.
+    """
     sql = telemetry_query(datetime(2026, 7, 28, 12, tzinfo=UTC))
     phase_enrollment, recent_progress = sql.split("), recent_progress AS (")
 
     assert "name = 'phase'" in phase_enrollment
-    assert "timestamp_ms >=" not in phase_enrollment
+    assert (
+        "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:45:00') * 1000 AS BIGINT)" in phase_enrollment
+    )
     assert "name IN ('step', 'progress_time_seconds')" in recent_progress
     assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql
 

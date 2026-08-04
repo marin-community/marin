@@ -53,7 +53,7 @@ class DispatchBatch:
     running_tasks: list[RunningTaskEntry] = field(default_factory=list)
 
 
-DISPATCH_PROMOTION_RATE = 128
+DISPATCH_PROMOTION_RATE = 512
 """Token bucket capacity for task promotion (pods per minute).
 
 The direct provider relies on the Kubernetes scheduler (and the cloud

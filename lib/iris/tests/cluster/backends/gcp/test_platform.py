@@ -575,6 +575,35 @@ def test_gcp_list_slices_skips_deleting_tpus():
     assert handle.slice_id not in slice_ids
 
 
+def test_gcp_list_slices_terminates_reserved_tpu_as_queued_resource():
+    """A reserved TPU rediscovered via list_slices deletes its queued resource.
+
+    list_slices is the discovery path behind `iris cluster delete-slice` and
+    scale-group adoption. A handle that forgets the reserved capacity type would
+    call tpu_delete and strand the reservation in GCP.
+    """
+    gcp_service = InMemoryGcpService(mode=ServiceMode.DRY_RUN, project_id="test-project")
+    gcp_config = GcpPlatformConfig(project_id="test-project")
+    platform = GcpWorkerProvider(gcp_config, label_prefix="iris", worker_port=10001, gcp_service=gcp_service)
+
+    cfg = SliceConfig(
+        name_prefix="iris-tpu",
+        accelerator_type=AcceleratorType.TPU,
+        accelerator_variant="v5litepod-8",
+        capacity_type=CapacityType.RESERVED,
+        gcp=GcpSliceConfig(zone="us-central2-b", runtime_version="tpu-ubuntu2204-base"),
+    )
+    cfg.labels[Labels("iris").iris_managed] = "true"
+
+    created = platform.create_slice(cfg)
+
+    discovered = [s for s in platform.list_slices(zones=["us-central2-b"]) if s.slice_id == created.slice_id]
+    assert len(discovered) == 1
+    discovered[0].terminate()
+
+    assert gcp_service.queued_resource_describe(created.slice_id, "us-central2-b") is None
+
+
 def test_describe_resolves_topology_from_live_tpu_when_handle_variant_empty():
     """describe() sizes a slice from the live TPU's accelerator_type, not the handle's variant.
 

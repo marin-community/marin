@@ -268,9 +268,8 @@ def classify_pdfs(output_path: str, source_output_path: str, model_output_path: 
         resources=_WORKER_RESOURCES,
         max_workers=_MAX_WORKERS,
         stage_runner_factory=SubprocessRunner,
-        map_task_resources=_MAP_TASK_RESOURCES,
         heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-    ).execute(pipeline)
+    ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
     return PdfClassificationData(main_output_dir=output_dir, counters=dict(outcome.counters))
 
 

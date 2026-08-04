@@ -311,6 +311,7 @@ class HardwareProbe:
     tpu_worker_id: str
     tpu_chips_per_host_bounds: str
     gce_instance_name: str = ""
+    gce_instance_uid: str = ""
 
 
 def _probe_gce_instance_name() -> str:
@@ -318,6 +319,13 @@ def _probe_gce_instance_name() -> str:
     if not _is_gcp_vm():
         return ""
     return _get_gcp_metadata("name") or ""
+
+
+def _probe_gce_instance_uid() -> str:
+    """Read the immutable GCE instance ID. Empty string if not on GCP."""
+    if not _is_gcp_vm():
+        return ""
+    return _get_gcp_metadata("id") or ""
 
 
 def construct_worker_id(slice_id: str, worker_index: int) -> str:
@@ -356,6 +364,7 @@ def probe_hardware() -> HardwareProbe:
     tpu_name, tpu_type, tpu_worker_hostnames, tpu_worker_id, tpu_chips_per_host_bounds = _probe_tpu_metadata()
     gpu_count, gpu_name, gpu_memory_mb = _probe_gpu_info()
     gce_instance_name = _probe_gce_instance_name()
+    gce_instance_uid = _probe_gce_instance_uid()
     return HardwareProbe(
         hostname=hostname,
         ip_address=ip_address,
@@ -371,6 +380,7 @@ def probe_hardware() -> HardwareProbe:
         tpu_worker_id=tpu_worker_id,
         tpu_chips_per_host_bounds=tpu_chips_per_host_bounds,
         gce_instance_name=gce_instance_name,
+        gce_instance_uid=gce_instance_uid,
     )
 
 

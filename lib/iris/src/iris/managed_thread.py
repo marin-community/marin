@@ -45,6 +45,7 @@ NEVER write loops that ignore stop_event:
 
 import contextlib
 import logging
+import socket
 import threading
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
@@ -191,7 +192,14 @@ class ThreadContainer:
         thread.start()
         return thread
 
-    def spawn_server(self, server: Any, *, name: str, daemon: bool = False) -> ManagedThread:
+    def spawn_server(
+        self,
+        server: Any,
+        *,
+        name: str,
+        daemon: bool = False,
+        sockets: list[socket.socket] | None = None,
+    ) -> ManagedThread:
         """Spawn a server (like uvicorn.Server) with automatic stop_event bridging.
 
         When stop() is called, server.should_exit is set to True, causing server.run()
@@ -202,11 +210,16 @@ class ThreadContainer:
             name: Name for the managed thread
             daemon: Run on a daemon thread so it never blocks process exit. Use for a
                 fire-and-forget server whose container may never be stop()ed.
+            sockets: Bound sockets to transfer to the server. When omitted, the
+                server binds from its own configuration.
         """
 
         def _run(stop_event: threading.Event) -> None:
             logger.debug("Running server %s (%s)", name, server)
-            server.run()
+            if sockets is None:
+                server.run()
+            else:
+                server.run(sockets=sockets)
             logger.debug("Server %s exited", name)
 
         def _stop_server() -> None:

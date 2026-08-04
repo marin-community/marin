@@ -7,14 +7,13 @@ Time-series measurements live in these namespaces rather than the controller
 SQLite DB (see AGENTS.md "Decisions vs measurements"). This module is the single
 home for the wire contract — namespace names, row dataclasses, storage policies —
 that dashboards, Grafana alert rules, and the federation hub key on. Producers
-live next to their mechanism (the worker daemon, the k8s backend's collectors,
+live next to their mechanism (the worker daemon, the k8s backend's task collectors,
 the autoscaler, the controller's task-state emitter) and import their row types
 from here; ``LogStack`` resolves every table from this catalog.
 
 - ``iris.worker`` / ``iris.task`` — worker-emitted host and per-attempt resource
-  rows. On Kubernetes clusters, which have no per-node worker daemon, the cluster
-  backend emits one ``iris.worker`` row per node (host utilization + GPU
-  hardware), so nodes surface as workers in the same dashboards.
+  rows. Kubernetes task rows come from metrics-server; physical-node hardware
+  readings use the normalized telemetry stream.
 - ``iris.task_status`` — markdown status text pushed from inside a running task
   via ``RemoteClusterClient.report_task_status_text``.
 - ``iris.task_event`` — backend events and controller actions per task attempt.

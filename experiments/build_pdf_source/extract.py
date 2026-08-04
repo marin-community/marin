@@ -227,9 +227,8 @@ def extract_pdf_text(
         resources=_WORKER_RESOURCES,
         max_workers=_MAX_WORKERS,
         stage_runner_factory=SubprocessRunner,
-        map_task_resources=_MAP_TASK_RESOURCES,
         heartbeat_timeout=_HEARTBEAT_TIMEOUT,
-    ).execute(pipeline)
+    ).execute(pipeline, map_task_resources=_MAP_TASK_RESOURCES)
     return NormalizedData(
         main_output_dir=prefix_join(output_path, "outputs/main"),
         dup_output_dir=prefix_join(output_path, "outputs/dups"),

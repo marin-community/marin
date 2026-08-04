@@ -19,6 +19,7 @@ use hyper_util::rt::TokioExecutor;
 use crate::proto::finelog::logging::LogServiceClient;
 use crate::proto::finelog::stats::StatsServiceClient;
 use crate::server::auth::AuthPolicy;
+use crate::server::forwarding::FORWARD_REQUEST_COMPRESSION;
 use crate::server::{build_app_with_config, ServerConfig, MAX_MESSAGE_BYTES};
 use crate::store::Store;
 use crate::test_support::unique_dir;
@@ -52,6 +53,9 @@ fn client_config(addr: SocketAddr) -> (TestTransport, ClientConfig) {
     );
     let config = ClientConfig::new(uri)
         .proto()
+        // Match production forwarding clients so integration tests exercise the
+        // server's zstd request path for large WriteRows payloads.
+        .compress_requests(FORWARD_REQUEST_COMPRESSION)
         .with_default_max_message_size(MAX_MESSAGE_BYTES);
     (transport, config)
 }

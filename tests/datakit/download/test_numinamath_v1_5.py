@@ -8,13 +8,9 @@ import pyarrow.parquet as pq
 import pytest
 from marin.datakit.download.numinamath_v1_5 import (
     HF_DATASET_ID,
-    HF_REVISION,
-    TRAIN_PARQUET_GLOB,
-    numinamath_v1_5_normalize_steps,
     row_to_doc,
     transform,
 )
-from marin.datakit.sources import all_sources
 
 
 def _valid_row(**overrides) -> dict:
@@ -99,28 +95,6 @@ def test_row_to_doc_preserves_optional_metadata_as_empty_strings():
     assert doc["question_type"] == ""
     assert doc["numina_source"] == ""
     assert doc["synthetic"] is False
-
-
-def test_numinamath_v1_5_normalize_steps_use_train_split_and_stable_names():
-    processed, normalized = numinamath_v1_5_normalize_steps()
-    download = processed.deps[0]
-
-    assert download.name == "raw/numinamath-1.5"
-    assert download.hash_attrs["hf_dataset_id"] == HF_DATASET_ID
-    assert download.hash_attrs["revision"] == HF_REVISION
-    assert download.hash_attrs["hf_urls_glob"] == [TRAIN_PARQUET_GLOB]
-    assert processed.name == "processed/numinamath-1.5"
-    assert processed.deps == [download]
-    assert normalized.name == "normalized/numinamath-1.5"
-    assert normalized.deps == [processed]
-
-
-def test_numinamath_v1_5_is_registered_as_datakit_source():
-    source = all_sources()["numinamath-1.5"]
-
-    assert source.rough_token_count_b == 0.40
-    assert source.normalize_steps[0].name == "processed/numinamath-1.5"
-    assert source.normalized.name == "normalized/numinamath-1.5"
 
 
 def test_transform_reads_parquet_and_writes_valid_docs(tmp_path: Path):

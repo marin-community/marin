@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import os
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -15,6 +19,7 @@ from haliax.nn.ragged_dot import ragged_dot
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -437,7 +442,7 @@ def test_moe_expert_mlp_init_uses_logical_weight_pspecs():
     assert mlp.w_down.sharding.spec == P(None, "model", "data")
 
 
-@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all"])
+@pytest.mark.parametrize("implementation", ["ring", "ragged_all_to_all", "fixed_all_to_all"])
 def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
     mesh = _make_abstract_moe_mesh(data=2, expert=2, model=1)
 
@@ -493,6 +498,182 @@ def test_moe_ep_path_lowers_on_abstract_mesh(implementation: MoeImplementation):
             .lower(lowering_platforms=(platform,))
         )
         assert lowered is not None
+
+
+def test_fixed_all_to_all_drops_assignments_over_capacity():
+    mesh = Mesh(
+        np.asarray([jax.devices()[0]]),
+        axis_names=("expert",),
+        axis_types=(AxisType.Explicit,),
+    )
+    tokens = 4
+    hidden_dim = 4
+    intermediate_dim = 6
+    num_experts = 2
+    topk = 2
+    x, _, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(41),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    selected_experts = jnp.tile(jnp.arange(topk, dtype=jnp.int32), (tokens, 1))
+
+    def fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down):
+        return _moe_mlp_ep_fixed_a2a_local(
+            x,
+            selected_experts,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            activation_fn=jax.nn.silu,
+            num_experts=num_experts,
+            capacity_factor=0.5,
+        )
+
+    sharded_fixed_a2a = jax.shard_map(
+        fixed_a2a,
+        mesh=mesh,
+        in_specs=(P(), P(), P(), P(), P()),
+        out_specs=(P(), P()),
+        check_vma=False,
+    )
+    with jax.set_mesh(mesh):
+        actual, dropped = sharded_fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down)
+
+    keep = jnp.asarray([[True, True], [True, True], [False, False], [False, False]])
+
+    def dense_output(x, w_up_gate, w_down):
+        selected_w13 = w_up_gate[selected_experts]
+        hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
+        gate, up = jnp.split(hidden, [intermediate_dim], axis=-1)
+        expert_output = jnp.einsum(
+            "tki,tkih->tkh",
+            jax.nn.silu(gate) * up,
+            w_down[selected_experts],
+        )
+        return jnp.einsum("tkh,tk->th", expert_output, combine_weights * keep)
+
+    cotangent = jax.random.normal(jax.random.key(42), x.shape)
+    with jax.set_mesh(mesh):
+        actual_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(
+                sharded_fixed_a2a(x, selected_experts, combine_weights, w_up_gate, w_down)[0] * cotangent
+            ),
+            argnums=(0, 1, 2),
+        )(x, w_up_gate, w_down)
+
+    expected = dense_output(x, w_up_gate, w_down)
+    expected_gradients = jax.grad(
+        lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
+        argnums=(0, 1, 2),
+    )(x, w_up_gate, w_down)
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+    for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
+        np.testing.assert_allclose(
+            np.asarray(actual_gradient),
+            np.asarray(expected_gradient),
+            rtol=1e-5,
+            atol=1e-5,
+        )
+    assert int(dropped) == 4
+
+
+def test_fixed_all_to_all_matches_dense_cross_shard_value_and_gradients():
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.grug.grug_moe import moe_mlp
+
+        assert jax.device_count() == 4
+        mesh = Mesh(
+            np.asarray(jax.devices()),
+            axis_names=("expert",),
+            axis_types=(AxisType.Explicit,),
+        )
+        x = jax.random.normal(jax.random.key(0), (4, 4))
+        selected_experts = jnp.asarray(
+            [[2, 3], [4, 5], [6, 7], [0, 1]],
+            dtype=jnp.int32,
+        )
+        combine_weights = jax.nn.softmax(jax.random.normal(jax.random.key(1), (4, 2)), axis=-1)
+        w_up_gate = jax.random.normal(jax.random.key(2), (8, 4, 6))
+        w_down = jax.random.normal(jax.random.key(3), (8, 3, 4))
+        cotangent = jax.random.normal(jax.random.key(4), (4, 4))
+
+        def dense_output(x, w_up_gate, w_down):
+            selected_w13 = w_up_gate[selected_experts]
+            hidden = jnp.einsum("th,tkhi->tki", x, selected_w13)
+            gate, up = jnp.split(hidden, [3], axis=-1)
+            expert_output = jnp.einsum(
+                "tki,tkih->tkh",
+                jax.nn.silu(gate) * up,
+                w_down[selected_experts],
+            )
+            return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
+
+        expected = dense_output(x, w_up_gate, w_down)
+        expected_gradients = jax.grad(
+            lambda x, w_up_gate, w_down: jnp.sum(dense_output(x, w_up_gate, w_down) * cotangent),
+            argnums=(0, 1, 2),
+        )(x, w_up_gate, w_down)
+
+        batch_sharding = NamedSharding(mesh, P("expert", None))
+        expert_sharding = NamedSharding(mesh, P("expert", None, None))
+        x = jax.device_put(x, batch_sharding)
+        selected_experts = jax.device_put(selected_experts, batch_sharding)
+        combine_weights = jax.device_put(combine_weights, batch_sharding)
+        w_up_gate = jax.device_put(w_up_gate, expert_sharding)
+        w_down = jax.device_put(w_down, expert_sharding)
+        cotangent = jax.device_put(cotangent, batch_sharding)
+
+        def fixed_output(x, w_up_gate, w_down):
+            return moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                activation=jax.nn.silu,
+                implementation="fixed_all_to_all",
+                mesh=mesh,
+                capacity_factor=4.0,
+            )
+
+        with jax.set_mesh(mesh):
+            actual = fixed_output(x, w_up_gate, w_down)
+            actual_gradients = jax.grad(
+                lambda x, w_up_gate, w_down: jnp.sum(fixed_output(x, w_up_gate, w_down) * cotangent),
+                argnums=(0, 1, 2),
+            )(x, w_up_gate, w_down)
+
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+        for actual_gradient, expected_gradient in zip(actual_gradients, expected_gradients, strict=True):
+            np.testing.assert_allclose(
+                np.asarray(actual_gradient),
+                np.asarray(expected_gradient),
+                rtol=1e-5,
+                atol=1e-5,
+            )
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_shard_a2a_params_uses_sender_side_output_offsets():

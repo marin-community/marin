@@ -210,6 +210,10 @@ class BackgroundTracker(Tracker):
     def log_summary(self, metrics: dict[str, Any]) -> None:
         self._defer(self.wrapped._prepare_summary, self.wrapped.log_summary, metrics)
 
+    def capture_stall_diagnostics(self) -> None:
+        """Run time-critical diagnostics synchronously on the wrapped tracker."""
+        self.wrapped.capture_stall_diagnostics()
+
     def log_artifact(
         self,
         artifact_path,

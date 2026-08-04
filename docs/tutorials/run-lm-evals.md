@@ -218,8 +218,8 @@ endpoint details.
 
 ### Results
 
-TPU-routed runs default to `gs://marin-eval-metadata/runs`. CoreWeave GPU runs default to
-`s3://marin-us-east-02a/marin/eval-metadata/runs`. `--dry-run` prints the effective prefix.
+TPU-routed runs default to `gs://marin-eval-metadata/evals`. CoreWeave GPU runs default to
+`s3://marin-us-east-02a/marin/evals`. `--dry-run` prints the effective prefix.
 
 Every selected evaluation writes `{records_prefix}/{run_id}/record.json` plus its mechanism-specific
 results and normalized sample parquet. Harbor also persists trial directories and trajectories in
