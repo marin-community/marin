@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, toRaw } from 'vue'
 
 import DashboardEditor from '@/components/dashboard/DashboardEditor.vue'
 import DashboardPanelView from '@/components/dashboard/DashboardPanelView.vue'
@@ -28,7 +28,7 @@ type SourceKind = 'builtin' | 'saved' | 'new'
 const MINUTE_MS = 60_000
 
 function cloneDefinition(definition: DashboardDefinition): DashboardDefinition {
-  return structuredClone(definition)
+  return structuredClone(toRaw(definition))
 }
 
 function inputDateTime(timestampMs: number): string {

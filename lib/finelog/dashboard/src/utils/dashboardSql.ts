@@ -6,7 +6,8 @@ export interface DashboardMacroValues {
 }
 
 const MACRO_PATTERN = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
-const UNEXPANDED_MACRO_PATTERN = /\{\{[^}]*\}\}/
+const MACRO_CANDIDATE_PATTERN = /\{\{[^}]*\}\}/g
+const VALID_MACRO_PATTERN = /^\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}$/
 
 function integerLiteral(value: number, name: string): string {
   if (!Number.isSafeInteger(value)) throw new Error(`${name} must be a safe integer`)
@@ -21,20 +22,20 @@ export function sqlStringLiteral(value: string): string {
 /** Expand the complete dashboard macro vocabulary into typed SQL literals. */
 export function expandDashboardSql(sql: string, values: DashboardMacroValues): string {
   if (values.intervalMs <= 0) throw new Error('interval_ms must be positive')
+  for (const [macro] of sql.matchAll(MACRO_CANDIDATE_PATTERN)) {
+    if (!VALID_MACRO_PATTERN.test(macro)) throw new Error(`invalid dashboard macro: ${macro}`)
+  }
   const builtins: Record<string, string> = {
     from_ms: integerLiteral(values.fromMs, 'from_ms'),
     to_ms: integerLiteral(values.toMs, 'to_ms'),
     interval_ms: integerLiteral(values.intervalMs, 'interval_ms'),
   }
-  const expanded = sql.replace(MACRO_PATTERN, (_match, name: string) => {
+  return sql.replace(MACRO_PATTERN, (_match, name: string) => {
     const builtin = builtins[name]
     if (builtin !== undefined) return builtin
     if (!(name in values.variables)) throw new Error(`unknown dashboard variable: ${name}`)
     return sqlStringLiteral(values.variables[name])
   })
-  const unknown = expanded.match(UNEXPANDED_MACRO_PATTERN)
-  if (unknown) throw new Error(`invalid dashboard macro: ${unknown[0]}`)
-  return expanded
 }
 
 /** Choose a stable interval that keeps a time-series query near 120 points. */

@@ -31,6 +31,11 @@ test('keeps adversarial viewer input inside one SQL string literal', () => {
   )
 })
 
+test('does not interpret macro-like text inside a variable value', () => {
+  const values = { ...base, variables: { note: 'value {{x}}' } }
+  assert.equal(expandDashboardSql('SELECT {{note}}', values), "SELECT 'value {{x}}'")
+})
+
 test('rejects unknown, malformed, and NUL-containing variables', () => {
   assert.throws(() => expandDashboardSql('SELECT {{missing}}', base), Error)
   assert.throws(() => expandDashboardSql('SELECT {{job-id}}', base), Error)
