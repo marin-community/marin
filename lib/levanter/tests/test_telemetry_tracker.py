@@ -1,11 +1,17 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import stat
+import sys
+from pathlib import Path
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from rigging import telemetry
-from rigging.testing import RecordingTelemetryTransport
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
+from rigging.testing import RecordingTelemetryTransport, nccl_ras_payload
 
 from levanter.tracker import telemetry as tracker_telemetry
 from levanter.tracker.histogram import SummaryStats
@@ -24,6 +30,16 @@ def exported(monkeypatch):
 
 def _values(records: list[dict]) -> dict[str, float]:
     return {record["name"]: record["value"] for record in records}
+
+
+def _install_nccl_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, marker: Path | None = None) -> None:
+    marker_write = (
+        f"with open({str(marker)!r}, 'a') as marker_file:\n    marker_file.write('started\\n')\n" if marker else ""
+    )
+    command = tmp_path / "nccl-client"
+    command.write_text(f"#!{sys.executable}\n{marker_write}print({json.dumps(nccl_ras_payload())!r})")
+    command.chmod(command.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(tracker_telemetry.nccl, "_CLIENT_COMMAND", (str(command),))
 
 
 def test_log_exports_jax_scalar_snapshots_without_service_prefix(exported):
@@ -123,3 +139,38 @@ def test_finish_stops_the_phase_heartbeat(exported, fast_heartbeat):
     tracker.finish()
 
     assert not fast_heartbeat.running
+
+
+def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch, tmp_path):
+    marker = tmp_path / "ncclras-started"
+    _install_nccl_client(monkeypatch, tmp_path, marker=marker)
+    monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
+    monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
+
+    tracker = TelemetryTracker()
+    rank = exported.record(
+        "communicator_rank_status",
+        {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "0"},
+    )
+
+    tracker.finish()
+
+    assert rank["attributes"]["rank_host"] == "10.0.0.1"
+    assert marker.read_text() == "started\n"
+
+
+def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, monkeypatch):
+    monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
+    monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
+    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 1)
+    monkeypatch.setattr(
+        tracker_telemetry.nccl,
+        "start",
+        lambda **_kwargs: pytest.fail("nonprimary process started NCCL RAS polling"),
+    )
+
+    tracker = TelemetryTracker()
+    tracker.finish()
+
+    assert not any(record["name"] == "communicators" for record in exported.records)

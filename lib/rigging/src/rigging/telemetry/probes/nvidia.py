@@ -82,14 +82,14 @@ def _query(
     fields: tuple[str, ...],
     deadline: Deadline,
 ) -> CommandOutput | None:
-    return runner.run(
+    return runner.run_result(
         (
             "nvidia-smi",
             f"--query-gpu={','.join(fields)}",
             "--format=csv,noheader,nounits",
         ),
         deadline.remaining_seconds(),
-    )
+    ).output
 
 
 def _row_metrics(row: list[str], fields: tuple[str, ...]) -> list[_Metric]:

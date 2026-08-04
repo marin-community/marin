@@ -26,6 +26,7 @@ from typing import Any, NewType
 import cloudpickle
 import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Timestamp
 
 from iris.cluster.setup_scripts import (
@@ -762,7 +763,7 @@ class EnvironmentSpec:
         if wants_gpu_extra(self.extras or ()):
             default_env_vars.update(
                 {
-                    "NCCL_RAS_ENABLE": "1",
+                    NCCL_RAS_ENABLE_ENV: "1",
                     "NCCL_DEBUG": "INFO",
                     "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
                     "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
