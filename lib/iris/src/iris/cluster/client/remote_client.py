@@ -226,8 +226,18 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_job_status({job_id})", _call)
 
-    def get_job_states(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]:
-        """Lightweight batch query returning only the state enum per job."""
+    def get_job_states(
+        self,
+        job_ids: list[JobName],
+        *,
+        retry_max_elapsed: float | None = None,
+    ) -> dict[str, job_pb2.JobState]:
+        """Lightweight batch query returning only the state enum per job.
+
+        Args:
+            job_ids: Job identifiers to query.
+            retry_max_elapsed: Optional controller RPC retry deadline.
+        """
 
         def _call():
             request = controller_pb2.Controller.GetJobStateRequest(
@@ -236,7 +246,13 @@ class RemoteClusterClient:
             response = self._client.get_job_state(request)
             return dict(response.states)
 
-        return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
+        if retry_max_elapsed is None:
+            return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
+        return call_with_retry(
+            f"get_job_states({len(job_ids)} jobs)",
+            _call,
+            max_elapsed=retry_max_elapsed,
+        )
 
     def _poll_job_state(self, job_id: JobName) -> job_pb2.JobState:
         """Fetch only the state enum for a single job via the lightweight RPC."""
@@ -523,11 +539,17 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_task_status({task_name})", _call)
 
-    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
+    def list_tasks(
+        self,
+        job_id: JobName,
+        *,
+        retry_max_elapsed: float | None = None,
+    ) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 
         Args:
             job_id: Job ID to query tasks for
+            retry_max_elapsed: Optional controller RPC retry deadline.
 
         Returns:
             List of TaskStatus protos, one per task in the job
@@ -538,7 +560,13 @@ class RemoteClusterClient:
             response = self._client.list_tasks(request)
             return list(response.tasks)
 
-        return call_with_retry(f"list_tasks({job_id})", _call)
+        if retry_max_elapsed is None:
+            return call_with_retry(f"list_tasks({job_id})", _call)
+        return call_with_retry(
+            f"list_tasks({job_id})",
+            _call,
+            max_elapsed=retry_max_elapsed,
+        )
 
     def kick_tasks(
         self,

@@ -44,7 +44,12 @@ class ClusterClient(Protocol):
 
     def get_job_status(self, job_id: JobName) -> job_pb2.JobStatus: ...
 
-    def get_job_states(self, job_ids: list[JobName]) -> dict[str, int]:
+    def get_job_states(
+        self,
+        job_ids: list[JobName],
+        *,
+        retry_max_elapsed: float | None = None,
+    ) -> dict[str, int]:
         """Lightweight batch query returning only the state enum per job."""
         ...
 
@@ -101,7 +106,12 @@ class ClusterClient(Protocol):
 
     def get_task_status(self, task_name: JobName) -> job_pb2.TaskStatus: ...
 
-    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]: ...
+    def list_tasks(
+        self,
+        job_id: JobName,
+        *,
+        retry_max_elapsed: float | None = None,
+    ) -> list[job_pb2.TaskStatus]: ...
 
     def kick_tasks(
         self,

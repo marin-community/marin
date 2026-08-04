@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
-from marin.evaluation.harbor import runner
+from marin.evaluation.harbor import driver_config, runner
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
     HarborDatasetKind,
+    HarborRuntimeOverlay,
     ValidatedHarborConfig,
 )
 from marin.evaluation.harbor.runner import (
@@ -21,6 +23,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
+from marin.inference.iris import InferenceRecoveryMode, InferenceTemporarilyUnavailable
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
@@ -200,7 +203,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
     captured: dict = {}
 
-    def dying_driver(config, overlay, driver_env) -> None:
+    def dying_driver(config, overlay, driver_env, _dependency_check) -> None:
         captured["jobs_dir"] = overlay.jobs_dir
         captured["job_name"] = overlay.job_name
         trial = StoragePath(overlay.jobs_dir) / overlay.job_name / "trial-one"
@@ -218,7 +221,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
     assert durable.exists()
 
-    def resumed_driver(config, overlay, driver_env) -> None:
+    def resumed_driver(config, overlay, driver_env, _dependency_check) -> None:
         # Harbor's own resume finds the durable trial and writes nothing new this run.
         return None
 
@@ -232,10 +235,191 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     assert StoragePath(f"{output_dir}/harbor_result.json").exists()
 
 
+def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, monkeypatch):
+    output_dir = str(tmp_path / "run")
+    executor = _harbor_executor(f"managed-{tmp_path.name}")
+
+    class RecoveringSession:
+        model = _running_model()
+        recovery_mode = InferenceRecoveryMode.DIRECT_TASK_RETRY
+        recovery_attempt_limit = 10
+        recovery_waits = 0
+        unavailable = True
+
+        def check_ready(self) -> None:
+            if self.unavailable:
+                raise InferenceTemporarilyUnavailable("inference task is pending")
+
+        def wait_until_ready(self) -> None:
+            self.recovery_waits += 1
+            self.unavailable = False
+
+    session = RecoveringSession()
+    driver_starts = 0
+
+    def run_driver(config, overlay, driver_env, dependency_check) -> None:
+        nonlocal driver_starts
+        driver_starts += 1
+        job_dir = Path(overlay.jobs_dir) / overlay.job_name
+        completed_result = job_dir / "trial-one" / "result.json"
+        completed_result.parent.mkdir(parents=True, exist_ok=True)
+        if not completed_result.exists():
+            completed_result.write_text(
+                json.dumps({"task_name": "trial-one", "verifier_result": {"rewards": {"reward": 1.0}}})
+            )
+        zero_reward_result = job_dir / "trial-three" / "result.json"
+        zero_reward_result.parent.mkdir(parents=True, exist_ok=True)
+        if not zero_reward_result.exists():
+            zero_reward_result.write_text(
+                json.dumps({"task_name": "trial-three", "verifier_result": {"rewards": {"reward": 0.0}}})
+            )
+        transport_result = job_dir / "trial-two" / "result.json"
+        if driver_starts == 1:
+            transport_result.parent.mkdir(parents=True, exist_ok=True)
+            transport_result.write_text(
+                json.dumps(
+                    {
+                        "task_name": "trial-two",
+                        "exception_info": {
+                            "exception_type": "InternalServerError",
+                            "exception_message": "502 upstream transport error: client error (Connect)",
+                        },
+                    }
+                )
+            )
+        else:
+            assert completed_result.exists()
+            assert zero_reward_result.exists()
+            assert not transport_result.exists()
+            transport_result.parent.mkdir(parents=True, exist_ok=True)
+            transport_result.write_text(
+                json.dumps({"task_name": "trial-two", "verifier_result": {"rewards": {"reward": 1.0}}})
+            )
+        dependency_check()
+
+    monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
+
+    outcome = executor.run_with_inference(session, output_dir, {})
+
+    assert session.recovery_waits == 1
+    assert driver_starts == 2
+    assert outcome.metrics[executor.config.record_dataset] == {
+        "accuracy": 2 / 3,
+        "mean_reward": 2 / 3,
+        "solved": 2.0,
+        "total": 3.0,
+    }
+
+
+def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):
+    ready_path = tmp_path / "ready"
+    stopped_path = tmp_path / "stopped"
+    script_path = tmp_path / "driver.py"
+    script_path.write_text(
+        "\n".join(
+            (
+                "import signal",
+                "import time",
+                "from pathlib import Path",
+                f"ready_path = Path({str(ready_path)!r})",
+                f"stopped_path = Path({str(stopped_path)!r})",
+                "def stop(*_args):",
+                "    stopped_path.write_text('stopped')",
+                "    raise SystemExit(143)",
+                "signal.signal(signal.SIGTERM, stop)",
+                "ready_path.write_text('ready')",
+                "while True:",
+                "    time.sleep(0.1)",
+            )
+        )
+    )
+    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: [sys.executable, str(script_path)])
+    monkeypatch.setattr(driver_config, "_DEPENDENCY_CHECK_SECONDS", 0.01)
+
+    def dependency_check() -> None:
+        assert ready_path.exists()
+        raise InferenceTemporarilyUnavailable("inference task is pending")
+
+    with pytest.raises(InferenceTemporarilyUnavailable):
+        driver_config.run_harbor_driver(
+            _validated_config(),
+            HarborRuntimeOverlay(
+                job_name="driver-stop",
+                jobs_dir=str(tmp_path / "jobs"),
+                dataset_path=None,
+                endpoint_url="https://iris.example/capability/v1",
+                served_model="model",
+                task_limit=1,
+                model_agent_kwargs={},
+            ),
+            {},
+            dependency_check,
+        )
+
+    assert stopped_path.read_text() == "stopped"
+
+
+def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):
+    script_path = tmp_path / "driver.py"
+    script_path.write_text("raise SystemExit(2)\n")
+    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: [sys.executable, str(script_path)])
+
+    def dependency_check() -> None:
+        raise InferenceTemporarilyUnavailable("inference task is pending")
+
+    with pytest.raises(InferenceTemporarilyUnavailable):
+        driver_config.run_harbor_driver(
+            _validated_config(),
+            HarborRuntimeOverlay(
+                job_name="driver-failure",
+                jobs_dir=str(tmp_path / "jobs"),
+                dataset_path=None,
+                endpoint_url="https://iris.example/capability/v1",
+                served_model="model",
+                task_limit=1,
+                model_agent_kwargs={},
+            ),
+            {},
+            dependency_check,
+        )
+
+
+def test_managed_harbor_bounds_repeated_dependency_recovery(tmp_path, monkeypatch):
+    class FlappingSession:
+        model = _running_model()
+        recovery_mode = InferenceRecoveryMode.DIRECT_TASK_RETRY
+        recovery_attempt_limit = 1
+        recovery_waits = 0
+
+        def check_ready(self) -> None:
+            raise InferenceTemporarilyUnavailable("inference task is pending")
+
+        def wait_until_ready(self) -> None:
+            self.recovery_waits += 1
+
+    session = FlappingSession()
+    driver_starts = 0
+
+    def run_driver(config, overlay, driver_env, dependency_check) -> None:
+        nonlocal driver_starts
+        driver_starts += 1
+        dependency_check()
+
+    monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"flapping-{tmp_path.name}")
+
+    with pytest.raises(EvaluationError) as exc_info:
+        executor.run_with_inference(session, str(tmp_path / "run"), {})
+
+    assert exc_info.value.status is RunStatus.INFRA_FAILED
+    assert session.recovery_waits == 1
+    assert driver_starts == 2
+
+
 def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch):
     captured: dict = {}
 
-    def run_driver(config, overlay, driver_env) -> None:
+    def run_driver(config, overlay, driver_env, _dependency_check) -> None:
         captured["config"] = config
         captured["overlay"] = overlay
         captured["env"] = driver_env
@@ -287,7 +471,7 @@ def _harbor_executor(dataset: str) -> HarborExecutor:
 
 
 def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
-    def run_driver(_config, overlay, driver_env) -> None:
+    def run_driver(_config, overlay, driver_env, _dependency_check) -> None:
         assert isinstance(driver_env, dict)
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
@@ -316,7 +500,7 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
 
 
 def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, monkeypatch):
-    def run_driver(_config, overlay, driver_env) -> None:
+    def run_driver(_config, overlay, driver_env, _dependency_check) -> None:
         assert isinstance(driver_env, dict)
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,7 @@
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from fray.client import JobHandle
 from iris.client import IrisClient, Job, iris_ctx
@@ -64,12 +64,28 @@ class EvaluationError(RuntimeError):
         self.log_tails = log_tails or {}
 
 
+class InferenceDependencyError(EvaluationError):
+    """An evaluation stopped because its managed inference endpoint could not recover."""
+
+
 class EvalExecutor(Protocol):
     """Execute one evaluation mechanism against an already-running OpenAI endpoint."""
 
     def __call__(
         self,
         model: RunningModel,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+    ) -> EvaluationOutcome: ...
+
+
+@runtime_checkable
+class ManagedInferenceExecutor(Protocol):
+    """An evaluator that can supervise the lifecycle of its inference session."""
+
+    def run_with_inference(
+        self,
+        session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome: ...
@@ -252,7 +268,14 @@ def _run_one_evaluation(
         session.check_alive()
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
-        outcome = evaluation.executor(session.model, evaluation.identity.output_dir, evaluation_env)
+        if isinstance(evaluation.executor, ManagedInferenceExecutor):
+            outcome = evaluation.executor.run_with_inference(
+                session,
+                evaluation.identity.output_dir,
+                evaluation_env,
+            )
+        else:
+            outcome = evaluation.executor(session.model, evaluation.identity.output_dir, evaluation_env)
         metrics = outcome.metrics
         jobs |= outcome.jobs
     except Exception as exc:
@@ -260,6 +283,8 @@ def _run_one_evaluation(
             status = exc.status
             jobs |= exc.jobs
             tails = exc.log_tails
+            if isinstance(exc, InferenceDependencyError):
+                inference_failure = exc
         else:
             logger.exception("unexpected failure in evaluation %s", evaluation.identity.eval_ref.name)
             status = RunStatus.FAILED

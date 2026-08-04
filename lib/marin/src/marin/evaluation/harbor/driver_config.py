@@ -7,12 +7,14 @@ import json
 import logging
 import subprocess
 import tempfile
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from rigging.config_discovery import find_project_root
+from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.external_dependencies import HARBOR
@@ -20,6 +22,9 @@ from marin.external_dependencies import HARBOR
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _OWNER_ONLY_MODE = 0o600
+_DRIVER_POLL_SECONDS = 1.0
+_DEPENDENCY_CHECK_SECONDS = 15.0
+_DRIVER_TERMINATION_GRACE_SECONDS = 30.0
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
     "HOME",
@@ -161,10 +166,42 @@ def _capture_driver(command: list[str]) -> subprocess.CompletedProcess[str]:
         raise _driver_failure(exc) from exc
 
 
-def _stream_driver(command: list[str], driver_env: Mapping[str, str]) -> None:
+def _stream_driver(
+    command: list[str],
+    driver_env: Mapping[str, str],
+    dependency_check: Callable[[], None] | None = None,
+) -> None:
+    process = subprocess.Popen(
+        command,
+        env=_driver_environment(driver_env),
+        start_new_session=True,
+    )
+    next_dependency_check = time.monotonic() + _DEPENDENCY_CHECK_SECONDS
     try:
-        subprocess.run(command, check=True, env=_driver_environment(driver_env))
-    except subprocess.CalledProcessError as exc:
+        while True:
+            try:
+                return_code = process.wait(timeout=_DRIVER_POLL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                if process.poll() is not None:
+                    continue
+                if dependency_check is not None and time.monotonic() >= next_dependency_check:
+                    next_dependency_check = time.monotonic() + _DEPENDENCY_CHECK_SECONDS
+                    try:
+                        dependency_check()
+                    except Exception:
+                        return_code = process.poll()
+                        if return_code == 0:
+                            break
+                        raise
+    except BaseException:
+        terminate_process_group(process, grace_period=_DRIVER_TERMINATION_GRACE_SECONDS)
+        raise
+
+    if return_code:
+        if dependency_check is not None:
+            dependency_check()
+        exc = subprocess.CalledProcessError(return_code, command)
         raise _driver_failure(exc) from exc
 
 
@@ -254,6 +291,7 @@ def run_harbor_driver(
     config: ValidatedHarborConfig,
     overlay: HarborRuntimeOverlay,
     driver_env: Mapping[str, str],
+    dependency_check: Callable[[], None] | None = None,
 ) -> None:
     """Apply a runtime overlay and run one Harbor job in the isolated environment."""
     runtime = {"version": HARBOR.version, "commit": HARBOR.commit}
@@ -279,4 +317,4 @@ def run_harbor_driver(
         overlay_path.chmod(_OWNER_ONLY_MODE)
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
-        _stream_driver(command, driver_env)
+        _stream_driver(command, driver_env, dependency_check)

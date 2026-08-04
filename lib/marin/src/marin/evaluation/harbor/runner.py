@@ -33,8 +33,13 @@ from marin.evaluation.harbor.driver_config import (
     run_harbor_driver,
 )
 from marin.evaluation.records import RunStatus
-from marin.evaluation.runner import EvaluationError, EvaluationOutcome
+from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceDependencyError
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
+from marin.inference.iris import (
+    InferenceRecoveryMode,
+    InferenceTemporarilyUnavailable,
+    RemoteInferenceSession,
+)
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -152,6 +157,27 @@ def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
         return list(pool.map(_read_trial, result_files))
 
 
+def _remove_unscored_trials(job_dir: StoragePath) -> int:
+    """Remove unscored exception results after an inference interruption so Harbor retries them."""
+    removed = 0
+    for result_file in (job_dir / "*/result.json").glob():
+        try:
+            data = json.loads(result_file.read_text())
+        except json.JSONDecodeError:
+            logger.warning("leaving unreadable Harbor result in place during inference recovery: %s", result_file)
+            continue
+        if not isinstance(data, Mapping):
+            continue
+        exception_info = data.get("exception_info")
+        if data.get("verifier_result") is not None or not isinstance(exception_info, Mapping):
+            continue
+        result_file.parent.rmtree()
+        removed += 1
+    if removed:
+        logger.info("removed %d unscored Harbor trial(s) before inference recovery resume", removed)
+    return removed
+
+
 def _sample_for(trial: HarborTrial, dataset: str) -> EvalSample:
     """Normalize one trial into an agentic :class:`EvalSample`, referencing its durable trajectory."""
     solved = trial.reward >= SOLVED_REWARD
@@ -209,10 +235,36 @@ def _run_harbor_job(
     environment: str,
     output_dir: str,
     driver_env: Mapping[str, str],
+    dependency_check: Callable[[], None] | None = None,
+    wait_until_ready: Callable[[], None] | None = None,
+    dependency_recovery_limit: int = 0,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
-    run_harbor_driver(config, overlay, driver_env)
+    recovery_count = 0
+    while True:
+        try:
+            run_harbor_driver(config, overlay, driver_env, dependency_check)
+            break
+        except InferenceTemporarilyUnavailable as exc:
+            if wait_until_ready is None:
+                raise
+            if recovery_count >= dependency_recovery_limit:
+                raise InferenceDependencyError(
+                    f"inference dependency exceeded {dependency_recovery_limit} recovery attempt(s)",
+                    status=RunStatus.INFRA_FAILED,
+                ) from exc
+            recovery_count += 1
+            logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
+            _remove_unscored_trials(job_dir)
+            try:
+                wait_until_ready()
+            except Exception as recovery_exc:
+                raise InferenceDependencyError(
+                    f"inference dependency failed to recover: {recovery_exc}",
+                    status=RunStatus.INFRA_FAILED,
+                ) from recovery_exc
+            logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     trials = _read_trials(job_dir)
     samples_path = _write_samples(trials, dataset, output_dir)
@@ -244,6 +296,8 @@ def _run_harbor_job(
 def _evaluation_outcome(run: Callable[[], HarborRunResult], output_dir: str) -> EvaluationOutcome:
     try:
         result = run()
+    except EvaluationError:
+        raise
     except Exception as exc:
         raise EvaluationError(str(exc), status=RunStatus.FAILED) from exc
     if not result.total_trials:
@@ -275,6 +329,9 @@ class HarborExecutor:
         output_dir: str,
         hf_token: str | None,
         driver_env: Mapping[str, str],
+        dependency_check: Callable[[], None] | None = None,
+        wait_until_ready: Callable[[], None] | None = None,
+        dependency_recovery_limit: int = 0,
     ) -> HarborRunResult:
         dataset = self.config.record_dataset
         job_name = _job_name(
@@ -304,6 +361,9 @@ class HarborExecutor:
             environment=self.config.environment,
             output_dir=output_dir,
             driver_env=driver_env,
+            dependency_check=dependency_check,
+            wait_until_ready=wait_until_ready,
+            dependency_recovery_limit=dependency_recovery_limit,
         )
 
     def __call__(
@@ -318,5 +378,32 @@ class HarborExecutor:
             driver_env["HF_TOKEN"] = hf_token
         return _evaluation_outcome(
             lambda: self._run(model, output_dir, hf_token, driver_env),
+            output_dir,
+        )
+
+    def run_with_inference(
+        self,
+        session: RemoteInferenceSession,
+        output_dir: str,
+        env_vars: Mapping[str, str],
+    ) -> EvaluationOutcome:
+        """Run Harbor while supervising a managed inference dependency."""
+        if session.recovery_mode is InferenceRecoveryMode.NONE:
+            return self(session.model, output_dir, env_vars)
+
+        driver_env = {key: env_vars[key] for key in self.secret_env_keys}
+        hf_token = env_vars.get("HF_TOKEN")
+        if hf_token:
+            driver_env["HF_TOKEN"] = hf_token
+        return _evaluation_outcome(
+            lambda: self._run(
+                session.model,
+                output_dir,
+                hf_token,
+                driver_env,
+                session.check_ready,
+                session.wait_until_ready,
+                session.recovery_attempt_limit,
+            ),
             output_dir,
         )

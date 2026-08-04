@@ -17,6 +17,7 @@ import marin.inference.iris as iris_module
 import pytest
 from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
+from iris.rpc import job_pb2
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -28,7 +29,13 @@ from marin.inference.config import (
     ServedModelConfig,
     VllmEngineConfig,
 )
-from marin.inference.iris import RemoteInferenceStartupError, remote_inference
+from marin.inference.iris import (
+    InferenceRecoveryMode,
+    InferenceTemporarilyUnavailable,
+    RemoteInferenceSession,
+    RemoteInferenceStartupError,
+    remote_inference,
+)
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
     InferenceRequest,
@@ -209,6 +216,144 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     assert exc_info.value.jobs == (job,)
     assert job.terminated
     assert len(requests) == 1
+
+
+def test_direct_inference_session_reports_pending_task_as_temporarily_unavailable(monkeypatch) -> None:
+    class _RunningJob:
+        job_id = "/tester/inference"
+
+        def status(self) -> JobStatus:
+            return JobStatus.RUNNING
+
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                job_state=lambda _job_id, **_kwargs: job_pb2.JOB_STATE_RUNNING,
+                list_tasks=lambda job_id, **_kwargs: [
+                    SimpleNamespace(task_id=f"{job_id}/0", state=job_pb2.TASK_STATE_PENDING)
+                ],
+            )
+        ),
+    )
+    session = RemoteInferenceSession(
+        model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
+        jobs=(_RunningJob(),),
+        recovery_mode=InferenceRecoveryMode.DIRECT_TASK_RETRY,
+        recovery_timeout_seconds=1800,
+        recovery_attempt_limit=10,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+
+    with pytest.raises(InferenceTemporarilyUnavailable, match="PENDING"):
+        session.check_ready()
+
+
+def test_brokered_inference_session_does_not_require_every_worker_task_running(monkeypatch) -> None:
+    class _RunningJob:
+        job_id = "/tester/inference-worker"
+
+        def status(self) -> JobStatus:
+            return JobStatus.RUNNING
+
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(list_tasks=lambda _job_id: pytest.fail("unexpected task poll"))),
+    )
+    session = RemoteInferenceSession(
+        model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
+        jobs=(_RunningJob(),),
+        recovery_mode=InferenceRecoveryMode.NONE,
+        recovery_timeout_seconds=None,
+        recovery_attempt_limit=0,
+        streaming=False,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+
+    session.check_ready()
+
+
+def test_inference_readiness_treats_controller_transport_failure_as_unknown(monkeypatch) -> None:
+    class _UnreachableJob:
+        job_id = "/tester/inference"
+
+        def status(self) -> JobStatus:
+            return JobStatus.RUNNING
+
+    def unavailable_state(*_args, **_kwargs):
+        raise ConnectionError("controller unavailable")
+
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(job_state=unavailable_state)),
+    )
+
+    session = RemoteInferenceSession(
+        model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
+        jobs=(_UnreachableJob(),),
+        recovery_mode=InferenceRecoveryMode.DIRECT_TASK_RETRY,
+        recovery_timeout_seconds=1800,
+        recovery_attempt_limit=10,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+
+    # Unknown controller state must not terminate a Harbor run whose endpoint may still be healthy.
+    session.check_ready()
+
+
+def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:
+    class _FailedJob:
+        job_id = "/tester/inference"
+
+        def status(self) -> JobStatus:
+            return JobStatus.FAILED
+
+    session = RemoteInferenceSession(
+        model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
+        jobs=(_FailedJob(),),
+        recovery_mode=InferenceRecoveryMode.DIRECT_TASK_RETRY,
+        recovery_timeout_seconds=1800,
+        recovery_attempt_limit=10,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(client=SimpleNamespace(job_state=lambda *_args, **_kwargs: job_pb2.JOB_STATE_FAILED)),
+    )
+    monkeypatch.setattr(iris_module.requests, "get", lambda *_args, **_kwargs: pytest.fail("unexpected probe"))
+
+    with pytest.raises(RuntimeError, match="finished unexpectedly"):
+        session.wait_until_ready()
+
+
+def test_inference_recovery_honors_deadline(monkeypatch) -> None:
+    session = RemoteInferenceSession(
+        model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
+        jobs=(),
+        recovery_mode=InferenceRecoveryMode.DIRECT_TASK_RETRY,
+        recovery_timeout_seconds=0.01,
+        recovery_attempt_limit=10,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+    now = iter((0.0, 0.02))
+    monkeypatch.setattr(iris_module.time, "monotonic", lambda: next(now))
+    monkeypatch.setattr(iris_module.requests, "get", lambda *_args, **_kwargs: pytest.fail("unexpected probe"))
+
+    with pytest.raises(TimeoutError, match="did not recover"):
+        session.wait_until_ready()
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:
