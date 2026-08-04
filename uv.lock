@@ -3972,6 +3972,12 @@ deploy = [
     { name = "pulumi-kubernetes" },
 ]
 
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-xdist" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "google-cloud-kms", marker = "extra == 'deploy'", specifier = ">=2.24.0" },
@@ -3987,6 +3993,12 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["deploy"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-xdist" },
+]
 
 [[package]]
 name = "marin-iris"

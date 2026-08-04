@@ -42,6 +42,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "iac",
 )
 
 
@@ -56,7 +57,8 @@ class SourceRoot:
 
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
-    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
+    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope != "iac"),
+    SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/evaldash/src", "."),
@@ -85,10 +87,12 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "iac": "marin-iac",
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
+    "iac": ["deploy"],
 }
 
 PYTHON_VERSION = "3.12"
@@ -105,7 +109,8 @@ BROAD_TRIGGER_REASON = "broad-trigger"
 DIFF_DRIVEN_REASON = "diff-driven"
 
 TEST_DIR: dict[str, str] = {
-    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope != "marin"},
+    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope not in {"iac", "marin"}},
+    "iac": "infra/pulumi/tests",
     "marin": "tests",
 }
 
