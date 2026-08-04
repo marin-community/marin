@@ -1,32 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-import json
 import os
-import shutil
 import tempfile
-from pathlib import Path
 
 import pytest
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
 from levanter.tokenizers import load_tokenizer
 
+from test_support.tokenizers import stage_gpt2_tokenizer
+
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
-
-_LEVANTER_TESTS = Path(__file__).resolve().parents[1] / "lib" / "levanter" / "tests"
-_GPT2_TOKENIZER = _LEVANTER_TESTS / "gpt2_tokenizer.json"
-_GPT2_TOKENIZER_CONFIG = _LEVANTER_TESTS / "gpt2_tokenizer_config.json"
 
 
 @pytest.fixture(scope="session")
 def gpt2_tokenizer_path(tmp_path_factory) -> str:
-    """Stage the checked-in GPT-2 tokenizer without accessing Hugging Face."""
-    tokenizer_dir = tmp_path_factory.mktemp("gpt2_tokenizer")
-    shutil.copy(_GPT2_TOKENIZER, tokenizer_dir / "tokenizer.json")
-    shutil.copy(_GPT2_TOKENIZER_CONFIG, tokenizer_dir / "tokenizer_config.json")
-    (tokenizer_dir / "config.json").write_text(json.dumps({"model_type": "gpt2", "vocab_size": 5027}))
-    return str(tokenizer_dir)
+    return str(stage_gpt2_tokenizer(tmp_path_factory))
 
 
 @pytest.fixture(scope="session")

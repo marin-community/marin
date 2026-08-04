@@ -63,11 +63,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _wait_for_job_status() -> None:
-    """Throttle a blocking status poll."""
-    time.sleep(1)
-
-
 def _warn_if_secondary_task() -> None:
     """Warn when StepRunner starts on a non-primary task of a multi-task Iris job.
 
@@ -256,7 +251,7 @@ class StepRunner:
                 done = [p for p, h in running.items() if JobStatus.finished(h.status())]
                 if done or not block:
                     break
-                _wait_for_job_status()
+                time.sleep(1)
             for path in done:
                 handle = running.pop(path)
                 step_name = _display_name(path)

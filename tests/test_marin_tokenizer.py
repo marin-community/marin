@@ -25,6 +25,8 @@ QUESTION = [
     {"role": "assistant", "content": "The answer is 4."},
 ]
 
+_RESERVED_SPECIAL_TOKENS = ("<|reserved_special_token_0|>", "<|reserved_special_token_1|>")
+
 
 @pytest.fixture
 def marin_chat_tokenizer(gpt2_tokenizer) -> MarinTokenizer:
@@ -37,10 +39,8 @@ def _decode(tokenizer, ids) -> str:
 
 def test_inject_special_tokens_renames_reserved_slots(gpt2_tokenizer_path):
     base = AutoTokenizer.from_pretrained(gpt2_tokenizer_path, local_files_only=True)
-    base.add_special_tokens(
-        {"additional_special_tokens": ["<|reserved_special_token_0|>", "<|reserved_special_token_1|>"]}
-    )
-    reserved_ids = base.convert_tokens_to_ids(["<|reserved_special_token_0|>", "<|reserved_special_token_1|>"])
+    base.add_special_tokens({"additional_special_tokens": list(_RESERVED_SPECIAL_TOKENS)})
+    reserved_ids = base.convert_tokens_to_ids(list(_RESERVED_SPECIAL_TOKENS))
     plain_text = "Hello, how are you?"
     plain_ids = base.encode(plain_text, add_special_tokens=False)
 
