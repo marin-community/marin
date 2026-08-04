@@ -224,6 +224,12 @@ def _run_benchmark_local(config: TransportBenchConfig) -> None:
     report = {
         "run_id": config.run_id,
         "ranks": num_ranks,
+        # Record the resolved flags so a result states its own configuration.
+        # Kernel selection needs both the device-kernel option and the NCCL
+        # symmetric-buffer option (MNEP-045), and kernel names do not show which
+        # options were set.
+        "xla_flags": os.environ.get("XLA_FLAGS", ""),
+        "jax_version": jax.__version__,
         "row_elements": config.row_elements,
         "capacity_factor": config.capacity_factor,
         "skew": config.skew,
