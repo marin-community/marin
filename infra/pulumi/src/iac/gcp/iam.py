@@ -25,8 +25,10 @@ from google.cloud import kms_v1
 
 from iac.gcp.cloud_run import resource_slug
 
-# Builds the per-resource ResourceOptions (parent/provider/import_) for one grant's live id.
+# Builds ResourceOptions for an explicitly imported owned resource.
 OptsFor = Callable[[str], pulumi.ResourceOptions]
+# Builds ResourceOptions for an idempotently-created IAM member grant.
+GrantOpts = Callable[[], pulumi.ResourceOptions]
 
 _ConditionArgsT = TypeVar("_ConditionArgsT")
 
@@ -135,19 +137,15 @@ class GcpIamArgs:
     buckets: tuple[GcpBucketIam, ...]
     artifact_repositories: tuple[GcpArtifactRepositoryIam, ...]
     service_accounts: tuple[GcpServiceAccountIam, ...]
-    # Adoption mode: stamp import_=<live id> on every resource so `pulumi preview` shows the real
-    # adoption diff against the live bindings instead of planning creates. Set via
-    # `marin-iac:import`, matching the CoreWeave/GcpArtifactRegistries pattern.
+    # Adoption mode imports owned service accounts and custom roles. IAM member creation is
+    # idempotent in the GCP provider, so grants deliberately use its create path instead; importing
+    # them makes the shared policy etag unknown and plans spurious replacements (#7961).
     adopt: bool = False
 
 
 def _grant_name(prefix: str, role: str, member: str, condition: GcpIamCondition | None) -> str:
     name = f"{prefix}-{resource_slug(role)}-{resource_slug(member)}"
     return f"{name}-{resource_slug(condition.title)}" if condition else name
-
-
-def _condition_suffix(condition: GcpIamCondition | None) -> str:
-    return f" {condition.title}" if condition else ""
 
 
 def _crypto_key_id(args: GcpIamArgs) -> str:
@@ -204,7 +202,7 @@ def _resolve_encrypted_members(args: GcpIamArgs, decrypt: _KmsMemberDecryptor) -
 
 
 def _grant_resource(
-    name_prefix: str, resource_ref: str, grant: GcpRoleGrant, member: str | GcpEncryptedMember, opts_for: OptsFor
+    name_prefix: str, grant: GcpRoleGrant, member: str | GcpEncryptedMember, opts_for: GrantOpts
 ) -> tuple[str, str, pulumi.ResourceOptions]:
     """The (name, member, opts) shared by every resource type for one (grant, member) pair.
     Asserts `member` is already resolved to `str` — every call site runs after
@@ -215,8 +213,7 @@ def _grant_resource(
     base."""
     assert isinstance(member, str), f"unresolved encrypted member reached _grant_resource: {member!r}"
     name = _grant_name(name_prefix, grant.role, member, grant.condition)
-    import_id = f"{resource_ref} {grant.role} {member}{_condition_suffix(grant.condition)}"
-    return name, member, opts_for(import_id)
+    return name, member, opts_for()
 
 
 def _create_service_accounts(args: GcpIamArgs, opts_for: OptsFor) -> list[gcp.serviceaccount.Account]:
@@ -255,10 +252,10 @@ def _create_custom_roles(args: GcpIamArgs, opts_for: OptsFor) -> list[gcp.projec
     return created
 
 
-def _grant_project_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
+def _grant_project_iam(args: GcpIamArgs, opts_for: GrantOpts) -> None:
     for grant in args.project_grants:
         for member in grant.members:
-            name, member, opts = _grant_resource("project", args.project, grant, member, opts_for)
+            name, member, opts = _grant_resource("project", grant, member, opts_for)
             gcp.projects.IAMMember(
                 name,
                 project=args.project,
@@ -269,11 +266,11 @@ def _grant_project_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
             )
 
 
-def _grant_kms_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
+def _grant_kms_iam(args: GcpIamArgs, opts_for: GrantOpts) -> None:
     crypto_key_id = _crypto_key_id(args)
     for grant in args.kms_grants:
         for member in grant.members:
-            name, member, opts = _grant_resource("kms", crypto_key_id, grant, member, opts_for)
+            name, member, opts = _grant_resource("kms", grant, member, opts_for)
             gcp.kms.CryptoKeyIAMMember(
                 name,
                 crypto_key_id=crypto_key_id,
@@ -284,14 +281,11 @@ def _grant_kms_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
             )
 
 
-def _grant_secret_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
+def _grant_secret_iam(args: GcpIamArgs, opts_for: GrantOpts) -> None:
     for secret in args.secrets:
-        secret_id = f"projects/{args.project}/secrets/{secret.secret}"
         for grant in secret.grants:
             for member in grant.members:
-                name, member, opts = _grant_resource(
-                    f"secret-{resource_slug(secret.secret)}", secret_id, grant, member, opts_for
-                )
+                name, member, opts = _grant_resource(f"secret-{resource_slug(secret.secret)}", grant, member, opts_for)
                 gcp.secretmanager.SecretIamMember(
                     name,
                     project=args.project,
@@ -303,13 +297,11 @@ def _grant_secret_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
                 )
 
 
-def _grant_bucket_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
+def _grant_bucket_iam(args: GcpIamArgs, opts_for: GrantOpts) -> None:
     for bucket in args.buckets:
         for grant in bucket.grants:
             for member in grant.members:
-                name, member, opts = _grant_resource(
-                    f"bucket-{resource_slug(bucket.bucket)}", f"b/{bucket.bucket}", grant, member, opts_for
-                )
+                name, member, opts = _grant_resource(f"bucket-{resource_slug(bucket.bucket)}", grant, member, opts_for)
                 gcp.storage.BucketIAMMember(
                     name,
                     bucket=bucket.bucket,
@@ -320,14 +312,12 @@ def _grant_bucket_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
                 )
 
 
-def _grant_artifact_repository_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
+def _grant_artifact_repository_iam(args: GcpIamArgs, opts_for: GrantOpts) -> None:
     for repo in args.artifact_repositories:
-        repo_path = f"projects/{args.project}/locations/{repo.location}/repositories/{repo.repository}"
         for grant in repo.grants:
             for member in grant.members:
                 name, member, opts = _grant_resource(
                     f"ar-{resource_slug(repo.location)}-{resource_slug(repo.repository)}",
-                    repo_path,
                     grant,
                     member,
                     opts_for,
@@ -344,15 +334,13 @@ def _grant_artifact_repository_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
                 )
 
 
-def _grant_service_account_iam(args: GcpIamArgs, opts_for: OptsFor) -> None:
+def _grant_service_account_iam(args: GcpIamArgs, opts_for: GrantOpts) -> None:
     for account in args.service_accounts:
         service_account_id = f"projects/{args.project}/serviceAccounts/{account.email}"
         account_local = account.email.split("@", 1)[0]
         for grant in account.grants:
             for member in grant.members:
-                name, member, opts = _grant_resource(
-                    f"sa-{resource_slug(account_local)}", service_account_id, grant, member, opts_for
-                )
+                name, member, opts = _grant_resource(f"sa-{resource_slug(account_local)}", grant, member, opts_for)
                 gcp.serviceaccount.IAMMember(
                     name,
                     service_account_id=service_account_id,
@@ -412,8 +400,12 @@ class GcpIam(pulumi.ComponentResource):
         created_accounts = _create_service_accounts(args, opts_for)
         created_roles = _create_custom_roles(args, opts_for)
 
-        def grant_opts_for(import_id: str) -> pulumi.ResourceOptions:
-            return opts_for(import_id, depends_on=created_accounts + created_roles)
+        def grant_opts_for() -> pulumi.ResourceOptions:
+            return pulumi.ResourceOptions(
+                parent=self,
+                provider=gcp_provider,
+                depends_on=created_accounts + created_roles,
+            )
 
         _grant_project_iam(args, grant_opts_for)
         _grant_kms_iam(args, grant_opts_for)

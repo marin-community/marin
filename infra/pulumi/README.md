@@ -154,6 +154,26 @@ or `delete` on a NodePool is not** — it deprovisions a reserved bare-metal fle
 reconcile the program to match reality; never `pulumi up` through a destructive NodePool diff.
 Once the preview is clean, `pulumi up`.
 
+### Adopting existing GCP resources
+
+Set `marin-iac:import=true` when adding a custom role or owned service account that already
+exists in GCP:
+
+```bash
+pulumi stack select marin
+pulumi config set marin-iac:import true
+pulumi preview
+pulumi up
+pulumi config rm marin-iac:import
+```
+
+The flag attaches an import ID to custom roles and owned service accounts. It deliberately does
+not attach one to `*IAMMember` grants: all six grant resources use the GCP provider's idempotent
+read-modify-write create path, which deduplicates an existing member and records its resource ID
+in Pulumi state. A live-but-untracked grant therefore appears as `create` in the preview but does
+not add a duplicate binding when applied. Already-tracked grants remain ordinary no-ops instead
+of entering an import diff against their parent policy's shared `etag`.
+
 ### Adopting a new cluster
 
 A cluster whose RBAC/NodePools/Kueue/Traefik already exist live (the normal case — the CKS
