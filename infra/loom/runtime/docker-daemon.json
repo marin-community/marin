@@ -1,0 +1,10 @@
+{
+  "data-root": "/mnt/loom-data/docker",
+  "default-ulimits": {
+    "core": {
+      "Name": "core",
+      "Hard": 0,
+      "Soft": 0
+    }
+  }
+}

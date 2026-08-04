@@ -40,6 +40,7 @@ WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
+DOCKER_DAEMON_CONFIG = (ROOT / "runtime/docker-daemon.json").read_text()
 RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
 MCP_ACCESS_NONE = "none"
@@ -796,6 +797,7 @@ def _create_instance(
         "loom-port": str(LOOM_PORT),
         "data-disk-device": DATA_DISK_DEVICE_NAME,
         "loom-deployment": runtime_policy.manifest,
+        "docker-daemon-config": DOCKER_DAEMON_CONFIG,
         "loom-compose": RUNTIME_COMPOSE,
         "loom-caddyfile": RUNTIME_CADDYFILE,
         "startup-script": STARTUP_SCRIPT,

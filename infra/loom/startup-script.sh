@@ -91,7 +91,7 @@ resize2fs "$DATA_DISK_DEVICE"
 grep -q "^${DATA_DISK_DEVICE} " /etc/fstab || \
   echo "${DATA_DISK_DEVICE} ${DATA_MOUNT} ext4 discard,defaults,nofail 0 2" >>/etc/fstab
 mkdir -p "${DATA_MOUNT}/docker" /etc/docker
-desired_daemon_config="$(printf '{\n  "data-root": "%s/docker"\n}\n' "$DATA_MOUNT")"
+desired_daemon_config="$(meta instance/attributes/docker-daemon-config)"
 if [ ! -f "$DOCKER_CONFIG" ] || [ "$(cat "$DOCKER_CONFIG")" != "$desired_daemon_config" ]; then
   printf '%s\n' "$desired_daemon_config" >"$DOCKER_CONFIG"
   docker_config_changed=true

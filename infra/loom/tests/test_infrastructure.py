@@ -11,6 +11,7 @@ import pytest
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
+    DOCKER_DAEMON_CONFIG,
     DeploymentConfig,
     GitHubFederationConfig,
     ProfileConfig,
@@ -175,6 +176,16 @@ def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
 
 
+def test_docker_daemon_config_disables_core_dumps() -> None:
+    daemon_config = json.loads(DOCKER_DAEMON_CONFIG)
+    assert daemon_config["data-root"] == "/mnt/loom-data/docker"
+    assert daemon_config["default-ulimits"]["core"] == {
+        "Name": "core",
+        "Hard": 0,
+        "Soft": 0,
+    }
+
+
 @pytest.mark.parametrize(
     "mcp_access",
     [
@@ -206,6 +217,7 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         assert field(attached[0], "auto_delete", "autoDelete") is not True
         assert vm.inputs["metadata"]["dotenv-secret-version"] == "3"
         assert "startup-script" in vm.inputs["metadata"]
+        assert "docker-daemon-config" in vm.inputs["metadata"]
         assert "loom-compose" in vm.inputs["metadata"]
         assert "loom-caddyfile" in vm.inputs["metadata"]
         assert "metadataStartupScript" not in vm.inputs
