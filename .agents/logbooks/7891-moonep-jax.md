@@ -2074,3 +2074,30 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Treatment: Run the transport benchmark on eight nodes, which is 32 ranks, at `8,192` and `4,096` rows for each peer.
 - Comparison: The 16-rank results are `323.4 GB/s` at `8,192` rows and `304.7 GB/s` at `4,096` rows.
 - Gate: One complete result file. Rank count is the last cheap variable in the rack gap.
+
+### 2026-08-04 03:56 UTC - MNEP-114 profile of the best configuration
+
+- Trace: One step from step three, 2,542,583 events, four GPUs on one host.
+- Per GPU: ragged all-to-all `15.47 s` in 864 calls, QuACK `4.76 s`, other GEMM `2.39 s`, Triton layout `0.004 s`.
+- Step span: `27.38 s`. Transport is `56%` of the step.
+- Overlap: Transport overlaps compute for `2.98 s`, which hides `19%` of transport. Exposed transport is `12.60 s`.
+- Comparison: MNEP-075 measured `15.6%` overlap. The one-CTA change did not raise it.
+- Layout: The receive-order layout costs `0.004 s`. It is not a factor in this graph.
+- Ceiling: With transport fully hidden the step becomes `14.79 s`, which is about `17.6%` MFU. That is below the `21.7%` gate.
+- Conclusion: Perfect overlap alone does not pass the gate. The traffic must also fall.
+
+### 2026-08-04 03:56 UTC - MNEP-116 rejects rank count as the cause
+
+- Setup: 32 ranks on eight nodes, balanced traffic, one wheel.
+- Result: `335.9 GB/s` at `8,192` rows for each peer, and `320.2 GB/s` at `4,096` rows.
+- Comparison: 16 ranks gave `323.4` and `304.7 GB/s`. Rank count from 16 to 32 costs nothing.
+- Status: Message size, skew, GEMM contention, and rank count are all measured and rejected as the cause of the rack gap.
+
+### 2026-08-04 03:56 UTC - MNEP-115 rejects a higher collective overlap limit
+
+- Treatment: Repeat MNEP-102 with `--xla_gpu_experimental_parallel_collective_overlap_limit=4` instead of `1`.
+- Correctness: All 16 workers completed five steps with zero dropped assignments.
+- Timing: Rank zero reached step three at `168 s` and step five at `226 s`, so each steady step took `29.0 s`.
+- Comparison: MNEP-102 took `26.17 s` for each step. The higher limit is `11%` slower, or about `8.97%` MFU.
+- Conclusion: Reject the change and keep the serial default. Concurrent device-kernel collectives do not improve the step, and they cost time.
+- Consequence: The `19%` overlap in MNEP-114 is not caused by the XLA concurrency limit.
