@@ -2197,3 +2197,14 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Method rule: Read MFU and step duration from the W&B summary. Do not derive them from progress-bar output.
 - Other corrections from the same source: MNEP-105 shows `11.816%` MFU but drops `1,796,915,552` assignments, so it stays invalid. MNEP-114 shows `9.822%`, not `9.937%`.
 - Single-rack FSDP: `mhfsdp-1rack-5-20260804-1805` shows `10.114%` MFU with `125,361,718` dropped assignments and a `34.59 s` step, so it is not a clean comparison point either.
+
+### 2026-08-04 20:45 UTC - Remove the XLA and NCCL patches
+
+- Basis: MNEP-126 runs stock XLA `5d53e1e` with both flags and reaches `332.1 GB/s`, above the `310.8 GB/s` of the fully patched build at the same shape.
+- Basis: The fatal EP64 failure was a missing flag, not an XLA defect. `UsesDeviceKernel()` needs the device-kernel option and the symmetric-buffer option together.
+- Composition: Of the 23 XLA patches, ten (`0005` to `0014`) were early-return diagnostics for that bisect, and six (`0003`, `0017`, `0018`, `0019`, and the CTA caps) measured worse than stock.
+- NCCL: `nccl_patches/0001-use-full-mnnvl-domain-for-lsa.patch` was rejected at MNEP-033. No wheel used it.
+- Action: Delete `experiments/grug/moe_hero_ep/xla_patches/` and `experiments/grug/moe_hero_ep/nccl_patches/`. Git history keeps them.
+- Kept: The JAX and XLA pin. The build stays at JAX `f9f6bbace` with XLA `5d53e1e40cd`, which carries the multi-node LSA fix that the released wheel lacked (MNEP-010).
+- Kept: The wheel artifact records in `jax_wheel_setup.py`, because the logbook cites those builds and the S3 artifacts still exist.
+- Open: MNEP-127 tests stock XLA at EP64 against the `10.719%` MFU of MNEP-115. Restore the patches if that run regresses.
