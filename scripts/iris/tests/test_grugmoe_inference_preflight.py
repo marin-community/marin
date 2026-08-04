@@ -223,49 +223,141 @@ def test_health_manifest_freezes_representative_disjoint_warmup_inputs() -> None
         "schema_version": 2,
         "kind": "unit",
         "seed": 7,
-        "branches_per_root": 1,
+        "branches_per_root": 8,
         "history_lengths": [3, 4, 5],
-        "append_tokens": 1,
+        "append_tokens": 2,
         "response_tokens": 2,
-        "final_lengths": [6, 7, 8],
+        "final_lengths": [7, 8, 9],
         "roots": [
             {"root": index, "cohort": cohort, "prefix_token_ids": [250] * (index + 3)}
             for index, cohort in enumerate(cohorts)
         ],
         "requests": [
             {
-                "request_id": f"request-{index}",
+                "request_id": f"request-{index}-{branch}",
                 "root": index,
-                "branch": 0,
+                "branch": branch,
                 "cohort": cohort,
                 "prefix_token_count": index + 3,
-                "append_token_count": 1,
-                "append_token_ids": [index + 3],
+                "append_token_count": 2,
+                "append_token_ids": [index + 3, branch + 10],
                 "max_tokens": 2,
-                "final_token_count": index + 6,
+                "final_token_count": index + 7,
             }
             for index, cohort in enumerate(cohorts)
+            for branch in range(8)
         ],
     }
 
-    manifest = grug_preflight._health_workload_manifest(workload, concurrencies=[3])
+    manifest = grug_preflight._health_workload_manifest(workload, concurrencies=[24])
 
     warm_up = manifest["warm_up"]
-    records = warm_up["by_concurrency"]["3"]
+    roots = warm_up["root_copies"]
+    records = warm_up["by_concurrency"]["24"]
     assert warm_up["rolling_passes"] == grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
-    assert len(records) == 3 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert len(roots) == 3 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert len(records) == 24 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
     assert {record["pass"] for record in records} == set(range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES))
-    assert {record["slot_id"] for record in records} == {0, 1, 2}
+    assert {record["slot_id"] for record in records} == set(range(24))
     assert {record["data_parallel_rank"] for record in records} == {0, 1, 2}
     assert {record["max_tokens"] for record in records} == {2}
-    assert {record["token_count"] for record in records} == {4, 5, 6}
+    assert {record["token_count"] for record in records} == {5, 6, 7}
     assert all(record["disjoint_from_measured_roots"] for record in records)
+    assert all(record["shared_root_graph"] for record in records)
     assert len({record["token_ids_sha256"] for record in records}) == len(records)
-    assert all(
-        record["token_ids_sha256"]
-        == grug_preflight._sha256_json(grug_preflight._health_warm_prompt(record["prompt_index"], record["token_count"]))
-        for record in records
+    assert len({record["token_ids_sha256"] for record in roots}) == len(roots)
+    assert all(record["disjoint_from_measured_roots"] for record in roots)
+    assert all(record["disjoint_from_other_passes"] for record in roots)
+    for pass_index in range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES):
+        pass_records = [record for record in records if record["pass"] == pass_index]
+        sharing = {root: sum(record["root"] == root for record in pass_records) for root in range(3)}
+        assert sharing == {0: 8, 1: 8, 2: 8}
+        warm_workload = grug_preflight._health_warm_workload(workload, pass_index=pass_index)
+        requests_by_id = {request["request_id"]: request for request in workload["requests"]}
+        assert all(
+            record["token_ids_sha256"]
+            == grug_preflight._sha256_json(
+                grug_preflight.materialize_prompt(
+                    warm_workload,
+                    requests_by_id[record["manifest_request_id"]],
+                )
+            )
+            for record in pass_records
+        )
+
+
+def test_health_warmup_populates_shared_roots_and_barriers_each_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cohorts = ("short", "medium", "long")
+    workload = {
+        "roots": [
+            {"root": root, "cohort": cohort, "prefix_token_ids": [1, 20 + root]} for root, cohort in enumerate(cohorts)
+        ],
+        "requests": [
+            {
+                "request_id": f"request-{root}",
+                "root": root,
+                "branch": 0,
+                "cohort": cohort,
+                "append_token_ids": [40 + root],
+                "max_tokens": 2,
+            }
+            for root, cohort in enumerate(cohorts)
+        ],
+    }
+    barriers = [threading.Barrier(3) for _ in range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES)]
+    events: list[str] = []
+    lock = threading.Lock()
+
+    def completion(*_: object, request_id: str, data_parallel_rank: int, **__: object) -> dict[str, object]:
+        with lock:
+            events.append(f"start:{request_id}")
+        if "-slot-" in request_id:
+            pass_index = next(
+                index
+                for index in range(grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES)
+                if f"-warm-pass-{index:02d}-slot-" in request_id
+            )
+            barriers[pass_index].wait(timeout=2)
+        with lock:
+            events.append(f"finish:{request_id}")
+        return {"data_parallel_rank": data_parallel_rank, "route_array": None}
+
+    monkeypatch.setattr(grug_preflight, "_health_completion", completion)
+    branches, roots = grug_preflight._health_warm_up(
+        "http://server",
+        "model",
+        workload,
+        case=CASES["exact-reference-ep16"],
+        r3_enabled=False,
+        arm_id="arm",
+        target_concurrency=3,
     )
+
+    passes = grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
+    assert len(branches) == 3 * passes
+    assert len(roots) == 3 * passes
+    for pass_index in range(passes):
+        root_marker = f"-warm-pass-{pass_index:02d}-populate-root-"
+        branch_marker = f"-warm-pass-{pass_index:02d}-slot-"
+        root_finishes = [
+            index for index, event in enumerate(events) if event.startswith("finish:") and root_marker in event
+        ]
+        branch_starts = [
+            index for index, event in enumerate(events) if event.startswith("start:") and branch_marker in event
+        ]
+        branch_finishes = [
+            index for index, event in enumerate(events) if event.startswith("finish:") and branch_marker in event
+        ]
+        assert len(root_finishes) == len(branch_starts) == len(branch_finishes) == 3
+        assert max(root_finishes) < min(branch_starts)
+        if pass_index + 1 < passes:
+            next_root_marker = f"-warm-pass-{pass_index + 1:02d}-populate-root-"
+            next_root_starts = [
+                index for index, event in enumerate(events) if event.startswith("start:") and next_root_marker in event
+            ]
+            assert max(branch_finishes) < min(next_root_starts)
 
 
 def test_health_repeatability_gates_only_identical_settings() -> None:
@@ -747,11 +839,17 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
 
     assert warm_requests == 3 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES
     assert arm["warm_up"] == {
-        "requests": warm_requests,
+        "requests": warm_requests + 18 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
+        "branch_requests": warm_requests,
+        "root_population_requests": 18 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
+        "root_copies": 18 * grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
         "rolling_passes": grug_preflight.HEALTH_REPRESENTATIVE_WARM_UP_PASSES,
         "target_concurrency": 3,
         "max_tokens_per_request": 1,
-        "data_parallel_ranks_covered": [0, 6, 12],
+        "data_parallel_ranks_covered": list(range(16)),
+        "shared_root_graph": True,
+        "full_pass_barrier": True,
+        "distinct_root_copy_per_pass": True,
         "disjoint_from_measured_roots": True,
         "excluded_from_measurement": True,
         "prefix_cache_reset_after": True,
