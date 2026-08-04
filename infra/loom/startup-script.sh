@@ -13,7 +13,6 @@ DOTENV_SECRET_ID="$(meta instance/attributes/dotenv-secret-id)"
 LOOM_PORT="$(meta instance/attributes/loom-port)"
 RUNTIME_DIR=/opt/loom
 COMPOSE_FILE="${RUNTIME_DIR}/docker-compose.yml"
-DOCKER_ROOT=/var/lib/docker
 DOCKER_CONFIG=/etc/docker/daemon.json
 HEALTH_URL="http://127.0.0.1:${LOOM_PORT}/api/health"
 STARTUP_SUCCESS=/run/loom-startup-succeeded
@@ -62,7 +61,7 @@ if [ "${#packages[@]}" -gt 0 ]; then
   apt-get install -y --no-install-recommends "${packages[@]}"
 fi
 
-mkdir -p "$DOCKER_ROOT" /etc/docker
+mkdir -p /etc/docker
 desired_daemon_config="$(meta instance/attributes/docker-daemon-config)"
 if [ ! -f "$DOCKER_CONFIG" ] || [ "$(cat "$DOCKER_CONFIG")" != "$desired_daemon_config" ]; then
   printf '%s\n' "$desired_daemon_config" >"$DOCKER_CONFIG"
