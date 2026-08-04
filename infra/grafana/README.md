@@ -325,6 +325,12 @@ through the read-only Kubernetes API. The usernames live under
 `provisioning.coreweave.grafana_observer_rbac` so both tokens can retain access during
 a rotation.
 
+[CoreWeave IAM does not govern Kubernetes resources inside CKS](https://docs.coreweave.com/security/iam/access-policies);
+those permissions use Kubernetes RBAC. The namespaced RoleBinding is therefore the
+clearance adjustment for the existing token. Keeping the provider token on its `read`
+role avoids general Kubernetes write access, and reusing its Managed Auth identity
+avoids a separate service-account credential and rotation path for every cluster.
+
 Rotation is overlap-safe:
 
 1. Mint a second read-role token in the CoreWeave console. Save it as a single

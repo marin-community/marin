@@ -137,37 +137,6 @@ def grafana_observer_manifests(usernames: tuple[str, ...]) -> tuple[dict, dict]:
     return role, binding
 
 
-def grafana_finelog_probe_manifests(
-    namespace: str, usernames: tuple[str, ...], finelog_service: str
-) -> tuple[dict, dict]:
-    """Return least-privilege RBAC for Finelog's HTTP service-proxy probe."""
-    labels = {
-        "app.kubernetes.io/name": "marin-grafana",
-        "app.kubernetes.io/component": "finelog-prober",
-    }
-    role = {
-        "metadata": {"name": GRAFANA_FINELOG_PROBER_ROLE, "namespace": namespace, "labels": labels},
-        "rules": [
-            {
-                "apiGroups": [""],
-                "resources": ["services/proxy"],
-                "resourceNames": [f"http:{finelog_service}:rpc"],
-                "verbs": ["get"],
-            }
-        ],
-    }
-    binding = {
-        "metadata": {"name": GRAFANA_FINELOG_PROBER_ROLE, "namespace": namespace, "labels": labels},
-        "roleRef": {
-            "apiGroup": "rbac.authorization.k8s.io",
-            "kind": "Role",
-            "name": GRAFANA_FINELOG_PROBER_ROLE,
-        },
-        "subjects": _user_subjects(usernames),
-    }
-    return role, binding
-
-
 class GrafanaObserverRbac(pulumi.ComponentResource):
     """Read-only node observation and optional Finelog health probing for Grafana."""
 
@@ -204,26 +173,36 @@ class GrafanaObserverRbac(pulumi.ComponentResource):
             opts=child_opts(depends_on=[cluster_role]),
         )
         if args.finelog_service is not None:
-            finelog_role_manifest, finelog_binding_manifest = grafana_finelog_probe_manifests(
-                args.namespace,
-                args.usernames,
-                args.finelog_service,
-            )
 
             def namespaced_child_opts(depends_on: list | None = None) -> pulumi.ResourceOptions:
                 return pulumi.ResourceOptions(parent=self, provider=k8s_provider, depends_on=depends_on)
 
+            labels = {
+                "app.kubernetes.io/name": "marin-grafana",
+                "app.kubernetes.io/component": "finelog-prober",
+            }
             finelog_role = k8s.rbac.v1.Role(
                 "finelog-probe-role",
-                metadata=finelog_role_manifest["metadata"],
-                rules=finelog_role_manifest["rules"],
+                metadata={"name": GRAFANA_FINELOG_PROBER_ROLE, "namespace": args.namespace, "labels": labels},
+                rules=[
+                    {
+                        "apiGroups": [""],
+                        "resources": ["services/proxy"],
+                        "resourceNames": [f"http:{args.finelog_service}:rpc"],
+                        "verbs": ["get"],
+                    }
+                ],
                 opts=namespaced_child_opts(),
             )
             k8s.rbac.v1.RoleBinding(
                 "finelog-probe-role-binding",
-                metadata=finelog_binding_manifest["metadata"],
-                role_ref=finelog_binding_manifest["roleRef"],
-                subjects=finelog_binding_manifest["subjects"],
+                metadata={"name": GRAFANA_FINELOG_PROBER_ROLE, "namespace": args.namespace, "labels": labels},
+                role_ref={
+                    "apiGroup": "rbac.authorization.k8s.io",
+                    "kind": "Role",
+                    "name": GRAFANA_FINELOG_PROBER_ROLE,
+                },
+                subjects=_user_subjects(args.usernames),
                 opts=namespaced_child_opts(depends_on=[finelog_role]),
             )
         self.register_outputs({})

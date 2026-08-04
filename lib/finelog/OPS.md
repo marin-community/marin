@@ -191,29 +191,17 @@ API service proxy. It also checks the Deployment's desired and Ready replica cou
 The alert evaluates every minute and pages after one minute if either check fails.
 
 The Grafana token's built-in CoreWeave `read` role does not include
-`services/proxy`. `infra/pulumi` adds a Role in the Iris namespace with one permitted
-resource name, `http:<finelog-service>:rpc`, and binds it to the Managed Auth usernames
-under `provisioning.coreweave.grafana_observer_rbac`. A 403 with
-`error_class=auth` means the cluster stack does not contain the current token username
-or was not updated after the cluster's `finelog.config` changed.
+`services/proxy`. CoreWeave IAM leaves authorization for Kubernetes resources inside
+CKS to Kubernetes RBAC, so `infra/pulumi` adjusts the same token's clearance with a
+Role in the Iris namespace. The Role permits `get` only on
+`http:<finelog-service>:rpc` and binds the Managed Auth usernames under
+`provisioning.coreweave.grafana_observer_rbac`. A 403 with `error_class=auth` means
+the cluster stack does not contain the current token username or was not updated after
+the cluster's `finelog.config` changed.
 
-Apply the two new RBAC resources in each Finelog cluster before deploying a Grafana
-revision that uses the direct probe. Use targeted updates because an unrelated
-replacement or deletion elsewhere in a cluster preview is not safe to apply:
-
-```bash
-cd infra/pulumi
-for cluster in cw-us-east-02a cw-us-east-08a cw-rno2a; do
-  pulumi stack select "$cluster"
-  role='urn:pulumi:'"$cluster"'::marin-iac::marin:coreweave:GrafanaObserverRbac$kubernetes:rbac.authorization.k8s.io/v1:Role::finelog-probe-role'
-  binding='urn:pulumi:'"$cluster"'::marin-iac::marin:coreweave:GrafanaObserverRbac$kubernetes:rbac.authorization.k8s.io/v1:RoleBinding::finelog-probe-role-binding'
-  pulumi preview --target "$role" --target "$binding"
-  pulumi up --target "$role" --target "$binding"
-done
-```
-
-Each preview must contain only the Role and RoleBinding additions. Stop if it includes
-any replacement, deletion, or unrelated update.
+Deploy the `cw-us-east-02a`, `cw-us-east-08a`, and `cw-rno2a` Pulumi stacks before
+deploying a Grafana revision that uses the direct probe. Apply the Finelog probe Role
+and RoleBinding without including unrelated stack changes.
 
 After the RBAC update, the same named-port proxy path should return `ok` with an
 operator kubeconfig. The production bridge token exercises the identical path on every
