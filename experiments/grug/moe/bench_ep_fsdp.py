@@ -32,11 +32,9 @@ import argparse
 import collections
 import json
 import math
-import os
 import re
 import statistics
 import subprocess
-import sys
 
 _ARMS = ("before", "after")
 _METRICS = {
@@ -53,51 +51,62 @@ _RUN_BEGIN = re.compile(r"BENCH_RUN begin index=(\d+) arm=(\w+)")
 _LAYOUT_LINE = re.compile(r"BENCH_FSDP_LAYOUT resolved fsdp=(\(.*?\)) lm_head=(\(.*?\))")
 
 
-# The artifact store the CoreWeave H100 cluster reads and writes. Not defaulted here: an
-# unset MARIN_PREFIX silently resolves the tokenized SlimPajama cache to a local /tmp
-# path, and rather than fail it re-tokenizes the corpus from scratch, which needs the
-# gated llama3 tokenizer and surfaces as an unrelated 401.
-_EXPECTED_PREFIX = "s3://marin-us-east-02a/marin"
+# The launcher itself runs as a CPU task on the cluster rather than locally. Its artifact
+# lookups resolve the tokenized SlimPajama cache out of the CoreWeave bucket, and task
+# pods already carry MARIN_PREFIX and that bucket's credentials via `task_env` in
+# lib/iris/config/cw-us-east-02a.yaml. Run it here instead and it needs an object-storage
+# key pair on the submitting machine, and without one it silently retargets the cache to a
+# local path and tries to re-tokenize the corpus from scratch. Everything the benchmark
+# reports comes back through the job log, so nothing needs to read the bucket locally.
+# Matches the shape the probe launcher ran at; >=4 GB RAM needs --enable-extra-resources.
+_LAUNCHER_RESOURCES = ("--cpu", "2", "--memory", "8GB", "--disk", "30GB", "--enable-extra-resources")
 
 
-def submit(args) -> None:
-    if not os.environ.get("MARIN_PREFIX"):
-        raise SystemExit(
-            f"MARIN_PREFIX is unset, so the tokenized SlimPajama cache would resolve to a local "
-            f"path and be rebuilt instead of reused. Set MARIN_PREFIX={_EXPECTED_PREFIX} "
-            "(lib/iris/config/cw-us-east-02a.yaml) and resubmit."
-        )
-
-    sweep = ",".join(_ARMS * args.repeats)
-    env = os.environ.copy()
-    env.update(
-        SCALE_FSDP_SWEEP=sweep,
-        SCALE_GPU_REPLICAS=str(args.nodes),
-        SCALE_EXPERT_AXIS=str(args.expert),
-        SCALE_REPLICA_AXIS="1",
-        SCALE_HIDDEN_DIM=str(args.hidden_dim),
-        SCALE_NUM_LAYERS=str(args.num_layers),
-        SCALE_NUM_EXPERTS=str(args.num_experts),
-        SCALE_TOP_K=str(args.top_k),
-        SCALE_SEQ_LEN=str(args.seq_len),
-        SCALE_BATCH=str(args.batch),
-        SCALE_STEPS=str(args.steps),
-        SCALE_TRACKER="json_logger",
+def _sweep_env(args) -> dict[str, str]:
+    return {
+        "SCALE_FSDP_SWEEP": ",".join(_ARMS * args.repeats),
+        "SCALE_GPU_REPLICAS": str(args.nodes),
+        "SCALE_EXPERT_AXIS": str(args.expert),
+        "SCALE_REPLICA_AXIS": "1",
+        "SCALE_HIDDEN_DIM": str(args.hidden_dim),
+        "SCALE_NUM_LAYERS": str(args.num_layers),
+        "SCALE_NUM_EXPERTS": str(args.num_experts),
+        "SCALE_TOP_K": str(args.top_k),
+        "SCALE_SEQ_LEN": str(args.seq_len),
+        "SCALE_BATCH": str(args.batch),
+        "SCALE_STEPS": str(args.steps),
+        "SCALE_TRACKER": "json_logger",
         # The default s3 checkpointer saved at step 1 and step 2 of the probe run, ~25
         # minutes of blocking upload each, dwarfing the 80 steps being measured and
         # costing bucket traffic for state no one reads. `local` writes to the pod's
         # /tmp with save_interval=None, so only the forced final save happens.
-        SCALE_CHECKPOINTS="local",
-        RUN_ID=args.run_id,
-    )
-    print(f"submitting {args.run_id} with sweep [{sweep}]", flush=True)
-    result = subprocess.run(
-        [sys.executable, "-m", "experiments.grug.moe.launch_cw_scale", "--version", args.version, "--run"],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+        "SCALE_CHECKPOINTS": "local",
+        "RUN_ID": args.run_id,
+    }
+
+
+def submit(args) -> None:
+    env = _sweep_env(args)
+    command = [
+        "uv",
+        "run",
+        "iris",
+        f"--cluster={args.cluster}",
+        "job",
+        "run",
+        "--job-name",
+        args.run_id,
+        "--user",
+        args.user,
+        "--no-wait",
+        *_LAUNCHER_RESOURCES,
+    ]
+    for key, value in env.items():
+        command += ["-e", key, value]
+    command += ["--", "python", "-m", "experiments.grug.moe.launch_cw_scale", "--version", args.version, "--run"]
+
+    print(f"submitting {args.run_id} with sweep [{env['SCALE_FSDP_SWEEP']}]", flush=True)
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
     print(result.stdout[-2000:] or result.stderr[-2000:], flush=True)
     if result.returncode != 0:
         raise SystemExit(f"{args.run_id} failed to submit: {result.stderr[-4000:]}")
@@ -222,6 +231,8 @@ def main() -> None:
     run.add_argument("--steps", type=int, default=80)
     run.add_argument("--repeats", type=int, default=3, help="paired before/after draws")
     run.add_argument("--run-id", default="ep-fsdp-sweep")
+    run.add_argument("--cluster", default="cw-us-east-02a")
+    run.add_argument("--user", default="mwittmann", help="iris user prefix for the job")
     run.add_argument("--version", default="2026.08.03", help="artifact calendar version")
     run.set_defaults(func=submit)
 
