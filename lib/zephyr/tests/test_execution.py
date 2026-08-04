@@ -40,6 +40,7 @@ from zephyr.dataset import Dataset
 from zephyr.execution import _NON_RETRYABLE_ERRORS, ZephyrContext
 from zephyr.plan import compute_plan
 from zephyr.shuffle import ListShard
+from zephyr.stage_checkpoint import ZephyrStageCheckpoint
 from zephyr.stage_io import (
     PickleDiskChunk,
     ShardTask,
@@ -1485,6 +1486,64 @@ def test_execute_does_not_retry_worker_errors(local_client, tmp_path):
 
     # Should fail fast — no retries for application errors
     assert elapsed < 15.0, f"Took {elapsed:.1f}s, expected fast failure (no retries)"
+
+
+def test_execute_resumes_after_completed_stage(local_client, tmp_path):
+    """A new context starts after the last completed stage after a prior failure."""
+    chunk_prefix = str(tmp_path / "chunks")
+    map_calls_path = tmp_path / "map-calls"
+    release_path = tmp_path / "release-reducer"
+
+    def record_map(value: int) -> dict:
+        with map_calls_path.open("a") as f:
+            f.write(f"{value}\n")
+        counters.pipeline.update_counter("resume/map_rows", 1)
+        return {"key": value % 2, "value": value}
+
+    def reduce_after_release(key: int, records) -> dict:
+        if not release_path.exists():
+            raise RuntimeError("reducer is not released")
+        return {"key": key, "total": sum(record["value"] for record in records)}
+
+    dataset = (
+        Dataset.from_list([1, 2, 3])
+        .map(record_map)
+        .group_by(
+            key=lambda record: record["key"],
+            reducer=reduce_after_release,
+            num_output_shards=2,
+        )
+    )
+    checkpoint = ZephyrStageCheckpoint(key="completed-stage")
+
+    def make_context() -> ZephyrContext:
+        return ZephyrContext(
+            client=local_client,
+            max_workers=2,
+            resources=ResourceConfig(cpu=1, ram="512m"),
+            chunk_storage_prefix=chunk_prefix,
+            max_execution_retries=0,
+            name=f"test-stage-resume-{uuid.uuid4().hex[:8]}",
+        )
+
+    with pytest.raises(ZephyrWorkerError, match="reducer is not released"):
+        make_context().execute(dataset, checkpoint=checkpoint)
+
+    assert sorted(map_calls_path.read_text().splitlines()) == ["1", "2", "3"]
+    assert list(Path(chunk_prefix).rglob("stage-0000.pkl"))
+
+    with pytest.raises(ValueError, match="does not match the current physical plan"):
+        make_context().execute(dataset.map(lambda record: record), checkpoint=checkpoint)
+
+    release_path.touch()
+    outcome = make_context().execute(dataset, checkpoint=checkpoint)
+    results = sorted(outcome.results, key=lambda record: record["key"])
+
+    assert results == [{"key": 0, "total": 2}, {"key": 1, "total": 4}]
+    assert outcome.counters["resume/map_rows"] == 3
+    # The map stage did not run again, and success deleted the checkpoint data.
+    assert sorted(map_calls_path.read_text().splitlines()) == ["1", "2", "3"]
+    assert not list(Path(chunk_prefix).rglob("stage-*.pkl"))
 
 
 def test_stage_index_correct_with_join(local_client, tmp_path):

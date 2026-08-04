@@ -161,6 +161,7 @@ def compute_minhash_attrs(
     text_cap_chars: int | None = 500_000,
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
@@ -192,6 +193,7 @@ def compute_minhash_attrs(
             old ``dedup_fuzzy_document``: dupekit's Rust MinHash pipeline uses
             a native thread pool and may consume up to ~2 cores beyond the
             Python thread. Required when ``map_task_resources`` is set.
+        coordinator_resources: Coordinator resource request.
         max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
         map_task_resources: ResourceConfig for map-stage tasks.
         reduce_task_resources: ResourceConfig for reduce-stage tasks.
@@ -229,6 +231,8 @@ def compute_minhash_attrs(
         "name": "minhash-attrs",
         "resources": resources,
     }
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
@@ -270,7 +274,9 @@ def compute_minhash_attrs_step(
     text_cap_chars: int | None = 500_000,
     seed: int = 42,
     worker_resources: ResourceConfig | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    zephyr_context: ZephyrContext | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that computes MinHash attrs from a normalize step."""
@@ -286,15 +292,17 @@ def compute_minhash_attrs_step(
             text_cap_chars=text_cap_chars,
             seed=seed,
             worker_resources=worker_resources,
+            coordinator_resources=coordinator_resources,
             max_workers=max_workers,
+            zephyr_context=zephyr_context,
         ),
         hash_attrs={
-            "artifact_version": MINHASH_ATTR_DATA_VERSION,
             "num_perms": num_perms,
             "num_bands": num_bands,
             "ngram_size": ngram_size,
             "text_cap_chars": text_cap_chars,
             "seed": seed,
+            "v": MINHASH_ATTR_DATA_VERSION,
         },
         override_output_path=override_output_path,
     )

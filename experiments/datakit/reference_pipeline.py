@@ -99,14 +99,12 @@ from marin.execution.remote import remote
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_spec import StepSpec
 from marin.processing.classification.deduplication.fuzzy_dups import (
-    FUZZY_DUPS_ATTR_DATA_VERSION,
+    DEFAULT_CC_MAX_ITERATIONS,
     FuzzyDupsAttrData,
-    compute_fuzzy_dups_attrs,
+    compute_fuzzy_dups_attrs_step,
 )
 from marin.processing.classification.deduplication.fuzzy_minhash import (
-    MINHASH_ATTR_DATA_VERSION,
-    MinHashAttrData,
-    compute_minhash_attrs,
+    compute_minhash_attrs_step,
 )
 from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
@@ -334,6 +332,61 @@ def default_sources() -> dict[str, StepSpec]:
     return select_sources(None)
 
 
+@dataclass(frozen=True)
+class FuzzyDedupSteps:
+    minhash: dict[str, StepSpec]
+    dedup: StepSpec
+
+
+def build_fuzzy_dedup_steps(
+    sources: dict[str, StepSpec],
+    *,
+    scale: PipelineScale = DEFAULT_SCALE,
+    cc_max_iterations: int = DEFAULT_CC_MAX_ITERATIONS,
+    coordinator_resources: ResourceConfig | None = None,
+    minhash_max_workers: int | None = None,
+    dedup_max_workers: int | None = None,
+    dedup_num_reduce_shards: int | None = None,
+    dedup_worker_resources: ResourceConfig | None = None,
+    dedup_map_task_resources: ResourceConfig | None = None,
+    dedup_reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
+) -> FuzzyDedupSteps:
+    """Build only the MinHash and global fuzzy-dedup parts of the Datakit DAG."""
+    mh = scale.minhash
+    minhash = {
+        name: compute_minhash_attrs_step(
+            name=f"datakit/minhash/{name}",
+            normalize=normalize_step,
+            num_perms=mh.num_perms,
+            num_bands=mh.num_bands,
+            ngram_size=mh.ngram_size,
+            text_cap_chars=mh.text_cap_chars,
+            seed=mh.seed,
+            worker_resources=scale.pool.worker,
+            coordinator_resources=coordinator_resources,
+            max_workers=minhash_max_workers,
+            zephyr_context=zephyr_context,
+        )
+        for name, normalize_step in sources.items()
+    }
+    dedup = compute_fuzzy_dups_attrs_step(
+        name="datakit/dedup",
+        minhash_steps=list(minhash.values()),
+        cc_max_iterations=cc_max_iterations,
+        cc_resume=True,
+        max_parallelism=scale.dedup_max_parallelism,
+        num_reduce_shards=dedup_num_reduce_shards,
+        max_workers=dedup_max_workers,
+        worker_resources=dedup_worker_resources or scale.pool.worker,
+        coordinator_resources=coordinator_resources,
+        map_task_resources=dedup_map_task_resources,
+        reduce_task_resources=dedup_reduce_task_resources,
+        zephyr_context=zephyr_context,
+    )
+    return FuzzyDedupSteps(minhash=minhash, dedup=dedup)
+
+
 def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale) -> StepSpec:
     return StepSpec(
         name=f"datakit/embed/{name}",
@@ -548,7 +601,7 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
     """
     cluster = scale.cluster
-    mh = scale.minhash
+    fuzzy_dedup = build_fuzzy_dedup_steps(sources, scale=scale, zephyr_context=zephyr_context)
 
     source_names = sorted(sources)
     exact_dedup = StepSpec(
@@ -611,8 +664,6 @@ def reference_datakit_steps(
 
     # ---- Per-source steps ------------------------------------------------------
     per_source: dict[str, dict[str, StepSpec]] = {}
-    minhash_steps: list[StepSpec] = []
-
     for name, normalize_step in sources.items():
         embed = embed_steps[name]
 
@@ -687,57 +738,17 @@ def reference_datakit_steps(
             zephyr_context=zephyr_context,
         )
 
-        minhash = StepSpec(
-            name=f"datakit/minhash/{name}",
-            deps=[normalize_step],
-            hash_attrs={
-                "num_perms": mh.num_perms,
-                "num_bands": mh.num_bands,
-                "ngram_size": mh.ngram_size,
-                "text_cap_chars": mh.text_cap_chars,
-                "seed": mh.seed,
-                "v": MINHASH_ATTR_DATA_VERSION,
-            },
-            fn=lambda op, n=normalize_step: compute_minhash_attrs(
-                source=read_artifact(n.output_path, NormalizedData),
-                output_path=op,
-                num_perms=mh.num_perms,
-                num_bands=mh.num_bands,
-                ngram_size=mh.ngram_size,
-                text_cap_chars=mh.text_cap_chars,
-                seed=mh.seed,
-                worker_resources=scale.pool.worker,
-                zephyr_context=zephyr_context,
-            ),
-        )
-        minhash_steps.append(minhash)
-
         per_source[name] = {
             "tokenize": tokenize,
             "embed": embed,
             "assign": assign,
             "quality": quality,
             "decontam": decontam,
-            "minhash": minhash,
+            "minhash": fuzzy_dedup.minhash[name],
         }
 
     # ---- Cross-source dedup ----------------------------------------------------
-    # No content params of its own -- the MinHash params live in the minhash deps
-    # (so a param change re-keys minhash, then dedup via dep names); connected
-    # components is deterministic given those inputs. ``v`` is a manual salt.
-    dedup = StepSpec(
-        name="datakit/dedup",
-        deps=minhash_steps,
-        hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
-        fn=lambda op: compute_fuzzy_dups_attrs(
-            inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
-            output_path=op,
-            max_parallelism=scale.dedup_max_parallelism,
-            cc_resume=True,
-            worker_resources=scale.pool.worker,
-            zephyr_context=zephyr_context,
-        ),
-    )
+    dedup = fuzzy_dedup.dedup
 
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
     def _store_fn(output_path: str) -> ClusteredStoreData:

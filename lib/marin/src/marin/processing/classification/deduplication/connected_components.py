@@ -11,6 +11,7 @@ from rigging.filesystem import StoragePath
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
+from zephyr.stage_checkpoint import ZephyrStageCheckpoint
 from zephyr.writers import write_parquet_file
 
 logger = logging.getLogger(__name__)
@@ -81,12 +82,13 @@ def connected_components(
     ctx: ZephyrContext,
     *,
     output_dir: str,
+    num_reduce_shards: int | None = None,
     max_iterations: int = 10,
     preserve_singletons: bool = True,
     resume: bool = False,
-    num_reduce_shards: int | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    checkpoint_key_prefix: str | None = None,
 ) -> tuple[bool, Sequence[str]]:
     """
     Connected Components implementation using Zephyr Dataset API and Hash-to-Min algorithm (https://arxiv.org/abs/1203.5387)
@@ -95,11 +97,17 @@ def connected_components(
         ds: Input dataset containing 'bucket' and 'ids' fields, most likely from MinHash LSH output
         ctx: ZephyrContext to use for execution.
         output_dir: Directory to write intermediate and final output files
+        num_reduce_shards: Number of output shards for each group-by stage. The
+            default is one shard for each Zephyr worker.
         max_iterations: Maximum number of iterations to run the connected components algorithm
         preserve_singletons: Whether to preserve single-node buckets in the output
-        resume: If True, skip complete prior iterations and start at the first
-            incomplete iteration. If no complete state exists, run from scratch.
-        num_reduce_shards: Shuffle shard count. Defaults to the context worker cap.
+        resume: If True, skip iterations whose ``it_N/`` already contains a complete set of
+            parquet files (count == ``num_reduce_shards``). Starts from the first incomplete
+            iteration. If no complete prior state exists, runs from scratch.
+        map_task_resources: Per-task map resources for each ``ctx.execute`` call.
+        reduce_task_resources: Per-task reduce resources for each ``ctx.execute`` call.
+        checkpoint_key_prefix: Stable key prefix for resume between completed
+            Zephyr stages. The default disables stage checkpoints.
     """
 
     def _reduce_bucket_to_links(bucket: str, items: Iterator[CCInput]) -> Iterator[dict]:
@@ -157,7 +165,10 @@ def connected_components(
 
     # Determine reduce shard count. Default to ctx max_workers to avoid
     # I/O amplification.
-    num_reduce_shards = num_reduce_shards or ctx.max_workers
+    if num_reduce_shards is None:
+        num_reduce_shards = ctx.max_workers or 1
+    if num_reduce_shards < 1:
+        raise ValueError("num_reduce_shards must be at least 1")
 
     start_iteration = 1
     curr_it: Sequence[str]
@@ -177,6 +188,9 @@ def connected_components(
             start_iteration = last_it
         logger.info("CC resume: through it_%d, starting at it_%d", last_it, start_iteration)
     else:
+        initial_checkpoint = (
+            ZephyrStageCheckpoint(key=f"{checkpoint_key_prefix}:initial") if checkpoint_key_prefix else None
+        )
         curr_it = ctx.execute(
             ds
             # Group nodes in buckets, deduplicate, and emit pairwise links
@@ -205,6 +219,7 @@ def connected_components(
             verbose=True,
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
+            checkpoint=initial_checkpoint,
         ).results
 
     def _get_write_shard_and_count_fn(iteration: int):
@@ -233,6 +248,9 @@ def connected_components(
     for i in range(start_iteration, max_iterations + 1):  # type: ignore[bad-assignment]
         logger.info(f"Connected components iteration {i}...")
 
+        iteration_checkpoint = (
+            ZephyrStageCheckpoint(key=f"{checkpoint_key_prefix}:iteration-{i}") if checkpoint_key_prefix else None
+        )
         shard_results = ctx.execute(
             Dataset.from_list(curr_it)
             .load_parquet()
@@ -243,6 +261,7 @@ def connected_components(
             verbose=True,
             map_task_resources=map_task_resources,
             reduce_task_resources=reduce_task_resources,
+            checkpoint=iteration_checkpoint,
         ).results
 
         curr_it = [r["path"] for r in shard_results]

@@ -24,6 +24,7 @@ from rigging.timing import ExponentialBackoff, RateLimiter, log_time
 
 from zephyr.plan import Join, PhysicalOp, PhysicalPlan, PhysicalStage, Scatter, Shard, SourceItem, StageType
 from zephyr.shuffle import ListShard, MemChunk
+from zephyr.stage_checkpoint import load_stage_checkpoint, write_stage_checkpoint
 from zephyr.stage_io import (
     ShardTask,
     TaskResult,
@@ -1083,11 +1084,16 @@ class ZephyrCoordinator:
         execution_id: str,
         map_cost: ZephyrTaskResources,
         reduce_cost: ZephyrTaskResources,
+        checkpoint_fingerprint: str | None = None,
     ) -> None:
         """Run one pipeline, blocking until done. The result goes to storage.
 
         Calls for different execution IDs can run concurrently. A duplicate
         call joins the first call for its execution ID.
+
+        When ``checkpoint_fingerprint`` is present, the coordinator resumes
+        after the newest valid stage checkpoint and writes one manifest after
+        each completed stage.
         """
         for task_kind, cost in (("map", map_cost), ("reduce", reduce_cost)):
             if not self._worker_resources.can_fit(cost):
@@ -1128,11 +1134,27 @@ class ZephyrCoordinator:
             return None
 
         result_path = _execution_result_path(self._chunk_prefix, execution_id)
+        succeeded = False
         try:
             shards = _build_source_shards(plan.source_items)
             if not shards:
                 self._persist_result(result_path, ZephyrExecutionResult(results=[], counters={}))
+                succeeded = True
                 return None
+
+            start_stage_index = 0
+            if checkpoint_fingerprint is not None:
+                checkpoint = load_stage_checkpoint(
+                    prefix=self._chunk_prefix,
+                    execution_id=execution_id,
+                    fingerprint=checkpoint_fingerprint,
+                    num_stages=len(plan.stages),
+                )
+                if checkpoint is not None:
+                    shards = checkpoint.shards
+                    start_stage_index = checkpoint.stage_index + 1
+                    with self._lock:
+                        run.completed_totals = dict(checkpoint.completed_totals)
 
             last_worker_stage_idx = max(
                 (i for i, st in enumerate(plan.stages) if st.stage_type != StageType.RESHARD),
@@ -1143,6 +1165,8 @@ class ZephyrCoordinator:
                 run.plan_stages = list(plan.stages)
 
             for stage_idx, stage in enumerate(plan.stages):
+                if stage_idx < start_stage_index:
+                    continue
                 if stage.stage_type == StageType.RESHARD:
                     shards = _reshard_refs(shards, stage.output_shards or len(shards))
                     continue
@@ -1157,6 +1181,17 @@ class ZephyrCoordinator:
                     aux_per_shard=aux_per_shard,
                     is_last_stage=(stage_idx == last_worker_stage_idx),
                 )
+                if checkpoint_fingerprint is not None:
+                    with self._lock:
+                        completed_totals = dict(run.completed_totals)
+                    write_stage_checkpoint(
+                        prefix=self._chunk_prefix,
+                        execution_id=execution_id,
+                        fingerprint=checkpoint_fingerprint,
+                        stage_index=stage_idx,
+                        shards=shards,
+                        completed_totals=completed_totals,
+                    )
 
             materialized = self._result_executor.map(list, shards)
 
@@ -1167,6 +1202,7 @@ class ZephyrCoordinator:
             with self._lock:
                 counters = {name: entry.value for name, entry in run.merged_counters().items()}
             self._persist_result(result_path, ZephyrExecutionResult(results=flat_result, counters=counters))
+            succeeded = True
             return None
         except Exception as e:
             # Persist the normalized exception so the driver can recover the
@@ -1182,6 +1218,11 @@ class ZephyrCoordinator:
             raise terminal_error from e
         finally:
             storage_cleanup_safe = self._drain_execution(run)
+            if checkpoint_fingerprint is not None and not succeeded:
+                logger.info(
+                    "[%s] Keeping intermediate data so a later run resumes from its stage checkpoint", execution_id
+                )
+                storage_cleanup_safe = False
             with self._lock:
                 run.finish(storage_cleanup_safe=storage_cleanup_safe)
                 run.finished.set()
