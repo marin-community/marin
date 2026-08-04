@@ -9,7 +9,6 @@ import time
 import traceback
 from collections.abc import Callable, Hashable
 from contextlib import suppress
-from typing import Any
 
 from fray.actor import ActorFuture, ActorHandle, current_actor
 from rigging.timing import ExponentialBackoff, RateLimiter
@@ -109,9 +108,9 @@ class ZephyrWorker:
         """
         logger.info("[%s] Poll loop starting", self._worker_id)
         try:
-            registrations = self._coordinator.register_worker.remote(
-                self._worker_id, self._actor_handle
-            ).result(timeout=30.0)
+            registrations = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle).result(
+                timeout=30.0
+            )
             self._memory_store.restore(registrations)
         except Exception:
             logger.error("[%s] Failed to register with coordinator", self._worker_id, exc_info=True)

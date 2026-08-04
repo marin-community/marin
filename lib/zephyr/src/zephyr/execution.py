@@ -40,7 +40,7 @@ from zephyr.coordinator import (
     _try_read_coordinator_result,
 )
 from zephyr.dataset import Dataset
-from zephyr.memory_store import MemoryStore, _MemoryTableRegistration, _actor_result_with_recovery, _store_plan
+from zephyr.memory_store import MemoryStore, _actor_result_with_recovery, _MemoryTableRegistration, _store_plan
 from zephyr.plan import PhysicalPlan, compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
 from zephyr.stage_io import (
@@ -397,9 +397,7 @@ class ZephyrContext:
 
         try:
             load_pass()
-            coordinator.register_memory_table.remote(registration).result(
-                timeout=max(0.0, deadline - time.monotonic())
-            )
+            coordinator.register_memory_table.remote(registration).result(timeout=max(0.0, deadline - time.monotonic()))
             stats_by_position = load_pass()
             actors_by_index: list[ActorHandle | None] = [None] * self.max_workers
             for handle, stats in zip(handles, stats_by_position, strict=True):

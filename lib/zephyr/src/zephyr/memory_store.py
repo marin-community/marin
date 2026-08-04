@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeAlias, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast
 
 from fray.actor import ActorFuture, ActorHandle, ActorUnavailableError
 from rigging.timing import ExponentialBackoff
@@ -123,7 +123,7 @@ class _MemoryTableStatsResult:
     stats: MemoryStoreActorStats | None = None
 
 
-_MemoryTableResult: TypeAlias = _MemoryTableLookup | _MemoryTableStatsResult
+type _MemoryTableResult = _MemoryTableLookup | _MemoryTableStatsResult
 
 
 @dataclass
@@ -159,8 +159,11 @@ class _MemoryStoreService:
 
     def restore(self, registrations: tuple[_MemoryTableRegistration, ...]) -> None:
         """Install active table metadata without reading source data."""
-        for registration in registrations:
-            self._install(registration)
+        with self._tables_lock:
+            for registration in registrations:
+                if registration.table_id in self._destroyed or registration.table_id in self._tables:
+                    continue
+                self._tables[registration.table_id] = _MemoryTableState(registration=registration)
 
     def _load_values(self, registration: _MemoryTableRegistration) -> tuple[dict[Hashable, Any], tuple[int, ...]]:
         plan = registration.plan
@@ -331,7 +334,10 @@ class MemoryStore(Generic[K, V]):
 
     def _reload(self, actor_index: int, deadline: float) -> None:
         actor = self.actors[actor_index]
-        call = lambda: actor.reload_memory_table.submit(self.table_id)
+
+        def call() -> ActorFuture:
+            return actor.reload_memory_table.submit(self.table_id)
+
         try:
             initial_future = call()
         except ActorUnavailableError:
@@ -441,7 +447,10 @@ class MemoryStore(Generic[K, V]):
     def destroy(self) -> None:
         """Remove this table from the worker pool."""
         deadline = time.monotonic() + self.recovery_timeout
-        unregister = lambda: self.coordinator.unregister_memory_table.remote(self.table_id)
+
+        def unregister() -> ActorFuture:
+            return self.coordinator.unregister_memory_table.remote(self.table_id)
+
         try:
             unregister_future = unregister()
         except ActorUnavailableError:

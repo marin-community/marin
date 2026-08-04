@@ -356,9 +356,7 @@ class ZephyrCoordinator:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
         self._worker_group = worker_group
 
-    def register_worker(
-        self, worker_id: str, worker_handle: ActorHandle
-    ) -> tuple[_MemoryTableRegistration, ...]:
+    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> tuple[_MemoryTableRegistration, ...]:
         """Called by workers when they come online to register with coordinator.
 
         Handles re-registration from reconstructed workers (e.g. after node

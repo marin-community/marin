@@ -175,23 +175,17 @@ def test_memory_store_invalid_input_does_not_restart_workers(iris_integration_cl
 
     with _store_context(iris_integration_client, tmp_path) as context:
         task_ids = [_worker_task_id(context, actor_index) for actor_index in range(2)]
-        attempts_before = [
-            iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids
-        ]
+        attempts_before = [iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids]
 
         with pytest.raises(MemoryStorePartitionError):
             _load_store(context, dataset, name="invalid-partition", hash_key=_wrong_key_partition)
 
-        attempts_after = [
-            iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids
-        ]
+        attempts_after = [iris_integration_client._iris.task_status(task_id).current_attempt_id for task_id in task_ids]
         assert attempts_after == attempts_before
 
 
 def test_memory_store_rejects_duplicate_key_without_poisoning_worker(local_client, tmp_path):
-    duplicate = Dataset.from_list([[((0, "same"), "first"), ((0, "same"), "second")]]).flat_map(
-        _partition_rows
-    )
+    duplicate = Dataset.from_list([[((0, "same"), "first"), ((0, "same"), "second")]]).flat_map(_partition_rows)
     valid = Dataset.from_list([((0, "valid"), "value")])
 
     with _store_context(local_client, tmp_path) as context:
