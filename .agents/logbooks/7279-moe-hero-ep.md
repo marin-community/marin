@@ -722,3 +722,23 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Comparison anchor: A prior EP64 arm at d6144, 4-of-128, sliding window 2048, and 120 steps
   measured 24.842% median MFU and 274,954 tokens/s (issue 7279 comment 5095217108). That arm is not
   this shape, but it bounds the expected range.
+
+### 2026-08-04 23:50 UTC - MHEP-009 passed: the FSDP shape runs on EP64
+
+- Completion: All 16 GPU tasks succeeded with exit 0 and zero failures. The run completed all 25
+  steps. Admission took nine attempts across 5 hours and 17 minutes, with eight preemptions before
+  the successful window. No preemption reached step 0, thus no GPU work was lost.
+- Performance: Median MFU is 27.7544%, mean MFU is 26.0191%, p10 MFU is 19.8324%, and p90 MFU is
+  29.3997% over 26 samples. The last sample is 26.4006% MFU, 316,473 tokens/s, and 13.2533 seconds.
+- Training: Final loss is 6.0498. Final MoE drop fraction is 9.9683%, or 80,275,372 assignments.
+- Memory: The run confirms the pre-flight estimate. There was no OOM and no allocator failure at an
+  estimated 106 GiB per device with host offload of the optimizer state.
+- Variance caveat: The standard deviation is 6.5623 over 26 samples, because the early samples
+  include compile and warmup. Use the median. The 200-step EP hero gate had a 0.5656 deviation, so a
+  longer run is necessary before any small difference is called real.
+- Capacity caveat: The 9.9683% drop fraction means EP does less work than the analytic FLOP count
+  credits. The FSDP control computes every assignment. Thus the MFU comparison is not yet
+  quality-fair, and MHEP-012 remains necessary.
+- Comparison anchors: A prior EP64 arm at d6144, 4-of-128, and sliding window 2048 measured 24.842%
+  median MFU. The native d5120 EP hero measured 23.6969% at 200 steps. This shape is above both.
+- Next action: Read the MHEP-010 control when it completes, then report the same-shape comparison.
