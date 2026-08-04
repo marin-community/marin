@@ -2187,3 +2187,13 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Comparison: 16 ranks give `310.8 GB/s` and 32 ranks give `335.9 GB/s` at this peer message size.
 - Prediction: A rate near `100 GB/s` supports the CTA-per-peer hypothesis and explains the training gap. A rate near `300 GB/s` rejects it and moves the cause into the training graph.
 - Gate: One complete result file with all three variants.
+
+### 2026-08-04 18:40 UTC - Correction: MNEP-115 passes and is the best exact result
+
+- Error: The MNEP-115 entry above records `29.0 s` for each step and about `8.97%` MFU, and rejects the change. Those numbers came from tqdm `elapsed` deltas, not from the logged metric.
+- Correct values from W&B: `throughput/p50_mfu` is `10.719%`, `throughput/duration` is `24.15 s`, `throughput/tokens_per_second` is `173,705`, and `moe/dropped_assignments` is `0`.
+- Comparison: MNEP-102 gives `9.937%` and MNEP-074 gives `10.004%`. MNEP-115 is `7.9%` above MNEP-102 and is the highest exact-mode MFU in this work.
+- Conclusion: `--xla_gpu_experimental_parallel_collective_overlap_limit=4` is an improvement. Reverse the earlier rejection. The serial default of `1` was a safety setting whose comment asked for a gate that had never run.
+- Method rule: Read MFU and step duration from the W&B summary. Do not derive them from progress-bar output.
+- Other corrections from the same source: MNEP-105 shows `11.816%` MFU but drops `1,796,915,552` assignments, so it stays invalid. MNEP-114 shows `9.822%`, not `9.937%`.
+- Single-rack FSDP: `mhfsdp-1rack-5-20260804-1805` shows `10.114%` MFU with `125,361,718` dropped assignments and a `34.59 s` step, so it is not a clean comparison point either.
