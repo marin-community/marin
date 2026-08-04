@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from rigging.filesystem import StoragePath, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join
 
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
@@ -34,7 +34,16 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
+from marin.evaluation.samples import (
+    EvalSample,
+    Grading,
+    SampleKind,
+    archive_samples_table,
+    archive_steps_table,
+    open_eval_archive,
+    sample_to_archive_row,
+    trajectory_step_rows,
+)
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -62,9 +71,10 @@ class HarborTrial:
     """One finished Harbor trial, normalized off its ``result.json``."""
 
     task_id: str
+    trial_id: str
     reward: float
     status: str
-    trajectory_uri: str | None
+    trajectory_path: str | None
     error: dict | None
 
 
@@ -121,7 +131,7 @@ def _job_dir(output_dir: str, job_name: str) -> StoragePath:
 
 
 def _read_trial(result_file: StoragePath) -> HarborTrial:
-    """Normalize one finished trial off its ``result.json``, referencing its durable trajectory."""
+    """Normalize one finished trial off its ``result.json``, locating its durable trajectory."""
     trial_dir = result_file.parent
     data = json.loads(result_file.read_text())
     task_id = data.get("task_name", trial_dir.name)
@@ -130,15 +140,14 @@ def _read_trial(result_file: StoragePath) -> HarborTrial:
     reward = float(reward) if isinstance(reward, int | float) else 0.0
     exc = data.get("exception_info")
     error = {"type": exc.get("exception_type"), "message": exc.get("exception_message")} if exc else None
-    # The trajectory is already durable in the job tree; reference it in place rather than reading it
-    # back and re-uploading a copy.
     trajectory_file = trial_dir / "agent" / "trajectory.json"
-    trajectory_uri = str(trajectory_file) if trajectory_file.exists() else None
+    trajectory_path = str(trajectory_file) if trajectory_file.exists() else None
     return HarborTrial(
         task_id=task_id,
+        trial_id=trial_dir.name,
         reward=reward,
         status="failed" if exc else "completed",
-        trajectory_uri=trajectory_uri,
+        trajectory_path=trajectory_path,
         error=error,
     )
 
@@ -152,15 +161,15 @@ def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
         return list(pool.map(_read_trial, result_files))
 
 
-def _sample_for(trial: HarborTrial, dataset: str) -> EvalSample:
-    """Normalize one trial into an agentic :class:`EvalSample`, referencing its durable trajectory."""
+def _sample_for(trial: HarborTrial, dataset: str, *, trajectory_uri: str | None) -> EvalSample:
+    """Normalize one trial into an agentic :class:`EvalSample`, referencing its archived trajectory."""
     solved = trial.reward >= SOLVED_REWARD
     detail = json.dumps({"reward": trial.reward, "error": trial.error}, ensure_ascii=False)
     return EvalSample(
         task=dataset,
         doc_id=trial.task_id,
         kind=SampleKind.AGENTIC,
-        trajectory_uri=trial.trajectory_uri,
+        trajectory_uri=trajectory_uri,
         grading=Grading(
             method="harbor:verifier",
             metric="reward",
@@ -173,15 +182,41 @@ def _sample_for(trial: HarborTrial, dataset: str) -> EvalSample:
     )
 
 
-def _write_samples(trials: list[HarborTrial], dataset: str, out_path: str) -> str | None:
-    """Write one agentic-sample parquet for the run; return its path (None if there were no trials)."""
+def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> str | None:
+    """Write the run's samples, flattened steps, and raw trajectories to the finestore archive.
+
+    Each trial's raw trajectory is stored once in the ``blobs`` table and referenced from the sample
+    by a ``finestore://`` URI; its steps are flattened into the ``steps`` table for column projection.
+    """
     if not trials:
         return None
-    samples = [_sample_for(trial, dataset) for trial in trials]
-    dest = prefix_join(out_path, "samples_harbor.parquet")
-    fs, _ = url_to_fs(dest)
-    write_sample_parquet(fs, dest, samples)
-    return dest
+    store = open_eval_archive(output_dir, writer_id="harbor")
+    samples = archive_samples_table(store)
+    steps = archive_steps_table(store)
+    try:
+        for trial in trials:
+            trajectory_uri = None
+            if trial.trajectory_path is not None:
+                raw = StoragePath(trial.trajectory_path).read_bytes()
+                trajectory_uri = store.write(
+                    f"{trial.trial_id}/trajectory.json",
+                    {"task": dataset, "doc_id": trial.task_id, "trial_id": trial.trial_id},
+                    raw,
+                )
+                try:
+                    trajectory = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    logger.warning("trial %s has an unparseable trajectory; skipping steps", trial.trial_id)
+                else:
+                    rows = trajectory_step_rows(trajectory, task=dataset, doc_id=trial.task_id, trial_id=trial.trial_id)
+                    if rows:
+                        steps.extend(rows)
+            sample = _sample_for(trial, dataset, trajectory_uri=trajectory_uri)
+            samples.append(sample_to_archive_row(sample, trial_id=trial.trial_id))
+        store.seal()
+    finally:
+        store.close()
+    return output_dir
 
 
 def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None) -> HarborRunResult:
@@ -215,7 +250,7 @@ def _run_harbor_job(
     run_harbor_driver(config, overlay, driver_env)
 
     trials = _read_trials(job_dir)
-    samples_path = _write_samples(trials, dataset, output_dir)
+    samples_path = _write_archive(trials, dataset, output_dir)
     result = _aggregate(trials, dataset, samples_path)
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(

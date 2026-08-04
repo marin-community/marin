@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from finestore import CompositeReader
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import runner
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
@@ -16,8 +17,7 @@ from marin.evaluation.harbor.runner import (
     HarborExecutor,
     HarborTrial,
     _read_trials,
-    _sample_for,
-    _write_samples,
+    _write_archive,
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
@@ -117,24 +117,32 @@ def test_materialize_harbor_dataset_rebases_local_path_onto_worker_workspace(tmp
     )
 
 
-def test_write_samples_uses_a_path_safe_name_for_hf_dataset(tmp_path):
-    trial = HarborTrial(task_id="task-one", reward=0.0, status="completed", trajectory_uri=None, error=None)
+def test_write_archive_writes_agentic_samples(tmp_path):
+    trial = HarborTrial(
+        task_id="task-one", trial_id="trial-1", reward=0.0, status="completed", trajectory_path=None, error=None
+    )
 
-    path = _write_samples([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
+    root = _write_archive([trial], "hf://DCAgent2/terminal_bench_2", str(tmp_path))
 
-    assert path == str(tmp_path / "samples_harbor.parquet")
-    assert Path(path).exists()
+    assert root == str(tmp_path)
+    rows = CompositeReader(str(tmp_path)).scan("samples").to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["doc_id"] == "task-one"
+    assert rows[0]["trial_id"] == "trial-1"
+    assert rows[0]["kind"] == "agentic"
 
 
-def test_read_trials_references_trajectory_in_place(tmp_path):
-    """A trial's trajectory is referenced at its durable job-tree path, not copied elsewhere."""
+def test_read_trials_and_archive_captures_trajectory(tmp_path):
+    """A trial's trajectory is archived once, referenced by a finestore:// URI, and its steps flattened."""
     job_dir = tmp_path / "harbor_jobs" / "job"
     with_trajectory = job_dir / "trial-one"
     (with_trajectory / "agent").mkdir(parents=True)
     (with_trajectory / "result.json").write_text(
         json.dumps({"task_name": "task-one", "verifier_result": {"rewards": {"reward": 1.0}}})
     )
-    (with_trajectory / "agent" / "trajectory.json").write_text('{"steps": []}')
+    (with_trajectory / "agent" / "trajectory.json").write_text(
+        json.dumps({"steps": [{"step_id": 1, "source": "agent", "message": "hi"}]})
+    )
     without_trajectory = job_dir / "trial-two"
     without_trajectory.mkdir(parents=True)
     (without_trajectory / "result.json").write_text(json.dumps({"task_name": "task-two"}))
@@ -142,18 +150,27 @@ def test_read_trials_references_trajectory_in_place(tmp_path):
     trials = _read_trials(StoragePath(str(job_dir)))
 
     by_task = {trial.task_id: trial for trial in trials}
-    assert by_task["task-one"].trajectory_uri == str(with_trajectory / "agent" / "trajectory.json")
-    assert by_task["task-two"].trajectory_uri is None
-    # The sample carries the in-place URI; no separate trajectories/ copy is written.
-    sample = _sample_for(by_task["task-one"], "aime")
-    assert sample.trajectory_uri == str(with_trajectory / "agent" / "trajectory.json")
+    assert by_task["task-one"].trajectory_path == str(with_trajectory / "agent" / "trajectory.json")
+    assert by_task["task-one"].trial_id == "trial-one"
+    assert by_task["task-two"].trajectory_path is None
+
+    archive_root = str(tmp_path / "archive")
+    _write_archive(trials, "aime", archive_root)
+    reader = CompositeReader(archive_root)
+    samples = {row["doc_id"]: row for row in reader.scan("samples").to_pylist()}
+    # The archived sample references its trajectory by a finestore:// URI, not the job-tree path.
+    assert samples["task-one"]["trajectory_uri"].startswith("finestore://blobs/")
+    assert reader.resolve(samples["task-one"]["trajectory_uri"]) is not None
+    steps = reader.scan("steps").to_pylist()
+    assert len(steps) == 1 and steps[0]["step_id"] == 1
 
 
 def _memory_remote(protocol: str, monkeypatch) -> None:
     """Route ``protocol://`` reads and writes to a fresh in-memory filesystem.
 
-    Patches both the ``StoragePath`` factory (glob/read/write verbs) and the ``url_to_fs`` bound in
-    the runner (the sample-parquet writer), so the whole executor path stays off real object storage.
+    Patches rigging's factory (``url_to_fs``/``open_url``), which every read and write resolves through
+    at call time -- ``StoragePath`` verbs, ``atomic_rename``, and the finestore archive writer -- so the
+    whole executor path stays off real object storage.
     """
 
     class RemoteMemoryFileSystem(MemoryFileSystem):
@@ -182,7 +199,6 @@ def _memory_remote(protocol: str, monkeypatch) -> None:
 
     monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", remote_url_to_fs)
     monkeypatch.setattr("rigging.filesystem.factory.open_url", remote_open_url)
-    monkeypatch.setattr(runner, "url_to_fs", remote_url_to_fs)
 
 
 @pytest.mark.parametrize("protocol", ["gs", "s3"])
@@ -228,7 +244,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
-    assert StoragePath(f"{output_dir}/samples_harbor.parquet").exists()
+    assert StoragePath(f"{output_dir}/_finestore/SEALED").exists()
     assert StoragePath(f"{output_dir}/harbor_result.json").exists()
 
 

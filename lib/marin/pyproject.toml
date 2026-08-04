@@ -17,6 +17,7 @@ dependencies = [
     "draccus>=0.11.6",
     "fasttext-wheel>=0.9.2",
     "marin-fray",
+    "marin-finestore",
     "marin-iris",
     "marin-rigging[prometheus]",
     "fsspec>=2025.3.0",

@@ -135,6 +135,7 @@ members = [
     "lib/marin",
     "lib/rigging",
     "lib/zephyr",
+    "lib/finestore",
     "infra/pulumi",
 ]
 # Native maturin packages are excluded from uv workspace discovery because each
@@ -167,6 +168,7 @@ marin-levanter = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-zephyr = { workspace = true }
+marin-finestore = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
@@ -277,6 +279,7 @@ project-includes = [
     "lib/ducky/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
+    "lib/finestore/src/**/*.py",
     "scripts/ci",
     "scripts/cost_manager",
 ]
@@ -290,6 +293,7 @@ search-path = [
     "lib/haliax/src",
     "lib/rigging/src",
     "lib/zephyr/src",
+    "lib/finestore/src",
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
