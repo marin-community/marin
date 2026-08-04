@@ -129,7 +129,7 @@ def _start_nccl_ras_probe() -> PeriodicProbe | None:
         if jax.default_backend() != "gpu" or jax.process_index() != 0:
             return None
         return nccl.start(interval=_NCCL_RAS_POLL_SECONDS)
-    except Exception:
+    except RuntimeError:
         logger.warning("could not start NCCL RAS telemetry", exc_info=True)
         return None
 

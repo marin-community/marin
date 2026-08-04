@@ -69,7 +69,7 @@ def collect(runner: BoundedCommandRunner) -> None:
     if command.status is CommandStatus.CANCELLED:
         return
     if command.output is None:
-        _record_poll(command.status.value, duration, failed=True)
+        _record_poll(command.status.value, duration)
         if command.status is CommandStatus.DEADLINE_EXCEEDED:
             telemetry.counter("ras_poll_timeouts", unit="{timeout}").add(
                 1,
@@ -77,28 +77,29 @@ def collect(runner: BoundedCommandRunner) -> None:
             )
         return
     if command.output.returncode != 0:
-        _record_poll("nonzero_exit", duration, failed=True)
+        _record_poll("nonzero_exit", duration)
         return
 
     try:
         metrics = _metrics(json.loads(command.output.stdout))
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
         logger.warning("could not parse NCCL RAS telemetry: %s", error)
-        _record_poll("invalid_payload", duration, failed=True)
+        _record_poll("invalid_payload", duration)
         return
-    _record_poll("success", duration, failed=False)
+    _record_poll("success", duration)
     for metric in metrics:
         telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
 
 
-def _record_poll(outcome: str, duration: float, *, failed: bool) -> None:
+def _record_poll(outcome: str, duration: float) -> None:
+    available = outcome == "success"
     current = {
         "outcome": outcome,
         **telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT),
     }
-    telemetry.gauge("ras_available").set(0.0 if failed else 1.0, attributes=current)
+    telemetry.gauge("ras_available").set(float(available), attributes=current)
     telemetry.histogram("ras_poll_duration_seconds", unit="s").record(duration, attributes=current)
-    if failed:
+    if not available:
         telemetry.counter("ras_poll_failures", unit="{failure}").add(
             1,
             attributes={

@@ -67,7 +67,9 @@ def _install_ncclras(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, marker:
         ],
         "ras": {"collection_time_sec": 0.125, "timeouts_count": 0},
     }
-    marker_write = f"from pathlib import Path\nPath({str(marker)!r}).write_text('started')\n" if marker else ""
+    marker_write = (
+        f"with open({str(marker)!r}, 'a') as marker_file:\n    marker_file.write('started\\n')\n" if marker else ""
+    )
     command = tmp_path / "ncclras"
     command.write_text(f"#!{sys.executable}\n{marker_write}print({json.dumps(payload)!r})")
     command.chmod(command.stat().st_mode | stat.S_IXUSR)
@@ -174,35 +176,22 @@ def test_finish_stops_the_phase_heartbeat(exported, fast_heartbeat):
 
 
 def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch, tmp_path):
-    _install_ncclras(monkeypatch, tmp_path)
+    marker = tmp_path / "ncclras-started"
+    _install_ncclras(monkeypatch, tmp_path, marker=marker)
     monkeypatch.setenv("NCCL_RAS_ENABLE", "1")
     monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
+    monkeypatch.setattr(tracker_telemetry, "_NCCL_RAS_POLL_SECONDS", 0.01)
 
     tracker = TelemetryTracker()
     rank = exported.record("communicator_rank_status", {"communicator_hash": "0xabc", "rank": "0"})
 
     tracker.finish()
+    completed_polls = marker.read_text()
+    Event().wait(0.05)
 
     assert rank["attributes"]["rank_host"] == "10.0.0.1"
-
-
-def test_finish_stops_nccl_ras_collection(exported, monkeypatch):
-    stopped = Event()
-
-    class RecordingProbe:
-        def shutdown(self):
-            stopped.set()
-
-    monkeypatch.setenv("NCCL_RAS_ENABLE", "1")
-    monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
-    monkeypatch.setattr(tracker_telemetry.nccl, "start", lambda **_kwargs: RecordingProbe())
-
-    tracker = TelemetryTracker()
-    tracker.finish()
-
-    assert stopped.is_set()
+    assert marker.read_text() == completed_polls
 
 
 def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, monkeypatch, tmp_path):

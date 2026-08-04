@@ -58,10 +58,6 @@ class BoundedCommandRunner:
         self._active: set[subprocess.Popen[bytes]] = set()
         self._cancelled = False
 
-    def run(self, argv: tuple[str, ...], timeout: float) -> CommandOutput | None:
-        """Return completed output, or None when collection cannot finish safely."""
-        return self.run_result(argv, timeout).output
-
     def run_result(self, argv: tuple[str, ...], timeout: float) -> CommandResult:
         """Return completed output or the reason collection did not complete."""
         if not argv:
