@@ -2046,3 +2046,14 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Consequence 2: MNEP-087 measured `0.000 s` of overlap between QuACK and ragged transport in the training graph. The hardware permits that overlap, so the training result comes from the graph or the scheduler, not from the devices.
 - Suspect: `MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT = 1` serializes every collective. The comment says this is a safety default until an EP64 overlap gate runs. That gate never ran.
 - Caveat: The combined call is `0.45 ms` faster than the collective alone, which is inside run-to-run noise. The safe statement is that the GEMM adds no measurable cost.
+
+### 2026-08-04 01:00 UTC - MNEP-113 best-configuration profile contract
+
+- Treatment: Repeat MNEP-102 without a code change. This is the best exact configuration at `9.937%` median MFU and `26.170 s` for each step.
+- Configuration: Two token buckets, compute-overlap schedule, exact MoonEP, ragged direct-device transport, global histogram QB, and the one-remote-CTA wheel.
+- Capture: One complete step from step three on process zero. MNEP-099 shows that an all-process capture stops the rack before step one.
+- Primary measures: Total ragged time, exposed ragged time, exact QuACK overlap, gated-GEMM overlap, and full-step GPU event time.
+- Secondary measures: Layout time and the split between the six transfer families.
+- Open questions that this profile answers: Whether the `0.000 s` overlap of MNEP-087 still holds after the one-CTA change, and where the remaining `2.4` times transport gap sits inside the step.
+- Gate: Require five finite steps, zero dropped assignments, and one complete XProf session.
+- Capacity note: No domain has 16 free nodes at submit time. The best domains hold 9 and 8 free nodes.
