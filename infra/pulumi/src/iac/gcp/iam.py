@@ -139,7 +139,7 @@ class GcpIamArgs:
     service_accounts: tuple[GcpServiceAccountIam, ...]
     # Adoption mode imports owned service accounts and custom roles. IAM member creation is
     # idempotent in the GCP provider, so grants deliberately use its create path instead; importing
-    # them makes the shared policy etag unknown and plans spurious replacements (#7961).
+    # them makes the shared policy etag unknown and plans spurious replacements.
     adopt: bool = False
 
 
@@ -382,14 +382,11 @@ class GcpIam(pulumi.ComponentResource):
         # only ever handles plain strings.
         args = _resolve_encrypted_members(args, _KmsMemberDecryptor(_crypto_key_id(args)))
 
-        def opts_for(
-            import_id: str, *, depends_on: list[pulumi.Resource] | None = None, protect: bool = False
-        ) -> pulumi.ResourceOptions:
+        def opts_for(import_id: str, *, protect: bool = False) -> pulumi.ResourceOptions:
             return pulumi.ResourceOptions(
                 parent=self,
                 provider=gcp_provider,
                 import_=import_id if args.adopt else None,
-                depends_on=depends_on,
                 protect=protect,
             )
 
