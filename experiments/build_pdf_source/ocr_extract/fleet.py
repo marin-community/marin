@@ -91,16 +91,18 @@ _WORKER_REQUEST_TIMEOUT = 900.0
 _LEASE_TIMEOUT = 1020.0
 _PROXY_REQUEST_TIMEOUT = 1140.0
 
+_STARTUP_TIMEOUT = 3600
+_ENDPOINT_READY_TIMEOUT = 3600.0
+_WORKER_DISK = "300g"
+
 # How long the proxy waits for the first worker to serve /v1/models. This is a weight-download
 # budget, not a serving one, and the 300s default silently governs a fleet whose every other
 # timeout is set to an hour. Flash starts in ~173s and fits under it; Infinity-Parser2-Pro takes
 # ~647s and did not, so the proxy gave up mid-fetch and killed the fleet with a 504 on /v1/models
-# while the workers were still healthy. Any model heavier than Flash hits this.
-_PROXY_READINESS_TIMEOUT = 1800.0
-
-_STARTUP_TIMEOUT = 3600
-_ENDPOINT_READY_TIMEOUT = 3600.0
-_WORKER_DISK = "300g"
+# while the workers were still healthy. Raised again to match the engine startup budget after 8 of
+# 11 fleets missed a 1800s window when 176 instances cold-started at once -- under contention the
+# readiness budget must never be tighter than the startup budget it is waiting on.
+_PROXY_READINESS_TIMEOUT = float(_STARTUP_TIMEOUT)
 
 
 def _vllm_extra_args() -> tuple[str, ...]:
