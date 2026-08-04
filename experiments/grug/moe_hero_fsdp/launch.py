@@ -11,6 +11,7 @@ import click
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
@@ -37,8 +38,10 @@ HERO_NODES_PER_RACK = 16
 HERO_PROCESSES_PER_TASK = 1
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
-# This must exceed XLA's 10-minute collective timeout and synchronous checkpoint staging.
-HERO_TRAINING_STALL_TIMEOUT = timedelta(minutes=15)
+# This must exceed XLA's 10-minute collective timeout.
+HERO_TRAIN_STEP_TIMEOUT = timedelta(minutes=15)
+# Evaluation, checkpointing, and other hooks use this process-wide deadline.
+HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -112,9 +115,13 @@ def build_hero_run(
                     name=run_id,
                     replicate_path=ctx.output_path,
                 ),
-                TelemetryConfig(training_stall_timeout=HERO_TRAINING_STALL_TIMEOUT),
+                TelemetryConfig(),
             ),
             watch=WatchConfig(interval=20),
+            progress_watchdog=ProgressWatchdogConfig(
+                step_timeout=HERO_TRAIN_STEP_TIMEOUT,
+                process_timeout=HERO_PROCESS_STALL_TIMEOUT,
+            ),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,

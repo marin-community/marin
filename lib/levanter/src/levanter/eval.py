@@ -24,7 +24,7 @@ import haliax as hax
 from haliax.partitioning import ResourceMapping
 
 import levanter.tracker
-from levanter.callbacks import StepInfo
+from levanter.callbacks import ProgressEvent, StepInfo
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.text.examples import (
@@ -337,43 +337,46 @@ def cb_tagged_lm_evaluate(
     def eval_callback(step: StepInfo):
         step_count = step.step
         metrics_to_write = {}
+        step.emit_event(ProgressEvent.EVALUATION_STARTED)
+        try:
+            if eval_current:
+                log_dict = eval_model(evaluator, step.model, prefix=prefix)
+                levanter.tracker.log(log_dict, step=step_count)
+                metrics_to_write.update(log_dict)
 
-        if eval_current:
-            log_dict = eval_model(evaluator, step.model, prefix=prefix)
-            levanter.tracker.log(log_dict, step=step_count)
-            metrics_to_write.update(log_dict)
+            if not eval_current and step.state.model_averaging is None:
+                raise ValueError(
+                    "Cannot evaluate EMA model without model averaging, but you only want to evaluate EMA"
+                )
 
-        if not eval_current and step.state.model_averaging is None:
-            raise ValueError("Cannot evaluate EMA model without model averaging, but you only want to evaluate EMA")
+            if eval_ema and step.state.model_averaging is not None:
+                log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+                levanter.tracker.log(log_dict, step=step_count)
+                metrics_to_write.update(log_dict)
 
-        if eval_ema and step.state.model_averaging is not None:
-            log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
-            levanter.tracker.log(log_dict, step=step_count)
-            metrics_to_write.update(log_dict)
+            # Write metrics to file if checkpoint_path is provided (only from head process to avoid GCS rate limits)
+            if checkpoint_path is not None and metrics_to_write and jax.process_index() == 0:
+                metrics_file = os.path.join(checkpoint_path, "eval_metrics.jsonl")
+                fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
+                fs.makedirs(checkpoint_path, exist_ok=True)
 
-        # Write metrics to file if checkpoint_path is provided (only from head process to avoid GCS rate limits)
-        if checkpoint_path is not None and metrics_to_write and jax.process_index() == 0:
-            metrics_file = os.path.join(checkpoint_path, "eval_metrics.jsonl")
-            fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
-            fs.makedirs(checkpoint_path, exist_ok=True)
+                if fs.exists(metrics_file):
+                    with fs.open(metrics_file, "r") as f:
+                        content = f.read()
+                else:
+                    content = ""
 
-            if fs.exists(metrics_file):
-                with fs.open(metrics_file, "r") as f:
-                    content = f.read()
-            else:
-                content = ""
-
-            with fs.open(metrics_file, "w") as f:
-                # Convert numpy/jax floats to Python floats for JSON serialization
-                serializable_metrics = {
-                    k: float(v) if isinstance(v, (np.floating, jnp.floating)) else v
-                    for k, v in metrics_to_write.items()
-                }
-                record = {"step": int(step_count), **serializable_metrics}
-                content += json.dumps(record, sort_keys=True) + "\n"
-                f.write(content)
-
-        return
+                with fs.open(metrics_file, "w") as f:
+                    # Convert numpy/jax floats to Python floats for JSON serialization
+                    serializable_metrics = {
+                        k: float(v) if isinstance(v, (np.floating, jnp.floating)) else v
+                        for k, v in metrics_to_write.items()
+                    }
+                    record = {"step": int(step_count), **serializable_metrics}
+                    content += json.dumps(record, sort_keys=True) + "\n"
+                    f.write(content)
+        finally:
+            step.emit_event(ProgressEvent.EVALUATION_FINISHED)
 
     return eval_callback
 
@@ -401,15 +404,19 @@ def cb_tagged_evaluate(
         if last_eval_step == step_count:
             return
 
-        if eval_current:
-            log_dict = eval_model(evaluator, step.model, prefix=prefix)
-            levanter.tracker.log(log_dict, step=step_count)
+        step.emit_event(ProgressEvent.EVALUATION_STARTED)
+        try:
+            if eval_current:
+                log_dict = eval_model(evaluator, step.model, prefix=prefix)
+                levanter.tracker.log(log_dict, step=step_count)
 
-        if eval_ema:
-            log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
-            levanter.tracker.log(log_dict, step=step_count)
+            if eval_ema:
+                log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+                levanter.tracker.log(log_dict, step=step_count)
 
-        last_eval_step = step_count
+            last_eval_step = step_count
+        finally:
+            step.emit_event(ProgressEvent.EVALUATION_FINISHED)
 
     return eval_callback
 

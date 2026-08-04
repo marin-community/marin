@@ -53,8 +53,9 @@ import levanter.checkpoint
 import levanter.tracker
 import levanter.tracker.wandb
 import levanter.utils.logging
-from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, ProgressEvent, StepInfo
 from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
@@ -131,6 +132,10 @@ class TrainerHooks:
         for hook in self.hooks:
             if force or (info.step > 1 and info.step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
+
+    def emit_event(self, event: ProgressEvent) -> None:
+        for hook in self.hooks:
+            hook.fn.on_event(event)
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
@@ -387,10 +392,13 @@ class Trainer:
         # letting the background commit thread finish here also avoids it logging into the
         # already-closed tracker/stdout during teardown.
         if self._checkpointer is not None:
+            self.hooks.emit_event(ProgressEvent.CHECKPOINT_STARTED)
             try:
                 self._checkpointer.wait_until_finished()
             except Exception as e:
                 problems.append(e)
+            finally:
+                self.hooks.emit_event(ProgressEvent.CHECKPOINT_FINISHED)
 
         for cmanager in reversed(self._cmanagers):
             try:
@@ -399,6 +407,7 @@ class Trainer:
                 problems.append(e)
 
         self._cmanagers = []
+        self.hooks.emit_event(ProgressEvent.TRAINING_FINISHED)
 
         if len(problems) > 0:
             raise RuntimeError("Exception(s) occurred while exiting trainer", problems) from problems[0]
@@ -496,6 +505,7 @@ class Trainer:
         # this results in two compiles, but the cost of the second compile is worth it
         hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
 
+        self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
             # Annotation scoped to the compiled step only (not hooks/logging below) so
             # that GPU host-side step_num timing matches TPU device-side "Steps" semantics.
@@ -508,6 +518,7 @@ class Trainer:
                     )
 
             loss = result.loss.item()
+            self.hooks.emit_event(ProgressEvent.TRAIN_STEP_FINISHED)
 
             if self.config.crash_on_nan and jnp.isnan(loss):
                 raise RuntimeError("Loss is NaN")
@@ -515,7 +526,7 @@ class Trainer:
             if self.config.crash_on_inf and jnp.isinf(loss):
                 raise RuntimeError("Loss is Inf")
 
-            info = StepInfo(result.new_state, loss, step_time())
+            info = StepInfo(result.new_state, loss, step_time(), _event_handler=self.hooks.emit_event)
 
             with capture_time() as hook_time:
                 self.run_hooks(info)
@@ -570,7 +581,7 @@ class Trainer:
                 f"Training already complete at step {state.step} (target: {self.num_train_steps}). "
                 "Running final hooks only."
             )
-            info = StepInfo(state, 0.0, 0.0)
+            info = StepInfo(state, 0.0, 0.0, _event_handler=self.hooks.emit_event)
             self.run_hooks(info, force=True)
             return info
 
@@ -589,6 +600,10 @@ class Trainer:
         return info
 
     def _add_default_hooks(self):
+        progress_watchdog = self.config.progress_watchdog.create()
+        if progress_watchdog is not None:
+            self.add_hook(progress_watchdog, every=1)
+
         self.add_hook(levanter.callbacks.pbar_logger(total=self.config.num_train_steps), every=1)
         self.add_hook(
             levanter.callbacks.log_step_info(self.config.num_train_steps, self.config.batch_schedule), every=1
@@ -598,7 +613,11 @@ class Trainer:
         self._checkpointer = checkpointer
 
         def checkpoint_hook(info, force=False):
-            checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+            info.emit_event(ProgressEvent.CHECKPOINT_STARTED)
+            try:
+                checkpointer.on_step(tree=info.state.saveable_state, step=info.step, force=force)
+            finally:
+                info.emit_event(ProgressEvent.CHECKPOINT_FINISHED)
 
         self.add_hook(checkpoint_hook, every=1)  # checkpointer manages its own frequency
 
@@ -821,6 +840,8 @@ class TrainerConfig:
     tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
     profiler: ProfilerConfig = ProfilerConfig()
+    progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig()
+    """Optional deadlines for training-step and whole-process progress events."""
 
     log_jaxprs: bool = True
     """Whether to log the jaxpr of the training step. This is useful for debugging and understanding the model."""

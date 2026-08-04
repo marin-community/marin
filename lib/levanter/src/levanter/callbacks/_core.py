@@ -4,7 +4,8 @@
 import abc
 import inspect
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Callable, Generic, TypeVar
 
 from jaxtyping import PyTree
@@ -16,6 +17,22 @@ M = TypeVar("M")  # Model
 M_con = TypeVar("M_con", bound=PyTree, contravariant=True)
 S = TypeVar("S", bound=TrainerState)
 CBInfo = TypeVar("CBInfo")
+
+
+class ProgressEvent(StrEnum):
+    """Lifecycle events that represent forward progress through training."""
+
+    TRAIN_STEP_STARTED = "train_step_started"
+    TRAIN_STEP_FINISHED = "train_step_finished"
+    EVALUATION_STARTED = "evaluation_started"
+    EVALUATION_FINISHED = "evaluation_finished"
+    CHECKPOINT_STARTED = "checkpoint_started"
+    CHECKPOINT_FINISHED = "checkpoint_finished"
+    TRAINING_FINISHED = "training_finished"
+
+
+def _ignore_progress_event(event: ProgressEvent) -> None:
+    del event
 
 
 @dataclass
@@ -30,6 +47,11 @@ class StepInfo(Generic[S]):
     state: S
     loss: float
     step_duration: float
+    _event_handler: Callable[[ProgressEvent], None] = field(
+        default=_ignore_progress_event,
+        repr=False,
+        compare=False,
+    )
 
     model = property(lambda self: self.state.model)
     opt_state = property(lambda self: self.state.opt_state)
@@ -42,6 +64,10 @@ class StepInfo(Generic[S]):
 
     next_step = property(lambda self: int(self.state.step))
 
+    def emit_event(self, event: ProgressEvent) -> None:
+        """Notify event-aware callbacks about progress inside a step callback."""
+        self._event_handler(event)
+
 
 class Callback(ABC, Generic[S]):
     """
@@ -50,6 +76,9 @@ class Callback(ABC, Generic[S]):
 
     @abc.abstractmethod
     def on_step(self, info: StepInfo[S], force: bool = False): ...
+
+    def on_event(self, event: ProgressEvent) -> None:
+        del event
 
 
 class LambdaCallback(Callback[S]):
