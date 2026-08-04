@@ -17,7 +17,7 @@ import jax
 import numpy as np
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
-from rigging.telemetry.probes import nccl
+from rigging.telemetry.probes import nccl, nccl_client
 from rigging.telemetry.probes.runner import PeriodicProbe
 
 from levanter.tracker import Tracker, TrackerConfig
@@ -125,7 +125,7 @@ def _start_nccl_ras_probe() -> PeriodicProbe | None:
     try:
         if not telemetry.runtime_status().configured:
             return None
-        if os.environ.get("NCCL_RAS_ENABLE", "1") == "0":
+        if os.environ.get(nccl_client.NCCL_RAS_ENABLE_ENV, "1") == "0":
             return None
         if jax.default_backend() != "gpu" or jax.process_index() != 0:
             return None

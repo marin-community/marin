@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 import stat
 import sys
 from pathlib import Path
-from threading import Event
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from rigging import telemetry
-from rigging.testing import RecordingTelemetryTransport
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
+from rigging.testing import RecordingTelemetryTransport, nccl_ras_payload
 
 from levanter.tracker import telemetry as tracker_telemetry
 from levanter.tracker.histogram import SummaryStats
@@ -33,48 +33,13 @@ def _values(records: list[dict]) -> dict[str, float]:
 
 
 def _install_nccl_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, marker: Path | None = None) -> None:
-    payload = {
-        "nccl_version": "2.29.1",
-        "cuda_runtime_version": 13000,
-        "cuda_driver_version": 13000,
-        "communicators_count": 1,
-        "communicators": [
-            {
-                "hash": "0xabc",
-                "secondary_hash": "0xdef:0x123",
-                "size": 1,
-                "ranks_count": 1,
-                "missing_ranks_count": 0,
-                "ranks": [
-                    {
-                        "rank": 0,
-                        "host": "10.0.0.1",
-                        "pid": 1234,
-                        "cuda_dev": 0,
-                        "nvml_dev": 0,
-                        "status": {
-                            "init_state": 0,
-                            "async_error": 0,
-                            "finalize_called": False,
-                            "destroy_flag": False,
-                            "abort_flag": False,
-                        },
-                        "collective_counts": {"AllReduce": 12},
-                    }
-                ],
-                "missing_ranks": [],
-            }
-        ],
-        "ras": {"collection_time_sec": 0.125, "timeouts_count": 0},
-    }
     marker_write = (
         f"with open({str(marker)!r}, 'a') as marker_file:\n    marker_file.write('started\\n')\n" if marker else ""
     )
     command = tmp_path / "nccl-client"
-    command.write_text(f"#!{sys.executable}\n{marker_write}print({json.dumps(payload)!r})")
+    command.write_text(f"#!{sys.executable}\n{marker_write}print({json.dumps(nccl_ras_payload())!r})")
     command.chmod(command.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setattr(tracker_telemetry.nccl, "_CLIENT_COMMAND", (str(command),))
-    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
 
 
 def test_log_exports_jax_scalar_snapshots_without_service_prefix(exported):
@@ -179,32 +144,33 @@ def test_finish_stops_the_phase_heartbeat(exported, fast_heartbeat):
 def test_gpu_primary_process_exports_nccl_ras_until_finish(exported, monkeypatch, tmp_path):
     marker = tmp_path / "ncclras-started"
     _install_nccl_client(monkeypatch, tmp_path, marker=marker)
-    monkeypatch.setenv("NCCL_RAS_ENABLE", "1")
+    monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
     monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 0)
-    monkeypatch.setattr(tracker_telemetry, "_NCCL_RAS_POLL_SECONDS", 0.01)
 
     tracker = TelemetryTracker()
-    rank = exported.record("communicator_rank_status", {"communicator_hash": "0xabc", "rank": "0"})
+    rank = exported.record(
+        "communicator_rank_status",
+        {"communicator_hash": "0xae94423cfbb2ef4a", "rank": "0"},
+    )
 
     tracker.finish()
-    completed_polls = marker.read_text()
-    Event().wait(0.05)
 
     assert rank["attributes"]["rank_host"] == "10.0.0.1"
-    assert marker.read_text() == completed_polls
+    assert marker.read_text() == "started\n"
 
 
-def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, monkeypatch, tmp_path):
-    marker = tmp_path / "ncclras-started"
-    _install_nccl_client(monkeypatch, tmp_path, marker=marker)
-    monkeypatch.setenv("NCCL_RAS_ENABLE", "1")
+def test_gpu_nonprimary_process_does_not_duplicate_nccl_ras_polling(exported, monkeypatch):
+    monkeypatch.setenv(NCCL_RAS_ENABLE_ENV, "1")
     monkeypatch.setattr(tracker_telemetry.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 1)
+    monkeypatch.setattr(
+        tracker_telemetry.nccl,
+        "start",
+        lambda **_kwargs: pytest.fail("nonprimary process started NCCL RAS polling"),
+    )
 
     tracker = TelemetryTracker()
-    Event().wait(0.05)  # Give an incorrectly started background probe time to create the marker.
     tracker.finish()
 
-    assert not marker.exists()
     assert not any(record["name"] == "communicators" for record in exported.records)

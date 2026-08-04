@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from rigging import telemetry
 from rigging.telemetry.probes import nccl, nccl_client, nvidia
-from rigging.testing import RecordingTelemetryTransport
+from rigging.testing import RecordingTelemetryTransport, nccl_ras_payload
 
 
 @pytest.fixture(autouse=True)
@@ -54,52 +54,6 @@ def _install_commands(
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
 
 
-def _nccl_payload() -> dict[str, object]:
-    return {
-        "nccl_version": "2.29.1",
-        "cuda_runtime_version": 13000,
-        "cuda_driver_version": 13000,
-        "communicators_count": 1,
-        "communicators": [
-            {
-                "hash": "0xae94423cfbb2ef4a",
-                "secondary_hash": "0xb7e7187447156001:0xb8242ed28a71381e",
-                "size": 2,
-                "ranks_count": 1,
-                "missing_ranks_count": 1,
-                "ranks": [
-                    {
-                        "rank": 0,
-                        "host": "10.0.0.1",
-                        "pid": 1234,
-                        "cuda_dev": 0,
-                        "nvml_dev": 3,
-                        "status": {
-                            "init_state": 0,
-                            "async_error": 0,
-                            "finalize_called": False,
-                            "destroy_flag": False,
-                            "abort_flag": False,
-                        },
-                        "collective_counts": {"AllReduce": 12},
-                    }
-                ],
-                "missing_ranks": [
-                    {
-                        "rank": 1,
-                        "host": "10.0.0.2",
-                        "pid": 5678,
-                        "cuda_dev": 0,
-                        "nvml_dev": 1,
-                        "status": {"unresponsive": True, "considered_dead": False},
-                    }
-                ],
-            }
-        ],
-        "ras": {"collection_time_sec": 0.125, "timeouts_count": 2},
-    }
-
-
 class _RasConnection:
     def __init__(self, responses: list[bytes]) -> None:
         self._responses = iter(responses)
@@ -125,7 +79,7 @@ class _RasConnection:
 
 
 def test_nccl_client_queries_documented_json_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    connection = _RasConnection([b"OK\nOK\n", json.dumps(_nccl_payload()).encode(), b""])
+    connection = _RasConnection([b"OK\nOK\n", json.dumps(nccl_ras_payload()).encode(), b""])
     connected_to: list[tuple[tuple[str, int], float]] = []
 
     def connect(address: tuple[str, int], timeout: float) -> _RasConnection:
@@ -138,7 +92,7 @@ def test_nccl_client_queries_documented_json_status(monkeypatch: pytest.MonkeyPa
 
     assert connected_to == [(("localhost", 28028), 1.2)]
     assert connection.request == b"TIMEOUT 2\nSET FORMAT json\nVERBOSE STATUS\n"
-    assert response == b"OK\nOK\n" + json.dumps(_nccl_payload()).encode()
+    assert response == b"OK\nOK\n" + json.dumps(nccl_ras_payload()).encode()
 
 
 def test_nccl_client_bounds_one_shot_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,7 +116,7 @@ def test_nvidia_probe_emits_only_stable_hardware_evidence(
         monkeypatch,
         tmp_path,
         nvidia_source=f"print({nvidia_row!r})",
-        nccl_source=f"print({json.dumps(_nccl_payload())!r})",
+        nccl_source=f"print({json.dumps(nccl_ras_payload())!r})",
     )
     transport = _configure(monkeypatch)
 
@@ -183,7 +137,7 @@ def test_nccl_probe_emits_only_communicator_evidence(
         monkeypatch,
         tmp_path,
         nvidia_source="raise SystemExit(2)",
-        nccl_source=f"print({json.dumps(_nccl_payload())!r})",
+        nccl_source=f"print({json.dumps(nccl_ras_payload())!r})",
     )
     transport = _configure(monkeypatch)
 
@@ -290,7 +244,7 @@ def test_output_limit_drops_one_probe_without_blocking_its_peer(
         monkeypatch,
         tmp_path,
         nvidia_source="import os\nos.write(1, b'x' * 300_000)",
-        nccl_source=f"print({json.dumps(_nccl_payload())!r})",
+        nccl_source=f"print({json.dumps(nccl_ras_payload())!r})",
     )
     transport = _configure(monkeypatch)
 

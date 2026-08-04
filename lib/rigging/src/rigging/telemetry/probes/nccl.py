@@ -23,12 +23,13 @@ _MAX_COLLECTIVES_PER_RANK = 64
 _MAX_METRICS = 4_096
 _MAX_FIELD_BYTES = 256
 _MAX_EXACT_COUNT = 2**53 - 1
+_SUCCESS_OUTCOME = "success"
 _CLIENT_COMMAND = (sys.executable, "-m", nccl_client.__name__)
 _CLIENT_FAILURES = {
     nccl_client.TIMEOUT_EXIT_CODE: "client_timeout",
     nccl_client.UNAVAILABLE_EXIT_CODE: "unavailable",
     nccl_client.INVALID_CONFIG_EXIT_CODE: "invalid_client_config",
-    nccl_client.OUTPUT_LIMIT_EXIT_CODE: "output_limit",
+    nccl_client.OUTPUT_LIMIT_EXIT_CODE: CommandStatus.OUTPUT_LIMIT.value,
 }
 
 logger = logging.getLogger(__name__)
@@ -50,8 +51,8 @@ class _ReportedRank(NamedTuple):
     rank: int
     host: str
     pid: int
-    cuda_dev: int
-    nvml_dev: int
+    cuda_device: int
+    nvml_device: int
     init_state: int
     async_error: int
     finalized: bool
@@ -64,8 +65,8 @@ class _MissingRank(NamedTuple):
     rank: int
     host: str
     pid: int
-    cuda_dev: int
-    nvml_dev: int
+    cuda_device: int
+    nvml_device: int
     unresponsive: bool
     considered_dead: bool
 
@@ -95,7 +96,7 @@ def collect(runner: BoundedCommandRunner) -> None:
         logger.warning("could not parse NCCL RAS telemetry: %s", error)
         _record_poll("invalid_payload", duration)
         return
-    _record_poll("success", duration)
+    _record_poll(_SUCCESS_OUTCOME, duration)
     for metric in metrics:
         telemetry.gauge(metric.name, unit=metric.unit).set(metric.value, attributes=metric.attributes)
 
@@ -115,7 +116,7 @@ def _record_timeout() -> None:
 
 
 def _record_poll(outcome: str, duration: float) -> None:
-    available = outcome == "success"
+    available = outcome == _SUCCESS_OUTCOME
     current = {
         "outcome": outcome,
         **telemetry.snapshot_attributes("nccl_ras", telemetry.CURRENT_SNAPSHOT),
@@ -302,8 +303,8 @@ def _rank_identity(rank: _ReportedRank | _MissingRank) -> dict[str, str]:
         "rank": str(rank.rank),
         "rank_host": rank.host,
         "process_id": str(rank.pid),
-        "cuda_device": str(rank.cuda_dev),
-        "nvml_device": str(rank.nvml_dev),
+        "cuda_device": str(rank.cuda_device),
+        "nvml_device": str(rank.nvml_device),
     }
 
 

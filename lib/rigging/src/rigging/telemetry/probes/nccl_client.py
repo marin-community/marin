@@ -12,6 +12,8 @@ import sys
 from rigging.timing import Deadline
 
 DEFAULT_NCCL_RAS_ADDRESS = "localhost:28028"
+NCCL_RAS_ADDRESS_ENV = "NCCL_RAS_ADDR"
+NCCL_RAS_ENABLE_ENV = "NCCL_RAS_ENABLE"
 MAX_RESPONSE_BYTES = 256 * 1024
 TIMEOUT_EXIT_CODE = 2
 UNAVAILABLE_EXIT_CODE = 3
@@ -75,7 +77,7 @@ def query_nccl_ras(*, address: str, timeout: float) -> bytes:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Query NCCL RAS as JSON")
-    parser.add_argument("--address", default=os.environ.get("NCCL_RAS_ADDR", DEFAULT_NCCL_RAS_ADDRESS))
+    parser.add_argument("--address", default=os.environ.get(NCCL_RAS_ADDRESS_ENV, DEFAULT_NCCL_RAS_ADDRESS))
     parser.add_argument("--timeout", type=float, required=True)
     args = parser.parse_args()
     try:
