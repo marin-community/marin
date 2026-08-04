@@ -41,6 +41,13 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MinHashAttrData,
     compute_minhash_attrs,
 )
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
+)
 from marin.processing.tokenize.tokenize import TokenizeConfig, tokenize
 from rigging.filesystem import StoragePath, marin_prefix, marin_temp_bucket
 from rigging.log_setup import configure_logging
@@ -87,7 +94,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
     )
 
     # ~98 source shards / ~46 GiB; modest fan-out for fuzzy_dups CC.
-    deduped = StepSpec(
+    candidates = StepSpec(
         name="datakit-tier2-skewed-smoke/fuzzy_dups",
         deps=[minhash],
         hash_attrs={"artifact_version": FUZZY_DUPS_ATTR_DATA_VERSION, "cc_max_iterations": 3},
@@ -100,20 +107,40 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{ttl_base}/fuzzy_dups",
     )
 
+    verification_params = FuzzyVerificationParams()
+    verified = StepSpec(
+        name="datakit-tier2-skewed-smoke/verify_fuzzy_dups",
+        deps=[normalized, minhash, candidates],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+        },
+        fn=lambda output_path: verify_fuzzy_dups(
+            normalized_sources={"source": read_artifact(normalized.output_path, NormalizedData)},
+            minhash_sources={"source": read_artifact(minhash.output_path, MinHashAttrData)},
+            candidates=read_artifact(candidates.output_path, FuzzyDupsAttrData),
+            output_path=output_path,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+        ),
+        override_output_path=f"{ttl_base}/verify_fuzzy_dups",
+    )
+
     consolidated = StepSpec(
         name="datakit-tier2-skewed-smoke/consolidate",
-        deps=[normalized, deduped],
+        deps=[normalized, verified],
         fn=lambda output_path: consolidate(
             input_path=read_artifact(normalized.output_path, NormalizedData).main_output_dir,
             output_path=output_path,
             filetype="parquet",
             filters=[
                 FilterConfig(
-                    type=FilterType.KEEP_DOC,
-                    attribute_path=read_artifact(deduped.output_path, FuzzyDupsAttrData).attr_dir_for_source(
+                    type=FilterType.REMOVE_DOC,
+                    attribute_path=read_artifact(verified.output_path, VerifiedFuzzyDupsAttrData).attr_dir_for_source(
                         read_artifact(normalized.output_path, NormalizedData).main_output_dir
                     ),
-                    name="is_cluster_canonical",
+                    name="dup_doc",
                     attribute_filetype="parquet",
                     keep_if_missing=True,
                 ),
@@ -137,7 +164,7 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{ttl_base}/tokens",
     )
 
-    return [download, normalized, minhash, deduped, consolidated, tokenized]
+    return [download, normalized, minhash, candidates, verified, consolidated, tokenized]
 
 
 def _write_status(status: str, prefix: str) -> None:

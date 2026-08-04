@@ -1,0 +1,566 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Run and inspect fuzzy-duplicate verification on an existing Datakit sample.
+
+The bounded inspection independently replays reducer decisions. It is a manual
+data gate for this algorithm version, not a production validation API.
+"""
+
+import argparse
+import json
+import logging
+import os
+from collections import Counter, defaultdict
+from collections.abc import Iterator
+from dataclasses import asdict, dataclass
+from itertools import groupby
+from typing import Any
+
+import pyarrow.parquet as pq
+from fray.types import ResourceConfig
+from marin.datakit.normalize import NormalizedData
+from marin.datakit.source_key import datakit_source_key
+from marin.execution.artifact import read_artifact
+from marin.execution.step_runner import StepRunner
+from marin.execution.step_spec import StepSpec
+from marin.processing.classification.deduplication.fuzzy_dups import (
+    FuzzyDupsAttrData,
+    compute_fuzzy_dups_attrs_step,
+)
+from marin.processing.classification.deduplication.fuzzy_minhash import MinHashAttrData, compute_minhash_attrs_step
+from marin.processing.classification.deduplication.fuzzy_verification import (
+    FuzzyVerificationParams,
+    VerificationResult,
+    character_ngram_jaccard,
+    verify_candidate,
+)
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    LocalRepresentativeParams,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups_step,
+)
+from rigging.filesystem import StoragePath, prefix_join
+from rigging.log_setup import configure_logging
+
+from experiments.datakit.reference_pipeline import SAMPLE_PREFIX, sample_sources
+from experiments.datakit.reports.dedup import dedup_report
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_MAX_WORKERS = 64
+DEFAULT_MAX_CONCURRENT = 8
+DEFAULT_INSPECTION_LIMIT = 10_000
+TEXT_PREVIEW_CHARS = 500
+WORKER_RESOURCES = ResourceConfig(cpu=2, ram="8g", disk="8g")
+VERIFIED_COLUMNS = [
+    "id",
+    "dup_doc",
+    "dup_cluster_id",
+    "dup_representative_id",
+    "dup_representative_source_key",
+    "dup_representative_kind",
+    "dup_shared_lsh_buckets",
+    "dup_comparisons",
+    "dup_member_containment",
+    "dup_jaccard",
+    "dup_under_tokenized",
+    "dup_char_jaccard",
+    "dup_local_token_sequence_equal",
+    "dup_local_char_jaccard",
+]
+
+
+@dataclass(frozen=True)
+class CandidateMember:
+    """One candidate cluster member with its normalized text."""
+
+    file_idx: int
+    source_name: str
+    source_key: str
+    id: str
+    cluster_id: str
+    is_cluster_canonical: bool
+    text: str
+    buckets: tuple[str, ...]
+
+
+def _rows(path: str, columns: list[str]) -> Iterator[dict[str, Any]]:
+    with StoragePath(path).open("rb") as stream:
+        parquet = pq.ParquetFile(stream)
+        for batch in parquet.iter_batches(columns=columns):
+            yield from batch.to_pylist()
+
+
+def _join_candidate_text(
+    *,
+    normalized: dict[str, NormalizedData],
+    minhash: dict[str, MinHashAttrData],
+    candidates: FuzzyDupsAttrData,
+    limit: int,
+) -> list[CandidateMember]:
+    """Read persisted inputs without calling the production join."""
+    members: list[CandidateMember] = []
+    file_idx = 0
+    for source_name, source in sorted(normalized.items()):
+        source_key = datakit_source_key(source.main_output_dir)
+        minhash_source = minhash[source_name]
+        if minhash_source.source_key != source_key:
+            raise ValueError(f"MinHash source key differs for {source_name!r}")
+        if minhash_source.params != candidates.params:
+            raise ValueError(f"MinHash params differ for {source_name!r}")
+        candidate_dir = candidates.sources[source_key].attr_dir
+        normalized_paths = sorted(
+            str(path) for path in StoragePath(prefix_join(source.main_output_dir, "*.parquet")).glob()
+        )
+        for normalized_path in normalized_paths:
+            candidate_path = prefix_join(candidate_dir, os.path.basename(normalized_path))
+            minhash_path = prefix_join(minhash_source.attr_dir, os.path.basename(normalized_path))
+            current_file_idx = file_idx
+            file_idx += 1
+            if not StoragePath(candidate_path).exists():
+                continue
+
+            candidate_rows = iter(_rows(candidate_path, ["id", "dup_cluster_id", "is_cluster_canonical"]))
+            candidate = next(candidate_rows, None)
+            if candidate is None:
+                continue
+
+            normalized_rows = iter(_rows(normalized_path, ["id", "text"]))
+            normalized_row = next(normalized_rows, None)
+            minhash_rows = iter(_rows(minhash_path, ["id", "buckets"]))
+            minhash_row = next(minhash_rows, None)
+            while candidate is not None:
+                while normalized_row is not None and normalized_row["id"] < candidate["id"]:
+                    normalized_row = next(normalized_rows, None)
+                if normalized_row is None or normalized_row["id"] != candidate["id"]:
+                    raise ValueError(f"Candidate {candidate['id']!r} is absent from {normalized_path}")
+                while minhash_row is not None and minhash_row["id"] < candidate["id"]:
+                    minhash_row = next(minhash_rows, None)
+                if minhash_row is None or minhash_row["id"] != candidate["id"]:
+                    raise ValueError(f"Candidate {candidate['id']!r} is absent from {minhash_path}")
+                members.append(
+                    CandidateMember(
+                        file_idx=current_file_idx,
+                        source_name=source_name,
+                        source_key=source_key,
+                        id=candidate["id"],
+                        cluster_id=str(candidate["dup_cluster_id"]),
+                        is_cluster_canonical=candidate["is_cluster_canonical"],
+                        text=normalized_row["text"] or "",
+                        buckets=tuple(sorted(set(minhash_row["buckets"] or []))),
+                    )
+                )
+                if len(members) > limit:
+                    raise ValueError(f"Inspection found more than {limit} candidate members")
+                candidate = next(candidate_rows, None)
+                normalized_row = next(normalized_rows, None)
+                minhash_row = next(minhash_rows, None)
+    return members
+
+
+def _verified_rows(verified: VerifiedFuzzyDupsAttrData) -> dict[tuple[str, str], dict[str, Any]]:
+    rows: dict[tuple[str, str], dict[str, Any]] = {}
+    for source_key, source in verified.sources.items():
+        paths = sorted(str(path) for path in StoragePath(prefix_join(source.attr_dir, "*.parquet")).glob())
+        for path in paths:
+            for row in _rows(path, VERIFIED_COLUMNS):
+                key = (source_key, row["id"])
+                if key in rows:
+                    raise ValueError(f"Verified output contains duplicate marker {key!r}")
+                rows[key] = row
+    return rows
+
+
+def _score_fields(result: VerificationResult) -> dict[str, Any]:
+    return {
+        "member_chars": result.member_chars,
+        "representative_chars": result.representative_chars,
+        "member_tokens": result.member_tokens,
+        "representative_tokens": result.representative_tokens,
+        "member_ngrams": result.member_ngrams,
+        "representative_ngrams": result.representative_ngrams,
+        "shared_ngrams": result.shared_ngrams,
+        "member_unique_ngrams": result.member_unique_ngrams,
+        "member_containment": result.member_containment,
+        "jaccard": result.jaccard,
+        "under_tokenized": result.under_tokenized,
+        "char_jaccard": result.char_jaccard,
+    }
+
+
+def _add_local_representative(
+    member: CandidateMember,
+    retained: list[CandidateMember],
+    local_representative_chars: int,
+    params: LocalRepresentativeParams,
+) -> tuple[int, str | None]:
+    if len(retained) >= params.maximum_representatives_per_cluster:
+        return local_representative_chars, "cluster_limit"
+    if len(member.text) > params.maximum_local_representative_chars:
+        return local_representative_chars, "document_chars"
+    if len(member.text) + local_representative_chars > params.maximum_local_representative_chars_per_cluster:
+        return local_representative_chars, "cluster_chars"
+    retained.append(member)
+    return local_representative_chars + len(member.text), None
+
+
+def _assert_marker(
+    *,
+    marker: dict[str, Any],
+    member: CandidateMember,
+    representative: CandidateMember,
+    result: VerificationResult,
+    representative_kind: str,
+    shared_lsh_buckets: int,
+    comparisons: int,
+    local_token_sequence_equal: bool | None,
+    local_char_jaccard: float | None,
+) -> None:
+    expected = {
+        "dup_doc": True,
+        "dup_cluster_id": member.cluster_id,
+        "dup_representative_id": representative.id,
+        "dup_representative_source_key": representative.source_key,
+        "dup_representative_kind": representative_kind,
+        "dup_shared_lsh_buckets": shared_lsh_buckets,
+        "dup_comparisons": comparisons,
+        "dup_member_containment": result.member_containment,
+        "dup_jaccard": result.jaccard,
+        "dup_under_tokenized": result.under_tokenized,
+        "dup_char_jaccard": result.char_jaccard,
+        "dup_local_token_sequence_equal": local_token_sequence_equal,
+        "dup_local_char_jaccard": local_char_jaccard,
+    }
+    actual = {name: marker[name] for name in expected}
+    if actual != expected:
+        raise AssertionError(
+            f"Verified marker differs for {(member.source_key, member.id)!r}: {actual!r} != {expected!r}"
+        )
+
+
+def inspect_verification(
+    *,
+    normalized: dict[str, NormalizedData],
+    minhash: dict[str, MinHashAttrData],
+    candidates: FuzzyDupsAttrData,
+    verified: VerifiedFuzzyDupsAttrData,
+    output_path: str,
+    limit: int,
+) -> dict[str, Any]:
+    """Write a bounded, direct review of each candidate decision."""
+    members = _join_candidate_text(normalized=normalized, minhash=minhash, candidates=candidates, limit=limit)
+    by_cluster: dict[str, list[CandidateMember]] = defaultdict(list)
+    for member in members:
+        by_cluster[member.cluster_id].append(member)
+
+    actual_markers = _verified_rows(verified)
+    expected_marker_keys: set[tuple[str, str]] = set()
+    decisions: Counter[str] = Counter()
+    comparison_decisions: Counter[str] = Counter()
+    cluster_reviews = []
+    for cluster_id, cluster_members in sorted(by_cluster.items(), key=lambda item: (-len(item[1]), item[0])):
+        canonicals = [member for member in cluster_members if member.is_cluster_canonical]
+        if len(canonicals) != 1:
+            raise AssertionError(f"Cluster {cluster_id!r} has {len(canonicals)} canonical members")
+        canonical = canonicals[0]
+        ordered = [
+            canonical,
+            *sorted(
+                (member for member in cluster_members if not member.is_cluster_canonical),
+                key=lambda member: (member.id, member.file_idx),
+            ),
+        ]
+        retained = [canonical]
+        local_representative_chars = 0
+        member_reviews = []
+
+        for member_id, same_id_iterator in groupby(ordered[1:], key=lambda member: member.id):
+            same_id_members = list(same_id_iterator)
+            exact_group = member_id == canonical.id or len(same_id_members) > 1
+            if exact_group:
+                first_member = same_id_members[0]
+                expected_text = canonical.text if member_id == canonical.id else first_member.text
+                for member in same_id_members:
+                    if member.text != expected_text:
+                        raise AssertionError(f"Content ID {member.id!r} has different text")
+                    marker_key = (member.source_key, member.id)
+                    decisions["delegated_global_exact"] += 1
+                    if marker_key in actual_markers:
+                        raise AssertionError(f"Global exact member {marker_key!r} has a fuzzy output marker")
+                    member_reviews.append(
+                        {
+                            "member": {
+                                **asdict(member),
+                                "text": member.text[:TEXT_PREVIEW_CHARS],
+                                "text_chars": len(member.text),
+                            },
+                            "decision": "delegated_global_exact",
+                            "attempts": [],
+                            "output_marker_present": False,
+                        }
+                    )
+                if member_id != canonical.id:
+                    local_representative_chars, _skip = _add_local_representative(
+                        first_member,
+                        retained,
+                        local_representative_chars,
+                        verified.local_representatives,
+                    )
+                continue
+
+            member = same_id_members[0]
+            marker_key = (member.source_key, member.id)
+            attempts = []
+            comparison_count = 1
+            shared_buckets = len(set(member.buckets) & set(canonical.buckets))
+            result = verify_candidate(member.text, canonical.text, verified.verification)
+            comparison_decision = result.rejection.value if result.rejection is not None else "accepted"
+            comparison_decisions[comparison_decision] += 1
+            attempts.append(
+                {
+                    "representative_id": canonical.id,
+                    "representative_kind": "cluster_canonical",
+                    "shared_lsh_buckets": shared_buckets,
+                    "decision": comparison_decision,
+                    "scores": _score_fields(result),
+                }
+            )
+            matched = canonical if result.accepted else None
+            matched_result = result if result.accepted else None
+            matched_kind = "cluster_canonical"
+            matched_local_token_sequence_equal = None
+            matched_local_char_jaccard = None
+
+            if matched is None:
+                nominees = []
+                member_buckets = set(member.buckets)
+                for retained_index, local in enumerate(retained[1:], start=1):
+                    shared = len(member_buckets & set(local.buckets))
+                    if shared:
+                        nominees.append((shared, retained_index))
+                nominees.sort(key=lambda item: (-item[0], item[1]))
+                local_limit = verified.local_representatives.maximum_comparisons_per_document - 1
+                for local_shared, retained_index in nominees[:local_limit]:
+                    local = retained[retained_index]
+                    comparison_count += 1
+                    local_result = verify_candidate(member.text, local.text, verified.verification)
+                    token_sequence_equal = None
+                    local_char_jaccard = None
+                    if not local_result.accepted:
+                        assert local_result.rejection is not None
+                        local_accepted = False
+                        local_decision = local_result.rejection.value
+                    elif local_result.jaccard < verified.local_representatives.minimum_local_token_ngram_jaccard:
+                        local_accepted = False
+                        local_decision = "local_token_jaccard_below_threshold"
+                    else:
+                        token_sequence_equal = member.text.casefold().split() == local.text.casefold().split()
+                        if token_sequence_equal:
+                            local_accepted = True
+                            local_decision = "accepted"
+                        else:
+                            local_char_jaccard = character_ngram_jaccard(
+                                member.text,
+                                local.text,
+                                verified.local_representatives.local_char_ngram_size,
+                            )
+                            local_accepted = (
+                                local_char_jaccard >= verified.local_representatives.minimum_local_char_jaccard
+                            )
+                            local_decision = "accepted" if local_accepted else "local_char_jaccard_below_threshold"
+                    comparison_decisions[local_decision] += 1
+                    attempts.append(
+                        {
+                            "representative_id": local.id,
+                            "representative_kind": "local_representative",
+                            "shared_lsh_buckets": local_shared,
+                            "decision": local_decision,
+                            "scores": {
+                                **_score_fields(local_result),
+                                "local_token_sequence_equal": token_sequence_equal,
+                                "local_char_jaccard": local_char_jaccard,
+                            },
+                        }
+                    )
+                    if local_accepted:
+                        matched = local
+                        matched_result = local_result
+                        matched_kind = "local_representative"
+                        matched_local_token_sequence_equal = token_sequence_equal
+                        matched_local_char_jaccard = local_char_jaccard
+                        shared_buckets = local_shared
+                        break
+
+            if matched is None:
+                decisions["retained_no_match"] += 1
+                local_representative_chars, representative_skip = _add_local_representative(
+                    member,
+                    retained,
+                    local_representative_chars,
+                    verified.local_representatives,
+                )
+                if marker_key in actual_markers:
+                    raise AssertionError(f"Retained member {marker_key!r} has an output marker")
+            else:
+                decisions["accepted"] += 1
+                expected_marker_keys.add(marker_key)
+                marker = actual_markers.get(marker_key)
+                if marker is None:
+                    raise AssertionError(f"Accepted member {marker_key!r} has no output marker")
+                assert matched_result is not None
+                _assert_marker(
+                    marker=marker,
+                    member=member,
+                    representative=matched,
+                    result=matched_result,
+                    representative_kind=matched_kind,
+                    shared_lsh_buckets=shared_buckets,
+                    comparisons=comparison_count,
+                    local_token_sequence_equal=matched_local_token_sequence_equal,
+                    local_char_jaccard=matched_local_char_jaccard,
+                )
+                representative_skip = None
+
+            member_reviews.append(
+                {
+                    "member": {
+                        **asdict(member),
+                        "text": member.text[:TEXT_PREVIEW_CHARS],
+                        "text_chars": len(member.text),
+                    },
+                    "decision": "accepted" if matched is not None else "retained_no_match",
+                    "attempts": attempts,
+                    "representative_skip": representative_skip,
+                    "output_marker_present": marker_key in actual_markers,
+                }
+            )
+
+        cluster_reviews.append(
+            {
+                "cluster_id": cluster_id,
+                "cluster_size": len(ordered),
+                "representative": {
+                    **asdict(canonical),
+                    "text": canonical.text[:TEXT_PREVIEW_CHARS],
+                    "text_chars": len(canonical.text),
+                },
+                "retained_representatives": len(retained),
+                "members": member_reviews,
+            }
+        )
+
+    if set(actual_markers) != expected_marker_keys:
+        unexpected = sorted(set(actual_markers) - expected_marker_keys)
+        missing = sorted(expected_marker_keys - set(actual_markers))
+        raise AssertionError(f"Verified marker set differs: unexpected={unexpected!r}, missing={missing!r}")
+
+    review = {
+        "verification_params": verified.verification.model_dump(mode="json"),
+        "local_representative_params": verified.local_representatives.model_dump(mode="json"),
+        "counts": {
+            "candidate_members": len(members),
+            "clusters": len(by_cluster),
+            "comparisons": sum(comparison_decisions.values()),
+            "verified_duplicates": len(expected_marker_keys),
+            "max_cluster_size": max((len(cluster) for cluster in by_cluster.values()), default=0),
+        },
+        "decisions": dict(sorted(decisions.items())),
+        "comparison_decisions": dict(sorted(comparison_decisions.items())),
+        "clusters": cluster_reviews,
+    }
+    StoragePath(output_path).write_text(json.dumps(review, indent=2, ensure_ascii=False) + "\n")
+    return review
+
+
+def _parse_source_names(value: str) -> list[str] | None:
+    if value == "all":
+        return None
+    names = [name.strip() for name in value.split(",") if name.strip()]
+    if not names:
+        raise ValueError("--sources must be 'all' or a comma-separated list")
+    return names
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sample-prefix", default=SAMPLE_PREFIX)
+    parser.add_argument("--output-prefix", required=True)
+    parser.add_argument("--sources", default="all")
+    parser.add_argument("--max-workers", type=int, default=DEFAULT_MAX_WORKERS)
+    parser.add_argument("--max-concurrent", type=int, default=DEFAULT_MAX_CONCURRENT)
+    parser.add_argument("--inspection-limit", type=int, default=DEFAULT_INSPECTION_LIMIT)
+    args = parser.parse_args()
+
+    if args.max_workers < 1:
+        raise ValueError("--max-workers must be at least 1")
+    if args.max_concurrent < 1:
+        raise ValueError("--max-concurrent must be at least 1")
+    if args.inspection_limit < 1:
+        raise ValueError("--inspection-limit must be at least 1")
+
+    configure_logging(logging.INFO)
+    output_prefix = args.output_prefix.rstrip("/")
+    normalized_steps = sample_sources(args.sample_prefix, _parse_source_names(args.sources))
+    minhash_steps = {
+        source_name: compute_minhash_attrs_step(
+            name=f"datakit/fuzzy_verification_testbed/minhash/{source_name}",
+            normalize=normalize_step,
+            worker_resources=WORKER_RESOURCES,
+            max_workers=args.max_workers,
+            override_output_path=prefix_join(output_prefix, f"minhash/{source_name}"),
+        )
+        for source_name, normalize_step in normalized_steps.items()
+    }
+    candidates_step = compute_fuzzy_dups_attrs_step(
+        name="datakit/fuzzy_verification_testbed/candidates",
+        minhash_steps=list(minhash_steps.values()),
+        max_parallelism=args.max_workers,
+        worker_resources=WORKER_RESOURCES,
+        override_output_path=prefix_join(output_prefix, "candidates"),
+    )
+    verification_params = FuzzyVerificationParams()
+    verified_step = verify_fuzzy_dups_step(
+        name="datakit/fuzzy_verification_testbed/verified",
+        normalized_steps=normalized_steps,
+        minhash_steps=minhash_steps,
+        candidates_step=candidates_step,
+        verification_params=verification_params,
+        local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+        worker_resources=WORKER_RESOURCES,
+        override_output_path=prefix_join(output_prefix, "verified"),
+    )
+    report_step = StepSpec(
+        name="datakit/fuzzy_verification_testbed/report",
+        deps=[candidates_step, verified_step],
+        hash_attrs={"v": 2},
+        fn=lambda output_path: dedup_report(
+            output_path,
+            read_artifact(candidates_step.output_path, FuzzyDupsAttrData),
+            read_artifact(verified_step.output_path, VerifiedFuzzyDupsAttrData),
+        ),
+        override_output_path=prefix_join(output_prefix, "report"),
+    )
+
+    StepRunner().run([report_step], max_concurrent=args.max_concurrent)
+
+    normalized = {
+        source_name: read_artifact(step.output_path, NormalizedData) for source_name, step in normalized_steps.items()
+    }
+    minhash = {
+        source_name: read_artifact(step.output_path, MinHashAttrData) for source_name, step in minhash_steps.items()
+    }
+    review = inspect_verification(
+        normalized=normalized,
+        minhash=minhash,
+        candidates=read_artifact(candidates_step.output_path, FuzzyDupsAttrData),
+        verified=read_artifact(verified_step.output_path, VerifiedFuzzyDupsAttrData),
+        output_path=prefix_join(output_prefix, "inspection.json"),
+        limit=args.inspection_limit,
+    )
+    logger.info("Verification testbed passed: %s", json.dumps(review["counts"], sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

@@ -21,7 +21,8 @@ Per source::
 Then:
     global_exact_dedup([<normalized source>])
     fuzzy_dups([<minhash per source>])
-    build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, dedup)
+    verify_fuzzy_dups([<normalized source>], [<minhash per source>], fuzzy_dups)
+    build_clustered_store(tokenize, decontam, cluster_assign, quality, exact_dedup, verified_dedup)
     one ``datakit/report/<stage>`` step per stage -- a single self-contained
     HTML page built from that stage's counters + site/sample outputs
     (:mod:`experiments.datakit.reports`)
@@ -107,6 +108,13 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     MINHASH_ATTR_DATA_VERSION,
     MinHashAttrData,
     compute_minhash_attrs,
+)
+from marin.processing.classification.deduplication.fuzzy_verification import FuzzyVerificationParams
+from marin.processing.classification.deduplication.verify_fuzzy_dups import (
+    REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+    VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+    VerifiedFuzzyDupsAttrData,
+    verify_fuzzy_dups,
 )
 from marin.processing.tokenize.attributes import (
     TokenizedAttrData,
@@ -725,7 +733,7 @@ def reference_datakit_steps(
     # No content params of its own -- the MinHash params live in the minhash deps
     # (so a param change re-keys minhash, then dedup via dep names); connected
     # components is deterministic given those inputs. ``v`` is a manual salt.
-    dedup = StepSpec(
+    dedup_candidates = StepSpec(
         name="datakit/dedup",
         deps=minhash_steps,
         hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
@@ -739,6 +747,29 @@ def reference_datakit_steps(
         ),
     )
 
+    verification_params = FuzzyVerificationParams()
+    verified_dedup = StepSpec(
+        name="datakit/verify_fuzzy_dups",
+        deps=[*sources.values(), *minhash_steps, dedup_candidates],
+        hash_attrs={
+            "artifact_version": VERIFIED_FUZZY_DUPS_ATTR_DATA_VERSION,
+            "verification": verification_params.model_dump(mode="json"),
+            "local_representatives": REFERENCE_LOCAL_REPRESENTATIVE_PARAMS.model_dump(mode="json"),
+        },
+        fn=lambda op: verify_fuzzy_dups(
+            normalized_sources={name: read_artifact(step.output_path, NormalizedData) for name, step in sources.items()},
+            minhash_sources={
+                name: read_artifact(stages["minhash"].output_path, MinHashAttrData)
+                for name, stages in per_source.items()
+            },
+            candidates=read_artifact(dedup_candidates.output_path, FuzzyDupsAttrData),
+            output_path=op,
+            verification_params=verification_params,
+            local_representative_params=REFERENCE_LOCAL_REPRESENTATIVE_PARAMS,
+            worker_resources=scale.pool.worker,
+        ),
+    )
+
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
     def _store_fn(output_path: str) -> ClusteredStoreData:
         return build_clustered_store(
@@ -749,7 +780,7 @@ def reference_datakit_steps(
             },
             quality={n: read_artifact(s["quality"].output_path, QualityScores) for n, s in per_source.items()},
             exact_dedup=read_artifact(exact_dedup.output_path, GlobalExactDedupData),
-            dedup=read_artifact(dedup.output_path, FuzzyDupsAttrData),
+            dedup=read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
             output_path=output_path,
             cluster_view=cluster.cluster_view,
             split=SPLIT,
@@ -766,7 +797,7 @@ def reference_datakit_steps(
     store_deps: list[StepSpec] = []
     for s in per_source.values():
         store_deps += [s["tokenize"], s["decontam"], s["assign"], s["quality"]]
-    store_deps += [exact_dedup, dedup]
+    store_deps += [exact_dedup, verified_dedup]
 
     # Hash output-shaping values read directly by the store. ``shards_per_task``
     # and ``reduce_shards`` only schedule the shuffle, so they intentionally do
@@ -835,9 +866,13 @@ def reference_datakit_steps(
         ),
         StepSpec(
             name="datakit/report/dedup",
-            deps=[dedup],
-            hash_attrs={"v": 1},
-            fn=lambda op: dedup_report(op, read_artifact(dedup.output_path, FuzzyDupsAttrData)),
+            deps=[dedup_candidates, verified_dedup],
+            hash_attrs={"v": 2},
+            fn=lambda op: dedup_report(
+                op,
+                read_artifact(dedup_candidates.output_path, FuzzyDupsAttrData),
+                read_artifact(verified_dedup.output_path, VerifiedFuzzyDupsAttrData),
+            ),
         ),
         StepSpec(
             name="datakit/report/store",
@@ -852,7 +887,7 @@ def reference_datakit_steps(
         all_steps.append(domain_centroids)
     for s in per_source.values():
         all_steps += list(s.values())
-    all_steps += [dedup, store, *reports]
+    all_steps += [dedup_candidates, verified_dedup, store, *reports]
     return DatakitSteps(sources=sources, output_buckets=store, all_steps=all_steps)
 
 
