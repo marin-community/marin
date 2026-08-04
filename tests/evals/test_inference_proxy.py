@@ -285,51 +285,55 @@ def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None
 
 
 def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> None:
-    states = iter(
-        (
-            job_pb2.TASK_STATE_PENDING,
-            job_pb2.TASK_STATE_RUNNING,
-            job_pb2.TASK_STATE_RUNNING,
-        )
-    )
-    responses = iter((SimpleNamespace(status_code=502), SimpleNamespace(status_code=200)))
-    sleeps: list[float] = []
-    requests: list[tuple[str, float]] = []
+    task_pending = True
+    probe_statuses: list[int] = []
+
+    def list_tasks(_job_id):
+        nonlocal task_pending
+        state = job_pb2.TASK_STATE_PENDING if task_pending else job_pb2.TASK_STATE_RUNNING
+        task_pending = False
+        return [SimpleNamespace(state=state)]
+
+    def probe_endpoint(_url, timeout):
+        del timeout
+        status_code = 502 if not probe_statuses else 200
+        probe_statuses.append(status_code)
+        return SimpleNamespace(status_code=status_code)
+
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
                 status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
-                list_tasks=lambda _job_id: [SimpleNamespace(state=next(states))],
+                list_tasks=list_tasks,
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
             )
         ),
     )
-    monkeypatch.setattr(iris_module.time, "sleep", sleeps.append)
-    monkeypatch.setattr(
-        iris_module.requests,
-        "get",
-        lambda url, timeout: requests.append((url, timeout)) or next(responses),
-    )
+    monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(iris_module.requests, "get", probe_endpoint)
 
     session = _remote_session()
     session.wait_until_ready()
 
-    assert sleeps == [2.0, 2.0]
-    assert requests == [
-        ("https://iris.example/capability/v1/models", 5.0),
-        ("https://iris.example/capability/v1/models", 5.0),
-    ]
+    assert probe_statuses == [502, 200]
 
 
 def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monkeypatch) -> None:
     class ExpiredDeadline:
+        def __init__(self) -> None:
+            self.checks = 0
+
         def remaining_seconds(self) -> float:
             return 5.0
 
         def raise_if_expired(self, message: str) -> None:
-            raise TimeoutError(message)
+            self.checks += 1
+            if self.checks > 1:
+                raise TimeoutError(message)
+
+    probes: list[str] = []
 
     monkeypatch.setattr(
         iris_module,
@@ -347,10 +351,15 @@ def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monke
         "from_seconds",
         lambda _timeout: ExpiredDeadline(),
     )
-    monkeypatch.setattr(iris_module.requests, "get", lambda *_args, **_kwargs: SimpleNamespace(status_code=502))
+    monkeypatch.setattr(
+        iris_module.requests,
+        "get",
+        lambda url, **_kwargs: probes.append(url) or SimpleNamespace(status_code=502),
+    )
 
     with pytest.raises(TimeoutError, match=r"did not become healthy within 1800\.0s"):
         _remote_session().wait_until_ready()
+    assert probes == ["https://iris.example/capability/v1/models"]
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:

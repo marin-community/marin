@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -101,20 +102,74 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
-def test_terminus_policies_retry_transient_endpoint_errors(checked_policies):
-    expected_retry = {
-        "max_retries": 10,
-        "include_exceptions": ["APIConnectionError", "APITimeoutError", "InternalServerError"],
-        "exclude_exceptions": [],
-        "wait_multiplier": 2.0,
-        "min_wait_sec": 1.0,
-        "max_wait_sec": 60.0,
+def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_policies):
+    policies = {
+        name: payload["stable_policy_json"]
+        for name, payload in checked_policies.items()
+        if json.loads(payload["stable_policy_json"])["agents"][0]["name"] == "terminus-2"
     }
+    assert policies
+    policies_path = tmp_path / "policies.json"
+    policies_path.write_text(json.dumps(policies))
+    script = textwrap.dedent(
+        """
+        import asyncio
+        import json
+        import sys
+        from pathlib import Path
+        from types import SimpleNamespace
 
-    for payload in checked_policies.values():
-        policy = json.loads(payload["stable_policy_json"])
-        if policy["agents"][0]["name"] == "terminus-2":
-            assert policy["retry"] == expected_retry
+        import harbor.trial.queue as queue_module
+        from harbor.models.job.config import JobConfig
+        from harbor.trial.queue import TrialQueue
+        from harbor.trial.trial import Trial
+
+        async def main():
+            policies = json.loads(Path(sys.argv[1]).read_text())
+            outcomes = {}
+            for name, serialized_policy in policies.items():
+                retry = JobConfig.model_validate_json(serialized_policy).retry
+                attempts = 0
+                waits = []
+                failed_result = SimpleNamespace(
+                    exception_info=SimpleNamespace(exception_type="InternalServerError")
+                )
+
+                class FailedTrial:
+                    paths = SimpleNamespace(trial_dir=Path("/tmp/unused-harbor-trial"))
+
+                    async def run(self):
+                        nonlocal attempts
+                        attempts += 1
+                        return failed_result
+
+                    def add_hook(self, _event, _hook):
+                        pass
+
+                async def create_trial(_config):
+                    return FailedTrial()
+
+                async def record_wait(delay):
+                    waits.append(delay)
+
+                Trial.create = staticmethod(create_trial)
+                queue_module.asyncio.sleep = record_wait
+                queue_module.safe_rmtree = lambda *_args, **_kwargs: None
+                result = await TrialQueue(n_concurrent=1, retry_config=retry)._run_trial(
+                    SimpleNamespace(trial_name="endpoint-failure")
+                )
+                assert result is failed_result
+                outcomes[name] = {"attempts": attempts, "wait_seconds": sum(waits)}
+
+            print(json.dumps(outcomes, sort_keys=True))
+
+        asyncio.run(main())
+        """
+    )
+
+    outcomes = json.loads(_external_python("-c", script, str(policies_path)).stdout)
+
+    assert outcomes == {name: {"attempts": 11, "wait_seconds": 303.0} for name in policies}
 
 
 def test_local_source_is_rebased_onto_worker_workspace(tmp_path, monkeypatch):
