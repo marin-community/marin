@@ -7,7 +7,8 @@
 //! - the live `RegisteredNamespace` registry (`live`) + registration order
 //!   (`registered_at`),
 //! - the `dropping` reservation set (fences concurrent register during a drop),
-//! - the sqlite connection (`namespaces`, `storage_policies`, `segments`).
+//! - the sqlite connection (`namespaces`, `storage_policies`, `segments`,
+//!   `dashboards`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -30,6 +31,15 @@ pub struct RegisteredNamespace {
     pub name: String,
     pub schema: Schema,
     pub policy: StoragePolicy,
+}
+
+/// One persisted dashboard definition from the catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedDashboard {
+    pub dashboard_id: String,
+    pub definition_json: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
 }
 
 struct CatalogInner {
@@ -135,7 +145,7 @@ fn remove_segments_in(
 
 impl Catalog {
     /// Open the catalog. `data_dir = None` -> in-memory; otherwise the sidecar
-    /// lives at `{data_dir}/_finelog_catalog.sqlite`. Creates the three tables
+    /// lives at `{data_dir}/_finelog_catalog.sqlite`. Creates catalog tables
     /// idempotently.
     pub fn open(data_dir: Option<&Path>) -> Result<Catalog, StatsError> {
         let conn = match data_dir {
@@ -211,9 +221,115 @@ impl Catalog {
                 cursor    INTEGER NOT NULL,
                 PRIMARY KEY (target, namespace)
             );
+            CREATE TABLE IF NOT EXISTS dashboards (
+                dashboard_id    TEXT    PRIMARY KEY,
+                definition_json TEXT    NOT NULL,
+                created_at_ms   INTEGER NOT NULL,
+                updated_at_ms   INTEGER NOT NULL
+            );
             "#,
         )
         .map_err(sqlite_err)
+    }
+
+    // ----- dashboards ---------------------------------------------------
+
+    /// Saved dashboards ordered by most recently updated, then identifier.
+    pub fn list_dashboards(&self) -> Result<Vec<SavedDashboard>, StatsError> {
+        let inner = self.inner.lock().unwrap();
+        let mut stmt = inner
+            .conn
+            .prepare(
+                "SELECT dashboard_id, definition_json, created_at_ms, updated_at_ms \
+                 FROM dashboards ORDER BY updated_at_ms DESC, dashboard_id ASC",
+            )
+            .map_err(sqlite_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SavedDashboard {
+                    dashboard_id: row.get(0)?,
+                    definition_json: row.get(1)?,
+                    created_at_ms: row.get(2)?,
+                    updated_at_ms: row.get(3)?,
+                })
+            })
+            .map_err(sqlite_err)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_err)
+    }
+
+    /// Return one saved dashboard, or `None` when it does not exist.
+    pub fn dashboard(&self, dashboard_id: &str) -> Result<Option<SavedDashboard>, StatsError> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .conn
+            .query_row(
+                "SELECT dashboard_id, definition_json, created_at_ms, updated_at_ms \
+                 FROM dashboards WHERE dashboard_id = ?1",
+                [dashboard_id],
+                |row| {
+                    Ok(SavedDashboard {
+                        dashboard_id: row.get(0)?,
+                        definition_json: row.get(1)?,
+                        created_at_ms: row.get(2)?,
+                        updated_at_ms: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(sqlite_err)
+    }
+
+    /// Insert or replace one shared dashboard definition.
+    pub fn upsert_dashboard(
+        &self,
+        dashboard_id: &str,
+        definition_json: &str,
+    ) -> Result<SavedDashboard, StatsError> {
+        let inner = self.inner.lock().unwrap();
+        let now = now_ms();
+        inner
+            .conn
+            .execute(
+                r#"
+                INSERT INTO dashboards
+                    (dashboard_id, definition_json, created_at_ms, updated_at_ms)
+                VALUES (?1, ?2, ?3, ?3)
+                ON CONFLICT (dashboard_id) DO UPDATE SET
+                    definition_json = excluded.definition_json,
+                    updated_at_ms = excluded.updated_at_ms
+                "#,
+                rusqlite::params![dashboard_id, definition_json, now],
+            )
+            .map_err(sqlite_err)?;
+        inner
+            .conn
+            .query_row(
+                "SELECT dashboard_id, definition_json, created_at_ms, updated_at_ms \
+                 FROM dashboards WHERE dashboard_id = ?1",
+                [dashboard_id],
+                |row| {
+                    Ok(SavedDashboard {
+                        dashboard_id: row.get(0)?,
+                        definition_json: row.get(1)?,
+                        created_at_ms: row.get(2)?,
+                        updated_at_ms: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(sqlite_err)
+    }
+
+    /// Delete one shared dashboard, returning whether a row existed.
+    pub fn delete_dashboard(&self, dashboard_id: &str) -> Result<bool, StatsError> {
+        let inner = self.inner.lock().unwrap();
+        let deleted = inner
+            .conn
+            .execute(
+                "DELETE FROM dashboards WHERE dashboard_id = ?1",
+                [dashboard_id],
+            )
+            .map_err(sqlite_err)?;
+        Ok(deleted > 0)
     }
 
     // ----- forward watermark ---------------------------------------------
@@ -911,6 +1027,23 @@ mod tests {
         let all = cat.list_all().unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].0, "a");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dashboards_persist_across_catalog_reopen() {
+        let dir = tempdir();
+        {
+            let cat = Catalog::open(Some(&dir)).unwrap();
+            let saved = cat
+                .upsert_dashboard("hardware-health", r#"{"version":1}"#)
+                .unwrap();
+            assert_eq!(saved.dashboard_id, "hardware-health");
+        }
+
+        let cat = Catalog::open(Some(&dir)).unwrap();
+        let saved = cat.dashboard("hardware-health").unwrap().unwrap();
+        assert_eq!(saved.definition_json, r#"{"version":1}"#);
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -21,7 +21,7 @@ use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
-use crate::store::catalog::{Catalog, RegisteredNamespace};
+use crate::store::catalog::{Catalog, RegisteredNamespace, SavedDashboard};
 use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
@@ -534,6 +534,30 @@ impl Store {
         cursor: i64,
     ) -> Result<(), StatsError> {
         self.catalog.set_forward_cursor(target, namespace, cursor)
+    }
+
+    /// List shared SQL dashboard definitions from the persistent catalog.
+    pub fn list_dashboards(&self) -> Result<Vec<SavedDashboard>, StatsError> {
+        self.catalog.list_dashboards()
+    }
+
+    /// Return one shared SQL dashboard definition.
+    pub fn dashboard(&self, dashboard_id: &str) -> Result<Option<SavedDashboard>, StatsError> {
+        self.catalog.dashboard(dashboard_id)
+    }
+
+    /// Insert or replace one shared SQL dashboard definition.
+    pub fn upsert_dashboard(
+        &self,
+        dashboard_id: &str,
+        definition_json: &str,
+    ) -> Result<SavedDashboard, StatsError> {
+        self.catalog.upsert_dashboard(dashboard_id, definition_json)
+    }
+
+    /// Delete one shared SQL dashboard definition.
+    pub fn delete_dashboard(&self, dashboard_id: &str) -> Result<bool, StatsError> {
+        self.catalog.delete_dashboard(dashboard_id)
     }
 
     /// Return `(name, schema, stats, policy)` for every live namespace in

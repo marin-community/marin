@@ -14,6 +14,7 @@
 //! [legacy-path middleware]             (transport layer; rewrites the URI)
 //!   /health
 //!   /v1/telemetry       (authenticated bounded JSON ingestion)
+//!   /v1/dashboards      (authenticated saved dashboard definitions)
 //!   /debug/*            (only with --debug-admin)
 //!   /static, /favicon.ico, /, /{*rest}   (SPA, before the fallback)
 //!   .fallback_service(connect)            (RPC POSTs land here)
@@ -36,7 +37,7 @@ use crate::server::interceptors::{
     ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
 };
-use crate::server::{debug, forwarded_prefix, legacy_path, spa, telemetry};
+use crate::server::{dashboards, debug, forwarded_prefix, legacy_path, spa, telemetry};
 use crate::store::Store;
 
 use super::log_service::LogServiceImpl;
@@ -143,9 +144,11 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
         config.max_concurrent_telemetry,
         config.telemetry_dedupe_capacity,
     );
+    let dashboards = dashboards::router(Arc::clone(&store), Arc::clone(&config.auth));
     let mut app = Router::new()
         .route("/health", get(|| async { "ok" }))
-        .merge(telemetry);
+        .merge(telemetry)
+        .merge(dashboards);
     if config.debug_admin {
         // Mounted BEFORE the connect fallback so /debug/* is not shadowed. These
         // admin routes bypass the Connect interceptor chain, so they are gated by
