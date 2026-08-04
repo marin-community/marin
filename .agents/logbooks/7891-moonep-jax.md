@@ -2101,3 +2101,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Comparison: MNEP-102 took `26.17 s` for each step. The higher limit is `11%` slower, or about `8.97%` MFU.
 - Conclusion: Reject the change and keep the serial default. Concurrent device-kernel collectives do not improve the step, and they cost time.
 - Consequence: The `19%` overlap in MNEP-114 is not caused by the XLA concurrency limit.
+
+### 2026-08-04 04:10 UTC - MNEP-117 one-bucket rack gate
+
+- Question: One bucket has never been tested on the one-remote-CTA wheel. MNEP-074 reached `10.004%` MFU with one bucket on the multi-context wheel, and MNEP-102 reached `9.937%` with two buckets on the one-remote-CTA wheel. The bucket count and the wheel changed together.
+- Basis 1: Every 2-bucket result is below the best 1-bucket result. MNEP-076 gave `9.439%` and MNEP-077 gave `9.262%`.
+- Basis 2: Two buckets halve each message. MNEP-109 measures `304.7 GB/s` at `4,096` rows for each peer against `323.4 GB/s` at `8,192` rows.
+- Basis 3: One bucket removes six of the 18 ragged calls in each layer, from the MNEP-114 profile count.
+- Treatment: Repeat MNEP-102 with one token bucket and the eager dispatch schedule. The wheel, mode, QB, and resources do not change.
+- Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above the `9.937%` of MNEP-102.
