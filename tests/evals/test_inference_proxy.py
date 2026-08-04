@@ -31,7 +31,6 @@ from marin.inference.config import (
 )
 from marin.inference.iris import (
     InferenceRecoveryMode,
-    InferenceTemporarilyUnavailable,
     RemoteInferenceSession,
     RemoteInferenceStartupError,
     remote_inference,
@@ -248,8 +247,7 @@ def test_direct_inference_session_reports_pending_task_as_temporarily_unavailabl
         backend_name="vllm",
     )
 
-    with pytest.raises(InferenceTemporarilyUnavailable, match="PENDING"):
-        session.check_ready()
+    assert not session.backends_ready()
 
 
 def test_inference_readiness_treats_controller_transport_failure_as_unknown(monkeypatch) -> None:
@@ -280,7 +278,7 @@ def test_inference_readiness_treats_controller_transport_failure_as_unknown(monk
     )
 
     # Unknown controller state must not terminate a Harbor run whose endpoint may still be healthy.
-    session.check_ready()
+    assert session.backends_ready()
 
 
 def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:

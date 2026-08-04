@@ -389,7 +389,7 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
 
     captured: dict = {}
 
-    def run_driver(config, overlay, driver_env, _dependency_check) -> None:
+    def run_driver(config, overlay, driver_env, _backends_ready) -> None:
         assert driver_env["DAYTONA_API_KEY"] == "daytona-key"
         captured["config"] = config
         captured["overlay"] = overlay

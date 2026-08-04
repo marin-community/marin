@@ -28,6 +28,7 @@ from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
+    HarborBackendsUnavailable,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
     run_harbor_driver,
@@ -35,11 +36,7 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome, InferenceDependencyError
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
-from marin.inference.iris import (
-    InferenceRecoveryMode,
-    InferenceTemporarilyUnavailable,
-    RemoteInferenceSession,
-)
+from marin.inference.iris import InferenceRecoveryMode, RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -242,10 +239,10 @@ def _run_harbor_job(
     recovery_count = 0
     while True:
         try:
-            dependency_check = inference_session.check_ready if inference_session is not None else None
-            run_harbor_driver(config, overlay, driver_env, dependency_check)
+            backends_ready = inference_session.backends_ready if inference_session is not None else None
+            run_harbor_driver(config, overlay, driver_env, backends_ready)
             break
-        except InferenceTemporarilyUnavailable as exc:
+        except HarborBackendsUnavailable as exc:
             if inference_session is None:
                 raise
             if recovery_count >= inference_session.recovery_attempt_limit:

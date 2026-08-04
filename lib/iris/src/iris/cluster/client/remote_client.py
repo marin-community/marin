@@ -226,41 +226,17 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_job_status({job_id})", _call)
 
-    def get_job_states(
-        self,
-        job_ids: list[JobName],
-        *,
-        retry_max_elapsed: float | None = None,
-    ) -> dict[str, job_pb2.JobState]:
-        """Lightweight batch query returning only the state enum per job.
-
-        Args:
-            job_ids: Job identifiers to query.
-            retry_max_elapsed: Optional controller retry deadline, which also
-                caps each RPC attempt.
-        """
-
-        rpc_timeout_ms = (
-            None if retry_max_elapsed is None else min(self._timeout_ms, max(1, int(retry_max_elapsed * 1000)))
-        )
+    def get_job_states(self, job_ids: list[JobName]) -> dict[str, job_pb2.JobState]:
+        """Lightweight batch query returning only the state enum per job."""
 
         def _call():
             request = controller_pb2.Controller.GetJobStateRequest(
                 job_ids=[jid.to_wire() for jid in job_ids],
             )
-            if rpc_timeout_ms is None:
-                response = self._client.get_job_state(request)
-            else:
-                response = self._client.get_job_state(request, timeout_ms=rpc_timeout_ms)
+            response = self._client.get_job_state(request)
             return dict(response.states)
 
-        if retry_max_elapsed is None:
-            return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
-        return call_with_retry(
-            f"get_job_states({len(job_ids)} jobs)",
-            _call,
-            max_elapsed=retry_max_elapsed,
-        )
+        return call_with_retry(f"get_job_states({len(job_ids)} jobs)", _call)
 
     def _poll_job_state(self, job_id: JobName) -> job_pb2.JobState:
         """Fetch only the state enum for a single job via the lightweight RPC."""
@@ -547,42 +523,22 @@ class RemoteClusterClient:
 
         return call_with_retry(f"get_task_status({task_name})", _call)
 
-    def list_tasks(
-        self,
-        job_id: JobName,
-        *,
-        retry_max_elapsed: float | None = None,
-    ) -> list[job_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 
         Args:
             job_id: Job ID to query tasks for
-            retry_max_elapsed: Optional controller retry deadline, which also
-                caps each RPC attempt.
 
         Returns:
             List of TaskStatus protos, one per task in the job
         """
 
-        rpc_timeout_ms = (
-            None if retry_max_elapsed is None else min(self._timeout_ms, max(1, int(retry_max_elapsed * 1000)))
-        )
-
         def _call():
             request = controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire())
-            if rpc_timeout_ms is None:
-                response = self._client.list_tasks(request)
-            else:
-                response = self._client.list_tasks(request, timeout_ms=rpc_timeout_ms)
+            response = self._client.list_tasks(request)
             return list(response.tasks)
 
-        if retry_max_elapsed is None:
-            return call_with_retry(f"list_tasks({job_id})", _call)
-        return call_with_retry(
-            f"list_tasks({job_id})",
-            _call,
-            max_elapsed=retry_max_elapsed,
-        )
+        return call_with_retry(f"list_tasks({job_id})", _call)
 
     def kick_tasks(
         self,

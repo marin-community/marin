@@ -368,13 +368,12 @@ async def _run(config: JobConfig) -> int:
     loop = asyncio.get_running_loop()
     run_task = asyncio.current_task()
     assert run_task is not None
-    received_signal: signal.Signals | None = None
+    received_signal: asyncio.Future[signal.Signals] = loop.create_future()
 
     def cancel_job(signum: signal.Signals) -> None:
-        nonlocal received_signal
-        if received_signal is not None:
+        if received_signal.done():
             return
-        received_signal = signum
+        received_signal.set_result(signum)
         run_task.cancel()
 
     handled_signals = (signal.SIGINT, signal.SIGTERM)
@@ -384,15 +383,15 @@ async def _run(config: JobConfig) -> int:
         job = await Job.create(config)
         await job.run()
     except asyncio.CancelledError:
-        if received_signal is None:
+        if not received_signal.done():
             raise
         run_task.uncancel()
     finally:
         for signum in handled_signals:
             loop.remove_signal_handler(signum)
 
-    if received_signal is not None:
-        return 128 + received_signal.value
+    if received_signal.done():
+        return 128 + received_signal.result().value
     return 0
 
 

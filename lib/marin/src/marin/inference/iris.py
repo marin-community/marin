@@ -24,7 +24,7 @@ from iris.rpc import job_pb2
 from iris.rpc.errors import is_retryable_error
 from rigging.connect import capability_path, proxy_path
 from rigging.log_setup import configure_logging
-from rigging.timing import Duration
+from rigging.timing import Deadline, Duration
 
 from marin.inference.backend import OPENAI_API_SUFFIX
 from marin.inference.broker import InferenceBroker
@@ -54,7 +54,6 @@ _TIMEOUT_POLL_SECONDS = 30
 _ENDPOINT_READY_POLL_SECONDS = 2.0
 _DEPENDENCY_RECOVERY_POLL_SECONDS = 1.0
 _DEPENDENCY_PROBE_TIMEOUT_SECONDS = 10.0
-_DEPENDENCY_RPC_RETRY_SECONDS = 10.0
 _METADATA_MODEL = "model"
 _METADATA_KIND = "kind"
 _METADATA_BACKEND = "backend"
@@ -71,10 +70,6 @@ class RemoteInferenceStartupError(RuntimeError):
     def __init__(self, message: str, jobs: tuple[JobHandle, ...]):
         super().__init__(message)
         self.jobs = jobs
-
-
-class InferenceTemporarilyUnavailable(RuntimeError):
-    """A managed inference worker is retrying and its endpoint cannot serve requests."""
 
 
 class InferenceRecoveryMode(StrEnum):
@@ -102,21 +97,21 @@ class RemoteInferenceSession:
             if JobStatus.finished(status):
                 raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {status}")
 
-    def check_ready(self) -> None:
-        """Raise when a direct inference worker is temporarily unavailable."""
+    def backends_ready(self) -> bool:
+        """Return whether every direct inference task can accept requests."""
         if self.recovery_mode is InferenceRecoveryMode.NONE:
-            return
+            return True
 
         unavailable: list[str] = []
         try:
             client = iris_ctx().client
             for job in self.jobs:
                 job_name = JobName.from_string(str(job.job_id))
-                job_state = client.job_state(job_name, retry_max_elapsed=_DEPENDENCY_RPC_RETRY_SECONDS)
+                job_state = client.job_state(job_name)
                 if is_job_finished(job_state):
                     state = job_pb2.JobState.Name(job_state).removeprefix("JOB_STATE_")
                     raise RuntimeError(f"Inference job {job.job_id} finished unexpectedly with status {state}")
-                tasks = client.list_tasks(job_name, retry_max_elapsed=_DEPENDENCY_RPC_RETRY_SECONDS)
+                tasks = client.list_tasks(job_name)
                 if not tasks:
                     unavailable.append(f"{job.job_id} has no tasks")
                     continue
@@ -128,12 +123,14 @@ class RemoteInferenceSession:
             if not is_retryable_error(exc):
                 raise
             logger.warning("Could not verify inference task readiness: %s", exc)
-            return
+            return True
         except ConnectionError as exc:
             logger.warning("Could not verify inference task readiness: %s", exc)
-            return
+            return True
         if unavailable:
-            raise InferenceTemporarilyUnavailable("; ".join(unavailable))
+            logger.warning("Inference backends are not ready: %s", "; ".join(unavailable))
+            return False
+        return True
 
     def wait_until_ready(self) -> None:
         """Wait for direct inference tasks and their OpenAI endpoint to recover."""
@@ -141,20 +138,23 @@ class RemoteInferenceSession:
             return
         assert self.recovery_timeout_seconds is not None
 
-        deadline = time.monotonic() + self.recovery_timeout_seconds
+        deadline = Deadline.from_seconds(self.recovery_timeout_seconds)
         last_error = "inference dependency is unavailable"
-        while time.monotonic() < deadline:
+        while not deadline.expired():
             try:
-                self.check_ready()
+                if not self.backends_ready():
+                    last_error = "inference tasks are not running"
+                    time.sleep(min(_DEPENDENCY_RECOVERY_POLL_SECONDS, deadline.remaining_seconds()))
+                    continue
                 with requests.get(
                     self.model.endpoint.url("models"),
                     timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS,
                 ) as response:
                     response.raise_for_status()
                 return
-            except (InferenceTemporarilyUnavailable, requests.RequestException) as exc:
+            except requests.RequestException as exc:
                 last_error = str(exc)
-                remaining = deadline - time.monotonic()
+                remaining = deadline.remaining_seconds()
                 if remaining > 0:
                     time.sleep(min(_DEPENDENCY_RECOVERY_POLL_SECONDS, remaining))
 

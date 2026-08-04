@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +9,7 @@ from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import driver_config, runner
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
+    HarborBackendsUnavailable,
     HarborDatasetKind,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
@@ -23,7 +23,7 @@ from marin.evaluation.harbor.runner import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
-from marin.inference.iris import InferenceRecoveryMode, InferenceTemporarilyUnavailable, RemoteInferenceSession
+from marin.inference.iris import InferenceRecoveryMode, RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
@@ -216,7 +216,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
 
     captured: dict = {}
 
-    def dying_driver(config, overlay, driver_env, _dependency_check) -> None:
+    def dying_driver(config, overlay, driver_env, _backends_ready) -> None:
         captured["jobs_dir"] = overlay.jobs_dir
         captured["job_name"] = overlay.job_name
         trial = StoragePath(overlay.jobs_dir) / overlay.job_name / "trial-one"
@@ -234,7 +234,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     durable = StoragePath(captured["jobs_dir"]) / captured["job_name"] / "trial-one" / "result.json"
     assert durable.exists()
 
-    def resumed_driver(config, overlay, driver_env, _dependency_check) -> None:
+    def resumed_driver(config, overlay, driver_env, _backends_ready) -> None:
         # Harbor's own resume finds the durable trial and writes nothing new this run.
         return None
 
@@ -259,9 +259,8 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         recovery_waits = 0
         unavailable = True
 
-        def check_ready(self) -> None:
-            if self.unavailable:
-                raise InferenceTemporarilyUnavailable("inference task is pending")
+        def backends_ready(self) -> bool:
+            return not self.unavailable
 
         def wait_until_ready(self) -> None:
             self.recovery_waits += 1
@@ -270,7 +269,7 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
     session = RecoveringSession()
     driver_starts = 0
 
-    def run_driver(_config, overlay, _driver_env, dependency_check) -> None:
+    def run_driver(_config, overlay, _driver_env, backends_ready) -> None:
         nonlocal driver_starts
         driver_starts += 1
         job_dir = Path(overlay.jobs_dir) / overlay.job_name
@@ -308,7 +307,8 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
             transport_result.write_text(
                 json.dumps({"task_name": "trial-two", "verifier_result": {"rewards": {"reward": 1.0}}})
             )
-        dependency_check()
+        if not backends_ready():
+            raise HarborBackendsUnavailable("inference backends are not ready")
 
     monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
 
@@ -325,35 +325,22 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
 
 
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):
-    ready_path = tmp_path / "ready"
-    stopped_path = tmp_path / "stopped"
-    script_path = tmp_path / "driver.py"
-    script_path.write_text(
-        "\n".join(
-            (
-                "import signal",
-                "import time",
-                "from pathlib import Path",
-                f"ready_path = Path({str(ready_path)!r})",
-                f"stopped_path = Path({str(stopped_path)!r})",
-                "def stop(*_args):",
-                "    stopped_path.write_text('stopped')",
-                "    raise SystemExit(143)",
-                "signal.signal(signal.SIGTERM, stop)",
-                "ready_path.write_text('ready')",
-                "while True:",
-                "    time.sleep(0.1)",
-            )
-        )
-    )
-    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: [sys.executable, str(script_path)])
+    terminated_return_codes: list[int | None] = []
+    terminate_process_group = driver_config.terminate_process_group
+
+    def terminate(process, *, grace_period):
+        terminate_process_group(process, grace_period=grace_period)
+        terminated_return_codes.append(process.returncode)
+
+    monkeypatch.setattr(driver_config, "terminate_process_group", terminate)
+    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["sleep", "60"])
+    monkeypatch.setattr(driver_config, "_DRIVER_POLL_SECONDS", 0.01)
     monkeypatch.setattr(driver_config, "_DEPENDENCY_CHECK_SECONDS", 0.01)
 
-    def dependency_check() -> None:
-        assert ready_path.exists()
-        raise InferenceTemporarilyUnavailable("inference task is pending")
+    def backends_ready() -> bool:
+        return False
 
-    with pytest.raises(InferenceTemporarilyUnavailable):
+    with pytest.raises(HarborBackendsUnavailable):
         driver_config.run_harbor_driver(
             _validated_config(),
             HarborRuntimeOverlay(
@@ -366,21 +353,20 @@ def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, 
                 model_agent_kwargs={},
             ),
             {},
-            dependency_check,
+            backends_ready,
         )
 
-    assert stopped_path.read_text() == "stopped"
+    assert len(terminated_return_codes) == 1
+    assert terminated_return_codes[0] is not None
 
 
 def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_path, monkeypatch):
-    script_path = tmp_path / "driver.py"
-    script_path.write_text("raise SystemExit(2)\n")
-    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: [sys.executable, str(script_path)])
+    monkeypatch.setattr(driver_config, "_driver_command", lambda *_args: ["false"])
 
-    def dependency_check() -> None:
-        raise InferenceTemporarilyUnavailable("inference task is pending")
+    def backends_ready() -> bool:
+        return False
 
-    with pytest.raises(InferenceTemporarilyUnavailable):
+    with pytest.raises(HarborBackendsUnavailable):
         driver_config.run_harbor_driver(
             _validated_config(),
             HarborRuntimeOverlay(
@@ -393,7 +379,7 @@ def test_harbor_driver_classifies_fast_failure_from_unavailable_dependency(tmp_p
                 model_agent_kwargs={},
             ),
             {},
-            dependency_check,
+            backends_ready,
         )
 
 
@@ -404,8 +390,8 @@ def test_managed_harbor_bounds_repeated_dependency_recovery(tmp_path, monkeypatc
         recovery_attempt_limit = 1
         recovery_waits = 0
 
-        def check_ready(self) -> None:
-            raise InferenceTemporarilyUnavailable("inference task is pending")
+        def backends_ready(self) -> bool:
+            return False
 
         def wait_until_ready(self) -> None:
             self.recovery_waits += 1
@@ -413,10 +399,11 @@ def test_managed_harbor_bounds_repeated_dependency_recovery(tmp_path, monkeypatc
     session = FlappingSession()
     driver_starts = 0
 
-    def run_driver(_config, _overlay, _driver_env, dependency_check) -> None:
+    def run_driver(_config, _overlay, _driver_env, backends_ready) -> None:
         nonlocal driver_starts
         driver_starts += 1
-        dependency_check()
+        if not backends_ready():
+            raise HarborBackendsUnavailable("inference backends are not ready")
 
     monkeypatch.setattr(runner, "run_harbor_driver", run_driver)
     executor = _harbor_executor(f"flapping-{tmp_path.name}")
@@ -432,7 +419,7 @@ def test_managed_harbor_bounds_repeated_dependency_recovery(tmp_path, monkeypatc
 def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_path, monkeypatch):
     captured: dict = {}
 
-    def run_driver(config, overlay, driver_env, _dependency_check) -> None:
+    def run_driver(config, overlay, driver_env, _backends_ready) -> None:
         captured["config"] = config
         captured["overlay"] = overlay
         captured["env"] = driver_env
@@ -485,7 +472,7 @@ def _harbor_executor(dataset: str) -> HarborExecutor:
 
 
 def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monkeypatch):
-    def run_driver(_config, overlay, driver_env, _dependency_check) -> None:
+    def run_driver(_config, overlay, driver_env, _backends_ready) -> None:
         assert isinstance(driver_env, dict)
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)
@@ -514,7 +501,7 @@ def test_harbor_executor_fails_when_trial_contains_exception_info(tmp_path, monk
 
 
 def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, monkeypatch):
-    def run_driver(_config, overlay, driver_env, _dependency_check) -> None:
+    def run_driver(_config, overlay, driver_env, _backends_ready) -> None:
         assert isinstance(driver_env, dict)
         trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
         trial_dir.mkdir(parents=True, exist_ok=True)

@@ -828,24 +828,12 @@ class IrisClient:
         """
         return self._cluster_client.get_job_status(job_id)
 
-    def job_state(
-        self,
-        job_id: JobName,
-        *,
-        retry_max_elapsed: float | None = None,
-    ) -> job_pb2.JobState:
+    def job_state(self, job_id: JobName) -> job_pb2.JobState:
         """Lightweight state query that avoids loading tasks/attempts/workers.
 
         Prefer this over ``status(job_id).state`` for polling loops.
-
-        Args:
-            job_id: Job identifier.
-            retry_max_elapsed: Optional controller RPC retry deadline.
         """
-        if retry_max_elapsed is None:
-            states = self._cluster_client.get_job_states([job_id])
-        else:
-            states = self._cluster_client.get_job_states([job_id], retry_max_elapsed=retry_max_elapsed)
+        states = self._cluster_client.get_job_states([job_id])
         wire_id = job_id.to_wire()
         if wire_id not in states:
             raise ConnectError(Code.NOT_FOUND, f"Job {wire_id} not found")
@@ -961,24 +949,16 @@ class IrisClient:
         """Mint a scoped token for a link-accessible endpoint."""
         return self._cluster_client.mint_endpoint_token(endpoint_name, ttl=ttl)
 
-    def list_tasks(
-        self,
-        job_id: JobName,
-        *,
-        retry_max_elapsed: float | None = None,
-    ) -> list[job_pb2.TaskStatus]:
+    def list_tasks(self, job_id: JobName) -> list[job_pb2.TaskStatus]:
         """List all tasks for a job.
 
         Args:
-            job_id: Job identifier.
-            retry_max_elapsed: Optional controller RPC retry deadline.
+            job_id: Job identifier
 
         Returns:
             List of TaskStatus protos, one per task
         """
-        if retry_max_elapsed is None:
-            return self._cluster_client.list_tasks(job_id)
-        return self._cluster_client.list_tasks(job_id, retry_max_elapsed=retry_max_elapsed)
+        return self._cluster_client.list_tasks(job_id)
 
     def kick_tasks(
         self,

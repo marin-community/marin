@@ -7,13 +7,13 @@ import json
 import logging
 import subprocess
 import tempfile
-import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from rigging.config_discovery import find_project_root
+from rigging.timing import RateLimiter
 from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
@@ -43,6 +43,11 @@ _DRIVER_SYSTEM_ENV_KEYS = (
     "https_proxy",
     "no_proxy",
 )
+
+
+class HarborBackendsUnavailable(RuntimeError):
+    """Harbor stopped because its model backends are not ready."""
+
 
 # Object-store credentials and config the isolated driver needs to write each trial straight to a
 # remote ``jobs_dir`` (CoreWeave S3, GCS). fsspec reads the ``FSSPEC_S3`` block natively; ``s3fs``
@@ -169,14 +174,15 @@ def _capture_driver(command: list[str]) -> subprocess.CompletedProcess[str]:
 def _stream_driver(
     command: list[str],
     driver_env: Mapping[str, str],
-    dependency_check: Callable[[], None] | None = None,
+    backends_ready: Callable[[], bool] | None = None,
 ) -> None:
     process = subprocess.Popen(
         command,
         env=_driver_environment(driver_env),
         start_new_session=True,
     )
-    next_dependency_check = time.monotonic() + _DEPENDENCY_CHECK_SECONDS
+    backend_checks = RateLimiter(_DEPENDENCY_CHECK_SECONDS)
+    backend_checks.mark_run()
     try:
         while True:
             try:
@@ -185,22 +191,18 @@ def _stream_driver(
             except subprocess.TimeoutExpired:
                 if process.poll() is not None:
                     continue
-                if dependency_check is not None and time.monotonic() >= next_dependency_check:
-                    next_dependency_check = time.monotonic() + _DEPENDENCY_CHECK_SECONDS
-                    try:
-                        dependency_check()
-                    except Exception:
-                        return_code = process.poll()
-                        if return_code == 0:
-                            break
-                        raise
+                if backends_ready is not None and backend_checks.should_run() and not backends_ready():
+                    return_code = process.poll()
+                    if return_code == 0:
+                        break
+                    raise HarborBackendsUnavailable("inference backends are not ready") from None
     except BaseException:
         terminate_process_group(process, grace_period=_DRIVER_TERMINATION_GRACE_SECONDS)
         raise
 
     if return_code:
-        if dependency_check is not None:
-            dependency_check()
+        if backends_ready is not None and not backends_ready():
+            raise HarborBackendsUnavailable("inference backends are not ready")
         exc = subprocess.CalledProcessError(return_code, command)
         raise _driver_failure(exc) from exc
 
@@ -291,7 +293,7 @@ def run_harbor_driver(
     config: ValidatedHarborConfig,
     overlay: HarborRuntimeOverlay,
     driver_env: Mapping[str, str],
-    dependency_check: Callable[[], None] | None = None,
+    backends_ready: Callable[[], bool] | None = None,
 ) -> None:
     """Apply a runtime overlay and run one Harbor job in the isolated environment."""
     runtime = {"version": HARBOR.version, "commit": HARBOR.commit}
@@ -317,4 +319,4 @@ def run_harbor_driver(
         overlay_path.chmod(_OWNER_ONLY_MODE)
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
-        _stream_driver(command, driver_env, dependency_check)
+        _stream_driver(command, driver_env, backends_ready)
