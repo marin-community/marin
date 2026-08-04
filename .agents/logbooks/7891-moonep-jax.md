@@ -2110,3 +2110,12 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Basis 3: One bucket removes six of the 18 ragged calls in each layer, from the MNEP-114 profile count.
 - Treatment: Repeat MNEP-102 with one token bucket and the eager dispatch schedule. The wheel, mode, QB, and resources do not change.
 - Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above the `9.937%` of MNEP-102.
+
+### 2026-08-04 05:23 UTC - MNEP-118 rejects one bucket on the one-CTA wheel
+
+- Treatment: One token bucket and eager dispatch on the one-remote-CTA wheel. Everything else matched MNEP-102.
+- Result: Step one completed. Step two gave `RuntimeError: Non-finite loss (nan) at step 2`. The other 15 workers stopped through coscheduling.
+- Interpretation: The one-remote-CTA kernel is not safe with one bucket. Its local gate covered only the rematerialized two-bucket graph, so the one-bucket schedule was never validated for this wheel.
+- Pattern: This is the fourth step-two NaN in this work. MNEP-068 (runtime collective branch), MNEP-080 (overlap without a remote-write fence), and MNEP-094 (reserved QuACK clusters) all failed the same way. Every case changed the collective schedule around the direct device kernel.
+- Consequence: The two-bucket schedule is a requirement of the current wheel, not a free choice. A one-bucket run needs either the multi-context wheel or a new kernel gate.
+- Standing comparison: MNEP-074 reached `10.004%` MFU with one bucket on the multi-context wheel. MNEP-102 reached `9.937%` with two buckets on the one-CTA wheel. The best result in this work is still MNEP-074.
