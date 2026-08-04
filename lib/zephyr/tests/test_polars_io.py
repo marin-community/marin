@@ -10,7 +10,6 @@ which CoreWeave's gateways reject with a bare 400 on the first HEAD.
 
 import fsspec
 import pytest
-
 from zephyr.polars_io import scan_storage_options
 
 
