@@ -53,6 +53,7 @@ from marin.inference.broker import InferenceBroker
 from marin.inference.config import BrokerConfig
 from marin.inference.proxy import serve_inference_proxy
 from marin.inference.types import (
+    BrokerStatsProvider,
     InferenceRequest,
     InferenceRequestProvider,
     InferenceResponse,
@@ -129,10 +130,15 @@ class ConverterPoolConfig:
 
 @dataclass(frozen=True)
 class ConverterPoolSession:
-    """A running pool: the proxy endpoint senders talk to, and the jobs behind it."""
+    """A running pool: the proxy endpoint senders talk to, and the jobs behind it.
+
+    ``broker`` is the queue's stats surface -- queued/leased depth, registered pods, and the
+    completed-response total -- for callers that monitor a long run.
+    """
 
     endpoint: OpenAIEndpoint
     jobs: tuple[JobHandle, ...]
+    broker: BrokerStatsProvider
 
     def check_alive(self) -> None:
         """Raise when any pool job has reached a terminal state."""
@@ -202,7 +208,11 @@ def remote_converter_pool(config: ConverterPoolConfig) -> Iterator[ConverterPool
         ) as running_model:
             readiness = requests.get(running_model.endpoint.url("models"), timeout=proxy.readiness_timeout_seconds)
             readiness.raise_for_status()
-            yield ConverterPoolSession(endpoint=running_model.endpoint, jobs=tuple(jobs))
+            yield ConverterPoolSession(
+                endpoint=running_model.endpoint,
+                jobs=tuple(jobs),
+                broker=cast(BrokerStatsProvider, broker_handle),
+            )
     finally:
         for job in jobs:
             try:

@@ -23,7 +23,12 @@ from marin.inference.broker import InferenceBroker
 from marin.inference.config import BrokerConfig
 from marin.inference.converter_pool import ConverterPoolConfig, serve_leases
 from marin.inference.proxy import InferenceProxy
-from marin.inference.types import InferenceRequest, InferenceResponse
+from marin.inference.types import (
+    InferenceRequest,
+    InferenceResponse,
+    InferenceWorkerMetadata,
+    LeasedInferenceResponse,
+)
 from rigging.timing import ExponentialBackoff
 
 _MODEL_ID = "test-converter"
@@ -203,6 +208,32 @@ def test_dead_converters_are_respawned_in_their_slots(monkeypatch: pytest.Monkey
     assert spawned == [1, 2]
     assert children[0] is survivor
     assert children[1].poll() is None and children[2].poll() is None
+
+
+def test_broker_stats_track_the_document_lifecycle() -> None:
+    """The run monitor's view: a request moves queued -> leased -> completed, and totals persist."""
+    broker = InferenceBroker(request_lease_timeout_seconds=300.0)
+    broker.register_worker("pod-0", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="converter-pool"))
+    broker.submit_request(InferenceRequest(request_id="req-0", method="POST", path="/v1/convert", payload=b"doc"))
+    queued = broker.stats()
+
+    [lease] = broker.fetch_requests(max_items=1)
+    leased = broker.stats()
+
+    broker.submit_responses(
+        [LeasedInferenceResponse(lease_id=lease.lease_id, response=_payload_response(lease.request, b"done"))]
+    )
+    answered = broker.stats()
+
+    broker.fetch_responses(max_items=1)
+    drained = broker.stats()
+
+    assert (queued.queued, queued.leased, queued.workers) == (1, 0, 1)
+    assert (leased.queued, leased.leased, leased.completed_total) == (0, 1, 0)
+    assert (answered.leased, answered.responses_ready, answered.completed_total) == (0, 1, 1)
+    # The proxy drained the response, but the completed total is cumulative -- that is what a
+    # monitor differentiates for throughput.
+    assert (drained.responses_ready, drained.completed_total) == (0, 1)
 
 
 def test_an_unpicklable_handler_factory_is_rejected_at_config_time() -> None:
