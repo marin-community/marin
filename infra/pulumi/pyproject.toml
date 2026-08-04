@@ -20,6 +20,7 @@ dependencies = [
 [dependency-groups]
 test = [
     "pytest>=8.3.2",
+    "pytest-timeout",
     "pytest-xdist",
 ]
 
