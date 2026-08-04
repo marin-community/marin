@@ -53,7 +53,21 @@ _RUN_BEGIN = re.compile(r"BENCH_RUN begin index=(\d+) arm=(\w+)")
 _LAYOUT_LINE = re.compile(r"BENCH_FSDP_LAYOUT resolved fsdp=(\(.*?\)) lm_head=(\(.*?\))")
 
 
+# The artifact store the CoreWeave H100 cluster reads and writes. Not defaulted here: an
+# unset MARIN_PREFIX silently resolves the tokenized SlimPajama cache to a local /tmp
+# path, and rather than fail it re-tokenizes the corpus from scratch, which needs the
+# gated llama3 tokenizer and surfaces as an unrelated 401.
+_EXPECTED_PREFIX = "s3://marin-us-east-02a/marin"
+
+
 def submit(args) -> None:
+    if not os.environ.get("MARIN_PREFIX"):
+        raise SystemExit(
+            f"MARIN_PREFIX is unset, so the tokenized SlimPajama cache would resolve to a local "
+            f"path and be rebuilt instead of reused. Set MARIN_PREFIX={_EXPECTED_PREFIX} "
+            "(lib/iris/config/cw-us-east-02a.yaml) and resubmit."
+        )
+
     sweep = ",".join(_ARMS * args.repeats)
     env = os.environ.copy()
     env.update(
