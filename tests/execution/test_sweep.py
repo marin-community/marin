@@ -13,6 +13,7 @@ import os
 import threading
 
 import pytest
+from marin.execution.artifact import read_record
 from marin.execution.step_status import (
     STATUS_FAILED,
     STATUS_SUCCESS,
@@ -161,6 +162,47 @@ def test_claim_and_run_processes_every_target_exactly_once(num_workers, num_targ
     assert len(claimed) == num_targets
     for target in targets:
         assert _status_at(sweep_root, target.target_id) == STATUS_SUCCESS
+
+
+def test_successful_cell_writes_artifact_record(tmp_path):
+    """A claimed target that runs to completion gets a ``.artifact.json`` at its output path.
+
+    The record carries the cell's identity and its config; a target that failed (or that a peer
+    never reached) has no record. This is what makes an ablation cell catalogable from disk.
+    """
+    sweep_root = str(tmp_path)
+    targets = _make_targets(3)
+    failing_id = targets[1].target_id
+
+    def run(target: SweepTarget) -> None:
+        if target.target_id == failing_id:
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        claim_and_run(sweep_root, targets, run)
+
+    ok = read_record(os.path.join(sweep_root, targets[0].target_id))
+    assert ok is not None
+    assert ok.name == targets[0].target_id
+    assert ok.config == {"i": 0}
+    assert ok.provenance is not None
+
+    # The failed cell marks status but writes no record; the unreached cell has neither.
+    assert read_record(os.path.join(sweep_root, failing_id)) is None
+    assert read_record(os.path.join(sweep_root, targets[2].target_id)) is None
+
+
+def test_follower_writes_no_artifact_record(tmp_path):
+    """Followers mirror the leader's runs but own no on-disk output, so they write no record."""
+    targets = _make_targets(2)
+    actor = SweepLeaderActor()
+    actor.publish(0, targets[0].target_id)
+    actor.publish(1, None)
+
+    claim_and_run(str(tmp_path), targets, lambda t: None, coordinator=_FollowerCoordinator(actor))
+
+    for target in targets:
+        assert read_record(os.path.join(str(tmp_path), target.target_id)) is None
 
 
 def test_pre_existing_success_is_skipped(tmp_path):
