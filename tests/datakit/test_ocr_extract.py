@@ -90,7 +90,7 @@ def run_batch(monkeypatch, endpoint):
     page ordering, boilerplate removal and record assembly all run for real.
     """
 
-    def run(rows, respond, *, keys=None, render_options=None, boilerplate=None):
+    def run(rows, respond, *, keys=None, render_options=None, boilerplate=None, loop=None):
         monkeypatch.setattr(extract_ocr, "ocr_page", respond)
         return list(
             ocr_batch(
@@ -99,6 +99,7 @@ def run_batch(monkeypatch, endpoint):
                 endpoint=endpoint,
                 render_options=render_options or RenderOptions(),
                 boilerplate=boilerplate or extract_ocr.BOILERPLATE_OPTIONS,
+                loop=loop or extract_ocr.LOOP_OPTIONS,
             )
         )
 

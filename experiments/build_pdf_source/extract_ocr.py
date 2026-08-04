@@ -63,6 +63,7 @@ from experiments.build_pdf_source.boilerplate import BoilerplateOptions, strip_b
 from experiments.build_pdf_source.classify import routing_keys
 from experiments.build_pdf_source.common import FOCUS_CRAWL, PdfClassificationData, PdfSourceData
 from experiments.build_pdf_source.document_record import PDF_DOCUMENT_FIELDS, source_id
+from experiments.build_pdf_source.loop_repair import LoopOptions, repair_page
 from experiments.build_pdf_source.ocr_extract import fleet
 from experiments.build_pdf_source.ocr_extract.client import (
     DEFAULT_MAX_TOKENS,
@@ -78,6 +79,7 @@ logger = logging.getLogger(__name__)
 
 RENDER_OPTIONS = RenderOptions()
 BOILERPLATE_OPTIONS = BoilerplateOptions()
+LOOP_OPTIONS = LoopOptions()
 
 _SOURCE_COLUMNS = ["pdf", "warc_filename", "warc_record_offset", "content_digest", "url"]
 
@@ -88,13 +90,14 @@ class OcrStatus(StrEnum):
     """Whether a document was OCR'd whole.
 
     ``PARTIAL`` covers every way a page can come back short: MuPDF declining to render it, the page
-    budget truncating a very long document, the request failing after its retries, or the model
-    hitting its token cap part-way down the page. The per-page counts in the record say which.
+    budget truncating a very long document, the request failing after its retries, the model hitting
+    its token cap part-way down the page, or the model falling into a repetition loop whose output
+    was cut back to the transcription in front of it. The per-page counts in the record say which.
 
-    The last of those is the one worth watching, because it is the only one that yields text that
+    The last two are the ones worth watching, because they are the only ones that yield text that
     looks complete. A page dropped for any other reason is empty and obvious; a page cut off at
     ``max_tokens`` is ordinary Markdown that simply stops, and nothing but ``pages_truncated`` says
-    so.
+    so; a repaired page reads as a clean short page and only ``looped_pages`` says otherwise.
     """
 
     SUCCESS = "success"
@@ -117,6 +120,13 @@ _OCR_FIELDS: tuple[pa.Field, ...] = (
     pa.field("mean_render_dpi", pa.float32(), nullable=False),
     pa.field("pages_below_legibility_floor", pa.int32(), nullable=False),
     pa.field("completion_tokens", pa.int32(), nullable=False),
+    # Pages whose text was cut back because the model fell into a repetition loop. 1-based, in
+    # reading order. Listed rather than counted: a consumer excluding repaired pages needs to know
+    # which ones, and ``page_offsets`` already indexes the text that way.
+    pa.field("looped_pages", pa.list_(pa.int32()), nullable=False),
+    # Characters the repair removed. Non-zero means ``text`` is shorter than what the model
+    # returned, which nothing else in the record would reveal.
+    pa.field("loop_chars_dropped", pa.int32(), nullable=False),
 )
 
 _OUTPUT_SCHEMA = pa.schema([*PDF_DOCUMENT_FIELDS, *_OCR_FIELDS])
@@ -224,6 +234,8 @@ class _Document:
     failed: int = 0
     truncated: int = 0
     completion_tokens: int = 0
+    looped_pages: list[int] = field(default_factory=list)
+    loop_chars_dropped: int = 0
     first_error: str | None = None
 
     @property
@@ -231,12 +243,16 @@ class _Document:
         """Every page submitted and every submitted page resolved."""
         return self.closed and len(self.pages) == self.submitted
 
-    def absorb(self, future: "Future[PageOcr]") -> None:
+    def absorb(self, future: "Future[PageOcr]", loop: LoopOptions) -> None:
         """Record one page's result, keeping a failed page as an empty page.
 
         The exception is deliberately not propagated. The request has already exhausted its retries,
         and one unreadable page is data about the document rather than a reason to lose it or to
         fail the shard; it is recorded on the row and counted.
+
+        A page the model looped on is repaired here rather than downstream, because this is the only
+        place the per-page truncation flag exists -- the counts collapse into totals immediately --
+        and because the boilerplate pass must see each page's real last line, not a loop's tail.
         """
         try:
             page = future.result()
@@ -250,13 +266,22 @@ class _Document:
             # only diagnosis that survives a run whose logs cannot be retrieved.
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/page_request_failed/{type(error).__name__}", 1)
             return
-        self.pages.append(page.text)
+        repair = repair_page(page.text, page.truncated, loop)
+        self.pages.append(repair.text)
         self.completion_tokens += page.completion_tokens
         if page.truncated:
             # The page is real but incomplete. Counted rather than dropped: partial text from a
             # dense page is still worth more than nothing, but a consumer has to be able to tell.
             self.truncated += 1
             counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/page_truncated", 1)
+        if repair.looped:
+            self.looped_pages.append(len(self.pages))
+            self.loop_chars_dropped += repair.dropped_chars
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/page_looped", 1)
+            counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/loop_chars_dropped", repair.dropped_chars)
+            if not repair.text:
+                # The loop began before any transcription did, so the page carries nothing.
+                counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/page_looped_emptied", 1)
 
     def record(self, boilerplate: BoilerplateOptions, floor_dpi: float) -> dict | None:
         """Build the output row, or ``None`` if the document has no text worth keeping."""
@@ -277,7 +302,8 @@ class _Document:
 
         unrendered = max(0, self.declared_pages - self.submitted)
         ocred = self.submitted - self.failed
-        status = OcrStatus.SUCCESS if self.failed == 0 and unrendered == 0 and self.truncated == 0 else OcrStatus.PARTIAL
+        whole = self.failed == 0 and unrendered == 0 and self.truncated == 0 and not self.looped_pages
+        status = OcrStatus.SUCCESS if whole else OcrStatus.PARTIAL
         below_floor = sum(1 for dpi in self.dpis if dpi < floor_dpi)
 
         counters.pipeline.update_counter(f"{_COUNTER_PREFIX}/extracted", 1)
@@ -311,12 +337,19 @@ class _Document:
             "mean_render_dpi": sum(self.dpis) / len(self.dpis) if self.dpis else 0.0,
             "pages_below_legibility_floor": below_floor,
             "completion_tokens": self.completion_tokens,
+            "looped_pages": list(self.looped_pages),
+            "loop_chars_dropped": self.loop_chars_dropped,
         }
 
     def _error_summary(self, unrendered: int) -> str | None:
         parts = []
         if self.truncated:
             parts.append(f"{self.truncated} of {self.submitted} pages hit the token cap and were cut off")
+        if self.looped_pages:
+            parts.append(
+                f"{len(self.looped_pages)} of {self.submitted} pages repeated themselves and were "
+                f"cut back, dropping {self.loop_chars_dropped} characters"
+            )
         if unrendered:
             parts.append(f"{unrendered} of {self.declared_pages} pages were not rendered")
         if self.failed:
@@ -330,6 +363,7 @@ def ocr_batch(
     endpoint: OcrEndpoint,
     render_options: RenderOptions,
     boilerplate: BoilerplateOptions,
+    loop: LoopOptions,
 ) -> Iterator[dict]:
     """OCR the OCR-routed documents in one Parquet row group.
 
@@ -352,7 +386,7 @@ def ocr_batch(
 
     def resolve_oldest() -> None:
         document, future = inflight.popleft()
-        document.absorb(future)
+        document.absorb(future, loop)
 
     def emit_ready() -> Iterator[dict]:
         while documents and documents[0].complete:
@@ -499,6 +533,7 @@ def ocr_pdf_text(
                             endpoint=endpoint,
                             render_options=RENDER_OPTIONS,
                             boilerplate=BOILERPLATE_OPTIONS,
+                            loop=LOOP_OPTIONS,
                         )
                     )
                     .write_parquet(
@@ -565,7 +600,16 @@ def ocr_extract_step(source: StepSpec, classification: StepSpec) -> StepSpec:
             "boilerplate_min_page_fraction": BOILERPLATE_OPTIONS.min_page_fraction,
             "boilerplate_max_page_fraction": BOILERPLATE_OPTIONS.max_page_fraction,
             "boilerplate_max_edge_lines": BOILERPLATE_OPTIONS.max_edge_lines,
-            "schema_version": 1,
+            # Loop repair rewrites the stored text, so its thresholds re-key the step exactly as the
+            # prompt does. The calibration behind them assumes ``max_tokens`` above: raising the cap
+            # means a runaway no longer marks the page truncated, and the gate has to be re-derived.
+            "loop_min_page_chars": LOOP_OPTIONS.min_page_chars,
+            "loop_min_loop_chars": LOOP_OPTIONS.min_loop_chars,
+            "loop_min_loop_fraction": LOOP_OPTIONS.min_loop_fraction,
+            "loop_max_trailing_chars": LOOP_OPTIONS.max_trailing_chars,
+            "loop_min_counter_score": LOOP_OPTIONS.min_counter_score,
+            "loop_min_salvage_prefix": LOOP_OPTIONS.min_salvage_prefix,
+            "schema_version": 2,
         },
         fn=remote(
             partial(
