@@ -678,3 +678,24 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
   specs drift apart in more fields than the two forced deltas.
 - Dry run: The plan resolves d6144, 128 experts, top-4, two shared experts, SConv, sliding window
   512, EP64, capacity 1.0, batch 1024, and 16 workers with four GB200 GPUs each.
+
+### 2026-08-04 18:31 UTC - MHEP-009 launch contract ready and submitted
+
+- Hypothesis: The FSDP hero shape completes 25 steps on one EP64 rack, and its median MFU gives the
+  first same-shape comparison between EP and FSDP sharding.
+- Run ID: `mhep-009-fsdp-shape-25-20260804-1831`.
+- Job: `/rav/mhep-009-fsdp-shape-25-20260804-1831-coord`.
+- Command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive --cpu 2
+  --memory 8GB --disk 32GB --timeout 21600 --max-retries 50 --job-name
+  mhep-009-fsdp-shape-25-20260804-1831-coord -e WANDB_MODE offline -- python -m
+  experiments.grug.moe_hero_ep.launch --run-id mhep-009-fsdp-shape-25-20260804-1831 --num-steps 25
+  --shape fsdp --version 2026.08.04 --run`.
+- Code snapshot: `01025d80b`; clean tree. Source bundle: Iris workspace bundle, 9.6 MB.
+- Hardware: 16 workers with four GB200 GPUs each on `cw-us-east-08a`; 64 GPUs total.
+- W&B: ID and display name `mhep-009-fsdp-shape-25-20260804-1831`, project `marin_moe`, group
+  `moe-hero-ep`, tag `shape-fsdp`, and offline mode.
+- Final step: 25. Checkpoint policy: No checkpoints. This gate writes metrics only.
+- Stop criteria: Stop on terminal failure, non-finite loss, task retry, OOM, or incomplete step 25.
+- Next action: Monitor to a terminal state, read `tracker_metrics.jsonl`, then run the one-rack FSDP
+  control at the same shape and batch.
