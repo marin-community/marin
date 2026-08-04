@@ -2057,3 +2057,20 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Open questions that this profile answers: Whether the `0.000 s` overlap of MNEP-087 still holds after the one-CTA change, and where the remaining `2.4` times transport gap sits inside the step.
 - Gate: Require five finite steps, zero dropped assignments, and one complete XProf session.
 - Capacity note: No domain has 16 free nodes at submit time. The best domains hold 9 and 8 free nodes.
+
+### 2026-08-04 02:50 UTC - MNEP-115 collective overlap limit gate
+
+- Suspect: `MOONEP_DIRECT_DEVICE_COLLECTIVE_OVERLAP_LIMIT = 1` serializes every collective. Its comment calls this a safety default until an EP64 overlap gate runs. That gate never ran.
+- Basis: MNEP-112 shows that the hardware runs the device kernel and a rack-shape GEMM at the same time with no measurable cost. MNEP-087 measured `0.000 s` of overlap in the training graph. The devices are not the limit.
+- Treatment: Repeat MNEP-102 with `--xla_gpu_experimental_parallel_collective_overlap_limit=4`.
+- Method: Set `XLA_FLAGS` in the job environment. `train.py` keeps an explicit flag and does not add its default, so this needs no code change.
+- Gate: Require five finite EP64 steps on attempt zero, zero dropped assignments, and median MFU above the `9.937%` of MNEP-102.
+- Stop criteria: Stop on a retry, a non-finite value, a transport error, or an out-of-memory error.
+- Risk: Concurrent device-kernel collectives share NCCL device-communicator state. MNEP-024 ruled out collective concurrency as the cause of an earlier fault, but a non-finite result here would restore the serial default.
+
+### 2026-08-04 02:52 UTC - MNEP-116 rank scaling contract
+
+- Question: The device kernel gives `333.7 GB/s` on 16 ranks, but the EP64 rack run gives `101.9 GB/s`. Size and skew together explain only a part.
+- Treatment: Run the transport benchmark on eight nodes, which is 32 ranks, at `8,192` and `4,096` rows for each peer.
+- Comparison: The 16-rank results are `323.4 GB/s` at `8,192` rows and `304.7 GB/s` at `4,096` rows.
+- Gate: One complete result file. Rank count is the last cheap variable in the rack gap.
