@@ -17,6 +17,12 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[dependency-groups]
+test = [
+    "pytest>=8.3.2",
+    "pytest-xdist",
+]
+
 # The pulumi SDK is only imported when running the IaC program itself (pulumi
 # preview/up, the grafana Cloud Run deploy, and the iac tests); no Iris/Marin
 # runtime code touches it. Gating it behind the `deploy` extra keeps the

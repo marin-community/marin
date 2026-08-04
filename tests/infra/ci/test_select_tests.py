@@ -134,6 +134,17 @@ def test_experiments_changes_select_dependent_marin_tests(tmp_path: Path) -> Non
     assert leg_paths(matrix, "marin") == ["tests/test_tokenizer_sweep.py"]
 
 
+def test_pulumi_changes_select_dependent_iac_tests(tmp_path: Path) -> None:
+    write(tmp_path, "infra/pulumi/src/iac/__init__.py")
+    write(tmp_path, "infra/pulumi/src/iac/gcp/__init__.py")
+    write(tmp_path, "infra/pulumi/src/iac/gcp/iam.py", "IAM = 1\n")
+    write(tmp_path, "infra/pulumi/tests/test_iam.py", "from iac.gcp import iam\n")
+
+    matrix = select_matrix(["infra/pulumi/src/iac/gcp/iam.py"], tmp_path)
+
+    assert matrix == [matrix_leg("iac", ["infra/pulumi/tests/test_iam.py"])]
+
+
 def test_test_helper_module_propagates_source_changes(tmp_path: Path) -> None:
     """A test reaching source only through a shared helper is still selected."""
     write(tmp_path, "lib/iris/src/iris/__init__.py")
