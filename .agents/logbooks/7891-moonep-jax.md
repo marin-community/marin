@@ -2139,3 +2139,21 @@ The work starts from PR #7890 at `e38ae4f8`. The first gate requires correct gra
 - Questions: Whether the 136,275 fusion launches and 24,716 device copies are launch-bound, and where the transport kernel sits against the API calls that enqueue it.
 - Gate: Require five finite steps, zero dropped assignments, one nsys report, and one HLO dump.
 - Risk: Report delivery on termination is best-effort. A large report can lose a race with SIGKILL after SIGTERM.
+
+### 2026-08-04 07:05 UTC - Arrival skew does not explain the training gap
+
+- Method: Compare the duration of each ragged collective instance across five hosts of the MNEP-114 profile, which is 20 GPUs.
+- Result: Medians agree to `0.0` to `0.5 ms` out of about `26 ms`. Example: `ragged-all-to-all.8.1` gives `26.7 ms` on every host.
+- Logic: A staggered arrival makes early ranks wait inside the collective, so their duration grows. Equal durations on every host mean that every rank arrives at the same time.
+- Conclusion: The `25` to `27 ms` is kernel time, not peer wait. Arrival skew is not the cause of the `106 GB/s` training rate.
+- Remaining hypothesis: Peer count. Patch `0023` gives one CTA the remote completion for every GIN context. That CTA serves 15 remote peers at 16 ranks and 63 at 64 ranks. MNEP-116 found no loss at 32 ranks, so the test needs 64.
+- Next: Run the transport benchmark on 16 nodes at 64 ranks with the same wheel.
+
+### 2026-08-04 07:06 UTC - Device kernel A/B against the stock path
+
+- Setup: 16 GPUs on four nodes, `8,192` rows for each peer, balanced, one shape, two builds.
+- With the patched build and both flags: `4.05 ms`, `310.8 GB/s`, kernel `RaggedAllToAllDeviceKernelImpl`.
+- With the stock XLA `5d53e1e` build and both flags off: `38.99 ms`, `32.3 GB/s`, kernels `RaggedAllToAllWithSymmetricMemoryKernel`, `ncclDevKernel_SendRecv`, and `MultiGpuBarrierWithNcclKernelImpl`.
+- Gain: `9.6` times end to end, and `12.3` times on kernel time.
+- Control: The plain padded all-to-all is `397` and `427 GB/s` in the two runs, so the environment is equal.
+- Consequence: The device kernel is a large gain. Training at `106 GB/s` is still `3.3` times above the stock path.
