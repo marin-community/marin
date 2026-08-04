@@ -31,6 +31,7 @@ ARTIFACT_IMAGE_NAME = "loom"
 DOTENV_SECRET_ID = "LOOM_DOTENV"
 LOOM_PORT = 7878
 DATA_DISK_DEVICE_NAME = "loom-data"
+DATA_MOUNT = "/mnt/loom-data"
 SECRET_ACCESSOR_ROLE = "roles/secretmanager.secretAccessor"
 LOG_WRITER_ROLE = "roles/logging.logWriter"
 KMS_ENCRYPTER_DECRYPTER_ROLE = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
@@ -40,7 +41,22 @@ WEB_FIREWALL_TAG = "loom-web"
 SSH_FIREWALL_TAG = "loom-ssh"
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 STARTUP_SCRIPT = (ROOT / "startup-script.sh").read_text()
-DOCKER_DAEMON_CONFIG = (ROOT / "runtime/docker-daemon.json").read_text()
+DOCKER_DAEMON_CONFIG = (
+    json.dumps(
+        {
+            "data-root": f"{DATA_MOUNT}/docker",
+            "default-ulimits": {
+                "core": {
+                    "Name": "core",
+                    "Hard": 0,
+                    "Soft": 0,
+                }
+            },
+        },
+        indent=2,
+    )
+    + "\n"
+)
 RUNTIME_COMPOSE = (ROOT / "runtime/docker-compose.yml").read_text()
 RUNTIME_CADDYFILE = (ROOT / "runtime/Caddyfile").read_text()
 MCP_ACCESS_NONE = "none"
@@ -796,6 +812,7 @@ def _create_instance(
         "dotenv-secret-id": DOTENV_SECRET_ID,
         "loom-port": str(LOOM_PORT),
         "data-disk-device": DATA_DISK_DEVICE_NAME,
+        "data-mount": DATA_MOUNT,
         "loom-deployment": runtime_policy.manifest,
         "docker-daemon-config": DOCKER_DAEMON_CONFIG,
         "loom-compose": RUNTIME_COMPOSE,
