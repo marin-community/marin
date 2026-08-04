@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PDF OCR sample browser</title>
+<link rel="stylesheet" href="/style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+<header id="topbar">
+  <div class="row">
+    <input id="q" type="search" placeholder="search…" />
+    <select id="qField">
+      <option value="both">title+text</option>
+      <option value="title">title</option>
+      <option value="text">text</option>
+    </select>
+    <select id="scoreVersion" title="which score set the chips and filters use"></select>
+    <button class="range-btn" data-key="begin" title="begin-segment score range">B<span class="range-tag">any</span></button>
+    <button class="range-btn" data-key="middle" title="middle-segment score range">M<span class="range-tag">any</span></button>
+    <button class="range-btn" data-key="end" title="end-segment score range">E<span class="range-tag">any</span></button>
+    <button class="range-btn" data-key="overall" title="worst-segment score range">min<span class="range-tag">any</span></button>
+    <button id="clearRanges" class="range-clear" title="clear all score filters">clear</button>
+    <select id="status">
+      <option value="">any status</option>
+      <option value="success">success</option>
+      <option value="partial">partial</option>
+    </select>
+    <span id="count" class="count">–</span>
+    <button id="prevDoc" title="previous doc (←)">‹</button>
+    <span id="position" class="count"></span>
+    <button id="nextDoc" title="next doc (→)">›</button>
+    <button id="toggleList">results</button>
+  </div>
+  <div id="drawer" class="hidden"></div>
+  <div id="rangePop" class="range-pop hidden">
+    <div class="range-pop-head"><span id="rangePopTitle"></span><span id="rangePopValue" class="dim"></span></div>
+    <label class="range-row">min<input type="range" id="rangeMin" /><span id="rangeMinVal" class="range-num"></span></label>
+    <label class="range-row">max<input type="range" id="rangeMax" /><span id="rangeMaxVal" class="range-num"></span></label>
+    <div class="range-quick" id="rangeQuick"></div>
+  </div>
+</header>
+
+<main>
+  <section id="left">
+    <div class="panel-head">
+      <div class="head-main">
+        <span id="pdfTitle" class="title">no document selected</span>
+        <span id="pdfMeta" class="dim"></span>
+        <button id="metaToggle" class="linkish">details ▾</button>
+      </div>
+      <dl id="metaTable" class="hidden"></dl>
+    </div>
+    <div id="pdfArea" class="panel-body">
+      <div id="pdfPlaceholder" class="placeholder">select a document</div>
+      <canvas id="pdfCanvas"></canvas>
+    </div>
+    <div class="panel-foot">
+      <button id="pdfPrev">◀ page</button>
+      <span id="pdfPageLabel">– / –</span>
+      <button id="pdfNext">page ▶</button>
+    </div>
+  </section>
+
+  <section id="right">
+    <div class="panel-head">
+      <div class="head-main">
+        <span class="title">OCR text</span>
+        <span id="versionNote" class="dim mini"></span>
+        <span id="chips" class="chips"></span>
+      </div>
+      <div id="reasoning" class="hidden"></div>
+    </div>
+    <div id="textArea" class="panel-body"></div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
