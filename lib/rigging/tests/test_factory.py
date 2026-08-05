@@ -31,6 +31,7 @@ from rigging.filesystem.factory import (
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
 from rigging.filesystem.s3_compat import (
     TotalDeadlineAIOHTTPSession,
+    configure_fsspec_s3,
     fsspec_s3_conf,
     s3_request_bounds_config_kwargs,
 )
@@ -58,7 +59,12 @@ class _ExternallyMutableFileSystem(fsspec.AbstractFileSystem):
         return listing if detail else [str(entry["name"]) for entry in listing]
 
 
+class _ExternallyMutableS3FileSystem(_ExternallyMutableFileSystem):
+    protocol = ("externals3listings", "s3")
+
+
 fsspec.register_implementation("externallistings", _ExternallyMutableFileSystem, clobber=True)
+fsspec.register_implementation("externals3listings", _ExternallyMutableS3FileSystem, clobber=True)
 
 
 def test_unique_temp_path_produces_distinct_paths():
@@ -202,6 +208,20 @@ def test_cloud_filesystem_preserves_process_listing_cache_config(monkeypatch):
     configure_listing_cache_defaults()
     files = {"bucket/first"}
     fs, path = fsspec.core.url_to_fs("externallistings://bucket", files=files)
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+    files.add("bucket/second")
+
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+
+def test_configure_fsspec_s3_preserves_process_listing_cache_config(monkeypatch):
+    for key in ("AWS_ENDPOINT_URL", "AWS_REGION", "AWS_DEFAULT_REGION", "FSSPEC_S3"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(fsspec.config.conf, "s3", {"listings_expiry_time": 60})
+    configure_fsspec_s3("https://objects.example.com")
+    files = {"bucket/first"}
+    fs, path = fsspec.core.url_to_fs("externals3listings://bucket", files=files)
     assert fs.ls(path, detail=False) == ["bucket/first"]
 
     files.add("bucket/second")

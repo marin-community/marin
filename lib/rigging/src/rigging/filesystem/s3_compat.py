@@ -41,7 +41,7 @@ import s3fs
 from aiobotocore.httpsession import AIOHTTPSession
 
 from rigging.filesystem.cluster_config import StoreType, store_config
-from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME
+from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME, configured_listing_cache_options
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
@@ -155,7 +155,12 @@ def configure_fsspec_s3(endpoint: str, key: str | None = None, secret: str | Non
     os.environ.setdefault("AWS_DEFAULT_REGION", "auto")
 
     if "FSSPEC_S3" not in os.environ:
-        os.environ["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
+        conf = fsspec_s3_conf(endpoint)
+        configured_cache = configured_listing_cache_options(("s3", "s3a"))
+        if configured_cache:
+            conf.pop("listings_expiry_time")
+            conf.update(configured_cache)
+        os.environ["FSSPEC_S3"] = json.dumps(conf)
 
     # Flush fsspec/s3fs cached instances so they pick up the new config.
     fsspec.config.set_conf_env(fsspec.config.conf)
