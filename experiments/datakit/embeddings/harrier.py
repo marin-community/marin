@@ -8,7 +8,6 @@ from marin.execution.lazy import ArtifactStep
 
 
 def build() -> ArtifactStep[Artifact]:
-    """Return the completed Harrier embedding artifact."""
     return ArtifactStep.adopt(
         name="datakit/embeddings/harrier-oss-v1-0.6b-50m",
         version="2026.08.04",
