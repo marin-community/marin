@@ -1,0 +1,19 @@
+name: g1_gptlong_top8_train_on_obs-1500-32B-h100x2
+location: laion/g1_gptlong_top8_train_on_obs-1500-32B
+revision: e379fa0ca9dbf99a3d76d169fa9722b412783dce
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+  memory: 128g
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 32768
+  max_num_seqs: 96
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

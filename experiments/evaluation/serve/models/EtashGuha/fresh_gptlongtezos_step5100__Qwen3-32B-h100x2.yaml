@@ -1,0 +1,19 @@
+name: fresh_gptlongtezos_step5100__Qwen3-32B-h100x2
+location: EtashGuha/fresh_gptlongtezos_step5100__Qwen3-32B
+revision: fbb8fe9d110718e98611acb53f31f8b6cdf71474
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 2
+  memory: 128g
+serve:
+  tensor_parallel_size: 2
+  max_model_len: 32768
+  max_num_seqs: 96
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'
