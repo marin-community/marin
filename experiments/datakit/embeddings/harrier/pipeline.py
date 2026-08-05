@@ -58,7 +58,6 @@ HARRIER_TOKENIZE_BATCH_SIZE = 128
 HARRIER_MAX_RAW_TEXT_CHARS = 1_048_576
 HARRIER_MAX_INFERENCE_BATCH_TOKENS = 32_768
 HARRIER_MAX_INFERENCE_BATCH_SIZE = 64
-HARRIER_TARGET_CLUSTER = "cw-us-east-02a"
 HARRIER_MAX_WORKERS = 256
 
 _MODEL_ARCHIVE_NAME = "model.tar"
@@ -369,7 +368,6 @@ def embed_source(
             cpu=8,
             ram="32g",
             disk="32g",
-            target_cluster=HARRIER_TARGET_CLUSTER,
         )
 
     ctx = ZephyrContext(
