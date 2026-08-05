@@ -497,6 +497,7 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
 def test_build_evaluation_batch_reuses_harbor_results_path(monkeypatch, tmp_path):
     _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    monkeypatch.setattr("experiments.evaluation.launch.validate_harbor_resume_root", lambda *_args, **_kwargs: None)
     policy = _write_harbor_config(tmp_path / "policy.yaml")
     spec = LaunchSpec(
         model="qwen3-8b",
@@ -513,3 +514,56 @@ def test_build_evaluation_batch_reuses_harbor_results_path(monkeypatch, tmp_path
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
     assert batch.evaluations[0].identity.output_dir == "s3://eval-bucket/existing/results"
+
+
+def test_build_evaluation_batch_validates_resume_root_before_reuse(monkeypatch, tmp_path):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    policy = _write_harbor_config(tmp_path / "policy.yaml")
+    captured: dict = {}
+
+    def fake_validate(path, config):
+        captured["path"] = path
+        captured["dataset"] = config.record_dataset
+
+    monkeypatch.setattr("experiments.evaluation.launch.validate_harbor_resume_root", fake_validate)
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=(),
+        harbor_configs=(HarborConfigSelection(name="policy", path=policy),),
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=None,
+        records_prefix="s3://eval-bucket/records",
+        cluster="marin",
+        resume_results_path="s3://eval-bucket/existing/results",
+    )
+
+    build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert captured == {"path": "s3://eval-bucket/existing/results", "dataset": "aime"}
+
+
+def test_build_evaluation_batch_propagates_resume_root_mismatch(monkeypatch, tmp_path):
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    policy = _write_harbor_config(tmp_path / "policy.yaml")
+
+    def reject(_path, _config):
+        raise ValueError("dataset mismatch: found 'other', expected 'aime'")
+
+    monkeypatch.setattr("experiments.evaluation.launch.validate_harbor_resume_root", reject)
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=(),
+        harbor_configs=(HarborConfigSelection(name="policy", path=policy),),
+        platform=Platform.GPU,
+        accelerator="H100x1",
+        limit=None,
+        records_prefix="s3://eval-bucket/records",
+        cluster="marin",
+        resume_results_path="s3://eval-bucket/existing/results",
+    )
+
+    with pytest.raises(ValueError, match="dataset mismatch"):
+        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")

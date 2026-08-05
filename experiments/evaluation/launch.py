@@ -23,7 +23,7 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
     preflight_harbor_configs,
 )
-from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name
+from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -98,12 +98,12 @@ def _launch_user() -> str:
 
 def _run_id(model_key: str, eval_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{eval_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_key}-{eval_key}-{uuid.uuid4().hex[:8]}"
 
 
 def _group_id(model_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_key}-{uuid.uuid4().hex[:8]}"
 
 
 def _capability_origin(cluster: str) -> str:
@@ -210,6 +210,7 @@ def build_evaluation_batch(
             raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
         if "://" not in spec.resume_results_path:
             raise ValueError("--resume-results-path must be an object-store path")
+        validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.config)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
