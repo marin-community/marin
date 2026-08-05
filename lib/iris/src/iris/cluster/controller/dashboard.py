@@ -7,7 +7,8 @@ The dashboard serves:
 - Web UI at / (main dashboard with tabs: jobs, fleet, endpoints, autoscaler, logs, transactions)
 - Web UI at /job/{job_id} (job detail page)
 - Web UI at /worker/{id} (worker detail page)
-- Connect RPC at /iris.cluster.ControllerService/* (called directly by JS)
+- Connect RPC at /iris.cluster.ControllerService/* and /iris.cluster.EndpointService/*
+  (called directly by JS)
 - Health check at /health
 
 All data fetching happens via Connect RPC calls from the browser JavaScript.
@@ -534,6 +535,11 @@ class ProxyControllerDashboard:
             Route(
                 "/iris.cluster.ControllerService/{method}",
                 functools.partial(self._proxy_rpc_post, service="iris.cluster.ControllerService"),
+                methods=["POST"],
+            ),
+            Route(
+                "/iris.cluster.EndpointService/{method}",
+                functools.partial(self._proxy_rpc_post, service="iris.cluster.EndpointService"),
                 methods=["POST"],
             ),
             Route("/proxy/{path:path}", self._proxy_endpoint, methods=list(PROXY_METHODS)),
