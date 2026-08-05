@@ -84,6 +84,10 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
+    # restores from the latest committed checkpoint, so without a writer an interrupted run
+    # restarts at step 0.
+    save_checkpoints: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -498,6 +502,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -625,12 +630,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
+                if checkpointer is not None:
+                    checkpointer.on_step(tree=state, step=int(state.step))
+
         except BaseException:
-            logger.exception("Fatal error in grug training loop; skipping final callbacks to preserve root cause")
+            logger.exception(
+                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+            )
             raise
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if checkpointer is not None:
+                checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
 
