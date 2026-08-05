@@ -47,6 +47,7 @@ from experiments.grug.moe.inference_preflight import (
     CASES,
     DUMMY_SEED,
     FROZEN_FIXTURE_PATH,
+    IDENTITY_CHAT_TOKENS,
     SNOWBALL_EXPORT,
     VLLM_SHA,
     ModelCase,
@@ -739,7 +740,9 @@ def _timed_completion(
         endpoint = "/v1/chat/completions"
         body = {
             "model": model,
-            "messages": [{"role": "user", "content": " ".join(f"t{token_id}" for token_id in prompt_token_ids)}],
+            "messages": [
+                {"role": "user", "content": " ".join(IDENTITY_CHAT_TOKENS[token_id] for token_id in prompt_token_ids)}
+            ],
             "max_tokens": max_tokens,
             **CHAT_HEALTH_SAMPLING_PARAMETERS,
         }

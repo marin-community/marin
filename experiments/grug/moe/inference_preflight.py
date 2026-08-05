@@ -29,6 +29,7 @@ ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/moe-inference-archite
 FROZEN_FIXTURE_PATH = "tests/cluster/vllm/resources/grug_exact_reference"
 
 DUMMY_SEED = 1234
+IDENTITY_CHAT_TOKENS = tuple(f"{token_id:02x}" for token_id in range(256))
 DTYPE = "bfloat16"
 KV_CACHE_DTYPE = "bfloat16"
 GPU_MEMORY_UTILIZATION = 0.90
@@ -919,10 +920,11 @@ def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) 
     # The benchmark normally sends token IDs directly and starts vLLM with
     # ``--skip-tokenizer-init``.  The matched MarinSkyRL carrier check must use
     # ``/v1/chat/completions`` instead.  This tiny tokenizer makes the chat
-    # renderer an identity map over the exact frozen 0..255 model vocabulary:
-    # message text ``t1 t37 t9`` becomes token IDs ``[1, 37, 9]``.  It adds no
-    # role markers, BOS token, EOS token, or generation suffix.
-    vocabulary = {f"t{token_id}": token_id for token_id in range(256)}
+    # renderer an identity map over the exact frozen 0..255 model vocabulary.
+    # Two-digit hexadecimal keeps a 65K prompt below vLLM's conservative
+    # four-characters-per-token frontend guard: ``01 25 09`` becomes token IDs
+    # ``[1, 37, 9]``. It adds no role markers, BOS token, EOS token, or suffix.
+    vocabulary = {token: token_id for token_id, token in enumerate(IDENTITY_CHAT_TOKENS)}
     tokenizer = {
         "version": "1.0",
         "truncation": None,
@@ -935,7 +937,7 @@ def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) 
         "model": {
             "type": "WordLevel",
             "vocab": vocabulary,
-            "unk_token": "t0",
+            "unk_token": IDENTITY_CHAT_TOKENS[0],
         },
     }
     chat_template = "{% for message in messages %}{{ message['content'] }}{% endfor %}"
@@ -945,7 +947,7 @@ def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) 
             {
                 "tokenizer_class": "PreTrainedTokenizerFast",
                 "model_max_length": case.max_model_len,
-                "unk_token": "t0",
+                "unk_token": IDENTITY_CHAT_TOKENS[0],
                 "chat_template": chat_template,
             },
             indent=2,
@@ -953,7 +955,9 @@ def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) 
         )
         + "\n"
     )
-    (output_dir / "special_tokens_map.json").write_text(json.dumps({"unk_token": "t0"}, sort_keys=True) + "\n")
+    (output_dir / "special_tokens_map.json").write_text(
+        json.dumps({"unk_token": IDENTITY_CHAT_TOKENS[0]}, sort_keys=True) + "\n"
+    )
     workload = deterministic_workload()
     (output_dir / "workload.json").write_text(json.dumps(workload, indent=2, sort_keys=True) + "\n")
     boundary_workload = deterministic_boundary_workload(case)
@@ -969,6 +973,7 @@ __all__ = [
     "CASES",
     "DUMMY_SEED",
     "FROZEN_FIXTURE_PATH",
+    "IDENTITY_CHAT_TOKENS",
     "KV_BLOCK_SIZE",
     "MARIN_BASE_SHA",
     "P0_SMOKE_CASES",

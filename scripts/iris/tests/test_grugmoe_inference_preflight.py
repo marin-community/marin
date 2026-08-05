@@ -721,10 +721,40 @@ def test_timed_chat_completion_preserves_frozen_ids_in_identity_template(
     assert observed["url"] == "http://server/v1/chat/completions"
     body = observed["json"]
     assert isinstance(body, dict)
-    assert body["messages"] == [{"role": "user", "content": "t1 t37 t9 t255"}]
+    assert body["messages"] == [{"role": "user", "content": "01 25 09 ff"}]
     assert body["logprobs"] is True
     assert body["top_logprobs"] == 1
     assert timing["request_transport"] == "chat"
+
+
+def test_timed_chat_completion_fits_vllm_character_guard_at_65k(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+
+    class Response:
+        ok = True
+        content = b'{"choices":[{}]}'
+
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+
+    def post(url: str, **kwargs: object) -> Response:
+        observed.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setattr(grug_preflight.requests, "post", post)
+    prompt_token_ids = [255] * 65_535
+    grug_preflight._timed_completion(
+        "http://server",
+        "model",
+        prompt_token_ids,
+        max_tokens=1,
+        request_transport="chat",
+    )
+
+    body = observed["json"]
+    assert isinstance(body, dict)
+    content = body["messages"][0]["content"]
+    assert len(content) <= 4 * len(prompt_token_ids)
 
 
 def test_labeled_prometheus_preserves_engines_and_window_histograms() -> None:

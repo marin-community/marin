@@ -361,10 +361,13 @@ def test_write_case_freezes_config_workload_and_manifest(tmp_path) -> None:
     workload = json.loads((tmp_path / "workload.json").read_text())
     correctness_workload = json.loads((tmp_path / "correctness-workload.json").read_text())
     manifest = json.loads((tmp_path / "manifest.json").read_text())
+    tokenizer = json.loads((tmp_path / "tokenizer.json").read_text())
     assert config["architectures"] == ["GrugMoeForCausalLM"]
     assert config["model_type"] == "grug_moe"
     assert workload["request_count"] == BRANCH_COUNT
     assert correctness_workload["cache_hit_alignment"] == 32
     assert correctness_workload["lengths"] == [33, 513]
+    assert tokenizer["model"]["vocab"]["00"] == 0
+    assert tokenizer["model"]["vocab"]["ff"] == 255
     expected_manifest = json.loads(json.dumps(frozen_manifest(CASES["tiny"], run_id="unit", git_sha="f" * 40)))
     assert manifest == expected_manifest
