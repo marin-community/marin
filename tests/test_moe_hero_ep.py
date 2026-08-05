@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import dataclasses
 import os
 import subprocess
 import sys
@@ -16,33 +15,13 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mes
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, train
-from experiments.grug.moe_hero_ep.heuristic import HERO_SHAPE_SPECS, HeroShape
-from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs as build_fsdp_hero_configs
-
-# Fields the FSDP hero shape cannot keep on an expert-parallel mesh: `sonic_cute` has no EP
-# collectives, and `moe_mlp` rejects expert_chunks > 1 once the expert axis exceeds one.
-_EXPECTED_EP_DELTAS = {"moe_implementation": "fixed_all_to_all", "expert_chunks": 1}
-
-
-def test_fsdp_shape_matches_the_fsdp_hero_apart_from_ep_deltas():
-    fsdp_model, _ = build_fsdp_hero_configs(num_train_steps=25, batch_size=1024)
-    ep_mesh_model = HERO_SHAPE_SPECS[HeroShape.FSDP].model
-
-    reference = dataclasses.asdict(fsdp_model)
-    measured = dataclasses.asdict(ep_mesh_model)
-    assert set(reference) == set(measured)
-
-    differing = {name: measured[name] for name in reference if measured[name] != reference[name]}
-    assert differing == _EXPECTED_EP_DELTAS
-    assert reference["moe_implementation"] == "sonic_cute"
-    assert reference["expert_chunks"] == 4
 
 
 def test_expert_bank_override_must_divide_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
     with pytest.raises(ValueError, match="must divide the expert axis"):
-        launch.build_hero_run(run_id="bad-bank", num_steps=1, shape=HeroShape.FSDP, num_experts=200, version="dev")
+        launch.build_hero_run(run_id="bad-bank", num_steps=1, num_experts=200, version="dev")
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):

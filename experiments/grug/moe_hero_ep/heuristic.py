@@ -1,37 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compute-scaling LR heuristic and the EP64 hero config builders.
+"""Compute-scaling LR heuristic and the EP64 hero config builder.
 
 ``MoeHeuristic`` is the May Recipe refit (issue #5951, R^2=0.996): it sets compute-optimal MuonH /
 Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``build_hero_configs``
-pairs it with a fixed hero model spec so a launcher gets both configs back from a single
-``(num_train_steps, batch_size, shape)`` call, keeping the hero self-contained.
+pairs it with the fixed hero model spec so a launcher gets both configs back from a single
+``(num_train_steps, batch_size)`` call, keeping the hero self-contained.
 
-Two model shapes run on the same EP64 mesh. ``HeroShape.EP`` is the native d5120 / 256-expert EP
-hero. ``HeroShape.FSDP`` is the ``experiments/grug/moe_hero_fsdp`` d6144 / 128-expert shape. Running
-it here gives both sharding strategies one analytic FLOP count, because that count depends only on
-the model config, so their MFU values share a denominator. They do not do the same work: at capacity
-1.0 the EP run dropped 9.97% of assignments against 1.88% for FSDP, so read the drop fraction with
-the MFU value or match the drop rates first.
+The hero model is d6144 with 48 layers, 128 routed experts at top-4, and two shared experts:
+359.6 B total parameters and 20.9 B active per token. The launcher sweeps expert count, expert
+width, routed top-k, and capacity factor from this spec.
 """
 
 import math
 from dataclasses import dataclass
-from enum import StrEnum
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.optimizer import GrugMoeMuonHConfig
-
-
-class HeroShape(StrEnum):
-    """Model shape that the EP64 mesh runs."""
-
-    EP = "ep"
-    """Native EP hero: d5120, 256 experts, top-8, one shared expert."""
-
-    FSDP = "fsdp"
-    """FSDP hero shape: d6144, 128 experts, top-4, two shared experts, SConv, hybrid GQA."""
 
 
 @dataclass(frozen=True)
@@ -91,36 +77,7 @@ class MoeHeuristic:
         )
 
 
-_EP_SHAPE_MODEL = GrugModelConfig(
-    vocab_size=128_256,
-    hidden_dim=5120,
-    intermediate_dim=1280,
-    shared_expert_intermediate_dim=5120,
-    num_shared_experts=1,
-    num_experts=256,
-    num_experts_per_token=8,
-    num_layers=48,
-    num_heads=40,
-    num_kv_heads=10,
-    head_dim=128,
-    max_seq_len=4096,
-    sliding_window=2048,
-    global_every=4,
-    capacity_factor=1.0,
-    initializer_std=0.5 / math.sqrt(5120),
-    qk_mult=1.3,
-    attention_implementation="gpu_fa4_cute",
-    moe_implementation="fixed_all_to_all",
-    expert_chunks=1,
-    report_capacity_overflow=True,
-)
-
-# The FSDP hero spec from experiments/grug/moe_hero_fsdp/heuristic.py, with the only two fields
-# that expert parallelism cannot honor: `sonic_cute` is a local grouped-GEMM backend that has no
-# EP collectives, and `moe_mlp` rejects expert_chunks > 1 whenever the expert axis is larger than
-# one because the expert bank is sharded rather than gathered. Every other field is identical, so
-# the two runs share one analytic FLOP count and one MFU denominator.
-_FSDP_SHAPE_MODEL = GrugModelConfig(
+HERO_MODEL = GrugModelConfig(
     vocab_size=128_256,
     hidden_dim=6144,
     intermediate_dim=3072,
@@ -149,28 +106,9 @@ _FSDP_SHAPE_MODEL = GrugModelConfig(
 )
 
 
-@dataclass(frozen=True)
-class HeroShapeSpec:
-    """Model spec and the memory setting measured for it on one NVL72 rack."""
-
-    model: GrugModelConfig
-    offload_opt_state: bool
-
-
-# d5120 measured a 19.694% MFU regression from host offload and its 135 GiB pinned-host arena.
-# d6144 keeps the FSDP hero's host offload: its parameters and MuonH momentum are 1.2 times larger
-# per device, and the FSDP reference run it is compared against also offloads.
-HERO_SHAPE_SPECS: dict[HeroShape, HeroShapeSpec] = {
-    HeroShape.EP: HeroShapeSpec(model=_EP_SHAPE_MODEL, offload_opt_state=False),
-    HeroShape.FSDP: HeroShapeSpec(model=_FSDP_SHAPE_MODEL, offload_opt_state=True),
-}
-
-
-def build_hero_configs(
-    *, num_train_steps: int, batch_size: int, shape: HeroShape = HeroShape.EP
-) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
-    """The fixed hero model for ``shape`` plus its compute-scaled MuonH optimizer."""
-    model = HERO_SHAPE_SPECS[shape].model
+def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+    """The fixed EP64 hero model plus its compute-scaled MuonH optimizer."""
+    model = HERO_MODEL
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_train_steps,
         batch_size=batch_size,
