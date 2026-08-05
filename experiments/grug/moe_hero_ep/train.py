@@ -369,23 +369,27 @@ _SUMMED_METRICS: frozenset[str] = frozenset({"moe/dropped_assignments", _ROUTING
 
 
 def _slice_microbatch(batch: GrugLmExample, start: int, size: int) -> GrugLmExample:
-    """Take one microbatch out of a batch, leaving the attention mask intact.
+    """Take one microbatch out of a batch, slicing the attention mask with it.
 
-    Only a batch-independent mask survives the slice untouched. Segment ids, THD segment metadata,
-    and precomputed FA4 bounds are all shaped [B, ...], so slicing the tokens without them
-    misaligns attention. Reject those rather than guess at the right slice.
+    Every array a `GrugLmExample` carries is per-example with the batch as its leading axis: the
+    tokens and loss weights, and the mask's segment ids, THD segment lengths, and FA4 bounds.
+    `block_cross_document_attention` populates those mask fields, so the hero batches always have
+    them and slicing the tokens alone would misalign attention against them. `is_causal` and
+    `sliding_window` are static equinox fields, so they are not leaves and carry through untouched.
+
+    Any leaf that does not lead with the batch axis is rejected rather than sliced on a guess.
     """
-    mask = batch.attn_mask
-    if any(field is not None for field in (mask.segment_ids, mask.thd_segment_metadata, mask.fa4_bounds)):
-        raise ValueError(
-            "microbatches > 1 needs a batch-independent attention mask; "
-            "segment ids, THD metadata, and FA4 bounds are all per-example"
-        )
-    return dataclasses.replace(
-        batch,
-        tokens=jax.lax.slice_in_dim(batch.tokens, start, start + size, axis=0),
-        loss_weight=jax.lax.slice_in_dim(batch.loss_weight, start, start + size, axis=0),
-    )
+    batch_size = batch.tokens.shape[0]
+
+    def slice_leaf(leaf: jax.Array) -> jax.Array:
+        if leaf.shape[:1] != (batch_size,):
+            raise ValueError(
+                f"microbatching needs every batch leaf to lead with the batch axis {batch_size}, "
+                f"got a leaf of shape {leaf.shape}"
+            )
+        return jax.lax.slice_in_dim(leaf, start, start + size, axis=0)
+
+    return jax.tree_util.tree_map(slice_leaf, batch)
 
 
 def _fold_metrics(per_microbatch: list[dict[str, Any]]) -> dict[str, Any]:
