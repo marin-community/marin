@@ -9,7 +9,7 @@ import os
 import click
 import jmp
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.wandb import WandbConfig
@@ -69,6 +69,8 @@ def build_hero_run(
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
+    profile_steps: int = 0,
+    profile_start_step: int = 5,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the one-rack EP64 hero throughput run.
@@ -133,7 +135,15 @@ def build_hero_run(
             seed=0,
             train_batch_size=HERO_EP_BATCH_SIZE,
             num_train_steps=num_steps,
-            profiler=ProfilerConfig(enabled=False),
+            profiler=ProfilerConfig(
+                enabled=profile_steps > 0,
+                start_step=profile_start_step,
+                num_steps=profile_steps,
+                # One rank is enough for a step trace, and tracing all 64 multiplies the upload
+                # without adding signal.
+                process_index=0,
+                profile_options=ProfileOptionsConfig(enable_hlo_proto=profile_steps > 0),
+            ),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
@@ -207,6 +217,20 @@ def build_hero_run(
     help="Override the routed expert width.",
 )
 @click.option(
+    "--profile-steps",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Steps to trace with XProf on rank 0. 0 disables the profiler.",
+)
+@click.option(
+    "--profile-start-step",
+    type=click.IntRange(min=0),
+    default=5,
+    show_default=True,
+    help="First traced step. Keep it past compile and warmup.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
@@ -220,6 +244,8 @@ def main(
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
+    profile_steps: int,
+    profile_start_step: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -228,6 +254,8 @@ def main(
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
+        profile_steps=profile_steps,
+        profile_start_step=profile_start_step,
     )
 
 
