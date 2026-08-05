@@ -34,15 +34,24 @@ fn main() {
 /// Bake the source revision and build environment into the binary as
 /// `FINELOG_BUILD_*` env vars, which `server::build_info` reads back.
 ///
+/// The revision comes from `FINELOG_SOURCE_*` when set, else from git. The
+/// override exists because the deploy image copies only `lib/finelog/rust` into
+/// its build stage — there is no checkout to interrogate there, so the builder
+/// passes the revision it built from as a `--build-arg`.
+///
 /// Every value degrades to an empty string rather than failing the build: a
-/// wheel built from an sdist has no `.git`, and a build stamp is diagnostic, not
+/// wheel built from an sdist has neither, and a build stamp is diagnostic, not
 /// load-bearing.
 fn emit_build_stamp() {
-    let commit = git(&["rev-parse", "HEAD"]);
+    let commit = source_var("FINELOG_SOURCE_COMMIT").unwrap_or_else(|| git(&["rev-parse", "HEAD"]));
     // The tree hash names the source CONTENT, so two commits that differ only in
     // message or parent — a rebase, a cherry-pick — are visibly the same build.
-    let tree = git(&["rev-parse", "HEAD^{tree}"]);
-    let dirty = !git(&["status", "--porcelain"]).is_empty();
+    let tree =
+        source_var("FINELOG_SOURCE_TREE").unwrap_or_else(|| git(&["rev-parse", "HEAD^{tree}"]));
+    let dirty = match source_var("FINELOG_SOURCE_DIRTY") {
+        Some(flag) => flag == "true",
+        None => !git(&["status", "--porcelain"]).is_empty(),
+    };
     let built_at_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -61,12 +70,25 @@ fn emit_build_stamp() {
     for input in ["src", "proto", "Cargo.toml"] {
         println!("cargo:rerun-if-changed={input}");
     }
+    for var in [
+        "FINELOG_SOURCE_COMMIT",
+        "FINELOG_SOURCE_TREE",
+        "FINELOG_SOURCE_DIRTY",
+    ] {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
     // `--git-path` resolves through a worktree's `.git` file, where the literal
     // path `.git/HEAD` does not exist.
     let head = git(&["rev-parse", "--git-path", "HEAD"]);
     if !head.is_empty() {
         println!("cargo:rerun-if-changed={head}");
     }
+}
+
+/// A `FINELOG_SOURCE_*` override, or `None` when unset or empty. An empty value
+/// is treated as absent because an unset `--build-arg` reaches the build as one.
+fn source_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
 /// Trimmed stdout of `git <args>`, or an empty string if git is absent, the

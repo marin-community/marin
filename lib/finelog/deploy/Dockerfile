@@ -52,8 +52,19 @@ ARG CARGO_PROFILE=release
 RUN apt-get update && apt-get install -y --no-install-recommends mold \
     && rm -rf /var/lib/apt/lists/*
 
+# The source revision this image is built from. Only lib/finelog/rust is copied
+# in, so there is no checkout here for build.rs to read; the builder passes what
+# it built from and build.rs stamps it into the binary, where `/api/server`
+# reports it. Unset leaves the deployed server reporting an unknown revision.
+ARG SOURCE_COMMIT=""
+ARG SOURCE_TREE=""
+ARG SOURCE_DIRTY=""
+
 WORKDIR /build/rust
 COPY lib/finelog/rust/ ./
+ENV FINELOG_SOURCE_COMMIT=${SOURCE_COMMIT} \
+    FINELOG_SOURCE_TREE=${SOURCE_TREE} \
+    FINELOG_SOURCE_DIRTY=${SOURCE_DIRTY}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/rust/target \
     mold -run cargo build --profile ${CARGO_PROFILE} -p finelog --bin finelog-server \
