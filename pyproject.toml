@@ -43,9 +43,6 @@ dependencies = [
 ]
 
 [tool.uv]
-# Keep local and CI lock updates on one resolver. uv upgrades can rewrite
-# Git-backed dependency metadata during unrelated native-wheel floor bumps.
-required-version = "==0.11.32"
 fork-strategy = "fewest"
 # "explicit": allow pre-releases only for packages whose declared specifier
 # names one, so our intentional pre-releases resolve while everything else stays

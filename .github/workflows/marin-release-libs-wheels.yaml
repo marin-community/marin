@@ -201,6 +201,10 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
 
       - uses: astral-sh/setup-uv@v7
+        # Native floor bumps must preserve the reviewed lock resolution. uv 0.12.1
+        # refreshed Git-backed CUDA and Torch metadata during an unrelated bump.
+        with:
+          version: "0.11.32"
 
       - name: Prepare shared update branch
         id: prepare
