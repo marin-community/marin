@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
@@ -33,10 +33,10 @@ class EvalchemyConfig(BaseModel):
 
     tasks: tuple[str, ...] = Field(min_length=1)
     task_options: Mapping[str, EvalchemyTaskOptions] = Field(default_factory=dict)
-    apply_chat_template: bool = False
+    apply_chat_template: bool | None = None
     limit: int | None = None
     num_fewshot: int | None = None
-    batch_size: str | None = "1"
+    batch_size: str | None = None
     seed: int | None = None
     gen_kwargs: Mapping[str, str] = Field(default_factory=dict)
     extra_model_args: Mapping[str, str | int | float | bool] = Field(default_factory=dict)
@@ -87,8 +87,3 @@ def load_evalchemy_config(path: Path) -> EvalchemyConfig:
         return EvalchemyConfig.model_validate(document)
     except (yaml.YAMLError, ValidationError) as exc:
         raise ValueError(f"invalid Evalchemy config {path}: {exc}") from exc
-
-
-def load_evalchemy_configs(paths: Sequence[Path]) -> tuple[EvalchemyConfig, ...]:
-    """Load Evalchemy launch files in argument order."""
-    return tuple(load_evalchemy_config(path) for path in paths)

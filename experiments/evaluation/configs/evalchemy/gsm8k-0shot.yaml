@@ -4,5 +4,4 @@ task_options:
     num_fewshot: 0
     task_alias: gsm8k_0shot
     generation: true
-batch_size: null
 max_tokens: 512

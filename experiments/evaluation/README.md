@@ -116,8 +116,9 @@ tracks a CLI validation mode that can move task-catalog errors back before Iris 
 `task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
 `apply_chat_template`, `limit`, `batch_size`, `seed`, `gen_kwargs`, `extra_model_args`, `max_length`,
 and `max_tokens`. `runtime_extras` names optional Evalchemy dependency groups required by custom task
-packages, such as `ifeval`. The model catalog supplies its chat-template and generation overlays, and
-an explicit launcher `--limit` overrides the file limit. `record.json` stores the resulting task
+packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog when omitted; an
+explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
+launcher `--limit` overrides the file limit. `record.json` stores the resulting task
 options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
 record provenance stores the exact Evalchemy requirement, including runtime extras.
 

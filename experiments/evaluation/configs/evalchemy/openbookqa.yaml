@@ -3,5 +3,4 @@ task_options:
   openbookqa:
     num_fewshot: 0
     task_alias: openbookqa_0shot
-batch_size: null
 max_tokens: 256

@@ -3,5 +3,4 @@ task_options:
   arc_easy:
     num_fewshot: 0
     task_alias: arc_easy_0shot
-batch_size: null
 max_tokens: 256

@@ -6,5 +6,4 @@ task_options:
     generation: true
     unsafe_code: true
     completion_only: true
-batch_size: null
 max_tokens: 1024

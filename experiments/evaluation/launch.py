@@ -12,12 +12,11 @@ import subprocess
 import uuid
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from pathlib import Path
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
-from marin.evaluation.evalchemy.config import EvalchemyConfig, load_evalchemy_configs
+from marin.evaluation.evalchemy.config import load_evalchemy_config
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
@@ -58,29 +57,13 @@ EVALUATION_CONTROLLER_CLUSTER = "marin"
 
 
 @dataclass(frozen=True)
-class EvalchemyConfigSelection:
-    """One portable Evalchemy config file supplied at launch."""
-
-    name: str
-    path: Path
-
-
-@dataclass(frozen=True)
-class HarborConfigSelection:
-    """One Harbor config file supplied at launch."""
-
-    name: str
-    path: Path
-
-
-@dataclass(frozen=True)
 class LaunchSpec:
     """One model, evaluation selection, execution target, and record destination."""
 
     model: str
     evals: tuple[str, ...]
-    evalchemy_configs: tuple[EvalchemyConfigSelection, ...]
-    harbor_configs: tuple[HarborConfigSelection, ...]
+    evalchemy_definitions: tuple[EvalchemyDefinition, ...]
+    harbor_definitions: tuple[HarborDefinition, ...]
     platform: Platform
     accelerator: str | None
     limit: int | None
@@ -137,18 +120,10 @@ def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefi
         (eval_key, EVALS[eval_key]) for eval_key in spec.evals
     )
     evalchemy_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (
-            selection.name,
-            EvalchemyDefinition(name=selection.name, config_path=selection.path),
-        )
-        for selection in spec.evalchemy_configs
+        (definition.name, definition) for definition in spec.evalchemy_definitions
     )
     harbor_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (
-            selection.name,
-            HarborDefinition(name=selection.name, config_path=selection.path),
-        )
-        for selection in spec.harbor_configs
+        (definition.name, definition) for definition in spec.harbor_definitions
     )
     definitions = registry_definitions + evalchemy_definitions + harbor_definitions
     if not definitions:
@@ -173,7 +148,7 @@ def _resolve_definitions(
     limit: int | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
     evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
-    evalchemy_configs = iter(load_evalchemy_configs([definition.config_path for definition in evalchemy_definitions]))
+    evalchemy_sources = iter(load_evalchemy_config(definition.config_path) for definition in evalchemy_definitions)
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
     requests = [(definition.config_path, dict(model.agent.agent_kwargs)) for definition in harbor_definitions]
     validated_configs = iter(preflight_harbor_configs(requests))
@@ -181,7 +156,7 @@ def _resolve_definitions(
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
         if isinstance(definition, EvalchemyDefinition):
-            source: EvalchemyConfig = next(evalchemy_configs)
+            source = next(evalchemy_sources)
             config = definition.config_for(source, model, limit)
             resolved.append(
                 (
@@ -279,5 +254,4 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
 
 
 def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
-    """Submit one resolved CPU orchestrator batch."""
     return submit_evaluation_batch(batch, client)

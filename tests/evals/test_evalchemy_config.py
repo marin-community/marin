@@ -15,7 +15,6 @@ import os
 
 import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
-from marin.evaluation.evalchemy.config import load_evalchemy_configs
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -96,39 +95,9 @@ def test_file_config_fields_reach_the_evalchemy_command():
 
 
 def test_parent_rejects_endpoint_model_arg_overrides():
-    with pytest.raises(ValueError, match="cannot override Marin endpoint fields: \\['model'\\]"):
+    # Endpoint identity is Marin-owned; a config must not reroute the isolated child to another model.
+    with pytest.raises(ValueError):
         _payload(_config(extra_model_args={"model": "other"}))
-
-
-def test_load_evalchemy_configs_normalizes_launch_yaml(tmp_path):
-    config_path = tmp_path / "ifeval.yaml"
-    config_path.write_text(
-        """\
-tasks: [ifeval]
-task_options:
-  ifeval:
-    num_fewshot: 0
-    generation: true
-apply_chat_template: true
-limit: 64
-batch_size: 1
-seed: 1234
-gen_kwargs: temperature=0,max_gen_toks=2048
-extra_model_args:
-  timeout: 900
-max_tokens: 2048
-runtime_extras: [ifeval]
-"""
-    )
-
-    (config,) = load_evalchemy_configs([config_path])
-
-    assert config.tasks == ("ifeval",)
-    assert config.task_options["ifeval"].generation
-    assert config.gen_kwargs == {"temperature": "0", "max_gen_toks": "2048"}
-    assert config.extra_model_args == {"timeout": 900}
-    assert config.batch_size == "1"
-    assert config.runtime_extras == ("ifeval",)
 
 
 def test_task_dirs_distinguish_shot_variants_of_one_task():

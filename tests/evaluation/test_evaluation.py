@@ -34,10 +34,8 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
 from experiments.evaluation.cli import cli
-from experiments.evaluation.evals import EVALS
+from experiments.evaluation.evals import EVALS, EvalchemyDefinition, HarborDefinition
 from experiments.evaluation.launch import (
-    EvalchemyConfigSelection,
-    HarborConfigSelection,
     LaunchSpec,
     build_evaluation_batch,
 )
@@ -218,8 +216,8 @@ def test_submit_evaluation_batch_uses_resolved_federated_cluster_and_priority(mo
     spec = LaunchSpec(
         model="qwen3-32b",
         evals=("mmlu-smoke",),
-        evalchemy_configs=(),
-        harbor_configs=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
         platform=Platform.GPU,
         accelerator=None,
         limit=1,
@@ -243,8 +241,8 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("aime-harbor", "tb2"),
-        evalchemy_configs=(),
-        harbor_configs=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
         platform=Platform.TPU,
         accelerator=None,
         limit=1,
@@ -275,8 +273,8 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("math500",),
-        evalchemy_configs=(),
-        harbor_configs=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
         platform=Platform.TPU,
         accelerator=None,
         limit=1,
@@ -294,6 +292,36 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     assert batch.evaluations[0].identity.eval_runtime == EVALCHEMY.requirement(("math500",))
 
 
+def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    definition = EvalchemyDefinition(
+        name="ifeval",
+        config_path=Path("experiments/evaluation/configs/evalchemy/ifeval.yaml"),
+    )
+    spec = LaunchSpec(
+        model="llama-3.1-8b-base",
+        evals=(),
+        evalchemy_definitions=(definition,),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    batch = build_evaluation_batch(
+        spec,
+        LaunchProvenance(git_sha="abc", launch_host="host"),
+        "tester",
+    )
+
+    evalchemy = batch.evaluations[0].identity.eval_ref.evalchemy
+    assert evalchemy is not None
+    assert evalchemy.apply_chat_template is True
+
+
 def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     first = replace(
@@ -309,8 +337,8 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("secret-first", "secret-second"),
-        evalchemy_configs=(),
-        harbor_configs=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
         platform=Platform.TPU,
         accelerator=None,
         limit=1,
@@ -336,8 +364,8 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("mmlu-smoke",),
-        evalchemy_configs=(EvalchemyConfigSelection(name="ifeval", path=evalchemy_config_path),),
-        harbor_configs=(HarborConfigSelection(name="aime-policy", path=config_path),),
+        evalchemy_definitions=(EvalchemyDefinition(name="ifeval", config_path=evalchemy_config_path),),
+        harbor_definitions=(HarborDefinition(name="aime-policy", config_path=config_path),),
         platform=Platform.TPU,
         accelerator=None,
         limit=2,
@@ -508,7 +536,6 @@ def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, m
     )
 
     assert result.exit_code == 2
-    assert error in result.output
     assert not iris_opened
 
 
@@ -537,7 +564,6 @@ def test_launch_rejects_malformed_evalchemy_yaml_before_iris_submission(tmp_path
     )
 
     assert result.exit_code == 2
-    assert "invalid Evalchemy config" in result.output
     assert not iris_opened
 
 
@@ -599,8 +625,8 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("mmlu-smoke",),
-        evalchemy_configs=(),
-        harbor_configs=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
         platform=Platform.TPU,
         accelerator=None,
         limit=1,

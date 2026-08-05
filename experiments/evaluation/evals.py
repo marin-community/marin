@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
-from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyConfig
+from marin.evaluation.evalchemy.config import EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_MAX_GEN_TOKS,
     DEFAULT_NUM_CONCURRENT,
@@ -78,7 +78,9 @@ class EvalchemyDefinition:
         effective_limit = config.max_eval_instances if limit is None else limit
         return replace(
             config,
-            apply_chat_template=model.apply_chat_template,
+            apply_chat_template=(
+                model.apply_chat_template if source.apply_chat_template is None else source.apply_chat_template
+            ),
             max_gen_toks=(
                 model.generation.max_gen_toks if model.generation.max_gen_toks is not None else config.max_gen_toks
             ),
@@ -168,9 +170,6 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         )
 
     extra_model_args = dict(config.extra_model_args)
-    conflicting_model_args = sorted(RESERVED_ENDPOINT_MODEL_ARGS.intersection(extra_model_args))
-    if conflicting_model_args:
-        raise ValueError(f"extra_model_args cannot override Marin endpoint fields: {conflicting_model_args}")
     configured_concurrency = extra_model_args.pop("num_concurrent", DEFAULT_NUM_CONCURRENT)
     try:
         num_concurrent = int(configured_concurrency)
@@ -187,7 +186,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
     return EvalchemyRunConfig(
         name=name,
         tasks=tuple(tasks),
-        apply_chat_template=config.apply_chat_template,
+        apply_chat_template=config.apply_chat_template or False,
         max_gen_toks=config.max_tokens or DEFAULT_MAX_GEN_TOKS,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,

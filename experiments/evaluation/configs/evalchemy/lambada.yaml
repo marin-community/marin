@@ -3,5 +3,4 @@ task_options:
   lambada_openai:
     num_fewshot: 0
     task_alias: lambada_openai_0shot
-batch_size: null
 max_tokens: 256
