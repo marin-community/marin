@@ -13,6 +13,7 @@
 pub mod optimizer;
 pub mod provider;
 pub mod sidecar;
+pub mod string_values;
 pub mod trigram_prune;
 pub mod udf;
 
@@ -20,7 +21,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{Field, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::compute::cast;
+use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use datafusion::common::config::Dialect;
 use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
@@ -29,6 +31,7 @@ use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
+use crate::query::string_values::StringValues;
 
 /// A namespace ready to register: its exact name (used verbatim in `FROM`) and
 /// its provider over the snapshotted sealed segments.
@@ -193,8 +196,8 @@ pub struct QueryResult {
     pub batches: Vec<RecordBatch>,
 }
 
-/// Relax every field in `schema` to `nullable = true` and re-stamp `batches`
-/// with the relaxed schema.
+/// Normalize a result for the wire: every field nullable, and every `Utf8View`
+/// column materialized back to `Utf8`.
 ///
 /// DuckDB returns ALL result columns as nullable, while
 /// DataFusion propagates source non-nullability (e.g. the store-form `seq`
@@ -203,27 +206,44 @@ pub struct QueryResult {
 /// makes the QueryResponse IPC schema match DuckDB exactly. Widening
 /// non-nullable -> nullable is always valid (a non-null array satisfies a
 /// nullable field), so no array data is touched.
-fn relax_result_nullability(
+///
+/// The scan reads string columns as `Utf8View` (see
+/// [`crate::query::provider::view_typed_schema`]), which is an in-memory layout
+/// clients do not need to know about. Converting here — after `LIMIT` and after
+/// any aggregation — costs the result's size rather than the scan's.
+fn normalize_result(
     schema: &SchemaRef,
     batches: Vec<RecordBatch>,
 ) -> DFResult<(SchemaRef, Vec<RecordBatch>)> {
     let fields: Vec<Field> = schema
         .fields()
         .iter()
-        .map(|f| f.as_ref().clone().with_nullable(true))
+        .map(|f| {
+            let f = f.as_ref().clone().with_nullable(true);
+            match f.data_type() {
+                DataType::Utf8View => f.with_data_type(DataType::Utf8),
+                _ => f,
+            }
+        })
         .collect();
-    let relaxed: SchemaRef = Arc::new(ArrowSchema::new_with_metadata(
+    let normalized: SchemaRef = Arc::new(ArrowSchema::new_with_metadata(
         fields,
         schema.metadata().clone(),
     ));
     let mut out = Vec::with_capacity(batches.len());
     for b in batches {
-        out.push(RecordBatch::try_new(
-            Arc::clone(&relaxed),
-            b.columns().to_vec(),
-        )?);
+        let columns = b
+            .columns()
+            .iter()
+            .zip(normalized.fields())
+            .map(|(c, f)| match (c.data_type(), f.data_type()) {
+                (DataType::Utf8View, DataType::Utf8) => cast(c, &DataType::Utf8),
+                _ => Ok(Arc::clone(c)),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        out.push(RecordBatch::try_new(Arc::clone(&normalized), columns)?);
     }
-    Ok((relaxed, out))
+    Ok((normalized, out))
 }
 
 /// Threshold (ms) at or above which a completed query is logged at WARN with its
@@ -375,7 +395,7 @@ pub async fn run_query_over(
         let batches = df.collect().await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
         // keeps source non-nullability that DuckDB would have dropped).
-        let (schema, batches) = relax_result_nullability(&schema, batches)?;
+        let (schema, batches) = normalize_result(&schema, batches)?;
         Ok(QueryResult { schema, batches })
     }
     .await;
@@ -408,7 +428,7 @@ pub async fn fetch_log_rows(
     tail: bool,
     max_lines: i32,
 ) -> DFResult<Vec<crate::store::log_read::LogRow>> {
-    use datafusion::arrow::array::{Int32Array, Int64Array, StringArray};
+    use datafusion::arrow::array::{Int32Array, Int64Array};
 
     const LOG_TABLE: &str = "__finelog_log";
     ctx.register_table(TableReference::bare(LOG_TABLE), Arc::new(provider))?;
@@ -457,17 +477,12 @@ pub async fn fetch_log_rows(
             .column_by_name("seq")
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
         let key = if include_key {
-            b.column_by_name("key")
-                .and_then(|c| c.as_any().downcast_ref::<StringArray>())
+            b.column_by_name("key").and_then(StringValues::new)
         } else {
             None
         };
-        let source = b
-            .column_by_name("source")
-            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
-        let data = b
-            .column_by_name("data")
-            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let source = b.column_by_name("source").and_then(StringValues::new);
+        let data = b.column_by_name("data").and_then(StringValues::new);
         let epoch_ms = b
             .column_by_name("epoch_ms")
             .and_then(|c| c.as_any().downcast_ref::<Int64Array>());
@@ -484,7 +499,7 @@ pub async fn fetch_log_rows(
         for i in 0..b.num_rows() {
             rows.push(crate::store::log_read::LogRow {
                 seq: seq.value(i),
-                key: key.map(|k| k.value(i).to_string()),
+                key: key.as_ref().map(|k| k.value(i).to_string()),
                 source: source.value(i).to_string(),
                 data: data.value(i).to_string(),
                 epoch_ms: epoch_ms.value(i),

@@ -19,7 +19,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result as DFResult;
@@ -52,6 +52,43 @@ enum Inner {
     Empty(Arc<MemTable>),
 }
 
+/// Retype `schema`'s top-level `Utf8` columns as `Utf8View`.
+///
+/// Parquet stores strings the same way either way, so this only chooses the
+/// in-memory layout the scan produces. `Utf8View` lets the reader emit 16-byte
+/// views over the decompressed pages rather than copying every value into one
+/// contiguous buffer, and lets grouping and comparison settle most rows on the
+/// inline 4-byte prefix. On a `GROUP BY name` over a low-cardinality column that
+/// is worth roughly 1.8x.
+///
+/// Nested string types (a `Map`'s keys and values) are left alone: the win comes
+/// from the wide top-level columns, and retyping map children would churn the
+/// duck-typed `json_*` path for no measured gain.
+///
+/// [`crate::query::normalize_result`] converts back at the response boundary, so
+/// the layout never reaches a client.
+fn view_typed_schema(schema: &SchemaRef) -> SchemaRef {
+    if !schema
+        .fields()
+        .iter()
+        .any(|f| f.data_type() == &DataType::Utf8)
+    {
+        return Arc::clone(schema);
+    }
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| match f.data_type() {
+            DataType::Utf8 => f.as_ref().clone().with_data_type(DataType::Utf8View),
+            _ => f.as_ref().clone(),
+        })
+        .collect();
+    Arc::new(ArrowSchema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    ))
+}
+
 impl NamespaceProvider {
     /// Build a provider from the registered arrow `schema` and a snapshot of
     /// sealed segment file paths.
@@ -61,6 +98,7 @@ impl NamespaceProvider {
     /// than listing a directory) so the scan sees exactly the snapshotted set —
     /// no re-listing, and compaction can't slip a new file in.
     pub fn build(schema: SchemaRef, segment_paths: &[String]) -> DFResult<NamespaceProvider> {
+        let schema = view_typed_schema(&schema);
         if segment_paths.is_empty() {
             let mem = MemTable::try_new(Arc::clone(&schema), vec![vec![]])?;
             return Ok(NamespaceProvider {
@@ -163,6 +201,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{Array, Int64Array, StringArray};
+
+    use crate::query::string_values::StringValues;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionContext;
@@ -281,8 +321,9 @@ mod tests {
         let ids: Vec<String> = batches
             .iter()
             .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
+                let column = b.column(0);
+                let c = StringValues::new(column).expect("string column");
+                (0..column.len())
                     .map(|i| c.value(i).to_string())
                     .collect::<Vec<_>>()
             })
@@ -465,6 +506,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn string_predicates_read_the_scan_layout_without_casting() {
+        // The scan reads strings as Utf8View, and the finelog UDFs accept that
+        // layout. A UDF with an exact-Utf8 signature would instead make the
+        // planner cast the whole column ahead of the predicate — materializing
+        // every value precisely to throw most of them away.
+        let dir = tempdir("no_cast");
+        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &["needle here"; 4]);
+        let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
+        assert_eq!(
+            provider
+                .schema()
+                .field_with_name("data")
+                .unwrap()
+                .data_type(),
+            &DataType::Utf8View,
+        );
+
+        let ctx = crate::query::make_ctx();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        for predicate in [
+            "contains(data, 'needle')",
+            "prefix(data, 'needle')",
+            "regexp_matches(data, 'needle')",
+            "json_get(data, 'k') IS NOT NULL",
+        ] {
+            let plan = ctx
+                .sql(&format!("SELECT seq FROM \"log\" WHERE {predicate}"))
+                .await
+                .unwrap()
+                .into_optimized_plan()
+                .unwrap();
+            let rendered = format!("{}", plan.display_indent());
+            assert!(
+                !rendered.contains("CAST(data"),
+                "{predicate} planned a whole-column cast:\n{rendered}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn contains_query_returns_matches_and_prunes_row_groups() {
         use datafusion::datasource::physical_plan::FileScanConfig;
         use datafusion::datasource::source::DataSourceExec;
@@ -504,8 +590,9 @@ mod tests {
         let got: Vec<String> = batches
             .iter()
             .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
+                let column = b.column(0);
+                let c = StringValues::new(column).expect("string column");
+                (0..column.len())
                     .map(|i| c.value(i).to_string())
                     .collect::<Vec<_>>()
             })
@@ -603,8 +690,9 @@ mod tests {
         let got: Vec<String> = batches
             .iter()
             .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
+                let column = b.column(0);
+                let c = StringValues::new(column).expect("string column");
+                (0..column.len())
                     .map(|i| c.value(i).to_string())
                     .collect::<Vec<_>>()
             })
