@@ -191,6 +191,14 @@ pub struct Namespace {
     /// Segments the sidecar backfill has already rebuilt without reaching
     /// coverage. See [`SidecarBackfillSkips`].
     sidecar_backfill_skips: Mutex<SidecarBackfillSkips>,
+    /// Segments already confirmed to carry the current physical layout.
+    ///
+    /// Determining staleness means parsing a segment's whole footer, so without
+    /// this the rewrite pass would re-read every footer in the namespace on
+    /// every tick — hundreds of MiB of thrift for a large namespace, forever,
+    /// long after there is nothing left to rewrite. A path's layout only ever
+    /// changes because this pass changed it.
+    current_layouts: Mutex<HashSet<String>>,
 }
 
 /// Segments the sidecar backfill cannot bring up to date, and the indexed set
@@ -335,6 +343,7 @@ impl Namespace {
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
             sidecar_backfill_skips: Mutex::new(SidecarBackfillSkips::default()),
+            current_layouts: Mutex::new(HashSet::new()),
         });
 
         // Refresh the catalog from the adopted deque so the segments table
@@ -1359,15 +1368,31 @@ impl Namespace {
         }
         let candidates: Vec<(String, i64)> = {
             let inner = self.inner.lock().unwrap();
-            inner
+            let live: HashSet<&str> = inner
                 .local_segments
                 .iter()
-                .rev()
-                .filter(|s| s.level >= 1)
-                .map(|s| (s.path.clone(), s.size_bytes))
-                .filter(|(p, _)| !segment_layout_is_current(Path::new(p)))
-                .take(max)
-                .collect()
+                .map(|s| s.path.as_str())
+                .collect();
+            let mut known = self.current_layouts.lock().unwrap();
+            known.retain(|p| live.contains(p.as_str()));
+            let mut out = Vec::new();
+            for seg in inner.local_segments.iter().rev() {
+                if seg.level < 1 || known.contains(&seg.path) {
+                    continue;
+                }
+                // Reading the stamp parses the footer, so record the verdict: a
+                // segment that is already current must not be re-examined on
+                // every subsequent tick.
+                if segment_layout_is_current(Path::new(&seg.path)) {
+                    known.insert(seg.path.clone());
+                    continue;
+                }
+                out.push((seg.path.clone(), seg.size_bytes));
+                if out.len() == max {
+                    break;
+                }
+            }
+            out
         };
         let mut rewritten = 0;
         for (path, was) in candidates {
@@ -1393,6 +1418,7 @@ impl Namespace {
                     continue;
                 }
             }
+            self.current_layouts.lock().unwrap().insert(path.clone());
             tracing::info!(
                 namespace = %self.name,
                 segment = %basename(&path),
@@ -2545,6 +2571,10 @@ mod tests {
             w.write(b).unwrap();
         }
         w.close().unwrap();
+        // The layout cache is per-process and starts empty, so a segment written
+        // by an older build is always first seen after a restart. Clear it to
+        // model that: nothing in production edits a segment behind the cache.
+        ns.current_layouts.lock().unwrap().clear();
         assert_eq!(ns.rewrite_stale_layouts(4), 1);
 
         // Local file adopted the current layout and the catalog followed it.
