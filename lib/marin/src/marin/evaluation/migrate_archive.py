@@ -82,18 +82,16 @@ def migrate_run(results_path: str, *, writer_id: str = "migrate") -> MigrationCo
                 trial_id = ""
                 uri = sample.trajectory_uri
                 if sample.kind == SampleKind.AGENTIC and uri and not uri.startswith(_ARCHIVE_URI_PREFIX):
+                    # A read failure aborts the migration -- it is idempotent and only seals on
+                    # success, so a transient fault is retried rather than recorded as complete.
                     trial_id = _trial_id_from_uri(uri)
-                    try:
-                        raw = StoragePath(uri).read_bytes()
-                    except Exception as exc:
-                        logger.warning("trajectory %s unreadable during migration (%s); keeping it", uri, exc)
-                    else:
-                        stored = store_trajectory(store, raw, task=sample.task, doc_id=sample.doc_id, trial_id=trial_id)
-                        sample = sample.model_copy(update={"trajectory_uri": stored.uri})
-                        if stored.steps:
-                            steps.extend(stored.steps)
-                            step_count += len(stored.steps)
-                            trajectory_count += 1
+                    raw = StoragePath(uri).read_bytes()
+                    stored = store_trajectory(store, raw, task=sample.task, doc_id=sample.doc_id, trial_id=trial_id)
+                    sample = sample.model_copy(update={"trajectory_uri": stored.uri})
+                    if stored.steps:
+                        steps.extend(stored.steps)
+                        step_count += len(stored.steps)
+                        trajectory_count += 1
                 samples.append(sample_to_archive_row(sample, trial_id=trial_id))
                 sample_count += 1
         store.seal()

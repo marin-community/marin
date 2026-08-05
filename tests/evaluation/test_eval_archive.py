@@ -129,3 +129,22 @@ def test_migrate_legacy_run_into_archive(tmp_path):
 
     # evaldash surfaces both migrated tasks.
     assert {task.task for task in list_sample_tasks(results).tasks} == {"arc", "aime"}
+
+
+def test_fetch_artifact_keys_cache_by_run(tmp_path):
+    # A finestore:// URI is archive-relative, so two runs can share one. Resolving it for run A then
+    # run B must return each run's own bytes, not A's cached response for both.
+    uri = "finestore://blobs/trial-1/trajectory.json"
+    run_a = str(tmp_path / "a" / "results")
+    run_b = str(tmp_path / "b" / "results")
+    for root, tag in ((run_a, "a"), (run_b, "b")):
+        store = open_eval_archive(root, writer_id="w")
+        assert store.write("trial-1/trajectory.json", {}, json.dumps({"run": tag}).encode()) == uri
+        store.seal()
+        store.close()
+
+    first = fetch_artifact(run_a, uri)
+    second = fetch_artifact(run_b, uri)
+    assert first.available and second.available
+    assert json.loads(first.text)["run"] == "a"
+    assert json.loads(second.text)["run"] == "b"

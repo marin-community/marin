@@ -389,14 +389,17 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
     if not results_path:
         return _unavailable_artifact(uri, "run has no results_path")
 
-    cached = _artifact_cache.get(uri)
+    # A finestore:// URI is archive-relative, so two runs can share one (e.g. blobs/trial-1/...);
+    # key the cache by the run as well so one run's artifact never answers for another's.
+    cache_key = f"{results_path}|{uri}"
+    cached = _artifact_cache.get(cache_key)
     if cached is not None:
         return cached
 
     if uri.startswith(_ARCHIVE_URI_PREFIX):
         response = _resolve_archive_artifact(results_path, uri, max_bytes)
         if response.available:
-            _artifact_cache.put(uri, response)
+            _artifact_cache.put(cache_key, response)
         return response
 
     if not _artifact_within_results(results_path, uri):
@@ -428,5 +431,5 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
         truncated=False,
         text=raw.decode("utf-8", errors="replace"),
     )
-    _artifact_cache.put(uri, response)
+    _artifact_cache.put(cache_key, response)
     return response
