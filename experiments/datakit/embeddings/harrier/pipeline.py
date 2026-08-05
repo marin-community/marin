@@ -16,8 +16,8 @@ write int8 directly). Consumers ``pq.read_table`` then dequantize with
 Model staging: the driver downloads the pinned HuggingFace snapshot once,
 uploads one archive to region-local TTL storage, and broadcasts only its URL.
 Each H100 worker downloads and loads the model once, cached across shards by
-``InlineRunner``. The driver job must enable ``marin-core:gpu`` so nested
-Zephyr workers inherit the CUDA PyTorch environment.
+``InlineRunner``. Fray infers the CUDA PyTorch environment from the worker's
+GPU resources.
 
 Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``,
 ``embed/docs_dedup_dropped``.

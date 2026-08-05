@@ -339,6 +339,7 @@ class TestActorGroupEnvironment:
         env = kwargs["environment"]
         assert env is not None
         assert env.env_vars["JAX_PLATFORMS"] == ""
+        assert env.extras == ["gpu"]
 
 
 def test_create_gpu_actor_group_uses_leafgroup_topology():
