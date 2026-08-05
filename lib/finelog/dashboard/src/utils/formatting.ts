@@ -68,7 +68,11 @@ export function formatTimestampMs(ms: number | null | undefined, mode: TimeZoneM
 
 /** Short axis label for `ms` — time of day, with the date when the span crosses one. */
 export function formatAxisTime(ms: number, spanMs: number, mode: TimeZoneMode): string {
-  const zone = mode === 'utc' || mode === 'raw' ? 'UTC' : Intl.DateTimeFormat().resolvedOptions().timeZone
+  // Raw means the reader asked for the underlying count, on the axis as much as
+  // in the table; formatting it as a time of day would answer a question they
+  // turned off.
+  if (mode === 'raw') return String(Math.round(ms))
+  const zone = mode === 'utc' ? 'UTC' : Intl.DateTimeFormat().resolvedOptions().timeZone
   const p = zonedParts(ms, zone)
   if (spanMs > 24 * 60 * 60 * 1000) return `${p.month}-${p.day} ${p.hour}:${p.minute}`
   return `${p.hour}:${p.minute}`

@@ -64,3 +64,23 @@ test('switches timestamps between UTC, local, and epoch', async ({ page }) => {
   await page.getByRole('button', { name: 'epoch', exact: true }).click()
   await expect(cell).toHaveText('1758000000000')
 })
+
+test('puts the submitted query in the URL so it can be shared', async ({ page }) => {
+  await page.goto('/query')
+  const editor = page.locator('textarea')
+  await editor.fill(`SELECT name, count(*) AS rows FROM "${NAMESPACE}" GROUP BY 1 ORDER BY 2 DESC LIMIT 5`)
+  await page.getByRole('button', { name: 'Execute' }).click()
+  await expect(page.locator('tbody tr').first()).toBeVisible()
+
+  await expect(page).toHaveURL(/[?&]sql=SELECT\+name/)
+
+  // Charting is part of what a link should carry.
+  await page.getByRole('button', { name: 'chart', exact: true }).click()
+  await expect(page).toHaveURL(/[?&]view=chart/)
+
+  // Following that link reproduces the chart, not the default table.
+  const shared = page.url()
+  await page.goto('/query')
+  await page.goto(shared)
+  await expect(page.locator('svg[role="img"]')).toBeVisible()
+})

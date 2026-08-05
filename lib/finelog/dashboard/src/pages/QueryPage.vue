@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { statsRpcCall } from '@/composables/useRpc'
 import { timeZoneMode } from '@/composables/useDisplayPrefs'
 import { decodeArrowIpc, type ArrowResult } from '@/utils/arrow'
@@ -18,6 +18,7 @@ interface QueryResponse {
 }
 
 const route = useRoute()
+const router = useRouter()
 const sql = ref<string>(typeof route.query.sql === 'string' ? route.query.sql : 'SELECT 1')
 const result = ref<ArrowResult>({ columns: [], types: {}, rows: [] })
 const rowCount = ref<number>(0)
@@ -31,6 +32,8 @@ const chartY = ref('')
 const chartSeries = ref('')
 const chartMark = ref<ChartMark>('line')
 const detail = ref<{ column: string; row: Record<string, unknown> } | null>(null)
+/** Set while a URL-supplied chart selection is still waiting for a result to apply to. */
+let restoreUrlChartState = typeof route.query.view === 'string'
 
 const kinds = computed<Record<string, ColumnKind>>(() =>
   classifyColumns(result.value.columns, result.value.types, result.value.rows),
@@ -114,6 +117,11 @@ async function execute() {
     elapsedMs.value = performance.now() - started
     pickChartDefaults()
     if (!canChart.value) view.value = 'table'
+    if (restoreUrlChartState) {
+      applyUrlChartState()
+      restoreUrlChartState = false
+    }
+    syncUrl()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
     result.value = { columns: [], types: {}, rows: [] }
@@ -122,6 +130,35 @@ async function execute() {
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * Mirror the submitted query and how it is being viewed into the URL, so the
+ * address bar is a link to what is on screen. A new query is a history entry —
+ * back returns to the previous one — while changing an axis only rewrites the
+ * current entry, which would otherwise bury the query behind every adjustment.
+ */
+function syncUrl() {
+  const query: Record<string, string> = { sql: sql.value }
+  if (view.value === 'chart') {
+    query.view = 'chart'
+    query.mark = chartMark.value
+    if (chartX.value) query.x = chartX.value
+    if (chartY.value) query.y = chartY.value
+    if (chartSeries.value) query.series = chartSeries.value
+  }
+  const isNewQuery = query.sql !== route.query.sql
+  void (isNewQuery ? router.push({ query }) : router.replace({ query }))
+}
+
+/** Restore a shared link's chart selection, which the type-aware defaults would otherwise overwrite. */
+function applyUrlChartState() {
+  const { view: urlView, x, y, series, mark } = route.query
+  if (typeof x === 'string' && x) chartX.value = x
+  if (typeof y === 'string' && y) chartY.value = y
+  if (typeof series === 'string') chartSeries.value = series
+  if (mark === 'line' || mark === 'bar' || mark === 'scatter') chartMark.value = mark
+  if (urlView === 'chart' && canChart.value) view.value = 'chart'
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -134,6 +171,20 @@ function onKeydown(e: KeyboardEvent) {
 watch(chartX, () => {
   if (chartY.value === chartX.value) {
     chartY.value = numericColumns.value.find((c) => c !== chartX.value) ?? ''
+  }
+})
+
+watch([view, chartX, chartY, chartSeries, chartMark], () => {
+  if (result.value.columns.length > 0) syncUrl()
+})
+
+// Navigating history (or following a second link) replaces the query without
+// remounting the page, so the new SQL has to be picked up and run.
+watch(() => route.query.sql, (next) => {
+  if (typeof next === 'string' && next !== sql.value) {
+    sql.value = next
+    restoreUrlChartState = true
+    void execute()
   }
 })
 

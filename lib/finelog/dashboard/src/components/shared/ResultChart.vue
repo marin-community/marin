@@ -99,8 +99,14 @@ const bounds = computed(() => {
   const ys = all.map((p) => p.yv)
   let y0 = Math.min(...ys)
   let y1 = Math.max(...ys)
-  // Bars read as a proportion, so their baseline belongs at zero.
-  if (props.mark === 'bar') y0 = Math.min(0, y0)
+  // Bars are read against a zero baseline, so the range has to contain zero on
+  // whichever side it falls — including all-negative values, where zero is the
+  // top of the axis and a range that stopped at the largest value would draw
+  // every bar from a baseline off the top of the plot.
+  if (props.mark === 'bar') {
+    y0 = Math.min(0, y0)
+    y1 = Math.max(0, y1)
+  }
   if (y0 === y1) {
     const pad = Math.max(1, Math.abs(y0) * 0.05)
     y0 -= pad
