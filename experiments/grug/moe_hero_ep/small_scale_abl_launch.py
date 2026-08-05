@@ -36,7 +36,6 @@ from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _v
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_ep.launch import (
     DEFAULT_WANDB_PROJECT,
-    HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
@@ -61,6 +60,30 @@ _VALIDATION = [
     *paloma_datasets(tokenizer=marin_tokenizer).values(),
     *uncheatable_datasets(tokenizer=marin_tokenizer).values(),
 ]
+
+
+@dataclasses.dataclass(frozen=True)
+class Target:
+    """Accelerator fleet that one run occupies, and the expert axis it spans."""
+
+    accelerator: str
+    gpus_per_node: int
+    nodes: int
+    cpu: int
+    ram: str
+    disk: str
+
+    @property
+    def expert_axis_size(self) -> int:
+        return self.gpus_per_node * self.nodes
+
+
+# These models are small enough to hold a whole rack's worth of experts on one node, so the H100
+# target keeps the all-to-all inside a single NVLink domain instead of crossing InfiniBand.
+TARGETS: dict[str, Target] = {
+    "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t"),
+    "h100-node": Target("H100", 8, 1, 120, "1900g", "900g"),
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -125,14 +148,19 @@ def _root_component(component: DatasetComponent | ConcatDatasetComponent) -> Dat
     return dataclasses.replace(component, cache_dir=datakit_source_path(component.cache_dir))
 
 
-def build_small_run(*, run_id: str, size: str, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
-    """One 1-rack EP64 run of the downsized hero shape ``size`` at its 60x token budget."""
+def build_small_run(
+    *, run_id: str, size: str, target: str = "gb200-rack", version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
+    """One expert-parallel run of the downsized hero shape ``size`` at its 60x token budget."""
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in SMALL_SHAPES:
         raise ValueError(f"size must be one of {sorted(SMALL_SHAPES)}, got {size!r}")
+    if target not in TARGETS:
+        raise ValueError(f"target must be one of {sorted(TARGETS)}, got {target!r}")
 
     shape = SMALL_SHAPES[size]
+    fleet = TARGETS[target]
     model = _small_model(shape)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=shape.num_steps,
@@ -146,17 +174,19 @@ def build_small_run(*, run_id: str, size: str, version: str | None = None) -> Ar
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=False,  # small models fit HBM; host offload destabilized small runs
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+        expert_axis_size=fleet.expert_axis_size,
         replica_axis_size=1,
         sharding_dump_path=None,
     )
+    if model.num_experts % fleet.expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {fleet.expert_axis_size}")
     train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=HERO_GPUS_PER_NODE,
-        cpu=120,
-        ram="850g",
-        disk="1t",
-        replicas=HERO_EP_NODES,
+        fleet.accelerator,
+        count=fleet.gpus_per_node,
+        cpu=fleet.cpu,
+        ram=fleet.ram,
+        disk=fleet.disk,
+        replicas=fleet.nodes,
     )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
@@ -172,7 +202,7 @@ def build_small_run(*, run_id: str, size: str, version: str | None = None) -> Ar
             tracker=WandbConfig(
                 entity="marin-community",
                 project=DEFAULT_WANDB_PROJECT,
-                tags=["grug", "moe", "hero", "ep", "small-abl", f"shape-{size}", "gb200", "MHEP"],
+                tags=["grug", "moe", "hero", "ep", "small-abl", f"shape-{size}", target, "MHEP"],
                 group="moe-hero-ep-small-abl",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -234,9 +264,16 @@ def build_small_run(*, run_id: str, size: str, version: str | None = None) -> Ar
     required=True,
     help="Downsized hero shape to run on one EP64 rack.",
 )
+@click.option(
+    "--target",
+    type=click.Choice(sorted(TARGETS)),
+    default="gb200-rack",
+    show_default=True,
+    help="Accelerator fleet for the run. The expert axis spans every GPU it holds.",
+)
 @build_options
-def main(run_id: str, size: str) -> ArtifactStep[HeroThroughputResult]:
-    return build_small_run(run_id=run_id, size=size)
+def main(run_id: str, size: str, target: str) -> ArtifactStep[HeroThroughputResult]:
+    return build_small_run(run_id=run_id, size=size, target=target)
 
 
 if __name__ == "__main__":
