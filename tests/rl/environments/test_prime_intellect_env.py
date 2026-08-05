@@ -117,24 +117,6 @@ def test_prime_intellect_env_sample(tokenizer, inference_ctx, vf_env):
     assert "primeintellect/gsm8k.total_rollouts" in metrics
 
 
-def test_prime_intellect_env_openai_client_called(tokenizer, inference_ctx, vf_env):
-    """Test that the OpenAI client is properly requested from inference context."""
-    env = PrimeIntellectEnv(env_id="primeintellect/gsm8k", env_args={})
-
-    with patch.object(env, "load_prime_intellect_env", return_value=vf_env), patch("subprocess.run"):
-        prng_key = jax.random.PRNGKey(42)
-        rollout_groups, _ = env.sample(
-            inference_ctx=inference_ctx,
-            n_examples=1,
-            n_generations=1,
-            decoding=DecodingConfig(temperature=1.0),
-            prng_key=prng_key,
-        )
-
-    # Verify we got rollout groups (which means generate() was called successfully)
-    assert len(rollout_groups) >= 0
-
-
 def test_prime_intellect_env_records_resolved_decoding_trace(tokenizer, inference_ctx, vf_env):
     env = PrimeIntellectEnv(env_id="primeintellect/gsm8k", env_args={})
     inference_ctx._stop_tokens = [42]

@@ -13,8 +13,6 @@ DOTENV_SECRET_ID="$(meta instance/attributes/dotenv-secret-id)"
 LOOM_PORT="$(meta instance/attributes/loom-port)"
 RUNTIME_DIR=/opt/loom
 COMPOSE_FILE="${RUNTIME_DIR}/docker-compose.yml"
-DATA_DISK_DEVICE="/dev/disk/by-id/google-$(meta instance/attributes/data-disk-device)"
-DATA_MOUNT="$(meta instance/attributes/data-mount)"
 DOCKER_CONFIG=/etc/docker/daemon.json
 HEALTH_URL="http://127.0.0.1:${LOOM_PORT}/api/health"
 STARTUP_SUCCESS=/run/loom-startup-succeeded
@@ -63,34 +61,7 @@ if [ "${#packages[@]}" -gt 0 ]; then
   apt-get install -y --no-install-recommends "${packages[@]}"
 fi
 
-if [ ! -e "$DATA_DISK_DEVICE" ]; then
-  echo "loom startup-script: durable data disk is not attached" >&2
-  exit 1
-fi
-if filesystem_type="$(blkid -p -s TYPE -o value "$DATA_DISK_DEVICE")"; then
-  if [ "$filesystem_type" != ext4 ]; then
-    echo "loom startup-script: durable data disk uses unexpected filesystem ${filesystem_type}" >&2
-    exit 1
-  fi
-else
-  blkid_status=$?
-  if [ "$blkid_status" -ne 2 ]; then
-    echo "loom startup-script: could not inspect durable data disk (blkid ${blkid_status})" >&2
-    exit 1
-  fi
-  mkfs.ext4 -m 0 "$DATA_DISK_DEVICE"
-fi
-mkdir -p "$DATA_MOUNT"
-if mountpoint -q "$DATA_MOUNT"; then
-  data_disk_mounted_this_run=false
-else
-  mount "$DATA_DISK_DEVICE" "$DATA_MOUNT"
-  data_disk_mounted_this_run=true
-fi
-resize2fs "$DATA_DISK_DEVICE"
-grep -q "^${DATA_DISK_DEVICE} " /etc/fstab || \
-  echo "${DATA_DISK_DEVICE} ${DATA_MOUNT} ext4 discard,defaults,nofail 0 2" >>/etc/fstab
-mkdir -p "${DATA_MOUNT}/docker" /etc/docker
+mkdir -p /etc/docker
 desired_daemon_config="$(meta instance/attributes/docker-daemon-config)"
 if [ ! -f "$DOCKER_CONFIG" ] || [ "$(cat "$DOCKER_CONFIG")" != "$desired_daemon_config" ]; then
   printf '%s\n' "$desired_daemon_config" >"$DOCKER_CONFIG"
@@ -99,7 +70,7 @@ else
   docker_config_changed=false
 fi
 systemctl enable --now docker
-if [ "${docker_config_changed:-false}" = true ] || [ "$data_disk_mounted_this_run" = true ]; then
+if [ "${docker_config_changed:-false}" = true ]; then
   systemctl restart docker
 fi
 

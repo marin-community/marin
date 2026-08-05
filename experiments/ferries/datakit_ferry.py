@@ -62,9 +62,8 @@ def build_steps(run_id: str) -> list[StepSpec]:
         override_output_path=f"{base}/normalize",
     )
 
-    # MinHash attrs: per-shard 1:1 from the normalized dataset.
-    # Sized like the old dedup_fuzzy_document map stage — dupekit's Rust pool
-    # uses ~2 cores beyond the Python thread.
+    # MinHash attrs: per-shard 1:1 from the normalized dataset. MinHash is
+    # single-core per shard, so the stage packs five subprocess slots here.
     minhash = StepSpec(
         name="datakit-smoke/minhash",
         deps=[normalized],

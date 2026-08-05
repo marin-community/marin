@@ -63,7 +63,10 @@ logger = logging.getLogger(__name__)
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
-MAX_WORKERS_PER_JOB = 1_024
+
+# Keep a Zephyr worker actor group below the practical Iris/Kubernetes control-plane
+# ceiling. Additional shards are pulled by these long-lived replicas.
+MAX_IRIS_WORKER_REPLICAS = 1_000
 
 
 def _generate_execution_id() -> str:
@@ -186,6 +189,7 @@ class _OwnedPool:
     coordinator_group: ActorGroup
     coordinator: ActorHandle
     worker_group: ActorGroup
+    worker_count: int
 
     def shutdown(self, client: Client) -> None:
         """Stop the workers before the coordinator."""
@@ -213,6 +217,11 @@ class _OwnedPool:
             self.coordinator_group.shutdown()
 
 
+def _distributed_worker_limit(configured: int | None) -> int:
+    requested = configured or MAX_IRIS_WORKER_REPLICAS
+    return min(requested, MAX_IRIS_WORKER_REPLICAS)
+
+
 @dataclass
 class ZephyrContext:
     """Execute Zephyr pipelines with a dedicated or shared worker pool.
@@ -227,7 +236,9 @@ class ZephyrContext:
 
     Args:
         client: Fray client. Zephyr selects the current client when this is not set.
-        max_workers: Worker limit for a dedicated pool or an owned shared pool.
+        max_workers: Worker limit for a dedicated or owned shared pool. Distributed
+            pools are capped at 1,000 replicas; additional shards multiplex through
+            the existing workers. Local execution is uncapped.
         resources: CPU, memory, and device resources for each worker.
         coordinator_resources: Resources for the coordinator actor.
         chunk_storage_prefix: Storage prefix for shared data, chunks, and results.
@@ -374,11 +385,11 @@ class ZephyrContext:
             name=name,
             plan=memory_store_plan(dataset),
             hash_key=hash_key,
-            worker_count=self.max_workers,
+            worker_count=pool.worker_count,
         )
 
         deadline = time.monotonic() + ready_timeout
-        handles = pool.worker_group.wait_ready(count=self.max_workers, timeout=ready_timeout)
+        handles = pool.worker_group.wait_ready(count=pool.worker_count, timeout=ready_timeout)
 
         def load_pass() -> list[MemoryStoreActorStats]:
             calls = {
@@ -401,7 +412,7 @@ class ZephyrContext:
             load_pass()
             coordinator.register_memory_table.remote(registration).result(timeout=max(0.0, deadline - time.monotonic()))
             stats_by_position = load_pass()
-            actors_by_index: list[ActorHandle | None] = [None] * self.max_workers
+            actors_by_index: list[ActorHandle | None] = [None] * pool.worker_count
             for handle, stats in zip(handles, stats_by_position, strict=True):
                 if actors_by_index[stats.actor_index] is not None:
                     raise RuntimeError(f"two memory-store actors reported index {stats.actor_index}")
@@ -455,11 +466,18 @@ class ZephyrContext:
 
     def _worker_limit(self) -> int:
         assert self.client is not None
-        if self.max_workers is not None:
-            return self.max_workers
         if isinstance(self.client, LocalClient):
-            return os.cpu_count() or 1
-        return MAX_WORKERS_PER_JOB
+            return self.max_workers or os.cpu_count() or 1
+
+        limit = _distributed_worker_limit(self.max_workers)
+        if self.max_workers is not None and limit != self.max_workers:
+            logger.warning(
+                "Capping max_workers=%d at the Iris worker replica limit of %d; "
+                "remaining shards will be multiplexed through the worker pool",
+                self.max_workers,
+                limit,
+            )
+        return limit
 
     def _start_pool(
         self,
@@ -510,7 +528,7 @@ class ZephyrContext:
             ready_wait = float(os.environ.get("ZEPHYR_WORKERS_READY_WAIT") or 12 * 60 * 60)
             worker_group.wait_ready(count=1, timeout=ready_wait)
             coordinator.set_worker_group.remote(worker_group).result()
-            return _OwnedPool(coordinator_group, coordinator, worker_group)
+            return _OwnedPool(coordinator_group, coordinator, worker_group, worker_count)
         except Exception:
             if coordinator is not None:
                 with suppress(Exception):

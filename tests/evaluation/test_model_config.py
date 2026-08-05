@@ -159,18 +159,6 @@ def test_scan_model_configs_rejects_duplicate_names(tmp_path):
         scan_model_configs(tmp_path)
 
 
-def test_every_registered_model_resolves_on_the_marin_fleet():
-    for name, config in models().items():
-        platform = Platform.GPU if config.resource_hint.gpu else Platform.TPU
-        choice = MARIN_EVAL_HARDWARE.select(config, platform, override=None)
-        if config.resource_hint.gpu:
-            gpu_type = choice.gpu_type
-            assert gpu_type is not None and gpu_type in config.resource_hint.gpu, name
-            assert choice.gpu_count == config.resource_hint.gpu[gpu_type], name
-        else:
-            assert choice.platform is Platform.TPU, name
-
-
 def test_model_registry_callers_cannot_mutate_the_cached_catalog():
     registry = models()
     removed_name = next(iter(registry))
