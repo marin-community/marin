@@ -52,8 +52,11 @@ from experiments.marin_tokenizer import marin_tokenizer
 
 # Shared with the FSDP sweep grid (issue #7856): 8192-token sequences, 512 sliding window with global
 # attention every 4th layer + the final layer, and the 60x token budget's step count per size.
-SMALL_BATCH_SIZE = 128
 SEQ_LEN = 8192
+SMALL_BATCH_SIZE = 128
+# Sequence-length sweeps hold tokens per step constant, so the token budget and the per-shard
+# routing capacity stay fixed and only the context length moves.
+TOKENS_PER_STEP = SMALL_BATCH_SIZE * SEQ_LEN
 SLIDING_WINDOW = 512
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
@@ -106,6 +109,27 @@ TARGETS: dict[str, Target] = {
 
 
 @dataclasses.dataclass(frozen=True)
+class Flavor:
+    """How the MoE layer shards, and what that implies for routing capacity.
+
+    ``ep`` spans the fleet with expert parallelism and drops assignments above each fixed
+    (sender shard, expert) cell. ``fsdp-nodrop`` keeps one expert axis, so every device holds the
+    whole bank and `_moe_mlp_local` computes every assignment: `expert_chunks` above one is the only
+    local path that drops, and it needs the Blackwell-only `sonic_cute` kernel anyway.
+    """
+
+    expert_axis_size: int | None  # None spans the fleet
+    moe_implementation: str
+    expert_chunks: int
+
+
+FLAVORS: dict[str, Flavor] = {
+    "ep": Flavor(None, "fixed_all_to_all", 1),
+    "fsdp-nodrop": Flavor(1, "scatter", 1),
+}
+
+
+@dataclasses.dataclass(frozen=True)
 class SmallShape:
     hidden_dim: int
     num_layers: int
@@ -123,7 +147,14 @@ SMALL_SHAPES: dict[str, SmallShape] = {
 }
 
 
-def _small_model(shape: SmallShape, capacity_factor: float, attention_implementation: str) -> GrugModelConfig:
+def _small_model(
+    shape: SmallShape,
+    capacity_factor: float,
+    attention_implementation: str,
+    moe_implementation: str,
+    expert_chunks: int,
+    seq_len: int,
+) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
     Every routing/MoE/attention-kernel field is kept from the d6144 hero shape; only the width,
@@ -144,7 +175,7 @@ def _small_model(shape: SmallShape, capacity_factor: float, attention_implementa
         local_kv_heads=shape.local_kv_heads,
         global_kv_heads=shape.global_kv_heads,
         head_dim=128,
-        max_seq_len=SEQ_LEN,
+        max_seq_len=seq_len,
         sliding_window=SLIDING_WINDOW,
         global_every=GLOBAL_EVERY,
         capacity_factor=capacity_factor,
@@ -152,8 +183,8 @@ def _small_model(shape: SmallShape, capacity_factor: float, attention_implementa
         qk_mult=1.3,
         sconv=True,
         attention_implementation=attention_implementation,
-        moe_implementation="fixed_all_to_all",
-        expert_chunks=1,
+        moe_implementation=moe_implementation,
+        expert_chunks=expert_chunks,
         report_capacity_overflow=True,
         rope_fused=True,
     )
@@ -172,7 +203,9 @@ def build_small_run(
     run_id: str,
     size: str,
     target: str = "gb200-rack",
+    flavor: str = "ep",
     capacity_factor: float = 1.0,
+    seq_len: int = SEQ_LEN,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One expert-parallel run of the downsized hero shape ``size`` at its 60x token budget."""
@@ -182,16 +215,31 @@ def build_small_run(
         raise ValueError(f"size must be one of {sorted(SMALL_SHAPES)}, got {size!r}")
     if target not in TARGETS:
         raise ValueError(f"target must be one of {sorted(TARGETS)}, got {target!r}")
+    if flavor not in FLAVORS:
+        raise ValueError(f"flavor must be one of {sorted(FLAVORS)}, got {flavor!r}")
+    if TOKENS_PER_STEP % seq_len != 0:
+        raise ValueError(f"seq_len={seq_len} must divide the {TOKENS_PER_STEP}-token step budget")
 
     shape = SMALL_SHAPES[size]
     fleet = TARGETS[target]
-    model = _small_model(shape, capacity_factor, fleet.attention_implementation)
+    sharding = FLAVORS[flavor]
+    # Tokens per step stay fixed, so a shorter context trains on the same data with a wider batch.
+    batch_size = TOKENS_PER_STEP // seq_len
+    expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
+    model = _small_model(
+        shape,
+        capacity_factor,
+        fleet.attention_implementation,
+        sharding.moe_implementation,
+        sharding.expert_chunks,
+        seq_len,
+    )
     optimizer = dataclasses.replace(
         MoeHeuristic().build_optimizer_config(
             num_train_steps=shape.num_steps,
-            batch_size=SMALL_BATCH_SIZE,
+            batch_size=batch_size,
             hidden_dim=model.hidden_dim,
-            seq_len=SEQ_LEN,
+            seq_len=seq_len,
         ),
         use_syrk=fleet.use_syrk,
     )
@@ -202,12 +250,12 @@ def build_small_run(
         z_loss_weight=1e-4,
         offload_opt_state=False,  # small models fit HBM; host offload destabilized small runs
         save_checkpoints=True,
-        expert_axis_size=fleet.expert_axis_size,
+        expert_axis_size=expert_axis_size,
         replica_axis_size=1,
         sharding_dump_path=None,
     )
-    if model.num_experts % fleet.expert_axis_size != 0:
-        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {fleet.expert_axis_size}")
+    if model.num_experts % expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {expert_axis_size}")
     train_resources = ResourceConfig.with_gpu(
         fleet.accelerator,
         count=fleet.gpus_per_node,
@@ -223,7 +271,7 @@ def build_small_run(
         trainer = TrainerConfig(
             id=run_id,
             seed=0,
-            train_batch_size=SMALL_BATCH_SIZE,
+            train_batch_size=batch_size,
             num_train_steps=shape.num_steps,
             profiler=ProfilerConfig(enabled=False),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
@@ -238,6 +286,8 @@ def build_small_run(
                     "small-abl",
                     f"shape-{size}",
                     f"capacity-{capacity_factor:g}",
+                    f"seq{seq_len}",
+                    flavor,
                     target,
                     "MHEP",
                 ],
@@ -268,8 +318,8 @@ def build_small_run(
             val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
         data = _datakit_data_config(
             total_steps=shape.num_steps,
-            batch_size=SMALL_BATCH_SIZE,
-            max_seq_len=SEQ_LEN,
+            batch_size=batch_size,
+            max_seq_len=seq_len,
             enable_simulated_epoching=False,
             val_components=val_components,
         )
@@ -319,6 +369,20 @@ def build_small_run(
     help="Accelerator fleet for the run. The expert axis spans every GPU it holds.",
 )
 @click.option(
+    "--flavor",
+    type=click.Choice(sorted(FLAVORS)),
+    default="ep",
+    show_default=True,
+    help="MoE sharding: expert-parallel, or FSDP with no routing capacity.",
+)
+@click.option(
+    "--seq-len",
+    type=click.IntRange(min=1),
+    default=SEQ_LEN,
+    show_default=True,
+    help="Sequence length. The batch widens to hold tokens per step constant.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=1.0,
@@ -326,8 +390,12 @@ def build_small_run(
     help="Fixed all-to-all capacity factor. Higher values drop fewer assignments and pad more.",
 )
 @build_options
-def main(run_id: str, size: str, target: str, capacity_factor: float) -> ArtifactStep[HeroThroughputResult]:
-    return build_small_run(run_id=run_id, size=size, target=target, capacity_factor=capacity_factor)
+def main(
+    run_id: str, size: str, target: str, flavor: str, seq_len: int, capacity_factor: float
+) -> ArtifactStep[HeroThroughputResult]:
+    return build_small_run(
+        run_id=run_id, size=size, target=target, flavor=flavor, seq_len=seq_len, capacity_factor=capacity_factor
+    )
 
 
 if __name__ == "__main__":
