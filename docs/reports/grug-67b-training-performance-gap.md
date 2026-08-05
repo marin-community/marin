@@ -2,7 +2,8 @@
 
 Status: the frozen headline cohort, the eager matched-CE isolation control, and
 the separately labeled present-day routed-expert attribution are complete and
-content-hash verified. No result is pending.
+content-hash verified. The later ring arithmetic oracle is also complete; no
+result is pending.
 
 ## Executive answer
 
@@ -33,8 +34,18 @@ Levanter's matched-CE wall gives a useful 5,330.611-second hybrid diagnostic,
 equal to 79.138% of the frozen gap. It is not a lower bound on the frozen gap:
 the full-replay stacks fail the represented-parameter/loss comparability gate,
 and the 111.351-second source bridge does not partition expert from nonexpert
-drift. The exact blocker and the paired experiment that resolves it are stated
-below.
+drift. The remaining correctness blocker and the now-rejected paired result
+are stated below.
+
+A post-freeze 32-H100 semantic oracle compared native Levanter ring EP8 with
+the exact 12,288 action-log-probability coordinates stored by the eager and
+grouped MarinSkyRL arms. The FP32-combine candidate reduced squared distance
+from Levanter by 12.9% for eager and 13.4% for grouped relative to their parent
+arms. It did not establish a grouped advantage: grouped had 0.014% more squared
+error than eager in the candidate artifact. This supports the candidate's
+numerical direction, but it neither passes the candidate's failed distributed
+semantic gate nor makes its observed 14.23x grouped speedup admissible. The
+oracle is excluded from every timing headline.
 
 The comparison uses one content-addressed rollout replay, the June step-630
 weights, pinned measurement-freeze source in both repositories, and 32
@@ -454,11 +465,43 @@ experts versus 1,739.815 ms in the Python expert loop, a 109.812x kernel ratio.
 Peak allocated memory was 10.204 GiB grouped versus 12.045 GiB eager. The
 [measured source `41d5b40`](https://github.com/marin-community/MarinSkyRL/commit/41d5b40)
 also passed its four-H100 semantic parity gate. The owner's current
-[draft PR #276](https://github.com/marin-community/MarinSkyRL/pull/276) is at
-[`3a011552`](https://github.com/marin-community/MarinSkyRL/commit/3a0115528588f86f53104faac8fef15a4c7a5895)
-with later correctness work and green CI. That newer implementation is not
-relabeled as the source of the older measurement. Neither isolated kernel ratio
-is an end-to-end policy-step speedup.
+[PR #276](https://github.com/marin-community/MarinSkyRL/pull/276) is open,
+non-draft, and at
+[`0c213586`](https://github.com/marin-community/MarinSkyRL/commit/0c213586b5491b8046ca7780e965c4b26dc6a2a2),
+with later correctness work and green checks. GitHub currently reports merge
+conflicts. That newer implementation is not relabeled as the source of the
+older measurement. Neither isolated kernel ratio is an end-to-end policy-step
+speedup.
+
+### Post-freeze ring arithmetic oracle
+
+The checkpoint recipe used Levanter's default ring EP8 backend, so this oracle
+restored the native step-630 FP32 checkpoint and pending query-bias state,
+executed the full replay with BF16 compute/output, and retained the same first,
+middle, and last action positions as the frozen MarinSkyRL artifacts. It
+compares values at exact coordinates and deliberately declares no
+cross-framework pass threshold.
+
+| MarinSkyRL artifact | Exact eager/grouped differences | Eager closer / grouped closer | Eager / grouped mean absolute distance | Grouped/eager squared error |
+| --- | ---: | ---: | ---: | ---: |
+| Parent BF16 combine | 10,563 / 12,288 | 5,181 / 5,382 | 0.482389 / 0.484482 | 1.006460x |
+| `fbb1fc8` FP32 combine | 117 / 12,288 | 65 / 52 | 0.403800 / 0.403853 | 1.000139x |
+
+The parent result splits the directional tests: grouped is closer at 201 more
+changed coordinates, but its total squared error is 0.646% higher. In the
+candidate result, eager is closer at 13 more changed coordinates and grouped's
+total squared error is 0.014% higher. Thus native ring does not pick grouped as
+the more faithful arm. Comparing corresponding candidate and parent arms is
+still informative: candidate squared error is 12.866% lower for eager and
+13.413% lower for grouped; mean absolute distance is 16.292% and 16.642% lower.
+
+These are exact floating-point inequality counts, not the earlier frozen
+tolerance failures of 1,995 for the parent pair and 3 for the first candidate
+pair. Large discrepancies are shared by both frameworks' arms—the candidate's
+maximum absolute distance from Levanter is 10.916—and exact tensor identity for
+the step-630 BF16 export is provenance-backed but not independently certified.
+The result is therefore descriptive evidence for the FP32 correction, not a
+new correctness gate or a performance measurement.
 
 ## What the old numbers do not prove
 
@@ -475,8 +518,16 @@ frozen headline and matched-control table. A separate 32-H100 production
 but it used a different replay and boundary and was manually stopped after its
 required gates. It is unmatched diagnostic evidence, not a bridge into the
 frozen arithmetic. [MarinSkyRL #249](https://github.com/marin-community/MarinSkyRL/pull/249)
-owns the separate MuonH prerequisite; this comparison keeps AdamW and does not
-attribute grouped-expert work to that PR.
+landed the separate MuonH prerequisite; this comparison keeps AdamW and does
+not attribute grouped-expert work to that PR.
+
+The later `fbb1fc8` paired run did use this exact replay on 32 H100s. Eager took
+7,692.213 seconds and grouped took 540.642 seconds, an observed 14.228x ratio.
+It passed the declared CE and sampled-gradient checks but failed 3 of 12,288
+sampled action-log-probability checks. The same artifact therefore rejects its
+own performance result. A route-aware follow-up failed at one new coordinate;
+the earlier three did not reproduce. Neither run closes
+[Marin #7903](https://github.com/marin-community/marin/issues/7903).
 
 After the freeze, [Marin #7820](https://github.com/marin-community/marin/pull/7820)
 added a self-contained Levanter FSDP MoE hero for 64 GB200 GPUs. It neither runs
@@ -487,20 +538,19 @@ so it does not replace any row or roadmap gate in this report.
 
 | Rank | Opportunity | Measured or bounded end-to-end benefit | Confidence | Effort | Main dependency | Acceptance metric |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | Measure the owner's grouped-expert path against its eager expert loop on this exact replay and matched-CE boundary | At most the present 5,583.786-second expert span; no frozen-gap closure is claimed before the paired result | High that this is the dominant present-day MarinSkyRL boundary; cross-stack recovery unmeasured | Medium measurement tranche; implementation already exists | Pin one owner source: `41d5b40` has measured four-H100 parity; `3a011552` is the newer current head | Paired 32-H100 runs at one correctness-passed owner source; identical represented values, same replay, routes or exact route/load-shape check, loss, finite gradients, hook counts, and nonexpert accounting; report wall and expert-span deltas |
+| 1 | Close grouped-expert semantics, then remeasure eager versus grouped on this replay | No accepted end-to-end benefit yet; one rejected candidate pair observed 14.228x, while the directly measured present-day expert span is 5,583.786 seconds | High that this is the dominant present-day MarinSkyRL boundary; realized recovery unmeasured | Medium correctness work plus one measurement | Resolve #7903 and restack conflicting #276 (`0c213586`) on current main | One paired 32-H100 run at a correctness-passed source; identical represented values, replay, routes or exact route/load-shape check, loss, finite gradients, hook counts, and nonexpert accounting; report wall and expert-span deltas |
 | 2 | Keep FlashAttention as the Grug training default | 222.543 seconds (3.085% of eager) already realized | High | Done | Packed-mask correctness | Eager/FA matched CE agrees within 0.000013 and FA has no slower fixed-replay wall |
 | 3 | Avoid disabled entropy computation in the policy forward | At most 29.794 seconds in the frozen FA operational/matched pair; 24.471 seconds in the eager pair | Medium | Small | Preserve required policy metrics and gradients | Same replay and gradients; beat the 17.390-second FA headline spread |
 | 4 | Amortize Python launches, status reductions, post-backward diagnostics, and the final barrier | At most 13.485 seconds from frozen status-plus-residual spans | Low | Medium | Memory-safe batching or graph capture | Same replay and gradients; reduce the directly measured status-plus-residual bound |
 
-The smallest useful next tranche is not another isolated kernel test. It is one
-paired 32-H100 fixed-replay A/B at one pinned owner source: eager experts versus
-grouped experts, with the attribution hooks left on in both arms. Source
-`41d5b40` already has the measured four-H100 parity gate; if the owner instead
-uses current head `3a011552`, first repeat that gate rather than transferring
-the older result. The A/B tests whether the 109.812x one-H100 kernel ratio survives
-the actual 128-microbatch boundary and measures how much of both the expert
-span and end-to-end wall it removes. Trainer EP can remain off for this first
-discriminator; add it only after the grouped-only arm closes its numerical and
+The paired 32-H100 discriminator has now run, but its semantic failure makes a
+second unchanged run poor value. The smallest useful next tranche is to close
+the residual contract in #7903 with focused tests and restack #276 on current
+main, then run exactly one accepted fixed-replay A/B with the attribution hooks
+left on in both arms. That run will decide whether the 109.812x isolated kernel
+ratio survives the 128-microbatch boundary and how much expert and end-to-end
+wall it removes. Trainer EP can remain off for this first accepted grouped-only
+comparison; add it only after the grouped arm closes its numerical and
 accounting gates.
 
 ## Reproduction and artifacts
@@ -518,6 +568,8 @@ Measurement jobs:
 - [Eager matched-CE independent result verifier](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fgrug-perf-fetch-msrl-eager-matched-f57b3b60-r1-20260801)
 - [Present-day routed-expert attribution](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fgrug-gap-attr-msrl-ce-08f8144-s1-20260801)
 - [Routed-expert independent result verifier](https://iris-cw-rno2a.oa.dev/#/job/%2Fromain%2Fgrug-gap-attr-fetch-verify-08f8144-s1-20260801)
+- [Post-freeze Levanter ring oracle](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fgrug-ring-oracle-headline-b53145bbc6-r2)
+- [Ring-oracle independent result verifier](https://iris-cw-us-east-02a.oa.dev/#/job/%2Fromain%2Fgrug-ring-oracle-readback-b53145bbc6-r1-20260805)
 
 Content-hashed result objects:
 
@@ -530,6 +582,7 @@ Content-hashed result objects:
 - `s3://marin-us-east-02a/iris/grug-training-perf-gap/20260731/msrl/headline-fa-matched-ce-f57b3b60-r4-s1.json`
 - `s3://marin-us-east-02a/iris/grug-training-perf-gap/20260731/msrl/headline-eager-matched-ce-f57b3b60-r1.json`
 - `s3://marin-us-east-02a/iris/grug-training-perf-gap/20260801/attribution/headline-fa-matched-ce-expert-08f8144-s1.json`
+- `s3://marin-us-east-02a/iris/grug-training-perf-gap/20260805/ring-oracle-headline-b53145bbc6-r2.json`
 
 Each JSON object includes a canonical `result_sha256` over its content excluding
 that field. Independent CPU readbacks recomputed and matched these accepted
@@ -545,6 +598,7 @@ hashes:
 | MarinSkyRL FA matched CE | `0a205b68f1671abc517a7ab5978b32e1f102071cdb49497f3f05855e5b0f0d1d` |
 | MarinSkyRL eager matched CE | `298a9bc2c5aa121c340a769d2931c8c42c29440b6c7917b71f18d6fa99c68e01` |
 | MarinSkyRL present-day routed-expert attribution | `51163e4045b5c64d97d6812966680a4e2538f065e20137cd5d7837ffdca3fa22` (payload `b105ae3029bf3239319a44159aeef8808b1f6a982d3779ff3be09447f70e8cbc`) |
+| Post-freeze Levanter ring oracle | `c6b5a6d942982fa4ec272c808987140a483314238f67bd5bbac1764a7567e782` (payload `179e859b1db014ba11818102487d3ed8089553e5e4de6fcf4f3b2ff6f7df56ba`) |
 
 The durable benchmark drivers are
 `scripts/perf/grug_levanter_fixed_replay_benchmark.py` in Marin and
@@ -557,6 +611,13 @@ The final jobs requested four replicas with one complete `H100x8` host per
 replica, 48 CPUs, 1,600 GB host memory, 4,000 GB disk, production priority, no
 retries, and the exact images above. The MSRL preflight requested one such
 host. GPU jobs ran sequentially.
+
+The post-freeze oracle separately used four complete H100x8 hosts in
+`cw-us-east-02a`, interactive priority, zero retries, source
+`b53145bbc67bb18265c0f29bd308c087890b2542`, and image
+`ghcr.io/marin-community/iris-task@sha256:9af9a3d38f57c2ed8dfe1d6f6657a9f4a00c582ec06a5ac2af8fcddbe51da03c`.
+Its 400.588-second compile and 69.643-second forward scan are explicitly not
+training benchmarks.
 
 <details>
 <summary>Exact driver arguments</summary>
@@ -590,5 +651,11 @@ revision, manifest, logical batch, `headline`, `flash_attention_2`, and
 `08f814440579854313a258a8dd658176557f907d`, image
 `ghcr.io/marin-community/marinskyrl@sha256:5f35056daee57d25f134aa2171126645be6750944c92bec27962cfae412041d3`,
 sample 1, and the 2026-08-01 attribution result URI above.
+
+The post-freeze semantic oracle used `--objective sampled_logprobs --mode
+headline --samples 1`, restored the native step-630 checkpoint, and compared
+the two frozen MarinSkyRL artifacts after verifying their payload and result
+digests. It stores exact first/middle/last action coordinates for every rank and
+microbatch. Its result declares `headline_eligible=false`.
 
 </details>
