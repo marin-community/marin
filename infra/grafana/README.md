@@ -62,8 +62,8 @@ relative range keeps one cache key as its edges drift. It calls only `Query`, av
 Timestamps come back as epoch milliseconds, so a panel selects a raw or `date_bin`-ned
 time column without casting. finelog has JSON SQL UDFs, so a panel groups by a label in SQL
 — `json_get(labels,'region')`; the bridge also flattens a `labels` column into
-`label_<key>` fields. The Kubernetes dashboard uses the hub datasource for a
-bounded recent view of `iris.task_event`, beside the live API server events.
+`label_<key>` fields. Jobs uses the hub datasource for a bounded recent view of
+`iris.task_event`, beside Clusters' live API server events.
 
 `v1/vllm/overview` backs the inference dashboard with a bounded, entity-scoped
 Finelog query. Operators select a job, root effort, or execution and a raw time
@@ -74,7 +74,7 @@ missing telemetry from healthy application silence.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
-at or above 5 seconds is slow. The dedicated finelog dashboard adds effective pod
+at or above 5 seconds is slow. Clusters' finelog row adds effective pod
 resources, restart history, probe presence, node placement, PVC class/capacity, and
 recent matching Kubernetes Warning events.
 
@@ -499,7 +499,9 @@ Four things about the data will bite you:
 
 - **Quote `cluster`.** finelog's SQL parser rejects a bare `cluster` identifier
   anywhere but the first select-list position — `SELECT ts AS t, cluster FROM …`
-  fails to parse. `"cluster"`, `COALESCE(cluster, '')` and `t.cluster` all work.
+  fails to parse. Qualifying or wrapping it is enough for the parser, but panels
+  always write `"cluster"`, and a test rejects every other spelling so nobody has
+  to remember which positions are safe.
 - **Bound every `telemetry_v1` query, and fold the boundary.** The namespace is
   sorted on `timestamp_ms` alone, so write
   `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`, never

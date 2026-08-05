@@ -433,12 +433,26 @@ def test_cluster_column_is_only_referenced_quoted_or_as_an_alias():
                 assert preceding.endswith(" AS"), f"{name}: unquoted `cluster` in {sql[:160]!r}"
 
 
-def test_cluster_filters_have_a_matching_variable():
+def test_every_sql_selector_has_a_matching_variable():
+    # A selector interpolated into SQL but never declared reaches finelog as literal
+    # `${name:sqlstring}` and the panel fails to parse. Shared fragments make this easy
+    # to hit: a dashboard adopting one inherits its filters.
     for name, dashboard in _stitched_dashboards().items():
         variables = {variable["name"] for variable in dashboard.get("templating", {}).get("list", [])}
         for sql in _panel_sql(dashboard):
             for variable in re.findall(r"\$\{(\w+):sqlstring\}", sql):
                 assert variable in variables, f"{name}: ${variable} used but not declared"
+
+
+def test_dashboard_links_point_at_provisioned_dashboards():
+    # Deleting a dashboard silently strands every nav link that named it.
+    uids = {dashboard["uid"] for dashboard in _stitched_dashboards().values()}
+    for name, dashboard in _stitched_dashboards().items():
+        for link in dashboard.get("links", []):
+            url = link["url"]
+            if not url.startswith("/d/"):
+                continue
+            assert url.removeprefix("/d/").split("/")[0] in uids, f"{name}: dead link {url}"
 
 
 def test_cluster_variable_lists_every_configured_cluster():

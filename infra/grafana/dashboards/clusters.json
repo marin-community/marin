@@ -1,7 +1,7 @@
 {
   "uid": "marin-clusters",
   "title": "Clusters",
-  "description": "Is the infrastructure under the jobs healthy: CoreWeave control planes, nodes, GB200 racks, host resources, and the finelog mirrors and canary probes behind them. The Kubernetes panels are current-state reads with no history; the host-resource charts come from the node agents' telemetry stream.",
+  "description": "Is the infrastructure under the jobs healthy: CoreWeave control planes, nodes, GB200 racks, host resources, and the finelog mirrors and canary probes behind them. The current-state reads have no history and cover every cluster; the cluster selector applies to the host-resource charts, which come from the node agents' telemetry stream. Each row says which of the two it is.",
   "tags": [
     "marin",
     "generated"
@@ -144,12 +144,25 @@
   ],
   "panels": [
     {
+      "id": 40,
+      "type": "row",
+      "title": "Current state — all clusters",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
       "id": 1,
       "gridPos": {
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 0
+        "y": 1
       },
       "panelRef": "k8s_apis_unreachable"
     },
@@ -159,7 +172,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 0
+        "y": 1
       },
       "panelRef": "iris_controller_up"
     },
@@ -169,7 +182,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 0
+        "y": 1
       },
       "panelRef": "healthy_workers_count"
     },
@@ -179,7 +192,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 0
+        "y": 1
       },
       "panelRef": "tpu_chips_count"
     },
@@ -189,7 +202,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 0
+        "y": 1
       },
       "panelRef": "pending_pods_count"
     },
@@ -199,7 +212,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 0
+        "y": 1
       },
       "panelRef": "crashloops_count"
     },
@@ -209,7 +222,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 4
+        "y": 5
       },
       "panelRef": "control_plane_components"
     },
@@ -226,7 +239,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 12
+        "y": 13
       },
       "fieldConfig": {
         "defaults": {
@@ -291,7 +304,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 12
+        "y": 13
       },
       "fieldConfig": {
         "defaults": {
@@ -354,7 +367,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 19
+        "y": 20
       },
       "panelRef": "coreweave_node_health"
     },
@@ -364,9 +377,22 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 28
       },
       "panelRef": "gpu_rack_tray_inventory"
+    },
+    {
+      "id": 41,
+      "type": "row",
+      "title": "Host resources — selected clusters",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "panels": []
     },
     {
       "id": 12,
@@ -381,7 +407,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 36
+        "y": 38
       },
       "fieldConfig": {
         "defaults": {
@@ -559,7 +585,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 36
+        "y": 38
       },
       "fieldConfig": {
         "defaults": {
@@ -737,7 +763,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 36
+        "y": 38
       },
       "fieldConfig": {
         "defaults": {
@@ -905,13 +931,13 @@
     {
       "id": 20,
       "type": "row",
-      "title": "Workload exceptions",
+      "title": "Workload exceptions — all clusters",
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 46
       },
       "panels": [
         {
@@ -1054,13 +1080,13 @@
     {
       "id": 21,
       "type": "row",
-      "title": "Finelog",
+      "title": "Finelog fleet — hub and mirrors",
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 47
       },
       "panels": [
         {
@@ -1268,13 +1294,13 @@
     {
       "id": 22,
       "type": "row",
-      "title": "Canary probes and TPU fleet",
+      "title": "Canary probes and TPU fleet — all regions",
       "collapsed": true,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 46
+        "y": 48
       },
       "panels": [
         {
