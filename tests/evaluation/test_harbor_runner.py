@@ -485,3 +485,25 @@ def test_harbor_executor_accepts_zero_reward_without_exception_info(tmp_path, mo
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 0.0
     result = json.loads((tmp_path / "harbor_result.json").read_text())
     assert result["failed_trials"] == 0
+
+
+def test_harbor_executor_upgrades_compatible_legacy_root_with_dataset_identity(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env, _backend_state) -> None:
+        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "result.json").write_text(
+            json.dumps({"task_name": "trial-one", "verifier_result": {"rewards": {"reward": 1.0}}})
+        )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor("aime")
+    legacy_config = tmp_path / "harbor_jobs" / "harbor_aime_0123456789ab" / "config.json"
+    legacy_config.parent.mkdir(parents=True)
+    legacy_config.write_text("{}")
+
+    executor(_inference_session(), str(tmp_path), {})
+
+    assert json.loads((tmp_path / "harbor_resume_identity.json").read_text()) == {
+        "schema_version": 1,
+        "dataset": "aime",
+    }

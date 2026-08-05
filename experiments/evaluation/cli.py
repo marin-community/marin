@@ -89,6 +89,11 @@ def cli() -> None:
     help="Human version label for this launch, e.g. '2026.07.20' or 'rl-fix-sweep'.",
 )
 @click.option("--description", default=None, help="Free-text note on why this launch was run.")
+@click.option(
+    "--resume-results-path",
+    default=None,
+    help="Existing object-store results path for one Harbor evaluation; verifies the dataset before resuming.",
+)
 @click.option("--no-wait", is_flag=True, help="Submit and return without waiting for results.")
 @click.option("--dry-run", is_flag=True, help="Print the resolved plan without submitting.")
 @click.option(
@@ -106,6 +111,7 @@ def launch(
     limit: int | None,
     version: str | None,
     description: str | None,
+    resume_results_path: str | None,
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
@@ -140,6 +146,7 @@ def launch(
         cluster=cluster,
         version=version,
         description=description,
+        resume_results_path=resume_results_path,
     )
     try:
         batch = prepare_evaluation_batch(spec)

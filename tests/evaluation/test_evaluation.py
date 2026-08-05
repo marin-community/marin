@@ -447,3 +447,55 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     assert batch.records_prefix == "gs://marin-eval-metadata/evals"
     evaluation = batch.evaluations[0]
     assert evaluation.identity.output_dir == f"{batch.records_prefix}/{evaluation.identity.run_id}/results"
+
+
+def test_build_evaluation_batch_rejects_resume_root_for_another_harbor_dataset(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
+    output_dir = f"memory://resume-{tmp_path.name}/previous-results"
+    previous_config = (
+        StoragePath(output_dir) / "harbor_jobs" / "harbor_terminus2-dev-set-v2_0123456789ab" / "config.json"
+    )
+    previous_config.write_text("{}")
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=(),
+        harbor_configs=(HarborConfigSelection(name="aime-policy", path=config_path),),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        cluster="marin",
+        resume_results_path=output_dir,
+    )
+
+    with pytest.raises(ValueError, match="aime"):
+        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert previous_config.read_text() == "{}"
+
+
+def test_build_evaluation_batch_resumes_matching_harbor_results_root(tmp_path, monkeypatch):
+    _install_fake_harbor_preflight(monkeypatch)
+    config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
+    output_dir = f"memory://resume-{tmp_path.name}/previous-results"
+    (StoragePath(output_dir) / "harbor_resume_identity.json").write_text(
+        json.dumps({"schema_version": 1, "dataset": "aime"})
+    )
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model="qwen3-8b",
+        evals=(),
+        harbor_configs=(HarborConfigSelection(name="aime-policy", path=config_path),),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        cluster="marin",
+        resume_results_path=output_dir,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert batch.evaluations[0].identity.output_dir == output_dir
