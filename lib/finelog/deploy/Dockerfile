@@ -19,7 +19,10 @@ FROM node:22-slim AS dashboard
 WORKDIR /build/dashboard
 
 # Copy manifests first so dependency install is cached across source edits.
+# The image builds the SPA and never runs the e2e suite, so Playwright's
+# browsers are skipped — they are ~400 MB the build has no use for.
 COPY lib/finelog/dashboard/package.json lib/finelog/dashboard/package-lock.json ./
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY lib/finelog/dashboard/ ./
