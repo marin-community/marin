@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import hashlib
 import io
 import json
 import subprocess
@@ -632,6 +633,39 @@ def test_timed_completion_freezes_seed_identity_and_transport(monkeypatch: pytes
     assert timing["response_body_transfer_seconds"] >= 0
 
 
+def test_timed_chat_completion_preserves_frozen_ids_in_identity_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class Response:
+        ok = True
+        content = b'{"choices":[{}]}'
+
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+
+    def post(url: str, **kwargs: object) -> Response:
+        observed.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setattr(grug_preflight.requests, "post", post)
+    _, timing = grug_preflight._timed_completion(
+        "http://server",
+        "model",
+        [1, 37, 9, 255],
+        request_transport="chat",
+    )
+
+    assert observed["url"] == "http://server/v1/chat/completions"
+    body = observed["json"]
+    assert isinstance(body, dict)
+    assert body["messages"] == [{"role": "user", "content": "t1 t37 t9 t255"}]
+    assert body["logprobs"] is True
+    assert body["top_logprobs"] == 1
+    assert timing["request_transport"] == "chat"
+
+
 def test_labeled_prometheus_preserves_engines_and_window_histograms() -> None:
     before = parse_labeled_prometheus(
         """
@@ -697,6 +731,55 @@ def test_r3_summary_checks_every_axis_and_cached_root_prefix() -> None:
             expected_positions=6,
             r3_enabled=True,
         )
+
+
+def test_chat_r3_summary_accepts_only_generated_token_nested_lists() -> None:
+    case = CASES["exact-reference-ep16"]
+    routes = np.arange(3 * case.num_hidden_layers * case.num_experts_per_tok, dtype=np.int64)
+    routes = (routes % case.num_experts).reshape(3, case.num_hidden_layers, case.num_experts_per_tok)
+    payload = {"choices": [{"routed_experts": routes.tolist()}]}
+
+    summary, retained = grug_preflight._health_route_summary(
+        payload,
+        case=case,
+        expected_positions=3,
+        r3_enabled=True,
+        request_transport="chat",
+        keep_routes=True,
+    )
+
+    assert summary["shape"] == [3, 48, 4]
+    assert summary["carrier_npy_bytes"] == 0
+    assert summary["carrier_base64_bytes"] == 0
+    assert summary["carrier_json_bytes"] > routes.size
+    assert summary["root_prefix_positions_compared"] == 0
+    np.testing.assert_array_equal(retained, routes)
+
+
+def test_route_audit_reconciles_owned_experts_without_drops() -> None:
+    case = CASES["tiny"]
+    counts = [[1] * case.num_experts for _ in range(case.num_hidden_layers)]
+    snapshot = {
+        "mode": "record",
+        "num_layers": case.num_hidden_layers,
+        "num_experts": case.num_experts,
+        "assignment_count": case.num_hidden_layers * case.num_experts,
+        "counts": counts,
+        "local_expert_mask": counts,
+        "worker": {"global_rank": 0, "local_rank": 0, "dp_rank": 0, "ep_rank": 0},
+    }
+
+    summary = grug_preflight._health_route_audit_summary(
+        [snapshot],
+        case=case,
+        mode="record",
+        routing_regime="balanced",
+        expected_assignment_count=case.num_hidden_layers * case.num_experts,
+    )
+
+    assert summary["passed"]
+    assert summary["assignment_count"] == summary["expected_assignment_count"]
+    assert summary["counts_outside_ownership"] == 0
 
 
 def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
@@ -2004,3 +2087,468 @@ def test_load_arm_samples_live_counter_before_slow_request_completes(
         10 * sample_seconds,
         abs=sample_seconds,
     )
+
+
+def test_matrix_calibration_uses_frozen_95_percent_lowest_concurrency_rule() -> None:
+    arms: list[dict[str, object]] = []
+    for concurrency in grug_preflight.CALIBRATION_CONCURRENCIES:
+        for mbt in grug_preflight.CALIBRATION_MAX_NUM_BATCHED_TOKENS:
+            rate = float(concurrency) / 2
+            if concurrency == 144 and mbt == 8192:
+                rate = 100.0
+            if concurrency == 96:
+                rate = 96.0 if mbt == 8192 else 97.0
+            arms.append(
+                {
+                    "arm_id": f"c{concurrency}-m{mbt}",
+                    "passed": True,
+                    "matrix": {"case": "exact-reference-ep16", "role": "calibration"},
+                    "settings": {
+                        "target_concurrency": concurrency,
+                        "max_num_batched_tokens": mbt,
+                        "max_num_seqs": 144,
+                    },
+                    "headline": {"generation_tokens_per_second_per_gpu": rate},
+                }
+            )
+
+    selection = grug_preflight._calibration_selection(arms, case_name="exact-reference-ep16")
+
+    assert selection["passed"]
+    assert selection["threshold_generation_tokens_per_second_per_gpu"] == 95.0
+    assert selection["selected"]["target_concurrency"] == 96
+    assert selection["selected"]["max_num_batched_tokens"] == 16384
+    assert selection["selected"]["max_num_seqs"] == 144
+    followups = grug_preflight._instrument_followup_phases(selection)
+    assert [phase["phase_id"] for phase in followups] == [
+        "ep16-r3off-aa",
+        "ep16-chat-r3off",
+        "ep16-chat-r3on",
+    ]
+    assert followups[0]["concurrencies"] == [96, 96]
+    assert followups[1]["request_transport"] == followups[2]["request_transport"] == "chat"
+    assert followups[1]["r3_enabled"] is False
+    assert followups[2]["r3_enabled"] is True
+
+
+def test_topology_calibration_sources_require_independent_frozen_selections() -> None:
+    class MemoryFilesystem:
+        def __init__(self) -> None:
+            self.data: dict[str, bytes] = {}
+
+        def cat_file(self, key: str) -> bytes:
+            return self.data[key]
+
+    filesystem = MemoryFilesystem()
+    marin_commit = "b" * 40
+    task_image = "example.invalid/image@sha256:" + "a" * 64
+
+    def add_source(*, plan: str, run_id: str, case: str, concurrency: int, mbt: int) -> None:
+        artifact_prefix = grug_preflight._matrix_artifact_prefix(plan, run_id)
+        manifest = {
+            "plan": plan,
+            "run_id": run_id,
+            "provenance": {
+                "marin_commit": marin_commit,
+                "vllm_commit": VLLM_SHA,
+                "task_image": task_image,
+            },
+        }
+        result = {
+            "plan": plan,
+            "run_id": run_id,
+            "passed": True,
+            "analysis": {
+                "calibration": {
+                    "selected": {
+                        "case": case,
+                        "target_concurrency": concurrency,
+                        "max_num_batched_tokens": mbt,
+                        "max_num_seqs": 144,
+                    }
+                }
+            },
+        }
+        manifest_bytes = json.dumps(manifest).encode()
+        result_bytes = json.dumps(result).encode()
+        filesystem.data[grug_preflight._s3_key(f"{artifact_prefix}manifest.json")] = manifest_bytes
+        filesystem.data[grug_preflight._s3_key(f"{artifact_prefix}result.json")] = result_bytes
+        receipt = {
+            "plan": plan,
+            "run_id": run_id,
+            "passed": True,
+            "benchmark_passed": True,
+            "reader_marin_commit": marin_commit,
+            "task_image": task_image,
+            "source_object_sha256": {
+                "manifest.json": hashlib.sha256(manifest_bytes).hexdigest(),
+                "result.json": hashlib.sha256(result_bytes).hexdigest(),
+            },
+        }
+        receipt_uri = f"{grug_preflight._matrix_control_prefix(plan, run_id)}independent-readback.json"
+        filesystem.data[grug_preflight._s3_key(receipt_uri)] = json.dumps(receipt).encode()
+
+    add_source(plan="ep8-calibration", run_id="ep8-run", case="reference-ep8", concurrency=96, mbt=16384)
+    add_source(
+        plan="instrument-v1",
+        run_id="ep16-run",
+        case="exact-reference-ep16",
+        concurrency=144,
+        mbt=8192,
+    )
+
+    sources = grug_preflight._verified_topology_calibration_sources(
+        filesystem,
+        ep8_run_id="ep8-run",
+        ep16_run_id="ep16-run",
+        ep8_concurrency=96,
+        ep8_max_num_batched_tokens=16384,
+        ep16_concurrency=144,
+        ep16_max_num_batched_tokens=8192,
+        max_num_seqs=144,
+        marin_commit=marin_commit,
+        task_image=task_image,
+    )
+
+    assert sources["ep8"]["selection"]["target_concurrency"] == 96
+    assert sources["ep16"]["selection"]["max_num_batched_tokens"] == 8192
+    with pytest.raises(RuntimeError, match="selection"):
+        grug_preflight._verified_topology_calibration_sources(
+            filesystem,
+            ep8_run_id="ep8-run",
+            ep16_run_id="ep16-run",
+            ep8_concurrency=144,
+            ep8_max_num_batched_tokens=16384,
+            ep16_concurrency=144,
+            ep16_max_num_batched_tokens=8192,
+            max_num_seqs=144,
+            marin_commit=marin_commit,
+            task_image=task_image,
+        )
+
+
+def test_topology_plan_reverses_fresh_ep8_ep16_arms_and_adds_noop_control() -> None:
+    args = parse_args(
+        [
+            "matrix-worker",
+            "--plan",
+            "topology-v1",
+            "--run-id",
+            "unit",
+            "--task-image",
+            "example.invalid/image@sha256:" + "a" * 64,
+            "--marin-commit",
+            "b" * 40,
+            "--submitted-coscheduling",
+            "nvlink.domain",
+            "--ep8-concurrency",
+            "96",
+            "--ep8-max-num-batched-tokens",
+            "16384",
+            "--ep16-concurrency",
+            "144",
+            "--ep16-max-num-batched-tokens",
+            "8192",
+            "--ep8-calibration-run-id",
+            "ep8-run",
+            "--ep16-instrument-run-id",
+            "ep16-run",
+        ]
+    )
+
+    grug_preflight._validate_matrix_args(args)
+
+    phases = grug_preflight._matrix_initial_phases(args)
+
+    assert len(phases) == 10
+    assert [phase["case"] for phase in phases[:4]] == [
+        "reference-ep8",
+        "exact-reference-ep16",
+        "exact-reference-ep16",
+        "reference-ep8",
+    ]
+    assert [phase["case"] for phase in phases[4:8]] == [
+        "reference-ep8",
+        "exact-reference-ep16",
+        "exact-reference-ep16",
+        "reference-ep8",
+    ]
+    assert [phase["routing_regime"] for phase in phases[:8]] == ["canonical"] * 4 + ["balanced"] * 4
+    assert [phase["route_audit_mode"] for phase in phases[-2:]] == ["noop", "record"]
+    assert all(phase["r3_enabled"] is False for phase in phases)
+    assert all(phase["request_transport"] == "completion" for phase in phases)
+    followups = grug_preflight._topology_followup_phases(args)
+    assert [phase["phase_id"] for phase in followups] == [
+        "targeted-ep8-chat-r3off",
+        "targeted-ep8-chat-r3on",
+    ]
+    assert all(phase["case"] == "reference-ep8" for phase in followups)
+    assert all(phase["request_transport"] == "chat" for phase in followups)
+    assert [phase["r3_enabled"] for phase in followups] == [False, True]
+
+
+def test_matrix_reader_reconstructs_phase_commands_and_matched_chat_diff() -> None:
+    provenance = {
+        "iris_task_count": 4,
+        "iris_job_id": "job-1",
+        "iris_coscheduling": "nvlink.domain",
+        "marin_commit": "a" * 40,
+        "vllm_commit": VLLM_SHA,
+        "task_image": "example.invalid/image@sha256:" + "b" * 64,
+    }
+
+    def build(phase: dict[str, object]) -> dict[str, object]:
+        case = CASES[str(phase["case"])]
+        leader = "10.0.0.1"
+        environment = dict(grug_preflight.VLLM_SERVER_DEV_MODE_ENVIRONMENT)
+        ranks: list[dict[str, object]] = []
+        startup: list[dict[str, object]] = []
+        for rank in range(4):
+            active = rank < case.node_count
+            command = None
+            if active:
+                command = vllm_command(
+                    vllm_args(
+                        case,
+                        model_dir=f"/tmp/{phase['phase_id']}/rank-{rank}",
+                        model_source="dummy",
+                        leader_ip=leader,
+                        node_index=rank,
+                        smoke=False,
+                        r3_enabled=bool(phase["r3_enabled"]),
+                        max_num_batched_tokens=int(phase["max_num_batched_tokens"]),
+                        max_num_seqs=int(phase["max_num_seqs"]),
+                        chat_transport=True,
+                    )
+                )
+                command.append("--aggregate-engine-logging")
+                startup.append(
+                    {
+                        "rank": rank,
+                        "command": command,
+                        "environment": environment,
+                        "alive": True,
+                        "command_sha256": hashlib.sha256("\0".join(command).encode()).hexdigest(),
+                    }
+                )
+            ranks.append(
+                {
+                    "rank": rank,
+                    "active": active,
+                    "active_task_count": case.node_count,
+                    "case": case.name,
+                    "job_id": "job-1",
+                    "marin_commit": provenance["marin_commit"],
+                    "vllm_commit": provenance["vllm_commit"],
+                    "task_image": provenance["task_image"],
+                    "coscheduling": provenance["iris_coscheduling"],
+                    "vllm_command": command,
+                    "vllm_environment": environment if active else None,
+                    "vllm_alive_before_stop": active,
+                    "error": None,
+                }
+            )
+        arm = {
+            "passed": True,
+            "matrix": {
+                "phase_id": phase["phase_id"],
+                "case": case.name,
+                "role": phase["role"],
+                "active_tasks": case.node_count,
+                "routing_regime": phase["routing_regime"],
+                "order": phase["order"],
+                "replicate": phase["replicate"],
+                "fresh_server": True,
+                "same_iris_allocation": "job-1",
+            },
+            "settings": {
+                "target_concurrency": phase["concurrencies"][0],
+                "max_num_batched_tokens": phase["max_num_batched_tokens"],
+                "max_num_seqs": phase["max_num_seqs"],
+                "r3_enabled": phase["r3_enabled"],
+                "request_transport": phase["request_transport"],
+                "routing_regime": phase["routing_regime"],
+                "route_audit_mode": phase["route_audit_mode"],
+                "settings_drift": False,
+            },
+        }
+        return {
+            "phase": phase,
+            "phase_id": phase["phase_id"],
+            "model": case.name,
+            "passed": True,
+            "error": None,
+            "placement": {
+                "passed": True,
+                "endpoints": [
+                    {"task_index": str(rank), "advertise_host": leader if rank == 0 else f"10.0.0.{rank + 1}"}
+                    for rank in range(case.node_count)
+                ],
+            },
+            "startup": startup,
+            "arms": [arm],
+            "all_rank_health": {"passed": True, "ranks": ranks},
+        }
+
+    off_plan = grug_preflight._matrix_phase(
+        "targeted-ep8-chat-r3off",
+        case="reference-ep8",
+        role="targeted-chat-r3",
+        concurrencies=[96],
+        max_num_batched_tokens=16384,
+        request_transport="chat",
+        r3_enabled=False,
+    )
+    on_plan = {**off_plan, "phase_id": "targeted-ep8-chat-r3on", "r3_enabled": True}
+    off = build(off_plan)
+    on = build(on_plan)
+
+    assert grug_preflight._matrix_phase_evidence_contract(off, off_plan, provenance)["passed"]
+    assert grug_preflight._matrix_phase_evidence_contract(on, on_plan, provenance)["passed"]
+    assert grug_preflight._matrix_matched_chat_pair_contract(
+        [off, on],
+        off_phase_id="targeted-ep8-chat-r3off",
+        on_phase_id="targeted-ep8-chat-r3on",
+    )["passed"]
+
+    on["all_rank_health"]["ranks"][0]["vllm_environment"] = {"unexpected": "drift"}
+    assert not grug_preflight._matrix_matched_chat_pair_contract(
+        [off, on],
+        off_phase_id="targeted-ep8-chat-r3off",
+        on_phase_id="targeted-ep8-chat-r3on",
+    )["passed"]
+
+
+def test_topology_summary_requires_stable_canonical_and_balanced_ep8_wins() -> None:
+    def arm(
+        phase_id: str,
+        *,
+        case: str,
+        role: str,
+        routing: str,
+        order: str | None,
+        rate: float,
+        r3_enabled: bool = False,
+    ) -> dict[str, object]:
+        return {
+            "arm_id": phase_id,
+            "passed": True,
+            "headline": {"generation_tokens_per_second_per_gpu": rate},
+            "settings": {"r3_enabled": r3_enabled},
+            "moe_routing": {
+                "carrier": {
+                    "json_bytes_per_engine_generation_token": 321.0 if r3_enabled else 0.0,
+                }
+            },
+            "matrix": {
+                "phase_id": phase_id,
+                "case": case,
+                "role": role,
+                "routing_regime": routing,
+                "order": order,
+            },
+        }
+
+    arms = [
+        arm(
+            "canonical-ab-ep8",
+            case="reference-ep8",
+            role="topology-comparison",
+            routing="canonical",
+            order="ab",
+            rate=110,
+        ),
+        arm(
+            "canonical-ab-ep16",
+            case="exact-reference-ep16",
+            role="topology-comparison",
+            routing="canonical",
+            order="ab",
+            rate=100,
+        ),
+        arm(
+            "canonical-ba-ep16",
+            case="exact-reference-ep16",
+            role="topology-comparison",
+            routing="canonical",
+            order="ba",
+            rate=101,
+        ),
+        arm(
+            "canonical-ba-ep8",
+            case="reference-ep8",
+            role="topology-comparison",
+            routing="canonical",
+            order="ba",
+            rate=111,
+        ),
+        arm(
+            "balanced-ab-ep8", case="reference-ep8", role="topology-comparison", routing="balanced", order="ab", rate=120
+        ),
+        arm(
+            "balanced-ab-ep16",
+            case="exact-reference-ep16",
+            role="topology-comparison",
+            routing="balanced",
+            order="ab",
+            rate=105,
+        ),
+        arm(
+            "balanced-ba-ep16",
+            case="exact-reference-ep16",
+            role="topology-comparison",
+            routing="balanced",
+            order="ba",
+            rate=106,
+        ),
+        arm(
+            "balanced-ba-ep8", case="reference-ep8", role="topology-comparison", routing="balanced", order="ba", rate=121
+        ),
+        arm(
+            "audit-control-noop-ep16",
+            case="exact-reference-ep16",
+            role="audit-control",
+            routing="canonical",
+            order=None,
+            rate=101,
+        ),
+        arm(
+            "audit-control-record-ep16",
+            case="exact-reference-ep16",
+            role="audit-control",
+            routing="canonical",
+            order=None,
+            rate=100.5,
+        ),
+        arm(
+            "targeted-ep8-chat-r3off",
+            case="reference-ep8",
+            role="targeted-chat-r3",
+            routing="canonical",
+            order=None,
+            rate=110,
+        ),
+        arm(
+            "targeted-ep8-chat-r3on",
+            case="reference-ep8",
+            role="targeted-chat-r3",
+            routing="canonical",
+            order=None,
+            rate=100,
+            r3_enabled=True,
+        ),
+    ]
+
+    summary = grug_preflight._matrix_topology_summary(arms)
+
+    assert summary["passed"]
+    assert summary["repeatability"]["passed"]
+    assert summary["ep8_is_targeted_chat_r3_finalist"]
+    assert summary["targeted_chat_r3"]["passed"]
+    assert summary["targeted_chat_r3"]["r3_on_over_off_percent"] == pytest.approx(-9.0909090909)
+    assert "Advance EP8" in summary["recommendation"]
+
+    incomplete = grug_preflight._matrix_topology_summary(arms[:-2])
+    assert incomplete["ep8_is_targeted_chat_r3_finalist"]
+    assert not incomplete["targeted_chat_r3"]["passed"]
+    assert not incomplete["passed"]

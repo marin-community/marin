@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 MARIN_BASE_SHA = "75bf2437035cf731d1a4bd71266229dfcdda9478"
-VLLM_SHA = "2c2bef33dfbd7aef3c9d4433a7e4110f77d56a4a"
+VLLM_SHA = "06af5cff3b97723356ec590b9ecf635b7690bd40"
 TRAINING_REFERENCE_SHA = "fd3e9bc5b428633027f944be7fdf1136567db028"
 PINNED_REFERENCE_URL = "https://github.com/marin-community/marin/issues/7201#issuecomment-5093392733"
 SNOWBALL_EXPORT = "s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b/step-42150/hf-bf16-vllm/d819cbc63780bd86/"
@@ -732,6 +732,44 @@ def frozen_manifest(
 def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "config.json").write_text(json.dumps(case.hf_config(), indent=2, sort_keys=True) + "\n")
+    # The benchmark normally sends token IDs directly and starts vLLM with
+    # ``--skip-tokenizer-init``.  The matched MarinSkyRL carrier check must use
+    # ``/v1/chat/completions`` instead.  This tiny tokenizer makes the chat
+    # renderer an identity map over the exact frozen 0..255 model vocabulary:
+    # message text ``t1 t37 t9`` becomes token IDs ``[1, 37, 9]``.  It adds no
+    # role markers, BOS token, EOS token, or generation suffix.
+    vocabulary = {f"t{token_id}": token_id for token_id in range(256)}
+    tokenizer = {
+        "version": "1.0",
+        "truncation": None,
+        "padding": None,
+        "added_tokens": [],
+        "normalizer": None,
+        "pre_tokenizer": {"type": "WhitespaceSplit"},
+        "post_processor": None,
+        "decoder": {"type": "WordPiece", "prefix": "##", "cleanup": False},
+        "model": {
+            "type": "WordLevel",
+            "vocab": vocabulary,
+            "unk_token": "t0",
+        },
+    }
+    chat_template = "{% for message in messages %}{{ message['content'] }}{% endfor %}"
+    (output_dir / "tokenizer.json").write_text(json.dumps(tokenizer, sort_keys=True) + "\n")
+    (output_dir / "tokenizer_config.json").write_text(
+        json.dumps(
+            {
+                "tokenizer_class": "PreTrainedTokenizerFast",
+                "model_max_length": case.max_model_len,
+                "unk_token": "t0",
+                "chat_template": chat_template,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    (output_dir / "special_tokens_map.json").write_text(json.dumps({"unk_token": "t0"}, sort_keys=True) + "\n")
     workload = deterministic_workload()
     (output_dir / "workload.json").write_text(json.dumps(workload, indent=2, sort_keys=True) + "\n")
     boundary_workload = deterministic_boundary_workload(case)
