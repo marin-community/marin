@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
+from collections.abc import Sequence
 
 import pyarrow as pa
 import pyarrow.dataset as pds
@@ -45,13 +46,12 @@ _DEFAULT_PRIMARY_KEY = (WRITER_COLUMN, SEQ_COLUMN)
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 
 
-def _build_filter(where) -> pds.Expression | None:
-    """Translate ``where`` — an Expression, one ``(col, op, val)``, or a list of them — to a filter."""
-    if where is None or isinstance(where, pds.Expression):
-        return where
-    conditions = where if isinstance(where, list) else [where]
+def _build_filter(where: list[tuple[str, str, object]] | None) -> pds.Expression | None:
+    """Translate ``where`` — a list of ``(col, op, val)`` conditions ANDed together — to a filter."""
+    if not where:
+        return None
     expr: pds.Expression | None = None
-    for col, op, val in conditions:
+    for col, op, val in where:
         if op not in _SUPPORTED_OPS:
             raise ValueError(f"unsupported filter op {op!r}; expected one of {sorted(_SUPPORTED_OPS)}")
         field = pds.field(col)
@@ -85,18 +85,17 @@ class CompositeReader:
         pk = meta.get("primary_key") if meta else None
         return tuple(pk) if pk else _DEFAULT_PRIMARY_KEY
 
-    def schema_version(self, table: str) -> int | None:
-        meta = self._meta(table)
-        return meta.get("schema_version") if meta else None
-
     def _meta(self, table: str) -> dict | None:
         if table in self._meta_cache:
             return self._meta_cache[table]
+        # An absent _schema.json means the table was written without registered metadata; fall back
+        # to the default primary key. A present-but-corrupt file is a real fault and propagates.
         try:
             text = StoragePath(schema_path(self.root, table)).read_text()
-            meta = json.loads(text)
-        except (FileNotFoundError, ValueError):
+        except FileNotFoundError:
             meta = {}
+        else:
+            meta = json.loads(text)
         self._meta_cache[table] = meta
         return meta
 
@@ -105,12 +104,22 @@ class CompositeReader:
 
     # -- scan / point ------------------------------------------------------------------------------
 
-    def scan(self, table: str, *, columns=None, where=None, primary_key=None, dedup: bool = True) -> pa.Table | None:
+    def scan(
+        self,
+        table: str,
+        *,
+        columns: Sequence[str] | None = None,
+        where: list[tuple[str, str, object]] | None = None,
+        primary_key: Sequence[str] | None = None,
+        dedup: bool = True,
+    ) -> pa.Table | None:
         """Return the deduplicated rows of ``table``, projected to ``columns`` and filtered by ``where``.
 
-        Returns ``None`` when the table has no shards. When ``columns`` is given, only those column
-        chunks are read (fat columns a query does not select are never fetched), plus whatever the
-        deduplication key needs; the result is projected back to ``columns``.
+        ``where`` is a list of ``(column, op, value)`` conditions (``==``, ``!=``, ``in``) ANDed
+        together and pushed into the Parquet scan. Returns ``None`` when the table has no shards. When
+        ``columns`` is given, only those column chunks are read (fat columns a query does not select
+        are never fetched), plus whatever the deduplication key needs; the result is projected back to
+        ``columns``.
         """
         fs, _ = url_to_fs(self.root)
         shards = self._list_shards(fs, table)

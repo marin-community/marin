@@ -9,7 +9,7 @@ import json
 
 from finestore import CompositeReader
 from fsspec.core import url_to_fs
-from marin.evaluation.migrate_archive import archive_sample_count, migrate_run
+from marin.evaluation.migrate_archive import MigrationCounts, archive_sample_count, migrate_run
 from marin.evaluation.samples import (
     Choice,
     EvalSample,
@@ -55,8 +55,8 @@ def test_archive_row_round_trips_each_kind():
         correct=True,
     )
     for sample in (mcq, generation, agentic):
-        row = sample_to_archive_row(sample, run_id="run-1", trial_id="t")
-        assert row["run_id"] == "run-1"
+        row = sample_to_archive_row(sample, trial_id="t")
+        assert row["trial_id"] == "t"
         assert sample_from_archive_row(row) == sample
 
 
@@ -109,7 +109,7 @@ def test_migrate_legacy_run_into_archive(tmp_path):
     write_sample_parquet(fs, f"{results}/samples_harbor.parquet", [agentic])
 
     counts = migrate_run(results)
-    assert counts == {"samples": 2, "steps": 1, "trajectories": 1}
+    assert counts == MigrationCounts(samples=2, steps=1, trajectories=1)
     assert archive_sample_count(results) == 2
 
     # Re-running is idempotent: samples dedupe on their primary key.

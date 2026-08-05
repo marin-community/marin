@@ -14,12 +14,3 @@ from finestore.compaction import compact
 from finestore.layout import build_uri, parse_uri
 from finestore.reader import CompositeReader
 from finestore.store import DataStore, DataTable
-
-__all__ = [
-    "CompositeReader",
-    "DataStore",
-    "DataTable",
-    "build_uri",
-    "compact",
-    "parse_uri",
-]

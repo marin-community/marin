@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import finestore
 import pyarrow as pa
 from finestore import CompositeReader, DataStore, compact
 
@@ -181,7 +180,3 @@ def test_explicit_schema_is_enforced(tmp_path):
         store.flush()
     rows = _rows(CompositeReader(root), "samples")
     assert rows[0]["task"] == "arc"
-
-
-def test_public_surface():
-    assert {"DataStore", "DataTable", "CompositeReader", "compact"} <= set(finestore.__all__)

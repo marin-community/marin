@@ -5,7 +5,7 @@
 
 ``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Two commands:
 ``launch`` submits runs and optionally waits for their object-store records; ``backfill-samples``
-rewrites every run's per-sample parquet exports from its kept ``samples_*.jsonl`` sources.
+rebuilds every run's finestore sample archive from its kept ``samples_*.jsonl`` sources.
 """
 
 from __future__ import annotations

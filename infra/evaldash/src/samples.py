@@ -48,7 +48,9 @@ _ARCHIVE_URI_PREFIX = "finestore://"
 
 
 class SampleTask(BaseModel):
-    """One discovered task and the number of shards that contain its samples."""
+    """One discovered task. ``files`` is the number of parquet objects backing its samples: on the
+    archive path this is the run's whole ``samples``-table shard count (the same for every task); on
+    the legacy path it is the count of that task's per-(sub)task parquet files."""
 
     model_config = ConfigDict(frozen=True)
 

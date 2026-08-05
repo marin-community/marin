@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _COMPACTOR = "compactor"
 
 
-def compact(root: str, table: str, *, primary_key=None, delete_source: bool = True) -> int:
+def compact(root: str, table: str, *, delete_source: bool = True) -> int:
     """Compact ``table`` under ``root`` into one sorted shard; return the row count written.
 
     Returns 0 (writing nothing) when the table is empty or has no shards. When ``delete_source`` is
@@ -37,7 +37,7 @@ def compact(root: str, table: str, *, primary_key=None, delete_source: bool = Tr
     shards = reader.list_shards(table)
     if not shards:
         return 0
-    pk = tuple(primary_key) if primary_key is not None else reader.primary_key(table)
+    pk = reader.primary_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
 
     data = reader.scan(table, primary_key=pk, dedup=True)

@@ -15,14 +15,16 @@ export time) or ``generation`` (the model produced free text; ``output`` is the 
 API) or a chat message list (``prompt_messages``); exactly one is set. ``correct`` is resolved once
 at export time from the primary metric.
 
-Storage is one ``samples_<task>_<timestamp>.parquet`` per (sub)task next to the mechanism's native
-output, and the parquet schema is the pydantic model itself: the writer is ``model_dump`` and the
+A run's durable storage is one finestore archive rooted at its results directory (see the archive
+adapter below); the row schema is the pydantic model itself, so the writer is ``model_dump`` and the
 reader is ``model_validate``, with nested fields stored as parquet structs/lists. ``schema_version``
-is a model field, so it rides in every row for future evolution.
+is a model field, so it rides in every row for future evolution. The legacy per-(sub)task
+``samples_<task>_<timestamp>.parquet`` layout is still read by the dashboard's migration fallback.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from collections.abc import Iterable
@@ -365,15 +367,13 @@ def _task_from_filename(name: str, suffix: str) -> str:
 # --------------------------------------------------------------------------------------------------
 # finestore archive adapter: an eval run's durable output is one finestore archive rooted at its
 # results directory, with a ``samples`` table (one row per evaluated question, this contract), a
-# ``steps`` table (agentic trajectories flattened for column projection), and a ``blobs`` table (raw
-# trajectories and other opaque attachments). The samples row is the sample's JSON dump plus the
-# archive's ``run_id``/``trial_id`` keys; the reader ignores those extra keys when validating.
+# ``steps`` table (agentic trajectories flattened for column projection), and finestore's reserved
+# ``blobs`` table (raw trajectories and other opaque attachments). The samples row is the sample's
+# JSON dump plus the archive's ``trial_id`` key; the reader ignores that extra key when validating.
 # --------------------------------------------------------------------------------------------------
 
 ARCHIVE_SAMPLES_TABLE = "samples"
 ARCHIVE_STEPS_TABLE = "steps"
-ARCHIVE_BLOBS_TABLE = "blobs"
-ARCHIVE_BLOB_NAME_COLUMN = "name"
 
 # A sample is unique within a run by its task, its document, and (for multi-attempt Harbor runs) the
 # trial that produced it. evalchemy leaves ``trial_id`` empty: one attempt per document.
@@ -381,10 +381,9 @@ SAMPLES_PRIMARY_KEY = ("task", "doc_id", "trial_id")
 STEPS_PRIMARY_KEY = ("task", "doc_id", "trial_id", "step_id")
 
 
-def sample_to_archive_row(sample: EvalSample, *, run_id: str = "", trial_id: str = "") -> dict:
-    """One archive ``samples`` row: the sample's JSON-mode dump plus its run/trial archive keys."""
+def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
+    """One archive ``samples`` row: the sample's JSON-mode dump plus its ``trial_id`` archive key."""
     row = sample.model_dump(mode="json")
-    row["run_id"] = run_id
     row["trial_id"] = trial_id
     return row
 
@@ -394,7 +393,7 @@ def sample_from_archive_row(row: dict) -> EvalSample:
 
     Parquet unifies the metrics struct across a shard, so a row missing a metric another row carries
     reads back with that key null; a null means the metric is absent (an ungraded sample), not zero,
-    so it is dropped before validation. Archive-only keys (``run_id``, ``trial_id``, and finestore's
+    so it is dropped before validation. Archive-only keys (``trial_id`` and finestore's
     ``_seq``/``_writer``/``_gen`` bookkeeping columns) are ignored by the model.
     """
     metrics = row.get("metrics")
@@ -410,7 +409,7 @@ def _content_to_text(value: object) -> str | None:
     return json.dumps(value, ensure_ascii=False)
 
 
-def trajectory_step_rows(trajectory: dict, *, task: str, doc_id: str, trial_id: str, run_id: str = "") -> list[dict]:
+def trajectory_step_rows(trajectory: dict, *, task: str, doc_id: str, trial_id: str) -> list[dict]:
     """Flatten a trajectory's top-level steps into archive ``steps`` rows.
 
     Token-id and logprob arrays stay as native list columns (the RL signal a reader projects); nested
@@ -424,7 +423,6 @@ def trajectory_step_rows(trajectory: dict, *, task: str, doc_id: str, trial_id: 
         observation = step.get("observation")
         rows.append(
             {
-                "run_id": run_id,
                 "task": task,
                 "doc_id": doc_id,
                 "trial_id": trial_id,
@@ -461,9 +459,28 @@ def archive_steps_table(store: DataStore) -> DataTable:
     return store.table(ARCHIVE_STEPS_TABLE, primary_key=STEPS_PRIMARY_KEY, schema_version=SCHEMA_VERSION)
 
 
-def archive_blobs_table(store: DataStore) -> DataTable:
-    """Register and return the run's ``blobs`` table (raw trajectories and opaque attachments)."""
-    return store.table(ARCHIVE_BLOBS_TABLE, primary_key=(ARCHIVE_BLOB_NAME_COLUMN,))
+@dataclasses.dataclass(frozen=True)
+class StoredTrajectory:
+    """The result of archiving one raw trajectory: its blob reference and its flattened step rows."""
+
+    uri: str
+    steps: list[dict]
+
+
+def store_trajectory(store: DataStore, raw: bytes, *, task: str, doc_id: str, trial_id: str) -> StoredTrajectory:
+    """Store one raw trajectory as a blob and flatten its steps.
+
+    The payload is written once to the ``blobs`` table under ``<trial_id>/trajectory.json`` and
+    referenced by the returned ``finestore://`` URI; its top-level steps are flattened into ``steps``
+    rows. An unparseable payload still stores the blob but yields no step rows.
+    """
+    uri = store.write(f"{trial_id}/trajectory.json", {"task": task, "doc_id": doc_id, "trial_id": trial_id}, raw)
+    try:
+        trajectory = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("trajectory for trial %s is unparseable; storing the blob without steps", trial_id)
+        return StoredTrajectory(uri=uri, steps=[])
+    return StoredTrajectory(uri=uri, steps=trajectory_step_rows(trajectory, task=task, doc_id=doc_id, trial_id=trial_id))
 
 
 def export_lm_eval_samples_to_archive(out_path: str, *, writer_id: str = "evalchemy") -> int:

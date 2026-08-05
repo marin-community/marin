@@ -16,6 +16,7 @@ before the legacy files are retired.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 
@@ -29,19 +30,27 @@ from marin.evaluation.samples import (
     ARCHIVE_SAMPLES_TABLE,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
-    EvalSample,
     SampleKind,
     archive_samples_table,
     archive_steps_table,
     open_eval_archive,
     sample_from_archive_row,
     sample_to_archive_row,
-    trajectory_step_rows,
+    store_trajectory,
 )
 
 logger = logging.getLogger(__name__)
 
 _ARCHIVE_URI_PREFIX = "finestore://"
+
+
+@dataclasses.dataclass(frozen=True)
+class MigrationCounts:
+    """What one migration wrote: sample rows, flattened step rows, and pulled-in trajectory blobs."""
+
+    samples: int
+    steps: int
+    trajectories: int
 
 
 def _trial_id_from_uri(uri: str) -> str:
@@ -52,41 +61,13 @@ def _trial_id_from_uri(uri: str) -> str:
     return ""
 
 
-def _migrate_trajectory(store, sample: EvalSample) -> tuple[str, str | None, list[dict]]:
-    """Pull an agentic sample's legacy trajectory into the archive; return (trial_id, new_uri, steps)."""
-    uri = sample.trajectory_uri
-    if sample.kind != SampleKind.AGENTIC or not uri or uri.startswith(_ARCHIVE_URI_PREFIX):
-        return "", uri, []
-    trial_id = _trial_id_from_uri(uri)
-    try:
-        raw = StoragePath(uri).read_bytes()
-    except Exception as exc:
-        logger.warning("trajectory %s unreadable during migration (%s); keeping the original uri", uri, exc)
-        return trial_id, uri, []
-    new_uri = store.write(
-        f"{trial_id}/trajectory.json",
-        {"task": sample.task, "doc_id": sample.doc_id, "trial_id": trial_id},
-        raw,
-    )
-    step_rows: list[dict] = []
-    try:
-        trajectory = json.loads(raw)
-        step_rows = trajectory_step_rows(trajectory, task=sample.task, doc_id=sample.doc_id, trial_id=trial_id)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("trajectory %s unparseable during migration; skipping steps", uri)
-    return trial_id, new_uri, step_rows
-
-
-def migrate_run(results_path: str, *, writer_id: str = "migrate") -> dict[str, int]:
-    """Backfill one run's legacy sample parquets into its finestore archive.
-
-    Returns counts of ``samples``, ``steps``, and ``trajectories`` written. Safe to re-run.
-    """
+def migrate_run(results_path: str, *, writer_id: str = "migrate") -> MigrationCounts:
+    """Backfill one run's legacy sample parquets into its finestore archive. Safe to re-run."""
     fs, root = url_to_fs(results_path)
     store = open_eval_archive(results_path, writer_id=writer_id)
     samples = archive_samples_table(store)
     steps = archive_steps_table(store)
-    counts = {"samples": 0, "steps": 0, "trajectories": 0}
+    sample_count = step_count = trajectory_count = 0
     try:
         for path in fs.find(root):
             name = path.rsplit("/", 1)[-1]
@@ -98,18 +79,27 @@ def migrate_run(results_path: str, *, writer_id: str = "migrate") -> dict[str, i
                 table = pq.read_table(handle)
             for row in table.to_pylist():
                 sample = sample_from_archive_row(row)
-                trial_id, new_uri, step_rows = _migrate_trajectory(store, sample)
-                if step_rows:
-                    steps.extend(step_rows)
-                    counts["steps"] += len(step_rows)
-                    counts["trajectories"] += 1
-                if new_uri != sample.trajectory_uri:
-                    sample = sample.model_copy(update={"trajectory_uri": new_uri})
+                trial_id = ""
+                uri = sample.trajectory_uri
+                if sample.kind == SampleKind.AGENTIC and uri and not uri.startswith(_ARCHIVE_URI_PREFIX):
+                    trial_id = _trial_id_from_uri(uri)
+                    try:
+                        raw = StoragePath(uri).read_bytes()
+                    except Exception as exc:
+                        logger.warning("trajectory %s unreadable during migration (%s); keeping it", uri, exc)
+                    else:
+                        stored = store_trajectory(store, raw, task=sample.task, doc_id=sample.doc_id, trial_id=trial_id)
+                        sample = sample.model_copy(update={"trajectory_uri": stored.uri})
+                        if stored.steps:
+                            steps.extend(stored.steps)
+                            step_count += len(stored.steps)
+                            trajectory_count += 1
                 samples.append(sample_to_archive_row(sample, trial_id=trial_id))
-                counts["samples"] += 1
+                sample_count += 1
         store.seal()
     finally:
         store.close()
+    counts = MigrationCounts(samples=sample_count, steps=step_count, trajectories=trajectory_count)
     logger.info("migrated %s: %s", results_path, counts)
     return counts
 
@@ -127,7 +117,7 @@ def main(results_path: str, writer_id: str) -> None:
     """Backfill the finestore archive for the run at RESULTS_PATH."""
     logging.basicConfig(level=logging.INFO)
     counts = migrate_run(results_path, writer_id=writer_id)
-    click.echo(json.dumps(counts, indent=2))
+    click.echo(json.dumps(dataclasses.asdict(counts), indent=2))
 
 
 if __name__ == "__main__":

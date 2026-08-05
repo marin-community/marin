@@ -43,7 +43,7 @@ from marin.evaluation.samples import (
     archive_steps_table,
     open_eval_archive,
     sample_to_archive_row,
-    trajectory_step_rows,
+    store_trajectory,
 )
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
@@ -82,7 +82,7 @@ class HarborTrial:
 
 @dataclass(frozen=True)
 class HarborRunResult:
-    """The aggregate of one Harbor run, and where its per-sample parquet landed."""
+    """The aggregate of one Harbor run, and the root of the finestore archive it wrote."""
 
     dataset: str
     total_trials: int
@@ -90,7 +90,7 @@ class HarborRunResult:
     failed_trials: int
     mean_reward: float
     accuracy: float
-    samples_path: str | None
+    archive_path: str | None
 
     def task_metrics(self) -> dict[str, dict[str, float]]:
         """Metrics keyed like the evalchemy reader: ``{dataset: {metric: value}}``."""
@@ -204,6 +204,7 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
 
     Each trial's raw trajectory is stored once in the ``blobs`` table and referenced from the sample
     by a ``finestore://`` URI; its steps are flattened into the ``steps`` table for column projection.
+    Returns the archive root, or ``None`` when there are no trials to write.
     """
     if not trials:
         return None
@@ -214,20 +215,16 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
         for trial in trials:
             trajectory_uri = None
             if trial.trajectory_path is not None:
-                raw = StoragePath(trial.trajectory_path).read_bytes()
-                trajectory_uri = store.write(
-                    f"{trial.trial_id}/trajectory.json",
-                    {"task": dataset, "doc_id": trial.task_id, "trial_id": trial.trial_id},
-                    raw,
+                stored = store_trajectory(
+                    store,
+                    StoragePath(trial.trajectory_path).read_bytes(),
+                    task=dataset,
+                    doc_id=trial.task_id,
+                    trial_id=trial.trial_id,
                 )
-                try:
-                    trajectory = json.loads(raw)
-                except (json.JSONDecodeError, ValueError):
-                    logger.warning("trial %s has an unparseable trajectory; skipping steps", trial.trial_id)
-                else:
-                    rows = trajectory_step_rows(trajectory, task=dataset, doc_id=trial.task_id, trial_id=trial.trial_id)
-                    if rows:
-                        steps.extend(rows)
+                trajectory_uri = stored.uri
+                if stored.steps:
+                    steps.extend(stored.steps)
             sample = _sample_for(trial, dataset, trajectory_uri=trajectory_uri)
             samples.append(sample_to_archive_row(sample, trial_id=trial.trial_id))
         store.seal()
@@ -236,7 +233,7 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
     return output_dir
 
 
-def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None) -> HarborRunResult:
+def _aggregate(trials: list[HarborTrial], dataset: str, archive_path: str | None) -> HarborRunResult:
     total = len(trials)
     solved = sum(1 for trial in trials if trial.reward >= SOLVED_REWARD)
     failed = sum(1 for trial in trials if trial.error is not None)
@@ -248,7 +245,7 @@ def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None
         failed_trials=failed,
         mean_reward=(total_reward / total) if total else 0.0,
         accuracy=(solved / total) if total else 0.0,
-        samples_path=samples_path,
+        archive_path=archive_path,
     )
 
 
@@ -276,8 +273,8 @@ def _run_harbor_job(
             logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     trials = _read_trials(job_dir)
-    samples_path = _write_archive(trials, dataset, output_dir)
-    result = _aggregate(trials, dataset, samples_path)
+    archive_path = _write_archive(trials, dataset, output_dir)
+    result = _aggregate(trials, dataset, archive_path)
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
         json.dumps(
             {

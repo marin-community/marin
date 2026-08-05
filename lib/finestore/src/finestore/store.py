@@ -35,7 +35,6 @@ from finestore.layout import (
     sealed_path,
     shard_path,
 )
-from finestore.reader import CompositeReader
 
 logger = logging.getLogger(__name__)
 
@@ -102,15 +101,11 @@ class DataStore:
         root: str,
         *,
         writer_id: str | None = None,
-        mode: str = "append",
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
         max_buffer_rows: int = DEFAULT_MAX_BUFFER_ROWS,
     ) -> None:
-        if mode not in ("append", "read"):
-            raise ValueError(f"mode must be 'append' or 'read', got {mode!r}")
         self.root = root.rstrip("/")
         self.writer_id = writer_id or _default_writer_id()
-        self.mode = mode
         self._flush_interval = flush_interval
         self._max_buffer_rows = max_buffer_rows
         self._tables: dict[str, _Buffer] = {}
@@ -120,14 +115,12 @@ class DataStore:
         self._stop = threading.Event()
         self._error: BaseException | None = None
         self._closed = False
-        self._thread: threading.Thread | None = None
-        if mode == "append":
-            self._thread = threading.Thread(target=self._run, name="finestore-flush", daemon=True)
-            self._thread.start()
+        self._thread = threading.Thread(target=self._run, name="finestore-flush", daemon=True)
+        self._thread.start()
 
     @classmethod
     def open(cls, root: str, **kwargs) -> DataStore:
-        """Open an archive for writing (``mode='append'``) or reading (``mode='read'``)."""
+        """Open an archive for writing under ``root``, produced by one ``writer_id``."""
         return cls(root, **kwargs)
 
     # -- table registration ------------------------------------------------------------------------
@@ -140,7 +133,7 @@ class DataStore:
         primary_key: Sequence[str] | None = None,
         schema_version: int = 1,
     ) -> DataTable:
-        """Register (or fetch) a table and return a handle for appending and reading it.
+        """Register (or fetch) a table and return a handle for appending to it.
 
         ``primary_key`` names the columns a reader deduplicates on; it is persisted to the table's
         ``_schema.json`` so readers that did not open the writer can recover it.
@@ -151,8 +144,7 @@ class DataStore:
                 pk = tuple(primary_key) if primary_key is not None else None
                 buffer = _Buffer(name=name, primary_key=pk, schema=schema, schema_version=schema_version)
                 self._tables[name] = buffer
-                if self.mode == "append":
-                    self._write_schema_meta(buffer)
+                self._write_schema_meta(buffer)
         return DataTable(self, name)
 
     def _write_schema_meta(self, buffer: _Buffer) -> None:
@@ -167,8 +159,6 @@ class DataStore:
 
     def _append(self, table: str, rows: Iterable[dict]) -> None:
         self._raise_if_failed()
-        if self.mode != "append":
-            raise RuntimeError("cannot append to a store opened in read mode")
         buffer = self._tables.get(table)
         if buffer is None:
             raise KeyError(f"table {table!r} is not registered; call store.table({table!r}, ...) first")
@@ -265,19 +255,9 @@ class DataStore:
         if self._error is not None:
             raise self._error
 
-    # -- read convenience --------------------------------------------------------------------------
-
-    def reader(self) -> CompositeReader:
-        """A reader over this archive (composes every writer's shards)."""
-        return CompositeReader(self.root)
-
-    def resolve(self, uri: str):
-        """Resolve a ``finestore://`` reference against this archive (see :meth:`CompositeReader.resolve`)."""
-        return self.reader().resolve(uri)
-
 
 class DataTable:
-    """A handle to one table: append on the write side, scan/point on the read side."""
+    """An append-only handle to one table. Reads go through :class:`CompositeReader`."""
 
     def __init__(self, store: DataStore, name: str) -> None:
         self._store = store
@@ -290,11 +270,3 @@ class DataTable:
     def extend(self, rows: Iterable[dict]) -> None:
         """Buffer many rows for the next flush."""
         self._store._append(self.name, rows)
-
-    def scan(self, *, columns: Sequence[str] | None = None, where=None):
-        """Read this table (deduplicated) — see :meth:`CompositeReader.scan`."""
-        return self._store.reader().scan(self.name, columns=columns, where=where)
-
-    def point(self, **keys):
-        """Look up one row by its primary-key columns — see :meth:`CompositeReader.point`."""
-        return self._store.reader().point(self.name, **keys)
