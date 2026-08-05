@@ -116,8 +116,7 @@ class ScopedCounters:
         worker = _worker_ctx_var.get()
         if worker is None:
             return {}
-        snap = worker.get_counter_snapshot()
-        return {k: e.value for k, e in snap.counters.items() if e.stage == self._stage}
+        return worker.counter_values(self._stage)
 
 
 pipeline: ScopedCounters = ScopedCounters(stage=None)
