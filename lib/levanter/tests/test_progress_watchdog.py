@@ -22,6 +22,7 @@ def test_watchdog_ignores_first_compile_then_times_out_a_steady_state_step(monke
     watchdog = ProgressWatchdog(
         step_timeout=timedelta(milliseconds=30),
         process_timeout=timedelta(seconds=1),
+        startup_grace_period=timedelta(0),
         poll_interval=0.005,
     )
 
@@ -36,6 +37,29 @@ def test_watchdog_ignores_first_compile_then_times_out_a_steady_state_step(monke
     assert exit_codes == [STALLED_TRAINING_EXIT_CODE]
 
 
+def test_watchdog_waits_for_startup_grace_period_before_terminating(monkeypatch):
+    terminated = Event()
+    current_time = 0.0
+
+    monkeypatch.setattr(progress_watchdog_module.os, "_exit", lambda _exit_code: terminated.set())
+    monkeypatch.setattr(progress_watchdog_module, "monotonic", lambda: current_time)
+    watchdog = ProgressWatchdog(
+        step_timeout=timedelta(seconds=1),
+        process_timeout=timedelta(seconds=1),
+        poll_interval=0.005,
+    )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
+
+    current_time = timedelta(hours=1).total_seconds() - 1
+    assert not terminated.wait(timeout=0.03)
+
+    current_time = timedelta(hours=1).total_seconds()
+    assert terminated.wait(timeout=1)
+    watchdog.stop()
+
+
 def test_watchdog_uses_process_timeout_during_evaluation(monkeypatch):
     terminated = Event()
     current_time = 0.0
@@ -45,8 +69,10 @@ def test_watchdog_uses_process_timeout_during_evaluation(monkeypatch):
     watchdog = ProgressWatchdog(
         step_timeout=timedelta(milliseconds=30),
         process_timeout=timedelta(seconds=1),
+        startup_grace_period=timedelta(0),
         poll_interval=0.005,
     )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
     watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
     watchdog.on_event(ProgressEvent.EVALUATION_STARTED)
 
@@ -70,8 +96,10 @@ def test_watchdog_terminates_an_evaluation_that_stops_progress(monkeypatch):
     watchdog = ProgressWatchdog(
         step_timeout=timedelta(milliseconds=30),
         process_timeout=timedelta(milliseconds=80),
+        startup_grace_period=timedelta(0),
         poll_interval=0.005,
     )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
     watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
     watchdog.on_event(ProgressEvent.EVALUATION_STARTED)
 
@@ -95,10 +123,12 @@ def test_watchdog_runs_diagnostic_before_exit(monkeypatch):
     watchdog = ProgressWatchdog(
         step_timeout=timedelta(milliseconds=30),
         process_timeout=timedelta(seconds=1),
+        startup_grace_period=timedelta(0),
         diagnostic=diagnostic,
         diagnostic_timeout=timedelta(milliseconds=100),
         poll_interval=0.005,
     )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
     watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
     watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
 
@@ -115,10 +145,12 @@ def test_watchdog_diagnostic_cannot_postpone_exit(monkeypatch):
     watchdog = ProgressWatchdog(
         step_timeout=timedelta(milliseconds=30),
         process_timeout=timedelta(seconds=1),
+        startup_grace_period=timedelta(0),
         diagnostic=lambda _timeout: never_returns.wait(),
         diagnostic_timeout=timedelta(milliseconds=30),
         poll_interval=0.005,
     )
+    watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
     watchdog.on_event(ProgressEvent.TRAIN_STEP_FINISHED)
     watchdog.on_event(ProgressEvent.TRAIN_STEP_STARTED)
 
