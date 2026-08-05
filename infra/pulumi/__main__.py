@@ -229,9 +229,9 @@ def _build_gcp(cluster: str, *, adopt: bool) -> None:
 def main() -> None:
     config = pulumi.Config("marin-iac")
     cluster = config.require("cluster")
-    # Adoption recon: `pulumi config set marin-iac:import true` stamps import_ on every
-    # resource so `pulumi preview` shows the real adoption diff (provider- and parent-correct)
-    # instead of planning creates. Never run `pulumi up` through a destructive NodePool diff.
+    # Adoption recon: `pulumi config set marin-iac:import true` imports resources that cannot be
+    # adopted through an idempotent create. GCP IAM member grants deliberately keep the provider's
+    # idempotent create path; see GcpIamArgs. Never apply a destructive NodePool diff.
     adopt = config.get_bool("import") or False
     provider = load_provisioning(cluster).provider
     if provider is Provider.COREWEAVE:

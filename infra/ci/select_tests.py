@@ -41,6 +41,7 @@ SCOPES: tuple[str, ...] = (
     "marin",
     "dupekit",
     "finelog",
+    "iac",
 )
 
 
@@ -55,7 +56,8 @@ class SourceRoot:
 
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
-    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES),
+    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope != "iac"),
+    SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("experiments", "."),
 )
 
@@ -83,14 +85,17 @@ UV_PACKAGE: dict[str, str] = {
     "marin": "marin-core",
     "dupekit": "marin-dupekit",
     "finelog": "marin-finelog",
+    "iac": "marin-iac",
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
+    "iac": ["deploy"],
 }
 
 TEST_DIR: dict[str, str] = {
-    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope != "marin"},
+    **{scope: f"lib/{scope}/tests" for scope in UV_PACKAGE if scope not in {"iac", "marin"}},
+    "iac": "infra/pulumi/tests",
     "marin": "tests",
 }
 
