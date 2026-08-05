@@ -74,6 +74,8 @@ from .conftest import (
 # Test Helpers
 # =============================================================================
 
+ENDPOINT_SERVICE = "EndpointService"
+
 
 def submit_job(
     state: ControllerTestState,
@@ -438,7 +440,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service="EndpointService")
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
 
     assert len(endpoints) == 2
@@ -465,7 +467,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service="EndpointService")
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
     assert len(endpoints) == 1
     # The response must carry the full task_id (including task index) so the
@@ -504,7 +506,7 @@ def test_list_endpoints_filters_by_task_ids(client, state):
                 ),
             )
 
-    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service="EndpointService")
+    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
     assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
     assert endpoints[0]["name"] == "/svc/ep-0"

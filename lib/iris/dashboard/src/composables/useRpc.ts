@@ -108,7 +108,6 @@ export function useControllerRpc<T>(
   return useRpc<T>(CONTROLLER_SERVICE_PATH, method, body)
 }
 
-/** RPC composable for EndpointService endpoints. */
 export function useEndpointRpc<T>(
   method: string,
   body?: RpcBody,
@@ -143,7 +142,6 @@ export function controllerRpcCall<T>(method: string, body?: Record<string, unkno
   return rpcCall<T>(CONTROLLER_SERVICE_PATH, method, body)
 }
 
-/** One-shot RPC call for EndpointService. */
 export function endpointRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   return rpcCall<T>(ENDPOINT_SERVICE_PATH, method, body)
 }
