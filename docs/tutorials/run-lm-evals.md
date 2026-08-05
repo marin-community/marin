@@ -38,6 +38,38 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
+## Launch file-backed evaluations
+
+Use `--evalchemy-config` for an Evalchemy or lm-eval definition that does not belong in the central
+registry. This dry run resolves the checked-in IFEval definition without opening Iris:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
+  --dry-run
+```
+
+The option is repeatable. It composes with registry selections and Harbor policy files, so one
+served model can run all three sources:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evals mmlu-smoke \
+  --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml \
+  --limit 2 \
+  --dry-run
+```
+
+Each config file is one evaluation with its own `record.json`. Marin decodes the launch YAML without
+importing Evalchemy, then the evaluation child invokes the `evalchemy` console script from the pinned
+external runtime. A dry run checks the YAML shape and launch plan; unavailable task names fail when
+the Evalchemy process starts. The record keeps the normalized launch-time task routing, few-shot
+counts, generation arguments, concurrency, context limit, and instance limit under `eval.tasks` and
+`eval.evalchemy`. Its provenance stores the exact Evalchemy requirement and optional runtime extras.
+
 ### Command recipes
 
 Run a capped Evalchemy smoke on the smallest registered Qwen model:
@@ -206,6 +238,9 @@ documents how to register a Hugging Face model or object-store checkpoint.
 
 - `--evals smoke` selects a named suite. `--evals mmlu,gsm8k` selects explicit keys. One invocation
   may mix Evalchemy and Harbor keys.
+- `--evalchemy-config path.yaml` adds one portable Evalchemy or lm-eval definition. Repeat the option
+  for multiple files.
+- `--harbor-config path.yaml` adds one Harbor policy. Repeat the option for multiple files.
 - `--limit N` overrides the configured instance cap for every selected evaluation.
 - `--no-wait` returns after Iris submission. Without it, the command waits for terminal records and
   prints their metrics.
@@ -237,10 +272,11 @@ TPU-routed runs default to `gs://marin-eval-metadata/evals`. CoreWeave GPU runs 
 `s3://marin-us-east-02a/marin/evals`. `--dry-run` prints the effective prefix.
 
 Every selected evaluation writes `{records_prefix}/{run_id}/record.json` plus its mechanism-specific
-results and normalized sample parquet. Harbor also persists trial directories and trajectories in
-the same GCS or S3 results tree. A Harbor trial with `exception_info` marks the evaluation failed
-after its artifacts are saved; a verifier-scored zero without an exception remains a completed
-evaluation with a zero score.
+results and normalized sample parquet. Evalchemy records include the normalized launch configuration;
+Harbor records include the dataset, agent, environment, task limit, and source-policy
+digest. Harbor also persists trial directories and trajectories in the same GCS or S3 results tree.
+A Harbor trial with `exception_info` marks the evaluation failed after its artifacts are saved; a
+verifier-scored zero without an exception remains a completed evaluation with a zero score.
 
 [Evaldash](https://evaldash.oa.dev) indexes records from both default stores. The record is the
 source of truth for model, evaluation identity, status, metrics, hardware, provenance, and Iris job

@@ -43,8 +43,9 @@ uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8
 ```
 
 Key options: `--evals` takes a suite name (`smoke`, `core`) or comma-separated eval keys
-(`gsm8k,mmlu-smoke`); `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the
-sizing heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
+(`gsm8k,mmlu-smoke`); repeatable `--evalchemy-config` and `--harbor-config` options add evaluator-native
+files; `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the sizing
+heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
 `--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
 band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
 launcher always submits through the `marin` Iris controller.
@@ -67,11 +68,12 @@ uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
 is the source of truth: model, hardware, status (`succeeded` / `failed` / `infra_failed`), the
-per-task metrics, provenance, the `group_id` shared by every eval from the same serve, and the iris
-job paths of every job behind the run (`jobs`: orchestrator, the shared inference child, this eval's
-child). The orchestrator writes it on success and on failure, so a failed run is still accounted
-for -- and a failure carries the failed child's last 100 log lines (`log_tails`), so most failures
-are diagnosable straight from the record (or the dashboard) without cluster access.
+per-task metrics, provenance, normalized evaluator configuration, the `group_id` shared by every eval
+from the same serve, and the iris job paths of every job behind the run (`jobs`: orchestrator, the
+shared inference child, this eval's child). The orchestrator writes it on success and on failure, so
+a failed run is still accounted for -- and a failure carries the failed child's last 100 log lines
+(`log_tails`), so most failures are diagnosable straight from the record (or the dashboard) without
+cluster access.
 
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
@@ -90,6 +92,40 @@ version="2026.07.19")` is a lazy, versioned handle. The step submits the same CP
 the CLI and writes eval outputs to the launcher's shared `evals` root; its artifact path contains the
 pipeline cache record. The slice override is a runtime arg, so changing it does not change the artifact
 identity.
+
+## Evalchemy config files
+
+Use repeatable `--evalchemy-config` options to launch portable Evalchemy YAML or JSON without adding
+entries to `EVALS`. Each file is one evaluation and produces one record. Files can select Evalchemy
+chat benchmarks or lm-eval tasks through the same `tasks` list:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b \
+  --evalchemy-config experiments/evaluation/configs/evalchemy/ifeval.yaml \
+  --dry-run
+```
+
+Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
+The evaluation child then invokes the `evalchemy` console script from the pinned external runtime.
+A dry run checks the YAML shape and the resolved Marin launch plan; task availability is checked when
+the Evalchemy process starts. [evalchemy#67](https://github.com/marin-community/evalchemy/issues/67)
+tracks a CLI validation mode that can move task-catalog errors back before Iris submission.
+
+`tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
+`task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
+`apply_chat_template`, `limit`, `batch_size`, `seed`, `gen_kwargs`, `extra_model_args`, `max_length`,
+and `max_tokens`. `runtime_extras` names optional Evalchemy dependency groups required by custom task
+packages, such as `ifeval`. `apply_chat_template` defaults to the model catalog when omitted; an
+explicit file value overrides it. The model catalog supplies generation overlays, and an explicit
+launcher `--limit` overrides the file limit. `record.json` stores the resulting task
+options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
+record provenance stores the exact Evalchemy requirement, including runtime extras.
+
+`--evalchemy-config` is additive with registry `--evals` and file-backed `--harbor-config`. The
+launcher preserves argument order by source: registry entries, Evalchemy files, then Harbor files.
+When no selection option is supplied, the launcher uses `smoke`; any file-only launch suppresses that
+default.
 
 ## Agentic benchmarks (Harbor)
 
@@ -192,14 +228,15 @@ Every explicit `serve` value wins over what `auto_serve_overrides` derives from 
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
 
-Add an `EvalchemyDefinition` to `EVALS` in `evals.py`, or add a same-named Harbor `JobConfig` YAML
-under `configs/harbor/` and reference it with `harbor_definition()`. Add the key to `SUITES` when it
-belongs in a named group. Task flags that matter for served evals:
+Add a same-named Evalchemy YAML file under `configs/evalchemy/` and add its name to
+`_STANDARD_EVALCHEMY_EVALS` in `evals.py`, or add a Harbor `JobConfig` YAML under `configs/harbor/`
+and reference it with `harbor_definition()`. Add the key to `SUITES` when it belongs in a named group.
+Task flags that matter for served evals:
 `generation` routes the task through the chat API for chat-template models (MCQ tasks always use
 completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
 `--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.
 
-Use `_chat_eval` for a benchmark under Evalchemy's `eval/chat_benchmarks` tree. It normalizes the
-task directory into the matching Evalchemy extra, so adding a benchmark installs its endpoint and
-grading dependencies without rebuilding an image. The isolated client also installs CPU-only
-PyTorch as a compatibility floor; inference remains in the separately served model process.
+For a benchmark under Evalchemy's `eval/chat_benchmarks` tree, set `runtime_extras` to its matching
+Evalchemy extra so the endpoint and grading dependencies are installed without rebuilding an image.
+The isolated client also installs CPU-only PyTorch as a compatibility floor; inference remains in
+the separately served model process.

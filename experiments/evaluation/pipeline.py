@@ -51,7 +51,8 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
     spec = LaunchSpec(
         model=config.model,
         evals=keys,
-        harbor_configs=(),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
         platform=default_platform(models()[config.model]),
         accelerator=config.accelerator,
         limit=config.limit,

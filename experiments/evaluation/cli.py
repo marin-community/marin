@@ -24,10 +24,9 @@ from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.evaluation.evals import EVALS, SUITES
+from experiments.evaluation.evals import EVALS, SUITES, EvalchemyDefinition, HarborDefinition
 from experiments.evaluation.launch import (
     EVALUATION_CONTROLLER_CLUSTER,
-    HarborConfigSelection,
     LaunchSpec,
     launch_group,
     prepare_evaluation_batch,
@@ -77,6 +76,12 @@ def cli() -> None:
     help="Suite name (e.g. 'smoke') or comma-separated eval keys; defaults to smoke.",
 )
 @click.option(
+    "--evalchemy-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    multiple=True,
+    help="Portable Evalchemy YAML or JSON. Repeatable and additive with --evals and --harbor-config.",
+)
+@click.option(
     "--harbor-config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     multiple=True,
@@ -118,6 +123,7 @@ def cli() -> None:
 def launch(
     model: str,
     evals_arg: str | None,
+    evalchemy_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
     platform: str | None,
     accelerator: str | None,
@@ -136,22 +142,30 @@ def launch(
         raise click.BadParameter(f"unknown model {model!r}; known: {sorted(catalog)}")
     model_config = catalog[model]
     resolved_platform = Platform(platform) if platform else default_platform(model_config)
-    harbor_configs = [
-        HarborConfigSelection(
+    evalchemy_definitions = [
+        EvalchemyDefinition(
             name=canonical_served_name(path.stem),
-            path=path,
+            config_path=path,
+        )
+        for path in evalchemy_config
+    ]
+    harbor_definitions = [
+        HarborDefinition(
+            name=canonical_served_name(path.stem),
+            config_path=path,
         )
         for path in harbor_config
     ]
     evals = (
         _resolve_eval_keys(evals_arg)
         if evals_arg is not None
-        else (() if harbor_configs else _resolve_eval_keys("smoke"))
+        else (() if evalchemy_definitions or harbor_definitions else _resolve_eval_keys("smoke"))
     )
     spec = LaunchSpec(
         model=model,
         evals=evals,
-        harbor_configs=tuple(harbor_configs),
+        evalchemy_definitions=tuple(evalchemy_definitions),
+        harbor_definitions=tuple(harbor_definitions),
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
@@ -164,7 +178,7 @@ def launch(
     try:
         batch = prepare_evaluation_batch(spec)
     except ValueError as exc:
-        param_hint = "--harbor-config" if harbor_config else "--evals"
+        param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
         raise click.BadParameter(str(exc), param_hint=param_hint) from exc
     if dry_run:
         _print_plan(spec, batch)
