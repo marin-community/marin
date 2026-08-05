@@ -765,3 +765,35 @@ The current Levanter code already contains a `ragged_all_to_all` EP backend. Thu
 - Next action: MHEP-012 (capacity sweep) is now necessary rather than optional, because the drop
   gap of 8.1 percentage points funds part of the EP lead. MHEP-011 (FSDP at expert_chunks=1) remains
   the cheapest way to attribute the rest.
+
+### 2026-08-05 01:00 UTC - MHEP-011 to MHEP-016 queued: size ladder and capacity sweep
+
+- Code snapshot: `5c7d9d2aa`. The EP launcher takes `--num-experts`, `--intermediate-dim`, and
+  `--capacity-factor`, and rejects a bank that does not divide the 64-way expert axis.
+- W&B: All six runs and `mhep-009b` write live to entity `marin-community`, project `rav_moe`.
+- Common settings: EP64, one rack, `--shape fsdp`, 25 steps, batch 1024, d6144, 48 layers, top-4,
+  two shared experts, host offload of the optimizer state.
+
+Size ladder. Each keeps 256 experts (four per device) and about 20 B active parameters, and each is
+larger than any shape measured on this rack before. Estimates come from a 64-device shape check.
+
+| run | experts x width | total | active | resident estimate | headroom |
+| --- | --- | --- | --- | --- | --- |
+| `mhep-011` | 256 x i2560 | 591.6 B | 19.9 B | 140.6 GiB | 32.6 GiB |
+| `mhep-012` | 256 x i2816 | 649.6 B | 20.8 B | 149.0 GiB | 24.2 GiB |
+| `mhep-013` | 256 x i3072 | 707.6 B | 21.7 B | 157.5 GiB | 15.8 GiB |
+
+- Expectation: `mhep-011` fits. `mhep-013` is at the estimate boundary and can fail, because the
+  estimate omits the FA4 workspace, the cross-entropy logit blocks, NCCL buffers, fragmentation, and
+  the Newton-Schulz transient (about 7 GiB at four experts per device). An OOM there is a result.
+- A fourth candidate, 512 x i1536 at top-8, estimates 167.2 GiB with 6.1 GiB of headroom. It was not
+  queued, because it fails the same estimate by a larger margin.
+
+Capacity sweep at the measured MHEP-009 shape (128 x i3072, top-4), where capacity 1.0 dropped
+9.9683% of assignments: `mhep-014` at 1.125, `mhep-015` at 1.25, `mhep-016` at 1.5. Cell capacity
+goes from 2,048 rows to 2,304, 2,560, and 3,072. The native EP hero measured a 4.1% relative MFU
+cost for capacity 1.0625, thus a cost is expected here as well.
+
+- Purpose: Price the drop correction that the MHEP-009 versus MHEP-010 comparison currently carries.
+- Cluster note: Seven of our gangs are queued at once against a saturated A08. They serialize. This
+  is a deliberate choice to keep the queue full while 12-rack runs cycle.
