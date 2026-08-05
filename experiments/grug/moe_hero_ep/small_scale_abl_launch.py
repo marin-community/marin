@@ -15,12 +15,14 @@ Each ``--size`` submits one 1-rack (16 x GB200x4 = EP64) job.
 
 import dataclasses
 import math
+from datetime import timedelta
 
 import click
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -29,6 +31,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
+from rigging.filesystem import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -53,6 +56,10 @@ SEQ_LEN = 8192
 SLIDING_WINDOW = 512
 GLOBAL_EVERY = 4
 EVAL_BATCH_SIZE = 256
+# These runs are hours long, so they checkpoint: the trainer restores from the latest committed
+# checkpoint, and an interrupted run would otherwise restart at step 0. A d1280 checkpoint is about
+# 38 GB, against 2.7 TiB at the d6144 hero shape.
+CHECKPOINT_INTERVAL = timedelta(minutes=30)
 
 # Paloma + uncheatable held-out sets (marin_tokenizer), added as zero-train-weight datakit components
 # so they surface as tagged eval sets -- matching the FSDP sweep.
@@ -104,7 +111,7 @@ SMALL_SHAPES: dict[str, SmallShape] = {
 }
 
 
-def _small_model(shape: SmallShape) -> GrugModelConfig:
+def _small_model(shape: SmallShape, capacity_factor: float) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
     Every routing/MoE/attention-kernel field is kept from the d6144 hero shape; only the width,
@@ -128,7 +135,7 @@ def _small_model(shape: SmallShape) -> GrugModelConfig:
         max_seq_len=SEQ_LEN,
         sliding_window=SLIDING_WINDOW,
         global_every=GLOBAL_EVERY,
-        capacity_factor=1.0,
+        capacity_factor=capacity_factor,
         initializer_std=0.5 / math.sqrt(shape.hidden_dim),
         qk_mult=1.3,
         sconv=True,
@@ -149,7 +156,12 @@ def _root_component(component: DatasetComponent | ConcatDatasetComponent) -> Dat
 
 
 def build_small_run(
-    *, run_id: str, size: str, target: str = "gb200-rack", version: str | None = None
+    *,
+    run_id: str,
+    size: str,
+    target: str = "gb200-rack",
+    capacity_factor: float = 1.0,
+    version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One expert-parallel run of the downsized hero shape ``size`` at its 60x token budget."""
     if not run_id.strip():
@@ -161,7 +173,7 @@ def build_small_run(
 
     shape = SMALL_SHAPES[size]
     fleet = TARGETS[target]
-    model = _small_model(shape)
+    model = _small_model(shape, capacity_factor)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=shape.num_steps,
         batch_size=SMALL_BATCH_SIZE,
@@ -174,6 +186,7 @@ def build_small_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=False,  # small models fit HBM; host offload destabilized small runs
+        save_checkpoints=True,
         expert_axis_size=fleet.expert_axis_size,
         replica_axis_size=1,
         sharding_dump_path=None,
@@ -202,7 +215,17 @@ def build_small_run(
             tracker=WandbConfig(
                 entity="marin-community",
                 project=DEFAULT_WANDB_PROJECT,
-                tags=["grug", "moe", "hero", "ep", "small-abl", f"shape-{size}", target, "MHEP"],
+                tags=[
+                    "grug",
+                    "moe",
+                    "hero",
+                    "ep",
+                    "small-abl",
+                    f"shape-{size}",
+                    f"capacity-{capacity_factor:g}",
+                    target,
+                    "MHEP",
+                ],
                 group="moe-hero-ep-small-abl",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -211,6 +234,15 @@ def build_small_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
+            checkpointer=CheckpointerConfig(
+                base_path=prefix_join(ctx.output_path, "checkpoints"),
+                temporary_base_path=None,
+                save_interval=CHECKPOINT_INTERVAL,
+                keep=None,
+                append_run_id_to_base_path=False,
+                delete_old_temp_checkpoints=True,
+                keep_last_temporary_checkpoints=1,
+            ),
         )
         # Datakit two-phase mixture, marin_prefix-rooted (relative bucket paths resolve against the
         # cluster's region-local prefix). Paloma + uncheatable ride in as zero-train-weight components
@@ -271,9 +303,16 @@ def build_small_run(
     show_default=True,
     help="Accelerator fleet for the run. The expert axis spans every GPU it holds.",
 )
+@click.option(
+    "--capacity-factor",
+    type=click.FloatRange(min=0, min_open=True),
+    default=1.0,
+    show_default=True,
+    help="Fixed all-to-all capacity factor. Higher values drop fewer assignments and pad more.",
+)
 @build_options
-def main(run_id: str, size: str, target: str) -> ArtifactStep[HeroThroughputResult]:
-    return build_small_run(run_id=run_id, size=size, target=target)
+def main(run_id: str, size: str, target: str, capacity_factor: float) -> ArtifactStep[HeroThroughputResult]:
+    return build_small_run(run_id=run_id, size=size, target=target, capacity_factor=capacity_factor)
 
 
 if __name__ == "__main__":
