@@ -17,7 +17,7 @@ object, and there is no manifest to keep consistent.
 
 Rows carry a caller-defined schema plus two stamped columns: `_writer` (the
 producing writer) and `_seq` (a per-writer monotonic id). A table declares a
-`primary_key`; the reader keeps one row per key.
+`merge_key`; the reader keeps one row per key (the latest write wins).
 
 `DataStore.write(name, metadata, data)` stores an opaque payload in the `blobs`
 table and returns a `finestore://blobs/<name>` reference. A sample row holds
@@ -32,7 +32,7 @@ from finestore.store import DataStore
 from finestore.reader import CompositeReader
 
 with DataStore.open("gs://bucket/run/results", writer_id="evalchemy") as store:
-    samples = store.table("samples", primary_key=("task", "doc_id"))
+    samples = store.table("samples", merge_key=("task", "doc_id"))
     samples.append({"task": "arc", "doc_id": "1", "correct": True})
     store.seal()  # mark the run complete
 
@@ -43,29 +43,31 @@ table = reader.scan("samples", columns=["task", "doc_id", "correct"],
 
 ## On-disk layout
 
-An archive lives entirely under `{root}/_finestore/`, so it never collides with
-sibling data under the same run prefix. Each table is a directory of immutable
+An archive owns its root directory. Each table is a subdirectory of immutable
 shards, partitioned by the writer that produced them and the compaction
 generation they belong to:
 
 ```
-{root}/_finestore/
+{root}/
     SEALED                                   # optional: the run is complete
-    {table}/_schema.json                     # primary key + schema version
+    {table}/_schema.json                     # merge key + schema version
     {table}/w={writer}/g={gen}/{seq:016d}-{uid}.parquet
 ```
 
 Shard membership is discovered by listing the table directory. A shard's schema
 and row-group statistics come from its Parquet footer. `_schema.json` records
-only what a footer cannot — the dedup primary key and a logical schema version —
+only what a footer cannot — the dedup merge key and a logical schema version —
 and is the archive's whole "manifest". The writer and generation are encoded in
-the object key and recovered by listing; nothing else references a shard.
+the object key and recovered by listing; nothing else references a shard. A
+caller that shares the root with sibling data (an eval run's results directory
+also holds JSON and legacy parquet) passes a dedicated subdirectory as the root;
+finestore does not impose one.
 
 ## Read semantics
 
 `scan` lists a table's shards, unifies their footers' schemas (a column a later
 writer added is promoted to null for older shards), reads only the projected
-columns plus whatever the dedup key needs, and deduplicates by primary key. For
+columns plus whatever the merge key needs, and deduplicates by merge key. For
 each key it keeps the row from the highest compaction generation, breaking ties
 by the highest `_seq`. That single rule makes a duplicate delivery, a retried
 flush, and a crash mid-compaction all converge to one row without coordination.
@@ -96,12 +98,16 @@ once, after every writer has finished, to drop the `SEALED` marker.
 
 ## Compaction
 
-`compact(root, table)` merges a table's level-0 shards into one next-generation
-shard, sorted by primary key. It writes the merged shard first, then deletes the
-sources. Compaction is optional and safe to run at any time — end of run, or in
-the background — because the dedup rule already yields correct reads across mixed
-generations. It reduces object count and improves read locality; it does not
-change query results.
+`compact(root, table)` streams a k-way merge over a table's shards in merge-key
+order and writes the surviving rows to one next-generation shard, one row group
+at a time, then deletes the shards it superseded. The merge is bounded in memory:
+a compacted shard (already in merge-key order) streams a row group at a time,
+while a level-0 shard — one flush, bounded by the writer's row cap — is sorted in
+memory, so an archive far larger than memory still compacts. Both the store flush
+and this merge write through the same `ShardWriter`. Compaction is optional and
+safe to run at any time — end of run, or in the background — because the dedup
+rule already yields correct reads across mixed generations. It reduces object
+count and improves read locality; it does not change query results.
 
 ## Recovery
 

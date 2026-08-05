@@ -259,7 +259,7 @@ def test_completed_trial_is_durable_across_driver_termination_and_restored(proto
     # The resumed driver produced no trials, so total==1 means the durable trial was read back.
     assert outcome.metrics[executor.config.record_dataset]["total"] == 1.0
     assert outcome.metrics[executor.config.record_dataset]["accuracy"] == 1.0
-    assert StoragePath(f"{output_dir}/_finestore/SEALED").exists()
+    assert StoragePath(f"{output_dir}/SEALED").exists()
     assert StoragePath(f"{output_dir}/harbor_result.json").exists()
 
 

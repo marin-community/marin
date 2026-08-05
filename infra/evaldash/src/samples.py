@@ -144,6 +144,7 @@ class _TtlCache(Generic[T]):
 
 _table_cache: _TtlCache[pa.Table] = _TtlCache(CACHE_TTL)
 _artifact_cache: _TtlCache[ArtifactResponse] = _TtlCache(CACHE_TTL)
+_discovery_cache: _TtlCache[tuple[int, tuple[str, ...]]] = _TtlCache(CACHE_TTL)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -151,9 +152,26 @@ _artifact_cache: _TtlCache[ArtifactResponse] = _TtlCache(CACHE_TTL)
 # --------------------------------------------------------------------------------------------------
 
 
-def _archive_shard_count(results_path: str) -> int:
-    """The number of ``samples`` shards in the run's archive; 0 means the run has no archive."""
-    return len(CompositeReader(results_path).list_shards(ARCHIVE_SAMPLES_TABLE))
+def _archive_discovery(results_path: str) -> tuple[int, tuple[str, ...]]:
+    """The run's ``samples`` shard count and distinct task names; ``(0, ())`` means no archive.
+
+    A finestore archive is live-appended, so this is TTL-cached rather than memoized with
+    ``functools.cache``: the short window bounds repeated per-poll listings while still surfacing
+    shards a later flush adds.
+    """
+    cached = _discovery_cache.get(results_path)
+    if cached is not None:
+        return cached
+    reader = CompositeReader(results_path)
+    shard_count = len(reader.list_shards(ARCHIVE_SAMPLES_TABLE))
+    tasks: tuple[str, ...] = ()
+    if shard_count:
+        table = reader.scan(ARCHIVE_SAMPLES_TABLE, columns=["task"])
+        if table is not None and table.num_rows:
+            tasks = tuple(sorted({value for value in table.column("task").to_pylist() if value is not None}))
+    result = (shard_count, tasks)
+    _discovery_cache.put(results_path, result)
+    return result
 
 
 def _archive_task_table(results_path: str, task: str) -> pa.Table:
@@ -167,14 +185,6 @@ def _archive_task_table(results_path: str, task: str) -> pa.Table:
         table = pa.table({})
     _table_cache.put(key, table)
     return table
-
-
-def _archive_tasks(results_path: str) -> list[str]:
-    """The distinct task names present in the run's ``samples`` table."""
-    table = CompositeReader(results_path).scan(ARCHIVE_SAMPLES_TABLE, columns=["task"])
-    if table is None or table.num_rows == 0:
-        return []
-    return sorted({value for value in table.column("task").to_pylist() if value is not None})
 
 
 # --------------------------------------------------------------------------------------------------
@@ -224,9 +234,9 @@ def list_sample_tasks(results_path: str | None) -> SampleTasksResponse:
     if not results_path:
         return SampleTasksResponse(available=False, error="run has no results_path", tasks=())
     try:
-        shard_count = _archive_shard_count(results_path)
+        shard_count, archive_tasks = _archive_discovery(results_path)
         if shard_count:
-            tasks = tuple(SampleTask(task=task, files=shard_count) for task in _archive_tasks(results_path))
+            tasks = tuple(SampleTask(task=task, files=shard_count) for task in archive_tasks)
         else:
             _fs, by_task = _legacy_discover(results_path)
             tasks = tuple(SampleTask(task=task, files=len(paths)) for task, paths in sorted(by_task.items()))
@@ -253,7 +263,8 @@ def _empty_samples(*, available: bool, error: str, task: str, offset: int, limit
 
 def _task_table(results_path: str, task: str) -> pa.Table | None:
     """The samples table for one task from the archive, or the legacy layout, or ``None`` if absent."""
-    if _archive_shard_count(results_path):
+    shard_count, _tasks = _archive_discovery(results_path)
+    if shard_count:
         table = _archive_task_table(results_path, task)
         return table if table.num_rows else None
     _fs, by_task = _legacy_discover(results_path)

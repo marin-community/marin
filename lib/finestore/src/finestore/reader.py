@@ -4,9 +4,9 @@
 """The reader: compose every writer's Parquet shards for a table, deduplicate, and project.
 
 A read lists the table directory, unifies the shards' self-describing schemas (so a column a run
-added later is null for older shards), reads only the projected columns, and deduplicates by the
-table's primary key — keeping, for each key, the row from the highest compaction generation and then
-the highest ``_seq``. That single rule makes a crash mid-compaction (level-0 and its merge both
+added later is null for older shards), reads only the projected columns, and collapses duplicates by
+the table's merge key — keeping, for each key, the row from the highest compaction generation and
+then the highest ``_seq``. That single rule makes a crash mid-compaction (level-0 and its merge both
 present), a duplicate delivery, and a retried flush all converge to one row without any manifest.
 """
 
@@ -30,18 +30,18 @@ from finestore.layout import (
     SEQ_COLUMN,
     WRITER_COLUMN,
     Shard,
-    archive_dir,
     parse_shard_path,
     parse_uri,
     schema_path,
     sealed_path,
+    table_dir,
 )
 
 logger = logging.getLogger(__name__)
 
-# Deduplication falls back to this always-unique key when a table declares no primary key: it still
+# Deduplication falls back to this always-unique key when a table declares no merge key: it still
 # collapses a re-published shard (same writer + seq) but not a duplicate domain delivery.
-_DEFAULT_PRIMARY_KEY = (WRITER_COLUMN, SEQ_COLUMN)
+_DEFAULT_MERGE_KEY = (WRITER_COLUMN, SEQ_COLUMN)
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 
@@ -70,8 +70,7 @@ class CompositeReader:
     # -- discovery ---------------------------------------------------------------------------------
 
     def _list_shards(self, fs, table: str) -> list[Shard]:
-        base = f"{archive_dir(self.root)}/{table}"
-        _fs, base_key = url_to_fs(base)
+        _fs, base_key = url_to_fs(table_dir(self.root, table))
         try:
             keys = fs.find(base_key)
         except FileNotFoundError:
@@ -79,11 +78,11 @@ class CompositeReader:
         shards = [parse_shard_path(key) for key in keys]
         return [shard for shard in shards if shard is not None]
 
-    def primary_key(self, table: str) -> tuple[str, ...]:
-        """The table's dedup primary key, read from ``_schema.json`` (or the default fallback)."""
+    def merge_key(self, table: str) -> tuple[str, ...]:
+        """The table's dedup merge key, read from ``_schema.json`` (or the default fallback)."""
         meta = self._meta(table)
-        pk = meta.get("primary_key") if meta else None
-        return tuple(pk) if pk else _DEFAULT_PRIMARY_KEY
+        key = meta.get("merge_key") if meta else None
+        return tuple(key) if key else _DEFAULT_MERGE_KEY
 
     def _meta(self, table: str) -> dict | None:
         if table in self._meta_cache:
@@ -110,7 +109,7 @@ class CompositeReader:
         *,
         columns: Sequence[str] | None = None,
         where: list[tuple[str, str, object]] | None = None,
-        primary_key: Sequence[str] | None = None,
+        merge_key: Sequence[str] | None = None,
         dedup: bool = True,
     ) -> pa.Table | None:
         """Return the deduplicated rows of ``table``, projected to ``columns`` and filtered by ``where``.
@@ -118,14 +117,14 @@ class CompositeReader:
         ``where`` is a list of ``(column, op, value)`` conditions (``==``, ``!=``, ``in``) ANDed
         together and pushed into the Parquet scan. Returns ``None`` when the table has no shards. When
         ``columns`` is given, only those column chunks are read (fat columns a query does not select
-        are never fetched), plus whatever the deduplication key needs; the result is projected back to
+        are never fetched), plus whatever the merge key needs; the result is projected back to
         ``columns``.
         """
         fs, _ = url_to_fs(self.root)
         shards = self._list_shards(fs, table)
         if not shards:
             return None
-        pk = tuple(primary_key) if primary_key is not None else self.primary_key(table)
+        key = tuple(merge_key) if merge_key is not None else self.merge_key(table)
         pa_fs = PyFileSystem(FSSpecHandler(fs))
 
         schemas = [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards]
@@ -133,7 +132,7 @@ class CompositeReader:
 
         read_columns = None
         if columns is not None:
-            needed = set(columns) | set(pk) | {SEQ_COLUMN}
+            needed = set(columns) | set(key) | {SEQ_COLUMN}
             read_columns = [name for name in unified.names if name in needed]
 
         filter_expr = _build_filter(where)
@@ -149,8 +148,8 @@ class CompositeReader:
             parts.append(part)
 
         combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
-        if dedup and all(name in combined.column_names for name in pk):
-            combined = _deduplicate(combined, pk)
+        if dedup and all(name in combined.column_names for name in key):
+            combined = _deduplicate(combined, key)
         if columns is not None:
             combined = combined.select([name for name in columns if name in combined.column_names])
         return combined
@@ -188,12 +187,12 @@ class CompositeReader:
         return self._list_shards(fs, table)
 
 
-def _deduplicate(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:
-    """Keep one row per primary key: the highest ``(_gen, _seq)`` wins."""
+def _deduplicate(table: pa.Table, merge_key: tuple[str, ...]) -> pa.Table:
+    """Keep one row per merge key: the highest ``(_gen, _seq)`` wins."""
     num_rows = table.num_rows
     if num_rows == 0:
         return table
-    key_columns = [table.column(name).to_pylist() for name in primary_key]
+    key_columns = [table.column(name).to_pylist() for name in merge_key]
     generations = table.column(GEN_COLUMN).to_pylist()
     sequences = table.column(SEQ_COLUMN).to_pylist() if SEQ_COLUMN in table.column_names else [0] * num_rows
     order = sorted(range(num_rows), key=lambda i: (generations[i], sequences[i]))

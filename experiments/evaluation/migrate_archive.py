@@ -22,7 +22,6 @@ import logging
 
 import click
 import pyarrow.parquet as pq
-from finestore.layout import FINESTORE_DIR
 from finestore.reader import CompositeReader
 from marin.evaluation.samples import (
     ARCHIVE_SAMPLES_TABLE,
@@ -59,13 +58,12 @@ def _trial_id_from_uri(uri: str) -> str:
 def migrate_run(results_path: str, *, writer_id: str = "migrate") -> MigrationCounts:
     """Backfill one run's legacy sample parquets into its finestore archive. Safe to re-run."""
     fs, root = url_to_fs(results_path)
-    store = EvaluationStore.open(results_path, writer_id=writer_id)
     sample_count = step_count = trajectory_count = 0
-    try:
+    # Archive shards are named ``{seq}-{uid}.parquet`` under per-table subdirs, so the legacy
+    # ``samples_*.parquet`` filter below never picks them up: a re-run reads only legacy sources.
+    with EvaluationStore.open(results_path, writer_id=writer_id) as store:
         for path in fs.find(root):
             name = path.rsplit("/", 1)[-1]
-            if f"/{FINESTORE_DIR}/" in path:
-                continue  # skip the archive's own shards
             if not (name.startswith(SAMPLES_PREFIX) and name.endswith(SAMPLES_SUFFIX)):
                 continue
             with fs.open(path, "rb") as handle:
@@ -75,8 +73,8 @@ def migrate_run(results_path: str, *, writer_id: str = "migrate") -> MigrationCo
                 trial_id = ""
                 uri = sample.trajectory_uri
                 if sample.kind == SampleKind.AGENTIC and uri and not uri.startswith(_ARCHIVE_URI_PREFIX):
-                    # A read failure aborts the migration -- it is idempotent and only seals on
-                    # success, so a transient fault is retried rather than recorded as complete.
+                    # A read failure aborts the migration before ``seal``; it is idempotent, so a
+                    # transient fault is retried rather than recorded as complete.
                     trial_id = _trial_id_from_uri(uri)
                     stored = store.add_trajectory(
                         StoragePath(uri).read_bytes(), task=sample.task, doc_id=sample.doc_id, trial_id=trial_id
@@ -88,8 +86,6 @@ def migrate_run(results_path: str, *, writer_id: str = "migrate") -> MigrationCo
                 store.add_sample(sample, trial_id=trial_id)
                 sample_count += 1
         store.seal()
-    finally:
-        store.close()
     counts = MigrationCounts(samples=sample_count, steps=step_count, trajectories=trajectory_count)
     logger.info("migrated %s: %s", results_path, counts)
     return counts

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
@@ -46,8 +45,8 @@ DEFAULT_MAX_BUFFER_ROWS = 20_000
 
 
 def _default_writer_id() -> str:
-    """A per-process writer identity, unique enough that two writers never share a key prefix."""
-    return f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    """A writer identity unique enough that two writers never share a key prefix."""
+    return uuid.uuid4().hex
 
 
 def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
@@ -115,30 +114,30 @@ class DataStore:
         name: str,
         *,
         schema: pa.Schema | None = None,
-        primary_key: Sequence[str] | None = None,
+        merge_key: Sequence[str] | None = None,
         schema_version: int = 1,
     ) -> DataTable:
         """Register (or fetch) a table and return a handle for appending to it.
 
-        ``primary_key`` names the columns a reader deduplicates on; it is persisted to the table's
-        ``_schema.json`` so readers that did not open the writer can recover it. Calling ``table``
-        again with the same ``name`` returns the same handle, so every appender shares one buffer and
-        one sequence counter.
+        ``merge_key`` names the columns a reader collapses duplicates on (keeping the latest); it is
+        persisted to the table's ``_schema.json`` so readers that did not open the writer can recover
+        it. Calling ``table`` again with the same ``name`` returns the same handle, so every appender
+        shares one buffer and one sequence counter.
         """
         with self._register_lock:
             existing = self._tables.get(name)
             if existing is not None:
                 return existing
-            pk = tuple(primary_key) if primary_key is not None else None
-            table = DataTable(self, name, primary_key=pk, schema=schema, schema_version=schema_version)
+            key = tuple(merge_key) if merge_key is not None else None
+            table = DataTable(self, name, merge_key=key, schema=schema, schema_version=schema_version)
             self._tables[name] = table
             self._write_schema_meta(table)
             return table
 
     def _write_schema_meta(self, table: DataTable) -> None:
-        """Persist the table's primary key and schema version (the archive's only metadata object)."""
+        """Persist the table's merge key and schema version (the archive's only metadata object)."""
         meta = {
-            "primary_key": list(table.primary_key) if table.primary_key else None,
+            "merge_key": list(table.merge_key) if table.merge_key else None,
             "schema_version": table.schema_version,
         }
         StoragePath(schema_path(self.root, table.name)).write_text(json.dumps(meta, indent=2))
@@ -149,7 +148,7 @@ class DataStore:
         The payload is stored inline as a Parquet binary column. ``metadata`` is kept verbatim as a
         JSON string for the reader to surface.
         """
-        blobs = self._tables.get(BLOBS_TABLE) or self.table(BLOBS_TABLE, primary_key=(BLOB_NAME_COLUMN,))
+        blobs = self._tables.get(BLOBS_TABLE) or self.table(BLOBS_TABLE, merge_key=(BLOB_NAME_COLUMN,))
         blobs.append(
             {
                 BLOB_NAME_COLUMN: name,
@@ -220,13 +219,13 @@ class DataTable:
         store: DataStore,
         name: str,
         *,
-        primary_key: tuple[str, ...] | None,
+        merge_key: tuple[str, ...] | None,
         schema: pa.Schema | None,
         schema_version: int,
     ) -> None:
         self._store = store
         self.name = name
-        self.primary_key = primary_key
+        self.merge_key = merge_key
         self.schema_version = schema_version
         self._schema = schema
         self._pending: list[dict] = []

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import pyarrow as pa
+from finestore import compaction
 from finestore.compaction import compact
 from finestore.reader import CompositeReader
 from finestore.store import DataStore
@@ -19,7 +20,7 @@ def _rows(reader: CompositeReader, table: str, **kwargs) -> list[dict]:
 def test_round_trip_and_projection(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        samples = store.table("samples", primary_key=("task", "doc_id"))
+        samples = store.table("samples", merge_key=("task", "doc_id"))
         samples.append({"task": "arc", "doc_id": "1", "correct": True, "logprobs": [0.1, 0.2]})
         samples.append({"task": "arc", "doc_id": "2", "correct": False, "logprobs": [0.3]})
         store.flush()
@@ -36,7 +37,7 @@ def test_round_trip_and_projection(tmp_path):
 def test_point_lookup(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", primary_key=("task", "doc_id"))
+        table = store.table("samples", merge_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(5)])
         store.flush()
 
@@ -49,10 +50,10 @@ def test_point_lookup(tmp_path):
 def test_duplicate_delivery_latest_seq_wins(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", primary_key=("task", "doc_id"))
+        table = store.table("samples", merge_key=("task", "doc_id"))
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
         store.flush()
-        # A retried trial re-delivers the same primary key with a fresh score in a later shard.
+        # A retried trial re-delivers the same merge key with a fresh score in a later shard.
         table.append({"task": "arc", "doc_id": "1", "score": 2.0})
         store.flush()
 
@@ -64,11 +65,11 @@ def test_duplicate_delivery_latest_seq_wins(tmp_path):
 def test_multi_writer_compose(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="worker-a") as a:
-        ta = a.table("samples", primary_key=("task", "doc_id"))
+        ta = a.table("samples", merge_key=("task", "doc_id"))
         ta.append({"task": "arc", "doc_id": "a", "score": 1.0})
         a.flush()
     with DataStore.open(root, writer_id="worker-b") as b:
-        tb = b.table("samples", primary_key=("task", "doc_id"))
+        tb = b.table("samples", merge_key=("task", "doc_id"))
         tb.append({"task": "arc", "doc_id": "b", "score": 2.0})
         b.flush()
 
@@ -80,11 +81,11 @@ def test_schema_evolution_null_promotes_missing_column(tmp_path):
     root = str(tmp_path / "run")
     # An "old" writer without the difficulty column.
     with DataStore.open(root, writer_id="old") as store:
-        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
     # A "new" writer that added a column.
     with DataStore.open(root, writer_id="new") as store:
-        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "difficulty": 3})
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "difficulty": 3})
         store.flush()
 
     result = CompositeReader(root).scan("samples")
@@ -98,7 +99,7 @@ def test_empty_dict_column_is_writable(tmp_path):
     # at write time and reads back as absent rather than failing the flush.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", primary_key=("task", "doc_id"))
+        table = store.table("samples", merge_key=("task", "doc_id"))
         table.append({"task": "arc", "doc_id": "1", "metrics": {}})
         store.flush()
     rows = _rows(CompositeReader(root), "samples")
@@ -119,7 +120,7 @@ def test_blob_write_and_resolve(tmp_path):
 def test_compaction_merges_and_deletes_source(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", primary_key=("task", "doc_id"))
+        table = store.table("samples", merge_key=("task", "doc_id"))
         for i in range(3):
             table.append({"task": "arc", "doc_id": str(i)})
             store.flush()  # three separate level-0 shards
@@ -142,7 +143,7 @@ def test_crash_mid_compaction_does_not_double_count(tmp_path):
     # both generations are present. Dedup must still return one row per key.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", primary_key=("task", "doc_id"))
+        table = store.table("samples", merge_key=("task", "doc_id"))
         table.extend([{"task": "arc", "doc_id": str(i)} for i in range(4)])
         store.flush()
 
@@ -155,11 +156,71 @@ def test_crash_mid_compaction_does_not_double_count(tmp_path):
     assert {r["doc_id"] for r in rows} == {"0", "1", "2", "3"}
 
 
+def test_recompaction_merges_all_generations(tmp_path):
+    # A crash-style compaction leaves g0 and g1 both present; a second compaction merges them into
+    # g2 (preferring the higher generation per key, the merge result) and drops the lower ones. This
+    # exercises the streaming read of an already-compacted (multi-generation) shard.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"))
+        table.extend([{"task": "arc", "doc_id": str(i), "score": float(i)} for i in range(4)])
+        store.flush()
+    compact(root, "samples", delete_source=False)
+    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {0, 1}
+
+    written = compact(root, "samples")
+    assert written == 4
+    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
+    rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
+    assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0}
+
+
+def test_compaction_unifies_evolved_schema(tmp_path):
+    # Two writers wrote different columns; the streaming merge reads through the unified schema, so
+    # the compacted shard carries both columns, null where a source lacked one.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="old") as store:
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "a": 1})
+        store.flush()
+    with DataStore.open(root, writer_id="new") as store:
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "2", "b": 2})
+        store.flush()
+
+    compact(root, "samples")
+    rows = {r["doc_id"]: (r.get("a"), r.get("b")) for r in _rows(CompositeReader(root), "samples")}
+    assert rows == {"1": (1, None), "2": (None, 2)}
+
+
+def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
+    # A tiny output row group forces a compacted shard to span several groups; re-compacting it with a
+    # fresh level-0 shard must stream those groups in merge-key order and merge correctly, proving the
+    # merge never materializes the whole table.
+    monkeypatch.setattr(compaction, "_COMPACT_BATCH_ROWS", 2)
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"))
+        table.extend([{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(7)])
+        store.flush()
+    compact(root, "samples")  # g1 spanning ceil(7/2) row groups
+
+    with DataStore.open(root, writer_id="w2") as store:
+        store.table("samples", merge_key=("task", "doc_id")).extend(
+            [{"task": "arc", "doc_id": f"{i:03d}", "score": float(i)} for i in range(7, 10)]
+        )
+        store.flush()
+
+    written = compact(root, "samples")
+    assert written == 10
+    assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
+    rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
+    assert rows == {f"{i:03d}": float(i) for i in range(10)}
+
+
 def test_seal_marker(tmp_path):
     root = str(tmp_path / "run")
     reader = CompositeReader(root)
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         assert not reader.is_sealed()
         store.seal()
     assert reader.is_sealed()
@@ -168,7 +229,7 @@ def test_seal_marker(tmp_path):
 def test_reader_none_for_absent_table(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        store.table("samples", primary_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
     assert CompositeReader(root).scan("does-not-exist") is None
 
@@ -179,8 +240,8 @@ def test_single_table_flush_is_independent(tmp_path):
     root = str(tmp_path / "run")
     reader = CompositeReader(root)
     with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
-        samples = store.table("samples", primary_key=("task", "doc_id"))
-        steps = store.table("steps", primary_key=("task", "step_id"))
+        samples = store.table("samples", merge_key=("task", "doc_id"))
+        steps = store.table("steps", merge_key=("task", "step_id"))
         samples.append({"task": "arc", "doc_id": "1"})
         steps.append({"task": "arc", "step_id": 0})
         samples.flush()
@@ -193,7 +254,7 @@ def test_table_returns_shared_handle(tmp_path):
     # sequence counter rather than splitting rows across two.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        first = store.table("samples", primary_key=("task", "doc_id"))
+        first = store.table("samples", merge_key=("task", "doc_id"))
         second = store.table("samples")
         assert first is second
         first.append({"task": "arc", "doc_id": "1"})
@@ -207,7 +268,7 @@ def test_explicit_schema_is_enforced(tmp_path):
     root = str(tmp_path / "run")
     schema = pa.schema([("task", pa.string()), ("doc_id", pa.string()), ("_seq", pa.int64()), ("_writer", pa.string())])
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", primary_key=("task", "doc_id"), schema=schema)
+        table = store.table("samples", merge_key=("task", "doc_id"), schema=schema)
         table.append({"task": "arc", "doc_id": "1"})
         store.flush()
     rows = _rows(CompositeReader(root), "samples")

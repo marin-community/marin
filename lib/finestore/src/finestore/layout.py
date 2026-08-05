@@ -3,18 +3,19 @@
 
 """Object-key layout for a finestore archive, and the ``finestore://`` reference scheme.
 
-An archive lives entirely under ``{root}/_finestore/`` so it never collides with sibling data
-under the same run prefix. Each table is a directory of immutable Parquet shards, partitioned by
-the writer that produced them and the compaction generation they belong to::
+An archive owns its root directory. Each table is a subdirectory of immutable Parquet shards,
+partitioned by the writer that produced them and the compaction generation they belong to::
 
-    {root}/_finestore/
+    {root}/
         SEALED                                  # optional marker: the run is complete
-        {table}/_schema.json                    # primary key + schema version (the only metadata)
+        {table}/_schema.json                    # merge key + schema version (the only metadata)
         {table}/w={writer}/g={gen}/{seq:016d}-{uid}.parquet
 
 Shard membership is discovered by listing the table directory; a shard's schema and row-group
 statistics come from its Parquet footer, so there is no manifest to keep consistent. The generation
-and writer are encoded in the key and recovered by :func:`parse_shard_path`.
+and writer are encoded in the key and recovered by :func:`parse_shard_path`. A caller that shares the
+root with sibling data (e.g. an eval run's results directory) passes a dedicated subdirectory as the
+root; finestore does not impose one.
 """
 
 from __future__ import annotations
@@ -23,13 +24,10 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-# Everything an archive writes lives under this directory beneath the archive root.
-FINESTORE_DIR = "_finestore"
-
 # The seal marker object; its presence means every writer has finished and the run is immutable.
 SEALED_MARKER = "SEALED"
 
-# Per-table metadata object. It records only what a Parquet footer cannot: the dedup primary key
+# Per-table metadata object. It records only what a Parquet footer cannot: the dedup merge key
 # and the logical schema version. This is the whole "manifest".
 SCHEMA_FILE = "_schema.json"
 
@@ -62,14 +60,9 @@ class Shard:
     generation: int
 
 
-def archive_dir(root: str) -> str:
-    """The archive root directory, ``{root}/_finestore``."""
-    return f"{root.rstrip('/')}/{FINESTORE_DIR}"
-
-
 def table_dir(root: str, table: str) -> str:
     """The directory holding one table's shards and metadata."""
-    return f"{archive_dir(root)}/{table}"
+    return f"{root.rstrip('/')}/{table}"
 
 
 def schema_path(root: str, table: str) -> str:
@@ -79,7 +72,7 @@ def schema_path(root: str, table: str) -> str:
 
 def sealed_path(root: str) -> str:
     """The seal-marker object path for the archive."""
-    return f"{archive_dir(root)}/{SEALED_MARKER}"
+    return f"{root.rstrip('/')}/{SEALED_MARKER}"
 
 
 def shard_path(root: str, table: str, writer: str, generation: int, seq: int, uid: str) -> str:

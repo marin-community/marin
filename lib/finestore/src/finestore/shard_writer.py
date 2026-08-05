@@ -1,13 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shard write primitive: an Arrow table to one immutable, atomically-published Parquet object.
+"""Shard write primitive: stream Arrow batches to one immutable, atomically-published Parquet object.
 
-Shared by the writer and the compactor. A shard is written to a temp sibling key and renamed into
-place, so a reader listing the directory never observes a half-written object.
+:class:`ShardWriter` is the single write path shared by a store flush (buffered rows) and a
+compaction merge (a k-way-merged stream). Each :meth:`ShardWriter.write_table` call appends one
+Parquet row group, so a caller streaming a merge holds only a row group at a time rather than the
+whole table. The shard is written to a temp sibling key and renamed into place on close, so a reader
+listing the directory never observes a half-written object.
 """
 
 from __future__ import annotations
+
+import contextlib
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -18,13 +23,39 @@ from rigging.filesystem import StoragePath, atomic_rename
 _COMPRESSION = "zstd"
 
 
-def write_table(path: str, table: pa.Table) -> None:
-    """Write ``table`` to the shard object ``path`` atomically, compressed with zstd.
+class ShardWriter:
+    """Streams record batches to one immutable Parquet shard, one row group per ``write_table`` call.
 
-    The table is written to a temp sibling key and renamed into place, so a reader listing the
-    directory never observes a half-written object.
+    Open it on the final object path; it writes to a temp sibling and renames into place on
+    :meth:`close` (or context-manager exit). Every appended table must share the writer's schema.
     """
-    StoragePath(path).parent.mkdirs()
-    with atomic_rename(path) as temp_path:
-        with StoragePath(temp_path).open("wb") as handle:
-            pq.write_table(table, handle, compression=_COMPRESSION)
+
+    def __init__(self, path: str, schema: pa.Schema, *, compression: str = _COMPRESSION) -> None:
+        self._schema = schema
+        self.rows_written = 0
+        StoragePath(path).parent.mkdirs()
+        self._stack = contextlib.ExitStack()
+        temp_path = self._stack.enter_context(atomic_rename(path))
+        handle = self._stack.enter_context(StoragePath(temp_path).open("wb"))
+        self._writer = self._stack.enter_context(pq.ParquetWriter(handle, schema, compression=compression))
+
+    def write_table(self, table: pa.Table) -> None:
+        """Append ``table`` as one row group; its schema must match the writer's."""
+        self._writer.write_table(table)
+        self.rows_written += table.num_rows
+
+    def close(self) -> None:
+        """Finalize the Parquet footer, flush the handle, and rename the shard into place."""
+        self._stack.close()
+
+    def __enter__(self) -> ShardWriter:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stack.close()
+
+
+def write_table(path: str, table: pa.Table) -> None:
+    """Write ``table`` to the shard object ``path`` atomically as one row group, compressed with zstd."""
+    with ShardWriter(path, table.schema) as writer:
+        writer.write_table(table)

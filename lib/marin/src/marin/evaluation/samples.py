@@ -377,8 +377,8 @@ ARCHIVE_STEPS_TABLE = "steps"
 
 # A sample is unique within a run by its task, its document, and (for multi-attempt Harbor runs) the
 # trial that produced it. evalchemy leaves ``trial_id`` empty: one attempt per document.
-SAMPLES_PRIMARY_KEY = ("task", "doc_id", "trial_id")
-STEPS_PRIMARY_KEY = ("task", "doc_id", "trial_id", "step_id")
+SAMPLES_MERGE_KEY = ("task", "doc_id", "trial_id")
+STEPS_MERGE_KEY = ("task", "doc_id", "trial_id", "step_id")
 
 
 def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
@@ -483,10 +483,8 @@ class EvaluationStore:
 
     def __init__(self, store: DataStore) -> None:
         self._store = store
-        self._samples = store.table(
-            ARCHIVE_SAMPLES_TABLE, primary_key=SAMPLES_PRIMARY_KEY, schema_version=SCHEMA_VERSION
-        )
-        self._steps = store.table(ARCHIVE_STEPS_TABLE, primary_key=STEPS_PRIMARY_KEY, schema_version=SCHEMA_VERSION)
+        self._samples = store.table(ARCHIVE_SAMPLES_TABLE, merge_key=SAMPLES_MERGE_KEY, schema_version=SCHEMA_VERSION)
+        self._steps = store.table(ARCHIVE_STEPS_TABLE, merge_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION)
 
     @classmethod
     def open(cls, root: str, *, writer_id: str) -> EvaluationStore:
