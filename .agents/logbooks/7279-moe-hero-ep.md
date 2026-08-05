@@ -836,3 +836,30 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Still open: MHEP-020 tests the other direction, holding parameters at the 590.7 B of the known
   pass while raising dispatch to 4.50 GiB with top-6. A pass there confirms that parameters, not the
   communicator, set the ceiling.
+
+### 2026-08-05 03:45 UTC - MHEP-020 stopped: top-k is the expensive axis, width is the cheap one
+
+- Configuration: 256 experts x i2560 at top-6, 590.7 B total, 24.5 B active. Parameters are equal to
+  the MHEP-011 configuration that passed, so only the routing multiplicity changed.
+- Result: `worker_failed` with one failed task and 15 coscheduled cascades, after the run entered
+  the training loop. Stopped after four failures.
+- Correction: This session first estimated top-6 as about 4.5 GiB more than top-4. That is wrong.
+  Six buffers scale with top-k, and one of them is float32:
+
+| buffer | top-4 | top-6 |
+| --- | --- | --- |
+| dispatch send (bf16) | 3.00 GiB | 4.50 GiB |
+| received after all-to-all (bf16) | 3.00 GiB | 4.50 GiB |
+| expert w13 output (bf16) | 2.50 GiB | 3.75 GiB |
+| expert output and combine (bf16) | 3.00 GiB | 4.50 GiB |
+| gathered [T, k, H] (bf16) | 3.00 GiB | 4.50 GiB |
+| backward grad_rows (float32) | 6.00 GiB | 9.00 GiB |
+| total | 20.50 GiB | 30.75 GiB |
+
+- The true delta is 10.25 GiB, and its peak is in the backward pass. That matches the observed
+  failure after the training loop started rather than during compilation.
+- Rule for sizing: active routed neurons are top-k multiplied by the expert width. Parameters track
+  expert count multiplied by width, and the k-scaled buffers track tokens multiplied by top-k.
+  Width is thus the cheap way to buy active compute and top-k is the expensive way.
+- Next test: MHEP-021 runs 128 experts x i5120 at top-4. It doubles the active neurons of MHEP-011
+  to 20,480 at the same 590.7 B of parameters, for 23.00 GiB of k-scaled buffers.
