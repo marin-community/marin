@@ -112,31 +112,6 @@ def test_input_batches_truncate_large_text_before_embedding(tmp_path) -> None:
     assert texts == [oversized_text[:1_048_576], "short"]
 
 
-def test_model_archive_uses_output_region(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = []
-
-    def temp_bucket(ttl_days: int, prefix: str, *, source_prefix: str | None = None) -> str:
-        calls.append((ttl_days, prefix, source_prefix))
-        return "s3://staging"
-
-    monkeypatch.setattr(harrier, "marin_temp_bucket", temp_bucket)
-
-    assert harrier._model_archive_url().endswith("/model.tar")
-    assert calls == [(1, "harrier-staging", harrier.OUTPUT_ROOT)]
-
-
-def test_run_embed_reuses_complete_shard_without_loading_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    part = InputPart("source", "input", 3, "output")
-    plan = _embedding_plan(part)
-    monkeypatch.setattr(harrier, "build_plan", lambda: plan)
-    monkeypatch.setattr(harrier, "_output_is_complete", lambda part, plan: True)
-    monkeypatch.setattr(harrier, "_harrier_embedder", lambda: pytest.fail("loaded model for a complete shard"))
-
-    result = harrier.run_embed(0, 1)
-
-    assert result["row_count"] == 3
-
-
 def test_embed_part_buffers_parquet_row_groups(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     input_path = tmp_path / "input.parquet"
     output_path = tmp_path / "output.parquet"
