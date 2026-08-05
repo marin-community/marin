@@ -20,7 +20,7 @@
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
 //! freshly allocated seq under the lock, and never writes parquet.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,18 +32,22 @@ use tokio::sync::{watch, Notify, RwLock};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
+use crate::query::sidecar::{read_header, SidecarManager};
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
-use crate::store::compaction::executor::{read_segment_batches, run_job, PlannedSwap};
+use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
 use crate::store::compaction::planner::plan;
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
 use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
-use crate::store::segment::{discover_segments, read_segment_footer, write_segment_to_dir};
+use crate::store::segment::{
+    discover_segments, read_segment_footer, segment_layout_is_current, stage_rewritten_segment,
+    write_segment_to_dir,
+};
 use crate::store::trigram::{sidecar_path, write_sidecar};
-use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
+use crate::store::types::{basename, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
 /// Best-effort removal of a segment's trigram sidecar (`<path>.tgm`), co-located
 /// with every parquet unlink. A missing sidecar (an L0 / unindexed-namespace
@@ -75,12 +79,56 @@ pub const MIN_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// Default durability-await budget when the RPC carries no deadline.
 pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Whether `segment`'s trigram sidecar is absent or predates one of `indexed`.
+///
+/// Reads only the sidecar's header, so this stays cheap enough to run over every
+/// local segment on each maintenance tick. An unreadable or unrecognized-version
+/// sidecar counts as needing a rebuild — the same conservative direction the
+/// query path takes when it treats one as absent.
+fn sidecar_needs_rebuild(segment: &Path, indexed: &[&str]) -> bool {
+    match read_header(&sidecar_path(segment)) {
+        Some(header) => !header.covers_columns(indexed),
+        None => true,
+    }
+}
+
 /// Trigram sidecars rebuilt per maintenance tick by the background backfill.
-/// Kept at one because a single index build over a terminal-level segment is
-/// itself heavy (the builder currently uses substantial CPU + RAM); rebuilding
-/// one per tick keeps the backfill the lowest-priority maintenance work and
-/// never starves compaction/sync/eviction. Raise once the builder is cheaper.
-pub const BACKFILL_SIDECARS_PER_TICK: usize = 1;
+///
+/// A single index build over a terminal-level segment is heavy (substantial CPU
+/// and RAM), and the backfill is the lowest-priority maintenance work, so this
+/// stays small enough never to starve compaction/sync/eviction. It is four rather
+/// than one so a namespace whose sidecars all need rebuilding — every sidecar
+/// format bump does that — converges in tens of minutes instead of hours, during
+/// which its substring queries scan unpruned.
+pub const BACKFILL_SIDECARS_PER_TICK: usize = 4;
+
+/// Wall-clock a maintenance tick spends re-encoding stale-layout segments.
+///
+/// Budgeted by time rather than by count because segment sizes span three orders
+/// of magnitude — on the marin hub a small L1 re-encodes in milliseconds where a
+/// 290 MiB terminal segment takes about 11 s — so a fixed count leaves the tick's
+/// duration unpredictable and can starve compaction, sync, and eviction queued
+/// behind it. A single over-budget segment can still overrun, because a rewrite
+/// already in flight is never abandoned.
+///
+/// The work is a storage and footer-size win rather than a correctness fix, so it
+/// stays a minority of the 30 s tick.
+const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
+
+/// Process-wide permit for the layout rewrite, so only one namespace re-encodes
+/// at a time.
+///
+/// Every namespace runs its own maintenance task, so a per-namespace budget
+/// alone let a store with dozens of namespaces spend dozens of budgets at once.
+/// On the marin hub that saturated the box: a 10 min telemetry query that
+/// normally answers in 0.18 s took 15 s, and `count(*)` went from 0.3 s to 17 s,
+/// because re-encoding pushes tens of GiB through the page cache the queries are
+/// served from and invalidates the parquet metadata cache entry for every
+/// segment it touches.
+///
+/// A namespace that cannot take the permit skips the step for this tick rather
+/// than queueing behind it, which would stall the rest of its maintenance.
+static REWRITE_SLOT: Mutex<()> = Mutex::new(());
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -159,6 +207,47 @@ pub struct Namespace {
     /// instead of busy-waiting. Pushed to by `spawn_flush_task` /
     /// `spawn_maintenance_task`; drained by [`shutdown`](Namespace::shutdown).
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Segments the sidecar backfill has already rebuilt without reaching
+    /// coverage. See [`SidecarBackfillSkips`].
+    sidecar_backfill_skips: Mutex<SidecarBackfillSkips>,
+    /// Segments already confirmed to carry the current physical layout.
+    ///
+    /// Determining staleness means parsing a segment's whole footer, so without
+    /// this the rewrite pass would re-read every footer in the namespace on
+    /// every tick — hundreds of MiB of thrift for a large namespace, forever,
+    /// long after there is nothing left to rewrite. A path's layout only ever
+    /// changes because this pass changed it.
+    current_layouts: Mutex<HashSet<String>>,
+}
+
+/// Segments the sidecar backfill cannot bring up to date, and the indexed set
+/// that verdict was reached under.
+///
+/// A trigram index covers only the columns a segment actually has: one written
+/// before a column existed indexes nothing for it, and its sidecar can never
+/// satisfy the rebuild condition. Without this the backfill would re-read and
+/// re-serialize that segment on every maintenance tick forever, at one segment
+/// per tick starving every segment that can still make progress. Enabling
+/// another index resets the verdict, since the new column may well be present.
+#[derive(Default)]
+struct SidecarBackfillSkips {
+    indexed: Vec<String>,
+    paths: HashSet<String>,
+}
+
+impl SidecarBackfillSkips {
+    /// Drop the recorded verdicts when the indexed set changes, and forget
+    /// segments that are no longer local (compacted away or evicted).
+    fn reconcile(&mut self, indexed: &[&str], live: &HashSet<&str>) {
+        if self.indexed.len() != indexed.len()
+            || !self.indexed.iter().zip(indexed).all(|(a, b)| a == b)
+        {
+            self.indexed = indexed.iter().map(|c| c.to_string()).collect();
+            self.paths.clear();
+            return;
+        }
+        self.paths.retain(|p| live.contains(p.as_str()));
+    }
 }
 
 /// A namespace's sealed local segments as one consistent observation: the files a
@@ -272,6 +361,8 @@ impl Namespace {
             stop: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
+            sidecar_backfill_skips: Mutex::new(SidecarBackfillSkips::default()),
+            current_layouts: Mutex::new(HashSet::new()),
         });
 
         // Refresh the catalog from the adopted deque so the segments table
@@ -1125,21 +1216,42 @@ impl Namespace {
         if indexed.is_empty() {
             return 0;
         }
+        // A segment needs a sidecar when it has none, or when the one it has
+        // predates a column gaining its index — enabling an index on a live
+        // namespace is otherwise silently ineffective for existing segments,
+        // since file existence alone cannot tell the two cases apart.
         let candidates: Vec<String> = {
             let inner = self.inner.lock().unwrap();
+            let mut skips = self.sidecar_backfill_skips.lock().unwrap();
+            let live: HashSet<&str> = inner
+                .local_segments
+                .iter()
+                .map(|s| s.path.as_str())
+                .collect();
+            skips.reconcile(&indexed, &live);
             inner
                 .local_segments
                 .iter()
                 .filter(|s| s.level >= 1)
                 .map(|s| s.path.clone())
-                .filter(|p| !sidecar_path(Path::new(p)).exists())
+                .filter(|p| !skips.paths.contains(p))
+                .filter(|p| sidecar_needs_rebuild(Path::new(p), &indexed))
                 .take(max)
                 .collect()
         };
+        // The index only reads the indexed columns and the key, so project to
+        // those: a full read materializes every column as uncompressed Arrow,
+        // which is what makes this the heaviest maintenance step.
+        let mut projection: Vec<&str> = indexed.clone();
+        if let Some(key) = self.key_column.as_deref() {
+            if !projection.contains(&key) {
+                projection.push(key);
+            }
+        }
         let mut built = 0;
         for path in candidates {
             let p = Path::new(&path);
-            let batches = match read_segment_batches(p) {
+            let batches = match read_segment_projected(p, Some(&projection)) {
                 Ok(batches) => batches,
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: read failed");
@@ -1148,6 +1260,10 @@ impl Namespace {
             };
             match write_sidecar(p, &batches, &indexed, self.key_column.as_deref()) {
                 Ok(true) => {
+                    // The rewrite reuses the path, and the query cache keys on
+                    // path alone, so a reader holding the replaced header would
+                    // address the new file at the old offsets.
+                    SidecarManager::global().invalidate(&sidecar_path(p));
                     built += 1;
                     tracing::debug!(namespace = %self.name, path = %path, "backfilled trigram sidecar");
                 }
@@ -1155,6 +1271,21 @@ impl Namespace {
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: write failed")
                 }
+            }
+            // A rebuild that left the segment still qualifying is a rebuild that
+            // can never stop qualifying: the columns it is short of are not in
+            // the segment to index.
+            if sidecar_needs_rebuild(p, &indexed) {
+                tracing::debug!(
+                    namespace = %self.name,
+                    path = %path,
+                    "sidecar backfill: segment predates an indexed column; not retrying"
+                );
+                self.sidecar_backfill_skips
+                    .lock()
+                    .unwrap()
+                    .paths
+                    .insert(path);
             }
         }
         built
@@ -1226,7 +1357,149 @@ impl Namespace {
         })
         .await
         .map_err(|e| StatsError::Internal(format!("maintenance backfill task panicked: {e}")))?;
+
+        // Re-encode segments still on an older physical layout (blocking parquet
+        // read + write). Also lowest-priority and bounded: the terminal level is
+        // never re-compacted, so without this a namespace carries whatever layout
+        // it was written with until eviction ages it out.
+        let ns = Arc::clone(self);
+        tokio::task::spawn_blocking(move || ns.rewrite_stale_layouts(REWRITE_LAYOUT_BUDGET))
+            .await
+            .map_err(|e| StatsError::Internal(format!("maintenance rewrite task panicked: {e}")))?;
         Ok(())
+    }
+
+    /// Re-encode segments whose physical layout predates the current writer
+    /// policy, oldest first, for up to `budget` of wall clock. Returns how many
+    /// were rewritten.
+    ///
+    /// Oldest first because the deque is age-ordered and a leveled store keeps
+    /// nearly all of its bytes in the oldest, terminal-level segments — going the
+    /// other way spends the first hour rewriting small recent segments while the
+    /// footer this exists to shrink stays untouched.
+    ///
+    /// Costs no remote bandwidth: the rewrite keeps the filename, and the sync
+    /// step only uploads segments the catalog still marks `Local`, so a segment
+    /// already flipped to `Both` is never re-uploaded. Its remote copy keeps the
+    /// old layout while holding identical rows, and ages out normally.
+    ///
+    /// The trigram sidecar is left alone deliberately — spans are a fixed row
+    /// count, independent of row groups, and the prune reads each segment's
+    /// actual layout — so a rewritten segment keeps pruning with the sidecar it
+    /// already had.
+    fn rewrite_stale_layouts(&self, budget: Duration) -> usize {
+        if self.data_dir.is_none() {
+            return 0;
+        }
+        let Ok(_slot) = REWRITE_SLOT.try_lock() else {
+            return 0;
+        };
+        let deadline = Instant::now() + budget;
+        let mut rewritten = 0;
+        // A segment that fails to stage or commit stays stale, so it would be
+        // picked again immediately; skipping it for the rest of the pass is what
+        // keeps one unreadable file from starving every other segment. The next
+        // tick retries it, because the set is per-pass.
+        let mut failed: HashSet<String> = HashSet::new();
+        while Instant::now() < deadline {
+            let Some((path, was)) = self.next_stale_layout(&failed) else {
+                break;
+            };
+            let started = Instant::now();
+            let (staging, size) = match stage_rewritten_segment(Path::new(&path)) {
+                Ok(staged) => staged,
+                Err(e) => {
+                    tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,
+                        "layout rewrite failed; leaving the segment as it was");
+                    failed.insert(path);
+                    continue;
+                }
+            };
+            match self.commit_rewritten_segment(&path, &staging, size) {
+                Ok(true) => {}
+                Ok(false) => {
+                    // Evicted mid-rewrite: it is gone from the deque, so it will
+                    // not come back around.
+                    tracing::debug!(namespace = %self.name, segment = %basename(&path),
+                        "segment went away mid-rewrite; discarded the replacement");
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,
+                        "layout rewrite commit failed");
+                    failed.insert(path);
+                    continue;
+                }
+            }
+            self.current_layouts.lock().unwrap().insert(path.clone());
+            tracing::info!(
+                namespace = %self.name,
+                segment = %basename(&path),
+                was_bytes = was,
+                now_bytes = size,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "rewrote segment layout"
+            );
+            rewritten += 1;
+        }
+        rewritten
+    }
+
+    /// The oldest local segment not yet known to carry the current layout, as
+    /// `(path, size)`, ignoring anything in `skip`. `None` once every segment is
+    /// current.
+    ///
+    /// Reads footers OUTSIDE the insertion lock — the lock guards only a snapshot
+    /// of candidate paths — so a slow filesystem cannot stall writers behind this.
+    fn next_stale_layout(&self, skip: &HashSet<String>) -> Option<(String, i64)> {
+        let candidates: Vec<(String, i64)> = {
+            let inner = self.inner.lock().unwrap();
+            let live: HashSet<&str> = inner
+                .local_segments
+                .iter()
+                .map(|s| s.path.as_str())
+                .collect();
+            let mut known = self.current_layouts.lock().unwrap();
+            known.retain(|p| live.contains(p.as_str()));
+            inner
+                .local_segments
+                .iter()
+                .filter(|s| s.level >= 1 && !known.contains(&s.path) && !skip.contains(&s.path))
+                .map(|s| (s.path.clone(), s.size_bytes))
+                .collect()
+        };
+        for (path, size) in candidates {
+            if segment_layout_is_current(Path::new(&path)) {
+                self.current_layouts.lock().unwrap().insert(path);
+                continue;
+            }
+            return Some((path, size));
+        }
+        None
+    }
+
+    /// Swap a staged rewrite over its segment and record the new size, under the
+    /// insertion lock. Returns `false` (discarding the staged file) when the
+    /// segment is no longer live — eviction can drop it while the rewrite runs,
+    /// and renaming over that path would resurrect a file nothing references.
+    fn commit_rewritten_segment(
+        &self,
+        path: &str,
+        staging: &Path,
+        byte_size: i64,
+    ) -> Result<bool, StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(seg) = inner.local_segments.iter_mut().find(|s| s.path == path) else {
+            let _ = std::fs::remove_file(staging);
+            return Ok(false);
+        };
+        std::fs::rename(staging, path).map_err(|e| {
+            StatsError::Internal(format!("rename {} -> {path}: {e}", staging.display()))
+        })?;
+        seg.size_bytes = byte_size;
+        drop(inner);
+        self.catalog.set_byte_size(&self.name, path, byte_size)?;
+        Ok(true)
     }
 
     /// Backdate one segment's `created_at_ms` in the catalog. Test-only seam
@@ -1346,14 +1619,6 @@ impl Namespace {
     }
 }
 
-fn basename(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path)
-        .to_string()
-}
-
 /// Debug-only deque invariant: no two entries share a path.
 ///
 /// A same-path duplicate is a phantom reference — two entries for one seq range,
@@ -1393,6 +1658,28 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
     }
 }
 
+/// Delete `*.parquet.tmp` left behind by a segment write or layout rewrite that
+/// died before its rename. Nothing references them: the catalog only ever names
+/// the final path, and `discover_segments` ignores the extension, so a survivor
+/// is disk the namespace's own byte accounting cannot see.
+fn discard_staging_files(dir: &std::path::Path, namespace: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("tmp") {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(namespace = %namespace, file = %path.display(),
+                "discarded an abandoned staging file"),
+            Err(e) => tracing::warn!(namespace = %namespace, file = %path.display(), error = %e,
+                "could not discard an abandoned staging file"),
+        }
+    }
+}
+
 /// Adopt segments at boot, reconciling catalog rows against local files.
 ///
 /// Two-pass reconcile:
@@ -1425,6 +1712,8 @@ fn adopt_local_segments(
     let started = Instant::now();
     let mut segs: Vec<LocalSegment> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    discard_staging_files(dir, namespace);
 
     let discover_started = Instant::now();
     let local_files: std::collections::HashMap<String, PathBuf> = discover_segments(dir)
@@ -2097,6 +2386,76 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A column indexed after a segment was written is not in that segment to
+    /// index, so its sidecar can never satisfy the rebuild condition. The
+    /// backfill must try once and drop it, or it re-reads that segment on every
+    /// tick and never reaches the segments that can still be indexed.
+    #[tokio::test]
+    async fn backfill_gives_up_on_a_segment_predating_an_indexed_column() {
+        let dir = tempdir();
+        let ns_dir = dir.join("iris.worker");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+
+        // Segments written under a schema with no `data` column at all.
+        let before = open_ns(
+            "iris.worker",
+            worker_schema(),
+            Some(ns_dir.clone()),
+            catalog.clone(),
+        );
+        before.append_aligned_batch(&aligned(3));
+        before.flush_once().unwrap();
+        let last = before.append_aligned_batch(&aligned(3));
+        before.flush_once().unwrap();
+        before
+            .await_persisted(last, Duration::from_secs(10))
+            .await
+            .unwrap();
+        before.run_maintenance(true).await.unwrap();
+        let segs = discover_segments(&ns_dir);
+        assert_eq!(segs.len(), 1, "two L0 merged into one L1");
+        assert!(!sidecar_path(&segs[0]).exists(), "nothing was indexed yet");
+        before.shutdown(Duration::from_secs(10)).await;
+
+        // Reopen with `data` added and indexed, as `merge_schemas` would leave it.
+        let mut columns = worker_schema().columns;
+        columns
+            .push(Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index());
+        let after = open_ns(
+            "iris.worker",
+            Schema::new(columns, "timestamp_ms"),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+
+        assert_eq!(after.backfill_missing_sidecars(10), 0, "nothing to index");
+        let path = segs[0].to_string_lossy().to_string();
+        assert!(
+            after
+                .sidecar_backfill_skips
+                .lock()
+                .unwrap()
+                .paths
+                .contains(&path),
+            "the segment is dropped from future ticks rather than retried",
+        );
+
+        // Indexing another column is a new question, so the verdict is dropped.
+        after
+            .sidecar_backfill_skips
+            .lock()
+            .unwrap()
+            .reconcile(&["data", "worker_id"], &HashSet::from([path.as_str()]));
+        assert!(after
+            .sidecar_backfill_skips
+            .lock()
+            .unwrap()
+            .paths
+            .is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn maintenance_drops_dangling_segment_reference_instead_of_wedging() {
         // Regression for the `iris.task` compaction wedge. A merge that consumed
@@ -2201,6 +2560,76 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].level, 1);
         assert_eq!(segs[0].location, SegmentLocation::Both);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn layout_rewrite_updates_the_local_segment_without_re_uploading() {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
+        use parquet::file::properties::WriterProperties;
+
+        let dir = tempdir();
+        let remote = dir.join("remote");
+        let ns_dir = dir.join("iris.worker");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns_remote(
+            "iris.worker",
+            worker_schema(),
+            Some(ns_dir),
+            catalog,
+            remote.to_str().unwrap(),
+            StoragePolicy::default(),
+        );
+        write_one(&ns).await;
+        ns.run_maintenance(true).await.unwrap();
+
+        let seg = ns.catalog.list_segments("iris.worker").unwrap().remove(0);
+        assert_eq!(seg.location, SegmentLocation::Both);
+        let remote_name = remote_files(&remote, "iris.worker").remove(0);
+        let remote_path = remote.join("iris.worker").join(&remote_name);
+        let remote_before = std::fs::read(&remote_path).unwrap();
+
+        // Put the local file back onto an older layout (no stamp), as a
+        // pre-existing segment would be.
+        let path = std::path::PathBuf::from(&seg.path);
+        let batches: Vec<RecordBatch> = {
+            let f = std::fs::File::open(&path).unwrap();
+            ParquetRecordBatchReaderBuilder::try_new(f)
+                .unwrap()
+                .build()
+                .unwrap()
+                .map(|b| b.unwrap())
+                .collect()
+        };
+        let out = std::fs::File::create(&path).unwrap();
+        let opts = ArrowWriterOptions::new().with_properties(WriterProperties::builder().build());
+        let mut w = ArrowWriter::try_new_with_options(out, batches[0].schema(), opts).unwrap();
+        for b in &batches {
+            w.write(b).unwrap();
+        }
+        w.close().unwrap();
+        // The layout cache is per-process and starts empty, so a segment written
+        // by an older build is always first seen after a restart. Clear it to
+        // model that: nothing in production edits a segment behind the cache.
+        ns.current_layouts.lock().unwrap().clear();
+        assert_eq!(ns.rewrite_stale_layouts(REWRITE_LAYOUT_BUDGET), 1);
+
+        // Local file adopted the current layout and the catalog followed it.
+        assert!(crate::store::segment::segment_layout_is_current(&path));
+        let after = ns.catalog.list_segments("iris.worker").unwrap().remove(0);
+        assert_eq!(
+            after.byte_size,
+            std::fs::metadata(&path).unwrap().len() as i64
+        );
+        assert_eq!(after.location, SegmentLocation::Both);
+
+        // The archive is untouched: same object, same bytes, no re-upload.
+        assert_eq!(remote_files(&remote, "iris.worker"), vec![remote_name]);
+        assert_eq!(std::fs::read(&remote_path).unwrap(), remote_before);
+
+        // A second pass finds nothing left to do.
+        assert_eq!(ns.rewrite_stale_layouts(REWRITE_LAYOUT_BUDGET), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 

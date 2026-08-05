@@ -61,7 +61,60 @@ timestamp conversion function.
 For a bounded query that is still slow, run `EXPLAIN ANALYZE` and compare
 `row_groups_pruned_statistics`, `bytes_scanned`, `metadata_load_time`, and
 `time_elapsed_opening`. High metadata/opening time with few scanned bytes means
-row-group pruning worked and file metadata is the remaining cost.
+row-group pruning worked and file metadata is the remaining cost. The
+`*_eval_time` metrics are accumulated elapsed time across concurrent per-file
+tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
+one as a place to look, not as a measured cost.
+
+An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
+carries a trigram index; otherwise it decodes the column for every row in the
+namespace. `ListNamespaces` reports which columns are indexed. How much it prunes
+depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
+`ERROR`, so any row group holding both survives, where `%CUDA\_ERROR%` — or
+`contains(data, 'CUDA_ERROR')` — gives the index the whole string. Escape the
+underscores when you mean them literally. Adding one is a
+`RegisterTable` away and does not need a reset, but the sidecar backfill runs a
+few segments per namespace per 30 s tick, so a large namespace speeds up over
+tens of minutes rather than at once.
+
+A release that bumps the sidecar format spends that same window on every existing
+sidecar at once: all of them read as unusable and every substring query scans
+unpruned until the backfill catches up. Before diagnosing a slow substring query
+after a deploy, check whether the rebuild is still in flight — the sidecar header
+carries its version in the fifth byte, so counting versions across a namespace's
+`.tgm` files separates "still rebuilding" from a real pruning failure. A time bound is the faster answer in the moment: `telemetry_v1` is keyed
+on `timestamp_ms` and a 10-minute window answers in about a second where the same
+query unbounded takes 30.
+
+`finelog query` applies a client deadline just past the server's own 60s one.
+Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
+needs longer.
+
+Row groups are sized to hold a fixed number of *encoded* bytes, so a namespace of
+narrow rows gets far fewer of them than one of wide log lines. Encoded rather
+than in-memory bytes is what matters: a telemetry row compresses to ~8 bytes
+against a log line's hundreds, so an in-memory target under-sizes worst exactly
+where the fix is needed.
+
+Each segment's footer carries the layout revision it was written with. Since the
+terminal level is never re-compacted, a maintenance pass re-encodes segments
+still on an older revision, a couple per namespace per 30 s tick — otherwise a
+namespace's bulk would keep its old row groups until eviction aged it out, which
+for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
+rewrite keeps the filename and preserves the rows and their order, so it costs no
+remote bandwidth: the archive keys objects by basename and only uploads segments
+still marked `Local`. A rewritten segment's remote copy keeps the old layout
+while holding the same rows.
+
+Watch it with the `rewrote segment layout` events, which report the before and
+after byte size per segment. Confirm the era split before concluding a layout
+change did or did not land — compare footer bytes for segments modified before
+and after the deploy, since a whole-namespace average is dominated by whatever
+has not been rewritten yet.
+
+`EXPLAIN ANALYZE` reports `row_groups_pruned_statistics` as `<total> total`,
+which is the count for the segments a query touched *after* any injected access
+plan, so it doubles as the check on whether trigram pruning fired.
 
 `query_metadata_cache_mb` in a deployment config overrides DataFusion's
 process-wide Parquet metadata cache limit. Leave it unset to retain DataFusion's

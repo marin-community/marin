@@ -440,6 +440,13 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
 ///   columns to nullable, and re-registration with the original schema must be
 ///   accepted, not rejected).
 /// - a differing `key_column` is a *hint*: warn and keep the registered value.
+/// - a secondary index is *monotonically enabled*: a request that asks for one
+///   on an existing column turns it on, and one that omits it leaves the
+///   registered value alone. Enabling is additive — the sidecar is a derived
+///   artifact the backfill sweep builds, and until it exists the query merely
+///   scans unpruned — so a newer client can add an index to a live namespace
+///   without a reset. An older client that does not know about the field can
+///   never clear one, mirroring the storage-policy rule.
 pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
     if registered.key_column != requested.key_column {
         tracing::warn!(
@@ -450,6 +457,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     }
 
     let mut extras: Vec<Column> = Vec::new();
+    let mut enable_trigram: Vec<&str> = Vec::new();
     for rc in &requested.columns {
         match registered.column(&rc.name) {
             None => {
@@ -470,7 +478,8 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                         column_type_name(rc.r#type),
                     )));
                 }
-                // A nullability difference on an existing column is NOT a conflict.
+                // A nullability difference on an existing column is NOT a conflict,
+                // and is routine rather than notable — hence debug, not warn.
                 // Adopt-from-disk widens every compacted column to nullable
                 // (DuckDB's COPY drops Arrow non-nullability), and the adopt
                 // design relies on a later RegisterTable with the original
@@ -480,21 +489,33 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 // permanently wedge every namespace with non-nullable columns
                 // once a compacted segment is adopted.
                 if existing.nullable != rc.nullable {
-                    tracing::warn!(
+                    tracing::debug!(
                         column = %rc.name,
                         registered = existing.nullable,
                         requested = rc.nullable,
                         "register: nullability differs — keeping registered",
                     );
                 }
+                if rc.index.trigram && !existing.index.trigram {
+                    enable_trigram.push(rc.name.as_str());
+                }
             }
         }
     }
 
-    if extras.is_empty() {
+    if extras.is_empty() && enable_trigram.is_empty() {
         return Ok(registered.clone());
     }
     let mut merged = registered.columns.clone();
+    for column in &mut merged {
+        if enable_trigram.contains(&column.name.as_str()) {
+            tracing::info!(
+                column = %column.name,
+                "register: enabling trigram index on an existing column",
+            );
+            column.index.trigram = true;
+        }
+    }
     merged.extend(extras);
     Ok(Schema::new(merged, registered.key_column.clone()))
 }
@@ -1055,6 +1076,65 @@ mod tests {
             merge_schemas(&reg, &req),
             Err(StatsError::SchemaConflict(_))
         ));
+    }
+
+    #[test]
+    fn merge_enables_trigram_index_on_an_existing_column() {
+        let reg = with_implicit_seq(worker_schema());
+        assert!(!reg.column("worker_id").unwrap().index.trigram);
+
+        let req_cols = reg
+            .columns
+            .iter()
+            .map(|c| {
+                if c.name == "worker_id" {
+                    c.clone().with_trigram_index()
+                } else {
+                    c.clone()
+                }
+            })
+            .collect();
+        let merged = merge_schemas(&reg, &Schema::new(req_cols, "")).unwrap();
+
+        assert!(merged.column("worker_id").unwrap().index.trigram);
+        // Enabling an index must not disturb the column set or their order.
+        assert_eq!(merged.column_names(), reg.column_names());
+    }
+
+    #[test]
+    fn merge_never_disables_a_registered_trigram_index() {
+        let mut reg = with_implicit_seq(worker_schema());
+        reg.columns
+            .iter_mut()
+            .find(|c| c.name == "worker_id")
+            .unwrap()
+            .index
+            .trigram = true;
+
+        // A client that predates the field sends the column with no index set.
+        let merged = merge_schemas(&reg, &with_implicit_seq(worker_schema())).unwrap();
+        assert!(merged.column("worker_id").unwrap().index.trigram);
+    }
+
+    #[test]
+    fn merge_enables_a_trigram_index_alongside_a_new_column() {
+        let reg = with_implicit_seq(worker_schema());
+        let mut req_cols: Vec<Column> = reg
+            .columns
+            .iter()
+            .map(|c| {
+                if c.name == "worker_id" {
+                    c.clone().with_trigram_index()
+                } else {
+                    c.clone()
+                }
+            })
+            .collect();
+        req_cols.push(col("note", ColumnType::COLUMN_TYPE_STRING, true));
+        let merged = merge_schemas(&reg, &Schema::new(req_cols, "")).unwrap();
+
+        assert!(merged.column("worker_id").unwrap().index.trigram);
+        assert!(merged.column("note").is_some());
     }
 
     #[test]

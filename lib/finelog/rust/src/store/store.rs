@@ -11,7 +11,7 @@
 //! - `log` is privileged and undroppable.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -595,8 +595,18 @@ impl Store {
         engine.backdate_segment(path_basename, created_at_ms)
     }
 
-    /// Per-segment catalog rows for `name`, ordered by `min_seq`, for the
-    /// `--debug-admin` `GET /debug/segments` observation surface. Exposes
+    /// Directory holding the catalog and every segment file, or `None` when the
+    /// store is RAM-only.
+    pub fn data_dir(&self) -> Option<&Path> {
+        self.data_dir.as_deref()
+    }
+
+    /// Offload target segments sync to; empty when sync is disabled.
+    pub fn remote_log_dir(&self) -> &str {
+        &self.remote_log_dir
+    }
+
+    /// Per-segment catalog rows for `name`, ordered by `min_seq`. Exposes
     /// level/location/seq-bounds that `NamespaceInfo` does not.
     pub fn list_segments(
         &self,

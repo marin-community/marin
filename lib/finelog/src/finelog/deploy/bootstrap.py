@@ -135,6 +135,7 @@ def render_bootstrap(
     remote_log_dir: str,
     auth_policy: str,
     query_metadata_cache_mb: int | None,
+    query_sidecar_cache_mb: int | None,
 ) -> str:
     """Render the finelog bootstrap script.
 
@@ -143,7 +144,8 @@ def render_bootstrap(
     allow-localhost default, which on a remote VM admits nothing but an SSH
     tunnel. It is passed single-quoted, so it must not contain a single quote
     (the JSON never does — CIDR prefixes, cluster names, PEM public keys).
-    ``query_metadata_cache_mb`` leaves DataFusion's default in place when unset.
+    ``query_metadata_cache_mb`` leaves DataFusion's default in place when unset,
+    and ``query_sidecar_cache_mb`` the server's own sidecar cache default.
     """
     if not image:
         raise ValueError("image is required")
@@ -155,6 +157,8 @@ def render_bootstrap(
     query_env = (
         f"-e FINELOG_QUERY_METADATA_CACHE_MB={query_metadata_cache_mb} " if query_metadata_cache_mb is not None else ""
     )
+    if query_sidecar_cache_mb is not None:
+        query_env += f"-e FINELOG_SIDECAR_CACHE_MB={query_sidecar_cache_mb} "
     return render_template(
         BOOTSTRAP_SCRIPT,
         docker_image=image,

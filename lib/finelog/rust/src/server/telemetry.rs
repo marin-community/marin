@@ -640,7 +640,9 @@ fn telemetry_schema() -> Schema {
             Column::new("record_index", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("service", ColumnType::COLUMN_TYPE_STRING, false),
             Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false),
-            Column::new("name", ColumnType::COLUMN_TYPE_STRING, false),
+            // Metric names are the primary substring-search target
+            // (`name LIKE '%nccl%'`), so this column carries the trigram index.
+            Column::new("name", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("value", ColumnType::COLUMN_TYPE_FLOAT64, true),
             Column::new("body_json", ColumnType::COLUMN_TYPE_STRING, true),
             Column::new("unit", ColumnType::COLUMN_TYPE_STRING, true),
