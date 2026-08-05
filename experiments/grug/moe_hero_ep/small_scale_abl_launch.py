@@ -79,6 +79,7 @@ class Target:
     cpu: int
     ram: str
     disk: str
+    attention_implementation: str
 
     @property
     def expert_axis_size(self) -> int:
@@ -87,9 +88,13 @@ class Target:
 
 # These models are small enough to hold a whole rack's worth of experts on one node, so the H100
 # target keeps the all-to-all inside a single NVLink domain instead of crossing InfiniBand.
+#
+# The attention backend follows the accelerator. `gpu_fa4_cute` is Blackwell-only: its MMA op
+# accepts sm_100/sm_103/sm_110 and rejects H100's sm_90a outright. `gpu_fa4_thd` dispatches on the
+# architecture family and carries real SM90 forward and backward kernels.
 TARGETS: dict[str, Target] = {
-    "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t"),
-    "h100-node": Target("H100", 8, 1, 120, "1900g", "900g"),
+    "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute"),
+    "h100-node": Target("H100", 8, 1, 120, "1900g", "900g", "gpu_fa4_thd"),
 }
 
 
@@ -111,7 +116,7 @@ SMALL_SHAPES: dict[str, SmallShape] = {
 }
 
 
-def _small_model(shape: SmallShape, capacity_factor: float) -> GrugModelConfig:
+def _small_model(shape: SmallShape, capacity_factor: float, attention_implementation: str) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
     Every routing/MoE/attention-kernel field is kept from the d6144 hero shape; only the width,
@@ -139,7 +144,7 @@ def _small_model(shape: SmallShape, capacity_factor: float) -> GrugModelConfig:
         initializer_std=0.5 / math.sqrt(shape.hidden_dim),
         qk_mult=1.3,
         sconv=True,
-        attention_implementation="gpu_fa4_cute",
+        attention_implementation=attention_implementation,
         moe_implementation="fixed_all_to_all",
         expert_chunks=1,
         report_capacity_overflow=True,
@@ -173,7 +178,7 @@ def build_small_run(
 
     shape = SMALL_SHAPES[size]
     fleet = TARGETS[target]
-    model = _small_model(shape, capacity_factor)
+    model = _small_model(shape, capacity_factor, fleet.attention_implementation)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=shape.num_steps,
         batch_size=SMALL_BATCH_SIZE,
