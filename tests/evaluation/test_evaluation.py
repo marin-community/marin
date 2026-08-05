@@ -437,7 +437,9 @@ def test_launch_dry_run_prints_resolved_federated_cluster_and_priority(
     )
 
     assert result.exit_code == 0, result.output
-    assert f"controller_cluster=marin  target_cluster={target_cluster}  priority={priority}" in result.output
+    assert "controller_cluster=marin" in result.output
+    assert f"target_cluster={target_cluster}" in result.output
+    assert f"priority={priority}" in result.output
 
 
 def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch):

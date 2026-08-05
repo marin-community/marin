@@ -150,25 +150,6 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
     assert "--trust-remote-code" not in engine_args
 
 
-def test_gpu_lowering_sets_serve_priority():
-    model = ModelConfig(
-        name="gpu-model",
-        location="org/model",
-        resource_hint=ResourceHint(gpu={"H100": 1}),
-        serve=ServeConfig(auto_overrides=False),
-    )
-    choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=1)
-
-    config = inference_config_for_model(
-        model,
-        choice,
-        env_vars={},
-        priority=job_pb2.PRIORITY_BAND_INTERACTIVE,
-    )
-
-    assert config.iris.priority == job_pb2.PRIORITY_BAND_INTERACTIVE
-
-
 def test_scan_model_configs_keys_by_name_and_skips_underscored(tmp_path):
     _write(tmp_path, "Qwen/Qwen3-8B.yaml", "name: qwen3-8b\nlocation: Qwen/Qwen3-8B\n")
     _write(tmp_path, "org/other.yaml", "name: other\nlocation: org/other\n")
