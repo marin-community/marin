@@ -32,9 +32,10 @@ use datafusion::logical_expr::{BinaryExpr, Expr, Like, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource_parquet::ParquetAccessPlan;
+use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 
 use crate::query::sidecar::SidecarManager;
-use crate::store::segment::segment_row_group_count;
+use crate::store::segment::segment_row_group_rows;
 use crate::store::trigram::{needle_trigrams, sidecar_path, MIN_TRIGRAM_LEN};
 
 /// An inclusive key range constraining a single column, distilled from a query's
@@ -318,6 +319,8 @@ fn build_access_plans(
     let mut out = HashMap::new();
     let mut total_row_groups = 0usize;
     let mut skipped_row_groups = 0usize;
+    let mut total_spans = 0usize;
+    let mut skipped_spans = 0usize;
     let mut scoped_out = 0usize;
     for path in segment_paths {
         let p = Path::new(path);
@@ -346,12 +349,12 @@ fn build_access_plans(
                 }
             }
         }
-        // A row group survives only if it survives EVERY constrained column's
-        // needles. A column this segment's sidecar does not index can't prune, so
-        // it simply contributes no constraint here. The mask is sized from the
-        // sidecar's own row-group count; the parquet is consulted below, only for
-        // a segment whose blooms actually pruned something.
-        let mut keep = vec![true; header.rg_count as usize];
+        // A span survives only if it survives EVERY constrained column's needles.
+        // A column this segment's sidecar does not index can't prune, so it
+        // simply contributes no constraint here. The mask is sized from the
+        // sidecar's own span count; the parquet is consulted below, only for a
+        // segment whose blooms actually pruned something.
+        let mut keep = vec![true; header.span_count as usize];
         let mut applied_any = false;
         for (&col, needle_trigrams) in &trigrams_by_column {
             let Some(index) = manager.get_column(&sidecar, &header, col) else {
@@ -367,32 +370,27 @@ fn build_access_plans(
         if !applied_any || keep.iter().all(|&k| k) {
             continue;
         }
-        // Confirm the sidecar aligns with the segment before attaching a plan: a
-        // row-group mismatch would hard-error the opener. This parses the whole
+        // Map the span mask onto the segment's row groups. This parses the whole
         // footer, so it runs last — after the cheap header and key-band checks,
         // and only for a segment an access plan would be attached to.
-        let Some(rg_count) = segment_row_group_count(p) else {
+        let Some(row_group_rows) = segment_row_group_rows(p) else {
             continue;
         };
-        if rg_count != keep.len() {
+        let Some(access) = span_access_plan(&keep, header.span_rows as usize, &row_group_rows)
+        else {
             tracing::warn!(
                 segment = basename,
-                sidecar_row_groups = header.rg_count,
-                parquet_row_groups = rg_count,
-                "stale trigram sidecar (row-group count mismatch); scanning unpruned"
+                sidecar_spans = header.span_count,
+                sidecar_span_rows = header.span_rows,
+                parquet_rows = row_group_rows.iter().sum::<usize>(),
+                "stale trigram sidecar (spans do not cover the segment); scanning unpruned"
             );
             continue;
-        }
-        let mut access = ParquetAccessPlan::new_all(rg_count);
-        let mut skipped = 0usize;
-        for (i, &k) in keep.iter().enumerate() {
-            if !k {
-                access.skip(i);
-                skipped += 1;
-            }
-        }
-        total_row_groups += rg_count;
-        skipped_row_groups += skipped;
+        };
+        total_row_groups += row_group_rows.len();
+        skipped_row_groups += row_group_rows.len() - access.row_group_indexes().len();
+        total_spans += keep.len();
+        skipped_spans += keep.iter().filter(|&&k| !k).count();
         out.insert(basename.to_string(), access);
     }
     if !out.is_empty() || scoped_out > 0 {
@@ -402,10 +400,72 @@ fn build_access_plans(
             segments_scoped_out = scoped_out,
             row_groups_skipped = skipped_row_groups,
             row_groups_total = total_row_groups,
+            spans_skipped = skipped_spans,
+            spans_total = total_spans,
             "trigram prune"
         );
     }
     out
+}
+
+/// Turn a per-span keep mask into a row-group access plan.
+///
+/// Spans and row groups both partition the segment's rows in order but at
+/// different strides, so a row group can be fully kept, fully skipped, or —
+/// the case that makes the decoupling worthwhile — partly covered, where it
+/// carries a row selection instead. `None` when the spans do not account for
+/// exactly the segment's rows, which means the sidecar is stale.
+fn span_access_plan(
+    keep: &[bool],
+    span_rows: usize,
+    row_group_rows: &[usize],
+) -> Option<ParquetAccessPlan> {
+    if span_rows == 0 {
+        return None;
+    }
+    let total_rows: usize = row_group_rows.iter().sum();
+    if keep.len() != total_rows.div_ceil(span_rows) {
+        return None;
+    }
+    let mut access = ParquetAccessPlan::new_all(row_group_rows.len());
+    let mut row_start = 0usize;
+    for (rg, &rows) in row_group_rows.iter().enumerate() {
+        if rows == 0 {
+            row_start += rows;
+            continue;
+        }
+        let spans = (row_start / span_rows)..=((row_start + rows - 1) / span_rows);
+        if spans.clone().all(|s| keep[s]) {
+            row_start += rows;
+            continue;
+        }
+        if spans.clone().all(|s| !keep[s]) {
+            access.skip(rg);
+            row_start += rows;
+            continue;
+        }
+        // Partly covered: walk this row group's rows span by span, emitting one
+        // selector per run. Selectors are in row-group-local coordinates.
+        let mut selectors: Vec<RowSelector> = Vec::new();
+        for span in spans {
+            let span_begin = span * span_rows;
+            let begin = span_begin.max(row_start);
+            let end = (span_begin + span_rows).min(row_start + rows);
+            let run = end - begin;
+            let selector = if keep[span] {
+                RowSelector::select(run)
+            } else {
+                RowSelector::skip(run)
+            };
+            match selectors.last_mut() {
+                Some(last) if last.skip == selector.skip => last.row_count += run,
+                _ => selectors.push(selector),
+            }
+        }
+        access.scan_selection(rg, RowSelection::from(selectors));
+        row_start += rows;
+    }
+    Some(access)
 }
 
 /// Rebuild the scan's file groups, attaching each file's access plan as a
@@ -619,7 +679,8 @@ mod tests {
     /// Write a real 2-row-group log segment (all rows under `key`, the needle in
     /// row group 1 only) plus its trigram sidecar; return the segment path.
     fn write_scoping_segment(dir: &std::path::Path, key: &str, needle: &str) -> String {
-        use crate::store::segment::{write_segment_to_dir, ROW_GROUP_SIZE};
+        use crate::store::segment::write_segment_to_dir;
+        use crate::store::trigram::SIDECAR_SPAN_ROWS;
         use arrow::array::{Int64Array, StringArray};
         use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
         use arrow::record_batch::RecordBatch;
@@ -629,7 +690,7 @@ mod tests {
             Field::new("key", DataType::Utf8, false),
             Field::new("data", DataType::Utf8, false),
         ]));
-        let mut data: Vec<String> = (0..ROW_GROUP_SIZE)
+        let mut data: Vec<String> = (0..SIDECAR_SPAN_ROWS)
             .map(|_| "idle heartbeat ok".to_string())
             .collect();
         data.push(needle.to_string()); // row group 1
@@ -705,6 +766,39 @@ mod tests {
         assert!(build_access_plans(&paths, &needles, &out_of_band).is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn span_mask_maps_onto_row_groups_of_a_different_stride() {
+        use datafusion_datasource_parquet::RowGroupAccess;
+
+        // 5 spans of 4 rows over row groups of 10, 10 — so row group 0 holds
+        // spans 0-2 (the third only partly) and row group 1 holds spans 2-4.
+        let keep = [true, false, false, true, false];
+        let plan = span_access_plan(&keep, 4, &[10, 10]).expect("spans cover the 20 rows");
+        let [first, second] = plan.inner() else {
+            panic!("two row groups: {plan:?}");
+        };
+        // Row group 0: rows 0-3 kept, 4-9 dropped.
+        let RowGroupAccess::Selection(first) = first else {
+            panic!("row group 0 is partly covered: {first:?}");
+        };
+        assert_eq!(first.row_count(), 4);
+        // Row group 1: rows 12-15 kept (span 3), the rest dropped.
+        let RowGroupAccess::Selection(second) = second else {
+            panic!("row group 1 is partly covered: {second:?}");
+        };
+        assert_eq!(second.row_count(), 4);
+
+        // A row group every one of whose spans survives is scanned whole, and one
+        // whose spans are all pruned is skipped outright.
+        let plan = span_access_plan(&[true, true, false, false, false], 4, &[10, 10]).unwrap();
+        assert!(matches!(plan.inner()[1], RowGroupAccess::Skip));
+
+        // Spans that do not account for exactly the segment's rows mean a stale
+        // sidecar, which must not produce a plan at all.
+        assert!(span_access_plan(&keep, 4, &[10, 20]).is_none());
+        assert!(span_access_plan(&keep, 8, &[10, 10]).is_none());
     }
 
     #[tokio::test]

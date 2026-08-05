@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use arrow::array::RecordBatch;
@@ -23,15 +23,41 @@ use parquet::schema::types::ColumnPath;
 use crate::errors::StatsError;
 use crate::store::types::{parse_seg_filename, seg_filename};
 
-/// Parquet row-group size.
-pub const ROW_GROUP_SIZE: usize = 16_384;
+/// Bytes of in-memory row data a parquet row group should hold.
+///
+/// Row groups are the unit of footer metadata: every one costs a record per
+/// column, with offsets, encodings, sizes, and min/max statistics. Sizing them by
+/// rows alone makes that cost track a namespace's row *width* — telemetry rows
+/// are ~20x narrower than log lines, so a fixed row count gave `telemetry_v1`
+/// 108K row groups and 206 MiB of footer for 15 GiB of data, most of a query's
+/// latency before any column was read. Sizing by bytes keeps the footer
+/// proportional to the data instead.
+const TARGET_ROW_GROUP_BYTES: usize = 16 * 1024 * 1024;
+
+/// Row-group bounds. The floor keeps small segments from collapsing to a single
+/// row group (which prunes nothing); the ceiling bounds the writer's buffered
+/// row group and keeps key statistics from covering too wide a band.
+const MIN_ROW_GROUP_ROWS: usize = 16_384;
+const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
+
+/// Rows per row group for a segment holding `batches`, from their mean in-memory
+/// width. Empty input takes the floor.
+pub fn row_group_rows(batches: &[RecordBatch]) -> usize {
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    if rows == 0 {
+        return MIN_ROW_GROUP_ROWS;
+    }
+    let bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
+    let bytes_per_row = (bytes / rows).max(1);
+    (TARGET_ROW_GROUP_BYTES / bytes_per_row).clamp(MIN_ROW_GROUP_ROWS, MAX_ROW_GROUP_ROWS)
+}
 
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
-/// Sets row-group [`ROW_GROUP_SIZE`], zstd level 1 (not the library default 3),
-/// and bloom filters: `Some(col)` writes one for exactly that column, `None`
-/// writes none. Centralizing this keeps L0 and compacted segments on one
+/// Sets `row_group_rows` (see [`row_group_rows`]), zstd level 1 (not the library
+/// default 3), and bloom filters: `Some(col)` writes one for exactly that column,
+/// `None` writes none. Centralizing this keeps L0 and compacted segments on one
 /// consistent on-disk layout.
 ///
 /// Callers pass the key column for L0 and `None` for compacted output. L0 is
@@ -40,11 +66,12 @@ pub const ROW_GROUP_SIZE: usize = 16_384;
 /// min/max statistics already prune the key band.
 pub fn segment_writer_properties(
     bloom_column: Option<&str>,
+    row_group_rows: usize,
 ) -> Result<WriterProperties, StatsError> {
     let zstd =
         ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
     let mut builder = WriterProperties::builder()
-        .set_max_row_group_row_count(Some(ROW_GROUP_SIZE))
+        .set_max_row_group_row_count(Some(row_group_rows))
         .set_compression(Compression::ZSTD(zstd))
         .set_bloom_filter_enabled(false);
     if let Some(column) = bloom_column {
@@ -69,10 +96,10 @@ pub struct SegmentMetadata {
     pub max_key_value: Option<i64>,
 }
 
-/// Encode `batch` to parquet bytes (UNSORTED L0, row-group 16384, zstd-1, a
-/// bloom filter on `key_column`).
+/// Encode `batch` to parquet bytes (UNSORTED L0, zstd-1, a bloom filter on
+/// `key_column`).
 pub fn write_segment(batch: &RecordBatch, key_column: Option<&str>) -> Result<Vec<u8>, StatsError> {
-    let props = segment_writer_properties(key_column)?;
+    let props = segment_writer_properties(key_column, row_group_rows(std::slice::from_ref(batch)))?;
     let mut buf: Vec<u8> = Vec::new();
     let opts = ArrowWriterOptions::new().with_properties(props);
     let mut writer = ArrowWriter::try_new_with_options(&mut buf, batch.schema(), opts)
@@ -205,63 +232,66 @@ pub fn segment_bounds(
     Some((num_rows, lo, hi))
 }
 
-/// Cached row-group counts, keyed by path and the file identity (length and
-/// modified time) the count was read from. Cleared wholesale past
-/// [`ROW_GROUP_COUNT_CACHE_ENTRIES`] rather than evicted one at a time: a segment
+/// Cached row-group layouts, keyed by path and the file identity (length and
+/// modified time) the layout was read from. Cleared wholesale past
+/// [`ROW_GROUP_CACHE_ENTRIES`] rather than evicted one at a time: a segment
 /// is written once and read many times, so entries only go stale when a segment
 /// is compacted away, and re-reading a few footers after a clear is far cheaper
 /// than tracking liveness.
-static ROW_GROUP_COUNTS: OnceLock<Mutex<HashMap<PathBuf, CachedRowGroupCount>>> = OnceLock::new();
+static ROW_GROUP_LAYOUTS: OnceLock<Mutex<HashMap<PathBuf, CachedRowGroups>>> = OnceLock::new();
 
-/// A row-group count and the file identity it was read from.
-struct CachedRowGroupCount {
+/// A segment's row-group row counts and the file identity they were read from.
+struct CachedRowGroups {
     len: u64,
     modified: SystemTime,
-    row_groups: usize,
+    rows: Arc<[usize]>,
 }
 
 /// Entries held before the row-group cache is cleared. A hub holds low thousands
 /// of segments across every namespace, so this is headroom, not a working limit.
-const ROW_GROUP_COUNT_CACHE_ENTRIES: usize = 8192;
+const ROW_GROUP_CACHE_ENTRIES: usize = 8192;
 
-/// Footer-only row-group count for the parquet file at `path`, or `None` on an
-/// unreadable footer. Used by the trigram prune to confirm a sidecar's
-/// per-row-group entries align with the segment before attaching an access plan.
+/// Footer-only row counts, one per row group, for the parquet file at `path`, or
+/// `None` on an unreadable footer. The trigram prune uses them to map its span
+/// mask onto row groups.
 ///
-/// Reading it means parsing the whole footer — every row group's metadata, not
-/// just the count — which over a namespace's segments costs more than the scan
-/// the prune is there to avoid. Segments are immutable once written, so the
-/// count is cached against the file's length and modified time; a path written
-/// again is read again rather than answered from the old entry.
-pub fn segment_row_group_count(path: &Path) -> Option<usize> {
+/// Reading them means parsing the whole footer — every row group's metadata —
+/// which over a namespace's segments costs more than the scan the prune is there
+/// to avoid. Segments are immutable once written, so the layout is cached against
+/// the file's length and modified time; a path written again is read again rather
+/// than answered from the old entry.
+pub fn segment_row_group_rows(path: &Path) -> Option<Arc<[usize]>> {
     let file = std::fs::File::open(path).ok()?;
     let meta = file.metadata().ok()?;
     let (len, modified) = (meta.len(), meta.modified().ok()?);
 
-    let cache = ROW_GROUP_COUNTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = ROW_GROUP_LAYOUTS.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(entry) = cache.lock().unwrap().get(path) {
         if entry.len == len && entry.modified == modified {
-            return Some(entry.row_groups);
+            return Some(Arc::clone(&entry.rows));
         }
     }
 
-    let row_groups = SerializedFileReader::new(file)
-        .ok()?
+    let reader = SerializedFileReader::new(file).ok()?;
+    let rows: Arc<[usize]> = reader
         .metadata()
-        .num_row_groups();
+        .row_groups()
+        .iter()
+        .map(|rg| rg.num_rows() as usize)
+        .collect();
     let mut cache = cache.lock().unwrap();
-    if cache.len() >= ROW_GROUP_COUNT_CACHE_ENTRIES {
+    if cache.len() >= ROW_GROUP_CACHE_ENTRIES {
         cache.clear();
     }
     cache.insert(
         path.to_path_buf(),
-        CachedRowGroupCount {
+        CachedRowGroups {
             len,
             modified,
-            row_groups,
+            rows: Arc::clone(&rows),
         },
     );
-    Some(row_groups)
+    Some(rows)
 }
 
 /// All `seg_L*_*.parquet` files in `dir`, sorted by filename (== by min_seq for
@@ -325,28 +355,28 @@ mod tests {
         .unwrap()
     }
 
-    /// The count is cached against the file's identity, not just its path, so a
-    /// path written again is re-read. Segments are immutable in practice, but a
-    /// stale count would make the trigram prune reject a valid sidecar (or, if it
-    /// were too small, attach a plan the opener rejects).
+    /// The layout is cached against the file's identity, not just its path, so a
+    /// path written again is re-read.
     #[test]
-    fn row_group_count_is_reread_when_the_file_changes() {
+    fn row_group_layout_is_reread_when_the_file_changes() {
         let dir = tempdir();
         let path = dir.join("seg_L1_0000000000000000001.parquet");
 
         let one_group = batch_with_keys(1, (0..10).collect());
         std::fs::write(&path, write_segment(&one_group, None).unwrap()).unwrap();
-        assert_eq!(segment_row_group_count(&path), Some(1));
+        assert_eq!(segment_row_group_rows(&path).as_deref(), Some(&[10][..]));
         assert_eq!(
-            segment_row_group_count(&path),
-            Some(1),
+            segment_row_group_rows(&path).as_deref(),
+            Some(&[10][..]),
             "second call cached"
         );
 
-        // Two row groups at the same path: more rows than ROW_GROUP_SIZE.
-        let two_groups = batch_with_keys(1, (0..(ROW_GROUP_SIZE as i64 + 1)).collect());
-        std::fs::write(&path, write_segment(&two_groups, None).unwrap()).unwrap();
-        assert_eq!(segment_row_group_count(&path), Some(2));
+        // A different layout at the same path must not be answered from the old
+        // entry: a stale layout would make the trigram prune reject a valid
+        // sidecar, or attach a plan the parquet opener rejects.
+        let more = batch_with_keys(1, (0..25).collect());
+        std::fs::write(&path, write_segment(&more, None).unwrap()).unwrap();
+        assert_eq!(segment_row_group_rows(&path).as_deref(), Some(&[25][..]));
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -281,7 +281,7 @@ fn header_heap_bytes(header: &SidecarHeader) -> usize {
     let key_bytes = header.key_min.as_ref().map_or(0, Vec::len)
         + header.key_max.as_ref().map_or(0, Vec::len)
         + header.key_column.len();
-    // The directory is private to trigram.rs; approximate it from rg_count-free
+    // The directory is private to trigram.rs; approximate it from span-count-free
     // fixed overhead. A handful of columns at most, so a constant suffices.
     std::mem::size_of::<SidecarHeader>() + key_bytes + 128
 }
@@ -316,7 +316,7 @@ fn read_column(path: &Path, header: &SidecarHeader, column: &str) -> Option<Colu
     let file = std::fs::File::open(path).ok()?;
     let mut buf = vec![0u8; dir.len as usize];
     file.read_exact_at(&mut buf, dir.offset).ok()?;
-    trigram::parse_column(&buf, header.rg_count)
+    trigram::parse_column(&buf, header.span_count)
 }
 
 #[cfg(test)]
@@ -382,7 +382,7 @@ mod tests {
         let mgr = SidecarManager::with_budget_bytes(64 * 1024 * 1024);
 
         let header = mgr.get_header(&sc).expect("header");
-        assert_eq!(header.rg_count, 1);
+        assert_eq!(header.span_count, 1);
         assert_eq!(header.key_min.as_deref(), Some(b"/m/a".as_slice()));
         assert!(header.column(FIXTURE_COLUMN).is_some());
 

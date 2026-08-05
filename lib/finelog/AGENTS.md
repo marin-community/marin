@@ -135,7 +135,16 @@ Enabling one is additive and can be done on a live namespace: `RegisterTable`
 turns an index on and never turns one off, and the maintenance backfill rebuilds
 any L≥1 sidecar that is missing or predates the column. Until a sidecar exists
 the query is unpruned, never wrong. Indexing a large namespace takes a while —
-the backfill is one segment per 30 s tick — so the speedup arrives gradually.
+the backfill is a few segments per namespace per 30 s tick — so the speedup
+arrives gradually.
+
+A sidecar Bloom covers a fixed 16,384-row *span*, which is deliberately not the
+parquet row-group size — row groups are sized to a byte target so a namespace's
+footer stays proportional to its data rather than to its row width. The prune
+maps the span mask onto row groups, emitting a row selection where a row group is
+only partly covered. Sidecars carry a format version; bumping it makes every
+existing sidecar unreadable (queries scan unpruned) until the maintenance
+backfill rebuilds them, a few segments per namespace per 30 s tick.
 
 Bloom filters are written only for **L0's key column**. L0 is unsorted, so a
 bloom is the only thing that prunes an exact-key lookup there; L1+ is sorted by

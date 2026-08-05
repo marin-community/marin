@@ -36,7 +36,7 @@ use crate::store::compaction::merge::{
     kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
 };
 use crate::store::compaction::planner::aggregate_key_bounds;
-use crate::store::segment::{segment_bounds, segment_writer_properties};
+use crate::store::segment::{row_group_rows, segment_bounds, segment_writer_properties};
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
 fn now_ms() -> i64 {
@@ -399,7 +399,7 @@ fn write_merged_segment(
     schema: &SchemaRef,
     batches: &[RecordBatch],
 ) -> Result<(), StatsError> {
-    let props = segment_writer_properties(None)?;
+    let props = segment_writer_properties(None, row_group_rows(batches))?;
     let file = std::fs::File::create(path)
         .map_err(|e| StatsError::Internal(format!("create {}: {e}", path.display())))?;
     let opts = ArrowWriterOptions::new().with_properties(props);
@@ -864,12 +864,11 @@ mod tests {
     /// row loss and global (key, seq) order across row-group boundaries.
     #[test]
     fn merge_multi_row_group_input_no_concat() {
-        use crate::store::segment::ROW_GROUP_SIZE;
         let dir = tempdir("multirg");
 
         // One large L0 segment: >2 row groups, written UNSORTED (descending key)
         // so the per-batch sort is load-bearing. seq is unique and monotonic.
-        let n = (ROW_GROUP_SIZE as i64) * 2 + 500;
+        let n = 16_384_i64 * 2 + 500;
         let big: Vec<(i64, i64, &str)> = (1..=n).map(|s| (s, n - s + 1, "big")).collect();
         let (p_big, _) = write_segment_to_dir(&dir, 0, 1, &batch(&big), Some("key")).unwrap();
         let (p_small, _) =
@@ -1031,15 +1030,14 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_row_groups_match_parquet_across_batch_boundaries() {
-        // The prune contract depends on the index having exactly one Bloom per
-        // parquet row group. The index chunks at ROW_GROUP_SIZE; `ArrowWriter`
-        // (via `segment_writer_properties`) flushes at the same stride REGARDLESS
-        // of how the written batches are split. Lock that with input batches whose
-        // boundaries straddle a row-group boundary (10k|10k|10005 over a 16384
-        // stride), so the writer must re-chunk across `write()` calls.
-        use crate::store::segment::{segment_row_group_count, ROW_GROUP_SIZE};
-        use crate::store::trigram::TrigramIndex;
+    fn sidecar_spans_cover_the_written_rows_across_batch_boundaries() {
+        // The prune contract is that the sidecar's spans account for exactly the
+        // segment's rows: the mask is then mapped onto whatever row groups the
+        // writer chose. Both sides chunk independently of how the written batches
+        // are split, so lock that with input batches whose boundaries straddle a
+        // span boundary (10k|10k|10005 over a 16384 stride).
+        use crate::store::segment::segment_row_group_rows;
+        use crate::store::trigram::{TrigramIndex, SIDECAR_SPAN_ROWS};
 
         let dir = tempdir("tgm_align");
         let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
@@ -1063,26 +1061,22 @@ mod tests {
         };
         let batches = vec![mk(1, 10_000), mk(10_001, 10_000), mk(20_001, 10_005)];
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
-        let expected_groups = total.div_ceil(ROW_GROUP_SIZE);
-        assert_eq!(
-            expected_groups, 2,
-            "30005 rows over a 16384 stride is 2 groups"
-        );
 
         let path = dir.join("seg_L1_00000000000000000001.parquet");
         write_merged_segment(&path, &log, &batches).unwrap();
 
-        let parquet_groups =
-            segment_row_group_count(&path).expect("readable footer for the written segment");
+        let row_group_rows =
+            segment_row_group_rows(&path).expect("readable footer for the written segment");
+        assert_eq!(
+            row_group_rows.iter().sum::<usize>(),
+            total,
+            "the row groups must account for every written row"
+        );
         let index = TrigramIndex::build(&batches, "data").unwrap();
         assert_eq!(
-            parquet_groups, expected_groups,
-            "ArrowWriter must flush a row group every ROW_GROUP_SIZE rows"
-        );
-        assert_eq!(
             index.len(),
-            parquet_groups,
-            "sidecar must carry exactly one Bloom per parquet row group"
+            total.div_ceil(SIDECAR_SPAN_ROWS),
+            "the sidecar must carry one Bloom per span of the written rows"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

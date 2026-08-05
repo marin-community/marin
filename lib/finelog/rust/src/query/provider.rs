@@ -203,6 +203,7 @@ mod tests {
     use arrow::array::{Array, Int64Array, StringArray};
 
     use crate::query::string_values::StringValues;
+    use crate::store::trigram::SIDECAR_SPAN_ROWS;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionContext;
@@ -478,12 +479,11 @@ mod tests {
         ]))
     }
 
-    /// Write one segment whose `data` column is `rg0` rows of `filler` followed
-    /// by `rg1`, then build its trigram sidecar — so row group 0 lacks the needle
-    /// and row group 1 carries it. Returns the segment path.
+    /// Write one segment whose `data` column is a full span of `filler` followed
+    /// by `rg1`, then build its trigram sidecar — so sidecar span 0 lacks the
+    /// needle and span 1 carries it. Returns the segment path.
     fn write_two_rg_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
-        use crate::store::segment::ROW_GROUP_SIZE;
-        let n0 = ROW_GROUP_SIZE;
+        let n0 = SIDECAR_SPAN_ROWS;
         let mut data: Vec<String> = (0..n0).map(|_| filler.to_string()).collect();
         data.extend(rg1.iter().map(|s| s.to_string()));
         let n = data.len() as i64;
@@ -556,7 +556,7 @@ mod tests {
         use datafusion::datasource::source::DataSourceExec;
         use datafusion::logical_expr::{col, lit};
         use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-        use datafusion_datasource_parquet::ParquetAccessPlan;
+        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 
         let dir = tempdir("contains_prune");
         // The needle lives only in row group 1 (rows 2 and 4 of the tail).
@@ -567,6 +567,7 @@ mod tests {
             "idle heartbeat ok",
             "another Bootstrap completed for TPU-xyz here",
         ];
+        let rg1_rows = rg1.len();
         let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
 
         // 1) End-to-end correctness: the contains() query returns exactly the two
@@ -634,13 +635,16 @@ mod tests {
                     .as_ref()
                     .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
                     .expect("trigram access plan attached to the partitioned file");
-                assert!(
-                    !ap.should_scan(0),
-                    "row group 0 (no needle) must be skipped"
-                );
-                assert!(
-                    ap.should_scan(1),
-                    "row group 1 (has needle) must be scanned"
+                // The needle is confined to the second span. These narrow rows
+                // fit one byte-sized row group, so the prune expresses that as a
+                // row selection inside it rather than a skipped row group.
+                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
+                    panic!("expected one row group carrying a row selection: {ap:?}");
+                };
+                assert_eq!(
+                    selection.row_count(),
+                    rg1_rows,
+                    "only the needle's span may be selected"
                 );
                 checked += 1;
             }
@@ -660,7 +664,7 @@ mod tests {
         // injected skip of the needle-free row group 0.
         use datafusion::datasource::physical_plan::FileScanConfig;
         use datafusion::datasource::source::DataSourceExec;
-        use datafusion_datasource_parquet::ParquetAccessPlan;
+        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 
         let dir = tempdir("like_prune");
         let needle = "Bootstrap completed for TPU-xyz";
@@ -669,6 +673,7 @@ mod tests {
             "E0601 Bootstrap completed for TPU-xyz started",
             "idle heartbeat ok",
         ];
+        let rg1_rows = rg1.len();
         let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
 
         let ctx = crate::query::make_ctx();
@@ -733,13 +738,16 @@ mod tests {
                     .as_ref()
                     .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
                     .expect("trigram access plan attached for the LIKE query");
-                assert!(
-                    !ap.should_scan(0),
-                    "row group 0 (no needle) must be skipped"
-                );
-                assert!(
-                    ap.should_scan(1),
-                    "row group 1 (has needle) must be scanned"
+                // The needle is confined to the second span. These narrow rows
+                // fit one byte-sized row group, so the prune expresses that as a
+                // row selection inside it rather than a skipped row group.
+                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
+                    panic!("expected one row group carrying a row selection: {ap:?}");
+                };
+                assert_eq!(
+                    selection.row_count(),
+                    rg1_rows,
+                    "only the needle's span may be selected"
                 );
                 checked += 1;
             }

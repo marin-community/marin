@@ -73,15 +73,22 @@ depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
 `ERROR`, so any row group holding both survives, where `%CUDA\_ERROR%` — or
 `contains(data, 'CUDA_ERROR')` — gives the index the whole string. Escape the
 underscores when you mean them literally. Adding one is a
-`RegisterTable` away and does not need a reset, but the sidecar backfill runs at
-one segment per 30 s tick, so a large namespace speeds up over hours rather than
-at once. A time bound is the faster answer in the moment: `telemetry_v1` is keyed
+`RegisterTable` away and does not need a reset, but the sidecar backfill runs a
+few segments per namespace per 30 s tick, so a large namespace speeds up over
+tens of minutes rather than at once. A time bound is the faster answer in the moment: `telemetry_v1` is keyed
 on `timestamp_ms` and a 10-minute window answers in about a second where the same
 query unbounded takes 30.
 
 `finelog query` applies a client deadline just past the server's own 60s one.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
 needs longer.
+
+Row groups are sized to hold a fixed number of *bytes*, so a namespace of narrow
+rows gets far fewer of them than one of wide log lines. This only applies to
+segments written since the change: existing segments keep the row groups they
+were written with, and their footers shrink as compaction and eviction turn them
+over. `EXPLAIN ANALYZE` reports `row_groups_pruned_statistics` as
+`<total> total`, which is the count for the segments a query touched.
 
 `query_metadata_cache_mb` in a deployment config overrides DataFusion's
 process-wide Parquet metadata cache limit. Leave it unset to retain DataFusion's

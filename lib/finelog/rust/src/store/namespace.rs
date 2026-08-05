@@ -90,11 +90,14 @@ fn sidecar_needs_rebuild(segment: &Path, indexed: &[&str]) -> bool {
 }
 
 /// Trigram sidecars rebuilt per maintenance tick by the background backfill.
-/// Kept at one because a single index build over a terminal-level segment is
-/// itself heavy (the builder currently uses substantial CPU + RAM); rebuilding
-/// one per tick keeps the backfill the lowest-priority maintenance work and
-/// never starves compaction/sync/eviction. Raise once the builder is cheaper.
-pub const BACKFILL_SIDECARS_PER_TICK: usize = 1;
+///
+/// A single index build over a terminal-level segment is heavy (substantial CPU
+/// and RAM), and the backfill is the lowest-priority maintenance work, so this
+/// stays small enough never to starve compaction/sync/eviction. It is four rather
+/// than one so a namespace whose sidecars all need rebuilding — every sidecar
+/// format bump does that — converges in tens of minutes instead of hours, during
+/// which its substring queries scan unpruned.
+pub const BACKFILL_SIDECARS_PER_TICK: usize = 4;
 
 fn now_ms() -> i64 {
     SystemTime::now()
