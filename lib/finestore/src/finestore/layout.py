@@ -53,9 +53,12 @@ GEN_COLUMN = "_gen"
 # The URI scheme sample rows use to reference payloads held inside the same archive.
 URI_SCHEME = "finestore"
 
-# The reserved table backing ``DataStore.write``: an opaque payload store keyed by blob name. Both the
-# writer and the reader (``resolve``/``read_blob``) depend on this contract, so it lives in the layout
-# module they both import rather than one importing the other.
+# The reserved table backing ``DataStore.write``: an opaque payload store whose merge key is the blob
+# name, so writes batch through the background flusher like any table and a compacted shard is sorted
+# by name -- a ``name ==`` lookup then prunes to a single row group via the Parquet footer statistics
+# rather than scanning. It is also the ``finestore://blobs/<name>`` URI's netloc. Both the writer and
+# the reader (``resolve``/``read_blob``) depend on this contract, so it lives in the layout module they
+# both import rather than one importing the other.
 BLOBS_TABLE = "blobs"
 BLOB_NAME_COLUMN = "name"
 

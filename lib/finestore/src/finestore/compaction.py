@@ -28,7 +28,7 @@ import pyarrow as pa
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 from pyarrow.fs import FSSpecHandler, PyFileSystem
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import factory
 
 from finestore.layout import SEQ_COLUMN, FineStoreLayout, Shard
 from finestore.reader import CompositeReader
@@ -43,7 +43,7 @@ _COMPACTOR = "compactor"
 _COMPACT_BATCH_ROWS = 10_000
 
 # One item in the merge heap: (merge-key tuple, generation, seq, row dict). The key sorts the merge;
-# generation then seq breaks ties so the latest write of a key wins.
+# seq then generation breaks ties so the latest write of a key wins (same rule the reader applies).
 _MergeItem = tuple[tuple, int, int, dict]
 
 
@@ -79,7 +79,7 @@ def _merge_dedup(streams: list[Iterator[_MergeItem]], merge_key: tuple[str, ...]
     """Merge per-shard sorted streams into one merge-key-ordered stream, one surviving row per key."""
     merged = heapq.merge(*streams, key=lambda item: item[0])
     for _key, group in itertools.groupby(merged, key=lambda item: item[0]):
-        winner = max(group, key=lambda item: (item[1], item[2]))
+        winner = max(group, key=lambda item: (item[2], item[1]))
         yield winner[3]
 
 
@@ -96,7 +96,7 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> int:
     merge_key = reader.merge_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
 
-    fs, _ = url_to_fs(root)
+    fs, _ = factory.url_to_fs(root)
     pa_fs = PyFileSystem(FSSpecHandler(fs))
     unified = pa.unify_schemas(
         [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"

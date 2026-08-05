@@ -76,7 +76,7 @@ finelog hub by internal IP over Direct VPC egress. GCE instance discovery requir
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
 
-The `samples/artifact` endpoint resolves a sample's `trajectory_uri`/`exchange_uri` through fsspec,
+The `samples/artifact` endpoint resolves a sample's `trajectory_uri` through fsspec,
 restricted to URIs under the run's own `results_path` -- a `..` segment or an out-of-tree URI is
 refused, so the endpoint cannot fetch arbitrary object storage. It size-caps each read and, like the
 logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable, or oversized

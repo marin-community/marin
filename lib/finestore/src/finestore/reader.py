@@ -5,9 +5,12 @@
 
 A read lists the table directory, unifies the shards' self-describing schemas (so a column a run
 added later is null for older shards), reads only the projected columns, and collapses duplicates by
-the table's merge key — keeping, for each key, the row from the highest compaction generation and
-then the highest ``_seq``. That single rule makes a crash mid-compaction (level-0 and its merge both
-present), a duplicate delivery, and a retried flush all converge to one row without any manifest.
+the table's merge key — keeping, for each key, the row with the highest ``_seq`` and then the highest
+compaction generation. Because a writer resumes its ``_seq`` above every persisted row, a later write
+always outranks an earlier one, so nothing can shadow it; the generation only breaks the exact-``_seq``
+tie a compaction creates when it re-emits a row unchanged. That single rule makes a crash
+mid-compaction (level-0 and its merge both present), a duplicate delivery, and a retried flush all
+converge to one row without any manifest.
 """
 
 from __future__ import annotations
@@ -17,10 +20,11 @@ from collections import defaultdict
 from collections.abc import Sequence
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 from pyarrow.fs import FSSpecHandler, PyFileSystem
-from rigging.filesystem import StoragePath, url_to_fs
+from rigging.filesystem import StoragePath, factory
 
 from finestore.layout import (
     BLOB_NAME_COLUMN,
@@ -72,7 +76,7 @@ class CompositeReader:
     # -- discovery ---------------------------------------------------------------------------------
 
     def _list_shards(self, fs, table: str) -> list[Shard]:
-        _fs, base_key = url_to_fs(self._layout.table_dir(table))
+        _fs, base_key = factory.url_to_fs(self._layout.table_dir(table))
         try:
             keys = fs.find(base_key)
         except FileNotFoundError:
@@ -130,7 +134,7 @@ class CompositeReader:
         are never fetched), plus whatever the merge key needs; the result is projected back to
         ``columns``.
         """
-        fs, _ = url_to_fs(self.root)
+        fs, _ = factory.url_to_fs(self.root)
         shards = self._list_shards(fs, table)
         if not shards:
             return None
@@ -173,10 +177,52 @@ class CompositeReader:
             return None
         return result.slice(0, 1).to_pylist()[0]
 
+    # -- resume primitives -------------------------------------------------------------------------
+
+    def max_seq(self, table: str) -> int:
+        """The highest ``_seq`` any shard of ``table`` has persisted, or ``-1`` if it has none.
+
+        A resuming writer starts its sequence counter one above this, so a row it appends now outranks
+        every row a prior session left behind. Reads only the ``_seq`` column of each shard footer.
+        """
+        fs, _ = factory.url_to_fs(self.root)
+        shards = self._list_shards(fs, table)
+        if not shards:
+            return -1
+        pa_fs = PyFileSystem(FSSpecHandler(fs))
+        highest = -1
+        for shard in shards:
+            column = pq.read_table(shard.path, columns=[SEQ_COLUMN], filesystem=pa_fs).column(SEQ_COLUMN)
+            if len(column):
+                highest = max(highest, pc.max(column).as_py())
+        return highest
+
+    def keys(self, table: str) -> set[tuple]:
+        """The deduplicated set of merge-key tuples durably present in ``table``.
+
+        The resume primitive a writer reads to skip work it already committed (e.g. Harbor asking
+        which trials are done). Reads only the merge-key columns; returns an empty set for a table
+        with no shards.
+        """
+        fs, _ = factory.url_to_fs(self.root)
+        if not self._list_shards(fs, table):
+            return set()
+        merge_key = self.merge_key(table)
+        result = self.scan(table, columns=list(merge_key))
+        if result is None:
+            return set()
+        columns = [result.column(name).to_pylist() for name in merge_key]
+        return set(zip(*columns, strict=True))
+
     # -- blobs / references ------------------------------------------------------------------------
 
     def read_blob(self, name: str) -> bytes | None:
-        """Return the inline bytes of the blob named ``name``, or ``None`` if absent."""
+        """Return the inline bytes of the blob named ``name``, or ``None`` if absent.
+
+        The blobs table is keyed by name, so the ``name ==`` filter this issues prunes the scan to the
+        one row group whose footer statistics bracket the name (log-n over a compacted, name-sorted
+        shard) rather than reading every blob's payload.
+        """
         row = self.point(BLOBS_TABLE, **{BLOB_NAME_COLUMN: name})
         if row is None:
             return None
@@ -194,19 +240,24 @@ class CompositeReader:
 
     def list_shards(self, table: str) -> list[Shard]:
         """Every discovered shard of ``table``, across writers and generations."""
-        fs, _ = url_to_fs(self.root)
+        fs, _ = factory.url_to_fs(self.root)
         return self._list_shards(fs, table)
 
 
 def _deduplicate(table: pa.Table, merge_key: tuple[str, ...]) -> pa.Table:
-    """Keep one row per merge key: the highest ``(_gen, _seq)`` wins."""
+    """Keep one row per merge key: the highest ``(_seq, _gen)`` wins.
+
+    ``_seq`` decides — a writer resumes it above every persisted row, so a later write outranks an
+    earlier one and cannot be shadowed. Generation only breaks the exact-``_seq`` tie compaction
+    leaves when it re-emits a row unchanged.
+    """
     num_rows = table.num_rows
     if num_rows == 0:
         return table
     key_columns = [table.column(name).to_pylist() for name in merge_key]
     generations = table.column(GEN_COLUMN).to_pylist()
     sequences = table.column(SEQ_COLUMN).to_pylist() if SEQ_COLUMN in table.column_names else [0] * num_rows
-    order = sorted(range(num_rows), key=lambda i: (generations[i], sequences[i]))
+    order = sorted(range(num_rows), key=lambda i: (sequences[i], generations[i]))
     winners: dict[tuple, int] = {}
     for i in order:
         winners[tuple(column[i] for column in key_columns)] = i

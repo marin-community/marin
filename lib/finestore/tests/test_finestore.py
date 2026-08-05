@@ -12,6 +12,7 @@ from finestore.compaction import compact
 from finestore.layout import FORMAT_VERSION, ArchiveMetadata, FineStoreLayout, SealMarker, TableMetadata
 from finestore.reader import CompositeReader
 from finestore.store import DataStore
+from fsspec.implementations.memory import MemoryFileSystem
 from rigging.filesystem import StoragePath
 
 
@@ -80,6 +81,39 @@ def test_multi_writer_compose(tmp_path):
     assert {r["doc_id"] for r in rows} == {"a", "b"}
 
 
+def test_resume_seq_prevents_shadowing(tmp_path):
+    # The no-shadow guarantee. A key compacted into a higher generation must still be overwritten by a
+    # later append. A resuming writer starts its sequence above every persisted _seq, and dedup ranks
+    # by _seq before generation, so the new low-generation row outranks the old compacted one -- which
+    # a generation-first rule would have shadowed.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
+    compact(root, "samples")
+    assert CompositeReader(root).list_shards("samples")[0].generation == 1
+
+    with DataStore.open(root, writer_id="w2") as store:
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 2.0})
+    rows = _rows(CompositeReader(root), "samples")
+    assert len(rows) == 1
+    assert rows[0]["score"] == 2.0
+
+
+def test_keys_lists_deduped_merge_keys(tmp_path):
+    # keys() is the resume primitive: the deduplicated set of merge-key tuples already committed, so a
+    # writer can skip finished work. A re-delivered key appears once; an absent table is the empty set.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"))
+        table.extend([{"task": "arc", "doc_id": "1"}, {"task": "arc", "doc_id": "2"}])
+        store.flush()
+        table.append({"task": "arc", "doc_id": "1"})
+        store.flush()
+    reader = CompositeReader(root)
+    assert reader.keys("samples") == {("arc", "1"), ("arc", "2")}
+    assert reader.keys("does-not-exist") == set()
+
+
 def test_schema_evolution_null_promotes_missing_column(tmp_path):
     root = str(tmp_path / "run")
     # An "old" writer without the difficulty column.
@@ -118,6 +152,17 @@ def test_blob_write_and_resolve(tmp_path):
     assert uri == "finestore://blobs/traj/t1.json"
     assert CompositeReader(root).resolve(uri) == payload
     assert CompositeReader(root).read_blob("missing") is None
+
+
+def test_blob_rewrite_supersedes_by_name(tmp_path):
+    # Blobs are a table keyed by name, so re-writing a name buffers a higher-_seq row that the reader's
+    # dedup keeps -- the latest payload wins, like any other merge-key collision.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        uri = store.write("t1.json", None, b"first")
+        store.write("t1.json", None, b"second")
+        store.flush()
+    assert CompositeReader(root).resolve(uri) == b"second"
 
 
 def test_compaction_merges_and_deletes_source(tmp_path):
@@ -263,6 +308,65 @@ def test_seal_marker(tmp_path):
         assert not reader.is_sealed()
         store.seal()
     assert reader.is_sealed()
+
+
+def test_seal_compacts_each_table_to_one_generation(tmp_path):
+    # seal is the materialize contract: it flushes then compacts every table, so a sealed archive is
+    # one deduplicated Parquet shard per table. Two flushes of the same key collapse to a single
+    # generation-1 shard holding the latest row -- readable without applying finestore's dedup rule.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"))
+        table.append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.flush()
+        table.append({"task": "arc", "doc_id": "1", "score": 2.0})
+        store.seal()
+    shards = CompositeReader(root).list_shards("samples")
+    assert len(shards) == 1
+    assert shards[0].generation == 1
+    assert CompositeReader(root).scan("samples", columns=["doc_id", "score"]).to_pylist() == [
+        {"doc_id": "1", "score": 2.0}
+    ]
+
+
+def test_reads_resolve_the_filesystem_factory_at_call_time(monkeypatch):
+    # finestore must resolve rigging's filesystem factory at call time, not bind it at import: a caller
+    # that routes a remote scheme to a stand-in filesystem (as the harbor tests do) must be honored on
+    # the read path too, or a write-then-read over the same mock silently reaches real object storage.
+    # Route s3:// to an in-memory store and round-trip a write, seal (flush + compact), and scan --
+    # every step touches the factory. If the read path bound url_to_fs at import, the scan would miss
+    # the mock and try real S3.
+    class MemoryS3(MemoryFileSystem):
+        @classmethod
+        def _strip_protocol(cls, path):
+            if isinstance(path, str) and path.startswith("s3://"):
+                path = path[len("s3://") :]
+            return MemoryFileSystem._strip_protocol(path)
+
+    MemoryS3.protocol = "s3"
+    MemoryS3.store = {}
+    MemoryS3.pseudo_dirs = [""]
+    fs = MemoryS3()
+
+    def fake_url_to_fs(url, **_kwargs):
+        path = StoragePath(url)
+        assert path.scheme == "s3"
+        return fs, "/".join(part for part in (path.netloc, path.key) if part)
+
+    def fake_open_url(url, mode="rb", **kwargs):
+        target_fs, key = fake_url_to_fs(url)
+        return target_fs.open(key, mode, **kwargs)
+
+    monkeypatch.setattr("rigging.filesystem.factory.url_to_fs", fake_url_to_fs)
+    monkeypatch.setattr("rigging.filesystem.factory.open_url", fake_open_url)
+
+    root = "s3://finestore-test/run"
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.seal()
+    rows = _rows(CompositeReader(root), "samples")
+    assert len(rows) == 1
+    assert rows[0]["score"] == 1.0
 
 
 def test_reader_none_for_absent_table(tmp_path):

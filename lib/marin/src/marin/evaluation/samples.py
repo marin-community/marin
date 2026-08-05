@@ -16,9 +16,11 @@ API) or a chat message list (``prompt_messages``); exactly one is set. ``correct
 at export time from the primary metric.
 
 A run's durable storage is one finestore archive rooted at its results directory (see the archive
-adapter below); the row schema is the pydantic model itself, so the writer is ``model_dump`` and the
-reader is ``model_validate``, with nested fields stored as parquet structs/lists. ``schema_version``
-is a model field, so it rides in every row for future evolution. The legacy per-(sub)task
+adapter below). The archive pins each table's column types from the pydantic model (via
+``finestore.arrow_schema``), so the writer is ``model_dump`` and the reader is ``model_validate``,
+with nested fields stored as parquet structs/lists and the dynamic-keyed ``metrics`` as a
+``map<string,double>`` that cannot drift its type across shards. ``schema_version`` is a model field,
+so it rides in every row for future evolution. The legacy per-(sub)task
 ``samples_<task>_<timestamp>.parquet`` layout is still read by the dashboard's migration fallback.
 """
 
@@ -32,13 +34,16 @@ from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.schema import arrow_schema
 from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+# 3: metrics moved from an inferred struct to a pinned ``map<string,double>`` and the unused
+# ``exchange_uri`` was dropped (finestore now pins both eval tables' schemas from these models).
+SCHEMA_VERSION = 3
 
 SAMPLES_PREFIX = "samples_"
 SAMPLES_SUFFIX = ".parquet"
@@ -106,9 +111,9 @@ class EvalSample(BaseModel):
     the scoring decision explicit for the UI. ``doc`` is the source dataset row as a JSON string, kept
     verbatim as the escape hatch for anything the normalized fields do not carry.
 
-    Rows stay bounded: the two unbounded payloads (an agentic trajectory, a prediction's raw
-    request/response exchange) are stored as sibling artifact files and referenced here by URI, so the
-    columnar reader never has to materialize them to page the light columns.
+    Rows stay bounded: the one unbounded payload, an agentic trajectory, is stored as a sibling blob
+    and referenced here by ``trajectory_uri``, so the columnar reader never has to materialize it to
+    page the light columns.
     """
 
     schema_version: int = SCHEMA_VERSION
@@ -124,7 +129,6 @@ class EvalSample(BaseModel):
     extracted: str | None = None
     target_text: str | None = None
     trajectory_uri: str | None = None
-    exchange_uri: str | None = None
     grading: Grading | None = None
     metrics: dict[str, float] = {}
     correct: bool | None = None
@@ -375,10 +379,25 @@ def _task_from_filename(name: str, suffix: str) -> str:
 ARCHIVE_SAMPLES_TABLE = "samples"
 ARCHIVE_STEPS_TABLE = "steps"
 
-# A sample is unique within a run by its task, its document, and (for multi-attempt Harbor runs) the
-# trial that produced it. evalchemy leaves ``trial_id`` empty: one attempt per document.
-SAMPLES_MERGE_KEY = ("task", "doc_id", "trial_id")
-STEPS_MERGE_KEY = ("task", "doc_id", "trial_id", "step_id")
+# The archive's own key on a samples row, added at write time (not an EvalSample field): a sample is
+# unique within a run by its task, its document, and (for multi-attempt Harbor runs) the trial that
+# produced it. evalchemy leaves ``trial_id`` empty: one attempt per document.
+TRIAL_ID_COLUMN = "trial_id"
+SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN)
+STEPS_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, "step_id")
+
+
+def samples_schema() -> pa.Schema:
+    """The pinned ``samples`` table schema: the :class:`EvalSample` columns plus the archive's
+    ``trial_id`` key. Pinning fixes each column's type up front, so ``metrics`` stays a
+    ``map<string,double>`` and no per-flush inference can drift a column's type across shards."""
+    return pa.schema([*arrow_schema(EvalSample), pa.field(TRIAL_ID_COLUMN, pa.string())])
+
+
+def steps_schema() -> pa.Schema:
+    """The pinned ``steps`` table schema, derived from :class:`StepRecord` (its own columns carry the
+    merge key), so token-id and logprob columns keep their list types across shards."""
+    return arrow_schema(StepRecord)
 
 
 def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
@@ -391,15 +410,16 @@ def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
 def sample_from_archive_row(row: dict) -> EvalSample:
     """Reconstruct an :class:`EvalSample` from an archive ``samples`` row.
 
-    Parquet unifies the metrics struct across a shard, so a row missing a metric another row carries
-    reads back with that key null; a null means the metric is absent (an ungraded sample), not zero,
-    so it is dropped before validation. Archive-only keys (``trial_id`` and finestore's
-    ``_seq``/``_writer``/``_gen`` bookkeeping columns) are ignored by the model.
+    ``metrics`` is a pinned ``map<string,double>``, so a batch that wrote no metrics reads back a null
+    map and a partly-populated map can carry null values; normalize null, absent, and null-valued
+    metrics to a plain dict (a null value means the metric is absent, not zero) before validation. The
+    caller must materialize map columns as dicts (``to_pylist(maps_as_pydicts="strict")``). Archive-only
+    keys (``trial_id`` and finestore's ``_seq``/``_writer``/``_gen`` columns) are ignored by the model.
     """
-    metrics = row.get("metrics")
-    if metrics:
-        row = {**row, "metrics": {name: value for name, value in metrics.items() if value is not None}}
-    return EvalSample.model_validate(row)
+    metrics = row.get("metrics") or {}
+    return EvalSample.model_validate(
+        {**row, "metrics": {name: value for name, value in metrics.items() if value is not None}}
+    )
 
 
 def _content_to_text(value: object) -> str | None:
@@ -483,8 +503,12 @@ class EvaluationStore:
 
     def __init__(self, store: DataStore) -> None:
         self._store = store
-        self._samples = store.table(ARCHIVE_SAMPLES_TABLE, merge_key=SAMPLES_MERGE_KEY, schema_version=SCHEMA_VERSION)
-        self._steps = store.table(ARCHIVE_STEPS_TABLE, merge_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION)
+        self._samples = store.table(
+            ARCHIVE_SAMPLES_TABLE, schema=samples_schema(), merge_key=SAMPLES_MERGE_KEY, schema_version=SCHEMA_VERSION
+        )
+        self._steps = store.table(
+            ARCHIVE_STEPS_TABLE, schema=steps_schema(), merge_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION
+        )
 
     @classmethod
     def open(cls, root: str, *, writer_id: str) -> EvaluationStore:

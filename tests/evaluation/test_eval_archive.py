@@ -81,6 +81,24 @@ def test_evaldash_reads_the_archive(tmp_path):
     assert [row.doc_id for row in incorrect.rows] == ["2"]
 
 
+def test_ungraded_sample_reads_back_with_empty_metrics(tmp_path):
+    # metrics is a pinned map<string,double>. A batch that writes no metrics leaves that column null on
+    # disk (the write path drops an all-empty dict column); the reader must normalize the null back to
+    # an empty dict, not fail validation nor invent a zero.
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    store.add_sample(EvalSample(task="gsm8k", doc_id="1", kind=SampleKind.GENERATION, output="4"))
+    store.seal()
+    store.close()
+
+    page = fetch_samples(root, "gsm8k", offset=0, limit=10, correct="all")
+    assert page.available
+    assert page.counts.ungraded == 1
+    assert page.primary_metric is None
+    assert page.rows[0].metrics == {}
+    assert page.rows[0].correct is None
+
+
 def test_migrate_legacy_run_into_archive(tmp_path):
     results = str(tmp_path / "run" / "results")
     fs, _ = url_to_fs(results)

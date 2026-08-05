@@ -23,6 +23,7 @@ from typing import Protocol
 import pyarrow as pa
 from rigging.filesystem import StoragePath
 
+from finestore.compaction import compact
 from finestore.layout import (
     BLOB_NAME_COLUMN,
     BLOBS_TABLE,
@@ -34,6 +35,7 @@ from finestore.layout import (
     TableMetadata,
     build_uri,
 )
+from finestore.reader import CompositeReader
 from finestore.shard_writer import write_table
 
 logger = logging.getLogger(__name__)
@@ -78,6 +80,22 @@ def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
     if not drop:
         return rows
     return [{k: v for k, v in row.items() if k not in drop} for row in rows]
+
+
+def _with_stamp_columns(schema: pa.Schema) -> pa.Schema:
+    """Append finestore's ``_seq``/``_writer`` stamp columns to a caller's schema when absent.
+
+    A caller pins only its own columns; the write path stamps ``_seq``/``_writer`` on every row, so the
+    schema a flush validates against must carry them too. Idempotent: a schema that already declares
+    them (e.g. one round-tripped from a shard) is returned unchanged.
+    """
+    names = set(schema.names)
+    fields = list(schema)
+    if SEQ_COLUMN not in names:
+        fields.append(pa.field(SEQ_COLUMN, pa.int64()))
+    if WRITER_COLUMN not in names:
+        fields.append(pa.field(WRITER_COLUMN, pa.string()))
+    return pa.schema(fields)
 
 
 class FlushScheduler(Protocol):
@@ -139,12 +157,17 @@ class DataStore:
         persisted to the table's ``_schema.json`` so readers that did not open the writer can recover
         it. Calling ``table`` again with the same ``name`` returns the same handle, so every appender
         shares one buffer and one sequence counter.
+
+        On registration the table's sequence counter resumes above the highest ``_seq`` any shard has
+        already persisted, so a row this writer appends now always outranks a row a prior session left
+        behind — a re-run of an existing key wins, and nothing can shadow it.
         """
         with self._register_lock:
             existing = self._tables.get(name)
             if existing is not None:
                 return existing
             key = tuple(merge_key) if merge_key is not None else None
+            start_seq = CompositeReader(self.root).max_seq(name) + 1
             table = DataTable(
                 name,
                 writer_id=self.writer_id,
@@ -154,6 +177,7 @@ class DataStore:
                 merge_key=key,
                 schema=schema,
                 schema_version=schema_version,
+                start_seq=start_seq,
             )
             self._tables[name] = table
             self._write_schema_meta(table)
@@ -167,8 +191,11 @@ class DataStore:
     def write(self, name: str, metadata: Mapping[str, object] | None, data: bytes) -> str:
         """Append one opaque blob to the reserved ``blobs`` table; return its ``finestore://`` URI.
 
-        The payload is stored inline as a Parquet binary column. ``metadata`` is kept verbatim as a
-        JSON string for the reader to surface.
+        The blob is buffered and flushed with every other table, so many small writes never block on a
+        per-object round trip -- the point of routing them through the archive rather than one object
+        each. The payload rides inline as a Parquet binary column and ``metadata`` as a JSON string the
+        reader can project without touching the payload. The table's merge key is the blob name, so a
+        re-write supersedes the prior one and a compacted shard is sorted by name for a pruned lookup.
         """
         blobs = self._tables.get(BLOBS_TABLE) or self.table(BLOBS_TABLE, merge_key=(BLOB_NAME_COLUMN,))
         blobs.append(
@@ -190,8 +217,16 @@ class DataStore:
             table.flush()
 
     def seal(self) -> None:
-        """Flush, then mark the archive sealed so readers know the run is complete."""
+        """Flush, compact every table to one deduplicated generation, then mark the archive sealed.
+
+        Sealing is the materialize contract: afterward each table is a single deduplicated Parquet
+        shard and every blob is its own object, so a plain Parquet reader over the archive sees each
+        row once without having to apply finestore's generation/``_seq`` dedup rule. Compaction is
+        still only an optimization for the finestore reader, which deduplicates either way.
+        """
         self.flush()
+        for name in list(self._tables):
+            compact(self.root, name)
         StoragePath(self._layout.sealed_path).write_text(SealMarker(writer=self.writer_id).model_dump_json())
 
     def close(self) -> None:
@@ -254,6 +289,7 @@ class DataTable:
         merge_key: tuple[str, ...] | None,
         schema: pa.Schema | None,
         schema_version: int,
+        start_seq: int = 0,
     ) -> None:
         self.name = name
         self.merge_key = merge_key
@@ -262,9 +298,9 @@ class DataTable:
         self._layout = layout
         self._max_buffer_rows = max_buffer_rows
         self._scheduler = scheduler
-        self._schema = schema
+        self._schema = _with_stamp_columns(schema) if schema is not None else None
         self._pending: list[dict] = []
-        self._next_seq = 0
+        self._next_seq = start_seq
         self._lock = threading.Lock()
 
     def append(self, row: dict) -> None:

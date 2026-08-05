@@ -299,9 +299,14 @@ def fetch_samples(
     # compute them straight from the arrow columns and validate just the page's rows. Validating every
     # row (and materializing every fat column) on each page request is what made this scale with the
     # run instead of the page.
+    # ``metrics`` is a finestore ``map<string,double>`` in the archive (a struct in the legacy layout);
+    # materialize map columns as dicts so a row is ``{name: value}`` either way. Non-map columns ignore
+    # the flag.
     columns = set(table.column_names)
     correct_values = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
-    metric_maps = table.column("metrics").to_pylist() if "metrics" in columns else [None] * table.num_rows
+    metric_maps = (
+        table.column("metrics").to_pylist(maps_as_pydicts="strict") if "metrics" in columns else [None] * table.num_rows
+    )
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     picked = primary_metric(dict.fromkeys(metric_columns, 0.0))
     primary = picked[0] if picked is not None else None
@@ -322,7 +327,7 @@ def fetch_samples(
     else:
         indices = list(range(table.num_rows))
     page_indices = indices[offset : offset + limit]
-    page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist()
+    page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist(maps_as_pydicts="strict")
     page = tuple(sample_from_archive_row(row) for row in page_rows)
     return SamplesResponse(
         available=True,

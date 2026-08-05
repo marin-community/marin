@@ -262,14 +262,13 @@ export interface SampleRow {
   extracted: string | null
   target_text: string | null
   trajectory_uri: string | null
-  exchange_uri: string | null
   grading: SampleGrading | null
   metrics: Record<string, number>
   correct: boolean | null
   doc: string
 }
 
-// One sample-referenced artifact (a trajectory, an exchange) resolved to text by the server's
+// One sample-referenced artifact (a trajectory) resolved to text by the server's
 // artifact endpoint. `available` is false with a `reason` when the object is out of tree,
 // missing, unreadable, or over the size cap — mirroring the logs endpoint's degradation.
 export interface ArtifactResponse {
