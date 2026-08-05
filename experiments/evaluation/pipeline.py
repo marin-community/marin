@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from iris.client import iris_ctx
+from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -55,7 +56,8 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
         accelerator=config.accelerator,
         limit=config.limit,
         records_prefix=None,
-        cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
     )
     submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)

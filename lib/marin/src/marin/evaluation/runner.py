@@ -105,6 +105,7 @@ class EvaluationBatch:
     records_prefix: str
     model: ModelConfig
     accelerator: AcceleratorChoice
+    priority_band: int
     capability_origin: str
     api_model: str | None
     evaluations: tuple[Evaluation, ...]
@@ -334,6 +335,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         env_vars=runtime_env,
         capability_origin=batch.capability_origin,
         api_model=batch.api_model,
+        priority=batch.priority_band,
     )
     try:
         with remote_inference(inference) as session:
@@ -379,6 +381,7 @@ def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> Submi
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
         max_retries_failure=0,
+        priority_band=batch.priority_band,
     )
     logger.info("submitted eval batch %s (%d evals) as job %s", batch.group_id, len(batch.evaluations), job)
     return SubmittedEvaluationBatch(
