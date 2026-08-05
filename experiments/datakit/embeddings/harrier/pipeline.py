@@ -25,6 +25,7 @@ Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``,
 
 import logging
 import os
+import shutil
 import tarfile
 import tempfile
 from collections.abc import Iterator
@@ -211,9 +212,9 @@ class _HarrierEmbedder:
 def _load_embedder_from_shared() -> _HarrierEmbedder:
     archive_url: str = zephyr_worker_ctx().get_shared(_HARRIER_SHARED_KEY)
     local_root = Path(tempfile.mkdtemp(prefix="harrier-"))
-    archive_fd, local_archive = tempfile.mkstemp(dir=local_root, suffix=".tar")
-    os.close(archive_fd)
-    StoragePath(archive_url).download_to(local_archive)
+    local_archive = local_root / _MODEL_ARCHIVE_NAME
+    with StoragePath(archive_url).open("rb") as source, local_archive.open("wb") as destination:
+        shutil.copyfileobj(source, destination)
     with tarfile.open(local_archive) as archive:
         archive.extractall(local_root, filter="data")
     logger.info("Loading Harrier from %s (staged at %s)", local_root / _MODEL_DIRECTORY_NAME, archive_url)
@@ -244,7 +245,10 @@ def stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
         size_mb = archive_path.stat().st_size / 1e6
         logger.info("Uploading %.1f MB of Harrier weights to %s", size_mb, staged_url)
         staged.parent.mkdirs()
-        staged.upload_from(str(archive_path))
+        with archive_path.open("rb") as source, staged.open("wb") as destination:
+            shutil.copyfileobj(source, destination)
+        if staged.size() != archive_path.stat().st_size:
+            raise ValueError(f"Staged Harrier archive at {staged_url} has the wrong size")
     return staged_url
 
 
