@@ -18,6 +18,7 @@ from experiments.datakit.embeddings.harrier.pipeline import (
     HARRIER_REPO,
     HARRIER_REVISION,
     embed_source,
+    stage_harrier,
 )
 from experiments.datakit.reference_pipeline import select_sources
 
@@ -68,4 +69,5 @@ def build() -> list[StepSpec]:
 
 if __name__ == "__main__":
     configure_logging()
+    stage_harrier(HARRIER_REPO, HARRIER_REVISION, DEDUP_PATH)
     StepRunner().run(build(), max_concurrent=MAX_CONCURRENT)

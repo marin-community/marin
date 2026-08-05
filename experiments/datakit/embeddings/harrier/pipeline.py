@@ -220,7 +220,7 @@ def _load_embedder_from_shared() -> _HarrierEmbedder:
     return _HarrierEmbedder(local_root / _MODEL_DIRECTORY_NAME)
 
 
-def _stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
+def stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
     """Download and archive the pinned model once in the output region."""
     sanitized_repo = repo_id.replace("/", "__")
     staged_url = str(
@@ -230,7 +230,7 @@ def _stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
         / _MODEL_ARCHIVE_NAME
     )
     staged = StoragePath(staged_url)
-    if staged.exists():
+    if staged.exists() and staged.size() > 0:
         logger.info("Harrier model already staged at %s (cache hit)", staged_url)
         return staged_url
 
@@ -244,7 +244,7 @@ def _stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
         size_mb = archive_path.stat().st_size / 1e6
         logger.info("Uploading %.1f MB of Harrier weights to %s", size_mb, staged_url)
         staged.parent.mkdirs()
-        staged.upload_from(archive_path)
+        staged.upload_from(str(archive_path))
     return staged_url
 
 
@@ -333,7 +333,7 @@ def embed_source(
         batch_size,
     )
 
-    staged_url = _stage_harrier(repo_id, revision, output_path)
+    staged_url = stage_harrier(repo_id, revision, output_path)
 
     # Project columns at read time — partition_id (~8 B/row) is ~120 GB of
     # extra read at 15 B-doc scale, and we don't need it.
