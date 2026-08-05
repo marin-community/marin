@@ -264,6 +264,7 @@ class RecordScan:
 
 def _directory_children(fs, path: str) -> list[str]:
     """Immediate child directories of ``path``; an absent object-store prefix is empty."""
+    fs.invalidate_cache(path)
     try:
         children = fs.ls(path, detail=True)
     except FileNotFoundError:

@@ -500,6 +500,95 @@ class DatakitSteps:
     """Every StepSpec the runner needs (shared upstream, per-source, dedup, store)."""
 
 
+@dataclass(frozen=True)
+class ZephyrDatakitSteps:
+    """Storage-backed Datakit stages implemented as Zephyr pipelines."""
+
+    exact_dedup: StepSpec
+    tokenize: dict[str, StepSpec]
+    minhash: dict[str, StepSpec]
+    fuzzy_dedup: StepSpec
+
+
+def zephyr_datakit_steps(
+    sources: dict[str, StepSpec],
+    scale: PipelineScale = DEFAULT_SCALE,
+    zephyr_context: ZephyrContext | None = None,
+) -> ZephyrDatakitSteps:
+    """Build exact-dedup, tokenize, MinHash, and fuzzy-dedup stages."""
+    source_names = sorted(sources)
+    exact_dedup = StepSpec(
+        name="datakit/global_exact_dedup",
+        deps=[sources[name] for name in source_names],
+        hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
+        fn=lambda output_path: global_exact_deduplicate(
+            sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
+            output_path=output_path,
+            worker_resources=scale.pool.worker,
+            max_workers=scale.pool.n_workers,
+            zephyr_context=zephyr_context,
+        ),
+    )
+
+    mh = scale.minhash
+    tokenize_steps: dict[str, StepSpec] = {}
+    minhash_steps: dict[str, StepSpec] = {}
+    for name, normalize_step in sources.items():
+        tokenize_steps[name] = tokenize_attributes_step(
+            name=f"datakit/tokenize/{name}",
+            train_normalize=normalize_step,
+            tokenizer=TOKENIZER,
+            tokenizer_backend=TOKENIZER_BACKEND,
+            tokenizer_revision=TOKENIZER_REVISION,
+            max_workers=scale.pool.n_workers,
+            worker_resources=scale.pool.worker,
+            zephyr_context=zephyr_context,
+        )
+        minhash_steps[name] = StepSpec(
+            name=f"datakit/minhash/{name}",
+            deps=[normalize_step],
+            hash_attrs={
+                "num_perms": mh.num_perms,
+                "num_bands": mh.num_bands,
+                "ngram_size": mh.ngram_size,
+                "text_cap_chars": mh.text_cap_chars,
+                "seed": mh.seed,
+                "v": MINHASH_ATTR_DATA_VERSION,
+            },
+            fn=lambda output_path, n=normalize_step: compute_minhash_attrs(
+                source=read_artifact(n.output_path, NormalizedData),
+                output_path=output_path,
+                num_perms=mh.num_perms,
+                num_bands=mh.num_bands,
+                ngram_size=mh.ngram_size,
+                text_cap_chars=mh.text_cap_chars,
+                seed=mh.seed,
+                worker_resources=scale.pool.worker,
+                zephyr_context=zephyr_context,
+            ),
+        )
+
+    fuzzy_dedup = StepSpec(
+        name="datakit/dedup",
+        deps=list(minhash_steps.values()),
+        hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
+        fn=lambda output_path: compute_fuzzy_dups_attrs(
+            inputs=[read_artifact(step.output_path, MinHashAttrData) for step in minhash_steps.values()],
+            output_path=output_path,
+            max_parallelism=scale.dedup_max_parallelism,
+            cc_resume=True,
+            worker_resources=scale.pool.worker,
+            zephyr_context=zephyr_context,
+        ),
+    )
+    return ZephyrDatakitSteps(
+        exact_dedup=exact_dedup,
+        tokenize=tokenize_steps,
+        minhash=minhash_steps,
+        fuzzy_dedup=fuzzy_dedup,
+    )
+
+
 def reference_datakit_steps(
     sources: dict[str, StepSpec],
     *,
@@ -548,21 +637,8 @@ def reference_datakit_steps(
         zephyr_context: Optional shared context for subprocess-compatible stages.
     """
     cluster = scale.cluster
-    mh = scale.minhash
-
-    source_names = sorted(sources)
-    exact_dedup = StepSpec(
-        name="datakit/global_exact_dedup",
-        deps=[sources[name] for name in source_names],
-        hash_attrs={"sources": source_names, "v": GLOBAL_EXACT_DEDUP_DATA_VERSION},
-        fn=lambda output_path: global_exact_deduplicate(
-            sources={name: read_artifact(sources[name].output_path, NormalizedData) for name in source_names},
-            output_path=output_path,
-            worker_resources=scale.pool.worker,
-            max_workers=scale.pool.n_workers,
-            zephyr_context=zephyr_context,
-        ),
-    )
+    zephyr_steps = zephyr_datakit_steps(sources, scale, zephyr_context)
+    exact_dedup = zephyr_steps.exact_dedup
     embed_steps = build_per_source_embed_steps(sources, scale)
     if domain_centroids is None:
         domain_centroids = build_train_centroids_step(embed_steps, scale)
@@ -611,21 +687,10 @@ def reference_datakit_steps(
 
     # ---- Per-source steps ------------------------------------------------------
     per_source: dict[str, dict[str, StepSpec]] = {}
-    minhash_steps: list[StepSpec] = []
 
     for name, normalize_step in sources.items():
         embed = embed_steps[name]
-
-        tokenize = tokenize_attributes_step(
-            name=f"datakit/tokenize/{name}",
-            train_normalize=normalize_step,
-            tokenizer=TOKENIZER,
-            tokenizer_backend=TOKENIZER_BACKEND,
-            tokenizer_revision=TOKENIZER_REVISION,
-            max_workers=scale.pool.n_workers,
-            worker_resources=scale.pool.worker,
-            zephyr_context=zephyr_context,
-        )
+        tokenize = zephyr_steps.tokenize[name]
 
         # Domain assign: consumes the embed + the (given or trained) centroids.
         # ``centroids_hash`` feeds hash_attrs so re-pointing at a new model
@@ -687,30 +752,7 @@ def reference_datakit_steps(
             zephyr_context=zephyr_context,
         )
 
-        minhash = StepSpec(
-            name=f"datakit/minhash/{name}",
-            deps=[normalize_step],
-            hash_attrs={
-                "num_perms": mh.num_perms,
-                "num_bands": mh.num_bands,
-                "ngram_size": mh.ngram_size,
-                "text_cap_chars": mh.text_cap_chars,
-                "seed": mh.seed,
-                "v": MINHASH_ATTR_DATA_VERSION,
-            },
-            fn=lambda op, n=normalize_step: compute_minhash_attrs(
-                source=read_artifact(n.output_path, NormalizedData),
-                output_path=op,
-                num_perms=mh.num_perms,
-                num_bands=mh.num_bands,
-                ngram_size=mh.ngram_size,
-                text_cap_chars=mh.text_cap_chars,
-                seed=mh.seed,
-                worker_resources=scale.pool.worker,
-                zephyr_context=zephyr_context,
-            ),
-        )
-        minhash_steps.append(minhash)
+        minhash = zephyr_steps.minhash[name]
 
         per_source[name] = {
             "tokenize": tokenize,
@@ -721,23 +763,7 @@ def reference_datakit_steps(
             "minhash": minhash,
         }
 
-    # ---- Cross-source dedup ----------------------------------------------------
-    # No content params of its own -- the MinHash params live in the minhash deps
-    # (so a param change re-keys minhash, then dedup via dep names); connected
-    # components is deterministic given those inputs. ``v`` is a manual salt.
-    dedup = StepSpec(
-        name="datakit/dedup",
-        deps=minhash_steps,
-        hash_attrs={"v": FUZZY_DUPS_ATTR_DATA_VERSION},
-        fn=lambda op: compute_fuzzy_dups_attrs(
-            inputs=[read_artifact(s.output_path, MinHashAttrData) for s in minhash_steps],
-            output_path=op,
-            max_parallelism=scale.dedup_max_parallelism,
-            cc_resume=True,
-            worker_resources=scale.pool.worker,
-            zephyr_context=zephyr_context,
-        ),
-    )
+    dedup = zephyr_steps.fuzzy_dedup
 
     # ---- Final store: attribute join + per-bucket Levanter cache ---------------
     def _store_fn(output_path: str) -> ClusteredStoreData:

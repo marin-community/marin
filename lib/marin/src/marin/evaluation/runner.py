@@ -36,7 +36,6 @@ from marin.evaluation.serving_config import (
     inference_config_for_model,
 )
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
-from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +69,11 @@ class EvaluationError(RuntimeError):
 
 
 class EvalExecutor(Protocol):
-    """Execute one evaluation mechanism against an already-running OpenAI endpoint."""
+    """Execute one evaluation mechanism against an inference session."""
 
     def __call__(
         self,
-        model: RunningModel,
+        session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome: ...
@@ -258,7 +257,7 @@ def _run_one_evaluation(
         session.check_alive()
         allowed_env_keys = (*EVAL_RUNTIME_ENV_KEYS, *evaluation.secret_env_keys)
         evaluation_env = {key: env_vars[key] for key in allowed_env_keys if key in env_vars}
-        outcome = evaluation.executor(session.model, evaluation.identity.output_dir, evaluation_env)
+        outcome = evaluation.executor(session, evaluation.identity.output_dir, evaluation_env)
         metrics = outcome.metrics
         jobs |= outcome.jobs
     except Exception as exc:

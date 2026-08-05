@@ -9,7 +9,7 @@ import threading
 from dataclasses import dataclass
 from datetime import timedelta
 from time import monotonic
-from typing import Any
+from typing import Any, Callable
 
 from levanter.callbacks._core import Callback, ProgressEvent, StepInfo
 
@@ -20,6 +20,15 @@ _WATCHDOG_POLL_INTERVAL = 60.0
 STALLED_TRAINING_EXIT_CODE = 124
 
 
+@dataclass(frozen=True)
+class ProgressTimeout:
+    """Progress deadline that triggered watchdog termination."""
+
+    event: ProgressEvent
+    elapsed: float
+    timeout: float
+
+
 class ProgressWatchdog(Callback[Any]):
     """Watch explicit training lifecycle events with step and process deadlines."""
 
@@ -28,6 +37,8 @@ class ProgressWatchdog(Callback[Any]):
         *,
         step_timeout: timedelta | None,
         process_timeout: timedelta | None,
+        diagnostic: Callable[[ProgressTimeout], None] | None = None,
+        diagnostic_timeout: timedelta | None = None,
         poll_interval: float = _WATCHDOG_POLL_INTERVAL,
     ) -> None:
         if step_timeout is None and process_timeout is None:
@@ -36,11 +47,17 @@ class ProgressWatchdog(Callback[Any]):
             raise ValueError("step_timeout must be positive")
         if process_timeout is not None and process_timeout.total_seconds() <= 0:
             raise ValueError("process_timeout must be positive")
+        if diagnostic is not None and diagnostic_timeout is None:
+            raise ValueError("diagnostic_timeout is required when diagnostic is set")
+        if diagnostic_timeout is not None and diagnostic_timeout.total_seconds() <= 0:
+            raise ValueError("diagnostic_timeout must be positive")
         if poll_interval <= 0:
             raise ValueError("poll_interval must be positive")
 
         self._step_timeout = step_timeout.total_seconds() if step_timeout is not None else None
         self._process_timeout = process_timeout.total_seconds() if process_timeout is not None else None
+        self._diagnostic = diagnostic
+        self._diagnostic_timeout = diagnostic_timeout.total_seconds() if diagnostic_timeout is not None else None
         self._poll_interval = poll_interval
         self._lock = threading.Lock()
         self._completed_training_step = False
@@ -109,8 +126,27 @@ class ProgressWatchdog(Callback[Any]):
                 timeout,
                 STALLED_TRAINING_EXIT_CODE,
             )
+            if self._diagnostic is not None:
+                assert self._diagnostic_timeout is not None
+                diagnostic = threading.Thread(
+                    target=self._run_diagnostic,
+                    args=(ProgressTimeout(event, elapsed, timeout),),
+                    name="levanter-progress-diagnostic",
+                    daemon=True,
+                )
+                diagnostic.start()
+                diagnostic.join(self._diagnostic_timeout)
+                if diagnostic.is_alive():
+                    logger.error("Progress diagnostic exceeded its %.1f second budget", self._diagnostic_timeout)
         finally:
             os._exit(STALLED_TRAINING_EXIT_CODE)
+
+    def _run_diagnostic(self, timeout: ProgressTimeout) -> None:
+        try:
+            assert self._diagnostic is not None
+            self._diagnostic(timeout)
+        except Exception:
+            logger.exception("Progress diagnostic failed")
 
 
 @dataclass(frozen=True)
@@ -119,14 +155,31 @@ class ProgressWatchdogConfig:
 
     step_timeout: timedelta | None = None
     process_timeout: timedelta | None = None
+    diagnostic_timeout: timedelta | None = None
 
     def __post_init__(self) -> None:
         if self.step_timeout is not None and self.step_timeout.total_seconds() <= 0:
             raise ValueError("step_timeout must be positive")
         if self.process_timeout is not None and self.process_timeout.total_seconds() <= 0:
             raise ValueError("process_timeout must be positive")
+        if self.diagnostic_timeout is not None and self.diagnostic_timeout.total_seconds() <= 0:
+            raise ValueError("diagnostic_timeout must be positive")
 
-    def create(self) -> ProgressWatchdog | None:
+    def create(
+        self,
+        *,
+        process_index: int = 0,
+        diagnostic: Callable[[ProgressTimeout], None] | None = None,
+    ) -> ProgressWatchdog | None:
         if self.step_timeout is None and self.process_timeout is None:
             return None
-        return ProgressWatchdog(step_timeout=self.step_timeout, process_timeout=self.process_timeout)
+        if self.diagnostic_timeout is not None and process_index != 0:
+            return None
+        if self.diagnostic_timeout is not None and diagnostic is None:
+            raise ValueError("diagnostic is required when diagnostic_timeout is set")
+        return ProgressWatchdog(
+            step_timeout=self.step_timeout,
+            process_timeout=self.process_timeout,
+            diagnostic=diagnostic if self.diagnostic_timeout is not None else None,
+            diagnostic_timeout=self.diagnostic_timeout,
+        )

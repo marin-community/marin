@@ -488,7 +488,8 @@ def _fuse_operations(operations: list) -> list[PhysicalStage]:
             )
 
         else:
-            # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp, TakePerShardOp, WindowOp, SelectOp
+            # Fusible ops: LoadFileOp, MapOp, FilterOp, FlatMapOp, MapShardOp,
+            # TakePerShardOp, WindowOp, SelectOp
             state.pending_fusible.append(op)
 
     return state.finalize()

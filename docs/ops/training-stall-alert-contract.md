@@ -17,13 +17,19 @@ The required `service=levanter` telemetry records are `step`, `progress_time_sec
 
 ## NCCL RAS snapshots
 
-GPU Levanter runs poll NCCL RAS from JAX process 0 every two minutes. NCCL returns a job-global communicator view, so one collector avoids repeating the same query from every rank. The collector runs NCCL's documented text protocol in a bounded Python subprocess, gives it an eight-second outer deadline, and stops during normal tracker shutdown. It does not depend on the separately packaged `ncclras` executable. `NCCL_RAS_ENABLE=0` disables collection.
+GPU Levanter runs poll NCCL RAS from JAX process 0 every ten minutes. NCCL returns a job-global communicator view, so one collector avoids repeating the same query from every rank. Steady-state polling uses `STATUS`; watchdog-triggered collection uses `VERBOSE STATUS`. Both run through NCCL's documented text protocol in a bounded Python subprocess with an eight-second outer deadline. The collector does not depend on the separately packaged `ncclras` executable. `NCCL_RAS_ENABLE=0` disables collection.
+
+The client accepts up to 32 MiB of raw JSON in its own process, validates it with Pydantic models, and writes the complete reduced result to stdout. NCCL opts into a 32 MiB subprocess-output limit while other hardware probes retain the shared 256 KiB default. A malformed communicator increments the reduction's invalid count without discarding valid peers. The report records input and omitted communicator counts, while publication records enqueued and telemetry-lost rows.
+
+Healthy periodic samples produce communicator and rank-count summaries but no per-collective or per-rank rows. A periodic mismatch adds minimum and maximum operation counts for the affected collective. A watchdog-triggered sample includes all collective progress plus every missing rank, rank with an NCCL error, and unique progress outlier. Lifecycle transitions such as finalize and destroy are reported as state, not classified as errors. A tied count split is a mismatch but does not assign an outlier rank.
+
+`moe_hero_fsdp` configures a 20-second watchdog diagnostic budget. When the watchdog fires, only process 0 stops periodic collection, requests a fresh verbose sample, publishes the reduced evidence, flushes telemetry, and exits with code 124. The diagnostic thread cannot delay exit past that budget. Other ranks do not issue duplicate RAS queries; Iris propagates the failed coscheduled task to the gang.
 
 Iris's Kubernetes sidecar ships task logs and does not poll RAS. The Iris node-agent NVIDIA probe records host hardware separately. Leave both enabled; neither duplicates these communicator snapshots.
 
 Every row carries the collector's Iris `task_id`, attempt/execution identity, node, `process_index=0`, and `root_run_uid`. Rank rows add NCCL's `rank_host`, `process_id`, `cuda_device`, and `nvml_device`; those fields identify the process represented by a global RAS rank instead of treating the collector task as the rank owner.
 
-`ras_available=1` records a parsed response. `ras_available=0` includes an `outcome` such as `unavailable`, `client_timeout`, `deadline_exceeded`, `output_limit`, or `invalid_payload`. `ras_poll_failures` and `ras_poll_timeouts` are counter deltas; sum them over the query window. `ras_poll_duration_seconds` is the client-side latency, while `ras_collection_duration_seconds` and `ras_collection_timeouts` come from NCCL's successful response.
+`ras_available=1` records a parsed response. `ras_available=0` includes an `outcome` such as `unavailable`, `client_timeout`, `deadline_exceeded`, `runner_output_limit`, `client_response_limit`, `invalid_payload`, or `invalid_client_output`. The `trigger` attribute is `periodic` or `stall`. `ras_poll_failures` and `ras_poll_timeouts` are counter deltas; sum them over the query window. `ras_poll_duration_seconds` is the client-side latency, while `ras_collection_duration_seconds` and `ras_collection_timeouts` come from NCCL's successful response.
 
 Query a root run with a bounded timestamp range:
 
@@ -37,10 +43,13 @@ SELECT
   kind,
   value,
   json_get(attributes_json, 'outcome') AS outcome,
+  json_get(attributes_json, 'trigger') AS trigger,
   json_get(attributes_json, 'communicator_hash') AS communicator_hash,
   json_get(attributes_json, 'rank') AS rank,
   json_get(attributes_json, 'rank_host') AS rank_host,
-  json_get(attributes_json, 'collective') AS collective
+  json_get(attributes_json, 'collective') AS collective,
+  json_get(attributes_json, 'rank_statistic') AS rank_statistic,
+  json_get(attributes_json, 'record_state') AS record_state
 FROM "telemetry_v1"
 WHERE service = 'levanter'
   AND json_get(resource_attributes_json, 'root_run_uid') = '<run-id>'
@@ -54,6 +63,8 @@ WHERE service = 'levanter'
     'communicator_ranks',
     'communicator_rank_status',
     'collective_operations',
+    'ras_reduction_records',
+    'ras_metric_records',
     'ras_collection_duration_seconds',
     'ras_collection_timeouts'
   )
@@ -61,7 +72,9 @@ WHERE service = 'levanter'
 ORDER BY timestamp_ms, name;
 ```
 
-Repeated, unchanged `collective_operations` values during stale optimizer progress are evidence of a stationary communicator. A one-sample count mismatch is not a hang verdict because ranks may be briefly offset while collectives are active. No retained RAS rows means collection or delivery is unverified; `ras_available=0` proves the collector ran and could not obtain a valid response.
+`collective_operations` appears for periodic mismatches and detailed stall captures. A one-sample count mismatch is not a hang verdict because ranks may be briefly offset while collectives are active. Check `ras_reduction_records` and `ras_metric_records` before interpreting absent rank detail. No retained RAS rows means collection or delivery is unverified; `ras_available=0` proves the collector ran and could not obtain a valid response.
+
+The NVIDIA probe follows the same sparse convention. Every poll emits `nvidia_health_available` and `gpu_devices` counts grouped by `total`, `healthy`, `abnormal`, or `unknown`; per-device ECC, retired-page, and row-remap rows are emitted only when nonzero. Inventory, total memory, and power-limit rows are refreshed hourly rather than on every health poll.
 
 GPU utilization, power, and power-limit metrics remain diagnostic evidence available in finelog and the capture bundle; they do not gate or classify this warning. This avoids hiding a stalled job when node attribution is unavailable.
 

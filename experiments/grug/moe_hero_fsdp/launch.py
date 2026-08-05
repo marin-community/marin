@@ -42,6 +42,7 @@ HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
 HERO_TRAIN_STEP_TIMEOUT = timedelta(minutes=15)
 # Evaluation, checkpointing, and other hooks use this process-wide deadline.
 HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
+HERO_STALL_DIAGNOSTIC_TIMEOUT = timedelta(seconds=20)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -121,6 +122,7 @@ def build_hero_run(
             progress_watchdog=ProgressWatchdogConfig(
                 step_timeout=HERO_TRAIN_STEP_TIMEOUT,
                 process_timeout=HERO_PROCESS_STALL_TIMEOUT,
+                diagnostic_timeout=HERO_STALL_DIAGNOSTIC_TIMEOUT,
             ),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
