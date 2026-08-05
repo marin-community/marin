@@ -61,6 +61,9 @@ class Flavor:
 
 FLAVORS: dict[str, Flavor] = {
     "ep": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "fixed_all_to_all", 1),
+    # Same buffer as `ep`, but routing capacity is pooled across the experts on a device, so an
+    # idle expert can lend rows to a hot one instead of the assignment being dropped.
+    "ep-grouped": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "fixed_grouped_a2a", 1),
     "fsdp-nodrop": Flavor(1, "scatter", 1),
 }
 
