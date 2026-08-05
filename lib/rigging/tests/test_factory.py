@@ -11,7 +11,9 @@ import socket
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
+import fsspec
 import pytest
 from aiobotocore.config import AioConfig
 from botocore.awsrequest import AWSRequest
@@ -27,11 +29,34 @@ from rigging.filesystem.factory import (
     unique_temp_path,
     url_to_fs,
 )
+from rigging.filesystem.listing_cache import configure_listing_cache_defaults
 from rigging.filesystem.s3_compat import (
     TotalDeadlineAIOHTTPSession,
     fsspec_s3_conf,
     s3_request_bounds_config_kwargs,
 )
+
+
+class _ExternallyMutableFileSystem(fsspec.AbstractFileSystem):
+    """Object-store fake whose listings can change outside this filesystem instance."""
+
+    protocol = ("externallistings", "gs")
+    cachable = False
+    files: ClassVar[set[str]] = set()
+
+    def ls(self, path: str, detail: bool = True, **kwargs: object) -> list[dict[str, str | int]] | list[str]:
+        path = self._strip_protocol(path).rstrip("/")
+        try:
+            listing = self.dircache[path]
+        except KeyError:
+            listing: list[dict[str, str | int]] = [
+                {"name": name, "size": 0, "type": "file"} for name in sorted(self.files) if name.startswith(f"{path}/")
+            ]
+            self.dircache[path] = listing
+        return listing if detail else [str(entry["name"]) for entry in listing]
+
+
+fsspec.register_implementation("externallistings", _ExternallyMutableFileSystem, clobber=True)
 
 
 def test_unique_temp_path_produces_distinct_paths():
@@ -141,6 +166,45 @@ def test_open_url_local_file(tmp_path):
 def test_filesystem_local():
     fs = filesystem("file")
     assert not isinstance(fs, CrossRegionGuardedFS)
+
+
+@pytest.mark.parametrize("entrypoint", ["url_to_fs", "filesystem", "fsspec"])
+def test_cloud_filesystem_detects_externally_added_files_by_default(entrypoint):
+    _ExternallyMutableFileSystem.files = {"bucket/first"}
+    if entrypoint == "url_to_fs":
+        fs, path = url_to_fs("externallistings://bucket")
+    elif entrypoint == "filesystem":
+        fs, path = filesystem("externallistings"), "bucket"
+    else:
+        fs, path = fsspec.core.url_to_fs("externallistings://bucket")
+
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+    _ExternallyMutableFileSystem.files.add("bucket/second")
+
+    assert fs.ls(path, detail=False) == ["bucket/first", "bucket/second"]
+
+
+def test_cloud_filesystem_preserves_explicit_listing_cache_opt_in():
+    _ExternallyMutableFileSystem.files = {"bucket/first"}
+    fs, path = url_to_fs("externallistings://bucket", listings_expiry_time=60)
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+    _ExternallyMutableFileSystem.files.add("bucket/second")
+
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+
+def test_cloud_filesystem_preserves_process_listing_cache_config(monkeypatch):
+    monkeypatch.setitem(fsspec.config.conf, "gs", {"listings_expiry_time": 60})
+    configure_listing_cache_defaults()
+    _ExternallyMutableFileSystem.files = {"bucket/first"}
+    fs, path = fsspec.core.url_to_fs("externallistings://bucket")
+    assert fs.ls(path, detail=False) == ["bucket/first"]
+
+    _ExternallyMutableFileSystem.files.add("bucket/second")
+
+    assert fs.ls(path, detail=False) == ["bucket/first"]
 
 
 def test_s3_filesystems_are_built_with_the_deadline():

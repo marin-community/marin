@@ -6,9 +6,11 @@
 ``url_to_fs``, ``open_url``, and ``filesystem`` are drop-in replacements for
 ``fsspec.core.url_to_fs``, ``fsspec.open``, and ``fsspec.filesystem`` that
 automatically wrap GCS filesystems in a :class:`CrossRegionGuardedFS` and inject
-finite botocore timeouts into S3/R2 filesystems (#6487). ``atomic_rename``
-provides write-and-rename semantics via a sibling temp key, and
-``fetch_file_atomic`` downloads a remote file to a local path the same way.
+finite botocore timeouts into S3/R2 filesystems (#6487). Importing this module
+also gives GCS and S3 directory listings a zero-second expiry unless fsspec was
+explicitly configured otherwise. ``atomic_rename`` provides write-and-rename
+semantics via a sibling temp key, and ``fetch_file_atomic`` downloads a remote
+file to a local path the same way.
 """
 
 import contextlib
@@ -27,10 +29,13 @@ from rigging.filesystem.cross_region import (
     _is_gcs_protocol,
     _is_gcs_url,
 )
+from rigging.filesystem.listing_cache import configure_listing_cache_defaults
 from rigging.filesystem.s3_compat import s3_python_config_kwargs
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
+
+configure_listing_cache_defaults()
 
 
 def _with_s3_timeout_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -58,7 +63,8 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
 
     Returns ``(fs, path)``.  For non-GCS URLs the filesystem is returned
     unwrapped.  ``mirror://`` URLs are handled by :class:`MirrorFileSystem`.
-    S3/R2 URLs get finite timeouts injected (#6487).
+    GCS/S3 listings expire immediately by default, and S3/R2 URLs get finite
+    timeouts injected (#6487).
     """
     if url.startswith("s3://"):
         kwargs = _with_s3_timeout_defaults(kwargs)
@@ -93,7 +99,8 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
 def filesystem(protocol: str, **kwargs: Any) -> Any:
     """Like ``fsspec.filesystem`` but wraps GCS filesystems in a cross-region guard.
 
-    S3/R2 filesystems get finite timeouts injected (#6487)."""
+    GCS/S3 listings expire immediately by default, and S3/R2 filesystems get
+    finite timeouts injected (#6487)."""
     if protocol in ("s3", "s3a"):
         kwargs = _with_s3_timeout_defaults(kwargs)
     fs = fsspec.filesystem(protocol, **kwargs)

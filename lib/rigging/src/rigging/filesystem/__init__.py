@@ -13,7 +13,7 @@ Focused submodules with one-directional imports:
   instead of the process-wide fsspec config.
 - ``cross_region`` — the :class:`TransferBudget` and :class:`CrossRegionGuardedFS`.
 - ``factory`` — the guarded ``url_to_fs`` / ``open_url`` / ``filesystem`` entry
-  points, ``atomic_rename``, and ``fetch_file_atomic``.
+  points with fresh cloud listings, ``atomic_rename``, and ``fetch_file_atomic``.
 - ``mirror`` — the ``mirror://`` :class:`MirrorFileSystem`.
 - ``distributed_lock`` — lease-based distributed locks (used by ``mirror``).
 

@@ -41,6 +41,7 @@ import s3fs
 from aiobotocore.httpsession import AIOHTTPSession
 
 from rigging.filesystem.cluster_config import StoreType, store_config
+from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
@@ -121,7 +122,7 @@ def needs_virtual_host_addressing(endpoint_url: str) -> bool:
 
 def fsspec_s3_conf(endpoint: str) -> dict:
     """The ``FSSPEC_S3`` config block for *endpoint*: virtual-hosted addressing where the domain
-    demands it, region-less ("auto") signing, and finite request bounds.
+    demands it, region-less ("auto") signing, finite request bounds, and fresh listings.
 
     Non-AWS S3-compatible endpoints (R2, CoreWeave Object Storage) don't honor the AWS region
     scheme; signing with the wrong region surfaces as 400 Bad Request. "auto" tells boto3 to skip
@@ -134,6 +135,7 @@ def fsspec_s3_conf(endpoint: str) -> dict:
         "endpoint_url": endpoint,
         "client_kwargs": {"region_name": "auto"},
         "config_kwargs": config_kwargs,
+        "listings_expiry_time": DEFAULT_LISTINGS_EXPIRY_TIME,
     }
 
 
