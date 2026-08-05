@@ -18,7 +18,7 @@ from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
 from marin.evaluation.runner import EvaluationBatch, wait_and_report
-from marin.evaluation.samples import export_lm_eval_samples_to_archive
+from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
@@ -175,7 +175,7 @@ def backfill_samples(prefixes: tuple[str, ...]) -> None:
     configure_coreweave_s3()
     for prefix in prefixes:
         for record in list_records(prefix):
-            written = export_lm_eval_samples_to_archive(record.results_path)
+            written = export_lm_eval_samples(record.results_path)
             click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
 
 

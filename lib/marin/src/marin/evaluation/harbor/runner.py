@@ -35,16 +35,7 @@ from marin.evaluation.harbor.driver_config import (
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.evaluation.samples import (
-    EvalSample,
-    Grading,
-    SampleKind,
-    archive_samples_table,
-    archive_steps_table,
-    open_eval_archive,
-    sample_to_archive_row,
-    store_trajectory,
-)
+from marin.evaluation.samples import EvalSample, EvaluationStore, Grading, SampleKind
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
@@ -208,25 +199,19 @@ def _write_archive(trials: list[HarborTrial], dataset: str, output_dir: str) -> 
     """
     if not trials:
         return None
-    store = open_eval_archive(output_dir, writer_id="harbor")
-    samples = archive_samples_table(store)
-    steps = archive_steps_table(store)
+    store = EvaluationStore.open(output_dir, writer_id="harbor")
     try:
         for trial in trials:
             trajectory_uri = None
             if trial.trajectory_path is not None:
-                stored = store_trajectory(
-                    store,
+                stored = store.add_trajectory(
                     StoragePath(trial.trajectory_path).read_bytes(),
                     task=dataset,
                     doc_id=trial.task_id,
                     trial_id=trial.trial_id,
                 )
                 trajectory_uri = stored.uri
-                if stored.steps:
-                    steps.extend(stored.steps)
-            sample = _sample_for(trial, dataset, trajectory_uri=trajectory_uri)
-            samples.append(sample_to_archive_row(sample, trial_id=trial.trial_id))
+            store.add_sample(_sample_for(trial, dataset, trajectory_uri=trajectory_uri), trial_id=trial.trial_id)
         store.seal()
     finally:
         store.close()

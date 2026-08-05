@@ -15,11 +15,12 @@ from __future__ import annotations
 import logging
 import uuid
 
+import pyarrow.compute as pc
 from rigging.filesystem import url_to_fs
 
-from finestore import _io
 from finestore.layout import GEN_COLUMN, SEQ_COLUMN, shard_path
 from finestore.reader import CompositeReader
+from finestore.shard_writer import write_table
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,10 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> int:
 
     Returns 0 (writing nothing) when the table is empty or has no shards. When ``delete_source`` is
     set, shards from generations below the new one are removed after the merged shard is published.
+
+    A global sort into one shard materializes the table's live rows in memory, so this targets the
+    modest, cold-after-seal archives eval data produces rather than unbounded streams; compaction is
+    optional, so an archive too large to fit is left as its level-0 shards and still reads correctly.
     """
     reader = CompositeReader(root)
     shards = reader.list_shards(table)
@@ -49,9 +54,9 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> int:
     if sort_keys:
         data = data.sort_by(sort_keys)
 
-    min_seq = min(data.column(SEQ_COLUMN).to_pylist()) if SEQ_COLUMN in data.column_names else 0
+    min_seq = pc.min(data.column(SEQ_COLUMN)).as_py() if SEQ_COLUMN in data.column_names else 0
     out_path = shard_path(root, table, _COMPACTOR, next_generation, min_seq, uuid.uuid4().hex[:8])
-    _io.write_table(out_path, data)
+    write_table(out_path, data)
     logger.info("finestore compacted %s to generation %d (%d rows)", table, next_generation, data.num_rows)
 
     if delete_source:

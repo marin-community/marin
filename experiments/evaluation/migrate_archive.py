@@ -22,22 +22,17 @@ import logging
 
 import click
 import pyarrow.parquet as pq
-from finestore import CompositeReader
 from finestore.layout import FINESTORE_DIR
-from rigging.filesystem import StoragePath, url_to_fs
-
+from finestore.reader import CompositeReader
 from marin.evaluation.samples import (
     ARCHIVE_SAMPLES_TABLE,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
+    EvaluationStore,
     SampleKind,
-    archive_samples_table,
-    archive_steps_table,
-    open_eval_archive,
     sample_from_archive_row,
-    sample_to_archive_row,
-    store_trajectory,
 )
+from rigging.filesystem import StoragePath, url_to_fs
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +59,7 @@ def _trial_id_from_uri(uri: str) -> str:
 def migrate_run(results_path: str, *, writer_id: str = "migrate") -> MigrationCounts:
     """Backfill one run's legacy sample parquets into its finestore archive. Safe to re-run."""
     fs, root = url_to_fs(results_path)
-    store = open_eval_archive(results_path, writer_id=writer_id)
-    samples = archive_samples_table(store)
-    steps = archive_steps_table(store)
+    store = EvaluationStore.open(results_path, writer_id=writer_id)
     sample_count = step_count = trajectory_count = 0
     try:
         for path in fs.find(root):
@@ -85,14 +78,14 @@ def migrate_run(results_path: str, *, writer_id: str = "migrate") -> MigrationCo
                     # A read failure aborts the migration -- it is idempotent and only seals on
                     # success, so a transient fault is retried rather than recorded as complete.
                     trial_id = _trial_id_from_uri(uri)
-                    raw = StoragePath(uri).read_bytes()
-                    stored = store_trajectory(store, raw, task=sample.task, doc_id=sample.doc_id, trial_id=trial_id)
+                    stored = store.add_trajectory(
+                        StoragePath(uri).read_bytes(), task=sample.task, doc_id=sample.doc_id, trial_id=trial_id
+                    )
                     sample = sample.model_copy(update={"trajectory_uri": stored.uri})
                     if stored.steps:
-                        steps.extend(stored.steps)
                         step_count += len(stored.steps)
                         trajectory_count += 1
-                samples.append(sample_to_archive_row(sample, trial_id=trial_id))
+                store.add_sample(sample, trial_id=trial_id)
                 sample_count += 1
         store.seal()
     finally:

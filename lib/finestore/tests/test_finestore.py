@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import pyarrow as pa
-from finestore import CompositeReader, DataStore, compact
+from finestore.compaction import compact
+from finestore.reader import CompositeReader
+from finestore.store import DataStore
 
 
 def _rows(reader: CompositeReader, table: str, **kwargs) -> list[dict]:

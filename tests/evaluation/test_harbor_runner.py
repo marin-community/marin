@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from finestore import CompositeReader
+from finestore.reader import CompositeReader
 from fsspec.implementations.memory import MemoryFileSystem
 from marin.evaluation.harbor import driver_config, runner
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset

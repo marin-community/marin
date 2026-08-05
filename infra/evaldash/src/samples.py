@@ -22,7 +22,7 @@ from typing import Generic, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore import CompositeReader
+from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
 from marin.evaluation.samples import (
     ARCHIVE_SAMPLES_TABLE,

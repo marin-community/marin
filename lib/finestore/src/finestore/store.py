@@ -24,7 +24,6 @@ from dataclasses import dataclass, field
 import pyarrow as pa
 from rigging.filesystem import StoragePath
 
-from finestore import _io
 from finestore.layout import (
     BLOB_NAME_COLUMN,
     BLOBS_TABLE,
@@ -35,6 +34,7 @@ from finestore.layout import (
     sealed_path,
     shard_path,
 )
+from finestore.shard_writer import write_table
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ def _default_writer_id() -> str:
 
 
 @dataclass
-class _Buffer:
+class _TableBuffer:
     """One table's pending rows, its dedup primary key, and its per-writer sequence counter."""
 
     name: str
@@ -108,7 +108,7 @@ class DataStore:
         self.writer_id = writer_id or _default_writer_id()
         self._flush_interval = flush_interval
         self._max_buffer_rows = max_buffer_rows
-        self._tables: dict[str, _Buffer] = {}
+        self._tables: dict[str, _TableBuffer] = {}
         self._register_lock = threading.Lock()
         self._flush_lock = threading.Lock()
         self._wake = threading.Event()
@@ -142,12 +142,12 @@ class DataStore:
             buffer = self._tables.get(name)
             if buffer is None:
                 pk = tuple(primary_key) if primary_key is not None else None
-                buffer = _Buffer(name=name, primary_key=pk, schema=schema, schema_version=schema_version)
+                buffer = _TableBuffer(name=name, primary_key=pk, schema=schema, schema_version=schema_version)
                 self._tables[name] = buffer
                 self._write_schema_meta(buffer)
         return DataTable(self, name)
 
-    def _write_schema_meta(self, buffer: _Buffer) -> None:
+    def _write_schema_meta(self, buffer: _TableBuffer) -> None:
         """Persist the table's primary key and schema version (the archive's only metadata object)."""
         meta = {
             "primary_key": list(buffer.primary_key) if buffer.primary_key else None,
@@ -204,7 +204,7 @@ class DataStore:
             for buffer in list(self._tables.values()):
                 self._flush_buffer(buffer)
 
-    def _flush_buffer(self, buffer: _Buffer) -> None:
+    def _flush_buffer(self, buffer: _TableBuffer) -> None:
         with buffer.lock:
             if not buffer.pending:
                 return
@@ -213,7 +213,7 @@ class DataStore:
         table = pa.Table.from_pylist(_drop_empty_struct_keys(rows), schema=buffer.schema)
         min_seq = min(row[SEQ_COLUMN] for row in rows)
         path = shard_path(self.root, buffer.name, self.writer_id, 0, min_seq, uuid.uuid4().hex[:8])
-        _io.write_table(path, table)
+        write_table(path, table)
         logger.debug("finestore flushed %d rows to %s", len(rows), path)
 
     def seal(self) -> None:

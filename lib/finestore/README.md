@@ -25,8 +25,11 @@ that reference in place of the payload (e.g. an agent trajectory), and
 `CompositeReader.resolve(uri)` reads it back. Everything the archive owns lives
 inside the archive, addressable by a `finestore://` URI.
 
+Import from the submodules directly; the package re-exports nothing.
+
 ```python
-from finestore import DataStore, CompositeReader
+from finestore.store import DataStore
+from finestore.reader import CompositeReader
 
 with DataStore.open("gs://bucket/run/results", writer_id="evalchemy") as store:
     samples = store.table("samples", primary_key=("task", "doc_id"))
@@ -114,8 +117,8 @@ There is no manifest and no rewrite, so recovery is a listing, not a repair.
 
 ## Migration
 
-`marin.evaluation.migrate_archive` backfills a run written before the archive
-existed. Legacy runs stored one `samples_<task>_<ts>.parquet` per (sub)task and
+`experiments.evaluation.migrate_archive` backfills a run written before the
+archive existed. Legacy runs stored one `samples_<task>_<ts>.parquet` per (sub)task and
 referenced Harbor trajectories by a `gs://` URI. The tool reads those files,
 writes the rows into the run's `samples` table, and for agentic samples pulls
 each referenced trajectory into the `blobs` table (rewriting the sample's
@@ -125,7 +128,7 @@ never deletes the source files, so a migration can be validated before the
 legacy layout is retired.
 
 ```shell
-uv run python -m marin.evaluation.migrate_archive gs://bucket/run/results
+uv run python -m experiments.evaluation.migrate_archive gs://bucket/run/results
 ```
 
 ## Packaging

@@ -7,21 +7,20 @@ from __future__ import annotations
 
 import json
 
-from finestore import CompositeReader
+from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
-from marin.evaluation.migrate_archive import MigrationCounts, archive_sample_count, migrate_run
 from marin.evaluation.samples import (
     Choice,
     EvalSample,
+    EvaluationStore,
     Grading,
     SampleKind,
-    archive_samples_table,
-    open_eval_archive,
     sample_from_archive_row,
     sample_to_archive_row,
     write_sample_parquet,
 )
 
+from experiments.evaluation.migrate_archive import MigrationCounts, archive_sample_count, migrate_run
 from infra.evaldash.src.samples import fetch_artifact, fetch_samples, list_sample_tasks
 
 
@@ -62,10 +61,9 @@ def test_archive_row_round_trips_each_kind():
 
 def test_evaldash_reads_the_archive(tmp_path):
     root = str(tmp_path / "run" / "results")
-    store = open_eval_archive(root, writer_id="evalchemy")
-    samples = archive_samples_table(store)
-    samples.append(sample_to_archive_row(_mcq("1", correct=True)))
-    samples.append(sample_to_archive_row(_mcq("2", correct=False)))
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    store.add_sample(_mcq("1", correct=True))
+    store.add_sample(_mcq("2", correct=False))
     store.seal()
     store.close()
 
@@ -138,8 +136,9 @@ def test_fetch_artifact_keys_cache_by_run(tmp_path):
     run_a = str(tmp_path / "a" / "results")
     run_b = str(tmp_path / "b" / "results")
     for root, tag in ((run_a, "a"), (run_b, "b")):
-        store = open_eval_archive(root, writer_id="w")
-        assert store.write("trial-1/trajectory.json", {}, json.dumps({"run": tag}).encode()) == uri
+        store = EvaluationStore.open(root, writer_id="w")
+        stored = store.add_trajectory(json.dumps({"run": tag}).encode(), task="t", doc_id="d", trial_id="trial-1")
+        assert stored.uri == uri
         store.seal()
         store.close()
 
