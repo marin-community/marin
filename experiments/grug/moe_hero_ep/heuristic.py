@@ -9,9 +9,11 @@ pairs it with a fixed hero model spec so a launcher gets both configs back from 
 ``(num_train_steps, batch_size, shape)`` call, keeping the hero self-contained.
 
 Two model shapes run on the same EP64 mesh. ``HeroShape.EP`` is the native d5120 / 256-expert EP
-hero. ``HeroShape.FSDP`` is the ``experiments/grug/moe_hero_fsdp`` d6144 / 128-expert shape, which
-makes MFU directly comparable between the two sharding strategies because the analytic FLOP count
-depends only on the model config.
+hero. ``HeroShape.FSDP`` is the ``experiments/grug/moe_hero_fsdp`` d6144 / 128-expert shape. Running
+it here gives both sharding strategies one analytic FLOP count, because that count depends only on
+the model config, so their MFU values share a denominator. They do not do the same work: at capacity
+1.0 the EP run dropped 9.97% of assignments against 1.88% for FSDP, so read the drop fraction with
+the MFU value or match the drop rates first.
 """
 
 import math

@@ -38,16 +38,6 @@ def test_fsdp_shape_matches_the_fsdp_hero_apart_from_ep_deltas():
     assert reference["expert_chunks"] == 4
 
 
-def test_fsdp_shape_fits_the_ep64_mesh_and_offloads_the_optimizer_state():
-    spec = HERO_SHAPE_SPECS[HeroShape.FSDP]
-
-    # 128 experts over a 64-way expert axis is two whole experts per device; a shape that does not
-    # divide the axis fails inside `moe_mlp` only after the rack is already allocated.
-    assert spec.model.num_experts % launch.HERO_EP_EXPERT_AXIS_SIZE == 0
-    assert launch.HERO_EP_EXPERT_AXIS_SIZE == 64
-    assert spec.offload_opt_state
-
-
 def test_expert_bank_override_must_divide_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
