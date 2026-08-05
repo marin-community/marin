@@ -18,17 +18,22 @@ from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 
 @dataclass(frozen=True)
 class MoeHeuristic:
-    """May Recipe MuonH LR-scaling refit (issue #5951, seq_len=4096 fits).
+    """MuonH LR-scaling law refit from the Aug hero LR sweep (issues #7856 / #8003, seq_len=8192).
 
     adam_lr  = lr_coeff * tokens^lr_tokens_exp * hidden_dim^lr_dim_exp * sqrt(tokens_per_batch)
     muonh_lr = muonh_ratio * adam_lr
     epsilon  = epsilon_coeff * sqrt(tokens / tokens_per_batch)
     beta2    = clip(beta2_base^(tokens_per_batch / beta2_reference_tpb), min_beta2, max_beta2)
+
+    The LR exponents/coefficient are the per-cell paloma-optimal fit (R^2=0.978): muonh_lr =
+    34.35 * tokens^-0.346 * hidden^-0.345 * batch^0.5 at seq_len=8192, folded into the sqrt(tokens_per_batch)
+    form (lr_coeff = 34.35 / (muonh_ratio * sqrt(8192))). Previous May-Recipe fit (#5951) was
+    lr_coeff=0.06602, lr_tokens_exp=-0.395, lr_dim_exp=-0.150.
     """
 
-    lr_coeff: float = 0.06602
-    lr_tokens_exp: float = -0.395
-    lr_dim_exp: float = -0.150
+    lr_coeff: float = 0.087571
+    lr_tokens_exp: float = -0.3461
+    lr_dim_exp: float = -0.3448
     muonh_ratio: float = 13 / 3
     epsilon_coeff: float = 9.676e-18
     beta1: float = 0.9062

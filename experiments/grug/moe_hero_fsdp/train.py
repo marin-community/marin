@@ -60,7 +60,10 @@ XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
-    os.environ.update(HERO_FSDP_RUNTIME_ENV)
+    # setdefault (not update) so a submitter-provided value wins -- e.g. non-Blackwell fleets pass
+    # -e JAX_ENABLE_PGLE 0 to avoid the "Another profiling session active" crash.
+    for _key, _value in HERO_FSDP_RUNTIME_ENV.items():
+        os.environ.setdefault(_key, _value)
     xla_flags = os.environ.get("XLA_FLAGS", "")
     command_buffer_flag_name = XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG.partition("=")[0]
     if any(flag.partition("=")[0] == command_buffer_flag_name for flag in xla_flags.split()):
@@ -494,8 +497,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
-        # This throughput reproduction intentionally produces no checkpoint.
-        checkpointer = None
+        # Honor the configured checkpointer: temporary (time-policy) checkpoints for crash-resume plus a
+        # forced permanent save at the final step. Disabled (None) only when no save_interval is set.
+        checkpointer = trainer.checkpointer.create(run_id) if trainer.checkpointer.save_interval is not None else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
