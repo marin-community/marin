@@ -64,6 +64,24 @@ def get_config(vocab_size=1000):
     return qwen_config
 
 
+def test_qwen_attention_config_honors_head_dim_and_bias_convention():
+    """head_dim must reach the attention projections, and Qwen keeps qkv bias without o_proj bias."""
+    config = QwenConfig(
+        max_seq_len=32, hidden_dim=16, intermediate_dim=32, num_layers=2, num_heads=4, num_kv_heads=2, head_dim=8
+    )
+
+    attention_config = config.attention_config()
+    assert attention_config.head_size == 8  # not hidden_dim // num_heads == 4
+    assert attention_config.use_bias
+    assert attention_config.use_output_bias is False
+
+    model = QwenLMHeadModel.init(hax.Axis("vocab", 37), config, key=random.PRNGKey(0))
+    attn = model.transformer.layers.stacked.self_attn
+    assert attn.q_proj.weight.resolve_axis("head_size").size == 8
+    assert attn.o_proj.bias is None
+    assert attn.q_proj.bias is not None
+
+
 @skip_if_no_torch
 def test_qwen_roundtrip(local_gpt2_tokenizer_path):
     import torch  # noqa: PLC0415  # optional dep: torch
