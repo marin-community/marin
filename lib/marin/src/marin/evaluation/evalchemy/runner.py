@@ -18,6 +18,7 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath, prefix_join
 
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
+from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
 from marin.evaluation.evalchemy.result import EvalchemyResult
 from marin.evaluation.evalchemy.runtime import (
     EVALCHEMY_EXTRA_PACKAGES,
@@ -128,6 +129,9 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
     tokenizer = model.tokenizer
     if tokenizer is None:
         raise ValueError("Evalchemy requires RunningModel.tokenizer")
+    conflicting_model_args = sorted(RESERVED_ENDPOINT_MODEL_ARGS.intersection(config.extra_model_args))
+    if conflicting_model_args:
+        raise ValueError(f"extra_model_args cannot override Marin endpoint fields: {conflicting_model_args}")
     return json.dumps(
         {
             "base_url": model.endpoint.base_url,

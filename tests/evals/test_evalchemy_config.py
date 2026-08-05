@@ -14,6 +14,7 @@ import json
 import os
 from types import SimpleNamespace
 
+import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
 from marin.evaluation.evalchemy.config import preflight_evalchemy_configs
 from marin.evaluation.evalchemy.runner import (
@@ -93,6 +94,11 @@ def test_file_config_fields_reach_the_evalchemy_command():
     model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
     assert model_args["timeout"] == "900"
     assert model_args["max_length"] == "32768"
+
+
+def test_parent_rejects_endpoint_model_arg_overrides():
+    with pytest.raises(ValueError, match="cannot override Marin endpoint fields: \\['model'\\]"):
+        _payload(_config(extra_model_args={"model": "other"}))
 
 
 def test_preflight_evalchemy_configs_returns_pinned_normalized_config(tmp_path, monkeypatch):

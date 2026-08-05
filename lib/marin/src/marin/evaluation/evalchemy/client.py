@@ -24,8 +24,6 @@ import urllib.request
 
 import fsspec
 
-from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
-
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
 
 # vLLM returns HTTP 400 when prompt_tokens + max_tokens exceeds the served context window. Reserve
@@ -89,9 +87,6 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
         # the endpoint. 1800s covers a full max_gen_toks generation on a slow serve.
         "timeout": 1800,
     }
-    conflicting = sorted(RESERVED_ENDPOINT_MODEL_ARGS.intersection(config.get("extra_model_args", {})))
-    if conflicting:
-        raise ValueError(f"extra_model_args cannot override Marin endpoint fields: {conflicting}")
     args.update(config.get("extra_model_args", {}))
     if max_length is not None:
         args["max_length"] = max_length
