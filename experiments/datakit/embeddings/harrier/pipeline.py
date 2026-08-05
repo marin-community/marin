@@ -106,6 +106,7 @@ class EmbeddingAttrData(BaseModel):
     version: str = f"v{EMBEDDING_ATTR_DATA_VERSION}"
     output_dir: DatakitArtifactPath
     source_key: str
+    dedup_attr_dir: DatakitArtifactPath | None = None
     model_name: str
     model_revision: str = ""
     embedding_dim: int
@@ -288,6 +289,13 @@ def _embed_shard(
     )
 
 
+def _keep_dedup_canonical(doc: dict, dedup: dict | None) -> dict | None:
+    if dedup is None or dedup["is_cluster_canonical"]:
+        return doc
+    counters.pipeline.update_counter("embed/docs_dedup_dropped", 1)
+    return None
+
+
 def embed_source(
     output_path: str,
     normalized: NormalizedData,
@@ -296,6 +304,7 @@ def embed_source(
     revision: str = HARRIER_REVISION,
     batch_size: int = DEFAULT_BATCH_SIZE,
     max_shards: int | None = None,
+    dedup_attr_dir: str | None = None,
     worker_resources: ResourceConfig | None = None,
     max_workers: int = HARRIER_MAX_WORKERS,
 ) -> EmbeddingAttrData:
@@ -329,11 +338,26 @@ def embed_source(
     # Project columns at read time — partition_id (~8 B/row) is ~120 GB of
     # extra read at 15 B-doc scale, and we don't need it.
     source_specs = [InputFileSpec(path=p, columns=["id", "text"]) for p in source_shards]
+    documents = Dataset.from_list(source_specs).flat_map(load_file)
+    if dedup_attr_dir is not None:
+        dedup_specs = [
+            InputFileSpec(
+                path=str(StoragePath(dedup_attr_dir) / os.path.basename(path)),
+                columns=["id", "is_cluster_canonical"],
+            )
+            for path in source_shards
+        ]
+        dedup_attrs = Dataset.from_list(dedup_specs).flat_map(load_file)
+        documents = documents.sorted_merge_join(
+            dedup_attrs,
+            left_key=lambda record: record["id"],
+            right_key=lambda record: record["id"],
+            combiner=_keep_dedup_canonical,
+            how="left",
+        ).filter(lambda record: record is not None)
 
     dataset = (
-        Dataset.from_list(source_specs)
-        .flat_map(load_file)
-        .window(batch_size)
+        documents.window(batch_size)
         .map_shard(_embed_shard)
         .write_parquet(_output_path, schema=_EMBEDDING_SCHEMA, skip_existing=True)
     )
@@ -361,6 +385,7 @@ def embed_source(
     artifact = EmbeddingAttrData(
         output_dir=output_path,
         source_key=datakit_source_key(normalized.main_output_dir),
+        dedup_attr_dir=dedup_attr_dir,
         model_name=repo_id,
         model_revision=revision,
         embedding_dim=HARRIER_DIM,
