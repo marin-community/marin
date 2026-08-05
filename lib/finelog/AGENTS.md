@@ -120,10 +120,10 @@ seeded store on the default port. Point it at a store with real segments via
 
 ## Secondary indexes
 
-A column declared with `ColumnIndex.trigram` gets a per-row-group substring
-index in each segment's `.tgm` sidecar, which is what makes
-`contains(col, …)`/`col LIKE '%…%'` prune instead of full-scan. Today that is
-`log.data` and `telemetry_v1.name`.
+A column declared with `ColumnIndex.trigram` gets a substring index in each
+segment's `.tgm` sidecar, covering a fixed span of rows at a time. That index is
+what makes `contains(col, …)`/`col LIKE '%…%'` prune instead of full-scan. Today
+it is on `log.data` and `telemetry_v1.name`.
 
 A `LIKE` pattern contributes every literal run between its wildcards, all
 required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the

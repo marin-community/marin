@@ -6,9 +6,10 @@
 //! `contains(col, needle)` / `LIKE '%needle%'` is opaque to parquet statistics —
 //! min/max and bloom filters key on whole values, so a substring match forces a
 //! decode of the column for every row in the scanned band. This index makes the
-//! match sub-linear: for each parquet row group it records the set of byte
-//! 3-grams present in `col`, as a Bloom filter. A query decomposes the needle
-//! into its 3-grams; a row group is **skipped unless it contains ALL of them**.
+//! match sub-linear: for each fixed-size span of rows (see the Spans section
+//! below) it records the set of byte 3-grams present in `col`, as a Bloom
+//! filter. A query decomposes the needle into its 3-grams; a span is **skipped
+//! unless it contains ALL of them**.
 //!
 //! The contract is **conservative — never a false negative**. A Bloom filter can
 //! only report "definitely absent" or "maybe present", so a kept row group might
@@ -55,7 +56,8 @@
 //! A bloom covers a fixed [`SIDECAR_SPAN_ROWS`] span of the segment's rows, which
 //! is deliberately NOT the parquet row-group size: row groups are sized by bytes
 //! so the footer stays small (see
-//! [`crate::store::segment::row_group_rows`]), while pruning wants the finest
+//! [`crate::store::segment::segment_writer_properties`]), while pruning wants the
+//! finest
 //! granularity its blooms can afford. The prune path maps the span mask onto the
 //! parquet row groups, emitting a row selection when a row group is only
 //! partly covered. It re-checks that the spans account for exactly the segment's
@@ -493,7 +495,7 @@ pub fn parse_header(bytes: &[u8]) -> Option<SidecarHeader> {
 }
 
 /// Parse one column's payload (`span_count` per-span blooms) from its slice.
-/// Returns `None` on truncation or a row-group-count mismatch.
+/// Returns `None` on truncation or a span-count mismatch.
 pub fn parse_column(bytes: &[u8], span_count: u32) -> Option<ColumnIndex> {
     let mut r = ByteReader::new(bytes);
     let mut groups = Vec::with_capacity(span_count as usize);

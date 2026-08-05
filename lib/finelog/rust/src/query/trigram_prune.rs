@@ -676,8 +676,8 @@ mod tests {
         assert!(mirrored.get("key").unwrap().hi.is_none());
     }
 
-    /// Write a real 2-row-group log segment (all rows under `key`, the needle in
-    /// row group 1 only) plus its trigram sidecar; return the segment path.
+    /// Write a log segment spanning two sidecar spans (all rows under `key`, the
+    /// needle in span 1 only) plus its trigram sidecar; return the segment path.
     fn write_scoping_segment(dir: &std::path::Path, key: &str, needle: &str) -> String {
         use crate::store::segment::write_segment_to_dir;
         use crate::store::trigram::SIDECAR_SPAN_ROWS;

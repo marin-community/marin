@@ -159,8 +159,8 @@ impl TableProvider for NamespaceProvider {
         match &self.inner {
             Inner::Listing(t) => {
                 // Delegate to DataFusion's parquet scan (which keeps the existing
-                // range / min-max / bloom row-group pruning), then layer the
-                // trigram prune on top by injecting per-file access plans.
+                // range / min-max row-group pruning), then layer the trigram
+                // prune on top by injecting per-file access plans.
                 let plan = t.scan(state, projection, filters, limit).await?;
                 // Hot path: a query with no `contains(col, …)`/`LIKE` filter on any
                 // column does only this cheap expr inspection (no I/O) and returns
@@ -473,7 +473,7 @@ mod tests {
     /// Write one segment whose `data` column is a full span of `filler` followed
     /// by `rg1`, then build its trigram sidecar — so sidecar span 0 lacks the
     /// needle and span 1 carries it. Returns the segment path.
-    fn write_two_rg_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
+    fn write_two_span_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
         let n0 = SIDECAR_SPAN_ROWS;
         let mut data: Vec<String> = (0..n0).map(|_| filler.to_string()).collect();
         data.extend(rg1.iter().map(|s| s.to_string()));
@@ -496,6 +496,32 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    /// Whether any expression in `plan` casts the `data` column. Walks the tree
+    /// rather than the rendered text, which qualifies column names inconsistently
+    /// across plan stages and would make a substring check pass vacuously.
+    fn casts_the_data_column(plan: &datafusion::logical_expr::LogicalPlan) -> bool {
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        use datafusion::logical_expr::Expr;
+
+        let mut found = false;
+        plan.apply(|node| {
+            for e in node.expressions() {
+                e.apply(|sub| {
+                    if let Expr::Cast(cast) = sub {
+                        if matches!(cast.expr.as_ref(), Expr::Column(c) if c.name == "data") {
+                            found = true;
+                        }
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .unwrap();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+        found
+    }
+
     #[tokio::test]
     async fn string_predicates_read_the_scan_layout_without_casting() {
         // The scan reads strings as Utf8View, and the finelog UDFs accept that
@@ -503,7 +529,7 @@ mod tests {
         // planner cast the whole column ahead of the predicate — materializing
         // every value precisely to throw most of them away.
         let dir = tempdir("no_cast");
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &["needle here"; 4]);
+        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &["needle here"; 4]);
         let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
         assert_eq!(
             provider
@@ -532,12 +558,22 @@ mod tests {
                 .unwrap()
                 .into_optimized_plan()
                 .unwrap();
-            let rendered = format!("{}", plan.display_indent());
             assert!(
-                !rendered.contains("CAST(data"),
-                "{predicate} planned a whole-column cast:\n{rendered}"
+                !casts_the_data_column(&plan),
+                "{predicate} planned a whole-column cast:\n{}",
+                plan.display_indent()
             );
         }
+
+        // The detector must actually fire on a cast, or the assertions above pass
+        // for the wrong reason.
+        let cast_plan = ctx
+            .sql("SELECT seq FROM \"log\" WHERE CAST(data AS int) = 1")
+            .await
+            .unwrap()
+            .into_optimized_plan()
+            .unwrap();
+        assert!(casts_the_data_column(&cast_plan));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -559,7 +595,7 @@ mod tests {
             "another Bootstrap completed for TPU-xyz here",
         ];
         let rg1_rows = rg1.len();
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &rg1);
 
         // 1) End-to-end correctness: the contains() query returns exactly the two
         //    matching rows (and prunes row group 0 along the way).
@@ -665,7 +701,7 @@ mod tests {
             "idle heartbeat ok",
         ];
         let rg1_rows = rg1.len();
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &rg1);
 
         let ctx = crate::query::make_ctx();
         let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
@@ -755,7 +791,7 @@ mod tests {
         use datafusion::logical_expr::{col, lit};
 
         let dir = tempdir("no_contains");
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &["one match here"]);
+        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &["one match here"]);
         let ctx = crate::query::make_ctx();
         let provider = NamespaceProvider::build(log_arrow(), &[path]).unwrap();
         let state = ctx.state();

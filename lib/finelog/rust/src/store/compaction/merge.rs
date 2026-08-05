@@ -25,7 +25,7 @@ use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
 
 /// Rows per output batch from the k-way merge. This is a batching decision only:
 /// the writer accumulates across batches and cuts row groups at its own
-/// byte-derived stride (see [`crate::store::segment::row_group_rows`]).
+/// byte-derived stride (see [`crate::store::segment::segment_writer_properties`]).
 const MERGE_CHUNK_ROWS: usize = 16_384;
 
 /// Project `batch` onto `target_schema`, additive-null-filling any target column
@@ -336,8 +336,9 @@ mod tests {
     }
 
     #[test]
-    fn merge_emits_row_group_aligned_chunks() {
-        // A merge that exceeds 16384 rows must produce 16384-row chunks.
+    fn merge_emits_fixed_size_chunks() {
+        // A merge that exceeds MERGE_CHUNK_ROWS must cut its output into chunks of
+        // that size; the writer's row groups are sized separately, by bytes.
         let n = MERGE_CHUNK_ROWS as i64 + 100;
         let a = batch((0..n).step_by(2).map(|s| (s, s, "a")).collect());
         let b = batch((1..n).step_by(2).map(|s| (s, s, "b")).collect());
