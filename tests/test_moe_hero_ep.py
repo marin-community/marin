@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import jax
 import jax.numpy as jnp
+import pytest
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 
@@ -45,6 +46,13 @@ def test_fsdp_shape_fits_the_ep64_mesh_and_offloads_the_optimizer_state():
     assert spec.model.num_experts % launch.HERO_EP_EXPERT_AXIS_SIZE == 0
     assert launch.HERO_EP_EXPERT_AXIS_SIZE == 64
     assert spec.offload_opt_state
+
+
+def test_expert_bank_override_must_divide_the_expert_axis():
+    # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
+    # its workspace is built, so the launcher has to reject it while it is still free to do so.
+    with pytest.raises(ValueError, match="must divide the expert axis"):
+        launch.build_hero_run(run_id="bad-bank", num_steps=1, shape=HeroShape.FSDP, num_experts=200, version="dev")
 
 
 def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch):

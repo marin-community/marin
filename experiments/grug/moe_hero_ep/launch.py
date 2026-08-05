@@ -59,19 +59,47 @@ class HeroThroughputResult(Artifact):
 
 
 def build_hero_run(
-    *, run_id: str, num_steps: int, shape: HeroShape = HeroShape.EP, version: str | None = None
+    *,
+    run_id: str,
+    num_steps: int,
+    shape: HeroShape = HeroShape.EP,
+    num_experts: int | None = None,
+    intermediate_dim: int | None = None,
+    capacity_factor: float | None = None,
+    version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build the one-rack EP64 hero throughput run for one model shape."""
+    """Build the one-rack EP64 hero throughput run for one model shape.
+
+    The three overrides sweep expert-bank size and routing capacity from the selected shape. They
+    keep the hidden dimension, so the compute-scaled optimizer values stay comparable across a
+    sweep. ``None`` keeps the shape's own value.
+    """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=HERO_EP_BATCH_SIZE, shape=shape)
+    overrides = {
+        name: value
+        for name, value in (
+            ("num_experts", num_experts),
+            ("intermediate_dim", intermediate_dim),
+            ("capacity_factor", capacity_factor),
+        )
+        if value is not None
+    }
+    if overrides:
+        model = dataclasses.replace(model, **overrides)
+    # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
+    # already allocated and the workspace is built. Reject it here instead.
+    if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
+        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {HERO_EP_EXPERT_AXIS_SIZE}")
     if model.moe_implementation is None:
         raise ValueError("the EP hero requires an explicit MoE implementation")
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
+    size_tag = f"e{model.num_experts}-i{model.intermediate_dim}"
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -114,6 +142,7 @@ def build_hero_run(
                     f"shape-{shape.value}",
                     backend_tag,
                     capacity_tag,
+                    size_tag,
                     "gb200",
                     "MHEP",
                 ],
@@ -163,9 +192,41 @@ def build_hero_run(
     show_default=True,
     help="Model shape to run on the EP64 mesh: the native EP hero or the FSDP hero shape.",
 )
+@click.option(
+    "--num-experts",
+    type=click.IntRange(min=1),
+    default=None,
+    help=f"Override the routed expert count. Must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}.",
+)
+@click.option(
+    "--intermediate-dim",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the routed expert width.",
+)
+@click.option(
+    "--capacity-factor",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Override the fixed all-to-all capacity factor.",
+)
 @build_options
-def main(run_id: str, num_steps: int, shape: str) -> ArtifactStep[HeroThroughputResult]:
-    return build_hero_run(run_id=run_id, num_steps=num_steps, shape=HeroShape(shape))
+def main(
+    run_id: str,
+    num_steps: int,
+    shape: str,
+    num_experts: int | None,
+    intermediate_dim: int | None,
+    capacity_factor: float | None,
+) -> ArtifactStep[HeroThroughputResult]:
+    return build_hero_run(
+        run_id=run_id,
+        num_steps=num_steps,
+        shape=HeroShape(shape),
+        num_experts=num_experts,
+        intermediate_dim=intermediate_dim,
+        capacity_factor=capacity_factor,
+    )
 
 
 if __name__ == "__main__":
