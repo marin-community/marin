@@ -83,7 +83,8 @@ the row model's defaults fill them in.
 Appends are non-blocking and buffer in memory. The background thread flushes
 each table on a time ceiling (`DEFAULT_FLUSH_INTERVAL`, 5s) so shards stay
 fresh, and immediately if a buffer crosses a row cap (`DEFAULT_MAX_BUFFER_ROWS`)
-so a burst cannot grow it without bound. `flush` and `close` block until every
+so a burst cannot grow it without bound. `table.flush()` persists one table;
+`store.flush()` persists all of them; `flush` and `close` block until every
 buffered row is a durable object — the "writes block until persisted" guarantee.
 Each flush writes to a temporary key and atomically renames it into place, so a
 partial object is never visible.

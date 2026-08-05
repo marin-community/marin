@@ -173,6 +173,36 @@ def test_reader_none_for_absent_table(tmp_path):
     assert CompositeReader(root).scan("does-not-exist") is None
 
 
+def test_single_table_flush_is_independent(tmp_path):
+    # DataTable.flush() persists just its own buffer; a sibling table's rows stay buffered. A long
+    # flush interval keeps the background thread from flushing the sibling during the test.
+    root = str(tmp_path / "run")
+    reader = CompositeReader(root)
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        samples = store.table("samples", primary_key=("task", "doc_id"))
+        steps = store.table("steps", primary_key=("task", "step_id"))
+        samples.append({"task": "arc", "doc_id": "1"})
+        steps.append({"task": "arc", "step_id": 0})
+        samples.flush()
+        assert len(reader.list_shards("samples")) == 1
+        assert reader.scan("steps") is None
+
+
+def test_table_returns_shared_handle(tmp_path):
+    # Re-registering a table returns the same handle, so two appenders share one buffer and one
+    # sequence counter rather than splitting rows across two.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        first = store.table("samples", primary_key=("task", "doc_id"))
+        second = store.table("samples")
+        assert first is second
+        first.append({"task": "arc", "doc_id": "1"})
+        second.append({"task": "arc", "doc_id": "2"})
+        store.flush()
+    rows = _rows(CompositeReader(root), "samples")
+    assert {r["doc_id"] for r in rows} == {"1", "2"}
+
+
 def test_explicit_schema_is_enforced(tmp_path):
     root = str(tmp_path / "run")
     schema = pa.schema([("task", pa.string()), ("doc_id", pa.string()), ("_seq", pa.int64()), ("_writer", pa.string())])

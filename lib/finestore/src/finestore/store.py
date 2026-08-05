@@ -19,7 +19,6 @@ import os
 import threading
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
 
 import pyarrow as pa
 from rigging.filesystem import StoragePath
@@ -49,19 +48,6 @@ DEFAULT_MAX_BUFFER_ROWS = 20_000
 def _default_writer_id() -> str:
     """A per-process writer identity, unique enough that two writers never share a key prefix."""
     return f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
-
-
-@dataclass
-class _TableBuffer:
-    """One table's pending rows, its dedup primary key, and its per-writer sequence counter."""
-
-    name: str
-    primary_key: tuple[str, ...] | None
-    schema: pa.Schema | None
-    schema_version: int
-    pending: list[dict] = field(default_factory=list)
-    next_seq: int = 0
-    lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
@@ -108,9 +94,8 @@ class DataStore:
         self.writer_id = writer_id or _default_writer_id()
         self._flush_interval = flush_interval
         self._max_buffer_rows = max_buffer_rows
-        self._tables: dict[str, _TableBuffer] = {}
+        self._tables: dict[str, DataTable] = {}
         self._register_lock = threading.Lock()
-        self._flush_lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._error: BaseException | None = None
@@ -136,43 +121,27 @@ class DataStore:
         """Register (or fetch) a table and return a handle for appending to it.
 
         ``primary_key`` names the columns a reader deduplicates on; it is persisted to the table's
-        ``_schema.json`` so readers that did not open the writer can recover it.
+        ``_schema.json`` so readers that did not open the writer can recover it. Calling ``table``
+        again with the same ``name`` returns the same handle, so every appender shares one buffer and
+        one sequence counter.
         """
         with self._register_lock:
-            buffer = self._tables.get(name)
-            if buffer is None:
-                pk = tuple(primary_key) if primary_key is not None else None
-                buffer = _TableBuffer(name=name, primary_key=pk, schema=schema, schema_version=schema_version)
-                self._tables[name] = buffer
-                self._write_schema_meta(buffer)
-        return DataTable(self, name)
+            existing = self._tables.get(name)
+            if existing is not None:
+                return existing
+            pk = tuple(primary_key) if primary_key is not None else None
+            table = DataTable(self, name, primary_key=pk, schema=schema, schema_version=schema_version)
+            self._tables[name] = table
+            self._write_schema_meta(table)
+            return table
 
-    def _write_schema_meta(self, buffer: _TableBuffer) -> None:
+    def _write_schema_meta(self, table: DataTable) -> None:
         """Persist the table's primary key and schema version (the archive's only metadata object)."""
         meta = {
-            "primary_key": list(buffer.primary_key) if buffer.primary_key else None,
-            "schema_version": buffer.schema_version,
+            "primary_key": list(table.primary_key) if table.primary_key else None,
+            "schema_version": table.schema_version,
         }
-        StoragePath(schema_path(self.root, buffer.name)).write_text(json.dumps(meta, indent=2))
-
-    # -- append ------------------------------------------------------------------------------------
-
-    def _append(self, table: str, rows: Iterable[dict]) -> None:
-        self._raise_if_failed()
-        buffer = self._tables.get(table)
-        if buffer is None:
-            raise KeyError(f"table {table!r} is not registered; call store.table({table!r}, ...) first")
-        over_cap = False
-        with buffer.lock:
-            for row in rows:
-                stamped = dict(row)
-                stamped[SEQ_COLUMN] = buffer.next_seq
-                stamped[WRITER_COLUMN] = self.writer_id
-                buffer.next_seq += 1
-                buffer.pending.append(stamped)
-            over_cap = len(buffer.pending) >= self._max_buffer_rows
-        if over_cap:
-            self._wake.set()
+        StoragePath(schema_path(self.root, table.name)).write_text(json.dumps(meta, indent=2))
 
     def write(self, name: str, metadata: Mapping[str, object] | None, data: bytes) -> str:
         """Append one opaque blob to the reserved ``blobs`` table; return its ``finestore://`` URI.
@@ -180,18 +149,14 @@ class DataStore:
         The payload is stored inline as a Parquet binary column. ``metadata`` is kept verbatim as a
         JSON string for the reader to surface.
         """
-        if BLOBS_TABLE not in self._tables:
-            self.table(BLOBS_TABLE, primary_key=(BLOB_NAME_COLUMN,))
-        self._append(
-            BLOBS_TABLE,
-            [
-                {
-                    BLOB_NAME_COLUMN: name,
-                    "size": len(data),
-                    "metadata_json": json.dumps(dict(metadata or {})),
-                    "data": data,
-                }
-            ],
+        blobs = self._tables.get(BLOBS_TABLE) or self.table(BLOBS_TABLE, primary_key=(BLOB_NAME_COLUMN,))
+        blobs.append(
+            {
+                BLOB_NAME_COLUMN: name,
+                "size": len(data),
+                "metadata_json": json.dumps(dict(metadata or {})),
+                "data": data,
+            }
         )
         return build_uri(BLOBS_TABLE, name)
 
@@ -200,21 +165,8 @@ class DataStore:
     def flush(self) -> None:
         """Write every table's buffered rows to shards now, blocking until they are durable."""
         self._raise_if_failed()
-        with self._flush_lock:
-            for buffer in list(self._tables.values()):
-                self._flush_buffer(buffer)
-
-    def _flush_buffer(self, buffer: _TableBuffer) -> None:
-        with buffer.lock:
-            if not buffer.pending:
-                return
-            rows = buffer.pending
-            buffer.pending = []
-        table = pa.Table.from_pylist(_drop_empty_struct_keys(rows), schema=buffer.schema)
-        min_seq = min(row[SEQ_COLUMN] for row in rows)
-        path = shard_path(self.root, buffer.name, self.writer_id, 0, min_seq, uuid.uuid4().hex[:8])
-        write_table(path, table)
-        logger.debug("finestore flushed %d rows to %s", len(rows), path)
+        for table in list(self._tables.values()):
+            table.flush()
 
     def seal(self) -> None:
         """Flush, then mark the archive sealed so readers know the run is complete."""
@@ -257,16 +209,65 @@ class DataStore:
 
 
 class DataTable:
-    """An append-only handle to one table. Reads go through :class:`CompositeReader`."""
+    """An append-only table: it buffers appended rows and flushes them to immutable shards.
 
-    def __init__(self, store: DataStore, name: str) -> None:
+    The table owns its pending rows, its per-writer sequence counter, and how they persist. Reads go
+    through :class:`CompositeReader`.
+    """
+
+    def __init__(
+        self,
+        store: DataStore,
+        name: str,
+        *,
+        primary_key: tuple[str, ...] | None,
+        schema: pa.Schema | None,
+        schema_version: int,
+    ) -> None:
         self._store = store
         self.name = name
+        self.primary_key = primary_key
+        self.schema_version = schema_version
+        self._schema = schema
+        self._pending: list[dict] = []
+        self._next_seq = 0
+        self._lock = threading.Lock()
 
     def append(self, row: dict) -> None:
-        """Buffer one row for the next flush."""
-        self._store._append(self.name, [row])
+        """Buffer one row. Non-blocking: the row is durable after the next flush tick or an explicit
+        ``flush``. Appends from one writer are ordered by a monotonic ``_seq``; the reader keeps the
+        highest ``_seq`` per primary key."""
+        self.extend([row])
 
     def extend(self, rows: Iterable[dict]) -> None:
-        """Buffer many rows for the next flush."""
-        self._store._append(self.name, rows)
+        """Buffer many rows for the next flush (see :meth:`append`)."""
+        self._store._raise_if_failed()
+        with self._lock:
+            for row in rows:
+                stamped = dict(row)
+                stamped[SEQ_COLUMN] = self._next_seq
+                stamped[WRITER_COLUMN] = self._store.writer_id
+                self._next_seq += 1
+                self._pending.append(stamped)
+            over_cap = len(self._pending) >= self._store._max_buffer_rows
+        if over_cap:
+            self._store._wake.set()
+
+    def flush(self) -> None:
+        """Write this table's buffered rows to one immutable shard now, blocking until it is durable.
+
+        Swaps the pending rows out under the table lock, then writes outside it, so a concurrent
+        flush of the same table (the background thread and a caller) each claim a disjoint batch and
+        never double-write a row.
+        """
+        self._store._raise_if_failed()
+        with self._lock:
+            if not self._pending:
+                return
+            rows = self._pending
+            self._pending = []
+        table = pa.Table.from_pylist(_drop_empty_struct_keys(rows), schema=self._schema)
+        min_seq = min(row[SEQ_COLUMN] for row in rows)
+        path = shard_path(self._store.root, self.name, self._store.writer_id, 0, min_seq, uuid.uuid4().hex[:8])
+        write_table(path, table)
+        logger.debug("finestore flushed %d rows to %s", len(rows), path)
