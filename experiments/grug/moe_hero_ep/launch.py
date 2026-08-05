@@ -65,6 +65,7 @@ def build_hero_run(
     *,
     run_id: str,
     num_steps: int,
+    batch_size: int = HERO_EP_BATCH_SIZE,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
@@ -85,7 +86,7 @@ def build_hero_run(
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
-    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=HERO_EP_BATCH_SIZE)
+    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
     overrides = {
         name: value
         for name, value in (
@@ -135,7 +136,7 @@ def build_hero_run(
         trainer = TrainerConfig(
             id=run_id,
             seed=0,
-            train_batch_size=HERO_EP_BATCH_SIZE,
+            train_batch_size=batch_size,
             num_train_steps=num_steps,
             profiler=ProfilerConfig(
                 enabled=profile_steps > 0,
@@ -219,6 +220,13 @@ def build_hero_run(
     help="Override the routed expert width.",
 )
 @click.option(
+    "--batch-size",
+    type=click.IntRange(min=1),
+    default=HERO_EP_BATCH_SIZE,
+    show_default=True,
+    help="Sequences per step. Scales the compute-scaled optimizer, so hold it fixed across a sweep.",
+)
+@click.option(
     "--microbatches",
     type=click.IntRange(min=1),
     default=1,
@@ -249,6 +257,7 @@ def build_hero_run(
 def main(
     run_id: str,
     num_steps: int,
+    batch_size: int,
     num_experts: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
@@ -260,6 +269,7 @@ def main(
     return build_hero_run(
         run_id=run_id,
         num_steps=num_steps,
+        batch_size=batch_size,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
