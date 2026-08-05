@@ -64,6 +64,7 @@ def build_hero_run(
     num_steps: int,
     shape: HeroShape = HeroShape.EP,
     num_experts: int | None = None,
+    num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     version: str | None = None,
@@ -84,6 +85,7 @@ def build_hero_run(
         name: value
         for name, value in (
             ("num_experts", num_experts),
+            ("num_experts_per_token", num_experts_per_token),
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
         )
@@ -199,6 +201,12 @@ def build_hero_run(
     help=f"Override the routed expert count. Must be divisible by {HERO_EP_EXPERT_AXIS_SIZE}.",
 )
 @click.option(
+    "--num-experts-per-token",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the routed top-k. Scales both active parameters and the EP dispatch buffers.",
+)
+@click.option(
     "--intermediate-dim",
     type=click.IntRange(min=1),
     default=None,
@@ -216,6 +224,7 @@ def main(
     num_steps: int,
     shape: str,
     num_experts: int | None,
+    num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -224,6 +233,7 @@ def main(
         num_steps=num_steps,
         shape=HeroShape(shape),
         num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
     )
