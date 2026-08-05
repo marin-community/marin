@@ -206,6 +206,7 @@ def build_small_run(
     flavor: str = "ep",
     capacity_factor: float = 1.0,
     seq_len: int = SEQ_LEN,
+    tokens_per_step: int = TOKENS_PER_STEP,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One expert-parallel run of the downsized hero shape ``size`` at its 60x token budget."""
@@ -217,14 +218,18 @@ def build_small_run(
         raise ValueError(f"target must be one of {sorted(TARGETS)}, got {target!r}")
     if flavor not in FLAVORS:
         raise ValueError(f"flavor must be one of {sorted(FLAVORS)}, got {flavor!r}")
-    if TOKENS_PER_STEP % seq_len != 0:
-        raise ValueError(f"seq_len={seq_len} must divide the {TOKENS_PER_STEP}-token step budget")
+    if tokens_per_step % seq_len != 0:
+        raise ValueError(f"seq_len={seq_len} must divide the {tokens_per_step}-token step budget")
 
     shape = SMALL_SHAPES[size]
     fleet = TARGETS[target]
     sharding = FLAVORS[flavor]
     # Tokens per step stay fixed, so a shorter context trains on the same data with a wider batch.
-    batch_size = TOKENS_PER_STEP // seq_len
+    batch_size = tokens_per_step // seq_len
+    # The 60x token budget is what the step count encodes, so a wider step needs proportionally
+    # fewer of them. A wider step also deepens each routing cell, which is what sets the drop rate:
+    # capacity is ceil(factor * tokens_per_shard * top-k / experts).
+    num_steps = max(1, round(shape.num_steps * TOKENS_PER_STEP / tokens_per_step))
     expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     model = _small_model(
         shape,
@@ -236,7 +241,7 @@ def build_small_run(
     )
     optimizer = dataclasses.replace(
         MoeHeuristic().build_optimizer_config(
-            num_train_steps=shape.num_steps,
+            num_train_steps=num_steps,
             batch_size=batch_size,
             hidden_dim=model.hidden_dim,
             seq_len=seq_len,
@@ -272,7 +277,7 @@ def build_small_run(
             id=run_id,
             seed=0,
             train_batch_size=batch_size,
-            num_train_steps=shape.num_steps,
+            num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
@@ -287,6 +292,7 @@ def build_small_run(
                     f"shape-{size}",
                     f"capacity-{capacity_factor:g}",
                     f"seq{seq_len}",
+                    f"tok{tokens_per_step // 1024}k",
                     flavor,
                     target,
                     "MHEP",
@@ -317,7 +323,7 @@ def build_small_run(
         else:
             val_components = {v.name: ctx.resolved(v).as_component() for v in _VALIDATION}
         data = _datakit_data_config(
-            total_steps=shape.num_steps,
+            total_steps=num_steps,
             batch_size=batch_size,
             max_seq_len=seq_len,
             enable_simulated_epoching=False,
@@ -383,6 +389,13 @@ def build_small_run(
     help="Sequence length. The batch widens to hold tokens per step constant.",
 )
 @click.option(
+    "--tokens-per-step",
+    type=click.IntRange(min=1),
+    default=TOKENS_PER_STEP,
+    show_default=True,
+    help="Tokens per optimizer step. Widens the batch and shortens the run to hold the token budget.",
+)
+@click.option(
     "--capacity-factor",
     type=click.FloatRange(min=0, min_open=True),
     default=1.0,
@@ -391,10 +404,22 @@ def build_small_run(
 )
 @build_options
 def main(
-    run_id: str, size: str, target: str, flavor: str, seq_len: int, capacity_factor: float
+    run_id: str,
+    size: str,
+    target: str,
+    flavor: str,
+    seq_len: int,
+    tokens_per_step: int,
+    capacity_factor: float,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_small_run(
-        run_id=run_id, size=size, target=target, flavor=flavor, seq_len=seq_len, capacity_factor=capacity_factor
+        run_id=run_id,
+        size=size,
+        target=target,
+        flavor=flavor,
+        seq_len=seq_len,
+        tokens_per_step=tokens_per_step,
+        capacity_factor=capacity_factor,
     )
 
 
