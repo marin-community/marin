@@ -647,13 +647,7 @@ impl Namespace {
 
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
     fn write_sealed(&self, dir: &std::path::Path, sealed: &SealedBuffer) -> Result<(), StatsError> {
-        let (path, size) = write_segment_to_dir(
-            dir,
-            0,
-            sealed.min_seq,
-            &sealed.batch,
-            self.key_column.as_deref(),
-        )?;
+        let (path, size) = write_segment_to_dir(dir, 0, sealed.min_seq, &sealed.batch)?;
         let (min_key, max_key) = self.key_bounds(&sealed.batch);
         let seg = LocalSegment {
             path: path.to_string_lossy().into_owned(),
@@ -1976,7 +1970,7 @@ mod tests {
     fn write_seg(dir: &Path, level: i32, first_seq: i64, n: i64) -> PathBuf {
         let arrow = schema_to_arrow(&worker_schema());
         let batch = stamp_seq_and_build(&aligned(n), first_seq, &arrow);
-        write_segment_to_dir(dir, level, first_seq, &batch, Some("timestamp_ms"))
+        write_segment_to_dir(dir, level, first_seq, &batch)
             .unwrap()
             .0
     }

@@ -75,7 +75,14 @@ depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
 underscores when you mean them literally. Adding one is a
 `RegisterTable` away and does not need a reset, but the sidecar backfill runs a
 few segments per namespace per 30 s tick, so a large namespace speeds up over
-tens of minutes rather than at once. A time bound is the faster answer in the moment: `telemetry_v1` is keyed
+tens of minutes rather than at once.
+
+A release that bumps the sidecar format spends that same window on every existing
+sidecar at once: all of them read as unusable and every substring query scans
+unpruned until the backfill catches up. Before diagnosing a slow substring query
+after a deploy, check whether the rebuild is still in flight — the sidecar header
+carries its version in the fifth byte, so counting versions across a namespace's
+`.tgm` files separates "still rebuilding" from a real pruning failure. A time bound is the faster answer in the moment: `telemetry_v1` is keyed
 on `timestamp_ms` and a 10-minute window answers in about a second where the same
 query unbounded takes 30.
 
@@ -83,12 +90,24 @@ query unbounded takes 30.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
 needs longer.
 
-Row groups are sized to hold a fixed number of *bytes*, so a namespace of narrow
-rows gets far fewer of them than one of wide log lines. This only applies to
-segments written since the change: existing segments keep the row groups they
-were written with, and their footers shrink as compaction and eviction turn them
-over. `EXPLAIN ANALYZE` reports `row_groups_pruned_statistics` as
-`<total> total`, which is the count for the segments a query touched.
+Row groups are sized to hold a fixed number of *encoded* bytes, so a namespace of
+narrow rows gets far fewer of them than one of wide log lines. Encoded rather
+than in-memory bytes is what matters: a telemetry row compresses to ~8 bytes
+against a log line's hundreds, so an in-memory target under-sizes worst exactly
+where the fix is needed.
+
+This applies only to segments written since the change, and the terminal level
+never re-compacts, so a namespace's bulk keeps its old row groups until eviction
+turns it over. That happens at the `max_bytes_per_namespace` cap, which is a time
+window in practice: `telemetry_v1`'s 15 GiB spans about four days and `log`'s
+about eight, so old layout ages out over that period rather than being rewritten.
+Confirm the era split before concluding a layout change did or did not land —
+compare footer bytes for segments modified before and after the deploy, since a
+whole-namespace average is dominated by the untouched terminal level.
+
+`EXPLAIN ANALYZE` reports `row_groups_pruned_statistics` as `<total> total`,
+which is the count for the segments a query touched *after* any injected access
+plan, so it doubles as the check on whether trigram pruning fired.
 
 `query_metadata_cache_mb` in a deployment config overrides DataFusion's
 process-wide Parquet metadata cache limit. Leave it unset to retain DataFusion's

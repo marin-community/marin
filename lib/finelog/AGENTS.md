@@ -146,7 +146,18 @@ only partly covered. Sidecars carry a format version; bumping it makes every
 existing sidecar unreadable (queries scan unpruned) until the maintenance
 backfill rebuilds them, a few segments per namespace per 30 s tick.
 
-Bloom filters are written only for **L0's key column**. L0 is unsorted, so a
-bloom is the only thing that prunes an exact-key lookup there; L1+ is sorted by
-`(key, seq)` and prunes the key band from min/max statistics instead. Writing
-them for every column cost 15% of each segment and pruned nothing measurable.
+No segment carries a parquet bloom filter. Writing them for every column cost 15%
+of each segment and pruned nothing measurable; the key-column bloom that outlived
+that only served exact-key lookups against unsorted L0, which is a few hundred
+KiB that compaction consumes within a tick or two, against a write cost on every
+flush. L1+ is sorted by `(key, seq)` and prunes the key band from min/max
+statistics; substring queries prune from the trigram sidecar.
+
+A starts-with predicate — `prefix(col, P)`, `col LIKE 'P%'`, or
+`regexp_matches(col, '^P…')` — prunes only because `PrefixRangeRewrite` ANDs the
+implied `[P, succ(P))` range onto it, since min/max statistics key on whole
+values. That rule is an `AnalyzerRule`, so it runs *before* the optimizer folds
+constants: a column and literal of different string types leave the literal
+wrapped in a coercion `Cast`, which the rule has to see through. It does not
+share this hazard with the trigram needles, which are extracted from the
+optimized plan where such casts are already folded away.

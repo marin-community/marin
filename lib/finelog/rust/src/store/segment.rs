@@ -18,66 +18,59 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
-use parquet::schema::types::ColumnPath;
 
 use crate::errors::StatsError;
 use crate::store::types::{parse_seg_filename, seg_filename};
 
-/// Bytes of in-memory row data a parquet row group should hold.
+/// Encoded size at which the parquet writer closes a row group.
 ///
-/// Row groups are the unit of footer metadata: every one costs a record per
-/// column, with offsets, encodings, sizes, and min/max statistics. Sizing them by
-/// rows alone makes that cost track a namespace's row *width* — telemetry rows
-/// are ~20x narrower than log lines, so a fixed row count gave `telemetry_v1`
-/// 108K row groups and 206 MiB of footer for 15 GiB of data, most of a query's
-/// latency before any column was read. Sizing by bytes keeps the footer
-/// proportional to the data instead.
+/// Row groups are the unit of footer metadata: every one costs a thrift record
+/// per column, carrying offsets, encodings, sizes, and min/max statistics. Sizing
+/// them by rows alone makes that cost track a namespace's row *width* — a
+/// telemetry row compresses to ~8 bytes where a log line takes hundreds, so a
+/// fixed 16K-row group gave `telemetry_v1` 108K row groups and 201 MiB of footer
+/// for 15 GiB of data, most of a query's latency before any column was read.
+///
+/// The target is denominated in ENCODED bytes, which is what footer weight
+/// actually tracks. An in-memory (Arrow) target would miss by the compression
+/// ratio, and that ratio is itself width-dependent: telemetry compresses ~66x
+/// against a log line's ~4x, so the narrow namespace this is meant to fix is
+/// exactly where an Arrow-denominated target under-sizes worst.
 const TARGET_ROW_GROUP_BYTES: usize = 16 * 1024 * 1024;
 
-/// Row-group bounds. The floor keeps small segments from collapsing to a single
-/// row group (which prunes nothing); the ceiling bounds the writer's buffered
-/// row group and keeps key statistics from covering too wide a band.
-const MIN_ROW_GROUP_ROWS: usize = 16_384;
+/// Ceiling on rows per row group, applied alongside the byte target (parquet
+/// closes the group at whichever binds first).
+///
+/// Row-group min/max statistics are what prune a key range, so an extremely
+/// compressible namespace should not collapse into a few groups each spanning a
+/// large share of the key space. Substring pruning is unaffected either way: a
+/// sidecar span is 16,384 rows regardless, and a partly-covered row group is
+/// pruned with a row selection rather than skipped whole.
 const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
-
-/// Rows per row group for a segment holding `batches`, from their mean in-memory
-/// width. Empty input takes the floor.
-pub fn row_group_rows(batches: &[RecordBatch]) -> usize {
-    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    if rows == 0 {
-        return MIN_ROW_GROUP_ROWS;
-    }
-    let bytes: usize = batches.iter().map(|b| b.get_array_memory_size()).sum();
-    let bytes_per_row = (bytes / rows).max(1);
-    (TARGET_ROW_GROUP_BYTES / bytes_per_row).clamp(MIN_ROW_GROUP_ROWS, MAX_ROW_GROUP_ROWS)
-}
 
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
-/// Sets `row_group_rows` (see [`row_group_rows`]), zstd level 1 (not the library
-/// default 3), and bloom filters: `Some(col)` writes one for exactly that column,
-/// `None` writes none. Centralizing this keeps L0 and compacted segments on one
-/// consistent on-disk layout.
+/// Sets the row-group bounds ([`TARGET_ROW_GROUP_BYTES`] and
+/// [`MAX_ROW_GROUP_ROWS`]) and zstd level 1 (not the library default 3).
+/// Centralizing this keeps L0 and compacted segments on one consistent on-disk
+/// layout.
 ///
-/// Callers pass the key column for L0 and `None` for compacted output. L0 is
-/// written unsorted, so its key statistics span the namespace and a bloom is the
-/// only thing that prunes an exact-key lookup; L1+ is sorted by `(key, seq)`, so
-/// min/max statistics already prune the key band.
-pub fn segment_writer_properties(
-    bloom_column: Option<&str>,
-    row_group_rows: usize,
-) -> Result<WriterProperties, StatsError> {
+/// No segment carries a parquet bloom filter. Writing them for every column cost
+/// 15% of each segment and pruned nothing measurable; the key-column bloom that
+/// outlived that only served exact-key lookups against unsorted L0, which is a
+/// few hundred KiB that compaction consumes within a tick or two, while its write
+/// cost fell on every flush. L1+ is sorted by `(key, seq)`, so min/max statistics
+/// prune the key band, and substring queries prune from the trigram sidecar.
+pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
     let zstd =
         ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
-    let mut builder = WriterProperties::builder()
-        .set_max_row_group_row_count(Some(row_group_rows))
+    Ok(WriterProperties::builder()
+        .set_max_row_group_bytes(Some(TARGET_ROW_GROUP_BYTES))
+        .set_max_row_group_row_count(Some(MAX_ROW_GROUP_ROWS))
         .set_compression(Compression::ZSTD(zstd))
-        .set_bloom_filter_enabled(false);
-    if let Some(column) = bloom_column {
-        builder = builder.set_column_bloom_filter_enabled(ColumnPath::from(column), true);
-    }
-    Ok(builder.build())
+        .set_bloom_filter_enabled(false)
+        .build())
 }
 
 /// Per-segment metadata recovered from filename + parquet footer.
@@ -96,10 +89,9 @@ pub struct SegmentMetadata {
     pub max_key_value: Option<i64>,
 }
 
-/// Encode `batch` to parquet bytes (UNSORTED L0, zstd-1, a bloom filter on
-/// `key_column`).
-pub fn write_segment(batch: &RecordBatch, key_column: Option<&str>) -> Result<Vec<u8>, StatsError> {
-    let props = segment_writer_properties(key_column, row_group_rows(std::slice::from_ref(batch)))?;
+/// Encode `batch` to parquet bytes (UNSORTED L0, zstd-1).
+pub fn write_segment(batch: &RecordBatch) -> Result<Vec<u8>, StatsError> {
+    let props = segment_writer_properties()?;
     let mut buf: Vec<u8> = Vec::new();
     let opts = ArrowWriterOptions::new().with_properties(props);
     let mut writer = ArrowWriter::try_new_with_options(&mut buf, batch.schema(), opts)
@@ -121,9 +113,8 @@ pub fn write_segment_to_dir(
     level: i32,
     min_seq: i64,
     batch: &RecordBatch,
-    key_column: Option<&str>,
 ) -> Result<(PathBuf, i64), StatsError> {
-    let bytes = write_segment(batch, key_column)?;
+    let bytes = write_segment(batch)?;
     let filename = seg_filename(level, min_seq);
     let final_path = dir.join(&filename);
     let staging_path = dir.join(format!("{filename}.tmp"));
@@ -363,7 +354,7 @@ mod tests {
         let path = dir.join("seg_L1_0000000000000000001.parquet");
 
         let one_group = batch_with_keys(1, (0..10).collect());
-        std::fs::write(&path, write_segment(&one_group, None).unwrap()).unwrap();
+        std::fs::write(&path, write_segment(&one_group).unwrap()).unwrap();
         assert_eq!(segment_row_group_rows(&path).as_deref(), Some(&[10][..]));
         assert_eq!(
             segment_row_group_rows(&path).as_deref(),
@@ -375,7 +366,7 @@ mod tests {
         // entry: a stale layout would make the trigram prune reject a valid
         // sidecar, or attach a plan the parquet opener rejects.
         let more = batch_with_keys(1, (0..25).collect());
-        std::fs::write(&path, write_segment(&more, None).unwrap()).unwrap();
+        std::fs::write(&path, write_segment(&more).unwrap()).unwrap();
         assert_eq!(segment_row_group_rows(&path).as_deref(), Some(&[25][..]));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -386,7 +377,7 @@ mod tests {
         let dir = tempdir();
         // non-monotonic keys: 30, 10, 20.
         let batch = batch_with_keys(1, vec![30, 10, 20]);
-        let (path, size) = write_segment_to_dir(&dir, 0, 1, &batch, Some("key")).unwrap();
+        let (path, size) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
         assert_eq!(
             path.file_name().unwrap().to_str().unwrap(),
             "seg_L0_0000000000000000001.parquet"
@@ -416,19 +407,11 @@ mod tests {
     }
 
     #[test]
-    fn only_the_named_column_gets_a_bloom_filter() {
+    fn segments_carry_no_bloom_filters() {
         let dir = tempdir();
         let batch = batch_with_keys(1, vec![30, 10, 20]);
-
-        // L0 carries one for its key, which is the only prune available on an
-        // unsorted segment.
-        let (keyed, _) = write_segment_to_dir(&dir, 0, 1, &batch, Some("key")).unwrap();
-        assert_eq!(bloom_columns(&keyed), vec!["key".to_string()]);
-
-        // Compacted output names no column, so the segment carries none.
-        let (unkeyed, _) = write_segment_to_dir(&dir, 0, 9, &batch, None).unwrap();
-        assert!(bloom_columns(&unkeyed).is_empty());
-
+        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
+        assert!(bloom_columns(&path).is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -436,7 +419,7 @@ mod tests {
     fn l0_write_is_unsorted_preserving_row_order() {
         let dir = tempdir();
         let batch = batch_with_keys(1, vec![30, 10, 20]);
-        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch, Some("key")).unwrap();
+        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
         // Read the rows back; their key order must be the on-write order.
         let file = std::fs::File::open(&path).unwrap();
         let builder =

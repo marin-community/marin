@@ -288,17 +288,9 @@ mod tests {
             0,
             1,
             &worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]),
-            Some("worker_id"),
         )
         .unwrap();
-        write_segment_to_dir(
-            &dir,
-            0,
-            3,
-            &worker_batch(3, vec!["w-3"], vec![300]),
-            Some("worker_id"),
-        )
-        .unwrap();
+        write_segment_to_dir(&dir, 0, 3, &worker_batch(3, vec!["w-3"], vec![300])).unwrap();
         let paths: Vec<String> = crate::store::segment::discover_segments(&dir)
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
@@ -370,7 +362,7 @@ mod tests {
             ],
         )
         .unwrap();
-        write_segment_to_dir(&dir, 0, 1, &batch, None).unwrap();
+        write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
         let paths: Vec<String> = crate::store::segment::discover_segments(&dir)
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
@@ -412,7 +404,6 @@ mod tests {
             0,
             1,
             &worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]),
-            Some("worker_id"),
         )
         .unwrap();
 
@@ -431,7 +422,7 @@ mod tests {
             ],
         )
         .unwrap();
-        write_segment_to_dir(&tdir, 0, 1, &task_batch, Some("worker_id")).unwrap();
+        write_segment_to_dir(&tdir, 0, 1, &task_batch).unwrap();
 
         let wpaths: Vec<String> = crate::store::segment::discover_segments(&wdir)
             .iter()
@@ -496,7 +487,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let (path, _) = write_segment_to_dir(dir, 1, 1, &batch, Some("key")).unwrap();
+        let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
         // Build the sidecar the way the compactor would.
         assert!(
             crate::store::trigram::write_sidecar(&path, &[batch], &["data"], Some("key")).unwrap(),

@@ -36,7 +36,7 @@ use crate::store::compaction::merge::{
     kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
 };
 use crate::store::compaction::planner::aggregate_key_bounds;
-use crate::store::segment::{row_group_rows, segment_bounds, segment_writer_properties};
+use crate::store::segment::{segment_bounds, segment_writer_properties};
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
 fn now_ms() -> i64 {
@@ -399,7 +399,7 @@ fn write_merged_segment(
     schema: &SchemaRef,
     batches: &[RecordBatch],
 ) -> Result<(), StatsError> {
-    let props = segment_writer_properties(None, row_group_rows(batches))?;
+    let props = segment_writer_properties()?;
     let file = std::fs::File::create(path)
         .map_err(|e| StatsError::Internal(format!("create {}: {e}", path.display())))?;
     let opts = ArrowWriterOptions::new().with_properties(props);
@@ -475,7 +475,7 @@ mod tests {
         // chunks values by global row position to stay aligned with row groups.
         let dir = tempdir("projected");
         let rows = &[(1, 30, "w-c"), (2, 10, "w-a"), (3, 20, "w-b")];
-        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch(rows), Some("key")).unwrap();
+        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch(rows)).unwrap();
 
         let projected = read_segment_projected(&path, Some(&["worker_id"])).unwrap();
         let names: Vec<String> = projected[0]
@@ -532,30 +532,12 @@ mod tests {
     fn merge_three_inputs_writes_one_sorted_segment() {
         let dir = tempdir("merge");
         // three L0 segments, seq-disjoint, interleaving keys.
-        let (p1, _) = write_segment_to_dir(
-            &dir,
-            0,
-            1,
-            &batch(&[(1, 30, "a"), (2, 10, "b")]),
-            Some("key"),
-        )
-        .unwrap();
-        let (p2, _) = write_segment_to_dir(
-            &dir,
-            0,
-            3,
-            &batch(&[(3, 20, "c"), (4, 40, "d")]),
-            Some("key"),
-        )
-        .unwrap();
-        let (p3, _) = write_segment_to_dir(
-            &dir,
-            0,
-            5,
-            &batch(&[(5, 5, "e"), (6, 25, "f")]),
-            Some("key"),
-        )
-        .unwrap();
+        let (p1, _) =
+            write_segment_to_dir(&dir, 0, 1, &batch(&[(1, 30, "a"), (2, 10, "b")])).unwrap();
+        let (p2, _) =
+            write_segment_to_dir(&dir, 0, 3, &batch(&[(3, 20, "c"), (4, 40, "d")])).unwrap();
+        let (p3, _) =
+            write_segment_to_dir(&dir, 0, 5, &batch(&[(5, 5, "e"), (6, 25, "f")])).unwrap();
 
         let job = CompactionJob {
             inputs: vec![
@@ -624,8 +606,7 @@ mod tests {
                 )
             })
             .collect();
-        let (path, _) =
-            write_segment_to_dir(dir, 0, first_seq, &batch(&rows), Some("key")).unwrap();
+        let (path, _) = write_segment_to_dir(dir, 0, first_seq, &batch(&rows)).unwrap();
         (path, first_seq, first_seq + n - 1)
     }
 
@@ -870,9 +851,9 @@ mod tests {
         // so the per-batch sort is load-bearing. seq is unique and monotonic.
         let n = 16_384_i64 * 2 + 500;
         let big: Vec<(i64, i64, &str)> = (1..=n).map(|s| (s, n - s + 1, "big")).collect();
-        let (p_big, _) = write_segment_to_dir(&dir, 0, 1, &batch(&big), Some("key")).unwrap();
+        let (p_big, _) = write_segment_to_dir(&dir, 0, 1, &batch(&big)).unwrap();
         let (p_small, _) =
-            write_segment_to_dir(&dir, 0, n + 1, &batch(&[(n + 1, 7, "s")]), Some("key")).unwrap();
+            write_segment_to_dir(&dir, 0, n + 1, &batch(&[(n + 1, 7, "s")])).unwrap();
 
         // Reading `big` back yields many row-group-bounded batches, not one array
         // — the condition under which the old concat path overflowed.
@@ -915,14 +896,8 @@ mod tests {
     #[test]
     fn level_bump_renames_preserving_metadata_no_rewrite() {
         let dir = tempdir("bump");
-        let (p, size) = write_segment_to_dir(
-            &dir,
-            2,
-            1,
-            &batch(&[(1, 10, "a"), (2, 20, "b")]),
-            Some("key"),
-        )
-        .unwrap();
+        let (p, size) =
+            write_segment_to_dir(&dir, 2, 1, &batch(&[(1, 10, "a"), (2, 20, "b")])).unwrap();
         let mut input = row_for(&p.to_string_lossy(), 2, 1, 2, size);
         input.created_at_ms = 9999;
         let job = CompactionJob {
@@ -985,17 +960,9 @@ mod tests {
             )
             .unwrap()
         };
-        let (p1, _) = write_segment_to_dir(
-            &dir,
-            0,
-            1,
-            &mk(1, &["Bootstrap completed for TPU"]),
-            Some("key"),
-        )
-        .unwrap();
-        let (p2, _) =
-            write_segment_to_dir(&dir, 0, 2, &mk(2, &["unrelated heartbeat"]), Some("key"))
-                .unwrap();
+        let (p1, _) =
+            write_segment_to_dir(&dir, 0, 1, &mk(1, &["Bootstrap completed for TPU"])).unwrap();
+        let (p2, _) = write_segment_to_dir(&dir, 0, 2, &mk(2, &["unrelated heartbeat"])).unwrap();
         // L0 inputs have no sidecars (intentionally unindexed).
         assert!(!sidecar_path(&p1).exists());
 
@@ -1093,8 +1060,7 @@ mod tests {
             Field::new("note", DataType::Utf8, true),
         ]));
         // old segment: narrow schema (no note).
-        let (p_old, _) =
-            write_segment_to_dir(&dir, 0, 1, &batch(&[(1, 10, "a")]), Some("key")).unwrap();
+        let (p_old, _) = write_segment_to_dir(&dir, 0, 1, &batch(&[(1, 10, "a")])).unwrap();
         // new segment: wide schema with note.
         let wide_batch = RecordBatch::try_new(
             Arc::clone(&wide),
@@ -1106,7 +1072,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let (p_new, _) = write_segment_to_dir(&dir, 0, 2, &wide_batch, Some("key")).unwrap();
+        let (p_new, _) = write_segment_to_dir(&dir, 0, 2, &wide_batch).unwrap();
 
         let job = CompactionJob {
             inputs: vec![
