@@ -15,6 +15,7 @@ Each ``--size`` submits one 1-rack (16 x GB200x4 = EP64) job.
 
 import dataclasses
 import math
+import os
 from datetime import timedelta
 
 import click
@@ -228,7 +229,7 @@ def build_small_run(
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
                 entity="marin-community",
-                project=DEFAULT_WANDB_PROJECT,
+                project=os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT,
                 tags=[
                     "grug",
                     "moe",
