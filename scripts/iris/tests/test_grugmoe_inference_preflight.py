@@ -218,6 +218,67 @@ def test_health_cli_freezes_worker_settings_and_three_way_concurrency() -> None:
     assert [command[index + 1] for index, value in enumerate(command) if value == "--concurrency"] == ["48", "72"]
 
 
+def test_matrix_submission_forwards_explicit_priority_and_keeps_zero_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeJob:
+        job_id = "unit-job"
+
+    class FakeClient:
+        def submit(self, **kwargs: object) -> FakeJob:
+            captured.update(kwargs)
+            return FakeJob()
+
+    class FakeControllerContext:
+        def __enter__(self) -> FakeClient:
+            return FakeClient()
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        grug_preflight,
+        "_clean_pushed_checkout",
+        lambda: {"commit": "b" * 40, "branch": "unit", "origin": "example.invalid/repo"},
+    )
+    monkeypatch.setattr(grug_preflight, "controller_client", lambda _: FakeControllerContext())
+    image = "example.invalid/task@sha256:" + "a" * 64
+    args = parse_args(
+        [
+            "submit-matrix",
+            "--plan",
+            "instrument-v1",
+            "--task-image",
+            image,
+            "--priority",
+            "production",
+        ]
+    )
+    default_args = parse_args(
+        [
+            "submit-matrix",
+            "--plan",
+            "instrument-v1",
+            "--task-image",
+            image,
+        ]
+    )
+
+    summary = grug_preflight.submit_matrix(args)
+
+    assert default_args.priority == "interactive"
+    entrypoint = captured["entrypoint"]
+    assert isinstance(entrypoint, grug_preflight.Entrypoint)
+    assert entrypoint.command[entrypoint.command.index("--iris-priority") + 1] == "production"
+    assert captured["priority_band"] == grug_preflight.PRIORITY_BANDS[Priority.PRODUCTION]
+    assert captured["max_retries_failure"] == 0
+    assert captured["max_retries_preemption"] == 0
+    assert captured["max_task_failures"] == 0
+    assert summary["priority"] == "production"
+
+
 def test_health_manifest_freezes_representative_disjoint_warmup_inputs() -> None:
     cohorts = ("short", "medium", "long")
     workload = {

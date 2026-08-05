@@ -1776,6 +1776,8 @@ def _unattended_worker_argv(
         image,
         "--marin-commit",
         marin_commit,
+        "--iris-priority",
+        args.priority,
         "--server-timeout",
         str(args.server_timeout),
         "--minimum-seconds",
@@ -1831,6 +1833,7 @@ def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("health max_num_seqs must be positive")
     checkout = _clean_pushed_checkout()
     image = _immutable_image(args.task_image)
+    priority = Priority(args.priority)
     run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     coscheduling = CoschedulingConfig(group_by=UNATTENDED_COSCHEDULING) if case.node_count > 1 else None
     worker_argv = _unattended_worker_argv(
@@ -1862,7 +1865,7 @@ def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
             max_retries_preemption=0,
             max_task_failures=0,
             task_image=image,
-            priority_band=PRIORITY_BANDS[Priority.INTERACTIVE],
+            priority_band=PRIORITY_BANDS[priority],
         )
         summary: dict[str, Any] = {
             "status": "submitted",
@@ -1873,6 +1876,7 @@ def submit_unattended(args: argparse.Namespace) -> dict[str, Any]:
             "replicas": case.node_count,
             "coscheduling": coscheduling.group_by if coscheduling is not None else None,
             "task_image": image,
+            "priority": priority.value,
             "checkout": checkout,
             "artifact_prefix": (
                 f"{HEALTH_ARTIFACT_ROOT}/{run_id}/"
@@ -5392,7 +5396,7 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
             "cluster_config": DEFAULT_CLUSTER_CONFIG,
             "iris_job_id": str(info.job_id),
             "iris_task_count": info.num_tasks,
-            "iris_priority": Priority.INTERACTIVE.value,
+            "iris_priority": args.iris_priority,
             "iris_coscheduling": args.submitted_coscheduling,
             "iris_retry_policy": {
                 "max_retries_failure": 0,
@@ -5768,7 +5772,7 @@ def run_health_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "cluster_config": DEFAULT_CLUSTER_CONFIG,
             "iris_job_id": str(info.job_id),
             "iris_task_count": info.num_tasks,
-            "iris_priority": Priority.INTERACTIVE.value,
+            "iris_priority": args.iris_priority,
             "iris_coscheduling": args.submitted_coscheduling,
             "iris_retry_policy": {
                 "max_retries_failure": 0,
@@ -7131,7 +7135,7 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
             and arm_settings_match
             and rank_provenance_matches
             and provenance["iris_task_count"] == 4
-            and provenance["iris_priority"] == Priority.INTERACTIVE.value
+            and provenance["iris_priority"] in {priority.value for priority in Priority}
             and provenance["iris_coscheduling"] == UNATTENDED_COSCHEDULING
             and provenance["cluster_config"] == DEFAULT_CLUSTER_CONFIG
             and provenance["iris_retry_policy"]
@@ -7728,6 +7732,7 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
             and placement.get("passed") is True
             and len(placement.get("distinct_advertise_hosts", [])) == int(provenance.get("iris_task_count", 0))
             and provenance.get("iris_coscheduling") == UNATTENDED_COSCHEDULING
+            and provenance.get("iris_priority") in {priority.value for priority in Priority}
             and provenance.get("iris_retry_policy")
             == {"max_retries_failure": 0, "max_retries_preemption": 0, "max_task_failures": 0}
             and provenance.get("task_image") == _immutable_image(provenance["task_image"])
@@ -7917,6 +7922,8 @@ def _matrix_worker_argv(
         image,
         "--marin-commit",
         marin_commit,
+        "--iris-priority",
+        args.priority,
         "--submitted-coscheduling",
         UNATTENDED_COSCHEDULING,
         "--server-timeout",
@@ -7975,6 +7982,7 @@ def submit_matrix(args: argparse.Namespace) -> dict[str, Any]:
     _validate_matrix_args(args)
     checkout = _clean_pushed_checkout()
     image = _immutable_image(args.task_image)
+    priority = Priority(args.priority)
     run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     replicas = 2 if args.plan == "ep8-calibration" else 4
     coscheduling = CoschedulingConfig(group_by=UNATTENDED_COSCHEDULING)
@@ -8005,7 +8013,7 @@ def submit_matrix(args: argparse.Namespace) -> dict[str, Any]:
             max_retries_preemption=0,
             max_task_failures=0,
             task_image=image,
-            priority_band=PRIORITY_BANDS[Priority.INTERACTIVE],
+            priority_band=PRIORITY_BANDS[priority],
         )
         summary: dict[str, Any] = {
             "status": "submitted",
@@ -8015,6 +8023,7 @@ def submit_matrix(args: argparse.Namespace) -> dict[str, Any]:
             "replicas": replicas,
             "coscheduling": coscheduling.group_by,
             "task_image": image,
+            "priority": priority.value,
             "checkout": checkout,
             "artifact_prefix": _matrix_artifact_prefix(args.plan, run_id),
             "receipt": f"{_matrix_control_prefix(args.plan, run_id)}independent-readback.json",
@@ -8143,6 +8152,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     submit.add_argument("--run-id")
     submit.add_argument("--task-image", required=True)
     submit.add_argument("--config", default=DEFAULT_CLUSTER_CONFIG)
+    submit.add_argument(
+        "--priority", choices=[priority.value for priority in Priority], default=Priority.INTERACTIVE.value
+    )
     submit.add_argument("--server-timeout", type=float, default=SERVER_TIMEOUT_SECONDS)
     submit.add_argument("--minimum-seconds", type=float, default=ACCEPTANCE_MINIMUM_SECONDS)
     submit.add_argument(
@@ -8172,6 +8184,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     worker.add_argument("--run-id", required=True)
     worker.add_argument("--task-image", required=True)
     worker.add_argument("--marin-commit", required=True)
+    worker.add_argument("--iris-priority", choices=[priority.value for priority in Priority], required=True)
     worker.add_argument("--submitted-coscheduling")
     worker.add_argument("--server-timeout", type=float, default=SERVER_TIMEOUT_SECONDS)
     worker.add_argument("--minimum-seconds", type=float, default=ACCEPTANCE_MINIMUM_SECONDS)
@@ -8226,6 +8239,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     submit_matrix_parser.add_argument("--run-id")
     submit_matrix_parser.add_argument("--task-image", required=True)
     submit_matrix_parser.add_argument("--config", default=DEFAULT_CLUSTER_CONFIG)
+    submit_matrix_parser.add_argument(
+        "--priority", choices=[priority.value for priority in Priority], default=Priority.INTERACTIVE.value
+    )
     submit_matrix_parser.add_argument("--wait", action="store_true")
     submit_matrix_parser.add_argument("--wait-timeout", type=float, default=21_600)
 
@@ -8234,6 +8250,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     matrix_worker.add_argument("--run-id", required=True)
     matrix_worker.add_argument("--task-image", required=True)
     matrix_worker.add_argument("--marin-commit", required=True)
+    matrix_worker.add_argument("--iris-priority", choices=[priority.value for priority in Priority], required=True)
     matrix_worker.add_argument("--submitted-coscheduling", required=True)
 
     submit_matrix_reader = subparsers.add_parser(
