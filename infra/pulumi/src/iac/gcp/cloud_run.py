@@ -30,6 +30,8 @@ IAP_SERVICE_AGENT = "serviceAccount:service-{project_number}@gcp-sa-iap.iam.gser
 OPENATHENA_IAP_MEMBER = "domain:openathena.ai"
 LOOM_VM_IAP_MEMBER = "serviceAccount:loom-vm@hai-gcp-models.iam.gserviceaccount.com"
 MARIN_INTERNAL_IAP_MEMBERS = (OPENATHENA_IAP_MEMBER, LOOM_VM_IAP_MEMBER)
+BUILD_CACHE_TAG = "buildcache"
+BUILD_CACHE_COMPRESSION_LEVEL = 3
 
 
 @dataclass(frozen=True)
@@ -235,10 +237,32 @@ def dockerfile_image(
     image_tag = repo.repository_id.apply(
         lambda repo_id: f"{region}-docker.pkg.dev/{project}/{repo_id}/{image_name}:latest"
     )
+    cache_ref = repo.repository_id.apply(
+        lambda repo_id: f"{region}-docker.pkg.dev/{project}/{repo_id}/{image_name}:{BUILD_CACHE_TAG}"
+    )
     return docker_build.Image(
         "image",
         context=docker_build.BuildContextArgs(location=build_context),
         dockerfile=docker_build.DockerfileArgs(location=f"{build_context}/{dockerfile}"),
+        # GitHub-hosted runners have no durable local BuildKit state. Export the full
+        # cache beside the image so later CI and local builds can reuse every stage.
+        cache_from=[
+            docker_build.CacheFromArgs(
+                registry=docker_build.CacheFromRegistryArgs(ref=cache_ref),
+            )
+        ],
+        cache_to=[
+            docker_build.CacheToArgs(
+                registry=docker_build.CacheToRegistryArgs(
+                    ref=cache_ref,
+                    mode=docker_build.CacheMode.MAX,
+                    compression=docker_build.CompressionType.ZSTD,
+                    compression_level=BUILD_CACHE_COMPRESSION_LEVEL,
+                    oci_media_types=True,
+                    image_manifest=True,
+                ),
+            )
+        ],
         # Cloud Run is linux/amd64; pin it so a build from an arm64 workstation still
         # produces a runnable image.
         platforms=[docker_build.Platform.LINUX_AMD64],
