@@ -7,8 +7,9 @@ An archive owns its root directory. Each table is a subdirectory of immutable Pa
 partitioned by the writer that produced them and the compaction generation they belong to::
 
     {root}/
+        _archive.json                           # archive-wide metadata: the on-disk format version
         SEALED                                  # optional marker: the run is complete
-        {table}/_schema.json                    # merge key + schema/format versions (the only metadata)
+        {table}/_schema.json                    # per-table metadata: merge key + logical schema version
         {table}/w={writer}/g={gen}/{seq:016d}-{uid}.parquet
 
 Shard membership is discovered by listing the table directory; a shard's schema and row-group
@@ -25,16 +26,21 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel
+from rigging.filesystem import prefix_join
 
 # The seal marker object; its presence means every writer has finished and the run is immutable.
 SEALED_MARKER = "SEALED"
 
-# Per-table metadata object. It records only what a Parquet footer cannot: the dedup merge key
-# and the schema/format versions. This is the whole "manifest".
+# Per-table metadata object, next to a table's shards: the dedup merge key and the caller's logical
+# schema version -- what a Parquet footer cannot record.
 SCHEMA_FILE = "_schema.json"
 
-# finestore's own on-disk format version, stamped into every table's metadata so a layout change in a
-# future release can be detected when reading an archive an older release wrote.
+# Archive-wide metadata object at the root: the on-disk format version. The store writes it once when
+# it opens the archive.
+ARCHIVE_FILE = "_archive.json"
+
+# finestore's own on-disk format version, recorded in the archive metadata so a reader can refuse an
+# archive written in a newer format than it understands.
 FORMAT_VERSION = 1
 
 # Columns finestore stamps on every row. ``_seq`` is a per-writer monotonic id used to break ties
@@ -57,17 +63,31 @@ _GEN_SEGMENT = re.compile(r"^g=(\d+)$")
 _WRITER_SEGMENT = re.compile(r"^w=(.+)$")
 
 
-class TableMetadata(BaseModel):
-    """The typed contents of a table's ``_schema.json`` — the archive's only metadata.
+class ArchiveMetadata(BaseModel):
+    """The typed contents of the archive-wide ``_archive.json``.
 
-    Records what a Parquet footer cannot: the columns a reader deduplicates on and the versions that
-    let the format evolve. ``schema_version`` is the caller's logical schema version; ``format_version``
-    is finestore's own on-disk format version.
+    ``format_version`` is finestore's on-disk format version; a reader refuses an archive stamped with
+    a version newer than it understands. The store writes this once when it opens the archive.
+    """
+
+    format_version: int = FORMAT_VERSION
+
+
+class TableMetadata(BaseModel):
+    """The typed contents of a table's ``_schema.json``.
+
+    Records what a Parquet footer cannot: ``merge_key`` names the columns a reader collapses
+    duplicates on, and ``schema_version`` is the caller's logical schema version for the table's rows.
     """
 
     merge_key: tuple[str, ...] | None = None
     schema_version: int = 1
-    format_version: int = FORMAT_VERSION
+
+
+class SealMarker(BaseModel):
+    """The typed contents of the ``SEALED`` marker: which writer sealed the completed archive."""
+
+    writer: str
 
 
 @dataclass(frozen=True)
@@ -90,21 +110,26 @@ class FineStoreLayout:
     root: str
 
     @property
+    def archive_path(self) -> str:
+        """The archive-wide metadata object path."""
+        return prefix_join(self.root, ARCHIVE_FILE)
+
+    @property
     def sealed_path(self) -> str:
         """The seal-marker object path for the archive."""
-        return f"{self.root.rstrip('/')}/{SEALED_MARKER}"
+        return prefix_join(self.root, SEALED_MARKER)
 
     def table_dir(self, table: str) -> str:
         """The directory holding one table's shards and metadata."""
-        return f"{self.root.rstrip('/')}/{table}"
+        return prefix_join(self.root, table)
 
     def schema_path(self, table: str) -> str:
         """The ``_schema.json`` object path for a table."""
-        return f"{self.table_dir(table)}/{SCHEMA_FILE}"
+        return prefix_join(self.table_dir(table), SCHEMA_FILE)
 
     def shard_path(self, table: str, writer: str, generation: int, seq: int, uid: str) -> str:
         """Build a shard object key. ``seq`` (the batch's minimum ``_seq``) makes keys sort by write order."""
-        return f"{self.table_dir(table)}/w={writer}/g={generation}/{seq:016d}-{uid}.parquet"
+        return prefix_join(self.table_dir(table), f"w={writer}/g={generation}/{seq:016d}-{uid}.parquet")
 
 
 def parse_shard_path(path: str) -> Shard | None:

@@ -25,9 +25,11 @@ from rigging.filesystem import StoragePath, url_to_fs
 from finestore.layout import (
     BLOB_NAME_COLUMN,
     BLOBS_TABLE,
+    FORMAT_VERSION,
     GEN_COLUMN,
     SEQ_COLUMN,
     WRITER_COLUMN,
+    ArchiveMetadata,
     FineStoreLayout,
     Shard,
     TableMetadata,
@@ -65,6 +67,7 @@ class CompositeReader:
         self.root = root.rstrip("/")
         self._layout = FineStoreLayout(self.root)
         self._meta_cache: dict[str, TableMetadata] = {}
+        self._archive_meta: ArchiveMetadata | None = None
 
     # -- discovery ---------------------------------------------------------------------------------
 
@@ -85,17 +88,27 @@ class CompositeReader:
     def _meta(self, table: str) -> TableMetadata:
         if table in self._meta_cache:
             return self._meta_cache[table]
-        # An absent _schema.json means the table was written without registered metadata; fall back
-        # to the defaults (which yield the default merge key). A present-but-corrupt file is a real
-        # fault and propagates.
-        try:
-            text = StoragePath(self._layout.schema_path(table)).read_text()
-        except FileNotFoundError:
-            meta = TableMetadata()
-        else:
-            meta = TableMetadata.model_validate_json(text)
+        # The store writes _schema.json when it registers a table, before any of that table's shards.
+        # So a table with shards always has one; a missing file is a corrupt or foreign archive and
+        # propagates rather than silently defaulting the merge key (which would mis-deduplicate).
+        meta = TableMetadata.model_validate_json(StoragePath(self._layout.schema_path(table)).read_text())
         self._meta_cache[table] = meta
         return meta
+
+    def archive_metadata(self) -> ArchiveMetadata:
+        """The archive-wide metadata the writer stamped at open (the on-disk format version)."""
+        if self._archive_meta is None:
+            text = StoragePath(self._layout.archive_path).read_text()
+            self._archive_meta = ArchiveMetadata.model_validate_json(text)
+        return self._archive_meta
+
+    def _check_format(self) -> None:
+        """Refuse an archive written in a newer on-disk format than this reader understands."""
+        found = self.archive_metadata().format_version
+        if found > FORMAT_VERSION:
+            raise ValueError(
+                f"archive at {self.root} is finestore format v{found}; this reader supports up to v{FORMAT_VERSION}"
+            )
 
     def is_sealed(self) -> bool:
         return StoragePath(self._layout.sealed_path).exists()
@@ -108,8 +121,6 @@ class CompositeReader:
         *,
         columns: Sequence[str] | None = None,
         where: list[tuple[str, str, object]] | None = None,
-        merge_key: Sequence[str] | None = None,
-        dedup: bool = True,
     ) -> pa.Table | None:
         """Return the deduplicated rows of ``table``, projected to ``columns`` and filtered by ``where``.
 
@@ -123,7 +134,8 @@ class CompositeReader:
         shards = self._list_shards(fs, table)
         if not shards:
             return None
-        key = tuple(merge_key) if merge_key is not None else self.merge_key(table)
+        self._check_format()
+        key = self.merge_key(table)
         pa_fs = PyFileSystem(FSSpecHandler(fs))
 
         schemas = [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards]
@@ -147,7 +159,7 @@ class CompositeReader:
             parts.append(part)
 
         combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
-        if dedup and all(name in combined.column_names for name in key):
+        if all(name in combined.column_names for name in key):
             combined = _deduplicate(combined, key)
         if columns is not None:
             combined = combined.select([name for name in columns if name in combined.column_names])

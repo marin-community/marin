@@ -18,6 +18,7 @@ import logging
 import threading
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
+from typing import Protocol
 
 import pyarrow as pa
 from rigging.filesystem import StoragePath
@@ -27,7 +28,9 @@ from finestore.layout import (
     BLOBS_TABLE,
     SEQ_COLUMN,
     WRITER_COLUMN,
+    ArchiveMetadata,
     FineStoreLayout,
+    SealMarker,
     TableMetadata,
     build_uri,
 )
@@ -77,6 +80,16 @@ def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
     return [{k: v for k, v in row.items() if k not in drop} for row in rows]
 
 
+class FlushScheduler(Protocol):
+    """The store-side controls a :class:`DataTable` needs, kept narrow so the table does not reach
+    into the store's internals: ask for a background flush when a buffer crosses its cap, and re-raise
+    a failure the background flusher hit."""
+
+    def request_flush(self) -> None: ...
+
+    def raise_if_failed(self) -> None: ...
+
+
 class DataStore:
     """A writable columnar archive under ``root`` for one ``writer_id``."""
 
@@ -99,6 +112,9 @@ class DataStore:
         self._stop = threading.Event()
         self._error: BaseException | None = None
         self._closed = False
+        # Stamp the archive-wide metadata at open. Concurrent writers write identical content, so a
+        # last-writer-wins overwrite is harmless.
+        StoragePath(self._layout.archive_path).write_text(ArchiveMetadata().model_dump_json(indent=2))
         self._thread = threading.Thread(target=self._run, name="finestore-flush", daemon=True)
         self._thread.start()
 
@@ -129,13 +145,22 @@ class DataStore:
             if existing is not None:
                 return existing
             key = tuple(merge_key) if merge_key is not None else None
-            table = DataTable(self, name, merge_key=key, schema=schema, schema_version=schema_version)
+            table = DataTable(
+                name,
+                writer_id=self.writer_id,
+                layout=self._layout,
+                max_buffer_rows=self._max_buffer_rows,
+                scheduler=self,
+                merge_key=key,
+                schema=schema,
+                schema_version=schema_version,
+            )
             self._tables[name] = table
             self._write_schema_meta(table)
             return table
 
     def _write_schema_meta(self, table: DataTable) -> None:
-        """Persist the table's merge key and versions (the archive's only metadata object)."""
+        """Persist the table's merge key and logical schema version to its ``_schema.json``."""
         meta = TableMetadata(merge_key=table.merge_key, schema_version=table.schema_version)
         StoragePath(self._layout.schema_path(table.name)).write_text(meta.model_dump_json(indent=2))
 
@@ -160,14 +185,14 @@ class DataStore:
 
     def flush(self) -> None:
         """Write every table's buffered rows to shards now, blocking until they are durable."""
-        self._raise_if_failed()
+        self.raise_if_failed()
         for table in list(self._tables.values()):
             table.flush()
 
     def seal(self) -> None:
         """Flush, then mark the archive sealed so readers know the run is complete."""
         self.flush()
-        StoragePath(self._layout.sealed_path).write_text(json.dumps({"writer": self.writer_id}))
+        StoragePath(self._layout.sealed_path).write_text(SealMarker(writer=self.writer_id).model_dump_json())
 
     def close(self) -> None:
         """Stop the background thread and flush any remaining rows."""
@@ -199,7 +224,14 @@ class DataStore:
                 logger.exception("finestore background flush failed")
                 return
 
-    def _raise_if_failed(self) -> None:
+    # -- FlushScheduler (the seam DataTable talks to) ----------------------------------------------
+
+    def request_flush(self) -> None:
+        """Wake the background flusher early because a table crossed its row cap."""
+        self._wake.set()
+
+    def raise_if_failed(self) -> None:
+        """Re-raise the exception the background flusher died with, if any."""
         if self._error is not None:
             raise self._error
 
@@ -213,17 +245,23 @@ class DataTable:
 
     def __init__(
         self,
-        store: DataStore,
         name: str,
         *,
+        writer_id: str,
+        layout: FineStoreLayout,
+        max_buffer_rows: int,
+        scheduler: FlushScheduler,
         merge_key: tuple[str, ...] | None,
         schema: pa.Schema | None,
         schema_version: int,
     ) -> None:
-        self._store = store
         self.name = name
         self.merge_key = merge_key
         self.schema_version = schema_version
+        self._writer_id = writer_id
+        self._layout = layout
+        self._max_buffer_rows = max_buffer_rows
+        self._scheduler = scheduler
         self._schema = schema
         self._pending: list[dict] = []
         self._next_seq = 0
@@ -237,17 +275,17 @@ class DataTable:
 
     def extend(self, rows: Iterable[dict]) -> None:
         """Buffer many rows for the next flush (see :meth:`append`)."""
-        self._store._raise_if_failed()
+        self._scheduler.raise_if_failed()
         with self._lock:
             for row in rows:
                 stamped = dict(row)
                 stamped[SEQ_COLUMN] = self._next_seq
-                stamped[WRITER_COLUMN] = self._store.writer_id
+                stamped[WRITER_COLUMN] = self._writer_id
                 self._next_seq += 1
                 self._pending.append(stamped)
-            over_cap = len(self._pending) >= self._store._max_buffer_rows
+            over_cap = len(self._pending) >= self._max_buffer_rows
         if over_cap:
-            self._store._wake.set()
+            self._scheduler.request_flush()
 
     def flush(self) -> None:
         """Write this table's buffered rows to one immutable shard now, blocking until it is durable.
@@ -256,7 +294,7 @@ class DataTable:
         flush of the same table (the background thread and a caller) each claim a disjoint batch and
         never double-write a row.
         """
-        self._store._raise_if_failed()
+        self._scheduler.raise_if_failed()
         with self._lock:
             if not self._pending:
                 return
@@ -264,6 +302,6 @@ class DataTable:
             self._pending = []
         table = pa.Table.from_pylist(_drop_empty_struct_keys(rows), schema=self._schema)
         min_seq = min(row[SEQ_COLUMN] for row in rows)
-        path = self._store._layout.shard_path(self.name, self._store.writer_id, 0, min_seq, uuid.uuid4().hex[:8])
+        path = self._layout.shard_path(self.name, self._writer_id, 0, min_seq, uuid.uuid4().hex[:8])
         write_table(path, table)
         logger.debug("finestore flushed %d rows to %s", len(rows), path)

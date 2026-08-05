@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pytest
 from finestore import compaction
 from finestore.compaction import compact
-from finestore.layout import FORMAT_VERSION, FineStoreLayout, TableMetadata
+from finestore.layout import FORMAT_VERSION, ArchiveMetadata, FineStoreLayout, SealMarker, TableMetadata
 from finestore.reader import CompositeReader
 from finestore.store import DataStore
 from rigging.filesystem import StoragePath
@@ -218,22 +219,40 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
 
 
-def test_metadata_is_typed_and_tolerates_older_format(tmp_path):
-    # The store persists a typed _schema.json the reader loads as TableMetadata. A file an older
-    # release wrote (no format_version) still deserializes, defaulting the version — the property that
-    # lets the on-disk format evolve without breaking readers of already-written archives.
+def test_typed_on_disk_metadata(tmp_path):
+    # The three on-disk contracts are typed pydantic objects with clear owners: the store stamps the
+    # archive-wide metadata at open, the per-table metadata at registration, and the seal marker at
+    # seal. Each round-trips through its model.
+    root = str(tmp_path / "run")
+    layout = FineStoreLayout(root)
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"), schema_version=3)
+        table.append({"task": "arc", "doc_id": "1"})
+        store.seal()
+
+    archive = ArchiveMetadata.model_validate_json(StoragePath(layout.archive_path).read_text())
+    assert archive.format_version == FORMAT_VERSION
+
+    table_meta = TableMetadata.model_validate_json(StoragePath(layout.schema_path("samples")).read_text())
+    assert table_meta.merge_key == ("task", "doc_id")
+    assert table_meta.schema_version == 3
+
+    seal = SealMarker.model_validate_json(StoragePath(layout.sealed_path).read_text())
+    assert seal.writer == "w1"
+
+
+def test_reader_refuses_a_future_format(tmp_path):
+    # A reader must not silently misread an archive a newer finestore wrote; the archive metadata
+    # records the format version and scan refuses one it does not understand.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
         store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
         store.flush()
-
-    meta = TableMetadata.model_validate_json(StoragePath(FineStoreLayout(root).schema_path("samples")).read_text())
-    assert meta.merge_key == ("task", "doc_id")
-    assert meta.format_version == FORMAT_VERSION
-
-    legacy = TableMetadata.model_validate_json('{"merge_key": ["task", "doc_id"], "schema_version": 1}')
-    assert legacy.merge_key == ("task", "doc_id")
-    assert legacy.format_version == FORMAT_VERSION
+    StoragePath(FineStoreLayout(root).archive_path).write_text(
+        ArchiveMetadata(format_version=FORMAT_VERSION + 1).model_dump_json()
+    )
+    with pytest.raises(ValueError, match="format"):
+        CompositeReader(root).scan("samples")
 
 
 def test_seal_marker(tmp_path):
@@ -284,12 +303,32 @@ def test_table_returns_shared_handle(tmp_path):
     assert {r["doc_id"] for r in rows} == {"1", "2"}
 
 
-def test_explicit_schema_is_enforced(tmp_path):
+def test_explicit_schema_pins_types_and_rejects_mismatch(tmp_path):
+    # An explicit schema pins each column's type. A row that violates it fails the flush loudly rather
+    # than silently writing an inferred type a later reader would see drift from; a conforming row
+    # persists with exactly the declared types.
     root = str(tmp_path / "run")
-    schema = pa.schema([("task", pa.string()), ("doc_id", pa.string()), ("_seq", pa.int64()), ("_writer", pa.string())])
-    with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"), schema=schema)
-        table.append({"task": "arc", "doc_id": "1"})
+    schema = pa.schema(
+        [
+            ("task", pa.string()),
+            ("doc_id", pa.string()),
+            ("count", pa.int64()),
+            ("_seq", pa.int64()),
+            ("_writer", pa.string()),
+        ]
+    )
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        store.table("samples", merge_key=("task", "doc_id"), schema=schema).append(
+            {"task": "arc", "doc_id": "1", "count": "not-an-int"}
+        )
+        with pytest.raises(pa.ArrowInvalid):
+            store.flush()
+
+    with DataStore.open(root, writer_id="w2", flush_interval=3600) as store:
+        store.table("samples", merge_key=("task", "doc_id"), schema=schema).append(
+            {"task": "arc", "doc_id": "2", "count": 5}
+        )
         store.flush()
-    rows = _rows(CompositeReader(root), "samples")
-    assert rows[0]["task"] == "arc"
+    result = CompositeReader(root).scan("samples", columns=["task", "doc_id", "count"])
+    assert result.schema.field("count").type == pa.int64()
+    assert result.to_pylist() == [{"task": "arc", "doc_id": "2", "count": 5}]

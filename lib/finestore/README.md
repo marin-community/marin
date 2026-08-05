@@ -49,19 +49,23 @@ generation they belong to:
 
 ```
 {root}/
+    _archive.json                            # archive-wide: the on-disk format version
     SEALED                                   # optional: the run is complete
-    {table}/_schema.json                     # merge key + schema version
+    {table}/_schema.json                     # per-table: merge key + logical schema version
     {table}/w={writer}/g={gen}/{seq:016d}-{uid}.parquet
 ```
 
 Shard membership is discovered by listing the table directory. A shard's schema
-and row-group statistics come from its Parquet footer. `_schema.json` records
-only what a footer cannot — the dedup merge key and a logical schema version —
-and is the archive's whole "manifest". The writer and generation are encoded in
-the object key and recovered by listing; nothing else references a shard. A
-caller that shares the root with sibling data (an eval run's results directory
-also holds JSON and legacy parquet) passes a dedicated subdirectory as the root;
-finestore does not impose one.
+and row-group statistics come from its Parquet footer. The small JSON objects
+record only what a footer cannot: `_archive.json` holds finestore's on-disk
+format version (the writer stamps it at open, and a reader refuses a newer
+format than it understands), and each `{table}/_schema.json` holds the dedup
+merge key and the caller's logical schema version. Together they are the whole
+"manifest". The writer and generation are encoded in the object key and
+recovered by listing; nothing else references a shard. A caller that shares the
+root with sibling data (an eval run's results directory also holds JSON and
+legacy parquet) passes a dedicated subdirectory as the root; finestore does not
+impose one.
 
 ## Read semantics
 
