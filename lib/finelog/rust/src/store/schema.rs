@@ -478,7 +478,8 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                         column_type_name(rc.r#type),
                     )));
                 }
-                // A nullability difference on an existing column is NOT a conflict.
+                // A nullability difference on an existing column is NOT a conflict,
+                // and is routine rather than notable — hence debug, not warn.
                 // Adopt-from-disk widens every compacted column to nullable
                 // (DuckDB's COPY drops Arrow non-nullability), and the adopt
                 // design relies on a later RegisterTable with the original
@@ -488,7 +489,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 // permanently wedge every namespace with non-nullable columns
                 // once a compacted segment is adopted.
                 if existing.nullable != rc.nullable {
-                    tracing::warn!(
+                    tracing::debug!(
                         column = %rc.name,
                         registered = existing.nullable,
                         requested = rc.nullable,

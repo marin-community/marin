@@ -102,14 +102,18 @@ fn sidecar_needs_rebuild(segment: &Path, indexed: &[&str]) -> bool {
 /// which its substring queries scan unpruned.
 pub const BACKFILL_SIDECARS_PER_TICK: usize = 4;
 
-/// Segments re-encoded onto the current physical layout per maintenance tick.
+/// Wall-clock a maintenance tick spends re-encoding stale-layout segments.
 ///
-/// A rewrite reads and re-compresses a whole segment, so this is deliberately
-/// small: the layout change it propagates is a storage and footer-size win, not
-/// a correctness fix, and eviction would eventually deliver it anyway. Two per
-/// 30 s tick turns a terminal level over in hours instead of days without
-/// competing with compaction for the box.
-pub const REWRITE_LAYOUTS_PER_TICK: usize = 2;
+/// Budgeted by time rather than by count because segment sizes span three orders
+/// of magnitude — on the marin hub a small L1 re-encodes in milliseconds where a
+/// 290 MiB terminal segment takes about 11 s — so a fixed count leaves the tick's
+/// duration unpredictable and can starve compaction, sync, and eviction queued
+/// behind it. A single over-budget segment can still overrun, because a rewrite
+/// already in flight is never abandoned.
+///
+/// The work is a storage and footer-size win rather than a correctness fix, so it
+/// stays a minority of the 30 s tick.
+const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(10);
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -1344,14 +1348,15 @@ impl Namespace {
         // never re-compacted, so without this a namespace carries whatever layout
         // it was written with until eviction ages it out.
         let ns = Arc::clone(self);
-        tokio::task::spawn_blocking(move || ns.rewrite_stale_layouts(REWRITE_LAYOUTS_PER_TICK))
+        tokio::task::spawn_blocking(move || ns.rewrite_stale_layouts(REWRITE_LAYOUT_BUDGET))
             .await
             .map_err(|e| StatsError::Internal(format!("maintenance rewrite task panicked: {e}")))?;
         Ok(())
     }
 
-    /// Re-encode up to `max` segments whose physical layout predates the current
-    /// writer policy, oldest first. Returns how many were rewritten.
+    /// Re-encode segments whose physical layout predates the current writer
+    /// policy, oldest first, for up to `budget` of wall clock. Returns how many
+    /// were rewritten.
     ///
     /// Oldest first because the deque is age-ordered and a leveled store keeps
     /// nearly all of its bytes in the oldest, terminal-level segments — going the
@@ -1367,40 +1372,13 @@ impl Namespace {
     /// count, independent of row groups, and the prune reads each segment's
     /// actual layout — so a rewritten segment keeps pruning with the sidecar it
     /// already had.
-    fn rewrite_stale_layouts(&self, max: usize) -> usize {
-        if self.data_dir.is_none() || max == 0 {
+    fn rewrite_stale_layouts(&self, budget: Duration) -> usize {
+        if self.data_dir.is_none() {
             return 0;
         }
-        let candidates: Vec<(String, i64)> = {
-            let inner = self.inner.lock().unwrap();
-            let live: HashSet<&str> = inner
-                .local_segments
-                .iter()
-                .map(|s| s.path.as_str())
-                .collect();
-            let mut known = self.current_layouts.lock().unwrap();
-            known.retain(|p| live.contains(p.as_str()));
-            let mut out = Vec::new();
-            for seg in inner.local_segments.iter() {
-                if seg.level < 1 || known.contains(&seg.path) {
-                    continue;
-                }
-                // Reading the stamp parses the footer, so record the verdict: a
-                // segment that is already current must not be re-examined on
-                // every subsequent tick.
-                if segment_layout_is_current(Path::new(&seg.path)) {
-                    known.insert(seg.path.clone());
-                    continue;
-                }
-                out.push((seg.path.clone(), seg.size_bytes));
-                if out.len() == max {
-                    break;
-                }
-            }
-            out
-        };
+        let deadline = Instant::now() + budget;
         let mut rewritten = 0;
-        for (path, was) in candidates {
+        while let Some((path, was)) = self.next_stale_layout() {
             let started = Instant::now();
             let (staging, size) = match stage_rewritten_segment(Path::new(&path)) {
                 Ok(staged) => staged,
@@ -1433,8 +1411,43 @@ impl Namespace {
                 "rewrote segment layout"
             );
             rewritten += 1;
+            if Instant::now() >= deadline {
+                break;
+            }
         }
         rewritten
+    }
+
+    /// The oldest local segment not yet known to carry the current layout, as
+    /// `(path, size)`. `None` once every segment is current.
+    ///
+    /// Reads footers OUTSIDE the insertion lock — the lock guards only a snapshot
+    /// of candidate paths — so a slow filesystem cannot stall writers behind this.
+    fn next_stale_layout(&self) -> Option<(String, i64)> {
+        let candidates: Vec<(String, i64)> = {
+            let inner = self.inner.lock().unwrap();
+            let live: HashSet<&str> = inner
+                .local_segments
+                .iter()
+                .map(|s| s.path.as_str())
+                .collect();
+            let mut known = self.current_layouts.lock().unwrap();
+            known.retain(|p| live.contains(p.as_str()));
+            inner
+                .local_segments
+                .iter()
+                .filter(|s| s.level >= 1 && !known.contains(&s.path))
+                .map(|s| (s.path.clone(), s.size_bytes))
+                .collect()
+        };
+        for (path, size) in candidates {
+            if segment_layout_is_current(Path::new(&path)) {
+                self.current_layouts.lock().unwrap().insert(path);
+                continue;
+            }
+            return Some((path, size));
+        }
+        None
     }
 
     /// Swap a staged rewrite over its segment and record the new size, under the
@@ -2580,7 +2593,7 @@ mod tests {
         // by an older build is always first seen after a restart. Clear it to
         // model that: nothing in production edits a segment behind the cache.
         ns.current_layouts.lock().unwrap().clear();
-        assert_eq!(ns.rewrite_stale_layouts(4), 1);
+        assert_eq!(ns.rewrite_stale_layouts(REWRITE_LAYOUT_BUDGET), 1);
 
         // Local file adopted the current layout and the catalog followed it.
         assert!(crate::store::segment::segment_layout_is_current(&path));
@@ -2596,7 +2609,7 @@ mod tests {
         assert_eq!(std::fs::read(&remote_path).unwrap(), remote_before);
 
         // A second pass finds nothing left to do.
-        assert_eq!(ns.rewrite_stale_layouts(4), 0);
+        assert_eq!(ns.rewrite_stale_layouts(REWRITE_LAYOUT_BUDGET), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
