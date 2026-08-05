@@ -211,7 +211,8 @@ class _HarrierEmbedder:
 def _load_embedder_from_shared() -> _HarrierEmbedder:
     archive_url: str = zephyr_worker_ctx().get_shared(_HARRIER_SHARED_KEY)
     local_root = Path(tempfile.mkdtemp(prefix="harrier-"))
-    local_archive = local_root / _MODEL_ARCHIVE_NAME
+    archive_fd, local_archive = tempfile.mkstemp(dir=local_root, suffix=".tar")
+    os.close(archive_fd)
     StoragePath(archive_url).download_to(local_archive)
     with tarfile.open(local_archive) as archive:
         archive.extractall(local_root, filter="data")
