@@ -11,11 +11,11 @@ import tempfile
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
-import fsspec
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -23,17 +23,39 @@ import pyarrow.parquet as pq
 from huggingface_hub import snapshot_download
 from iris.cluster.client.job_info import get_job_info
 from marin.datakit.sources import all_sources
-from rigging.filesystem import atomic_rename
+from marin.execution.artifact import Artifact
+from marin.execution.lazy import ArtifactStep
+from rigging.filesystem import StoragePath, atomic_rename, url_to_fs
 
-DATASET_ROOT = "s3://marin-us-east-02a/marin/datakit/sample_10pct_91269634"
-OUTPUT_ROOT = "s3://marin-us-east-02a/marin/user/held/harrier-oss-v1-0.6b-50m"
-MANIFEST_URL = f"{OUTPUT_ROOT}/manifest-canonical-sources.json"
-SANITY_URL = f"{OUTPUT_ROOT}/sanity.json"
 MODEL_ID = "microsoft/harrier-oss-v1-0.6b"
 MODEL_REVISION = "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee"
 MODEL_DIMENSION = 1_024
 TARGET_ROWS = 50_000_000
 MAX_TOKENS = 8_192
+MANIFEST_SHA256 = "791ce33496e7e99d54c17c4dfb5d71ce20a1273f021fef4f67c54da72e71e97c"
+DATASET_ARTIFACT: ArtifactStep[Artifact] = ArtifactStep.adopt(
+    name="datakit/sample-10pct-91269634",
+    version="2026.08.04",
+    source="s3://marin-us-east-02a/marin/datakit/sample_10pct_91269634",
+)
+HARRIER_EMBEDDINGS_ARTIFACT: ArtifactStep[Artifact] = ArtifactStep.adopt(
+    name="datakit/embeddings/harrier-oss-v1-0.6b-50m",
+    version="2026.08.04",
+    source="s3://marin-us-east-02a/marin/user/held/harrier-oss-v1-0.6b-50m",
+    config={
+        "dataset": DATASET_ARTIFACT.path(),
+        "manifest_sha256": MANIFEST_SHA256,
+        "model_id": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "rows": TARGET_ROWS,
+        "max_tokens": MAX_TOKENS,
+    },
+)
+DATASET_ROOT = DATASET_ARTIFACT.path()
+OUTPUT_ROOT = HARRIER_EMBEDDINGS_ARTIFACT.path()
+OUTPUT_PATH = StoragePath(OUTPUT_ROOT)
+MANIFEST_URL = str(OUTPUT_PATH / "manifest-canonical-sources.json")
+SANITY_URL = str(OUTPUT_PATH / "sanity.json")
 TOKENIZE_BATCH_SIZE = 128
 INPUT_BATCH_SIZE = 8
 MAX_RAW_TEXT_CHARS = 1_048_576
@@ -83,6 +105,13 @@ class SourceFile:
 
 
 @dataclass(frozen=True)
+class ModelFile:
+    path: str
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True)
 class InputPart:
     """A prefix of one input Parquet file and its paired output."""
 
@@ -90,6 +119,31 @@ class InputPart:
     input_url: str
     row_count: int
     output_url: str
+
+
+@dataclass(frozen=True)
+class SampledInput:
+    ids: list[str]
+    texts: list[str]
+    raw_lengths: list[int]
+
+
+@dataclass(frozen=True)
+class SemanticProbeReport:
+    anchor: str
+    related: str
+    unrelated: str
+    related_cosine: float
+    unrelated_cosine: float
+    margin: float
+
+
+@dataclass(frozen=True)
+class EmbedPartResult:
+    output_url: str
+    rows: int
+    reused: bool
+    duration_seconds: float
 
 
 @dataclass(frozen=True)
@@ -123,16 +177,12 @@ def _sha256_file(path: Path) -> str:
 
 
 def _read_json(url: str) -> dict[str, Any]:
-    filesystem, path = fsspec.core.url_to_fs(url)
-    with filesystem.open(path) as file:
-        return json.load(file)
+    return json.loads(StoragePath(url).read_text())
 
 
 def _write_json(url: str, value: dict[str, Any]) -> None:
-    filesystem, path = fsspec.core.url_to_fs(url)
-    with atomic_rename(path, fs=filesystem) as temporary_path:
-        with filesystem.open(temporary_path, "w") as file:
-            json.dump(value, file, indent=2, sort_keys=True)
+    with atomic_rename(url) as temporary_path:
+        StoragePath(temporary_path).write_text(json.dumps(value, indent=2, sort_keys=True))
 
 
 def allocate_source_quotas(source_counts: dict[str, int], target_rows: int) -> dict[str, int]:
@@ -214,21 +264,14 @@ def assigned_parts(parts: tuple[InputPart, ...], num_shards: int) -> tuple[tuple
     return tuple(tuple(sorted(items, key=lambda item: (item.source, item.input_url))) for items in assignments)
 
 
-def _s3_url(path: str) -> str:
-    return path if path.startswith("s3://") else f"s3://{path}"
-
-
 def _source_files(source: str) -> tuple[SourceFile, ...]:
-    input_root = f"{DATASET_ROOT}/{source}/outputs/main"
-    filesystem, path = fsspec.core.url_to_fs(input_root)
-    if not filesystem.exists(path):
+    input_root = StoragePath(DATASET_ROOT) / source / "outputs" / "main"
+    if not input_root.exists():
         return ()
-    urls = sorted(
-        _s3_url(item["name"]) for item in filesystem.ls(path, detail=True) if item["name"].endswith(".parquet")
-    )
+    urls = sorted(str(item) for item in input_root.ls() if item.name.endswith(".parquet"))
     files = []
     for input_url in urls:
-        input_filesystem, input_path = fsspec.core.url_to_fs(input_url)
+        input_filesystem, input_path = url_to_fs(input_url)
         with pq.ParquetFile(input_path, filesystem=input_filesystem) as parquet_file:
             files.append(SourceFile(input_url=input_url, row_count=parquet_file.metadata.num_rows))
     logger.info("Found %d rows across %d files for %s", sum(file.row_count for file in files), len(files), source)
@@ -252,7 +295,7 @@ def _source_parts(source: str, selected_rows: int, files: tuple[SourceFile, ...]
     remaining = selected_rows
     for file in files:
         row_count = min(remaining, file.row_count)
-        output_url = f"{OUTPUT_ROOT}/embeddings/{source}/{Path(file.input_url).name}"
+        output_url = str(OUTPUT_PATH / "embeddings" / source / StoragePath(file.input_url).name)
         parts.append(InputPart(source=source, input_url=file.input_url, row_count=row_count, output_url=output_url))
         remaining -= row_count
         if remaining == 0:
@@ -285,9 +328,10 @@ def build_manifest() -> dict[str, Any]:
         sha256="",
     )
     digest = hashlib.sha256(_canonical_json(manifest.payload())).hexdigest()
+    if digest != MANIFEST_SHA256:
+        raise ValueError(f"Built manifest digest is {digest}; expected {MANIFEST_SHA256}")
     manifest = replace(manifest, sha256=digest)
-    filesystem, path = fsspec.core.url_to_fs(MANIFEST_URL)
-    if filesystem.exists(path):
+    if StoragePath(MANIFEST_URL).exists():
         existing = read_manifest()
         if existing.sha256 != manifest.sha256:
             raise ValueError(f"Existing manifest has a different digest: {existing.sha256}")
@@ -314,6 +358,8 @@ def read_manifest() -> SampleManifest:
     digest = hashlib.sha256(_canonical_json(manifest.payload())).hexdigest()
     if digest != manifest.sha256:
         raise ValueError(f"Manifest digest is {digest}; expected {manifest.sha256}")
+    if manifest.sha256 != MANIFEST_SHA256:
+        raise ValueError(f"Manifest is {manifest.sha256}; expected pinned digest {MANIFEST_SHA256}")
     if manifest.dataset_root != DATASET_ROOT or manifest.output_root != OUTPUT_ROOT:
         raise ValueError("Manifest storage roots do not match this run")
     if manifest.target_rows != TARGET_ROWS or sum(part.row_count for part in manifest.parts) != TARGET_ROWS:
@@ -334,9 +380,8 @@ def manifest_summary(manifest: SampleManifest) -> dict[str, Any]:
 
 def stage_model() -> dict[str, Any]:
     """Download the pinned public model once and stage it in-region."""
-    manifest_url = f"{OUTPUT_ROOT}/model/manifest.json"
-    filesystem, path = fsspec.core.url_to_fs(manifest_url)
-    if filesystem.exists(path):
+    manifest_url = str(OUTPUT_PATH / "model" / "manifest.json")
+    if StoragePath(manifest_url).exists():
         manifest = _read_json(manifest_url)
         if manifest["model_id"] != MODEL_ID or manifest["model_revision"] != MODEL_REVISION:
             raise ValueError("Existing staged model identifies a different checkpoint")
@@ -344,20 +389,19 @@ def stage_model() -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         local_root = Path(temporary_directory) / "model"
         snapshot_download(repo_id=MODEL_ID, revision=MODEL_REVISION, local_dir=local_root)
-        files = []
+        files: list[ModelFile] = []
         for local_path in sorted(
             path for path in local_root.rglob("*") if path.is_file() and ".cache" not in path.parts
         ):
             relative = local_path.relative_to(local_root).as_posix()
-            remote_url = f"{OUTPUT_ROOT}/model/files/{relative}"
-            remote_filesystem, remote_path = fsspec.core.url_to_fs(remote_url)
-            with atomic_rename(remote_path, fs=remote_filesystem) as temporary_path:
-                remote_filesystem.put(str(local_path), temporary_path)
-            files.append({"path": relative, "size": local_path.stat().st_size, "sha256": _sha256_file(local_path)})
+            remote_path = OUTPUT_PATH / "model" / "files" / relative
+            with atomic_rename(str(remote_path)) as temporary_path:
+                StoragePath(temporary_path).upload_from(str(local_path))
+            files.append(ModelFile(path=relative, size=local_path.stat().st_size, sha256=_sha256_file(local_path)))
     manifest = {
         "model_id": MODEL_ID,
         "model_revision": MODEL_REVISION,
-        "files": files,
+        "files": [asdict(file) for file in files],
     }
     manifest["sha256"] = hashlib.sha256(_canonical_json(manifest)).hexdigest()
     _write_json(manifest_url, manifest)
@@ -365,21 +409,21 @@ def stage_model() -> dict[str, Any]:
 
 
 def _download_staged_model(local_root: Path) -> dict[str, Any]:
-    manifest = _read_json(f"{OUTPUT_ROOT}/model/manifest.json")
+    manifest = _read_json(str(OUTPUT_PATH / "model" / "manifest.json"))
     if manifest["model_id"] != MODEL_ID or manifest["model_revision"] != MODEL_REVISION:
         raise ValueError("Staged model identifies a different checkpoint")
     expected_sha256 = manifest.pop("sha256")
     if hashlib.sha256(_canonical_json(manifest)).hexdigest() != expected_sha256:
         raise ValueError("Staged model manifest failed digest verification")
     manifest["sha256"] = expected_sha256
-    for item in manifest["files"]:
-        local_path = local_root / item["path"]
+    files = [ModelFile(**item) for item in manifest["files"]]
+    for item in files:
+        local_path = local_root / item.path
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        remote_url = f"{OUTPUT_ROOT}/model/files/{item['path']}"
-        filesystem, path = fsspec.core.url_to_fs(remote_url)
-        filesystem.get(path, str(local_path))
-        if local_path.stat().st_size != item["size"] or _sha256_file(local_path) != item["sha256"]:
-            raise ValueError(f"Staged model file failed verification: {item['path']}")
+        remote_path = OUTPUT_PATH / "model" / "files" / item.path
+        remote_path.download_to(str(local_path))
+        if local_path.stat().st_size != item.size or _sha256_file(local_path) != item.sha256:
+            raise ValueError(f"Staged model file failed verification: {item.path}")
     return manifest
 
 
@@ -453,9 +497,10 @@ def _output_metadata(part: InputPart, manifest: SampleManifest) -> dict[bytes, b
 
 
 def _complete_output(part: InputPart, manifest: SampleManifest) -> bool:
-    filesystem, path = fsspec.core.url_to_fs(part.output_url)
-    if not filesystem.exists(path):
+    output_path = StoragePath(part.output_url)
+    if not output_path.exists():
         return False
+    filesystem, path = url_to_fs(str(output_path))
     with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
         rows = parquet_file.metadata.num_rows
         metadata = parquet_file.schema_arrow.metadata or {}
@@ -468,7 +513,7 @@ def _complete_output(part: InputPart, manifest: SampleManifest) -> bool:
 
 
 def _input_batches(part: InputPart) -> Iterator[pa.RecordBatch]:
-    filesystem, path = fsspec.core.url_to_fs(part.input_url)
+    filesystem, path = url_to_fs(part.input_url)
     remaining = part.row_count
     with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
         for batch in parquet_file.iter_batches(batch_size=INPUT_BATCH_SIZE, columns=["id", "text"]):
@@ -485,19 +530,19 @@ def _input_batches(part: InputPart) -> Iterator[pa.RecordBatch]:
         raise ValueError(f"Input ended with {remaining} selected rows missing: {part.input_url}")
 
 
-def _sample_input(part: InputPart, row_count: int) -> tuple[list[str], list[str], list[int]]:
-    filesystem, path = fsspec.core.url_to_fs(part.input_url)
+def _sample_input(part: InputPart, row_count: int) -> SampledInput:
+    filesystem, path = url_to_fs(part.input_url)
     with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
         batch = next(parquet_file.iter_batches(batch_size=min(row_count, part.row_count), columns=["id", "text"]))
     ids = batch.column("id").to_pylist()
     text = batch.column("text")
     raw_lengths = pc.utf8_length(text).to_pylist()
     truncated = pc.utf8_slice_codeunits(text, start=0, stop=MAX_RAW_TEXT_CHARS).to_pylist()
-    return ids, truncated, raw_lengths
+    return SampledInput(ids=ids, texts=truncated, raw_lengths=raw_lengths)
 
 
 def _sample_output(part: InputPart, row_count: int) -> tuple[list[str], np.ndarray]:
-    filesystem, path = fsspec.core.url_to_fs(part.output_url)
+    filesystem, path = url_to_fs(part.output_url)
     with pq.ParquetFile(path, filesystem=filesystem) as parquet_file:
         batch = next(parquet_file.iter_batches(batch_size=min(row_count, part.row_count), columns=["id", "embedding"]))
     ids = batch.column("id").to_pylist()
@@ -563,7 +608,7 @@ def _nearest_neighbor_metrics(embedder: HarrierEmbedder, vectors: np.ndarray) ->
     }
 
 
-def _semantic_probe_metrics(embedder: HarrierEmbedder) -> list[dict[str, Any]]:
+def _semantic_probe_metrics(embedder: HarrierEmbedder) -> list[SemanticProbeReport]:
     texts = [text for probe in SANITY_PROBES for text in probe]
     vectors = embedder.embed(texts).astype(np.float32)
     vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
@@ -573,22 +618,22 @@ def _semantic_probe_metrics(embedder: HarrierEmbedder) -> list[dict[str, Any]]:
         related_cosine = float(vectors[start] @ vectors[start + 1])
         unrelated_cosine = float(vectors[start] @ vectors[start + 2])
         reports.append(
-            {
-                "anchor": anchor,
-                "related": related,
-                "unrelated": unrelated,
-                "related_cosine": related_cosine,
-                "unrelated_cosine": unrelated_cosine,
-                "margin": related_cosine - unrelated_cosine,
-            }
+            SemanticProbeReport(
+                anchor=anchor,
+                related=related,
+                unrelated=unrelated,
+                related_cosine=related_cosine,
+                unrelated_cosine=unrelated_cosine,
+                margin=related_cosine - unrelated_cosine,
+            )
         )
     return reports
 
 
-def embed_part(embedder: HarrierEmbedder, part: InputPart, manifest: SampleManifest) -> dict[str, Any]:
+def embed_part(embedder: HarrierEmbedder, part: InputPart, manifest: SampleManifest) -> EmbedPartResult:
     """Embed one selected input prefix and atomically publish its output."""
     if _complete_output(part, manifest):
-        return {"output_url": part.output_url, "rows": part.row_count, "reused": True, "duration_seconds": 0.0}
+        return EmbedPartResult(output_url=part.output_url, rows=part.row_count, reused=True, duration_seconds=0.0)
     schema = pa.schema(
         [
             pa.field("id", pa.string()),
@@ -614,15 +659,22 @@ def embed_part(embedder: HarrierEmbedder, part: InputPart, manifest: SampleManif
                 logger.info("Embedded %d/%d rows for %s", rows, part.row_count, part.input_url)
         if rows != part.row_count:
             raise ValueError(f"Embedded {rows} rows; expected {part.row_count}: {part.input_url}")
-        filesystem, path = fsspec.core.url_to_fs(part.output_url)
-        with atomic_rename(path, fs=filesystem) as temporary_path:
-            filesystem.put(str(local_path), temporary_path)
-    return {
-        "output_url": part.output_url,
-        "rows": rows,
-        "reused": False,
-        "duration_seconds": time.perf_counter() - started,
-    }
+        with atomic_rename(part.output_url) as temporary_path:
+            StoragePath(temporary_path).upload_from(str(local_path))
+    return EmbedPartResult(
+        output_url=part.output_url,
+        rows=rows,
+        reused=False,
+        duration_seconds=time.perf_counter() - started,
+    )
+
+
+@contextmanager
+def _harrier_embedder() -> Iterator[HarrierEmbedder]:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        model_path = Path(temporary_directory) / "model"
+        _download_staged_model(model_path)
+        yield HarrierEmbedder(model_path)
 
 
 def run_embed(shard_index: int, num_shards: int) -> dict[str, Any]:
@@ -632,16 +684,14 @@ def run_embed(shard_index: int, num_shards: int) -> dict[str, Any]:
     if not 0 <= shard_index < num_shards:
         raise ValueError(f"shard_index must be in [0, {num_shards})")
     parts = assignments[shard_index]
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        model_path = Path(temporary_directory) / "model"
-        _download_staged_model(model_path)
-        embedder = HarrierEmbedder(model_path)
+    with _harrier_embedder() as embedder:
         results = []
         for index, part in enumerate(parts, start=1):
             logger.info(
                 "Embedding part %d/%d on worker %d/%d: %s", index, len(parts), shard_index, num_shards, part.input_url
             )
-            results.append({"source": part.source, "input_url": part.input_url, **embed_part(embedder, part, manifest)})
+            result = embed_part(embedder, part, manifest)
+            results.append({"source": part.source, "input_url": part.input_url, **asdict(result)})
     report = {
         "manifest_sha256": manifest.sha256,
         "model_id": MODEL_ID,
@@ -652,7 +702,7 @@ def run_embed(shard_index: int, num_shards: int) -> dict[str, Any]:
         "row_count": sum(result["rows"] for result in results),
         "parts": results,
     }
-    report_url = f"{OUTPUT_ROOT}/reports/worker-{shard_index:03d}-of-{num_shards:03d}.json"
+    report_url = str(OUTPUT_PATH / "reports" / f"worker-{shard_index:03d}-of-{num_shards:03d}.json")
     _write_json(report_url, report)
     return {"report_url": report_url, **report}
 
@@ -674,16 +724,18 @@ def run_smoke(max_rows: int) -> dict[str, Any]:
     part = replace(
         source_part,
         row_count=min(max_rows, source_part.row_count),
-        output_url=f"{OUTPUT_ROOT}/smoke/{manifest.sha256[:12]}.parquet",
+        output_url=str(OUTPUT_PATH / "smoke" / f"{manifest.sha256[:12]}.parquet"),
     )
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        model_path = Path(temporary_directory) / "model"
-        _download_staged_model(model_path)
-        embedder = HarrierEmbedder(model_path)
+    with _harrier_embedder() as embedder:
         result = embed_part(embedder, part, manifest)
-    result.update({"source": part.source, "input_url": part.input_url, "manifest_sha256": manifest.sha256})
-    _write_json(f"{OUTPUT_ROOT}/smoke/report.json", result)
-    return result
+    report = {
+        **asdict(result),
+        "source": part.source,
+        "input_url": part.input_url,
+        "manifest_sha256": manifest.sha256,
+    }
+    _write_json(str(OUTPUT_PATH / "smoke" / "report.json"), report)
+    return report
 
 
 def run_audit(num_shards: int) -> dict[str, Any]:
@@ -693,7 +745,7 @@ def run_audit(num_shards: int) -> dict[str, Any]:
     reported_inputs = set()
     reported_rows = 0
     for shard_index, expected_parts in enumerate(expected_assignments):
-        report_url = f"{OUTPUT_ROOT}/reports/worker-{shard_index:03d}-of-{num_shards:03d}.json"
+        report_url = str(OUTPUT_PATH / "reports" / f"worker-{shard_index:03d}-of-{num_shards:03d}.json")
         report = _read_json(report_url)
         if report["manifest_sha256"] != manifest.sha256:
             raise ValueError(f"Worker {shard_index} has a different manifest")
@@ -717,7 +769,7 @@ def run_audit(num_shards: int) -> dict[str, Any]:
         "row_count": reported_rows,
         "num_shards": num_shards,
     }
-    report_url = f"{OUTPUT_ROOT}/audit.json"
+    report_url = str(OUTPUT_PATH / "audit.json")
     _write_json(report_url, report)
     return {"audit_url": report_url, **report}
 
@@ -725,7 +777,7 @@ def run_audit(num_shards: int) -> dict[str, Any]:
 def run_sanity() -> dict[str, Any]:
     """Check sampled stored embeddings, reembedding agreement, and semantic separation."""
     manifest = read_manifest()
-    audit = _read_json(f"{OUTPUT_ROOT}/audit.json")
+    audit = _read_json(str(OUTPUT_PATH / "audit.json"))
     if audit["manifest_sha256"] != manifest.sha256 or int(audit["row_count"]) != TARGET_ROWS:
         raise ValueError("The completed audit does not match the pinned 50M manifest")
 
@@ -739,10 +791,7 @@ def run_sanity() -> dict[str, Any]:
     raw_prefix_truncated_rows = 0
     truncated_underfilled_rows = 0
 
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        model_path = Path(temporary_directory) / "model"
-        _download_staged_model(model_path)
-        embedder = HarrierEmbedder(model_path)
+    with _harrier_embedder() as embedder:
 
         def flush_reembedding() -> None:
             if not pending_texts:
@@ -757,16 +806,16 @@ def run_sanity() -> dict[str, Any]:
                 continue
             input_count = min(SANITY_REEMBED_ROWS_PER_PART, part.row_count)
             output_count = min(SANITY_RETRIEVAL_ROWS_PER_PART, part.row_count)
-            input_ids, texts, raw_lengths = _sample_input(part, input_count)
+            sampled_input = _sample_input(part, input_count)
             output_ids, output_vectors = _sample_output(part, output_count)
-            if input_ids != output_ids[:input_count]:
+            if sampled_input.ids != output_ids[:input_count]:
                 raise ValueError(f"Sampled input/output IDs differ: {part.input_url}")
             retrieval_vectors.append(output_vectors)
-            pending_texts.extend(texts)
+            pending_texts.extend(sampled_input.texts)
             pending_stored.extend(output_vectors[:input_count])
             sampled_sources.add(part.source)
             sampled_parts += 1
-            for text, raw_length in zip(texts, raw_lengths, strict=True):
+            for text, raw_length in zip(sampled_input.texts, sampled_input.raw_lengths, strict=True):
                 if raw_length <= MAX_RAW_TEXT_CHARS:
                     continue
                 raw_prefix_truncated_rows += 1
@@ -802,7 +851,7 @@ def run_sanity() -> dict[str, Any]:
         "reembedding_matches": reembedding["reembed_cosine_min"] >= 0.995,
         "character_cap_preserves_8k_prefix": truncated_underfilled_rows == 0,
         "sample_not_collapsed": distribution["random_pair_cosine_median"] < 0.99,
-        "semantic_probes_separate": all(probe["margin"] > 0 for probe in semantic_probes),
+        "semantic_probes_separate": all(probe.margin > 0 for probe in semantic_probes),
     }
     report = {
         "manifest_sha256": manifest.sha256,
@@ -817,7 +866,7 @@ def run_sanity() -> dict[str, Any]:
         "reembedding": reembedding,
         "distribution": distribution,
         "nearest_neighbors": nearest_neighbors,
-        "semantic_probes": semantic_probes,
+        "semantic_probes": [asdict(probe) for probe in semantic_probes],
         "checks": checks,
         "passed": all(checks.values()),
     }
@@ -826,6 +875,11 @@ def run_sanity() -> dict[str, Any]:
         failed = ", ".join(name for name, passed in checks.items() if not passed)
         raise ValueError(f"Embedding sanity checks failed: {failed}; report: {SANITY_URL}")
     return {"sanity_url": SANITY_URL, **report}
+
+
+def build() -> ArtifactStep[Artifact]:
+    """Return the adopted artifact for the completed Harrier embedding run."""
+    return HARRIER_EMBEDDINGS_ARTIFACT
 
 
 def parse_args() -> argparse.Namespace:
