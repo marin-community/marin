@@ -238,3 +238,19 @@ def test_slice_microbatch_rejects_a_leaf_that_is_not_batch_leading():
 
     with pytest.raises(ValueError, match="lead with the batch axis"):
         train._slice_microbatch(bad, 0, 2)
+
+
+def test_capacity_factor_is_rejected_for_a_flavor_that_never_drops():
+    # `scatter` computes every assignment, so a capacity factor would be silently inert and a sweep
+    # over it would produce identical runs under different names.
+    with pytest.raises(ValueError, match="never drops"):
+        launch.build_hero_run(run_id="nodrop-cf", num_steps=1, flavor="fsdp-nodrop", capacity_factor=1.5, version="dev")
+
+
+def test_eval_every_adds_the_held_out_suites_as_dependencies():
+    # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
+    off = launch.build_hero_run(run_id="eval-off", num_steps=1, version="dev")
+    on = launch.build_hero_run(run_id="eval-on", num_steps=1, eval_every=50, version="dev")
+
+    assert len(off.deps) == 1
+    assert len(on.deps) > len(off.deps)

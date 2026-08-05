@@ -22,8 +22,10 @@ from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 
+from experiments.datasets.paloma import paloma_datasets
+from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
-from experiments.grug.moe_hero_ep.train import GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -40,6 +42,37 @@ HERO_OFFLOAD_OPT_STATE = True
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
+
+
+@dataclasses.dataclass(frozen=True)
+class Flavor:
+    """How the MoE layer shards, and what that implies for routing capacity.
+
+    ``ep`` spans the rack with expert parallelism and drops every assignment above a fixed
+    (sender shard, expert) cell. ``fsdp-nodrop`` keeps one expert axis, so every device holds the
+    whole bank and computes every assignment. That is the drop-free control the throughput
+    comparison needs: the recorded FSDP reference uses ``sonic_cute`` with ``expert_chunks`` above
+    one and still drops about 1.9 percent, so it cannot price the cost of dropping.
+    """
+
+    expert_axis_size: int
+    moe_implementation: str
+    expert_chunks: int
+
+
+FLAVORS: dict[str, Flavor] = {
+    "ep": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "fixed_all_to_all", 1),
+    "fsdp-nodrop": Flavor(1, "scatter", 1),
+}
+
+
+# Held-out suites, added at weight 0 so they surface as tagged eval sets. The hero trains on
+# llama3-tokenized SlimPajama, so the eval caches must use the same tokenizer.
+def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
+    return [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
 
 
 def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
@@ -70,7 +103,9 @@ def build_hero_run(
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
+    flavor: str = "ep",
     microbatches: int = 1,
+    eval_every: int = 0,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -85,6 +120,13 @@ def build_hero_run(
         raise ValueError("run_id must not be empty")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    if flavor not in FLAVORS:
+        raise ValueError(f"flavor must be one of {sorted(FLAVORS)}, got {flavor!r}")
+    sharding = FLAVORS[flavor]
+    # `scatter` computes every assignment, so a capacity factor would be silently inert. Reject it
+    # rather than let a sweep think it swept something.
+    if capacity_factor is not None and sharding.moe_implementation == "scatter":
+        raise ValueError(f"flavor {flavor!r} never drops, so --capacity-factor has no effect")
 
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
     overrides = {
@@ -99,10 +141,15 @@ def build_hero_run(
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
+    model = dataclasses.replace(
+        model,
+        moe_implementation=sharding.moe_implementation,
+        expert_chunks=sharding.expert_chunks,
+    )
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
-    if model.num_experts % HERO_EP_EXPERT_AXIS_SIZE != 0:
-        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {HERO_EP_EXPERT_AXIS_SIZE}")
+    if model.num_experts % sharding.expert_axis_size != 0:
+        raise ValueError(f"num_experts={model.num_experts} must divide the expert axis {sharding.expert_axis_size}")
     if model.moe_implementation is None:
         raise ValueError("the EP hero requires an explicit MoE implementation")
     backend_tag = model.moe_implementation.replace("_", "-")
@@ -115,7 +162,7 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+        expert_axis_size=sharding.expert_axis_size,
         replica_axis_size=1,
         microbatches=microbatches,
         sharding_dump_path=None,
@@ -131,6 +178,7 @@ def build_hero_run(
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     slim = _slimpajama_6b_dataset()
+    validation = _validation_datasets() if eval_every > 0 else []
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         trainer = TrainerConfig(
@@ -157,6 +205,7 @@ def build_hero_run(
                     "hero",
                     "ep",
                     backend_tag,
+                    f"flavor-{flavor}",
                     capacity_tag,
                     size_tag,
                     "gb200",
@@ -173,11 +222,15 @@ def build_hero_run(
         )
         return GrugRunConfig(
             model=model,
-            data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+            data=mixture(ctx, {slim: 1.0}, validation=validation, shuffle=_SLIMPAJAMA_SHUFFLE),
             resources=ctx.runtime_arg("train_resources"),
             optimizer=optimizer,
             trainer=dataclasses.replace(grug_trainer, trainer=trainer),
-            eval=None,
+            # Off by default so a throughput run stays a throughput run. Turn it on to make a
+            # run scoreable: comparing configs needs held-out loss, not train loss.
+            eval=(
+                GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
+            ),
             processes_per_task=HERO_PROCESSES_PER_TASK,
         )
 
@@ -187,7 +240,7 @@ def build_hero_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(slim,),
+        deps=(slim, *validation),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -227,6 +280,20 @@ def build_hero_run(
     help="Sequences per step. Scales the compute-scaled optimizer, so hold it fixed across a sweep.",
 )
 @click.option(
+    "--flavor",
+    type=click.Choice(sorted(FLAVORS)),
+    default="ep",
+    show_default=True,
+    help="MoE sharding: expert-parallel with routing capacity, or FSDP that never drops.",
+)
+@click.option(
+    "--eval-every",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Run the paloma/uncheatable suites every N steps. 0 disables eval (throughput-only run).",
+)
+@click.option(
     "--microbatches",
     type=click.IntRange(min=1),
     default=1,
@@ -262,6 +329,8 @@ def main(
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
+    flavor: str,
+    eval_every: int,
     microbatches: int,
     profile_steps: int,
     profile_start_step: int,
@@ -274,6 +343,8 @@ def main(
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
+        flavor=flavor,
+        eval_every=eval_every,
         microbatches=microbatches,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
