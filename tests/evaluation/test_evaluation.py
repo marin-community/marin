@@ -14,6 +14,10 @@ import pytest
 from click.testing import CliRunner
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
+from marin.evaluation.evalchemy.config import (
+    EvalchemyTaskOptions,
+    ValidatedEvalchemyConfig,
+)
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -36,6 +40,7 @@ from rigging.filesystem import StoragePath
 from experiments.evaluation.cli import cli
 from experiments.evaluation.evals import EVALS
 from experiments.evaluation.launch import (
+    EvalchemyConfigSelection,
     HarborConfigSelection,
     LaunchSpec,
     build_evaluation_batch,
@@ -62,6 +67,35 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
         return tuple(configs)
 
     monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", preflight)
+
+
+def _install_fake_evalchemy_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    def preflight(paths):
+        return tuple(
+            ValidatedEvalchemyConfig(
+                tasks=("ifeval",),
+                task_options={
+                    "ifeval": EvalchemyTaskOptions(
+                        num_fewshot=0,
+                        task_alias="ifeval_0shot",
+                        generation=True,
+                    )
+                },
+                apply_chat_template=True,
+                limit=None,
+                num_fewshot=None,
+                batch_size=1,
+                seed=1234,
+                gen_kwargs={"max_gen_toks": "2048"},
+                extra_model_args={},
+                max_length=None,
+                max_tokens=2048,
+                runtime_extras=("ifeval",),
+            )
+            for _path in paths
+        )
+
+    monkeypatch.setattr("experiments.evaluation.launch.preflight_evalchemy_configs", preflight)
 
 
 def _write_harbor_config(path: Path) -> Path:
@@ -217,6 +251,7 @@ def test_submit_evaluation_batch_uses_resolved_federated_cluster_and_priority(mo
     spec = LaunchSpec(
         model="qwen3-32b",
         evals=("mmlu-smoke",),
+        evalchemy_configs=(),
         harbor_configs=(),
         platform=Platform.GPU,
         accelerator=None,
@@ -241,6 +276,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("aime-harbor", "tb2"),
+        evalchemy_configs=(),
         harbor_configs=(),
         platform=Platform.TPU,
         accelerator=None,
@@ -272,6 +308,7 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("math500",),
+        evalchemy_configs=(),
         harbor_configs=(),
         platform=Platform.TPU,
         accelerator=None,
@@ -305,6 +342,7 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("secret-first", "secret-second"),
+        evalchemy_configs=(),
         harbor_configs=(),
         platform=Platform.TPU,
         accelerator=None,
@@ -322,13 +360,17 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
         )
 
 
-def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_path, monkeypatch):
+def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(tmp_path, monkeypatch):
+    _install_fake_evalchemy_preflight(monkeypatch)
     _install_fake_harbor_preflight(monkeypatch)
+    evalchemy_config_path = tmp_path / "ifeval.yaml"
+    evalchemy_config_path.write_text("tasks: [ifeval]\n")
     config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("mmlu-smoke",),
+        evalchemy_configs=(EvalchemyConfigSelection(name="ifeval", path=evalchemy_config_path),),
         harbor_configs=(HarborConfigSelection(name="aime-policy", path=config_path),),
         platform=Platform.TPU,
         accelerator=None,
@@ -346,9 +388,37 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
 
     assert [evaluation.identity.eval_ref.name for evaluation in batch.evaluations] == [
         "mmlu-smoke",
+        "ifeval",
         "aime-policy",
     ]
-    evaluation = batch.evaluations[1]
+    ifeval = batch.evaluations[1].identity.eval_ref
+    assert batch.evaluations[1].identity.eval_runtime == EVALCHEMY.requirement(("ifeval",))
+    assert ifeval.model_dump(mode="json", exclude_none=True) == {
+        "name": "ifeval",
+        "mechanism": "evalchemy",
+        "tasks": [
+            {
+                "name": "ifeval",
+                "num_fewshot": 0,
+                "task_alias": "ifeval_0shot",
+                "generation": True,
+                "unsafe_code": False,
+                "completion_only": False,
+            }
+        ],
+        "evalchemy": {
+            "apply_chat_template": True,
+            "max_gen_toks": 2048,
+            "max_eval_instances": 2,
+            "num_concurrent": 16,
+            "batch_size": 1,
+            "seed": 1234,
+            "extra_gen_kwargs": {},
+            "extra_model_args": {},
+        },
+    }
+
+    evaluation = batch.evaluations[2]
     assert evaluation.identity.eval_ref.model_dump(mode="json", exclude_none=True) == {
         "name": "aime-policy",
         "mechanism": "harbor",
@@ -473,8 +543,42 @@ def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_pa
     assert not iris_opened
 
 
-def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, monkeypatch):
+def test_launch_rejects_unknown_evalchemy_task_before_iris_submission(tmp_path, monkeypatch):
+    config_path = tmp_path / "unknown.yaml"
+    config_path.write_text("tasks: [not_a_pinned_task]\n")
+    iris_opened = False
+
+    def reject_preflight(_paths):
+        raise ValueError("tasks are not recognized by pinned Evalchemy: ['not_a_pinned_task']")
+
+    def open_iris_client(**_kwargs):
+        nonlocal iris_opened
+        iris_opened = True
+        raise AssertionError("Iris must not be opened for an incompatible Evalchemy config")
+
+    monkeypatch.setattr("experiments.evaluation.launch.preflight_evalchemy_configs", reject_preflight)
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evalchemy-config",
+            str(config_path),
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert not iris_opened
+
+
+def test_launch_accepts_registry_ifeval_and_repeated_harbor_configs(tmp_path, monkeypatch):
+    _install_fake_evalchemy_preflight(monkeypatch)
     _install_fake_harbor_preflight(monkeypatch)
+    ifeval = Path("experiments/evaluation/configs/evalchemy/ifeval.yaml")
     first = _write_harbor_config(tmp_path / "first-policy.yaml")
     second = _write_harbor_config(tmp_path / "second-policy.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
@@ -487,6 +591,8 @@ def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, mon
             "qwen3-8b",
             "--evals",
             "mmlu-smoke",
+            "--evalchemy-config",
+            str(ifeval),
             "--harbor-config",
             str(first),
             "--harbor-config",
@@ -497,6 +603,7 @@ def test_launch_accepts_registry_evals_and_repeated_harbor_configs(tmp_path, mon
 
     assert result.exit_code == 0, result.output
     assert "eval=mmlu-smoke" in result.output
+    assert "eval=ifeval" in result.output
     assert "eval=first-policy" in result.output
     assert "eval=second-policy" in result.output
 
@@ -506,6 +613,7 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     spec = LaunchSpec(
         model="qwen3-8b",
         evals=("mmlu-smoke",),
+        evalchemy_configs=(),
         harbor_configs=(),
         platform=Platform.TPU,
         accelerator=None,

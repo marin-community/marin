@@ -17,6 +17,7 @@ from pathlib import Path
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
+from marin.evaluation.evalchemy.config import preflight_evalchemy_configs
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
@@ -48,11 +49,20 @@ from experiments.evaluation.evals import (
     EvalchemyDefinition,
     EvaluationDefinition,
     HarborDefinition,
+    evalchemy_definition,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
+
+
+@dataclass(frozen=True)
+class EvalchemyConfigSelection:
+    """One portable Evalchemy config file supplied at launch."""
+
+    name: str
+    path: Path
 
 
 @dataclass(frozen=True)
@@ -69,6 +79,7 @@ class LaunchSpec:
 
     model: str
     evals: tuple[str, ...]
+    evalchemy_configs: tuple[EvalchemyConfigSelection, ...]
     harbor_configs: tuple[HarborConfigSelection, ...]
     platform: Platform
     accelerator: str | None
@@ -125,14 +136,19 @@ def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefi
     registry_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
         (eval_key, EVALS[eval_key]) for eval_key in spec.evals
     )
-    config_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
+    validated_evalchemy = preflight_evalchemy_configs([selection.path for selection in spec.evalchemy_configs])
+    evalchemy_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
+        (selection.name, evalchemy_definition(selection.name, config))
+        for selection, config in zip(spec.evalchemy_configs, validated_evalchemy, strict=True)
+    )
+    harbor_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
         (
             selection.name,
             HarborDefinition(name=selection.name, config_path=selection.path),
         )
         for selection in spec.harbor_configs
     )
-    definitions = registry_definitions + config_definitions
+    definitions = registry_definitions + evalchemy_definitions + harbor_definitions
     if not definitions:
         raise ValueError("at least one evaluation is required")
     names = [name for name, _ in definitions]
@@ -161,13 +177,14 @@ def _preflight_definitions(
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
         if isinstance(definition, EvalchemyDefinition):
+            config = definition.config_for(model, limit)
             resolved.append(
                 (
                     name,
                     _ResolvedDefinition(
-                        record_ref=definition.record_ref,
+                        record_ref=definition.record_ref_for(config),
                         runtime_descriptor=definition.runtime_descriptor,
-                        executor=definition.executor_for(model, limit),
+                        executor=definition.executor_for(config),
                         secret_env=dict(definition.secret_env),
                     ),
                 )

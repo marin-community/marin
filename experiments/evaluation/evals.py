@@ -10,12 +10,18 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
-from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig, EvalchemyRuntimeConfig
+from marin.evaluation.evalchemy.config import ValidatedEvalchemyConfig
+from marin.evaluation.evalchemy.runner import (
+    DEFAULT_NUM_CONCURRENT,
+    EvalchemyExecutor,
+    EvalchemyRunConfig,
+    EvalchemyRuntimeConfig,
+)
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, ValidatedHarborConfig
 from marin.evaluation.harbor.runner import HarborExecutor
 from marin.evaluation.model_config import ModelConfig
-from marin.evaluation.records import EvalRef, EvalTaskRef, HarborRef
+from marin.evaluation.records import EvalchemyRef, EvalRef, EvalTaskRef, HarborRef
 from marin.evaluation.runner import EvalExecutor
 from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
@@ -37,21 +43,41 @@ class EvalchemyDefinition:
     config: EvalchemyRunConfig
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
-    @property
-    def record_ref(self) -> EvalRef:
+    def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
         return EvalRef(
-            name=self.config.name,
+            name=config.name,
             mechanism="evalchemy",
-            tasks=tuple(EvalTaskRef(name=task.name, num_fewshot=task.num_fewshot) for task in self.config.tasks),
+            tasks=tuple(
+                EvalTaskRef(
+                    name=task.name,
+                    num_fewshot=task.num_fewshot,
+                    task_alias=task.task_alias,
+                    generation=task.generation,
+                    unsafe_code=task.unsafe_code,
+                    completion_only=task.completion_only,
+                )
+                for task in config.tasks
+            ),
+            evalchemy=EvalchemyRef(
+                apply_chat_template=config.apply_chat_template,
+                max_gen_toks=config.max_gen_toks,
+                max_eval_instances=config.max_eval_instances,
+                num_concurrent=config.num_concurrent,
+                batch_size=config.batch_size,
+                seed=config.seed,
+                extra_gen_kwargs=dict(config.extra_gen_kwargs),
+                extra_model_args=dict(config.extra_model_args),
+                max_length=config.max_length,
+            ),
         )
 
     @property
     def runtime_descriptor(self) -> str:
         return self.config.runtime.requirement
 
-    def executor_for(self, model: ModelConfig, limit: int | None) -> EvalExecutor:
+    def config_for(self, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
         effective_limit = self.config.max_eval_instances if limit is None else limit
-        config = replace(
+        return replace(
             self.config,
             apply_chat_template=model.apply_chat_template,
             max_gen_toks=(
@@ -63,6 +89,8 @@ class EvalchemyDefinition:
                 **model.generation.extra_gen_kwargs,
             },
         )
+
+    def executor_for(self, config: EvalchemyRunConfig) -> EvalExecutor:
         return EvalchemyExecutor(config)
 
 
@@ -121,6 +149,61 @@ def harbor_definition(
         name=name,
         config_path=_HARBOR_CONFIG_DIR / f"{name}.yaml",
         max_eval_instances=max_eval_instances,
+    )
+
+
+def evalchemy_definition(name: str, config: ValidatedEvalchemyConfig) -> EvalchemyDefinition:
+    """Lower one pinned portable config into Marin's served Evalchemy runner."""
+    tasks: list[EvalTaskConfig] = []
+    for task_name in config.tasks:
+        options = config.task_options.get(task_name)
+        num_fewshot = config.num_fewshot
+        if options is not None and options.num_fewshot is not None:
+            num_fewshot = options.num_fewshot
+        tasks.append(
+            EvalTaskConfig(
+                name=task_name,
+                num_fewshot=num_fewshot,
+                task_alias=options.task_alias if options is not None else None,
+                generation=options.generation if options is not None else False,
+                unsafe_code=options.unsafe_code if options is not None else False,
+                completion_only=options.completion_only if options is not None else False,
+            )
+        )
+
+    extra_model_args = dict(config.extra_model_args)
+    reserved_model_args = {"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests"}
+    conflicting_model_args = sorted(reserved_model_args.intersection(extra_model_args))
+    if conflicting_model_args:
+        raise ValueError(f"extra_model_args cannot override Marin endpoint fields: {conflicting_model_args}")
+    configured_concurrency = extra_model_args.pop("num_concurrent", DEFAULT_NUM_CONCURRENT)
+    try:
+        num_concurrent = int(configured_concurrency)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"extra_model_args.num_concurrent must be an integer, got {configured_concurrency!r}") from exc
+    if num_concurrent <= 0:
+        raise ValueError(f"extra_model_args.num_concurrent must be positive, got {num_concurrent}")
+    for key in ("max_length", "max_model_len"):
+        extra_model_args.pop(key, None)
+
+    extra_gen_kwargs = dict(config.gen_kwargs)
+    for key in ("max_tokens", "max_new_tokens", "max_gen_toks"):
+        extra_gen_kwargs.pop(key, None)
+    return EvalchemyDefinition(
+        EvalchemyRunConfig(
+            name=name,
+            tasks=tuple(tasks),
+            apply_chat_template=config.apply_chat_template,
+            max_gen_toks=config.max_tokens or 2048,
+            max_eval_instances=config.limit,
+            num_concurrent=num_concurrent,
+            batch_size=config.batch_size,
+            seed=config.seed,
+            extra_gen_kwargs=extra_gen_kwargs,
+            extra_model_args=extra_model_args,
+            max_length=config.max_length,
+            runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement(config.runtime_extras)),
+        )
     )
 
 

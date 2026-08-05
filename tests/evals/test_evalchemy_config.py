@@ -12,8 +12,10 @@ serving, the eval itself) is exercised by the cluster smoke.
 
 import json
 import os
+from types import SimpleNamespace
 
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
+from marin.evaluation.evalchemy.config import preflight_evalchemy_configs
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -73,6 +75,59 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
     ]
 
 
+def test_file_config_fields_reach_the_evalchemy_command():
+    config = _payload(
+        _config(
+            tasks=(EvalTaskConfig("ifeval", 0, generation=True),),
+            batch_size=1,
+            seed=1234,
+            extra_model_args={"timeout": 900},
+            max_length=32768,
+        )
+    )
+
+    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", 32768)
+
+    assert command[command.index("--batch_size") + 1] == "1"
+    assert command[command.index("--seed") + 1] == "1234"
+    model_args = dict(pair.split("=", 1) for pair in command[command.index("--model_args") + 1].split(","))
+    assert model_args["timeout"] == "900"
+    assert model_args["max_length"] == "32768"
+
+
+def test_preflight_evalchemy_configs_returns_pinned_normalized_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "ifeval.yaml"
+    config_path.write_text("tasks: [ifeval]\n")
+    response = [
+        {
+            "config": {
+                "tasks": ["ifeval"],
+                "task_options": {"ifeval": {"num_fewshot": 0, "generation": True}},
+                "apply_chat_template": True,
+                "limit": 64,
+                "batch_size": 1,
+                "seed": 1234,
+                "gen_kwargs": "temperature=0,max_gen_toks=2048",
+                "extra_model_args": {"timeout": 900},
+                "max_tokens": 2048,
+            },
+            "runtime_extras": ["ifeval"],
+        }
+    ]
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.config._capture_driver",
+        lambda _request_path: SimpleNamespace(stdout=json.dumps(response)),
+    )
+
+    (config,) = preflight_evalchemy_configs([config_path])
+
+    assert config.tasks == ("ifeval",)
+    assert config.task_options["ifeval"].generation
+    assert config.gen_kwargs == {"temperature": "0", "max_gen_toks": "2048"}
+    assert config.extra_model_args == {"timeout": 900}
+    assert config.runtime_extras == ("ifeval",)
+
+
 def test_task_dirs_distinguish_shot_variants_of_one_task():
     # One task at two shot counts: the bare name repeats, so the distinct aliases -> distinct dirs are
     # the only thing keeping the two results from overwriting each other.
@@ -106,6 +161,14 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     assert model_args["base_url"] == "http://10.0.0.1:30000/v1/completions"
     assert model_args["model"] == "Qwen/Qwen3-0.6B"
     assert model_args["tokenizer"] == "Qwen/Qwen3-0.6B"
+
+
+def test_build_command_uses_evaluator_default_when_fewshot_is_unset():
+    config = _payload(_config(tasks=(EvalTaskConfig("ifeval", None, generation=True),)))
+
+    command = build_command(config, config["tasks"][0], "/tmp/out", "/opt/py", None)
+
+    assert "--num_fewshot" not in command
 
 
 def test_extra_gen_kwargs_ride_on_gen_kwargs():

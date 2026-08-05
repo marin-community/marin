@@ -101,7 +101,11 @@ class EvalchemyRunConfig:
     max_gen_toks: int = 2048
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
+    batch_size: int | str | None = None
+    seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
+    extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
+    max_length: int | None = None
     runtime: EvalchemyRuntimeConfig = field(default_factory=EvalchemyRuntimeConfig)
 
 
@@ -115,7 +119,8 @@ class EvalchemyOutcome:
 
 def _task_dir(task: EvalTaskConfig) -> str:
     """Return the durable subdirectory identity for one task configuration."""
-    return task.task_alias or f"{task.name}_{task.num_fewshot}shot"
+    shots = "default" if task.num_fewshot is None else str(task.num_fewshot)
+    return task.task_alias or f"{task.name}_{shots}shot"
 
 
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
@@ -144,6 +149,10 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
             "extra_gen_kwargs": dict(config.extra_gen_kwargs),
             "max_eval_instances": config.max_eval_instances,
             "num_concurrent": config.num_concurrent,
+            "batch_size": config.batch_size,
+            "seed": config.seed,
+            "extra_model_args": dict(config.extra_model_args),
+            "max_length": config.max_length,
         }
     )
 

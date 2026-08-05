@@ -66,12 +66,32 @@ class ModelRef(BaseModel):
 
 
 class EvalTaskRef(BaseModel):
-    """One lm-eval task and its shot count."""
+    """One evaluator task and the routing options that affect its result."""
 
     model_config = ConfigDict(frozen=True)
 
     name: str
-    num_fewshot: int
+    num_fewshot: int | None
+    task_alias: str | None = None
+    generation: bool = False
+    unsafe_code: bool = False
+    completion_only: bool = False
+
+
+class EvalchemyRef(BaseModel):
+    """The effective Evalchemy client configuration used for a run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    apply_chat_template: bool
+    max_gen_toks: int
+    max_eval_instances: int | None
+    num_concurrent: int
+    batch_size: int | str | None
+    seed: int | None
+    extra_gen_kwargs: dict[str, str] = Field(default_factory=dict)
+    extra_model_args: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    max_length: int | None = None
 
 
 class HarborRef(BaseModel):
@@ -98,8 +118,8 @@ class HarborRef(BaseModel):
 class EvalRef(BaseModel):
     """The eval that was run: its name, mechanism, and mechanism-specific detail.
 
-    ``tasks`` carries the lm-eval task list for the ``evalchemy`` mechanism; ``harbor`` carries the
-    dataset descriptor for the ``harbor`` mechanism. Exactly one is populated per record.
+    ``tasks`` and ``evalchemy`` carry the evaluator task list and effective client configuration;
+    ``harbor`` carries the dataset descriptor for the ``harbor`` mechanism.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -107,6 +127,7 @@ class EvalRef(BaseModel):
     name: str
     mechanism: str
     tasks: tuple[EvalTaskRef, ...] = ()
+    evalchemy: EvalchemyRef | None = None
     harbor: HarborRef | None = None
 
 
