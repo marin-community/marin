@@ -1,0 +1,16 @@
+name: a1-crosscodeeval_python
+location: DCAgent/a1-crosscodeeval_python
+revision: 8ef8615ca8d97ee71913d40b8d2ad55d5b4ba9cf
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  max_num_seqs: 96
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

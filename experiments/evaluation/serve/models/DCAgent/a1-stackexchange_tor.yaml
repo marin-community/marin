@@ -1,0 +1,16 @@
+name: a1-stackexchange_tor
+location: DCAgent/a1-stackexchange_tor
+revision: aeda494682d02115b3a614827664f0479365c290
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  max_num_seqs: 96
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

@@ -10,19 +10,20 @@ import os
 import socket
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
+from iris.rpc import job_pb2
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
     preflight_harbor_configs,
 )
-from marin.evaluation.harbor.runner import canonical_served_name
+from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.records import (
@@ -73,8 +74,11 @@ class LaunchSpec:
     limit: int | None
     records_prefix: str | None
     cluster: str
+    target_cluster: str | None = None
+    priority_band: int = job_pb2.PRIORITY_BAND_INHERIT
     version: str | None = None
     description: str | None = None
+    resume_results_path: str | None = None
 
 
 def _git_sha() -> str:
@@ -94,12 +98,12 @@ def _launch_user() -> str:
 
 def _run_id(model_key: str, eval_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{eval_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_key}-{eval_key}-{uuid.uuid4().hex[:8]}"
 
 
 def _group_id(model_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_key}-{uuid.uuid4().hex[:8]}"
 
 
 def _capability_origin(cluster: str) -> str:
@@ -196,7 +200,17 @@ def build_evaluation_batch(
     """Resolve experiment names into one model-serving evaluation batch."""
     model = models()[spec.model]
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
+    if spec.target_cluster is not None:
+        if accelerator.platform is not Platform.GPU:
+            raise ValueError("--target-cluster is supported only for GPU evaluations")
+        accelerator = replace(accelerator, target_cluster=spec.target_cluster, region=None)
     definitions = _preflight_definitions(_evaluation_definitions(spec), model, spec.limit)
+    if spec.resume_results_path is not None:
+        if len(definitions) != 1 or not isinstance(definitions[0][1].executor, HarborExecutor):
+            raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
+        if "://" not in spec.resume_results_path:
+            raise ValueError("--resume-results-path must be an object-store path")
+        validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.config)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
@@ -207,7 +221,7 @@ def build_evaluation_batch(
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
         run_id = _run_id(spec.model, eval_key)
-        output_dir = prefix_join(records_prefix, f"{run_id}/results")
+        output_dir = spec.resume_results_path or prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
             Evaluation(
                 identity=EvaluationIdentity(
@@ -236,6 +250,7 @@ def build_evaluation_batch(
         evaluations=tuple(evaluations),
         provenance=provenance,
         secret_env=secret_env,
+        priority_band=spec.priority_band,
     )
 
 

@@ -12,6 +12,7 @@ from fray.client import JobHandle
 from iris.client import IrisClient, Job, iris_ctx
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, region_constraint
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.rpc import job_pb2
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.secrets import SecretSpec, resolve_secret_spec
 
@@ -29,7 +30,11 @@ from marin.evaluation.records import (
     record_path,
     write_record,
 )
-from marin.evaluation.serving_config import inference_config_for_model
+from marin.evaluation.serving_config import (
+    BATCH_ENDPOINT_READY_TIMEOUT_SECONDS,
+    ENDPOINT_READY_TIMEOUT_SECONDS,
+    inference_config_for_model,
+)
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
 
 logger = logging.getLogger(__name__)
@@ -110,6 +115,7 @@ class EvaluationBatch:
     evaluations: tuple[Evaluation, ...]
     provenance: LaunchProvenance
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    priority_band: int = job_pb2.PRIORITY_BAND_INHERIT
 
 
 @dataclass(frozen=True)
@@ -332,6 +338,11 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
         batch.model,
         batch.accelerator,
         env_vars=runtime_env,
+        endpoint_ready_timeout_seconds=(
+            BATCH_ENDPOINT_READY_TIMEOUT_SECONDS
+            if batch.priority_band == job_pb2.PRIORITY_BAND_BATCH
+            else ENDPOINT_READY_TIMEOUT_SECONDS
+        ),
         capability_origin=batch.capability_origin,
         api_model=batch.api_model,
     )
@@ -379,6 +390,7 @@ def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> Submi
         environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
         max_retries_failure=0,
+        priority_band=batch.priority_band,
     )
     logger.info("submitted eval batch %s (%d evals) as job %s", batch.group_id, len(batch.evaluations), job)
     return SubmittedEvaluationBatch(

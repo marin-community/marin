@@ -20,6 +20,7 @@ import yaml
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor.utils.path_compat import safe_rmtree  # pyrefly: ignore[missing-import]
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import DatasetConfig  # pyrefly: ignore[missing-import]
@@ -363,8 +364,33 @@ def _preflight(request_path: Path) -> None:
 
 
 async def _run(config: JobConfig) -> None:
+    _prepare_resumed_job(config)
     job = await Job.create(config)
     await job.run()
+
+
+def _prepare_resumed_job(config: JobConfig) -> None:
+    """Keep scored trials and make every unscored legacy trial retryable."""
+    job_dir = config.jobs_dir / config.job_name
+    if not job_dir.exists():
+        return
+    scored_trial_exists = False
+    for trial_dir in job_dir.iterdir():
+        result_path = trial_dir / "result.json"
+        if not result_path.exists():
+            continue
+        try:
+            result = json.loads(result_path.read_text())
+        except json.JSONDecodeError:
+            safe_rmtree(trial_dir)
+            continue
+        if not isinstance(result, Mapping) or result.get("verifier_result") is None:
+            safe_rmtree(trial_dir)
+            continue
+        scored_trial_exists = True
+    config_path = job_dir / "config.json"
+    if scored_trial_exists and not config_path.exists():
+        config_path.write_text(config.model_dump_json())
 
 
 def effective_job_config(policy_path: Path, overlay_path: Path) -> JobConfig:

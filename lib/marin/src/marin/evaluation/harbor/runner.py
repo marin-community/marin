@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -46,11 +47,18 @@ logger = logging.getLogger(__name__)
 _HARBOR_WORKDIR = Path("/tmp/harbor_workdir")
 # Harbor writes its job tree under ``output_dir/harbor_jobs/<job_name>/<trial>/`` as trials finish.
 _HARBOR_JOBS_SUBDIR = "harbor_jobs"
+_LEGACY_HARBOR_TRIALS_SUBDIR = "harbor_trials"
 # Trials normalize off independent per-trial reads on the remote job tree; fan them out so a
 # several-hundred-trial dataset is not a sequential round-trip per trial.
 _TRIAL_READ_WORKERS = 16
 _JOB_DATASET_LENGTH = 32
 _JOB_DIGEST_LENGTH = 12
+# Durable markers a results root carries so a later run can confirm it belongs to the same dataset
+# before resuming into it (and so a fresh run records that identity for its own future resumes).
+_HARBOR_RESULT_FILE = "harbor_result.json"
+_RESUME_IDENTITY_FILE = "harbor_resume_identity.json"
+_RESUME_IDENTITY_SCHEMA_VERSION = 1
+_JOB_PREFIX = "harbor_"
 
 # The reward at or above which a Harbor trial counts as solved (rewards are typically 0.0 / 1.0; the
 # margin tolerates float noise).
@@ -104,12 +112,19 @@ def canonical_served_name(name: str) -> str:
     return candidate
 
 
+def _safe_job_dataset(dataset: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "_", dataset)
+
+
+def _job_dataset_prefix(dataset: str) -> str:
+    return f"{_JOB_PREFIX}{_safe_job_dataset(dataset)[:_JOB_DATASET_LENGTH]}_"
+
+
 def _job_name(dataset: str, identity: tuple[object, ...]) -> str:
     """A deterministic Harbor job name so a re-run resumes the previous job's completed trials."""
     key = "|".join(str(value) for value in identity)
     digest = hashlib.sha256(key.encode()).hexdigest()[:_JOB_DIGEST_LENGTH]
-    safe = re.sub(r"[^A-Za-z0-9_-]", "_", dataset)[:_JOB_DATASET_LENGTH]
-    return f"harbor_{safe}_{digest}"
+    return f"{_job_dataset_prefix(dataset)}{digest}"
 
 
 def _jobs_dir(output_dir: str) -> StoragePath:
@@ -120,6 +135,120 @@ def _jobs_dir(output_dir: str) -> StoragePath:
 def _job_dir(output_dir: str, job_name: str) -> StoragePath:
     """The durable tree for one job: ``output_dir/harbor_jobs/<job_name>`` (Harbor appends the name)."""
     return _jobs_dir(output_dir) / job_name
+
+
+def _resume_identity(config: ValidatedHarborConfig) -> dict[str, object]:
+    return {
+        "schema_version": _RESUME_IDENTITY_SCHEMA_VERSION,
+        "dataset": config.record_dataset,
+    }
+
+
+def _read_resume_json(path: StoragePath, output_dir: str) -> object:
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Harbor results root {output_dir!r} has an unreadable {path.name}") from exc
+
+
+def _raise_resume_identity_mismatch(
+    output_dir: str,
+    config: ValidatedHarborConfig,
+    existing: str,
+) -> None:
+    raise ValueError(
+        f"Harbor results root {output_dir!r} {existing}; this launch requires dataset "
+        f"{config.record_dataset!r}. Use the Harbor config that created this root, or omit "
+        "--resume-results-path to start a clean run."
+    )
+
+
+def validate_harbor_resume_root(output_dir: str, config: ValidatedHarborConfig) -> None:
+    """Verify that an existing results root belongs to the planned Harbor dataset.
+
+    A root created for one dataset must not be resumed into for another. We accept an explicit
+    identity file first, then fall back to the completed-run result file, then to the dataset prefix
+    embedded in legacy Harbor job names. Roots that predate all three signals and whose dataset name
+    is too long to fit in a job name cannot be verified and are rejected.
+    """
+    root = StoragePath.parse(output_dir)
+    identity_path = root / _RESUME_IDENTITY_FILE
+    if identity_path.exists():
+        identity = _read_resume_json(identity_path, output_dir)
+        expected = _resume_identity(config)
+        if identity != expected:
+            _raise_resume_identity_mismatch(output_dir, config, f"declares {identity!r}")
+        return
+
+    result_path = root / _HARBOR_RESULT_FILE
+    completed_dataset: object | None = None
+    if result_path.exists():
+        result = _read_resume_json(result_path, output_dir)
+        completed_dataset = result.get("dataset") if isinstance(result, Mapping) else None
+        if completed_dataset != config.record_dataset:
+            _raise_resume_identity_mismatch(output_dir, config, f"contains completed dataset {completed_dataset!r}")
+
+    job_configs = tuple((_jobs_dir(output_dir) / "*/config.json").glob())
+    safe_dataset = _safe_job_dataset(config.record_dataset)
+    if len(safe_dataset) > _JOB_DATASET_LENGTH and completed_dataset is None:
+        raise ValueError(
+            f"Harbor results root {output_dir!r} predates exact dataset identity metadata, and dataset "
+            f"{config.record_dataset!r} is too long to verify from its legacy job names. This root cannot "
+            "be migrated automatically; omit --resume-results-path to start a clean run."
+        )
+    job_names = tuple(path.parent.name for path in job_configs)
+    if not job_names and completed_dataset is None:
+        raise ValueError(
+            f"Harbor results root {output_dir!r} has no dataset identity or resumable jobs. "
+            "Choose the original results root, or omit --resume-results-path to start a clean run."
+        )
+    expected_prefix = _job_dataset_prefix(config.record_dataset)
+    incompatible = tuple(name for name in job_names if not name.startswith(expected_prefix))
+    if incompatible:
+        _raise_resume_identity_mismatch(output_dir, config, f"contains incompatible legacy jobs {incompatible!r}")
+
+
+def _bind_harbor_results_root(output_dir: str, config: ValidatedHarborConfig) -> None:
+    """Persist exact dataset identity, upgrading a compatible legacy root on first use."""
+    identity_path = StoragePath.parse(output_dir) / _RESUME_IDENTITY_FILE
+    root_entries = tuple((StoragePath.parse(output_dir) / "*").glob())
+    if root_entries:
+        validate_harbor_resume_root(output_dir, config)
+    if not identity_path.exists():
+        identity_path.write_text(json.dumps(_resume_identity(config), indent=2))
+
+
+def _legacy_scored_trial_dirs(output_dir: str) -> list[StoragePath]:
+    """Return legacy trial directories whose verifier produced a score."""
+    legacy_trials = StoragePath.parse(output_dir) / _LEGACY_HARBOR_TRIALS_SUBDIR
+    scored_trials: list[StoragePath] = []
+    for result_file in (legacy_trials / "*/result.json").glob():
+        try:
+            result = json.loads(result_file.read_text())
+        except json.JSONDecodeError:
+            continue
+        if result.get("verifier_result") is not None:
+            scored_trials.append(result_file.parent)
+    return scored_trials
+
+
+def _migrate_legacy_scored_trials(output_dir: str, job_dir: StoragePath) -> None:
+    """Import scored trials from the pre-durable Harbor layout exactly once."""
+    if (job_dir / "config.json").exists():
+        return
+    trial_dirs = _legacy_scored_trial_dirs(output_dir)
+    if not trial_dirs:
+        return
+    staging_dir = _HARBOR_WORKDIR / job_dir.name / "legacy_resume"
+    for trial_dir in trial_dirs:
+        target_dir = job_dir / trial_dir.name
+        if (target_dir / "result.json").exists():
+            continue
+        local_dir = staging_dir / trial_dir.name
+        trial_dir.download_to(str(local_dir), recursive=True)
+        target_dir.upload_from(str(local_dir), recursive=True)
+        shutil.rmtree(local_dir)
+    logger.info("imported %d scored legacy Harbor trials into %s", len(trial_dirs), job_dir)
 
 
 def _read_trial(result_file: StoragePath) -> HarborTrial:
@@ -229,6 +358,7 @@ def _run_harbor_job(
     inference_session: RemoteInferenceSession,
 ) -> HarborRunResult:
     job_dir = _job_dir(output_dir, job_name)
+    _migrate_legacy_scored_trials(output_dir, job_dir)
     logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
     while True:
         try:
@@ -243,7 +373,7 @@ def _run_harbor_job(
     trials = _read_trials(job_dir)
     samples_path = _write_samples(trials, dataset, output_dir)
     result = _aggregate(trials, dataset, samples_path)
-    StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
+    StoragePath(prefix_join(output_dir, _HARBOR_RESULT_FILE)).write_text(
         json.dumps(
             {
                 "dataset": result.dataset,
@@ -303,6 +433,7 @@ class HarborExecutor:
         driver_env: Mapping[str, str],
         inference_session: RemoteInferenceSession,
     ) -> HarborRunResult:
+        _bind_harbor_results_root(output_dir, self.config)
         dataset = self.config.record_dataset
         job_name = _job_name(
             dataset,

@@ -15,11 +15,15 @@ from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
 )
 from marin.evaluation.harbor.runner import (
+    _RESUME_IDENTITY_FILE,
     HarborExecutor,
     HarborTrial,
+    _job_dir,
+    _migrate_legacy_scored_trials,
     _read_trials,
     _sample_for,
     _write_samples,
+    validate_harbor_resume_root,
 )
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError
@@ -424,6 +428,67 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
     assert "OPENAI_API_KEY" not in captured["env"]
     assert outcome.metrics[f"toy-{tmp_path.name}"]["accuracy"] == 1.0
+
+
+@pytest.mark.parametrize("protocol", ["gs", "s3"])
+def test_legacy_harbor_resume_imports_only_scored_trials(protocol, tmp_path, monkeypatch):
+    _memory_remote(protocol, monkeypatch)
+    output_dir = f"{protocol}://eval-bucket-{tmp_path.name}/run"
+    legacy_trials = StoragePath(output_dir) / "harbor_trials"
+    scored = legacy_trials / "scored"
+    unscored = legacy_trials / "unscored"
+    (scored / "result.json").write_text(
+        json.dumps({"task_name": "scored", "verifier_result": {"rewards": {"reward": 1.0}}})
+    )
+    (scored / "agent" / "trajectory.json").write_text('{"steps": []}')
+    (unscored / "result.json").write_text(json.dumps({"task_name": "unscored", "exception_info": {}}))
+    (legacy_trials / "corrupt" / "result.json").write_text("not-json")
+
+    job_dir = _job_dir(output_dir, "resume-job")
+    _migrate_legacy_scored_trials(output_dir, job_dir)
+
+    assert (job_dir / "scored" / "result.json").exists()
+    assert (job_dir / "scored" / "agent" / "trajectory.json").exists()
+    assert not (job_dir / "unscored" / "result.json").exists()
+    assert not (job_dir / "corrupt" / "result.json").exists()
+
+
+def test_validate_harbor_resume_root_rejects_incompatible_legacy_jobs(tmp_path, monkeypatch):
+    _memory_remote("s3", monkeypatch)
+    output_dir = f"s3://resume-{tmp_path.name}/results"
+    # A legacy job whose name embeds a different dataset than this launch plans to resume.
+    (StoragePath(output_dir) / "harbor_jobs" / "harbor_other-dataset_0123456789ab" / "config.json").write_text("{}")
+
+    with pytest.raises(ValueError, match="aime"):
+        validate_harbor_resume_root(output_dir, _validated_config(dataset_selector="aime"))
+
+
+def test_validate_harbor_resume_root_accepts_matching_identity_file(tmp_path, monkeypatch):
+    _memory_remote("s3", monkeypatch)
+    output_dir = f"s3://resume-{tmp_path.name}/results"
+    (StoragePath(output_dir) / _RESUME_IDENTITY_FILE).write_text(json.dumps({"schema_version": 1, "dataset": "aime"}))
+
+    # No raise: the identity file declares the dataset this launch plans to resume.
+    validate_harbor_resume_root(output_dir, _validated_config(dataset_selector="aime"))
+
+
+def test_harbor_executor_binds_dataset_identity_on_first_run(tmp_path, monkeypatch):
+    def run_driver(_config, overlay, _driver_env) -> None:
+        trial_dir = Path(overlay.jobs_dir) / overlay.job_name / "trial-one"
+        trial_dir.mkdir(parents=True, exist_ok=True)
+        (trial_dir / "result.json").write_text(
+            json.dumps({"task_name": "trial-one", "verifier_result": {"rewards": {"reward": 1.0}}})
+        )
+
+    monkeypatch.setattr("marin.evaluation.harbor.runner.run_harbor_driver", run_driver)
+    executor = _harbor_executor(f"bind-{tmp_path.name}")
+
+    executor(_running_model(), str(tmp_path), {})
+
+    assert json.loads((tmp_path / _RESUME_IDENTITY_FILE).read_text()) == {
+        "schema_version": 1,
+        "dataset": f"bind-{tmp_path.name}",
+    }
 
 
 def _harbor_executor(dataset: str) -> HarborExecutor:

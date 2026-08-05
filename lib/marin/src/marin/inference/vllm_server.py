@@ -44,7 +44,34 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _CUDA_TORCH_BACKEND = "cu130"
-_FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
+_CUDA_NVCC_DISTRIBUTION = "nvidia-cuda-nvcc"
+_CUDA_TOOLCHAIN_REQUIREMENTS = (
+    f"{_CUDA_NVCC_DISTRIBUTION}==13.0.88",
+    "nvidia-cuda-crt==13.0.88",
+    "nvidia-nvvm==13.0.88",
+)
+_CUDA_NVCC_BOOTSTRAP = f"""\
+import importlib.metadata
+import os
+from pathlib import Path
+import sys
+
+distribution = importlib.metadata.distribution("{_CUDA_NVCC_DISTRIBUTION}")
+nvcc_file = next(path for path in distribution.files or () if str(path).endswith("/bin/nvcc"))
+nvcc = Path(distribution.locate_file(nvcc_file)).resolve()
+cuda_home = nvcc.parent.parent
+cuda_lib = cuda_home / "lib"
+cuda_lib64 = cuda_home / "lib64"
+if cuda_lib.is_dir() and not cuda_lib64.exists():
+    cuda_lib64.symlink_to(cuda_lib, target_is_directory=True)
+cudart = cuda_lib / "libcudart.so.13"
+cudart_link = cuda_lib / "libcudart.so"
+if cudart.is_file() and not cudart_link.exists():
+    cudart_link.symlink_to(cudart.name)
+os.environ["CUDA_HOME"] = str(cuda_home)
+os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
+os.execvp("vllm", ["vllm", *sys.argv[1:]])
+"""
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
@@ -129,28 +156,32 @@ class IsolatedCudaVllm:
             from_spec = vllm_fork_ref()
         else:
             from_spec = f"vllm[runai]=={self.version}"
-        return [
+        command = [
             "uvx",
             "--from",
             from_spec,
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
-            "--python",
-            self.python_version,
-            "--torch-backend",
-            _CUDA_TORCH_BACKEND,
-            "vllm",
         ]
+        for requirement in _CUDA_TOOLCHAIN_REQUIREMENTS:
+            command.extend(("--with", requirement))
+        command.extend(
+            (
+                "--python",
+                self.python_version,
+                "--torch-backend",
+                _CUDA_TORCH_BACKEND,
+                "python",
+                "-c",
+                _CUDA_NVCC_BOOTSTRAP,
+            )
+        )
+        return command
 
     def env(self) -> dict[str, str]:
-        # CoreWeave runtime images run without nvcc. FlashInfer would otherwise JIT-compile its
-        # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
-        # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
-        # callers pass `--gdn-prefill-backend triton` in vLLM extra arguments.
         # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
         # model cache. CoreWeave rejects the loader's default path-style S3 requests.
         environment = {
-            _FLASHINFER_SAMPLER_ENV_VAR: "0",
             _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
         }
         if self.source is VllmType.MARIN_FORK:
@@ -159,7 +190,8 @@ class IsolatedCudaVllm:
 
     def cache_identity(self) -> str:
         source = vllm_fork_ref() if self.source is VllmType.MARIN_FORK else f"vllm=={self.version}"
-        return f"cuda:{source}:{self.python_version}:{_CUDA_TORCH_BACKEND}"
+        toolchain = ",".join(_CUDA_TOOLCHAIN_REQUIREMENTS)
+        return f"cuda:{source}:{self.python_version}:{_CUDA_TORCH_BACKEND}:{toolchain}"
 
 
 def _write_virtual_hosted_s3_config() -> str:

@@ -1,0 +1,16 @@
+name: a1-bash_textbook
+location: DCAgent/a1-bash_textbook
+revision: 3eca4049f5f87f8dc3efdb012ce63c2464cc8b1a
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  max_num_seqs: 96
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

@@ -1,0 +1,16 @@
+name: a1-issue_tasks
+location: DCAgent/a1-issue_tasks
+revision: 842dcb5385669fe53b223df329c78e20d972d6bc
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 21
+serve:
+  max_model_len: 32768
+  max_num_seqs: 96
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

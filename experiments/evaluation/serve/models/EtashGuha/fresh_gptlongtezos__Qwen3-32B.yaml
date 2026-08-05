@@ -1,0 +1,19 @@
+name: fresh_gptlongtezos__Qwen3-32B
+location: EtashGuha/fresh_gptlongtezos__Qwen3-32B
+revision: 612f56d14e860bbeea16c89a747a1a2e163df73a
+apply_chat_template: true
+resource_hint:
+  gpu:
+    GB200: 1
+  memory: 128g
+serve:
+  tensor_parallel_size: 1
+  max_model_len: 32768
+  max_num_seqs: 96
+  tool_call_parser: hermes
+  reasoning_parser: qwen3
+  vllm_extra_args:
+  - --enable-prefix-caching
+agent:
+  agent_kwargs:
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

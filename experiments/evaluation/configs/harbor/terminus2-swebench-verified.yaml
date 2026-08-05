@@ -1,0 +1,43 @@
+n_attempts: 3
+timeout_multiplier: 16.0
+n_concurrent_trials: 128
+retry:
+  max_retries: 10
+  exclude_exceptions:
+  - AgentTimeoutError
+  - AgentEnvironmentTimeoutError
+  - BadRequestError
+  - VerifierTimeoutError
+  - SummarizationTimeoutError
+  - ContextLengthExceededError
+  wait_multiplier: 1.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+environment:
+  type: daytona
+  force_build: true
+  delete: true
+  kwargs:
+    auto_snapshot: true
+verifier:
+  max_timeout_sec: 14400
+agents:
+- name: terminus-2
+  max_timeout_sec: 7200
+  kwargs:
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: true
+    parser: xml
+    proactive_summarization_threshold: 2048
+    model_info:
+      max_input_tokens: 32768
+      max_output_tokens: 16384
+      input_cost_per_token: 0.0
+      output_cost_per_token: 0.0
+    trajectory_config:
+      raw_content: true
+      linear_history: true
+datasets:
+- name: hf://DCAgent2/swebench-verified-random-100-folders
+  ref: 0c553bd6d05d451907afb8db31dba84759ccc993
