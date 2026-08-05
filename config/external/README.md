@@ -16,8 +16,10 @@ uv run config/update-external.py evalchemy
 ```
 
 Omit the project name to advance all three. The command updates the selected
-lockfiles and regenerates the packaged pins. Verify that all generated state is
-current without contacting the repositories:
+lockfiles and regenerates the packaged requirements. The generated module also
+carries the isolated TPU-vLLM requirements from the root ``uv.lock``; those
+forks are not part of the nightly upgrade set. Verify that all generated state
+is current without contacting the repositories:
 
 ```bash
 uv run config/update-external.py --check

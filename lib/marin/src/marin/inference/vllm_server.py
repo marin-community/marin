@@ -26,10 +26,9 @@ from rigging.telemetry.metrics import MetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
-from rigging.timing import Deadline, ExponentialBackoff, retry_with_backoff
 
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
-from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
 
 logger = logging.getLogger(__name__)
@@ -60,10 +59,6 @@ class _ProcessGroupStatus(StrEnum):
     HAS_LIVE_PROCESSES = "has_live_processes"
     NO_LIVE_PROCESSES = "no_live_processes"
     UNKNOWN = "unknown"
-
-
-class TransientStartupError(RuntimeError):
-    """A vLLM startup failure whose child logs show a transient Run:ai streamer read fault."""
 
 
 class VllmLauncher(Protocol):
@@ -115,7 +110,7 @@ class WorkspaceVllm:
         return {}
 
     def cache_identity(self) -> str:
-        return f"workspace:{vllm_fork_ref()}:{tpu_inference_fork_ref()}:{WORKER_PYTHON_VERSION}"
+        return f"workspace:{VLLM_FORK_REQUIREMENT}:{TPU_INFERENCE_FORK_REQUIREMENT}:{WORKER_PYTHON_VERSION}"
 
 
 class VllmType(StrEnum):
@@ -146,7 +141,7 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         if self.source is VllmType.MARIN_FORK:
-            from_spec = vllm_fork_ref()
+            from_spec = VLLM_FORK_REQUIREMENT
         else:
             from_spec = f"vllm[runai]=={self.version}"
         return [
@@ -178,7 +173,7 @@ class IsolatedCudaVllm:
         return environment
 
     def cache_identity(self) -> str:
-        source = vllm_fork_ref() if self.source is VllmType.MARIN_FORK else f"vllm=={self.version}"
+        source = VLLM_FORK_REQUIREMENT if self.source is VllmType.MARIN_FORK else f"vllm=={self.version}"
         return f"cuda:{source}:{self.python_version}:{_CUDA_TORCH_BACKEND}"
 
 
@@ -194,7 +189,7 @@ class IsolatedTpuVllm:
     """Run Marin's forked TPU vLLM from a throwaway uv-managed environment via ``uvx``.
 
     The TPU counterpart to :class:`IsolatedCudaVllm`. ``vllm`` and its ``tpu-inference``
-    runtime are two git forks pinned by SHA (see ``marin.inference.tpu_vllm_pins``); this
+    runtime are two git forks pinned by SHA in ``marin.external_dependencies``; this
     provisions them in an isolated uv-tool env rather than the workspace lock, so
     ``marin-serve iris --tpu`` runs from outside a checkout.
     """
@@ -643,10 +638,11 @@ class VllmEnvironment:
         # Default to the workspace vLLM (TPU stack); GPU serving passes IsolatedCudaVllm.
         self.launcher: VllmLauncher = launcher or WorkspaceVllm()
         self.compilation_cache_mode = compilation_cache_mode
-        self.wait_for_ready = wait_for_ready
+        self._ready_on_enter = wait_for_ready
 
         self.vllm_server: VllmServerHandle | None = None
         self.model_id: str | None = None
+        self._command: list[str] | None = None
 
     def __enter__(self) -> "VllmEnvironment":
         if self.vllm_server is None:
@@ -659,45 +655,12 @@ class VllmEnvironment:
                 },
             )
             try:
-                if self.wait_for_ready:
-                    self.vllm_server = _start_vllm_native_server(
-                        model_name_or_path=self.model_name_or_path,
-                        host=self.host,
-                        port=self.port,
-                        timeout_seconds=self.timeout_seconds,
-                        extra_cli_args=self.extra_cli_args,
-                        launcher=self.launcher,
-                        compilation_cache_mode=self.compilation_cache_mode,
-                    )
-                    self.model_id = _get_first_model_id(self.vllm_server.server_url)
-                    logger.info(
-                        "vLLM environment ready",
-                        extra={
-                            "server_url": self.vllm_server.server_url,
-                            "model_id": self.model_id,
-                        },
-                    )
-                else:
-                    self.vllm_server, _ = _start_vllm_native_process(
-                        model_name_or_path=self.model_name_or_path,
-                        host=self.host,
-                        port=self.port,
-                        extra_cli_args=self.extra_cli_args,
-                        launcher=self.launcher,
-                        compilation_cache_mode=self.compilation_cache_mode,
-                        log_prefix="vllm_worker_",
-                    )
+                self._start_process()
             except Exception:
-                logger.exception("Failed to start vLLM environment", extra=self.debug_snapshot())
-                if self.vllm_server is not None:
-                    try:
-                        diagnostics = _native_diagnostics(self.vllm_server)
-                        for label, value in diagnostics.items():
-                            logger.error("%s:\n%s", label, value)
-                    except Exception:
-                        logger.exception("Failed to collect vLLM diagnostics")
-                    self.close()
+                self._report_failure_and_close("Failed to start vLLM environment")
                 raise
+            if self._ready_on_enter:
+                self.wait_until_ready()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -707,6 +670,73 @@ class VllmEnvironment:
         if self.vllm_server is not None:
             self.vllm_server.stop()
             self.vllm_server = None
+        self.model_id = None
+        self._command = None
+
+    def wait_until_ready(
+        self,
+        *,
+        poll_interval_seconds: float = 5,
+    ) -> None:
+        """Wait once for the running vLLM process to become HTTP-ready."""
+        if self.model_id is not None:
+            return
+        if self.vllm_server is None:
+            raise RuntimeError("vLLM server is not running in this environment.")
+
+        handle = self.vllm_server
+        command = self._command
+        assert command is not None
+        try:
+            _wait_for_vllm_server(
+                handle,
+                command=command,
+                timeout_seconds=self.timeout_seconds,
+                poll_interval_seconds=poll_interval_seconds,
+            )
+            handle.compilation_cache.publish()
+            self.vllm_server = _configure_vllm_telemetry(
+                handle,
+                host=self.host,
+                launcher=self.launcher,
+            )
+            self.model_id = _get_first_model_id(self.vllm_server.server_url)
+        except Exception:
+            self._report_failure_and_close("Failed to make vLLM environment ready")
+            raise
+
+        logger.info(
+            "vLLM environment ready",
+            extra={
+                "server_url": self.vllm_server.server_url,
+                "model_id": self.model_id,
+            },
+        )
+
+    def _start_process(self) -> None:
+        self.vllm_server, self._command = _start_vllm_native_process(
+            model_name_or_path=self.model_name_or_path,
+            host=self.host,
+            port=self.port,
+            extra_cli_args=self.extra_cli_args,
+            launcher=self.launcher,
+            compilation_cache_mode=self.compilation_cache_mode,
+            log_prefix="vllm_server_",
+        )
+
+    def _report_failure_and_close(self, message: str) -> None:
+        logger.exception(message, extra=self.debug_snapshot())
+        if self.vllm_server is not None:
+            try:
+                for label, value in _native_diagnostics(self.vllm_server).items():
+                    logger.error("%s:\n%s", label, value)
+            except Exception:
+                logger.exception("Failed to collect vLLM diagnostics")
+        try:
+            self.close()
+        except Exception:
+            # Preserve the startup error that selected the retry/failure path.
+            logger.warning("vLLM teardown failed after a startup failure", exc_info=True)
 
     @property
     def server_url(self) -> str:
@@ -873,8 +903,19 @@ def _wait_for_vllm_server(
     assert handle.log_pump is not None
 
     def _check_process_alive() -> None:
+        # A distributed loader worker can report this fault while the API parent stays alive and
+        # waits forever for the other ranks. Fail the task from the complete local logs so Iris
+        # can retry it without waiting for the parent to exit or the readiness timeout to expire.
+        has_streamer_fault = _RUNAI_STREAMER_READ_MARKER in _native_logs(handle.log_dir).lower()
         if process.poll() is None:
-            return
+            if not has_streamer_fault:
+                return
+            raise RuntimeError(
+                "vLLM server logged a Run:ai streamer read fault before becoming ready.\n"
+                f"Command: {command}\n"
+                f"Logs: {handle.log_dir}\n"
+                f"{_native_logs_tail(handle.log_dir)}"
+            )
         # Child has exited; drain the readers before reading the tail so it has the final lines.
         handle.log_pump.join(timeout=5)
         message = (
@@ -884,9 +925,6 @@ def _wait_for_vllm_server(
             f"Logs: {handle.log_dir}\n"
             f"{_native_logs_tail(handle.log_dir)}"
         )
-        # The fault is already in the tail carried by ``message``, so classify off that.
-        if _RUNAI_STREAMER_READ_MARKER in message.lower():
-            raise TransientStartupError(message)
         raise RuntimeError(message)
 
     _poll_until_ready(
@@ -923,21 +961,19 @@ def _vllm_serve_command(
 def _start_vllm_native_process(
     *,
     model_name_or_path: str,
-    host: str = "127.0.0.1",
-    port: int | None = None,
+    host: str,
+    port: int,
     extra_cli_args: list[str] | None = None,
-    launcher: VllmLauncher | None = None,
+    launcher: VllmLauncher,
     compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
     log_prefix: str,
 ) -> tuple[VllmServerHandle, list[str]]:
     """Start ``vllm serve`` without imposing an HTTP readiness policy."""
-    resolved_port = port if port is not None else _DEFAULT_VLLM_PORT
-    launcher = launcher or WorkspaceVllm()
     command = _vllm_serve_command(
         launcher=launcher,
         model_name_or_path=model_name_or_path,
         host=host,
-        port=resolved_port,
+        port=port,
         extra_cli_args=extra_cli_args,
     )
     log_dir = tempfile.mkdtemp(prefix=log_prefix)
@@ -952,8 +988,8 @@ def _start_vllm_native_process(
             _launch_vllm_process(
                 command=command,
                 environment=native_env,
-                server_url=f"http://{host}:{resolved_port}/v1",
-                port=resolved_port,
+                server_url=f"http://{host}:{port}/v1",
+                port=port,
                 log_dir=log_dir,
                 compilation_cache=cache,
             ),
@@ -964,86 +1000,13 @@ def _start_vllm_native_process(
         raise
 
 
-def _start_vllm_native_server(
+def _configure_vllm_telemetry(
+    handle: VllmServerHandle,
     *,
-    model_name_or_path: str,
-    host: str = "127.0.0.1",
-    port: int | None = None,
-    timeout_seconds: int = 3600,
-    extra_cli_args: list[str] | None = None,
-    launcher: VllmLauncher | None = None,
-    compilation_cache_mode: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED,
-    max_attempts: int = 3,
-    poll_interval_seconds: float = 5,
-    backoff: ExponentialBackoff | None = None,
+    host: str,
+    launcher: VllmLauncher,
 ) -> VllmServerHandle:
-    """Start `vllm serve` as a subprocess and wait until `/v1/models` responds.
-
-    Retries up to ``max_attempts`` times on a transient streamer read fault, with all attempts sharing
-    one ``timeout_seconds`` deadline. Any other startup failure is raised on the first attempt.
-    """
-
-    resolved_port = port if port is not None else _DEFAULT_VLLM_PORT
-    launcher = launcher or WorkspaceVllm()
-    # Fresh per call (mutable counter); wide jitter de-correlates retriers hitting the fault together.
-    backoff = backoff or ExponentialBackoff(initial=20.0, maximum=120.0, factor=2.0, jitter=0.9)
-
-    deadline = Deadline.from_seconds(timeout_seconds)
-    stale_log_dir: str | None = None
-
-    def _attempt() -> VllmServerHandle:
-        nonlocal stale_log_dir
-        # Drop the previous attempt's logs; a failed cleanup only leaks a temp dir, so ignore it.
-        if stale_log_dir is not None:
-            shutil.rmtree(stale_log_dir, ignore_errors=True)
-            stale_log_dir = None
-
-        remaining = deadline.remaining_seconds()
-        if remaining <= 0:
-            raise TimeoutError(f"vLLM startup budget of {timeout_seconds}s exhausted before this attempt.")
-
-        handle, command = _start_vllm_native_process(
-            model_name_or_path=model_name_or_path,
-            host=host,
-            port=resolved_port,
-            extra_cli_args=extra_cli_args,
-            launcher=launcher,
-            compilation_cache_mode=compilation_cache_mode,
-            log_prefix="vllm_server_",
-        )
-        log_dir = handle.log_dir
-        try:
-            _wait_for_vllm_server(
-                handle,
-                command=command,
-                timeout_seconds=remaining,
-                poll_interval_seconds=poll_interval_seconds,
-            )
-        except Exception:
-            try:
-                handle.stop()
-            except Exception:
-                # Don't let a stop() failure mask the startup failure the classifier needs.
-                logger.warning("vLLM teardown failed after a startup failure", exc_info=True)
-            stale_log_dir = log_dir
-            raise
-        return handle
-
-    try:
-        handle = retry_with_backoff(
-            _attempt,
-            retryable=lambda exc: isinstance(exc, TransientStartupError),
-            max_attempts=max_attempts,
-            max_elapsed=timeout_seconds,
-            backoff=backoff,
-            operation="vllm_startup",
-        )
-    except TransientStartupError as exc:
-        exc.add_note(f"vLLM startup failed after {max_attempts} attempts (each a transient Run:ai streamer read fault).")
-        raise
-
-    handle.compilation_cache.publish()
-
+    """Attach telemetry collectors after a native vLLM server is ready."""
     # Now that the server answers, forward its /metrics (throughput, TTFT, queue depth) to
     # direct telemetry so it reaches Finelog. The metrics endpoint sits at the root, not under /v1.
     runtime_telemetry.configure(
@@ -1052,7 +1015,7 @@ def _start_vllm_native_server(
     )
     if not telemetry.runtime_status().configured:
         return handle
-    metrics_url = f"http://{host}:{resolved_port}/metrics"
+    metrics_url = f"http://{host}:{handle.port}/metrics"
     metrics_collector = PrometheusCollector(
         metric_source=_VLLM_METRICS_SERVICE,
         scraper=PrometheusScraper(metrics_url),

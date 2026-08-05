@@ -22,15 +22,35 @@ class NextTokenObservation:
 
     case_id: str
     backend_rank: int
-    greedy_token_id: int
-    top_logprobs: tuple[TokenScore, ...]
+    emitted_token_id: int
+    returned_top_logprobs: tuple[TokenScore, ...]
+
+    @classmethod
+    def from_logprob_map(
+        cls,
+        case_id: str,
+        emitted_token_id: int,
+        actual_logprobs: dict[int, float],
+        *,
+        backend_rank: int,
+    ) -> "NextTokenObservation":
+        """Normalize a serving response so exact repeats compare as plain values."""
+        _assert_valid_emitted_token(case_id, emitted_token_id, actual_logprobs, backend_rank=backend_rank)
+        return cls(
+            case_id=case_id,
+            backend_rank=backend_rank,
+            emitted_token_id=emitted_token_id,
+            returned_top_logprobs=tuple(
+                TokenScore(token_id=token_id, logprob=logprob) for token_id, logprob in sorted(actual_logprobs.items())
+            ),
+        )
 
     def parity_against(self, expected_top_logprobs: tuple[TokenScore, ...]) -> "NextTokenParity":
         return _parity_from_token_scores(
             self.case_id,
             expected_top_logprobs,
-            self.greedy_token_id,
-            {score.token_id: score.logprob for score in self.top_logprobs},
+            self.emitted_token_id,
+            {score.token_id: score.logprob for score in self.returned_top_logprobs},
             backend_rank=self.backend_rank,
         )
 
@@ -40,7 +60,7 @@ class CrossRankDiagnostic:
     """A non-gating summary of variation between backend ranks."""
 
     case_id: str
-    greedy_token_ids: tuple[tuple[int, int], ...]
+    emitted_token_ids_by_rank: tuple[tuple[int, int], ...]
     shared_top_token_count: int
     max_probability_spread: float
 
@@ -64,46 +84,27 @@ class NextTokenParity:
         assert self.max_probability_error <= max_probability_error, self
 
 
-def observation_from_logprob_map(
+def _assert_valid_emitted_token(
     case_id: str,
-    greedy_token_id: int,
-    actual_logprobs: dict[int, float],
-    *,
-    backend_rank: int,
-) -> NextTokenObservation:
-    """Normalize a serving response so exact repeats compare as plain values."""
-    _assert_valid_greedy_response(case_id, greedy_token_id, actual_logprobs, backend_rank=backend_rank)
-    return NextTokenObservation(
-        case_id=case_id,
-        backend_rank=backend_rank,
-        greedy_token_id=greedy_token_id,
-        top_logprobs=tuple(
-            TokenScore(token_id=token_id, logprob=logprob) for token_id, logprob in sorted(actual_logprobs.items())
-        ),
-    )
-
-
-def _assert_valid_greedy_response(
-    case_id: str,
-    greedy_token_id: int,
+    emitted_token_id: int,
     actual_logprobs: dict[int, float],
     *,
     backend_rank: int,
 ) -> None:
-    assert greedy_token_id in actual_logprobs, f"{case_id} rank {backend_rank}: greedy token missing from logprobs"
+    assert emitted_token_id in actual_logprobs, f"{case_id} rank {backend_rank}: emitted token missing from logprobs"
     maximum_actual_logprob = max(actual_logprobs.values())
     assert (
-        actual_logprobs[greedy_token_id] == maximum_actual_logprob
-    ), f"{case_id} rank {backend_rank}: greedy token does not have maximum returned logprob"
+        actual_logprobs[emitted_token_id] == maximum_actual_logprob
+    ), f"{case_id} rank {backend_rank}: emitted token does not have maximum returned logprob"
 
 
 def assert_same_rank_repeatability(
-    first: Sequence[NextTokenObservation],
-    second: Sequence[NextTokenObservation],
+    first_wave: Sequence[NextTokenObservation],
+    second_wave: Sequence[NextTokenObservation],
 ) -> None:
-    """Require exact repeatability per rank without requiring ranks to agree."""
-    first_by_rank = _observations_by_rank(first)
-    second_by_rank = _observations_by_rank(second)
+    """Require exact emitted tokens and returned logprobs per rank across waves."""
+    first_by_rank = _observations_by_rank(first_wave)
+    second_by_rank = _observations_by_rank(second_wave)
     assert (
         first_by_rank.keys() == second_by_rank.keys()
     ), f"repeat waves covered different ranks: {sorted(first_by_rank)} != {sorted(second_by_rank)}"
@@ -111,7 +112,7 @@ def assert_same_rank_repeatability(
         second_observation = second_by_rank[rank]
         assert first_observation == second_observation, (
             f"{first_observation.case_id} rank {rank} was not exactly repeatable: "
-            f"first={first_observation!r}, second={second_observation!r}"
+            f"first_wave={first_observation!r}, second_wave={second_observation!r}"
         )
 
 
@@ -121,7 +122,7 @@ def cross_rank_diagnostic(observations: Sequence[NextTokenObservation]) -> Cross
     case_ids = {observation.case_id for observation in observations_by_rank.values()}
     assert len(case_ids) == 1, f"cross-rank diagnostic requires one case, got {sorted(case_ids)}"
     logprobs_by_rank = [
-        {score.token_id: score.logprob for score in observation.top_logprobs}
+        {score.token_id: score.logprob for score in observation.returned_top_logprobs}
         for observation in observations_by_rank.values()
     ]
     shared_tokens = set.intersection(*(set(scores) for scores in logprobs_by_rank))
@@ -135,8 +136,8 @@ def cross_rank_diagnostic(observations: Sequence[NextTokenObservation]) -> Cross
     )
     return CrossRankDiagnostic(
         case_id=case_ids.pop(),
-        greedy_token_ids=tuple(
-            (rank, observation.greedy_token_id) for rank, observation in sorted(observations_by_rank.items())
+        emitted_token_ids_by_rank=tuple(
+            (rank, observation.emitted_token_id) for rank, observation in sorted(observations_by_rank.items())
         ),
         shared_top_token_count=len(shared_tokens),
         max_probability_spread=maximum_spread,

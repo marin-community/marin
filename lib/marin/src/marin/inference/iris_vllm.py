@@ -4,33 +4,58 @@
 """Translate an Iris task gang into vLLM's native multiprocess arguments."""
 
 import contextlib
-import fcntl
 import logging
 import os
-import socket
-import struct
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.actor.client import ActorClient
+from iris.actor.server import ActorServer
 from iris.client import iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
-from iris.runtime.jax_init import poll_for_registered_endpoint
+from iris.rpc.errors import is_retryable_error
+from rigging.network import interface_for_ipv4
 from rigging.timing import Duration, ExponentialBackoff
 
 logger = logging.getLogger(__name__)
 
-_COORDINATOR_ENDPOINT = "vllm-coordinator"
-_READY_ENDPOINT_PREFIX = "vllm-ready-"
-_SHUTDOWN_ENDPOINT = "vllm-shutdown"
 _TIMEOUT_SECONDS = 30 * 60.0
 _POLL_SECONDS = 1.0
 _MASTER_PORT = 29500
-_SIOCGIFADDR = 0x8915
-_MISSING_ENDPOINT_CODES = frozenset({Code.NOT_FOUND, Code.UNIMPLEMENTED})
 _VLLM_HOST_IP_ENV = "VLLM_HOST_IP"
 _GLOO_SOCKET_IFNAME_ENV = "GLOO_SOCKET_IFNAME"
+
+
+class VllmCoordinatorActor:
+    """Leader-owned, latched lifecycle state for a native vLLM gang."""
+
+    def __init__(self, vllm_primary_address: str):
+        self._vllm_primary_address = vllm_primary_address
+        self._shutdown_requested = False
+        self._stopped_followers: set[int] = set()
+        self._lock = threading.Lock()
+
+    def vllm_primary_address(self) -> str:
+        return self._vllm_primary_address
+
+    def shutdown_requested(self) -> bool:
+        with self._lock:
+            return self._shutdown_requested
+
+    def request_shutdown(self) -> None:
+        with self._lock:
+            self._shutdown_requested = True
+
+    def follower_stopped(self, task_index: int) -> None:
+        with self._lock:
+            self._stopped_followers.add(task_index)
+
+    def followers_stopped(self, task_indices: tuple[int, ...]) -> bool:
+        with self._lock:
+            return all(task_index in self._stopped_followers for task_index in task_indices)
 
 
 @dataclass(frozen=True)
@@ -42,7 +67,7 @@ class IrisVllmLaunch:
     extra_cli_args: tuple[str, ...]
     host_ip: str
     gloo_interface: str
-    endpoint_namespace: str
+    coordinator_name: str
 
     @property
     def is_leader(self) -> bool:
@@ -62,7 +87,7 @@ def iris_vllm_launch(
     pipeline_parallel_size: int,
     data_parallel_size: int,
 ) -> Iterator[IrisVllmLaunch]:
-    """Bootstrap a stage-striped PP=1/2 native-vLLM task from Iris metadata."""
+    """Bootstrap a stage-striped native-vLLM task from Iris metadata."""
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("Iris vLLM launch must run inside an Iris job")
@@ -72,29 +97,40 @@ def iris_vllm_launch(
         )
 
     endpoint_namespace = str(job_info.job_id).strip("/").replace("/", "-")
-    coordinator_name = f"{endpoint_namespace}-{_COORDINATOR_ENDPOINT}"
-    if job_info.task_index == 0:
-        master_addr = job_info.advertise_host
-        coordinator_registration = iris_ctx().registry.registered(coordinator_name, f"{master_addr}:{_MASTER_PORT}")
-    else:
-        address = poll_for_registered_endpoint(
-            iris_ctx().resolver,
-            coordinator_name,
-            _TIMEOUT_SECONDS,
-            _POLL_SECONDS,
-        )
-        master_addr, port = address.rsplit(":", maxsplit=1)
-        if int(port) != _MASTER_PORT:
-            raise ValueError(f"Unexpected vLLM coordinator address: {address!r}")
-        coordinator_registration = contextlib.nullcontext()
+    coordinator_name = f"{endpoint_namespace}-vllm-coordinator"
+    ctx = iris_ctx()
 
-    with coordinator_registration:
-        yield _task_launch(
+    with contextlib.ExitStack() as stack:
+        if job_info.task_index == 0:
+            master_addr = job_info.advertise_host
+            server = ActorServer(host="0.0.0.0", port=0)
+            server.register(coordinator_name, VllmCoordinatorActor(master_addr))
+            actor_port = server.serve_background()
+            actor_address = f"http://{job_info.advertise_host}:{actor_port}"
+            stack.callback(server.stop)
+            stack.enter_context(ctx.registry.registered(coordinator_name, actor_address))
+            logger.info("vLLM coordinator actor serving at %s", actor_address)
+        else:
+            client = _coordinator_client(coordinator_name)
+            master_addr: str | None = None
+
+            def coordinator_available() -> bool:
+                nonlocal master_addr
+                master_addr = client.vllm_primary_address()
+                return True
+
+            _wait_until(
+                coordinator_available,
+                error_message="Timed out waiting for the vLLM coordinator",
+            )
+            assert master_addr is not None
+
+        yield _build_task_launch(
             job_info,
             pipeline_parallel_size=pipeline_parallel_size,
             data_parallel_size=data_parallel_size,
             master_addr=master_addr,
-            endpoint_namespace=endpoint_namespace,
+            coordinator_name=coordinator_name,
         )
 
 
@@ -102,71 +138,74 @@ def wait_for_iris_vllm_shutdown(
     launch: IrisVllmLaunch,
     check_alive: Callable[[], None],
 ) -> None:
-    """Keep a verified follower alive until the leader finishes its workload."""
+    """Keep a follower alive until the leader requests final shutdown."""
     if launch.is_leader:
-        raise RuntimeError("The vLLM leader does not wait for its own shutdown signal")
-    ready_name = _ready_endpoint_name(launch, launch.task_index)
-    shutdown_name = _shutdown_endpoint_name(launch)
+        raise RuntimeError("The vLLM leader does not wait for follower shutdown")
+    client = _coordinator_client(launch.coordinator_name)
 
     def shutdown_requested() -> bool:
+        if client.shutdown_requested():
+            return True
         check_alive()
-        return _resolve_endpoint(shutdown_name) is not None
+        return False
 
-    with iris_ctx().registry.registered(ready_name, launch.host_ip):
-        _wait_until(
-            shutdown_requested,
-            error_message="Timed out waiting for the vLLM leader to finish",
-        )
+    _wait_until(
+        shutdown_requested,
+        error_message="Timed out waiting for the vLLM leader to finish",
+    )
+    logger.info("vLLM follower %d received shutdown", launch.task_index)
+
+
+def notify_iris_vllm_stopped(launch: IrisVllmLaunch) -> None:
+    """Tell the leader that this follower has stopped."""
+    if launch.is_leader:
+        raise RuntimeError("The vLLM leader does not send a follower stop acknowledgement")
+    client = _coordinator_client(launch.coordinator_name)
+
+    def acknowledge_stop() -> bool:
+        client.follower_stopped(launch.task_index)
+        return True
+
+    _wait_until(
+        acknowledge_stop,
+        error_message="Timed out acknowledging that the vLLM follower stopped",
+    )
 
 
 @contextlib.contextmanager
 def iris_vllm_followers(launch: IrisVllmLaunch) -> Iterator[None]:
-    """Wait for verified followers, then stop them when the leader is done."""
+    """Request follower shutdown when the leader's workload is finished."""
     if not launch.is_leader:
         raise RuntimeError("Only the vLLM leader may coordinate followers")
     if launch.num_tasks == 1:
         yield
         return
 
-    def all_followers_ready() -> bool:
-        missing = [
-            task_index
-            for task_index in range(1, launch.num_tasks)
-            if _resolve_endpoint(_ready_endpoint_name(launch, task_index)) is None
-        ]
-        if missing:
-            logger.info("Waiting for vLLM followers %s", missing)
-        return not missing
+    client = _coordinator_client(launch.coordinator_name)
+    yield
+
+    def request_shutdown() -> bool:
+        client.request_shutdown()
+        return True
 
     _wait_until(
-        all_followers_ready,
-        error_message="Timed out waiting for vLLM followers",
+        request_shutdown,
+        error_message="Timed out requesting vLLM follower shutdown",
     )
-    try:
-        yield
-    finally:
-        shutdown_name = _shutdown_endpoint_name(launch)
-        with iris_ctx().registry.registered(shutdown_name, launch.host_ip):
-
-            def all_followers_stopped() -> bool:
-                return all(
-                    _resolve_endpoint(_ready_endpoint_name(launch, task_index)) is None
-                    for task_index in range(1, launch.num_tasks)
-                )
-
-            _wait_until(
-                all_followers_stopped,
-                error_message="Timed out stopping vLLM followers",
-            )
+    follower_indices = tuple(range(1, launch.num_tasks))
+    _wait_until(
+        lambda: client.followers_stopped(follower_indices),
+        error_message="Timed out stopping vLLM followers",
+    )
 
 
-def _task_launch(
+def _build_task_launch(
     job_info: JobInfo,
     *,
     pipeline_parallel_size: int,
     data_parallel_size: int,
     master_addr: str,
-    endpoint_namespace: str,
+    coordinator_name: str,
 ) -> IrisVllmLaunch:
     args = (
         "--tensor-parallel-size",
@@ -199,42 +238,19 @@ def _task_launch(
         extra_cli_args=args,
         host_ip=host_ip,
         gloo_interface=gloo_interface,
-        endpoint_namespace=endpoint_namespace,
+        coordinator_name=coordinator_name,
     )
 
 
 def _node_network(job_info: JobInfo) -> tuple[str, str]:
     host_ip = os.environ.get(_VLLM_HOST_IP_ENV, job_info.advertise_host)
-    gloo_interface = os.environ.get(_GLOO_SOCKET_IFNAME_ENV) or _interface_for_ipv4(host_ip)
+    gloo_interface = os.environ.get(_GLOO_SOCKET_IFNAME_ENV) or interface_for_ipv4(host_ip)
     logger.info("vLLM node network: host_ip=%s gloo_interface=%s", host_ip, gloo_interface)
     return host_ip, gloo_interface
 
 
-def _interface_for_ipv4(address: str) -> str:
-    """Find the local interface that owns ``address``."""
-    packed_address = socket.inet_aton(socket.gethostbyname(address))
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        for _, interface in socket.if_nameindex():
-            request = struct.pack("256s", interface.encode()[:15])
-            try:
-                interface_address = fcntl.ioctl(sock.fileno(), _SIOCGIFADDR, request)[20:24]
-            except OSError:
-                continue
-            if interface_address == packed_address:
-                return interface
-    raise RuntimeError(f"No local network interface owns Iris advertise address {address!r}")
-
-
-def _resolve_endpoint(name: str) -> str | None:
-    try:
-        result = iris_ctx().resolver.resolve(name)
-    except ConnectError as exc:
-        if exc.code in _MISSING_ENDPOINT_CODES:
-            return None
-        raise
-    if result.is_empty:
-        return None
-    return result.first().url
+def _coordinator_client(name: str) -> ActorClient:
+    return ActorClient(iris_ctx().resolver, name, call_timeout=30.0, max_call_attempts=1)
 
 
 def _wait_until(
@@ -242,24 +258,18 @@ def _wait_until(
     *,
     error_message: str,
 ) -> None:
-    def retry_transient_unavailability() -> bool:
+    def retry_transient_actor_error() -> bool:
         try:
             return predicate()
         except ConnectError as exc:
-            if exc.code is Code.UNAVAILABLE:
+            # Older controllers can report a not-yet-registered endpoint as a
+            # Connect NOT_FOUND or UNIMPLEMENTED instead of an empty result.
+            if is_retryable_error(exc) or exc.code in (Code.NOT_FOUND, Code.UNIMPLEMENTED):
                 return False
             raise
 
     ExponentialBackoff(initial=_POLL_SECONDS, maximum=30.0).wait_until_or_raise(
-        retry_transient_unavailability,
+        retry_transient_actor_error,
         timeout=Duration.from_seconds(_TIMEOUT_SECONDS),
         error_message=error_message,
     )
-
-
-def _ready_endpoint_name(launch: IrisVllmLaunch, task_index: int) -> str:
-    return f"{launch.endpoint_namespace}-{_READY_ENDPOINT_PREFIX}{task_index}"
-
-
-def _shutdown_endpoint_name(launch: IrisVllmLaunch) -> str:
-    return f"{launch.endpoint_namespace}-{_SHUTDOWN_ENDPOINT}"

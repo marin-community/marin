@@ -30,8 +30,8 @@ def _observation(rank: int, *, greedy_token_id: int = 2, logprob_offset: float =
     return NextTokenObservation(
         case_id="case",
         backend_rank=rank,
-        greedy_token_id=greedy_token_id,
-        top_logprobs=(
+        emitted_token_id=greedy_token_id,
+        returned_top_logprobs=(
             TokenScore(token_id=2, logprob=-0.1 + logprob_offset),
             TokenScore(token_id=3, logprob=-2.0),
         ),
@@ -65,14 +65,14 @@ def test_backend_distribution_contract_rejects_unexplained_outside_or_over_bound
 
 
 def test_same_rank_repeatability_compares_every_rank_without_cross_rank_equality() -> None:
-    first = (_observation(0, greedy_token_id=2), _observation(1, greedy_token_id=3))
-    second = tuple(reversed(first))
+    first_wave = (_observation(0, greedy_token_id=2), _observation(1, greedy_token_id=3))
+    second_wave = tuple(reversed(first_wave))
 
-    assert_same_rank_repeatability(first, second)
+    assert_same_rank_repeatability(first_wave, second_wave)
 
     changed_rank_one = (_observation(0, greedy_token_id=2), _observation(1, greedy_token_id=2))
     with pytest.raises(AssertionError, match="rank 1 was not exactly repeatable"):
-        assert_same_rank_repeatability(first, changed_rank_one)
+        assert_same_rank_repeatability(first_wave, changed_rank_one)
 
 
 def test_cross_rank_spread_is_reported_without_becoming_a_gate() -> None:
@@ -81,6 +81,6 @@ def test_cross_rank_spread_is_reported_without_becoming_a_gate() -> None:
     diagnostic = cross_rank_diagnostic(observations)
 
     assert diagnostic.case_id == "case"
-    assert diagnostic.greedy_token_ids == ((0, 2), (1, 3))
+    assert diagnostic.emitted_token_ids_by_rank == ((0, 2), (1, 3))
     assert diagnostic.shared_top_token_count == 2
     assert diagnostic.max_probability_spread == pytest.approx(math.exp(-0.1) - math.exp(-0.35))
