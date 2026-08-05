@@ -506,17 +506,40 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttempts | None:
-    """Return a TaskWithAttempts for ``task_id``, or None if absent."""
+    """Return a TaskWithAttempts for ``task_id``, or None if absent.
+
+    Reads the detail row off ``task_detail_query`` rather than through
+    ``reads.get_task_detail``, which additionally aggregates the task's failure and
+    preemption counts — counts ``TaskWithAttempts`` derives from its attempts and
+    so discards.
+    """
     with db.read_snapshot() as tx:
-        task_row = reads.get_task_detail(tx, task_id)
+        task_row = tx.execute(reads.task_detail_query().where(tasks_table.c.task_id == task_id)).first()
         if task_row is None:
             return None
-        attempt_rows = tx.execute(
-            select(*reads.ATTEMPT_COLS)
-            .where(task_attempts_table.c.task_id == task_id)
-            .order_by(task_attempts_table.c.attempt_id.asc())
-        ).all()
-    return TaskWithAttempts.from_row(task_row, tuple(attempt_rows))
+        attempts = reads.all_attempts_for_tasks(tx, [task_id]).get(task_id, ())
+    return TaskWithAttempts.from_row(task_row, attempts)
+
+
+_JOB_RESOURCE_COLS = (
+    job_config_table.c.res_cpu_millicores,
+    job_config_table.c.res_memory_bytes,
+    job_config_table.c.res_disk_bytes,
+    job_config_table.c.res_device_json,
+)
+
+
+def _job_resources(row) -> job_pb2.ResourceSpecProto | None:
+    """The declared resource spec from a ``_JOB_RESOURCE_COLS`` row, or None when unset.
+
+    An all-zero/empty row is a job config written before resources were recorded;
+    it carries no spec rather than an empty one.
+    """
+    if not (row.res_cpu_millicores or row.res_memory_bytes or row.res_disk_bytes or row.res_device_json):
+        return None
+    return resource_spec_from_scalars(
+        row.res_cpu_millicores, row.res_memory_bytes, row.res_disk_bytes, row.res_device_json
+    )
 
 
 def _job_state(db: ControllerDB, job_id: JobName) -> int | None:
@@ -987,19 +1010,14 @@ def _attempts_for_worker(
         resources_by_job: dict[JobName, job_pb2.ResourceSpecProto] = {}
         if job_ids:
             jc_rows = tx.execute(
-                select(
-                    job_config_table.c.job_id,
-                    job_config_table.c.res_cpu_millicores,
-                    job_config_table.c.res_memory_bytes,
-                    job_config_table.c.res_disk_bytes,
-                    job_config_table.c.res_device_json,
-                ).where(job_config_table.c.job_id.in_(list(job_ids)))
+                select(job_config_table.c.job_id, *_JOB_RESOURCE_COLS).where(
+                    job_config_table.c.job_id.in_(list(job_ids))
+                )
             ).all()
             for jc in jc_rows:
-                if jc.res_cpu_millicores or jc.res_memory_bytes or jc.res_disk_bytes or jc.res_device_json:
-                    resources_by_job[jc.job_id] = resource_spec_from_scalars(
-                        jc.res_cpu_millicores, jc.res_memory_bytes, jc.res_disk_bytes, jc.res_device_json
-                    )
+                resources = _job_resources(jc)
+                if resources is not None:
+                    resources_by_job[jc.job_id] = resources
     out: list[controller_pb2.Controller.WorkerTaskAttempt] = []
     for row in raw_rows:
         proto_attempt = job_pb2.TaskAttempt(
@@ -2187,21 +2205,9 @@ class ControllerServiceImpl:
         # Resource history / latest usage now comes from the ``iris.task``
         # stats namespace; the controller only attaches the static job
         # resource limits here.
-        job_resources = None
         with self._db.read_snapshot() as tx:
-            jc_row = tx.execute(
-                select(
-                    job_config_table.c.res_cpu_millicores,
-                    job_config_table.c.res_memory_bytes,
-                    job_config_table.c.res_disk_bytes,
-                    job_config_table.c.res_device_json,
-                ).where(job_config_table.c.job_id == task.job_id)
-            ).first()
-        if jc_row is not None:
-            if jc_row.res_cpu_millicores or jc_row.res_memory_bytes or jc_row.res_disk_bytes or jc_row.res_device_json:
-                job_resources = resource_spec_from_scalars(
-                    jc_row.res_cpu_millicores, jc_row.res_memory_bytes, jc_row.res_disk_bytes, jc_row.res_device_json
-                )
+            jc_row = tx.execute(select(*_JOB_RESOURCE_COLS).where(job_config_table.c.job_id == task.job_id)).first()
+        job_resources = _job_resources(jc_row) if jc_row is not None else None
 
         return controller_pb2.Controller.GetTaskStatusResponse(
             task=proto,
