@@ -1,0 +1,7 @@
+tasks: [arc_challenge]
+task_options:
+  arc_challenge:
+    num_fewshot: 25
+    task_alias: arc_challenge_25shot
+batch_size: null
+max_tokens: 256

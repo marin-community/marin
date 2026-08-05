@@ -63,11 +63,12 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
-Each config file is one evaluation with its own `record.json`. Before opening Iris, the launcher
-normalizes Evalchemy files with the package pinned in `config/external/evalchemy/uv.lock` and resolves
-every requested name against that revision's Evalchemy and lm-eval task catalogs. The record keeps
-the normalized launch-time task routing, few-shot counts, generation arguments, concurrency, context
-limit, and instance limit under `eval.tasks` and `eval.evalchemy`.
+Each config file is one evaluation with its own `record.json`. Marin decodes the launch YAML without
+importing Evalchemy, then the evaluation child invokes the `evalchemy` console script from the pinned
+external runtime. A dry run checks the YAML shape and launch plan; unavailable task names fail when
+the Evalchemy process starts. The record keeps the normalized launch-time task routing, few-shot
+counts, generation arguments, concurrency, context limit, and instance limit under `eval.tasks` and
+`eval.evalchemy`. Its provenance stores the exact Evalchemy requirement and optional runtime extras.
 
 ### Command recipes
 

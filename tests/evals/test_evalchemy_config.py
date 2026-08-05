@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The parent builds the Evalchemy child's config; the child turns each task into an ``eval.eval`` argv.
+"""The parent builds the Evalchemy child's config; the child turns each task into an ``evalchemy`` argv.
 
 These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
 the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
@@ -12,11 +12,10 @@ serving, the eval itself) is exercised by the cluster smoke.
 
 import json
 import os
-from types import SimpleNamespace
 
 import pytest
 from marin.evaluation.evalchemy.client import build_command, build_model_args, scored_results
-from marin.evaluation.evalchemy.config import preflight_evalchemy_configs
+from marin.evaluation.evalchemy.config import load_evalchemy_configs
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
     _run_config_json,
@@ -101,31 +100,28 @@ def test_parent_rejects_endpoint_model_arg_overrides():
         _payload(_config(extra_model_args={"model": "other"}))
 
 
-def test_preflight_evalchemy_configs_returns_pinned_normalized_config(tmp_path, monkeypatch):
+def test_load_evalchemy_configs_normalizes_launch_yaml(tmp_path):
     config_path = tmp_path / "ifeval.yaml"
-    config_path.write_text("tasks: [ifeval]\n")
-    response = [
-        {
-            "config": {
-                "tasks": ["ifeval"],
-                "task_options": {"ifeval": {"num_fewshot": 0, "generation": True}},
-                "apply_chat_template": True,
-                "limit": 64,
-                "batch_size": 1,
-                "seed": 1234,
-                "gen_kwargs": "temperature=0,max_gen_toks=2048",
-                "extra_model_args": {"timeout": 900},
-                "max_tokens": 2048,
-            },
-            "runtime_extras": ["ifeval"],
-        }
-    ]
-    monkeypatch.setattr(
-        "marin.evaluation.evalchemy.config.capture_driver",
-        lambda _command, _environment: SimpleNamespace(stdout=json.dumps(response)),
+    config_path.write_text(
+        """\
+tasks: [ifeval]
+task_options:
+  ifeval:
+    num_fewshot: 0
+    generation: true
+apply_chat_template: true
+limit: 64
+batch_size: 1
+seed: 1234
+gen_kwargs: temperature=0,max_gen_toks=2048
+extra_model_args:
+  timeout: 900
+max_tokens: 2048
+runtime_extras: [ifeval]
+"""
     )
 
-    (config,) = preflight_evalchemy_configs([config_path])
+    (config,) = load_evalchemy_configs([config_path])
 
     assert config.tasks == ("ifeval",)
     assert config.task_options["ifeval"].generation
@@ -154,7 +150,7 @@ def test_build_command_completion_route_with_fewshot_and_limit():
     config = _payload(_config(max_eval_instances=7))
     cmd = build_command(config, config["tasks"][1], "/tmp/out", "/opt/py", None)
 
-    assert cmd[:5] == ["/opt/py", "-m", "eval.eval", "--model", "local-completions"]
+    assert cmd[:3] == ["/opt/evalchemy", "--model", "local-completions"]
     assert "--apply_chat_template" not in cmd
     assert cmd[cmd.index("--tasks") + 1] == "gsm8k"
     assert cmd[cmd.index("--output_path") + 1] == "/tmp/out"
@@ -299,7 +295,7 @@ def _write_results(local_out: str, results: dict) -> None:
 
 
 def test_scored_results_rejects_empty_results_dict(tmp_path):
-    # eval.eval exits 0 and still writes results_*.json with an empty "results" dict when every
+    # Evalchemy exits 0 and still writes results_*.json with an empty "results" dict when every
     # endpoint request fails; the client must treat that as an unscored task.
     empty = tmp_path / "empty"
     empty.mkdir()

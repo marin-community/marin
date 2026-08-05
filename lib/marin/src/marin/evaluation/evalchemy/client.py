@@ -5,7 +5,7 @@
 
 Config arrives as JSON in ``$EVALCHEMY_CLIENT_CONFIG`` (the parent builds it in
 :mod:`marin.evaluation.evalchemy.runner`), so nothing else in Marin needs to import here.
-Each task runs through the evalchemy fork's ``eval.eval`` once (one invocation per task so each
+Each task runs through the evalchemy fork's ``evalchemy`` CLI once (one invocation per task so each
 carries its own ``num_fewshot``) with lm-eval's ``local-completions`` (or ``local-chat-completions``)
 API model pointed at the served URL. Its ``results_*.json`` tree is uploaded to ``out_path/<dir>/``
 for :class:`~marin.evaluation.evalchemy.result.EvalchemyResult` to read back. ``out_path`` is an
@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from pathlib import Path
 
 import fsspec
 
@@ -94,7 +95,7 @@ def build_model_args(config: dict, use_chat: bool, max_length: int | None) -> st
 
 
 def build_command(config: dict, task: dict, output_path: str, python: str, max_length: int | None) -> list[str]:
-    """The ``eval.eval`` argv for one task. ``python`` runs the evalchemy fork + lm-eval in its venv.
+    """The ``evalchemy`` argv for one task. ``python`` identifies the evaluator virtualenv.
 
     One invocation per task so each carries its own ``num_fewshot`` (lm-eval's ``--num_fewshot`` is a
     single global override). The chat route applies only to generation tasks of a chat-template model:
@@ -118,9 +119,7 @@ def build_command(config: dict, task: dict, output_path: str, python: str, max_l
         [f"max_gen_toks={gen_budget}", *(f"{key}={value}" for key, value in config.get("extra_gen_kwargs", {}).items())]
     )
     cmd = [
-        python,
-        "-m",
-        "eval.eval",
+        str(Path(python).with_name("evalchemy")),
         "--model",
         model,
         "--model_args",
@@ -197,8 +196,7 @@ def main() -> None:
     for task in tasks:
         dest = f"{out_path}/{task['dir']}"
         with tempfile.TemporaryDirectory() as local_out:
-            # sys.executable is the uvx environment's interpreter, so ``-m eval.eval`` resolves the
-            # fork + lm-eval installed there.
+            # Evalchemy is installed beside the uvx environment's interpreter.
             cmd = build_command(config, task, local_out, sys.executable, max_length)
             print(f"running evalchemy: {' '.join(cmd)}", flush=True)
             # Upload whatever the task produced before reacting to its exit code, so one task's failure
@@ -210,7 +208,7 @@ def main() -> None:
                 out_fs.put(local_out, dest, recursive=True)
                 print(f"uploaded {len(produced)} path(s) to {dest}", flush=True)
         if result.returncode != 0:
-            failures.append(f"{task['name']}: eval.eval exited {result.returncode}")
+            failures.append(f"{task['name']}: evalchemy exited {result.returncode}")
         elif not produced:
             failures.append(f"{task['name']}: produced no artifacts")
         elif not scored:

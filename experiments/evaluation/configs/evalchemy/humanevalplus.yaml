@@ -1,0 +1,10 @@
+tasks: [HumanEvalPlus]
+task_options:
+  HumanEvalPlus:
+    num_fewshot: 0
+    task_alias: humanevalplus
+    generation: true
+    unsafe_code: true
+batch_size: null
+max_tokens: 1024
+runtime_extras: [humanevalplus]

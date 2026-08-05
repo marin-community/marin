@@ -7,4 +7,7 @@ task_options:
     generation: true
 apply_chat_template: true
 limit: null
+batch_size: 1
+seed: 1234
 max_tokens: 2048
+runtime_extras: [ifeval]

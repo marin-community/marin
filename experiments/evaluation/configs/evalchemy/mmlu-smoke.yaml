@@ -1,0 +1,8 @@
+tasks: [mmlu_abstract_algebra]
+task_options:
+  mmlu_abstract_algebra:
+    num_fewshot: 0
+    task_alias: mmlu_abstract_algebra_0shot
+batch_size: null
+max_tokens: 256
+limit: 64

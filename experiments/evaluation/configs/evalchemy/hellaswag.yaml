@@ -1,0 +1,7 @@
+tasks: [hellaswag]
+task_options:
+  hellaswag:
+    num_fewshot: 10
+    task_alias: hellaswag_10shot
+batch_size: null
+max_tokens: 256

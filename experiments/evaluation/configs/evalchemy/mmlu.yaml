@@ -1,0 +1,7 @@
+tasks: [mmlu]
+task_options:
+  mmlu:
+    num_fewshot: 5
+    task_alias: mmlu_5shot
+batch_size: null
+max_tokens: 256

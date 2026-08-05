@@ -1,0 +1,8 @@
+tasks: [nq_open]
+task_options:
+  nq_open:
+    num_fewshot: 5
+    task_alias: nq_open_5shot
+    generation: true
+batch_size: null
+max_tokens: 128

@@ -14,10 +14,6 @@ import pytest
 from click.testing import CliRunner
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
-from marin.evaluation.evalchemy.config import (
-    EvalchemyTaskOptions,
-    ValidatedEvalchemyConfig,
-)
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -67,35 +63,6 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
         return tuple(configs)
 
     monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", preflight)
-
-
-def _install_fake_evalchemy_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
-    def preflight(paths):
-        return tuple(
-            ValidatedEvalchemyConfig(
-                tasks=("ifeval",),
-                task_options={
-                    "ifeval": EvalchemyTaskOptions(
-                        num_fewshot=0,
-                        task_alias="ifeval_0shot",
-                        generation=True,
-                    )
-                },
-                apply_chat_template=True,
-                limit=None,
-                num_fewshot=None,
-                batch_size="1",
-                seed=1234,
-                gen_kwargs={"max_gen_toks": "2048"},
-                extra_model_args={},
-                max_length=None,
-                max_tokens=2048,
-                runtime_extras=("ifeval",),
-            )
-            for _path in paths
-        )
-
-    monkeypatch.setattr("experiments.evaluation.launch.preflight_evalchemy_configs", preflight)
 
 
 def _write_harbor_config(path: Path) -> Path:
@@ -361,10 +328,9 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
 
 
 def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(tmp_path, monkeypatch):
-    _install_fake_evalchemy_preflight(monkeypatch)
     _install_fake_harbor_preflight(monkeypatch)
     evalchemy_config_path = tmp_path / "ifeval.yaml"
-    evalchemy_config_path.write_text("tasks: [ifeval]\n")
+    evalchemy_config_path.write_text(Path("experiments/evaluation/configs/evalchemy/ifeval.yaml").read_text())
     config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
@@ -512,35 +478,11 @@ def test_launch_dry_run_prints_resolved_federated_cluster_and_priority(
     assert f"priority={priority}" in result.output
 
 
-@pytest.mark.parametrize(
-    ("option", "contents", "preflight_target", "error"),
-    [
-        (
-            "--harbor-config",
-            "{}",
-            "experiments.evaluation.launch.preflight_harbor_configs",
-            "Harbor config must declare exactly one agent",
-        ),
-        (
-            "--evalchemy-config",
-            "tasks: [not_a_pinned_task]\n",
-            "experiments.evaluation.launch.preflight_evalchemy_configs",
-            "tasks are not recognized by pinned Evalchemy: ['not_a_pinned_task']",
-        ),
-    ],
-    ids=("harbor", "evalchemy"),
-)
-def test_launch_rejects_invalid_config_before_iris_submission(
-    tmp_path,
-    monkeypatch,
-    option,
-    contents,
-    preflight_target,
-    error,
-):
+def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, monkeypatch):
     config_path = tmp_path / "invalid.yaml"
-    config_path.write_text(contents)
+    config_path.write_text("{}")
     iris_opened = False
+    error = "Harbor config must declare exactly one agent"
 
     def reject_preflight(_requests):
         raise ValueError(error)
@@ -550,7 +492,7 @@ def test_launch_rejects_invalid_config_before_iris_submission(
         iris_opened = True
         raise AssertionError("Iris must not be opened for an invalid evaluator config")
 
-    monkeypatch.setattr(preflight_target, reject_preflight)
+    monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", reject_preflight)
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
 
     result = CliRunner().invoke(
@@ -559,7 +501,7 @@ def test_launch_rejects_invalid_config_before_iris_submission(
             "launch",
             "--model",
             "qwen3-8b",
-            option,
+            "--harbor-config",
             str(config_path),
             "--no-wait",
         ],
@@ -570,8 +512,57 @@ def test_launch_rejects_invalid_config_before_iris_submission(
     assert not iris_opened
 
 
+def test_launch_rejects_malformed_evalchemy_yaml_before_iris_submission(tmp_path, monkeypatch):
+    config_path = tmp_path / "invalid.yaml"
+    config_path.write_text("tasks: ifeval\n")
+    iris_opened = False
+
+    def open_iris_client(**_kwargs):
+        nonlocal iris_opened
+        iris_opened = True
+        raise AssertionError("Iris must not be opened for a malformed evaluator config")
+
+    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evalchemy-config",
+            str(config_path),
+            "--no-wait",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "invalid Evalchemy config" in result.output
+    assert not iris_opened
+
+
+def test_launch_defers_evalchemy_task_validation_to_external_cli(tmp_path, monkeypatch):
+    config_path = tmp_path / "external-task.yaml"
+    config_path.write_text("tasks: [task_added_after_marin_release]\n")
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--evalchemy-config",
+            str(config_path),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "eval=external-task" in result.output
+
+
 def test_launch_accepts_registry_ifeval_and_repeated_harbor_configs(tmp_path, monkeypatch):
-    _install_fake_evalchemy_preflight(monkeypatch)
     _install_fake_harbor_preflight(monkeypatch)
     ifeval = Path("experiments/evaluation/configs/evalchemy/ifeval.yaml")
     first = _write_harbor_config(tmp_path / "first-policy.yaml")

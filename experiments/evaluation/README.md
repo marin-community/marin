@@ -106,18 +106,20 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
-The file schema comes from the `evalchemy_config.EvaluationConfig` packaged at the revision in
-`config/external/evalchemy/uv.lock`. Before opening Iris, the launcher loads and canonicalizes every
-file in that locked environment and requires each task to resolve in the pinned Evalchemy or lm-eval
-catalog. Unknown fields, conflicting generation/context limits, task options for unselected tasks,
-and unknown task names fail during this preflight.
+Marin decodes the `evalchemy_config.EvaluationConfig`-compatible fields without importing Evalchemy.
+The evaluation child then invokes the `evalchemy` console script from the pinned external runtime.
+A dry run checks the YAML shape and the resolved Marin launch plan; task availability is checked when
+the Evalchemy process starts. [evalchemy#67](https://github.com/marin-community/evalchemy/issues/67)
+tracks a CLI validation mode that can move task-catalog errors back before Iris submission.
 
 `tasks` selects one or more evaluator task names. Use `task_options.<task>` for `num_fewshot`,
 `task_alias`, `generation`, `unsafe_code`, and `completion_only`; the remaining portable fields include
 `apply_chat_template`, `limit`, `batch_size`, `seed`, `gen_kwargs`, `extra_model_args`, `max_length`,
-and `max_tokens`. The model catalog supplies its chat-template and generation overlays, and an
-explicit launcher `--limit` overrides the file limit. `record.json` stores the resulting task options
-and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`.
+and `max_tokens`. `runtime_extras` names optional Evalchemy dependency groups required by custom task
+packages, such as `ifeval`. The model catalog supplies its chat-template and generation overlays, and
+an explicit launcher `--limit` overrides the file limit. `record.json` stores the resulting task
+options and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`; the
+record provenance stores the exact Evalchemy requirement, including runtime extras.
 
 `--evalchemy-config` is additive with registry `--evals` and file-backed `--harbor-config`. The
 launcher preserves argument order by source: registry entries, Evalchemy files, then Harbor files.
@@ -225,14 +227,15 @@ Every explicit `serve` value wins over what `auto_serve_overrides` derives from 
 `config.json`; `generation.extra_gen_kwargs` (e.g. `skip_special_tokens=false` for a thinking model)
 rides on `--gen_kwargs`.
 
-Add an `EvalchemyDefinition` to `EVALS` in `evals.py`, or add a same-named Harbor `JobConfig` YAML
-under `configs/harbor/` and reference it with `harbor_definition()`. Add the key to `SUITES` when it
-belongs in a named group. Task flags that matter for served evals:
+Add a same-named Evalchemy YAML file under `configs/evalchemy/` and add its name to
+`_STANDARD_EVALCHEMY_EVALS` in `evals.py`, or add a Harbor `JobConfig` YAML under `configs/harbor/`
+and reference it with `harbor_definition()`. Add the key to `SUITES` when it belongs in a named group.
+Task flags that matter for served evals:
 `generation` routes the task through the chat API for chat-template models (MCQ tasks always use
 completions, which alone can echo prompt logprobs); `unsafe_code` passes lm-eval's
 `--confirm_run_unsafe_code`; and `completion_only` pins a generation task to the completions API.
 
-Use `_chat_eval` for a benchmark under Evalchemy's `eval/chat_benchmarks` tree. It normalizes the
-task directory into the matching Evalchemy extra, so adding a benchmark installs its endpoint and
-grading dependencies without rebuilding an image. The isolated client also installs CPU-only
-PyTorch as a compatibility floor; inference remains in the separately served model process.
+For a benchmark under Evalchemy's `eval/chat_benchmarks` tree, set `runtime_extras` to its matching
+Evalchemy extra so the endpoint and grading dependencies are installed without rebuilding an image.
+The isolated client also installs CPU-only PyTorch as a compatibility floor; inference remains in
+the separately served model process.

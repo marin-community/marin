@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 
-from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, ValidatedEvalchemyConfig
+from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS, EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_MAX_GEN_TOKS,
     DEFAULT_NUM_CONCURRENT,
@@ -27,6 +27,7 @@ from marin.external_dependencies import EVALCHEMY
 from rigging.secrets import SecretSpec
 
 _DAYTONA_ENVIRONMENT_TYPE = "daytona"
+_EVALCHEMY_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
     {
@@ -40,7 +41,8 @@ _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
 
 @dataclass(frozen=True)
 class EvalchemyDefinition:
-    config: EvalchemyRunConfig
+    name: str
+    config_path: Path
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
     def record_ref_for(self, config: EvalchemyRunConfig) -> EvalRef:
@@ -71,21 +73,18 @@ class EvalchemyDefinition:
             ),
         )
 
-    @property
-    def runtime_descriptor(self) -> str:
-        return self.config.runtime.requirement
-
-    def config_for(self, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
-        effective_limit = self.config.max_eval_instances if limit is None else limit
+    def config_for(self, source: EvalchemyConfig, model: ModelConfig, limit: int | None) -> EvalchemyRunConfig:
+        config = evalchemy_run_config(self.name, source)
+        effective_limit = config.max_eval_instances if limit is None else limit
         return replace(
-            self.config,
+            config,
             apply_chat_template=model.apply_chat_template,
             max_gen_toks=(
-                model.generation.max_gen_toks if model.generation.max_gen_toks is not None else self.config.max_gen_toks
+                model.generation.max_gen_toks if model.generation.max_gen_toks is not None else config.max_gen_toks
             ),
             max_eval_instances=effective_limit,
             extra_gen_kwargs={
-                **self.config.extra_gen_kwargs,
+                **config.extra_gen_kwargs,
                 **model.generation.extra_gen_kwargs,
             },
         )
@@ -149,8 +148,8 @@ def harbor_definition(
     )
 
 
-def evalchemy_definition(name: str, config: ValidatedEvalchemyConfig) -> EvalchemyDefinition:
-    """Lower one pinned portable config into Marin's served Evalchemy runner."""
+def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConfig:
+    """Lower one launch file into Marin's served Evalchemy runner."""
     tasks: list[EvalTaskConfig] = []
     for task_name in config.tasks:
         options = config.task_options.get(task_name)
@@ -185,152 +184,76 @@ def evalchemy_definition(name: str, config: ValidatedEvalchemyConfig) -> Evalche
     extra_gen_kwargs = dict(config.gen_kwargs)
     for key in ("max_tokens", "max_new_tokens", "max_gen_toks"):
         extra_gen_kwargs.pop(key, None)
-    return EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name=name,
-            tasks=tuple(tasks),
-            apply_chat_template=config.apply_chat_template,
-            max_gen_toks=config.max_tokens or DEFAULT_MAX_GEN_TOKS,
-            max_eval_instances=config.limit,
-            num_concurrent=num_concurrent,
-            batch_size=config.batch_size,
-            seed=config.seed,
-            extra_gen_kwargs=extra_gen_kwargs,
-            extra_model_args=extra_model_args,
-            max_length=config.max_length,
-            runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement(config.runtime_extras)),
-        )
+    return EvalchemyRunConfig(
+        name=name,
+        tasks=tuple(tasks),
+        apply_chat_template=config.apply_chat_template,
+        max_gen_toks=config.max_tokens or DEFAULT_MAX_GEN_TOKS,
+        max_eval_instances=config.limit,
+        num_concurrent=num_concurrent,
+        batch_size=config.batch_size,
+        seed=config.seed,
+        extra_gen_kwargs=extra_gen_kwargs,
+        extra_model_args=extra_model_args,
+        max_length=config.max_length,
+        runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement(config.runtime_extras)),
     )
 
 
 EvaluationDefinition = EvalchemyDefinition | HarborDefinition
 
 
-def _mcq_eval(name: str, task: str, shots: int) -> EvalchemyDefinition:
-    return EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name=name,
-            tasks=(EvalTaskConfig(task, shots, task_alias=f"{task}_{shots}shot"),),
-            max_gen_toks=256,
-        )
-    )
-
-
-def _gen_eval(name: str, task: str, shots: int, max_gen_toks: int) -> EvalchemyDefinition:
-    return EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name=name,
-            tasks=(EvalTaskConfig(task, shots, task_alias=f"{task}_{shots}shot", generation=True),),
-            max_gen_toks=max_gen_toks,
-        )
-    )
-
-
-def _chat_eval(name: str, task: str, max_gen_toks: int, *, unsafe_code: bool = False) -> EvalchemyDefinition:
-    benchmark_extra = task.lower().replace("_", "-")
-    return EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name=name,
-            tasks=(EvalTaskConfig(task, 0, task_alias=name, generation=True, unsafe_code=unsafe_code),),
-            max_gen_toks=max_gen_toks,
-            runtime=EvalchemyRuntimeConfig(requirement=EVALCHEMY.requirement((benchmark_extra,))),
-        )
-    )
-
+_STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
+    "mmlu",
+    "arc-challenge",
+    "hellaswag",
+    "winogrande",
+    "truthfulqa",
+    "boolq",
+    "piqa",
+    "openbookqa",
+    "gsm8k",
+    "math500",
+    "humaneval",
+    "arc-easy",
+    "lambada",
+    "triviaqa",
+    "nq-open",
+    "drop",
+    "gsm8k-0shot",
+    "aime24",
+    "olympiadbench",
+    "humanevalplus",
+    "mbppplus",
+    "mmlu-smoke",
+    "gsm8k-smoke",
+)
 
 EVALS: dict[str, EvaluationDefinition] = {
-    # The core benchmarks, one eval per task so every model x task pair is its own run with its own
-    # inference/eval jobs, record, and per-question parquet. Shot counts follow the HF OpenLLM-v1
-    # conventions so scores line up with public leaderboards.
-    "mmlu": _mcq_eval("mmlu", "mmlu", 5),
-    "arc-challenge": _mcq_eval("arc-challenge", "arc_challenge", 25),
-    "hellaswag": _mcq_eval("hellaswag", "hellaswag", 10),
-    "winogrande": _mcq_eval("winogrande", "winogrande", 5),
-    "truthfulqa": _mcq_eval("truthfulqa", "truthfulqa_mc2", 0),
-    "boolq": _mcq_eval("boolq", "boolq", 0),
-    "piqa": _mcq_eval("piqa", "piqa", 0),
-    "openbookqa": _mcq_eval("openbookqa", "openbookqa", 0),
-    "gsm8k": EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name="gsm8k",
-            tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
-            max_gen_toks=512,
-        )
-    ),
-    # Evalchemy's chat-native MATH500 benchmark (boxed-answer extraction over the HuggingFaceH4
-    # MATH-500 split). A messages-based task: it runs through the chat route, so every model needs
-    # a server-side chat template (snowball serves one via its vLLM args).
-    "math500": _chat_eval("math500", "MATH500", max_gen_toks=8192),
-    "humaneval": EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name="humaneval",
-            tasks=(
-                EvalTaskConfig(
-                    "humaneval",
-                    0,
-                    task_alias="humaneval_0shot",
-                    generation=True,
-                    unsafe_code=True,
-                    completion_only=True,
-                ),
-            ),
-            max_gen_toks=1024,
-        )
-    ),
-    # --- Baseline lm-eval-harness NLP tasks ---
-    # mmlu/arc-challenge/hellaswag/winogrande/truthfulqa/boolq/piqa/openbookqa above already carry the
-    # standard OpenLLM shot counts; these fill in the rest of the 14-task NLP suite (see NLP_EVALS).
-    "arc-easy": _mcq_eval("arc-easy", "arc_easy", 0),
-    "lambada": _mcq_eval("lambada", "lambada_openai", 0),
-    "triviaqa": _gen_eval("triviaqa", "triviaqa", 5, max_gen_toks=128),
-    "nq-open": _gen_eval("nq-open", "nq_open", 5, max_gen_toks=128),
-    "drop": _gen_eval("drop", "drop", 3, max_gen_toks=256),
-    # gsm8k at 0-shot, a distinct eval identity from the existing 5-shot "gsm8k" so evaldash never
-    # mixes the two protocols in one history/column.
-    "gsm8k-0shot": _gen_eval("gsm8k-0shot", "gsm8k", 0, max_gen_toks=512),
-    # --- Baseline evalchemy chat benchmarks (greedy) ---
-    # 8192-token generation budget for the math-reasoning benchmarks (matches "math500"). A much larger
-    # budget makes a weak model generate to the cap on every unsolved problem; each request then
-    # exceeds the lm-eval API client timeout and retry-storms the endpoint. Raise it per model when a
-    # capable thinking model needs longer chains.
-    "aime24": _chat_eval("aime24", "AIME24", max_gen_toks=8192),
-    "olympiadbench": _chat_eval("olympiadbench", "OlympiadBench", max_gen_toks=8192),
-    "humanevalplus": _chat_eval("humanevalplus", "HumanEvalPlus", max_gen_toks=1024, unsafe_code=True),
-    "mbppplus": _chat_eval("mbppplus", "MBPPPlus", max_gen_toks=1024, unsafe_code=True),
-    "mmlu-smoke": EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name="mmlu-smoke",
-            tasks=(EvalTaskConfig("mmlu_abstract_algebra", 0, task_alias="mmlu_abstract_algebra_0shot"),),
-            max_gen_toks=256,
-            max_eval_instances=64,
-        )
-    ),
-    "gsm8k-smoke": EvalchemyDefinition(
-        EvalchemyRunConfig(
-            name="gsm8k-smoke",
-            tasks=(EvalTaskConfig("gsm8k", 5, task_alias="gsm8k_5shot", generation=True),),
-            max_gen_toks=512,
-            max_eval_instances=128,
-        )
-    ),
-    # --- Harbor (agentic registry benchmarks) ---
-    # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
-    # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
-    "aime-harbor": harbor_definition("aime-harbor"),
-    "aime-smoke": harbor_definition("aime-smoke", 2),
-    # Agentic datasets contain Harbor task directories and run with Daytona.
-    "tb2": harbor_definition("tb2"),
-    "tb2-lite": harbor_definition("tb2-lite", 2),
-    "swebench": harbor_definition("swebench"),
-    "swebench-lite": harbor_definition("swebench-lite", 2),
-    "swebench-full": harbor_definition("swebench-full"),
-    "gaia": harbor_definition("gaia"),
-    "bfcl": harbor_definition("bfcl"),
-    "aider": harbor_definition("aider"),
-    "medagentbench": harbor_definition("medagentbench"),
-    "financeagent": harbor_definition("financeagent"),
-    "grug-opencode-id": harbor_definition("grug-opencode-id"),
+    name: EvalchemyDefinition(name=name, config_path=_EVALCHEMY_CONFIG_DIR / f"{name}.yaml")
+    for name in _STANDARD_EVALCHEMY_EVALS
 }
+EVALS.update(
+    {
+        # --- Harbor (agentic registry benchmarks) ---
+        # aime@1.0 is 60 AIME math problems; the served model solves each in a Daytona sandbox and
+        # Harbor's verifier scores the boxed answer. aime-smoke caps the task count for a fast check.
+        "aime-harbor": harbor_definition("aime-harbor"),
+        "aime-smoke": harbor_definition("aime-smoke", 2),
+        # Agentic datasets contain Harbor task directories and run with Daytona.
+        "tb2": harbor_definition("tb2"),
+        "tb2-lite": harbor_definition("tb2-lite", 2),
+        "swebench": harbor_definition("swebench"),
+        "swebench-lite": harbor_definition("swebench-lite", 2),
+        "swebench-full": harbor_definition("swebench-full"),
+        "gaia": harbor_definition("gaia"),
+        "bfcl": harbor_definition("bfcl"),
+        "aider": harbor_definition("aider"),
+        "medagentbench": harbor_definition("medagentbench"),
+        "financeagent": harbor_definition("financeagent"),
+        "grug-opencode-id": harbor_definition("grug-opencode-id"),
+    }
+)
 
 # A fast cluster smoke: one small MCQ cut plus a capped gsm8k generation task.
 SMOKE_EVALS: tuple[str, ...] = ("mmlu-smoke", "gsm8k-smoke")

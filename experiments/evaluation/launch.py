@@ -17,7 +17,7 @@ from pathlib import Path
 from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
-from marin.evaluation.evalchemy.config import preflight_evalchemy_configs
+from marin.evaluation.evalchemy.config import EvalchemyConfig, load_evalchemy_configs
 from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
@@ -50,7 +50,6 @@ from experiments.evaluation.evals import (
     EvalchemyDefinition,
     EvaluationDefinition,
     HarborDefinition,
-    evalchemy_definition,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
@@ -137,10 +136,12 @@ def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefi
     registry_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
         (eval_key, EVALS[eval_key]) for eval_key in spec.evals
     )
-    validated_evalchemy = preflight_evalchemy_configs([selection.path for selection in spec.evalchemy_configs])
     evalchemy_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
-        (selection.name, evalchemy_definition(selection.name, config))
-        for selection, config in zip(spec.evalchemy_configs, validated_evalchemy, strict=True)
+        (
+            selection.name,
+            EvalchemyDefinition(name=selection.name, config_path=selection.path),
+        )
+        for selection in spec.evalchemy_configs
     )
     harbor_definitions: tuple[tuple[str, EvaluationDefinition], ...] = tuple(
         (
@@ -166,11 +167,13 @@ class _ResolvedDefinition:
     secret_env: dict[str, SecretSpec]
 
 
-def _preflight_definitions(
+def _resolve_definitions(
     definitions: tuple[tuple[str, EvaluationDefinition], ...],
     model: ModelConfig,
     limit: int | None,
 ) -> tuple[tuple[str, _ResolvedDefinition], ...]:
+    evalchemy_definitions = [definition for _, definition in definitions if isinstance(definition, EvalchemyDefinition)]
+    evalchemy_configs = iter(load_evalchemy_configs([definition.config_path for definition in evalchemy_definitions]))
     harbor_definitions = [definition for _, definition in definitions if isinstance(definition, HarborDefinition)]
     requests = [(definition.config_path, dict(model.agent.agent_kwargs)) for definition in harbor_definitions]
     validated_configs = iter(preflight_harbor_configs(requests))
@@ -178,13 +181,14 @@ def _preflight_definitions(
     resolved: list[tuple[str, _ResolvedDefinition]] = []
     for name, definition in definitions:
         if isinstance(definition, EvalchemyDefinition):
-            config = definition.config_for(model, limit)
+            source: EvalchemyConfig = next(evalchemy_configs)
+            config = definition.config_for(source, model, limit)
             resolved.append(
                 (
                     name,
                     _ResolvedDefinition(
                         record_ref=definition.record_ref_for(config),
-                        runtime_descriptor=definition.runtime_descriptor,
+                        runtime_descriptor=config.runtime.requirement,
                         executor=EvalchemyExecutor(config),
                         secret_env=dict(definition.secret_env),
                     ),
@@ -221,7 +225,7 @@ def build_evaluation_batch(
         if accelerator.platform is not Platform.GPU:
             raise ValueError("--federated_cluster requires a GPU accelerator")
         accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
-    definitions = _preflight_definitions(_evaluation_definitions(spec), model, spec.limit)
+    definitions = _resolve_definitions(_evaluation_definitions(spec), model, spec.limit)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
     evaluations: list[Evaluation] = []
@@ -266,7 +270,7 @@ def build_evaluation_batch(
 
 
 def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
-    """Resolve and preflight one launch before an Iris client is opened."""
+    """Resolve one launch before an Iris client is opened."""
     provenance = LaunchProvenance(
         git_sha=_git_sha(),
         launch_host=socket.gethostname(),
@@ -275,5 +279,5 @@ def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
 
 
 def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
-    """Submit one preflighted CPU orchestrator batch."""
+    """Submit one resolved CPU orchestrator batch."""
     return submit_evaluation_batch(batch, client)
