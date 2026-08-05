@@ -5,7 +5,7 @@
 
 ``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Two commands:
 ``launch`` submits runs and optionally waits for their object-store records; ``backfill-samples``
-rewrites every run's per-sample parquet exports from its kept ``samples_*.jsonl`` sources.
+rebuilds every run's finestore sample archive from its kept ``samples_*.jsonl`` sources.
 """
 
 from __future__ import annotations
@@ -192,12 +192,12 @@ def launch(
     help="Object-store prefix(es) to scan for records; repeatable.",
 )
 def backfill_samples(prefixes: tuple[str, ...]) -> None:
-    """Rewrite every run's per-sample parquets from its kept ``samples_*.jsonl`` sources."""
+    """Rebuild every run's finestore sample archive from its kept ``samples_*.jsonl`` sources."""
     configure_coreweave_s3()
     for prefix in prefixes:
         for record in list_records(prefix):
             written = export_lm_eval_samples(record.results_path)
-            click.echo(f"{record.run_id}  {len(written)} parquet(s)  {record.results_path}")
+            click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
 
 
 def main() -> None:

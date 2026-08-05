@@ -15,14 +15,18 @@ export time) or ``generation`` (the model produced free text; ``output`` is the 
 API) or a chat message list (``prompt_messages``); exactly one is set. ``correct`` is resolved once
 at export time from the primary metric.
 
-Storage is one ``samples_<task>_<timestamp>.parquet`` per (sub)task next to the mechanism's native
-output, and the parquet schema is the pydantic model itself: the writer is ``model_dump`` and the
-reader is ``model_validate``, with nested fields stored as parquet structs/lists. ``schema_version``
-is a model field, so it rides in every row for future evolution.
+A run's durable storage is one finestore archive rooted at its results directory (see the archive
+adapter below). The archive pins each table's column types from the pydantic model (via
+``finestore.arrow_schema``), so the writer is ``model_dump`` and the reader is ``model_validate``,
+with nested fields stored as parquet structs/lists and the dynamic-keyed ``metrics`` as a
+``map<string,double>`` that cannot drift its type across shards. ``schema_version`` is a model field,
+so it rides in every row for future evolution. The legacy per-(sub)task
+``samples_<task>_<timestamp>.parquet`` layout is still read by the dashboard's migration fallback.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from collections.abc import Iterable
@@ -30,12 +34,16 @@ from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.schema import arrow_schema
+from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+# 3: metrics moved from an inferred struct to a pinned ``map<string,double>`` and the unused
+# ``exchange_uri`` was dropped (finestore now pins both eval tables' schemas from these models).
+SCHEMA_VERSION = 3
 
 SAMPLES_PREFIX = "samples_"
 SAMPLES_SUFFIX = ".parquet"
@@ -103,9 +111,9 @@ class EvalSample(BaseModel):
     the scoring decision explicit for the UI. ``doc`` is the source dataset row as a JSON string, kept
     verbatim as the escape hatch for anything the normalized fields do not carry.
 
-    Rows stay bounded: the two unbounded payloads (an agentic trajectory, a prediction's raw
-    request/response exchange) are stored as sibling artifact files and referenced here by URI, so the
-    columnar reader never has to materialize them to page the light columns.
+    Rows stay bounded: the one unbounded payload, an agentic trajectory, is stored as a sibling blob
+    and referenced here by ``trajectory_uri``, so the columnar reader never has to materialize it to
+    page the light columns.
     """
 
     schema_version: int = SCHEMA_VERSION
@@ -121,7 +129,6 @@ class EvalSample(BaseModel):
     extracted: str | None = None
     target_text: str | None = None
     trajectory_uri: str | None = None
-    exchange_uri: str | None = None
     grading: Grading | None = None
     metrics: dict[str, float] = {}
     correct: bool | None = None
@@ -361,26 +368,216 @@ def _task_from_filename(name: str, suffix: str) -> str:
     return name[len(SAMPLES_PREFIX) : -len(suffix)].rsplit("_", 1)[0]
 
 
-def export_lm_eval_samples(out_path: str) -> list[str]:
-    """Write a contract parquet sibling for every lm-eval ``samples_*.jsonl`` under ``out_path``.
+# --------------------------------------------------------------------------------------------------
+# finestore archive adapter: an eval run's durable output is one finestore archive rooted at its
+# results directory, with a ``samples`` table (one row per evaluated question, this contract), a
+# ``steps`` table (agentic trajectories flattened for column projection), and finestore's reserved
+# ``blobs`` table (raw trajectories and other opaque attachments). The samples row is the sample's
+# JSON dump plus the archive's ``trial_id`` key; the reader ignores that extra key when validating.
+# --------------------------------------------------------------------------------------------------
 
-    Files stay keyed per (sub)task. The source jsonl is kept: it is the mechanism's native artifact,
-    the parquet is the contract view.
+ARCHIVE_SAMPLES_TABLE = "samples"
+ARCHIVE_STEPS_TABLE = "steps"
+
+# The archive's own key on a samples row, added at write time (not an EvalSample field): a sample is
+# unique within a run by its task, its document, and (for multi-attempt Harbor runs) the trial that
+# produced it. evalchemy leaves ``trial_id`` empty: one attempt per document.
+TRIAL_ID_COLUMN = "trial_id"
+SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN)
+STEPS_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, "step_id")
+
+
+def samples_schema() -> pa.Schema:
+    """The pinned ``samples`` table schema: the :class:`EvalSample` columns plus the archive's
+    ``trial_id`` key. Pinning fixes each column's type up front, so ``metrics`` stays a
+    ``map<string,double>`` and no per-flush inference can drift a column's type across shards."""
+    return pa.schema([*arrow_schema(EvalSample), pa.field(TRIAL_ID_COLUMN, pa.string())])
+
+
+def steps_schema() -> pa.Schema:
+    """The pinned ``steps`` table schema, derived from :class:`StepRecord` (its own columns carry the
+    merge key), so token-id and logprob columns keep their list types across shards."""
+    return arrow_schema(StepRecord)
+
+
+def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
+    """One archive ``samples`` row: the sample's JSON-mode dump plus its ``trial_id`` archive key."""
+    row = sample.model_dump(mode="json")
+    row["trial_id"] = trial_id
+    return row
+
+
+def sample_from_archive_row(row: dict) -> EvalSample:
+    """Reconstruct an :class:`EvalSample` from an archive ``samples`` row.
+
+    ``metrics`` is a pinned ``map<string,double>``, so a batch that wrote no metrics reads back a null
+    map and a partly-populated map can carry null values; normalize null, absent, and null-valued
+    metrics to a plain dict (a null value means the metric is absent, not zero) before validation. The
+    caller must materialize map columns as dicts (``to_pylist(maps_as_pydicts="strict")``). Archive-only
+    keys (``trial_id`` and finestore's ``_seq``/``_writer``/``_gen`` columns) are ignored by the model.
+    """
+    metrics = row.get("metrics") or {}
+    return EvalSample.model_validate(
+        {**row, "metrics": {name: value for name, value in metrics.items() if value is not None}}
+    )
+
+
+def _content_to_text(value: object) -> str | None:
+    """A trajectory step's message, coerced to text (multimodal content parts become JSON)."""
+    if value is None or isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+@dataclasses.dataclass(frozen=True)
+class StepRecord:
+    """One flattened agentic-trajectory step: the row schema of the archive ``steps`` table.
+
+    Token-id and logprob arrays stay as native list columns (the RL signal a reader projects); nested
+    tool calls and observations are kept as JSON strings. Sub-agent trajectories are preserved in the
+    raw-trajectory blob rather than flattened here.
+    """
+
+    task: str
+    doc_id: str
+    trial_id: str
+    step_id: int | None
+    source: str | None
+    model_name: str | None
+    message: str | None
+    reasoning_content: str | None
+    tool_calls_json: str | None
+    observation_json: str | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    cost_usd: float | None
+    prompt_token_ids: list[int] | None
+    completion_token_ids: list[int] | None
+    logprobs: list[float] | None
+
+
+def trajectory_step_rows(trajectory: dict, *, task: str, doc_id: str, trial_id: str) -> list[StepRecord]:
+    """Flatten a trajectory's top-level steps into typed :class:`StepRecord`s."""
+    records = []
+    for step in trajectory.get("steps") or []:
+        metrics = step.get("metrics") or {}
+        tool_calls = step.get("tool_calls")
+        observation = step.get("observation")
+        records.append(
+            StepRecord(
+                task=task,
+                doc_id=doc_id,
+                trial_id=trial_id,
+                step_id=step.get("step_id"),
+                source=step.get("source"),
+                model_name=step.get("model_name"),
+                message=_content_to_text(step.get("message")),
+                reasoning_content=step.get("reasoning_content"),
+                tool_calls_json=json.dumps(tool_calls, ensure_ascii=False) if tool_calls is not None else None,
+                observation_json=json.dumps(observation, ensure_ascii=False) if observation is not None else None,
+                prompt_tokens=metrics.get("prompt_tokens"),
+                completion_tokens=metrics.get("completion_tokens"),
+                cost_usd=metrics.get("cost_usd"),
+                prompt_token_ids=metrics.get("prompt_token_ids"),
+                completion_token_ids=metrics.get("completion_token_ids"),
+                logprobs=metrics.get("logprobs"),
+            )
+        )
+    return records
+
+
+@dataclasses.dataclass(frozen=True)
+class StoredTrajectory:
+    """The result of archiving one raw trajectory: its blob reference and its flattened steps."""
+
+    uri: str
+    steps: list[StepRecord]
+
+
+class EvaluationStore:
+    """One eval run's finestore archive: a ``samples`` table (the :class:`EvalSample` contract), a
+    ``steps`` table (flattened agentic trajectories), and raw trajectories held as blobs and
+    referenced by a ``finestore://`` URI. A caller adds samples and trajectories through this wrapper
+    without handling the individual tables; reads go through ``CompositeReader`` over the same root.
+    """
+
+    def __init__(self, store: DataStore) -> None:
+        self._store = store
+        self._samples = store.table(
+            ARCHIVE_SAMPLES_TABLE, schema=samples_schema(), merge_key=SAMPLES_MERGE_KEY, schema_version=SCHEMA_VERSION
+        )
+        self._steps = store.table(
+            ARCHIVE_STEPS_TABLE, schema=steps_schema(), merge_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION
+        )
+
+    @classmethod
+    def open(cls, root: str, *, writer_id: str) -> EvaluationStore:
+        """Open the archive for the run rooted at ``root``, written by ``writer_id``."""
+        return cls(DataStore.open(root, writer_id=writer_id))
+
+    def add_sample(self, sample: EvalSample, *, trial_id: str = "") -> None:
+        """Append one evaluated question to the ``samples`` table."""
+        self._samples.append(sample_to_archive_row(sample, trial_id=trial_id))
+
+    def add_trajectory(self, raw: bytes, *, task: str, doc_id: str, trial_id: str) -> StoredTrajectory:
+        """Store a raw trajectory as a blob and flatten its steps into the ``steps`` table.
+
+        The payload is written once under ``<trial_id>/trajectory.json``; an unparseable payload is
+        still stored but yields no steps. Returns the blob's ``finestore://`` URI and the steps
+        written, so a caller can reference the trajectory from its sample and count what was flattened.
+        """
+        uri = self._store.write(
+            f"{trial_id}/trajectory.json", {"task": task, "doc_id": doc_id, "trial_id": trial_id}, raw
+        )
+        try:
+            trajectory = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            logger.warning("trajectory for trial %s is unparseable; storing the blob without steps", trial_id)
+            return StoredTrajectory(uri=uri, steps=[])
+        steps = trajectory_step_rows(trajectory, task=task, doc_id=doc_id, trial_id=trial_id)
+        if steps:
+            self._steps.extend(dataclasses.asdict(step) for step in steps)
+        return StoredTrajectory(uri=uri, steps=steps)
+
+    def seal(self) -> None:
+        """Flush every table and mark the run complete."""
+        self._store.seal()
+
+    def close(self) -> None:
+        """Stop the writer and flush any remaining rows."""
+        self._store.close()
+
+    def __enter__(self) -> EvaluationStore:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> int:
+    """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
+
+    Returns the number of samples written. The source jsonl is kept as the mechanism's native
+    artifact. Re-running is idempotent: samples dedupe on ``(task, doc_id, trial_id)``.
     """
     fs, root = url_to_fs(out_path)
-    written: list[str] = []
-    for path in fs.find(root):
-        name = path.rsplit("/", 1)[-1]
-        if not (name.startswith(SAMPLES_PREFIX) and name.endswith(".jsonl")):
-            continue
-        with fs.open(path, "r") as handle:
-            rows = [json.loads(line) for line in handle if line.strip()]
-        if not rows:
-            logger.warning("samples file %s is empty; skipping parquet export", path)
-            continue
-        task = _task_from_filename(name, ".jsonl")
-        samples = [sample_from_lm_eval(task, raw) for raw in rows]
-        dest = path[: -len(".jsonl")] + SAMPLES_SUFFIX
-        write_sample_parquet(fs, dest, samples)
-        written.append(dest)
-    return written
+    store = EvaluationStore.open(out_path, writer_id=writer_id)
+    count = 0
+    try:
+        for path in fs.find(root):
+            name = path.rsplit("/", 1)[-1]
+            if not (name.startswith(SAMPLES_PREFIX) and name.endswith(".jsonl")):
+                continue
+            with fs.open(path, "r") as handle:
+                rows = [json.loads(line) for line in handle if line.strip()]
+            if not rows:
+                logger.warning("samples file %s is empty; skipping archive export", path)
+                continue
+            task = _task_from_filename(name, ".jsonl")
+            for raw in rows:
+                store.add_sample(sample_from_lm_eval(task, raw))
+                count += 1
+        store.seal()
+    finally:
+        store.close()
+    return count

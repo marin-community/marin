@@ -238,7 +238,7 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
-        parquets = export_lm_eval_samples(output_dir)
+        samples_written = export_lm_eval_samples(output_dir)
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),
@@ -247,9 +247,9 @@ def run_evalchemy(
             log_tails={},
         ) from exc
     logger.info(
-        "Evalchemy run %s wrote %d sample parquet file(s) under %s",
+        "Evalchemy run %s wrote %d sample(s) to the finestore archive under %s",
         config.name,
-        len(parquets),
+        samples_written,
         output_dir,
     )
     return EvalchemyOutcome(

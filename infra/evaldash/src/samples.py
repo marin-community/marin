@@ -1,12 +1,16 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Read per-sample contract parquet exports for a run's results directory.
+"""Read a run's per-sample eval output for the dashboard sample browser.
 
-marin.evaluation.samples writes one samples_<task>_<timestamp>.parquet per (sub)task under a run's
-results_path, each row an EvalSample. This module discovers those files with fsspec, validates every
-row back into the contract model, and returns typed Pydantic responses for the sample browser.
-Loaded tables are cached briefly so paging does not re-read object storage on every request.
+A run's durable output is a finestore archive rooted at its ``results_path``: a ``samples`` table
+(one row per evaluated question, the shared :class:`EvalSample` contract) plus a ``blobs`` table that
+holds raw agent trajectories a sample references by a ``finestore://`` URI. This module discovers the
+tasks, pages the samples for one task, and resolves a trajectory reference, returning typed responses.
+
+Runs written before the archive existed still carry one ``samples_<task>_<ts>.parquet`` per (sub)task
+and a ``gs://`` trajectory URI; the reader falls back to that layout when a run has no archive, so a
+run browses correctly whether or not it has been migrated.
 """
 
 from __future__ import annotations
@@ -18,8 +22,16 @@ from typing import Generic, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
-from marin.evaluation.samples import SAMPLES_PREFIX, SAMPLES_SUFFIX, EvalSample, primary_metric
+from marin.evaluation.samples import (
+    ARCHIVE_SAMPLES_TABLE,
+    SAMPLES_PREFIX,
+    SAMPLES_SUFFIX,
+    EvalSample,
+    primary_metric,
+    sample_from_archive_row,
+)
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem import StoragePath
 
@@ -27,15 +39,18 @@ logger = logging.getLogger(__name__)
 
 CACHE_TTL = 120.0
 
-# A single lazily-loaded artifact (an agentic trajectory, a prediction's exchange) is capped so one
-# request cannot pull an unbounded object into memory. Trajectories run tens of KB to a few MB; 16
-# MiB leaves generous headroom while still refusing a pathological file. Successful reads are cached
-# for the same window as sample tables so re-opening a trajectory does not re-hit object storage.
+# A lazily-loaded trajectory is capped so one request cannot pull an unbounded object into memory.
+# Trajectories run tens of KB to a few MB; 16 MiB leaves headroom while refusing a pathological file.
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
+
+# The finestore reference scheme a migrated sample uses for its trajectory.
+_ARCHIVE_URI_PREFIX = "finestore://"
 
 
 class SampleTask(BaseModel):
-    """One discovered task and the number of parquet shards that contain it."""
+    """One discovered task. ``files`` is the number of parquet objects backing its samples: on the
+    archive path this is the run's whole ``samples``-table shard count (the same for every task); on
+    the legacy path it is the count of that task's per-(sub)task parquet files."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -83,13 +98,13 @@ class SamplesResponse(BaseModel):
 
 
 class ArtifactResponse(BaseModel):
-    """One sample-referenced artifact (trajectory/exchange) resolved to text for the browser.
+    """One sample-referenced artifact (the trajectory) resolved to text for the browser.
 
     ``available`` is False -- with a human-readable ``reason`` -- for every non-happy path (the run
-    has no results directory, the URI escapes it, the object is missing/unreadable, or it exceeds the
-    size cap), mirroring the logs endpoint's reachability degradation rather than raising. ``text`` is
-    the decoded object body when available, and ``media_type`` reflects the URI extension so the
-    client knows whether to parse JSON.
+    has no results directory, the reference is missing/unreadable, or it exceeds the size cap),
+    mirroring the logs endpoint's reachability degradation rather than raising. ``text`` is the decoded
+    object body when available, and ``media_type`` reflects the URI extension so the client knows
+    whether to parse JSON.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -129,28 +144,74 @@ class _TtlCache(Generic[T]):
 
 _table_cache: _TtlCache[pa.Table] = _TtlCache(CACHE_TTL)
 _artifact_cache: _TtlCache[ArtifactResponse] = _TtlCache(CACHE_TTL)
+_discovery_cache: _TtlCache[tuple[int, tuple[str, ...]]] = _TtlCache(CACHE_TTL)
 
 
-def _sample_task(filename: str) -> str:
+# --------------------------------------------------------------------------------------------------
+# finestore archive access
+# --------------------------------------------------------------------------------------------------
+
+
+def _archive_discovery(results_path: str) -> tuple[int, tuple[str, ...]]:
+    """The run's ``samples`` shard count and distinct task names; ``(0, ())`` means no archive.
+
+    A finestore archive is live-appended, so this is TTL-cached rather than memoized with
+    ``functools.cache``: the short window bounds repeated per-poll listings while still surfacing
+    shards a later flush adds.
+    """
+    cached = _discovery_cache.get(results_path)
+    if cached is not None:
+        return cached
+    reader = CompositeReader(results_path)
+    shard_count = len(reader.list_shards(ARCHIVE_SAMPLES_TABLE))
+    tasks: tuple[str, ...] = ()
+    if shard_count:
+        table = reader.scan(ARCHIVE_SAMPLES_TABLE, columns=["task"])
+        if table is not None and table.num_rows:
+            tasks = tuple(sorted({value for value in table.column("task").to_pylist() if value is not None}))
+    result = (shard_count, tasks)
+    _discovery_cache.put(results_path, result)
+    return result
+
+
+def _archive_task_table(results_path: str, task: str) -> pa.Table:
+    """The deduplicated ``samples`` rows for one task, cached for the paging window."""
+    key = f"archive|{results_path}|{task}"
+    cached = _table_cache.get(key)
+    if cached is not None:
+        return cached
+    table = CompositeReader(results_path).scan(ARCHIVE_SAMPLES_TABLE, where=[("task", "==", task)])
+    if table is None:
+        table = pa.table({})
+    _table_cache.put(key, table)
+    return table
+
+
+# --------------------------------------------------------------------------------------------------
+# legacy per-(sub)task parquet fallback (runs written before the archive)
+# --------------------------------------------------------------------------------------------------
+
+
+def _legacy_task(filename: str) -> str:
     """samples_<task>_<timestamp>.parquet -> <task> (the timestamp has no underscore)."""
     stem = filename[len(SAMPLES_PREFIX) : -len(SAMPLES_SUFFIX)]
     return stem.rsplit("_", 1)[0]
 
 
-def _discover(results_path: str):
-    """Return (fs, {task: [parquet_path, ...]}) for sample files under results_path."""
+def _legacy_discover(results_path: str):
+    """Return (fs, {task: [parquet_path, ...]}) for legacy sample files under results_path."""
     fs, root = url_to_fs(results_path)
     by_task: dict[str, list[str]] = {}
     for path in fs.find(root):
         name = path.rsplit("/", 1)[-1]
         if name.startswith(SAMPLES_PREFIX) and name.endswith(SAMPLES_SUFFIX):
-            by_task.setdefault(_sample_task(name), []).append(path)
+            by_task.setdefault(_legacy_task(name), []).append(path)
     return fs, by_task
 
 
-def _load_table(fs, paths: list[str]) -> pa.Table:
-    """Read and cache the concatenated parquet table for one task's sample files."""
-    key = "|".join(sorted(paths))
+def _legacy_load_table(fs, paths: list[str]) -> pa.Table:
+    """Read and cache the concatenated parquet table for one legacy task's sample files."""
+    key = f"legacy|{'|'.join(sorted(paths))}"
     cached = _table_cache.get(key)
     if cached is not None:
         return cached
@@ -163,31 +224,29 @@ def _load_table(fs, paths: list[str]) -> pa.Table:
     return table
 
 
+# --------------------------------------------------------------------------------------------------
+# public API (the server's contract)
+# --------------------------------------------------------------------------------------------------
+
+
 def list_sample_tasks(results_path: str | None) -> SampleTasksResponse:
-    """Discover tasks with exported sample parquets under a run's results directory."""
+    """Discover the tasks with exported samples under a run's results directory."""
     if not results_path:
         return SampleTasksResponse(available=False, error="run has no results_path", tasks=())
     try:
-        _fs, by_task = _discover(results_path)
+        shard_count, archive_tasks = _archive_discovery(results_path)
+        if shard_count:
+            tasks = tuple(SampleTask(task=task, files=shard_count) for task in archive_tasks)
+        else:
+            _fs, by_task = _legacy_discover(results_path)
+            tasks = tuple(SampleTask(task=task, files=len(paths)) for task, paths in sorted(by_task.items()))
     except Exception as exc:
         logger.info("sample discovery failed for %s: %s", results_path, exc)
-        return SampleTasksResponse(
-            available=False,
-            error=f"{type(exc).__name__}: {exc}"[:400],
-            tasks=(),
-        )
-    tasks = tuple(SampleTask(task=task, files=len(paths)) for task, paths in sorted(by_task.items()))
+        return SampleTasksResponse(available=False, error=f"{type(exc).__name__}: {exc}"[:400], tasks=())
     return SampleTasksResponse(available=True, error=None, tasks=tasks)
 
 
-def _empty_samples(
-    *,
-    available: bool,
-    error: str,
-    task: str,
-    offset: int,
-    limit: int,
-) -> SamplesResponse:
+def _empty_samples(*, available: bool, error: str, task: str, offset: int, limit: int) -> SamplesResponse:
     return SamplesResponse(
         available=available,
         error=error,
@@ -202,6 +261,17 @@ def _empty_samples(
     )
 
 
+def _task_table(results_path: str, task: str) -> pa.Table | None:
+    """The samples table for one task from the archive, or the legacy layout, or ``None`` if absent."""
+    shard_count, _tasks = _archive_discovery(results_path)
+    if shard_count:
+        table = _archive_task_table(results_path, task)
+        return table if table.num_rows else None
+    _fs, by_task = _legacy_discover(results_path)
+    paths = by_task.get(task)
+    return _legacy_load_table(_fs, paths) if paths else None
+
+
 def fetch_samples(
     results_path: str | None,
     task: str,
@@ -212,42 +282,31 @@ def fetch_samples(
 ) -> SamplesResponse:
     """Return one typed, correctness-filtered page of samples for a task."""
     if not results_path:
-        return _empty_samples(
-            available=False,
-            error="run has no results_path",
-            task=task,
-            offset=offset,
-            limit=limit,
-        )
+        return _empty_samples(available=False, error="run has no results_path", task=task, offset=offset, limit=limit)
     try:
-        fs, by_task = _discover(results_path)
-        paths = by_task.get(task)
-        if not paths:
+        table = _task_table(results_path, task)
+        if table is None:
             return _empty_samples(
-                available=True,
-                error=f"no samples for task {task!r}",
-                task=task,
-                offset=offset,
-                limit=limit,
+                available=True, error=f"no samples for task {task!r}", task=task, offset=offset, limit=limit
             )
-        table = _load_table(fs, paths)
     except Exception as exc:
         logger.info("sample fetch failed for %s/%s: %s", results_path, task, exc)
         return _empty_samples(
-            available=False,
-            error=f"{type(exc).__name__}: {exc}"[:400],
-            task=task,
-            offset=offset,
-            limit=limit,
+            available=False, error=f"{type(exc).__name__}: {exc}"[:400], task=task, offset=offset, limit=limit
         )
 
     # Counts and the correctness filter need only the light ``correct`` and ``metrics`` columns, so
     # compute them straight from the arrow columns and validate just the page's rows. Validating every
-    # row (and materializing every fat column, e.g. per-token logprobs) on each page request is what
-    # made this reader scale with the whole run instead of the page.
+    # row (and materializing every fat column) on each page request is what made this scale with the
+    # run instead of the page.
+    # ``metrics`` is a finestore ``map<string,double>`` in the archive (a struct in the legacy layout);
+    # materialize map columns as dicts so a row is ``{name: value}`` either way. Non-map columns ignore
+    # the flag.
     columns = set(table.column_names)
     correct_values = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
-    metric_maps = table.column("metrics").to_pylist() if "metrics" in columns else [None] * table.num_rows
+    metric_maps = (
+        table.column("metrics").to_pylist(maps_as_pydicts="strict") if "metrics" in columns else [None] * table.num_rows
+    )
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     picked = primary_metric(dict.fromkeys(metric_columns, 0.0))
     primary = picked[0] if picked is not None else None
@@ -268,15 +327,8 @@ def fetch_samples(
     else:
         indices = list(range(table.num_rows))
     page_indices = indices[offset : offset + limit]
-    page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist()
-    for row in page_rows:
-        # Parquet unifies the metrics struct across all rows, so a row missing a metric that another
-        # row carries reads back with that key set to null. A null value means the metric is absent
-        # for this row (an ungraded sample), not zero -- drop it so the row still validates.
-        row_metrics = row.get("metrics")
-        if row_metrics:
-            row["metrics"] = {name: value for name, value in row_metrics.items() if value is not None}
-    page = tuple(EvalSample.model_validate(row) for row in page_rows)
+    page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist(maps_as_pydicts="strict")
+    page = tuple(sample_from_archive_row(row) for row in page_rows)
     return SamplesResponse(
         available=True,
         error=None,
@@ -311,12 +363,7 @@ def _unavailable_artifact(
 
 
 def _artifact_within_results(results_path: str, uri: str) -> bool:
-    """True when ``uri`` sits under ``results_path`` with no upward traversal.
-
-    The endpoint resolves only the ``trajectory_uri``/``exchange_uri`` a run wrote under its own
-    results directory, so a URI on a different store, above the root, or reached through a ``..``
-    segment is refused.
-    """
+    """True when a legacy ``uri`` sits under ``results_path`` with no upward traversal."""
     try:
         relative = StoragePath(uri).relative_to(StoragePath(results_path))
     except ValueError:
@@ -324,25 +371,57 @@ def _artifact_within_results(results_path: str, uri: str) -> bool:
     return ".." not in relative.split("/")
 
 
-def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> ArtifactResponse:
-    """Resolve one run-local artifact URI to decoded text, path-restricted and size-capped.
+def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> ArtifactResponse:
+    """Resolve a ``finestore://`` trajectory reference to decoded text from the run's blobs table."""
+    try:
+        raw = CompositeReader(results_path).resolve(uri)
+    except Exception as exc:
+        logger.info("archive artifact resolve failed for %s: %s", uri, exc)
+        return _unavailable_artifact(uri, f"{type(exc).__name__}: {exc}"[:400])
+    if raw is None:
+        return _unavailable_artifact(uri, "artifact is not present in the archive")
+    if len(raw) > max_bytes:
+        return _unavailable_artifact(
+            uri, f"artifact is {len(raw)} bytes; exceeds the {max_bytes}-byte cap", size=len(raw), truncated=True
+        )
+    return ArtifactResponse(
+        available=True,
+        reason=None,
+        uri=uri,
+        media_type=_media_type(uri),
+        size=len(raw),
+        truncated=False,
+        text=raw.decode("utf-8", errors="replace"),
+    )
 
-    Reads succeed only for URIs under ``results_path``; anything else -- a missing results directory,
-    an out-of-tree URI, an object over ``max_bytes``, or an unreadable/unreachable object -- returns
-    ``available=False`` with a reason instead of raising, so the caller degrades like the logs view.
+
+def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> ArtifactResponse:
+    """Resolve one sample-referenced artifact URI to decoded text, size-capped.
+
+    A ``finestore://`` reference resolves from the run's archive; a legacy ``gs://``/``s3://`` URI is
+    resolved in place, path-restricted to under ``results_path``. Anything missing, out of tree, or
+    oversized returns ``available=False`` with a reason instead of raising.
     """
     if not results_path:
         return _unavailable_artifact(uri, "run has no results_path")
+
+    # A finestore:// URI is archive-relative, so two runs can share one (e.g. blobs/trial-1/...);
+    # key the cache by the run as well so one run's artifact never answers for another's.
+    cache_key = f"{results_path}|{uri}"
+    cached = _artifact_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if uri.startswith(_ARCHIVE_URI_PREFIX):
+        response = _resolve_archive_artifact(results_path, uri, max_bytes)
+        if response.available:
+            _artifact_cache.put(cache_key, response)
+        return response
+
     if not _artifact_within_results(results_path, uri):
         logger.warning("artifact fetch rejected: %s is not under %s", uri, results_path)
         return _unavailable_artifact(uri, "artifact URI is outside the run results directory")
 
-    cached = _artifact_cache.get(uri)
-    if cached is not None:
-        return cached
-
-    # Resolve through StoragePath (the guarded url_to_fs/open_url factory) so an s3:// read inherits
-    # finite socket timeouts and a cross-region read is budget-charged, the same as the path check above.
     path = StoragePath(uri)
     try:
         size = path.size()
@@ -351,7 +430,6 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
                 uri, f"artifact is {size} bytes; exceeds the {max_bytes}-byte cap", size=size, truncated=True
             )
         with path.open("rb") as handle:
-            # Read one byte past the cap so a size the filesystem misreported is still caught.
             raw = handle.read(max_bytes + 1)
     except Exception as exc:
         logger.info("artifact fetch failed for %s: %s", uri, exc)
@@ -369,5 +447,5 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
         truncated=False,
         text=raw.decode("utf-8", errors="replace"),
     )
-    _artifact_cache.put(uri, response)
+    _artifact_cache.put(cache_key, response)
     return response
