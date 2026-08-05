@@ -820,3 +820,19 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   the measured fail, not the arithmetic ceiling.
 - Untested lever: Cap XLA with `XLA_PYTHON_CLIENT_MEM_FRACTION` instead of `cuda_async`, or lower
   `NCCL_BUFFSIZE`, to leave the communicator room. Neither was measured.
+
+### 2026-08-05 03:35 UTC - MHEP-019 stopped: lower top-k does not rescue the 641 B tier
+
+- Configuration: 192 experts x i3712 at top-3, 641.4 B total, 20.7 B active, three whole experts per
+  device. Dispatch buffers are 2.25 GiB, a quarter less than the 3.00 GiB of the 649.6 B run that
+  already failed.
+- Result: The rank-0 diagnostic reports `NCCL operation ncclAlltoAll(...)`, the same failure as
+  MHEP-012c, with the coscheduled siblings cascading. Stopped after two failures.
+- Interpretation: Two different routings now fail near 650 B. Thus the binding constraint is total
+  parameter memory that leaves NCCL too little room, not the size of the dispatch buffers. Lower
+  top-k reduces the communicator demand but does not offset the parameter growth.
+- Ceiling update: One rack fits 591.6 B (measured pass) and does not fit 641.4 B (measured fail).
+  The earlier bound of 592 B to 650 B narrows to 592 B to 641 B.
+- Still open: MHEP-020 tests the other direction, holding parameters at the 590.7 B of the known
+  pass while raising dispatch to 4.50 GiB with top-6. A pass there confirms that parameters, not the
+  communicator, set the ceiling.
