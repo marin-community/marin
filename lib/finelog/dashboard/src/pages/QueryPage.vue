@@ -6,11 +6,14 @@ import { timeZoneMode } from '@/composables/useDisplayPrefs'
 import { decodeArrowIpc, type ArrowResult } from '@/utils/arrow'
 import { classifyColumns, type ColumnKind } from '@/utils/columnKind'
 import { MAX_SERIES, type ChartMark } from '@/utils/chart'
-import { formatMetric, formatTimestampMs } from '@/utils/formatting'
+import { formatMetric, formatRelativeTime, formatTimestampMs } from '@/utils/formatting'
+import { shortColumnType, type ProtoSchema } from '@/types/stats'
+import type { NamespaceColumns } from '@/utils/sqlComplete'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import CellDetailPanel from '@/components/shared/CellDetailPanel.vue'
 import ResultChart from '@/components/shared/ResultChart.vue'
+import SqlEditor from '@/components/shared/SqlEditor.vue'
 
 interface QueryResponse {
   arrowIpc?: string
@@ -31,6 +34,8 @@ const chartX = ref('')
 const chartY = ref('')
 const chartSeries = ref('')
 const chartMark = ref<ChartMark>('line')
+const chartSmoothing = ref(0)
+const chartYScale = ref<'linear' | 'log'>('linear')
 const detail = ref<{ column: string; row: Record<string, unknown> } | null>(null)
 /** Set while a URL-supplied chart selection is still waiting for a result to apply to. */
 let restoreUrlChartState = typeof route.query.view === 'string'
@@ -104,6 +109,85 @@ function pickChartDefaults() {
 
 const canChart = computed(() => numericColumns.value.length > 0 && result.value.rows.length > 0)
 
+/**
+ * Every namespace and its columns, for the editor's completion.
+ *
+ * `seq` is not in any registered schema — the store assigns it — but it is in
+ * enough real queries (it is the column that prunes a recent-rows window) that
+ * leaving it out would make completion look wrong.
+ */
+const schema = ref<NamespaceColumns[]>([])
+
+async function loadSchema() {
+  try {
+    const resp = await statsRpcCall<{ namespaces?: { namespace: string; schema?: ProtoSchema }[] }>(
+      'ListNamespaces',
+    )
+    schema.value = (resp.namespaces ?? []).map((n) => ({
+      namespace: n.namespace,
+      columns: [
+        ...(n.schema?.columns ?? []).map((c) => ({ name: c.name, type: shortColumnType(c.type) })),
+        { name: 'seq', type: 'int64' },
+      ],
+    }))
+  } catch {
+    // Completion is an assist. Losing it should not put an error banner over a
+    // page whose own query may be running fine.
+    schema.value = []
+  }
+}
+
+const HISTORY_KEY = 'finelog-query-history'
+const HISTORY_LIMIT = 20
+
+interface HistoryEntry {
+  sql: string
+  atMs: number
+  rows: number
+  ms: number
+}
+
+function readHistory(): HistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY)
+    return raw ? (JSON.parse(raw) as HistoryEntry[]) : []
+  } catch {
+    return []
+  }
+}
+
+const history = ref<HistoryEntry[]>(readHistory())
+const historyOpen = ref(false)
+
+/** Record a query that returned, newest first and one entry per distinct SQL. */
+function remember(entry: HistoryEntry) {
+  history.value = [entry, ...history.value.filter((h) => h.sql !== entry.sql)].slice(0, HISTORY_LIMIT)
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
+  } catch {
+    // Blocked site data: history still works for this session.
+  }
+}
+
+/** One CSV field: quoted only when the value would otherwise break the row. */
+function csvField(value: unknown): string {
+  const text = value === null || value === undefined ? '' : String(value)
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+/** Download the result as CSV — raw values, not the display formatting. */
+function downloadCsv() {
+  const { columns: cols, rows } = result.value
+  const lines = [cols.map(csvField).join(',')]
+  for (const row of rows) lines.push(cols.map((c) => csvField(row[c])).join(','))
+  const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'finelog-query.csv'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 async function execute() {
   if (!sql.value.trim()) return
   loading.value = true
@@ -115,6 +199,7 @@ async function execute() {
     result.value = decodeArrowIpc(resp.arrowIpc)
     rowCount.value = Number(resp.rowCount ?? result.value.rows.length)
     elapsedMs.value = performance.now() - started
+    remember({ sql: sql.value, atMs: Date.now(), rows: rowCount.value, ms: elapsedMs.value })
     pickChartDefaults()
     if (!canChart.value) view.value = 'table'
     if (restoreUrlChartState) {
@@ -161,13 +246,6 @@ function applyUrlChartState() {
   if (urlView === 'chart' && canChart.value) view.value = 'chart'
 }
 
-function onKeydown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    e.preventDefault()
-    void execute()
-  }
-}
-
 watch(chartX, () => {
   if (chartY.value === chartX.value) {
     chartY.value = numericColumns.value.find((c) => c !== chartX.value) ?? ''
@@ -189,6 +267,7 @@ watch(() => route.query.sql, (next) => {
 })
 
 onMounted(() => {
+  void loadSchema()
   if (typeof route.query.sql === 'string' && route.query.sql.trim()) void execute()
 })
 </script>
@@ -196,12 +275,7 @@ onMounted(() => {
 <template>
   <div class="space-y-3">
     <InfoCard title="SQL · DataFusion">
-      <textarea
-        v-model="sql"
-        class="w-full font-mono text-sm bg-surface-sunken border border-surface-border rounded p-3 min-h-[120px] focus:outline-none focus:border-accent"
-        spellcheck="false"
-        @keydown="onKeydown"
-      />
+      <SqlEditor v-model="sql" :schema="schema" @submit="execute" />
       <div class="flex items-center gap-3 mt-2">
         <button
           class="px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent-hover disabled:opacity-50"
@@ -210,7 +284,31 @@ onMounted(() => {
         >
           {{ loading ? 'Running…' : 'Execute' }}
         </button>
-        <span class="text-xs text-text-muted">⌘/Ctrl-Enter to run</span>
+        <span class="text-xs text-text-muted">⌘/Ctrl-Enter to run · Tab to complete</span>
+
+        <div v-if="history.length" class="relative">
+          <button
+            class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised"
+            @click="historyOpen = !historyOpen"
+          >Recent ▾</button>
+          <ul
+            v-if="historyOpen"
+            class="absolute z-20 mt-1 w-[34rem] max-h-72 overflow-auto rounded border border-surface-border bg-surface shadow-lg py-1"
+          >
+            <li
+              v-for="h in history"
+              :key="h.sql"
+              class="px-2.5 py-1.5 cursor-pointer hover:bg-surface-raised"
+              @click="sql = h.sql; historyOpen = false; execute()"
+            >
+              <div class="font-mono text-xs truncate">{{ h.sql }}</div>
+              <div class="text-[0.65rem] text-text-muted tabular-nums">
+                {{ formatRelativeTime(h.atMs) }} · {{ h.rows.toLocaleString() }} rows · {{ Math.round(h.ms) }} ms
+              </div>
+            </li>
+          </ul>
+        </div>
+
         <span v-if="!loading && !error && elapsedMs !== null" class="text-xs text-text-muted ml-auto tabular-nums">
           {{ rowCount.toLocaleString() }} row{{ rowCount === 1 ? '' : 's' }} · {{ Math.round(elapsedMs) }} ms
         </span>
@@ -254,6 +352,25 @@ onMounted(() => {
                 <option v-for="c in seriesCandidates" :key="c" :value="c">{{ c }}</option>
               </select>
             </label>
+            <label v-if="chartMark === 'line'" class="text-xs text-text-secondary flex items-center gap-1.5">
+              smooth
+              <input
+                v-model.number="chartSmoothing"
+                type="range" min="0" max="0.95" step="0.05"
+                class="w-20 accent-accent"
+                :title="chartSmoothing ? `EMA weight ${chartSmoothing.toFixed(2)}` : 'Raw samples'"
+              >
+            </label>
+            <div class="inline-flex rounded border border-surface-border overflow-hidden">
+              <button
+                v-for="s in (['linear', 'log'] as const)"
+                :key="s"
+                class="px-2 py-1 text-xs"
+                :class="chartYScale === s ? 'bg-accent text-white' : 'hover:bg-surface-raised'"
+                :title="`${s} y axis`"
+                @click="chartYScale = s"
+              >{{ s === 'linear' ? 'lin' : 'log' }}</button>
+            </div>
             <div class="inline-flex rounded border border-surface-border overflow-hidden ml-auto">
               <button
                 v-for="m in (['line', 'bar', 'scatter'] as const)"
@@ -264,9 +381,13 @@ onMounted(() => {
               >{{ m }}</button>
             </div>
           </template>
-          <span v-else-if="result.rows.length" class="text-xs text-text-muted ml-auto">
-            Click a cell for its full value
-          </span>
+          <template v-else-if="result.rows.length">
+            <span class="text-xs text-text-muted ml-auto">Click a cell for its full value</span>
+            <button
+              class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised"
+              @click="downloadCsv"
+            >CSV</button>
+          </template>
         </div>
 
         <ResultChart
@@ -277,6 +398,8 @@ onMounted(() => {
           :y="chartY"
           :series="chartSeries || undefined"
           :mark="chartMark"
+          :smoothing="chartSmoothing"
+          :y-scale="chartYScale"
         />
         <DataTable
           v-else

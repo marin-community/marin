@@ -6,6 +6,7 @@ const tabs = [
   { to: '/query', label: 'Query' },
   { to: '/dashboards', label: 'Dashboards' },
   { to: '/logs', label: 'Logs' },
+  { to: '/system', label: 'System' },
 ]
 </script>
 

@@ -5,7 +5,7 @@
   "scripts": {
     "build": "rsbuild build",
     "build:check": "vue-tsc --noEmit && rsbuild build",
-    "test": "node --test src/utils/dashboardSql.test.ts",
+    "test": "node --test 'src/utils/*.test.ts'",
     "dev": "rsbuild dev",
     "test:e2e": "playwright test"
   },

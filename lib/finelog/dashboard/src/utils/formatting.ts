@@ -66,7 +66,13 @@ export function formatTimestampMs(ms: number | null | undefined, mode: TimeZoneM
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}.${millis}`
 }
 
-/** Short axis label for `ms` — time of day, with the date when the span crosses one. */
+/**
+ * Short axis label for `ms`, at the finest resolution the span needs.
+ *
+ * The unit has to follow the span or every tick prints the same text: a
+ * one-minute window labelled to the minute reads `22:02` five times over, which
+ * tells the reader nothing about where they are.
+ */
 export function formatAxisTime(ms: number, spanMs: number, mode: TimeZoneMode): string {
   // Raw means the reader asked for the underlying count, on the axis as much as
   // in the table; formatting it as a time of day would answer a question they
@@ -75,7 +81,10 @@ export function formatAxisTime(ms: number, spanMs: number, mode: TimeZoneMode): 
   const zone = mode === 'utc' ? 'UTC' : Intl.DateTimeFormat().resolvedOptions().timeZone
   const p = zonedParts(ms, zone)
   if (spanMs > 24 * 60 * 60 * 1000) return `${p.month}-${p.day} ${p.hour}:${p.minute}`
-  return `${p.hour}:${p.minute}`
+  if (spanMs > 10 * 60 * 1000) return `${p.hour}:${p.minute}`
+  if (spanMs > 10 * 1000) return `${p.hour}:${p.minute}:${p.second}`
+  const millis = String(Math.abs(Math.trunc(ms)) % 1000).padStart(3, '0')
+  return `${p.hour}:${p.minute}:${p.second}.${millis}`
 }
 
 /** The zone abbreviation shown next to a timestamp control. */

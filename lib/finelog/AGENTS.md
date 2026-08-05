@@ -113,6 +113,21 @@ cd lib/finelog && buf generate
 10001 (`FINELOG_DEV_SERVER` to point elsewhere), so frontend work does not need
 a `npm run build` round trip into the `dist/` the Rust server reads from disk.
 
+Two surfaces are plain axum JSON rather than proto, because they describe this
+process and its files rather than the wire contract: `GET /api/server` (build
+revision, uptime, store paths, metadata-cache occupancy, the writer's format
+policy) and `GET /api/segments?namespace=NS` (catalog rows, plus footer and
+sidecar detail under `physical=true`). Both sit behind the same default-deny
+auth gate as the RPCs. `build.rs` stamps the git commit, its tree hash, and a
+dirty flag into the binary; all three are empty when the build had no checkout
+to read, as in a wheel built from an sdist.
+
+The SQL editor completes identifiers from `ListNamespaces`, so the vocabulary is
+this store's namespaces and columns rather than a general SQL dictionary.
+`utils/sqlComplete.ts` holds the ranking and `utils/chart.ts` the axis, EMA, and
+decimation maths; both are pure and tested under `npm test` without mounting a
+component.
+
 `npm run test:e2e` drives the **built** dashboard with Playwright against an
 already-running server; it does not start one. `scripts/demo.py --keep` serves a
 seeded store on the default port. Point it at a store with real segments via

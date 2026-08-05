@@ -297,6 +297,11 @@ impl SidecarHeader {
             .all(|w| self.columns.iter().any(|c| c.name == *w))
     }
 
+    /// Names of the columns this sidecar indexes, in directory order.
+    pub fn column_names(&self) -> impl Iterator<Item = &str> {
+        self.columns.iter().map(|c| c.name.as_str())
+    }
+
     /// Whether the segment's key band can satisfy the inclusive query range
     /// `[lo, hi]`. Returns `false` only on a **provable** non-overlap — meaning
     /// the segment is out of band and its blooms need not be read. Unknown bounds

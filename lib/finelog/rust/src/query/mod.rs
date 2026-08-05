@@ -148,6 +148,39 @@ fn shared_runtime_env() -> Arc<RuntimeEnv> {
         .clone()
 }
 
+/// Occupancy of the process-wide parquet metadata cache.
+///
+/// The cache holds decoded footers, so it is what stands between a query and a
+/// re-parse of every segment's row-group statistics. `size_bytes` at the limit
+/// with a low hit count says the working set of footers no longer fits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetadataCacheStats {
+    pub limit_bytes: usize,
+    pub size_bytes: usize,
+    pub entries: usize,
+    pub hits: usize,
+}
+
+/// Read the shared metadata cache's occupancy.
+pub fn metadata_cache_stats() -> MetadataCacheStats {
+    cache_stats_of(&shared_runtime_env())
+}
+
+fn cache_stats_of(runtime: &RuntimeEnv) -> MetadataCacheStats {
+    let cache_manager = &runtime.cache_manager;
+    let entries = cache_manager.get_file_metadata_cache().list_entries();
+    MetadataCacheStats {
+        limit_bytes: cache_manager.get_metadata_cache_limit(),
+        size_bytes: entries.values().fold(0_usize, |total, entry| {
+            total.saturating_add(entry.size_bytes)
+        }),
+        entries: entries.len(),
+        hits: entries
+            .values()
+            .fold(0_usize, |total, entry| total.saturating_add(entry.hits)),
+    }
+}
+
 /// Build a read-only `SessionContext` matching DuckDB's externally-observable
 /// result shape.
 ///
@@ -324,23 +357,15 @@ fn log_slow_query(
     }
     let preview = truncate_sql_for_log(sql);
     let rows_str = rows.map_or_else(|| "ERR".to_string(), |n| n.to_string());
-    let runtime = ctx.runtime_env();
-    let cache_manager = &runtime.cache_manager;
-    let entries = cache_manager.get_file_metadata_cache().list_entries();
-    let metadata_cache_size_bytes = entries.values().fold(0_usize, |total, entry| {
-        total.saturating_add(entry.size_bytes)
-    });
-    let metadata_cache_hits = entries
-        .values()
-        .fold(0_usize, |total, entry| total.saturating_add(entry.hits));
+    let cache = cache_stats_of(&ctx.runtime_env());
     tracing::warn!(
         kind,
         elapsed_ms = elapsed_ms as u64,
         rows = %rows_str,
-        metadata_cache_limit_bytes = cache_manager.get_metadata_cache_limit(),
-        metadata_cache_size_bytes,
-        metadata_cache_entries = entries.len(),
-        metadata_cache_hits,
+        metadata_cache_limit_bytes = cache.limit_bytes,
+        metadata_cache_size_bytes = cache.size_bytes,
+        metadata_cache_entries = cache.entries,
+        metadata_cache_hits = cache.hits,
         sql = %preview,
         "slow {kind}: {elapsed_ms}ms rows={rows_str} sql={preview}",
     );

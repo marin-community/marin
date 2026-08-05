@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
@@ -16,7 +17,7 @@ use arrow::array::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use parquet::basic::{Compression, ZstdLevel};
-use parquet::file::metadata::KeyValue;
+use parquet::file::metadata::{KeyValue, ParquetMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
@@ -38,7 +39,7 @@ use crate::store::types::{parse_seg_filename, seg_filename};
 /// ratio, and that ratio is itself width-dependent: telemetry compresses ~66x
 /// against a log line's ~4x, so the narrow namespace this is meant to fix is
 /// exactly where an Arrow-denominated target under-sizes worst.
-const TARGET_ROW_GROUP_BYTES: usize = 16 * 1024 * 1024;
+pub const TARGET_ROW_GROUP_BYTES: usize = 16 * 1024 * 1024;
 
 /// Ceiling on rows per row group, applied alongside the byte target (parquet
 /// closes the group at whichever binds first).
@@ -48,7 +49,7 @@ const TARGET_ROW_GROUP_BYTES: usize = 16 * 1024 * 1024;
 /// large share of the key space. Substring pruning is unaffected either way: a
 /// sidecar span is 16,384 rows regardless, and a partly-covered row group is
 /// pruned with a row selection rather than skipped whole.
-const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
+pub const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
 
 /// Physical layout revision stamped into every segment's parquet footer.
 ///
@@ -57,7 +58,7 @@ const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
 /// versions hold identical rows in identical order — which is what lets
 /// maintenance re-encode a stale one in place without touching the catalog's
 /// view of its contents or its remote copy.
-const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_VERSION: u32 = 1;
 const LAYOUT_VERSION_KEY: &str = "finelog.layout_version";
 
 /// Rows per batch when streaming a segment through a re-encode. Bounds the
@@ -163,6 +164,86 @@ pub fn write_segment_to_dir(
     Ok((final_path, size))
 }
 
+/// The physical shape of one segment file, read from its parquet footer.
+///
+/// Every field is footer-resident, so filling this costs a tail read rather
+/// than a scan — but it is still a read per segment, which is why the
+/// introspection route asks for it explicitly instead of always.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentPhysical {
+    /// Layout revision stamped at write time. `None` for a segment written
+    /// before the stamp existed, which reads the same as "stale".
+    pub layout_version: Option<u32>,
+    pub row_groups: usize,
+    pub rows: i64,
+    /// Bytes the footer occupies on disk, including its length prefix and
+    /// trailing magic. This is the per-segment cost a query pays before it
+    /// reads a single column.
+    pub footer_bytes: i64,
+    /// Summed uncompressed column-chunk size. Against the file size on disk
+    /// this gives the segment's compression ratio.
+    pub uncompressed_bytes: i64,
+    /// Writer that produced the file, e.g. `parquet-rs version 58.3.0`.
+    pub created_by: Option<String>,
+}
+
+/// Read `path`'s footer and report its physical shape.
+pub fn segment_physical(path: &Path) -> Result<SegmentPhysical, StatsError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| StatsError::Internal(format!("open {}: {e}", path.display())))?;
+    let footer_bytes = parquet_footer_bytes(&file)?;
+    let reader = SerializedFileReader::new(file)
+        .map_err(|e| StatsError::Internal(format!("footer {}: {e}", path.display())))?;
+    let meta = reader.metadata();
+    let uncompressed_bytes = meta
+        .row_groups()
+        .iter()
+        .fold(0_i64, |total, rg| total + rg.total_byte_size());
+    Ok(SegmentPhysical {
+        layout_version: layout_version_of(meta),
+        row_groups: meta.num_row_groups(),
+        rows: meta.file_metadata().num_rows(),
+        footer_bytes,
+        uncompressed_bytes,
+        created_by: meta.file_metadata().created_by().map(str::to_string),
+    })
+}
+
+/// Size of the parquet footer at the tail of `file`: the serialized metadata
+/// plus its 4-byte length and the 4-byte `PAR1` magic.
+fn parquet_footer_bytes(file: &std::fs::File) -> Result<i64, StatsError> {
+    let len = file
+        .metadata()
+        .map_err(|e| StatsError::Internal(format!("stat segment: {e}")))?
+        .len();
+    if len < FOOTER_TAIL_BYTES as u64 {
+        return Err(StatsError::Internal(format!(
+            "segment is {len} bytes, too short to hold a parquet footer"
+        )));
+    }
+    let mut tail = [0_u8; FOOTER_TAIL_BYTES];
+    file.read_exact_at(&mut tail, len - FOOTER_TAIL_BYTES as u64)
+        .map_err(|e| StatsError::Internal(format!("read footer tail: {e}")))?;
+    if &tail[4..] != PARQUET_MAGIC {
+        return Err(StatsError::Internal("not a parquet file".to_string()));
+    }
+    let metadata_len = u32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]) as i64;
+    Ok(metadata_len + FOOTER_TAIL_BYTES as i64)
+}
+
+/// Trailing `[metadata_len: u32][PAR1]` every parquet file ends with.
+const FOOTER_TAIL_BYTES: usize = 8;
+const PARQUET_MAGIC: &[u8] = b"PAR1";
+
+/// The layout revision stamped in `meta`, or `None` when it carries no stamp.
+fn layout_version_of(meta: &ParquetMetaData) -> Option<u32> {
+    meta.file_metadata()
+        .key_value_metadata()
+        .and_then(|kvs| kvs.iter().find(|kv| kv.key == LAYOUT_VERSION_KEY))
+        .and_then(|kv| kv.value.as_deref())
+        .and_then(|v| v.parse::<u32>().ok())
+}
+
 /// Whether `path` was written by the current [`LAYOUT_VERSION`]. A segment
 /// written before the stamp existed, or by an older policy, reads as stale.
 pub fn segment_layout_is_current(path: &Path) -> bool {
@@ -172,14 +253,7 @@ pub fn segment_layout_is_current(path: &Path) -> bool {
     let Ok(reader) = SerializedFileReader::new(file) else {
         return true;
     };
-    reader
-        .metadata()
-        .file_metadata()
-        .key_value_metadata()
-        .and_then(|kvs| kvs.iter().find(|kv| kv.key == LAYOUT_VERSION_KEY))
-        .and_then(|kv| kv.value.as_deref())
-        .and_then(|v| v.parse::<u32>().ok())
-        .is_some_and(|v| v == LAYOUT_VERSION)
+    layout_version_of(reader.metadata()).is_some_and(|v| v == LAYOUT_VERSION)
 }
 
 /// Re-encode `path` under the current writer properties into a sibling
@@ -520,6 +594,34 @@ mod tests {
             .unwrap()
             .map(|b| b.unwrap())
             .collect()
+    }
+
+    #[test]
+    fn physical_stats_report_the_footer_a_query_would_read() {
+        let dir = tempdir();
+        let batch = batch_with_keys(1, (0..500).collect());
+        let (path, size) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+
+        let physical = segment_physical(&path).unwrap();
+        assert_eq!(physical.layout_version, Some(LAYOUT_VERSION));
+        assert_eq!(physical.rows, 500);
+        assert_eq!(physical.row_groups, 1);
+        assert!(physical.created_by.is_some());
+        // The footer is a real slice of the file, not an in-memory estimate, so
+        // it has to be smaller than the file and big enough to hold a row group's
+        // column metadata.
+        assert!(physical.footer_bytes > 0 && physical.footer_bytes < size);
+        // Compression is the point of the encoded-byte row-group target; a
+        // segment whose columns did not compress would not be worth re-encoding.
+        assert!(physical.uncompressed_bytes > size);
+
+        let legacy = dir.join("seg_L1_0000000000000000002.parquet");
+        write_legacy_layout(&legacy, &batch, 8);
+        let stale = segment_physical(&legacy).unwrap();
+        assert_eq!(stale.layout_version, None);
+        assert!(stale.row_groups > physical.row_groups);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
