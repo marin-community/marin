@@ -113,7 +113,22 @@ pub const BACKFILL_SIDECARS_PER_TICK: usize = 4;
 ///
 /// The work is a storage and footer-size win rather than a correctness fix, so it
 /// stays a minority of the 30 s tick.
-const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(10);
+const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
+
+/// Process-wide permit for the layout rewrite, so only one namespace re-encodes
+/// at a time.
+///
+/// Every namespace runs its own maintenance task, so a per-namespace budget
+/// alone let a store with dozens of namespaces spend dozens of budgets at once.
+/// On the marin hub that saturated the box: a 10 min telemetry query that
+/// normally answers in 0.18 s took 15 s, and `count(*)` went from 0.3 s to 17 s,
+/// because re-encoding pushes tens of GiB through the page cache the queries are
+/// served from and invalidates the parquet metadata cache entry for every
+/// segment it touches.
+///
+/// A namespace that cannot take the permit skips the step for this tick rather
+/// than queueing behind it, which would stall the rest of its maintenance.
+static REWRITE_SLOT: Mutex<()> = Mutex::new(());
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -1376,6 +1391,9 @@ impl Namespace {
         if self.data_dir.is_none() {
             return 0;
         }
+        let Ok(_slot) = REWRITE_SLOT.try_lock() else {
+            return 0;
+        };
         let deadline = Instant::now() + budget;
         let mut rewritten = 0;
         while let Some((path, was)) = self.next_stale_layout() {
