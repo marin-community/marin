@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Any
+
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -9,6 +12,7 @@ from iris.cluster.types import JobName
 
 from experiments.datakit.embeddings import harrier
 from experiments.datakit.embeddings.harrier import (
+    EmbeddingPlan,
     InputPart,
     SourceFile,
     allocate_source_quotas,
@@ -16,6 +20,21 @@ from experiments.datakit.embeddings.harrier import (
     inference_groups,
     resolve_shard_index,
 )
+
+
+def _embedding_plan(part: InputPart) -> EmbeddingPlan:
+    return EmbeddingPlan(
+        dataset_root="input",
+        output_root="output",
+        target_rows=part.row_count,
+        model_id=harrier.MODEL_ID,
+        model_revision=harrier.MODEL_REVISION,
+        model_dimension=harrier.MODEL_DIMENSION,
+        max_tokens=harrier.MAX_TOKENS,
+        sources=(),
+        parts=(part,),
+        sha256="plan",
+    )
 
 
 def test_source_inventory_uses_canonical_nested_names(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,3 +110,45 @@ def test_input_batches_truncate_large_text_before_embedding(tmp_path) -> None:
     texts = [text.as_py() for batch in batches for text in batch.column("text")]
 
     assert texts == [oversized_text[:1_048_576], "short"]
+
+
+def test_model_archive_uses_output_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def temp_bucket(ttl_days: int, prefix: str, *, source_prefix: str | None = None) -> str:
+        calls.append((ttl_days, prefix, source_prefix))
+        return "s3://staging"
+
+    monkeypatch.setattr(harrier, "marin_temp_bucket", temp_bucket)
+
+    assert harrier._model_archive_url().endswith("/model.tar")
+    assert calls == [(1, "harrier-staging", harrier.OUTPUT_ROOT)]
+
+
+def test_run_embed_reuses_complete_shard_without_loading_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    part = InputPart("source", "input", 3, "output")
+    plan = _embedding_plan(part)
+    monkeypatch.setattr(harrier, "build_plan", lambda: plan)
+    monkeypatch.setattr(harrier, "_output_is_complete", lambda part, plan: True)
+    monkeypatch.setattr(harrier, "_harrier_embedder", lambda: pytest.fail("loaded model for a complete shard"))
+
+    result = harrier.run_embed(0, 1)
+
+    assert result["row_count"] == 3
+
+
+def test_embed_part_buffers_parquet_row_groups(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    input_path = tmp_path / "input.parquet"
+    output_path = tmp_path / "output.parquet"
+    pq.write_table(pa.table({"id": [str(index) for index in range(5)], "text": ["text"] * 5}), input_path)
+    part = InputPart("source", str(input_path), 5, str(output_path))
+    embedder: Any = type("Embedder", (), {})()
+    embedder.embed = lambda texts: np.ones((len(texts), harrier.MODEL_DIMENSION), dtype=np.float16)
+    monkeypatch.setattr(harrier, "INPUT_BATCH_SIZE", 1)
+    monkeypatch.setattr(harrier, "PARQUET_ROW_GROUP_SIZE", 3)
+
+    harrier.embed_part(embedder, part, _embedding_plan(part))
+
+    with pq.ParquetFile(output_path) as parquet_file:
+        row_group_sizes = [parquet_file.metadata.row_group(index).num_rows for index in range(2)]
+    assert row_group_sizes == [3, 2]

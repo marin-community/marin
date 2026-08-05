@@ -253,7 +253,7 @@ def build_plan() -> EmbeddingPlan:
 
 
 def _model_archive_url() -> str:
-    root = StoragePath(marin_temp_bucket(ttl_days=1, prefix="harrier-staging"))
+    root = StoragePath(marin_temp_bucket(ttl_days=1, prefix="harrier-staging", source_prefix=OUTPUT_ROOT))
     return str(root / MODEL_REVISION / "model.tar")
 
 
@@ -388,8 +388,6 @@ def _input_batches(part: InputPart) -> Iterator[pa.RecordBatch]:
 
 def embed_part(embedder: HarrierEmbedder, part: InputPart, plan: EmbeddingPlan) -> EmbedPartResult:
     """Embed one selected input prefix and atomically publish its output."""
-    if _output_is_complete(part, plan):
-        return EmbedPartResult(output_url=part.output_url, rows=part.row_count, reused=True, duration_seconds=0.0)
     schema = pa.schema(
         [
             pa.field("id", pa.string()),
@@ -402,17 +400,23 @@ def embed_part(embedder: HarrierEmbedder, part: InputPart, plan: EmbeddingPlan) 
     with tempfile.TemporaryDirectory() as temporary_directory:
         local_path = Path(temporary_directory) / "embeddings.parquet"
         with pq.ParquetWriter(local_path, schema, compression="zstd") as writer:
+            output_tables = []
+            buffered_rows = 0
             for batch in _input_batches(part):
                 ids = batch.column(batch.schema.get_field_index("id"))
                 texts = batch.column(batch.schema.get_field_index("text")).to_pylist()
                 vectors = embedder.embed(texts)
                 embedding = pa.FixedSizeListArray.from_arrays(pa.array(vectors.reshape(-1)), MODEL_DIMENSION)
-                writer.write_table(
-                    pa.table({"id": ids, "embedding": embedding}, schema=schema),
-                    row_group_size=PARQUET_ROW_GROUP_SIZE,
-                )
+                output_tables.append(pa.table({"id": ids, "embedding": embedding}, schema=schema))
+                buffered_rows += len(batch)
+                if buffered_rows >= PARQUET_ROW_GROUP_SIZE:
+                    writer.write_table(pa.concat_tables(output_tables), row_group_size=PARQUET_ROW_GROUP_SIZE)
+                    output_tables = []
+                    buffered_rows = 0
                 rows += len(batch)
                 logger.info("Embedded %d/%d rows for %s", rows, part.row_count, part.input_url)
+            if output_tables:
+                writer.write_table(pa.concat_tables(output_tables), row_group_size=PARQUET_ROW_GROUP_SIZE)
         if rows != part.row_count:
             raise ValueError(f"Embedded {rows} rows; expected {part.row_count}: {part.input_url}")
         with atomic_rename(part.output_url) as temporary_path:
@@ -440,14 +444,25 @@ def run_embed(shard_index: int, num_shards: int) -> dict[str, Any]:
     if not 0 <= shard_index < num_shards:
         raise ValueError(f"shard_index must be in [0, {num_shards})")
     parts = assignments[shard_index]
-    with _harrier_embedder() as embedder:
-        results: list[EmbedPartResult] = []
-        for index, part in enumerate(parts, start=1):
-            logger.info(
-                "Embedding part %d/%d on worker %d/%d: %s", index, len(parts), shard_index, num_shards, part.input_url
-            )
-            result = embed_part(embedder, part, plan)
-            results.append(result)
+    results = []
+    pending_parts = []
+    for part in parts:
+        if _output_is_complete(part, plan):
+            results.append(EmbedPartResult(part.output_url, part.row_count, True, 0.0))
+        else:
+            pending_parts.append(part)
+    if pending_parts:
+        with _harrier_embedder() as embedder:
+            for index, part in enumerate(pending_parts, start=1):
+                logger.info(
+                    "Embedding part %d/%d on worker %d/%d: %s",
+                    index,
+                    len(pending_parts),
+                    shard_index,
+                    num_shards,
+                    part.input_url,
+                )
+                results.append(embed_part(embedder, part, plan))
     return {
         "input_plan_sha256": plan.sha256,
         "model_id": MODEL_ID,
