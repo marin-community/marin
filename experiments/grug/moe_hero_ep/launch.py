@@ -23,7 +23,6 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.datasets.paloma import paloma_datasets
-from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
 from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
@@ -66,13 +65,17 @@ FLAVORS: dict[str, Flavor] = {
 }
 
 
-# Held-out suites, added at weight 0 so they surface as tagged eval sets. The hero trains on
-# llama3-tokenized SlimPajama, so the eval caches must use the same tokenizer.
+# Held-out sets, added at weight 0 so they surface as tagged eval sets. The hero trains on
+# llama3-tokenized SlimPajama, so these must carry the same tokenizer.
+#
+# Paloma only, deliberately. `paloma_dataset` and `uncheatable_dataset` both hardcode a `-llama3`
+# suffix in the cache name while taking an arbitrary `tokenizer` argument, so callers asking for
+# different tokenizers collide on one cache identity and whoever materializes first wins. The
+# uncheatable caches under that name currently hold marin-tokenizer data, which fails the mixture's
+# single-tokenizer check. Paloma is also the suite the scaling-law scoring uses, so dropping
+# uncheatable costs nothing here.
 def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
-    return [
-        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
-        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
-    ]
+    return list(paloma_datasets(tokenizer=llama3_tokenizer).values())
 
 
 def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
