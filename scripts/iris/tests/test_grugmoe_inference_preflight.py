@@ -721,7 +721,12 @@ def test_timed_chat_completion_preserves_frozen_ids_in_identity_template(
     assert observed["url"] == "http://server/v1/chat/completions"
     body = observed["json"]
     assert isinstance(body, dict)
-    assert body["messages"] == [{"role": "user", "content": "01 25 09 ff"}]
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": " ".join(grug_preflight.IDENTITY_CHAT_TOKENS[token_id] for token_id in [1, 37, 9, 255]),
+        }
+    ]
     assert body["logprobs"] is True
     assert body["top_logprobs"] == 1
     assert timing["request_transport"] == "chat"
@@ -754,7 +759,8 @@ def test_timed_chat_completion_fits_vllm_character_guard_at_65k(monkeypatch: pyt
     body = observed["json"]
     assert isinstance(body, dict)
     content = body["messages"][0]["content"]
-    assert len(content) <= 4 * len(prompt_token_ids)
+    assert len(content) == 2 * len(prompt_token_ids) - 1
+    assert len(content) <= 2 * len(prompt_token_ids)
 
 
 def test_labeled_prometheus_preserves_engines_and_window_histograms() -> None:

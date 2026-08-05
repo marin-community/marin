@@ -10,10 +10,12 @@ import json
 
 import numpy as np
 import pytest
+from tokenizers import Tokenizer
 
 from experiments.grug.moe.inference_preflight import (
     BRANCH_COUNT,
     CASES,
+    IDENTITY_CHAT_TOKENS,
     MARIN_BASE_SHA,
     P0_SMOKE_CASES,
     VLLM_SHA,
@@ -367,7 +369,13 @@ def test_write_case_freezes_config_workload_and_manifest(tmp_path) -> None:
     assert workload["request_count"] == BRANCH_COUNT
     assert correctness_workload["cache_hit_alignment"] == 32
     assert correctness_workload["lengths"] == [33, 513]
-    assert tokenizer["model"]["vocab"]["00"] == 0
-    assert tokenizer["model"]["vocab"]["ff"] == 255
+    assert tokenizer["model"]["vocab"][IDENTITY_CHAT_TOKENS[0]] == 0
+    assert tokenizer["model"]["vocab"][IDENTITY_CHAT_TOKENS[255]] == 255
+    assert len(set(IDENTITY_CHAT_TOKENS)) == 256
+    assert all(len(token) == 1 and not token.isspace() for token in IDENTITY_CHAT_TOKENS)
+    prompt_ids = [index % 256 for index in range(65_535)]
+    content = " ".join(IDENTITY_CHAT_TOKENS[token_id] for token_id in prompt_ids)
+    assert len(content) == 131_069
+    assert Tokenizer.from_file(str(tmp_path / "tokenizer.json")).encode(content).ids == prompt_ids
     expected_manifest = json.loads(json.dumps(frozen_manifest(CASES["tiny"], run_id="unit", git_sha="f" * 40)))
     assert manifest == expected_manifest

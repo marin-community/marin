@@ -29,7 +29,7 @@ ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/moe-inference-archite
 FROZEN_FIXTURE_PATH = "tests/cluster/vllm/resources/grug_exact_reference"
 
 DUMMY_SEED = 1234
-IDENTITY_CHAT_TOKENS = tuple(f"{token_id:02x}" for token_id in range(256))
+IDENTITY_CHAT_TOKENS = tuple(chr(0x100 + token_id) for token_id in range(256))
 DTYPE = "bfloat16"
 KV_CACHE_DTYPE = "bfloat16"
 GPU_MEMORY_UTILIZATION = 0.90
@@ -921,9 +921,11 @@ def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) 
     # ``--skip-tokenizer-init``.  The matched MarinSkyRL carrier check must use
     # ``/v1/chat/completions`` instead.  This tiny tokenizer makes the chat
     # renderer an identity map over the exact frozen 0..255 model vocabulary.
-    # Two-digit hexadecimal keeps a 65K prompt below vLLM's conservative
-    # four-characters-per-token frontend guard: ``01 25 09`` becomes token IDs
-    # ``[1, 37, 9]``. It adds no role markers, BOS token, EOS token, or suffix.
+    # One-codepoint tokens plus spaces fit vLLM's conservative two-characters-
+    # per-token frontend guard exactly: 65,535 tokens serialize to 131,069
+    # characters. The U+0100..U+01FF range contains no whitespace, so the
+    # whitespace pre-tokenizer preserves the exact frozen 0..255 token IDs. It
+    # adds no role markers, BOS token, EOS token, or suffix.
     vocabulary = {token: token_id for token_id, token in enumerate(IDENTITY_CHAT_TOKENS)}
     tokenizer = {
         "version": "1.0",
