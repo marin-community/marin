@@ -8,7 +8,7 @@ partitioned by the writer that produced them and the compaction generation they 
 
     {root}/
         SEALED                                  # optional marker: the run is complete
-        {table}/_schema.json                    # merge key + schema version (the only metadata)
+        {table}/_schema.json                    # merge key + schema/format versions (the only metadata)
         {table}/w={writer}/g={gen}/{seq:016d}-{uid}.parquet
 
 Shard membership is discovered by listing the table directory; a shard's schema and row-group
@@ -24,12 +24,18 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from pydantic import BaseModel
+
 # The seal marker object; its presence means every writer has finished and the run is immutable.
 SEALED_MARKER = "SEALED"
 
 # Per-table metadata object. It records only what a Parquet footer cannot: the dedup merge key
-# and the logical schema version. This is the whole "manifest".
+# and the schema/format versions. This is the whole "manifest".
 SCHEMA_FILE = "_schema.json"
+
+# finestore's own on-disk format version, stamped into every table's metadata so a layout change in a
+# future release can be detected when reading an archive an older release wrote.
+FORMAT_VERSION = 1
 
 # Columns finestore stamps on every row. ``_seq`` is a per-writer monotonic id used to break ties
 # during read-time deduplication; ``_writer`` identifies the producing writer.
@@ -51,6 +57,19 @@ _GEN_SEGMENT = re.compile(r"^g=(\d+)$")
 _WRITER_SEGMENT = re.compile(r"^w=(.+)$")
 
 
+class TableMetadata(BaseModel):
+    """The typed contents of a table's ``_schema.json`` — the archive's only metadata.
+
+    Records what a Parquet footer cannot: the columns a reader deduplicates on and the versions that
+    let the format evolve. ``schema_version`` is the caller's logical schema version; ``format_version``
+    is finestore's own on-disk format version.
+    """
+
+    merge_key: tuple[str, ...] | None = None
+    schema_version: int = 1
+    format_version: int = FORMAT_VERSION
+
+
 @dataclass(frozen=True)
 class Shard:
     """One discovered Parquet shard: its object path and the writer/generation encoded in the key."""
@@ -60,24 +79,32 @@ class Shard:
     generation: int
 
 
-def table_dir(root: str, table: str) -> str:
-    """The directory holding one table's shards and metadata."""
-    return f"{root.rstrip('/')}/{table}"
+@dataclass(frozen=True)
+class FineStoreLayout:
+    """Every root-relative object key an archive uses.
 
+    An archive owns its ``root`` directory. Construct one layout per archive and call its methods
+    rather than threading ``root`` through free functions.
+    """
 
-def schema_path(root: str, table: str) -> str:
-    """The ``_schema.json`` object path for a table."""
-    return f"{table_dir(root, table)}/{SCHEMA_FILE}"
+    root: str
 
+    @property
+    def sealed_path(self) -> str:
+        """The seal-marker object path for the archive."""
+        return f"{self.root.rstrip('/')}/{SEALED_MARKER}"
 
-def sealed_path(root: str) -> str:
-    """The seal-marker object path for the archive."""
-    return f"{root.rstrip('/')}/{SEALED_MARKER}"
+    def table_dir(self, table: str) -> str:
+        """The directory holding one table's shards and metadata."""
+        return f"{self.root.rstrip('/')}/{table}"
 
+    def schema_path(self, table: str) -> str:
+        """The ``_schema.json`` object path for a table."""
+        return f"{self.table_dir(table)}/{SCHEMA_FILE}"
 
-def shard_path(root: str, table: str, writer: str, generation: int, seq: int, uid: str) -> str:
-    """Build a shard object key. ``seq`` (the batch's minimum ``_seq``) makes keys sort by write order."""
-    return f"{table_dir(root, table)}/w={writer}/g={generation}/{seq:016d}-{uid}.parquet"
+    def shard_path(self, table: str, writer: str, generation: int, seq: int, uid: str) -> str:
+        """Build a shard object key. ``seq`` (the batch's minimum ``_seq``) makes keys sort by write order."""
+        return f"{self.table_dir(table)}/w={writer}/g={generation}/{seq:016d}-{uid}.parquet"
 
 
 def parse_shard_path(path: str) -> Shard | None:

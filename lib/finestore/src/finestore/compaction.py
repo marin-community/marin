@@ -30,7 +30,7 @@ import pyarrow.parquet as pq
 from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import url_to_fs
 
-from finestore.layout import SEQ_COLUMN, Shard, shard_path
+from finestore.layout import SEQ_COLUMN, FineStoreLayout, Shard
 from finestore.reader import CompositeReader
 from finestore.shard_writer import ShardWriter
 
@@ -108,7 +108,7 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> int:
     if first is None:
         return 0
 
-    out_path = shard_path(root, table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
+    out_path = FineStoreLayout(root).shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
     written = 0
     with ShardWriter(out_path, unified) as writer:
         batch = [first]

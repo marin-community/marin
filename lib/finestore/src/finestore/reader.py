@@ -12,7 +12,6 @@ present), a duplicate delivery, and a retried flush all converge to one row with
 
 from __future__ import annotations
 
-import json
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
@@ -29,12 +28,11 @@ from finestore.layout import (
     GEN_COLUMN,
     SEQ_COLUMN,
     WRITER_COLUMN,
+    FineStoreLayout,
     Shard,
+    TableMetadata,
     parse_shard_path,
     parse_uri,
-    schema_path,
-    sealed_path,
-    table_dir,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,12 +63,13 @@ class CompositeReader:
 
     def __init__(self, root: str) -> None:
         self.root = root.rstrip("/")
-        self._meta_cache: dict[str, dict] = {}
+        self._layout = FineStoreLayout(self.root)
+        self._meta_cache: dict[str, TableMetadata] = {}
 
     # -- discovery ---------------------------------------------------------------------------------
 
     def _list_shards(self, fs, table: str) -> list[Shard]:
-        _fs, base_key = url_to_fs(table_dir(self.root, table))
+        _fs, base_key = url_to_fs(self._layout.table_dir(table))
         try:
             keys = fs.find(base_key)
         except FileNotFoundError:
@@ -80,26 +79,26 @@ class CompositeReader:
 
     def merge_key(self, table: str) -> tuple[str, ...]:
         """The table's dedup merge key, read from ``_schema.json`` (or the default fallback)."""
-        meta = self._meta(table)
-        key = meta.get("merge_key") if meta else None
+        key = self._meta(table).merge_key
         return tuple(key) if key else _DEFAULT_MERGE_KEY
 
-    def _meta(self, table: str) -> dict | None:
+    def _meta(self, table: str) -> TableMetadata:
         if table in self._meta_cache:
             return self._meta_cache[table]
         # An absent _schema.json means the table was written without registered metadata; fall back
-        # to the default primary key. A present-but-corrupt file is a real fault and propagates.
+        # to the defaults (which yield the default merge key). A present-but-corrupt file is a real
+        # fault and propagates.
         try:
-            text = StoragePath(schema_path(self.root, table)).read_text()
+            text = StoragePath(self._layout.schema_path(table)).read_text()
         except FileNotFoundError:
-            meta = {}
+            meta = TableMetadata()
         else:
-            meta = json.loads(text)
+            meta = TableMetadata.model_validate_json(text)
         self._meta_cache[table] = meta
         return meta
 
     def is_sealed(self) -> bool:
-        return StoragePath(sealed_path(self.root)).exists()
+        return StoragePath(self._layout.sealed_path).exists()
 
     # -- scan / point ------------------------------------------------------------------------------
 
@@ -182,7 +181,7 @@ class CompositeReader:
         return self.read_blob(ref.key)
 
     def list_shards(self, table: str) -> list[Shard]:
-        """Every shard of ``table`` (used by compaction)."""
+        """Every discovered shard of ``table``, across writers and generations."""
         fs, _ = url_to_fs(self.root)
         return self._list_shards(fs, table)
 

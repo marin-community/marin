@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "marin-rigging",
     "pyarrow>=23.0.0",
+    "pydantic>=2.0",
 ]
 
 [dependency-groups]

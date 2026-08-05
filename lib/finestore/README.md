@@ -142,6 +142,6 @@ uv run python -m experiments.evaluation.migrate_archive gs://bucket/run/results
 
 finestore ships as `marin-finestore` (import `finestore`), a pure-Python root
 workspace member built with hatchling. It depends only on `marin-rigging` (for
-`rigging.filesystem`, the object-store abstraction) and `pyarrow`. It pulls in
-no query engine and no `marin` code, so an import-light consumer such as the
-evaldash image can depend on it directly.
+`rigging.filesystem`, the object-store abstraction), `pyarrow`, and `pydantic`
+(the typed table metadata). It pulls in no query engine and no `marin` code, so
+an import-light consumer such as the evaldash image can depend on it directly.

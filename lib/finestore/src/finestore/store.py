@@ -27,10 +27,9 @@ from finestore.layout import (
     BLOBS_TABLE,
     SEQ_COLUMN,
     WRITER_COLUMN,
+    FineStoreLayout,
+    TableMetadata,
     build_uri,
-    schema_path,
-    sealed_path,
-    shard_path,
 )
 from finestore.shard_writer import write_table
 
@@ -90,6 +89,7 @@ class DataStore:
         max_buffer_rows: int = DEFAULT_MAX_BUFFER_ROWS,
     ) -> None:
         self.root = root.rstrip("/")
+        self._layout = FineStoreLayout(self.root)
         self.writer_id = writer_id or _default_writer_id()
         self._flush_interval = flush_interval
         self._max_buffer_rows = max_buffer_rows
@@ -135,12 +135,9 @@ class DataStore:
             return table
 
     def _write_schema_meta(self, table: DataTable) -> None:
-        """Persist the table's merge key and schema version (the archive's only metadata object)."""
-        meta = {
-            "merge_key": list(table.merge_key) if table.merge_key else None,
-            "schema_version": table.schema_version,
-        }
-        StoragePath(schema_path(self.root, table.name)).write_text(json.dumps(meta, indent=2))
+        """Persist the table's merge key and versions (the archive's only metadata object)."""
+        meta = TableMetadata(merge_key=table.merge_key, schema_version=table.schema_version)
+        StoragePath(self._layout.schema_path(table.name)).write_text(meta.model_dump_json(indent=2))
 
     def write(self, name: str, metadata: Mapping[str, object] | None, data: bytes) -> str:
         """Append one opaque blob to the reserved ``blobs`` table; return its ``finestore://`` URI.
@@ -170,7 +167,7 @@ class DataStore:
     def seal(self) -> None:
         """Flush, then mark the archive sealed so readers know the run is complete."""
         self.flush()
-        StoragePath(sealed_path(self.root)).write_text(json.dumps({"writer": self.writer_id}))
+        StoragePath(self._layout.sealed_path).write_text(json.dumps({"writer": self.writer_id}))
 
     def close(self) -> None:
         """Stop the background thread and flush any remaining rows."""
@@ -267,6 +264,6 @@ class DataTable:
             self._pending = []
         table = pa.Table.from_pylist(_drop_empty_struct_keys(rows), schema=self._schema)
         min_seq = min(row[SEQ_COLUMN] for row in rows)
-        path = shard_path(self._store.root, self.name, self._store.writer_id, 0, min_seq, uuid.uuid4().hex[:8])
+        path = self._store._layout.shard_path(self.name, self._store.writer_id, 0, min_seq, uuid.uuid4().hex[:8])
         write_table(path, table)
         logger.debug("finestore flushed %d rows to %s", len(rows), path)

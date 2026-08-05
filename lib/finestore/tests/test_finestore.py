@@ -8,8 +8,10 @@ from __future__ import annotations
 import pyarrow as pa
 from finestore import compaction
 from finestore.compaction import compact
+from finestore.layout import FORMAT_VERSION, FineStoreLayout, TableMetadata
 from finestore.reader import CompositeReader
 from finestore.store import DataStore
+from rigging.filesystem import StoragePath
 
 
 def _rows(reader: CompositeReader, table: str, **kwargs) -> list[dict]:
@@ -214,6 +216,24 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
     assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
+
+
+def test_metadata_is_typed_and_tolerates_older_format(tmp_path):
+    # The store persists a typed _schema.json the reader loads as TableMetadata. A file an older
+    # release wrote (no format_version) still deserializes, defaulting the version — the property that
+    # lets the on-disk format evolve without breaking readers of already-written archives.
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        store.table("samples", merge_key=("task", "doc_id")).append({"task": "arc", "doc_id": "1"})
+        store.flush()
+
+    meta = TableMetadata.model_validate_json(StoragePath(FineStoreLayout(root).schema_path("samples")).read_text())
+    assert meta.merge_key == ("task", "doc_id")
+    assert meta.format_version == FORMAT_VERSION
+
+    legacy = TableMetadata.model_validate_json('{"merge_key": ["task", "doc_id"], "schema_version": 1}')
+    assert legacy.merge_key == ("task", "doc_id")
+    assert legacy.format_version == FORMAT_VERSION
 
 
 def test_seal_marker(tmp_path):

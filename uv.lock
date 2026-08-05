@@ -5333,6 +5333,7 @@ source = { editable = "lib/finestore" }
 dependencies = [
     { name = "marin-rigging" },
     { name = "pyarrow" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -5351,6 +5352,7 @@ test = [
 requires-dist = [
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pyarrow", specifier = ">=23.0.0" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [package.metadata.requires-dev]

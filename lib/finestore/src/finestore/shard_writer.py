@@ -32,7 +32,6 @@ class ShardWriter:
 
     def __init__(self, path: str, schema: pa.Schema, *, compression: str = _COMPRESSION) -> None:
         self._schema = schema
-        self.rows_written = 0
         StoragePath(path).parent.mkdirs()
         self._stack = contextlib.ExitStack()
         temp_path = self._stack.enter_context(atomic_rename(path))
@@ -42,7 +41,6 @@ class ShardWriter:
     def write_table(self, table: pa.Table) -> None:
         """Append ``table`` as one row group; its schema must match the writer's."""
         self._writer.write_table(table)
-        self.rows_written += table.num_rows
 
     def close(self) -> None:
         """Finalize the Parquet footer, flush the handle, and rename the shard into place."""
