@@ -462,7 +462,22 @@ class CausalSelfAttention(eqx.Module):
         if self.cfg.local_kv_heads is not None and self.cfg.global_kv_heads is not None:
             stored_kv_heads = self.cfg.stored_kv_heads
 
+            # Both branches must agree on sharding, not just shape: `lax.cond` compares full types
+            # under explicit mesh axes. The pass-through case keeps the projection's `model`-sharded
+            # head axis, while the align case slices to one head -- which cannot stay sharded -- and
+            # broadcasts back, giving an identical shape with a different sharding. Reshard both to
+            # the same spec. This is a no-op wherever the mesh leaves `model` at one, which is why
+            # the hero shape never hit it despite also setting local_kv_heads != global_kv_heads.
+            #
+            # Replicate the head axis rather than pinning it to `model`: a shape can carry fewer
+            # KV heads than the model axis is wide (d768 stores one), and the KV tensors are small
+            # enough -- at most a dozen heads of 128 -- that replication is not worth a special case.
+            kv_spec = P(_BATCH_AXES, None, None, None)
+
             def _logical_kv(projection: jax.Array, num_kv_heads: int) -> jax.Array:
+                # Replicate before slicing, not after: narrowing a `model`-sharded head axis to a
+                # count that does not divide the mesh axis is unsupported.
+                projection = reshard(projection, kv_spec)
                 if num_kv_heads == stored_kv_heads:
                     return projection
                 return align_kv_heads(projection[:, :, :num_kv_heads, :], num_q_heads=stored_kv_heads)
