@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import jax.numpy as jnp
 import pytest
 from jax.sharding import AbstractMesh, AxisType, NamedSharding, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.data.text.examples import GrugLmExample
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, train
 
@@ -205,3 +207,34 @@ def test_fold_metrics_rejects_an_unclassifiable_metric():
     # A metric added later must not quietly default into the averaging bucket.
     with pytest.raises(TypeError, match="unfoldable type"):
         train._fold_metrics([{**_metrics(0.0, [[1.0]], 0.0), "train/new": "surprise"}] * 2)
+
+
+def _segmented_batch(batch_size=4, seq_len=8):
+    tokens = jnp.arange(batch_size * seq_len, dtype=jnp.int32).reshape(batch_size, seq_len)
+    # block_cross_document_attention populates segment ids, so the hero batches always carry them.
+    segment_ids = jnp.zeros((batch_size, seq_len), dtype=jnp.int32).at[:, seq_len // 2 :].set(1)
+    mask = GrugLmExample.causal(tokens[0]).attn_mask.with_segment_ids(segment_ids, max_segments=4)
+    return GrugLmExample(tokens=tokens, loss_weight=jnp.ones_like(tokens, dtype=jnp.float32), attn_mask=mask)
+
+
+def test_slice_microbatch_slices_the_segment_id_mask_with_the_tokens():
+    # Slicing tokens without the mask's per-example fields misaligns attention silently, which is
+    # what block_cross_document_attention makes possible on every hero batch.
+    batch = _segmented_batch(batch_size=4, seq_len=8)
+
+    second_half = train._slice_microbatch(batch, 2, 2)
+
+    assert second_half.tokens.shape == (2, 8)
+    assert second_half.tokens.tolist() == batch.tokens[2:].tolist()
+    q_segment_ids, _ = second_half.attn_mask.segment_ids
+    assert q_segment_ids.shape == (2, 8)
+    assert q_segment_ids.tolist() == batch.attn_mask.segment_ids[0][2:].tolist()
+    assert second_half.attn_mask.is_causal is batch.attn_mask.is_causal
+
+
+def test_slice_microbatch_rejects_a_leaf_that_is_not_batch_leading():
+    batch = _segmented_batch(batch_size=4, seq_len=8)
+    bad = dataclasses.replace(batch, loss_weight=jnp.ones((3, 8), dtype=jnp.float32))
+
+    with pytest.raises(ValueError, match="lead with the batch axis"):
+        train._slice_microbatch(bad, 0, 2)
