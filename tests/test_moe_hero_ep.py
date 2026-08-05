@@ -17,6 +17,14 @@ from jax.sharding import PartitionSpec as P
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, train
 
 
+def test_full_bank_top_k_is_rejected_before_launch():
+    # QB routing reads the (k+1)-th logit as its threshold, so a full-bank top-k asks `top_k` for
+    # more entries than there are experts. Without this the job dies in the router, which is after
+    # the 16-node gang is allocated.
+    with pytest.raises(ValueError, match="must be < num_experts"):
+        launch.build_hero_run(run_id="full-bank", num_steps=1, num_experts_per_token=128, version="dev")
+
+
 def test_expert_bank_override_must_divide_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
