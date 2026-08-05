@@ -94,7 +94,10 @@ class Target:
 # architecture family and carries real SM90 forward and backward kernels.
 TARGETS: dict[str, Target] = {
     "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute"),
-    "h100-node": Target("H100", 8, 1, 120, "1900g", "900g", "gpu_fa4_thd"),
+    # 8 nodes, not 1: capacity is per (sender shard, expert) cell, so the shard count sets how
+    # readily cells overflow. EP8 would give 4,096-row cells against 512 at EP64 and would drop far
+    # less on the same routing, which is not the behavior these runs are meant to reproduce.
+    "h100-8node": Target("H100", 8, 8, 120, "1900g", "900g", "reference"),
 }
 
 
