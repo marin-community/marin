@@ -64,7 +64,12 @@ from safetensors import safe_open
 
 from experiments.june_tpu_67b_a2b.moe.model import Transformer
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainState, _apply_qb_betas
-from scripts.perf.grug_fixed_replay import build_loss_weight, repacked_operational_micro_loss
+from scripts.perf.grug_fixed_replay import (
+    build_loss_weight,
+    compare_sampled_action_log_probs,
+    repacked_operational_micro_loss,
+    representative_action_coordinates,
+)
 
 CHUNK_BYTES = 16 * 1024 * 1024
 EXPECTED_FIELDS = (
@@ -79,6 +84,26 @@ EXPECTED_FIELDS = (
 EXPECTED_NONE_FIELDS = ("base_action_log_probs", "is_last_step", "rollout_logprobs", "values")
 MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
 _BATCH_AXES = ("replica_dcn", "data", "expert")
+MSRL_REFERENCE_ARTIFACTS = (
+    {
+        "label": "parent_bf16_combine",
+        "s3_uri": (
+            "s3://marin-us-east-02a/iris/grug-training-perf-gap/20260803/"
+            "divergence-closeout-2dd905e/headline-paired-s1.json"
+        ),
+        "payload_sha256": "0f62a8123a280edaf6692ab1db0c01d82b644c8c46906316421f63cc22f2fa8a",
+        "result_sha256": "2c1ef16927846e2ea031077064fd61b84e63bd707b9ec63904169096cb3fbe0c",
+    },
+    {
+        "label": "fp32_combine_candidate",
+        "s3_uri": (
+            "s3://marin-us-east-02a/iris/grug-training-perf-gap/20260803/"
+            "divergence-closeout-fbb1fc8/headline-paired-s1.json"
+        ),
+        "payload_sha256": "f06f4d21722e23843758537f72f79c52d3ebb54120b7344ac1f2d622dcdf5546",
+        "result_sha256": "2bf1c1b9ec35ea37adb2180eae51988b49c19e2e34171188f012cdc9219af8e2",
+    },
+)
 
 
 class ReplayArrays(NamedTuple):
@@ -95,7 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--objective", choices=("operational", "matched_ce"), required=True)
+    parser.add_argument("--objective", choices=("operational", "matched_ce", "sampled_logprobs"), required=True)
     parser.add_argument("--mode", choices=("preflight", "headline"), required=True)
     parser.add_argument("--result-s3-uri", required=True)
     parser.add_argument("--samples", type=int, default=3)
@@ -253,8 +278,6 @@ def load_process_replay(
         raise RuntimeError(f"benchmark requires 8 or 32 H100s, found {shard_count}")
     if rows_per_shard not in (1, 128):
         raise RuntimeError(f"rows_per_shard must be 1 or 128, got {rows_per_shard}")
-    if shard_count == 32 and rows_per_shard != 128:
-        raise RuntimeError("the 32-H100 headline must consume all 128 rows per shard")
     if shard_count == 8 and rows_per_shard != 1:
         raise RuntimeError("the one-node preflight must consume one row per shard")
 
@@ -287,6 +310,7 @@ def load_process_replay(
         "microbatches": int(sequences.shape[0]),
         "global_microbatch_size": shard_count,
         "sequence_length": int(sequences.shape[-1]),
+        "action_length": int(arrays["loss_mask"].shape[-1]),
     }
     return {"tokens": sequences, "loss_weight": loss_weight, "segment_ids": segment_ids}, counts
 
@@ -298,7 +322,7 @@ def aggregate_process_counts(local_counts: Mapping[str, int]) -> dict[str, int]:
     local_summed = np.asarray([local_counts[name] for name in summed_names], dtype=np.int64)
     gathered_summed = np.asarray(multihost_utils.process_allgather(local_summed)).reshape(-1, len(summed_names))
 
-    common_names = ("microbatches", "global_microbatch_size", "sequence_length")
+    common_names = ("microbatches", "global_microbatch_size", "sequence_length", "action_length")
     local_common = np.asarray([local_counts[name] for name in common_names], dtype=np.int64)
     gathered_common = np.asarray(multihost_utils.process_allgather(local_common)).reshape(-1, len(common_names))
     if not np.all(gathered_common == gathered_common[0]):
@@ -526,6 +550,82 @@ def make_matched_step(mp: jmp.Policy, global_loss_tokens: int):
     return jax.jit(step, donate_argnums=(0,))
 
 
+def make_sampled_logprob_step(mp: jmp.Policy, *, sequence_length: int, action_length: int):
+    action_indices = (0, action_length // 2, action_length - 1)
+    model_start = sequence_length - action_length - 1
+    model_token_indices = np.asarray([model_start + index for index in action_indices], dtype=np.int32)
+
+    def step(params: Transformer, pending_qb_betas: jax.Array, replay: ReplayArrays):
+        model = mp.cast_to_compute(_apply_qb_betas(params, pending_qb_betas))
+
+        def body(_, microbatch):
+            tokens, _, segment_ids = microbatch
+            mask = AttentionMask.causal().with_segment_ids(segment_ids)
+            hidden, _ = model(tokens, mask=mask)
+            labels = jnp.concatenate([tokens[:, 1:], tokens[:, :1] * 0], axis=1).astype(jnp.int32)
+            token_cross_entropy = fused_linear_softmax_cross_entropy_loss(
+                hidden,
+                model.output_proj,
+                labels,
+                reduction="none",
+                logsumexp_weight=None,
+                dtype=jnp.float32,
+                implementation=model.config.ce_implementation,
+            )
+            return None, -token_cross_entropy[:, model_token_indices]
+
+        _, sampled = jax.lax.scan(body, None, replay)
+        return sampled
+
+    return jax.jit(step)
+
+
+def local_sampled_logprob_workers(sampled: jax.Array, counts: Mapping[str, int]) -> list[dict[str, Any]]:
+    coordinates = representative_action_coordinates(
+        sequence_length=int(counts["sequence_length"]),
+        action_length=int(counts["action_length"]),
+        microbatch_count=int(counts["microbatches"]),
+    )
+    workers = []
+    for shard in sampled.addressable_shards:
+        microbatch_slice, batch_slice, sample_slice = shard.index
+
+        def is_full_slice(value, size: int) -> bool:
+            return (
+                isinstance(value, slice)
+                and (value.start is None or value.start == 0)
+                and (value.stop is None or value.stop == size)
+                and (value.step is None or value.step == 1)
+            )
+
+        if not is_full_slice(microbatch_slice, int(counts["microbatches"])) or not is_full_slice(sample_slice, 3):
+            raise RuntimeError(f"unexpected sampled-logprob shard index: {shard.index}")
+        if not isinstance(batch_slice, slice) or (batch_slice.step is not None and batch_slice.step != 1):
+            raise RuntimeError(f"unexpected sampled-logprob batch shard: {batch_slice}")
+        batch_start = 0 if batch_slice.start is None else batch_slice.start
+        batch_stop = int(counts["global_microbatch_size"]) if batch_slice.stop is None else batch_slice.stop
+        if not (0 <= batch_start < batch_stop <= int(counts["global_microbatch_size"])):
+            raise RuntimeError(f"unexpected sampled-logprob batch shard: {batch_slice}")
+        local = np.asarray(shard.data, dtype=np.float32)
+        expected_shape = (int(counts["microbatches"]), batch_stop - batch_start, 3)
+        if local.shape != expected_shape:
+            raise RuntimeError(f"sampled-logprob shard shape {local.shape} != {expected_shape}")
+        for local_index, rank in enumerate(range(batch_start, batch_stop)):
+            values = np.ascontiguousarray(local[:, local_index, :]).reshape(-1)
+            workers.append(
+                {
+                    "rank": rank,
+                    "representative_action_log_probs": values.astype(np.float32, copy=False).tolist(),
+                    "representative_action_log_probs_sha256": hashlib.sha256(values.tobytes()).hexdigest(),
+                    "representative_action_log_prob_coordinates": coordinates,
+                }
+            )
+    workers.sort(key=lambda worker: worker["rank"])
+    if len({worker["rank"] for worker in workers}) != len(workers):
+        raise RuntimeError("sampled-logprob output contains duplicate worker ranks")
+    return workers
+
+
 def make_operational_step(optimizer: optax.GradientTransformation, mp: jmp.Policy, global_loss_tokens: int):
     one = jnp.array(1, dtype=jnp.int32)
 
@@ -669,6 +769,97 @@ def upload_json(uri: str, result: dict[str, Any]) -> tuple[str, str]:
     return result["result_sha256"], hashlib.sha256(payload).hexdigest()
 
 
+def load_verified_json_result(spec: Mapping[str, str]) -> tuple[dict[str, Any], int]:
+    uri = spec["s3_uri"]
+    split_s3_uri(uri)
+    with fsspec.open(uri, "rb") as source:
+        payload = source.read()
+    payload_sha256 = hashlib.sha256(payload).hexdigest()
+    if payload_sha256 != spec["payload_sha256"]:
+        raise RuntimeError(
+            f"{spec['label']} payload digest mismatch: expected {spec['payload_sha256']}, got {payload_sha256}"
+        )
+    result = json.loads(payload)
+    claimed = result.pop("result_sha256")
+    canonical = json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
+    actual = hashlib.sha256(canonical).hexdigest()
+    if claimed != actual or claimed != spec["result_sha256"]:
+        raise RuntimeError(
+            f"{spec['label']} result digest mismatch: expected {spec['result_sha256']}, "
+            f"claimed {claimed}, computed {actual}"
+        )
+    result["result_sha256"] = claimed
+    return result, len(payload)
+
+
+def reconstruct_reference_coordinates(
+    workers: Sequence[Mapping[str, Any]], *, sequence_length: int, action_length: int
+) -> list[dict[str, Any]]:
+    """Add the implicit sample order used by the frozen MarinSkyRL artifacts."""
+
+    reconstructed = []
+    for stored_worker in workers:
+        worker = dict(stored_worker)
+        microbatches = int(worker["microbatches"])
+        values = worker["representative_action_log_probs"]
+        if len(values) != 3 * microbatches:
+            raise RuntimeError(f"rank {worker['rank']} has {len(values)} sampled values for {microbatches} microbatches")
+        worker["representative_action_log_prob_coordinates"] = representative_action_coordinates(
+            sequence_length=sequence_length,
+            action_length=action_length,
+            microbatch_count=microbatches,
+        )
+        reconstructed.append(worker)
+    return reconstructed
+
+
+def compare_msrl_reference_artifact(
+    spec: Mapping[str, str],
+    levanter_workers: Sequence[Mapping[str, Any]],
+    *,
+    manifest_sha256: str,
+    logical_batch_sha256: str,
+    sequence_length: int,
+    action_length: int,
+) -> dict[str, Any]:
+    result, payload_bytes = load_verified_json_result(spec)
+    expected = {
+        "objective": "paired_matched_ce",
+        "mode": "headline",
+        "world_size": 32,
+        "manifest_sha256": manifest_sha256,
+        "logical_batch_sha256": logical_batch_sha256,
+    }
+    for name, value in expected.items():
+        if result[name] != value:
+            raise RuntimeError(f"{spec['label']} has {name}={result[name]!r}, expected {value!r}")
+    arms_by_name = {arm["arm"]: arm for arm in result["arms"]}
+    if set(arms_by_name) != {"eager", "grouped"} or len(result["arms"]) != 2:
+        raise RuntimeError(f"{spec['label']} has unexpected arms {[arm['arm'] for arm in result['arms']]}")
+    reference_arms = {}
+    for name in ("eager", "grouped"):
+        # These frozen artifacts predate explicit coordinate storage. Their
+        # producer appended first/middle/last samples in microbatch order.
+        reference_arms[name] = reconstruct_reference_coordinates(
+            arms_by_name[name]["timed_workers"],
+            sequence_length=sequence_length,
+            action_length=action_length,
+        )
+    return {
+        "label": spec["label"],
+        "s3_uri": spec["s3_uri"],
+        "payload_bytes": payload_bytes,
+        "payload_sha256": spec["payload_sha256"],
+        "result_sha256": spec["result_sha256"],
+        "source_revision": result["source_revision"],
+        "image": result["image"],
+        "model": result["model"],
+        "model_revision": result["model_revision"],
+        "runtime_benchmark_sha256": result["runtime_benchmark_sha256"],
+        "comparison": compare_sampled_action_log_probs(levanter_workers, reference_arms),
+    }
+
+
 def upload_profile_directory(directory: Path, prefix_uri: str, process_index: int) -> list[dict[str, Any]]:
     """Upload one process's JAX trace before the ephemeral Iris task exits."""
 
@@ -741,13 +932,144 @@ def _config_evidence(
         "global_loss_tokens_denominator": global_loss_tokens,
         "diagnostic_microbatches": diagnostic_microbatches,
         "qb_beta_repacking": (
-            "pending step-630 QB beta is applied exactly; matched CE does not compute a next-step beta"
-            if objective == "matched_ce"
+            "pending step-630 QB beta is applied exactly; this objective does not compute a next-step beta"
+            if objective in ("matched_ce", "sampled_logprobs")
             else "pending step-630 QB beta is applied exactly before the update; the next-step beta is the "
             f"arithmetic mean of the {executed_microbatches} per-microbatch native QB betas because the full "
             "token-by-expert statistic does not fit"
         ),
     }
+
+
+def run_sampled_logprob_oracle(
+    args: argparse.Namespace,
+    *,
+    model_config,
+    mp: jmp.Policy,
+    mesh,
+    replay: ReplayArrays,
+    counts: Mapping[str, int],
+    manifest: Mapping[str, Any],
+) -> None:
+    params, pending = initialize_params(model_config, mp, args.checkpoint, mesh)
+    start_fingerprint = model_fingerprint(params, pending)
+    sampled_step = make_sampled_logprob_step(
+        mp,
+        sequence_length=int(counts["sequence_length"]),
+        action_length=int(counts["action_length"]),
+    )
+    compile_started = time.perf_counter()
+    compiled = sampled_step.lower(params, pending, replay).compile()
+    compile_seconds = time.perf_counter() - compile_started
+
+    multihost_utils.sync_global_devices("sampled-logprobs-ready")
+    execution_started = time.perf_counter()
+    sampled = compiled(params, pending, replay)
+    jax.block_until_ready(sampled)
+    execution_seconds = time.perf_counter() - execution_started
+    local_workers = local_sampled_logprob_workers(sampled, counts)
+    if not all(np.isfinite(value) for worker in local_workers for value in worker["representative_action_log_probs"]):
+        raise RuntimeError("Levanter produced non-finite sampled action log probabilities")
+
+    local_evidence = {
+        "process_index": jax.process_index(),
+        "compile_seconds": compile_seconds,
+        "execution_seconds": execution_seconds,
+        "workers": local_workers,
+        "hardware": {
+            "hostname": socket.gethostname(),
+            "jax_version": jax.__version__,
+            "jaxlib_version": jax.lib.__version__,
+            "devices": nvidia_smi_rows(),
+        },
+    }
+    gathered = gather_json(local_evidence)
+    job_info = get_job_info()
+    if jax.process_index() == 0:
+        levanter_workers = sorted(
+            (worker for process in gathered for worker in process["workers"]),
+            key=lambda worker: worker["rank"],
+        )
+        expected_world = 32
+        if [worker["rank"] for worker in levanter_workers] != list(range(expected_world)):
+            raise RuntimeError(
+                f"sampled-logprob worker ranks are {[worker['rank'] for worker in levanter_workers]}, "
+                f"expected 0..{expected_world - 1}"
+            )
+        references = [
+            compare_msrl_reference_artifact(
+                spec,
+                levanter_workers,
+                manifest_sha256=args.manifest_sha256,
+                logical_batch_sha256=args.logical_batch_sha256,
+                sequence_length=int(counts["sequence_length"]),
+                action_length=int(counts["action_length"]),
+            )
+            for spec in MSRL_REFERENCE_ARTIFACTS
+        ]
+        result = {
+            "schema_version": 1,
+            "created_utc": dt.datetime.now(dt.UTC).isoformat(),
+            "benchmark": "levanter_grug_fixed_replay_sampled_logprobs",
+            "objective": "sampled_logprobs",
+            "mode": args.mode,
+            "source_revision": args.source_revision,
+            "image": args.image,
+            "checkpoint": args.checkpoint,
+            "job": str(job_info.job_id) if job_info is not None else None,
+            "manifest_s3_uri": args.manifest_s3_uri,
+            "manifest_sha256": args.manifest_sha256,
+            "logical_batch_sha256": args.logical_batch_sha256,
+            "manifest_batch": manifest["batch"],
+            "manifest_batch_metadata": manifest["batch_metadata"],
+            "world_size": expected_world,
+            "counts": dict(counts),
+            "config": _config_evidence(
+                model_config,
+                mesh,
+                objective=args.objective,
+                executed_microbatches=int(replay.tokens.shape[0]),
+                global_microbatch_size=int(replay.tokens.shape[1]),
+                global_loss_tokens=int(counts["loss_tokens"]),
+                diagnostic_microbatches=None,
+            ),
+            "checkpoint_start_fingerprint": start_fingerprint,
+            "compile_seconds_not_a_benchmark": max(float(process["compile_seconds"]) for process in gathered),
+            "execution_seconds_not_a_benchmark": max(float(process["execution_seconds"]) for process in gathered),
+            "levanter_workers": levanter_workers,
+            "msrl_references": references,
+            "hardware": [process["hardware"] for process in gathered],
+            "arithmetic_boundary": (
+                "native step-630 FP32 checkpoint plus pending query-bias state, cast to BF16 compute/output; "
+                "default ring EP8; full-sequence native fused next-token CE with FP32 loss accumulation; "
+                "three frozen action positions retained per rank and microbatch"
+            ),
+            "model_identity_caveat": (
+                "The MSRL artifacts use the sanctioned all-BF16 HF export of this checkpoint. Its embedded "
+                "provenance says pending query-bias state was baked into router bias, but Marin's current "
+                "persisted-export digest test covers the base step-42150 checkpoint, not this exact step-630 "
+                "SFT export. Comparisons are descriptive and apply no cross-framework pass threshold."
+            ),
+            "headline_eligible": False,
+            "headline_exclusion_reason": "semantic arithmetic oracle; execution time is not a training benchmark",
+        }
+        result_sha256, payload_sha256 = upload_json(args.result_s3_uri, result)
+        print(
+            "GRUG_SAMPLED_LOGPROB_RESULT="
+            + json.dumps(
+                {
+                    "result_s3_uri": args.result_s3_uri,
+                    "result_sha256": result_sha256,
+                    "payload_sha256": payload_sha256,
+                    "comparisons": {
+                        reference["label"]: reference["comparison"]["paired_preference"] for reference in references
+                    },
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+    multihost_utils.sync_global_devices("sampled-logprobs-uploaded")
 
 
 def main() -> None:
@@ -760,6 +1082,8 @@ def main() -> None:
     args = parse_args()
     if args.samples <= 0:
         raise ValueError("--samples must be positive")
+    if args.objective == "sampled_logprobs" and args.samples != 1:
+        raise ValueError("sampled_logprobs is a semantic oracle and requires --samples 1")
     if args.diagnostic_microbatches is not None:
         if args.diagnostic_microbatches <= 0:
             raise ValueError("--diagnostic-microbatches must be positive")
@@ -767,7 +1091,9 @@ def main() -> None:
             raise ValueError("--diagnostic-microbatches is restricted to matched_ce headline diagnostics")
     if (args.profile_dir is None) != (args.profile_s3_prefix is None):
         raise ValueError("--profile-dir and --profile-s3-prefix must be supplied together")
-    expected_world = 8 if args.mode == "preflight" else 32
+    if args.objective == "sampled_logprobs" and args.profile_dir is not None:
+        raise ValueError("sampled_logprobs does not support profiling")
+    expected_world = 32 if args.mode == "headline" or args.objective == "sampled_logprobs" else 8
     expected_rows = 1 if args.mode == "preflight" else 128
 
     initialize_jax()
@@ -830,7 +1156,20 @@ def main() -> None:
                 "microbatches": int(replay.tokens.shape[0]),
                 "global_microbatch_size": int(replay.tokens.shape[1]),
                 "sequence_length": int(replay.tokens.shape[2]),
+                "action_length": counts["action_length"],
             }
+
+        if args.objective == "sampled_logprobs":
+            run_sampled_logprob_oracle(
+                args,
+                model_config=model_config,
+                mp=mp,
+                mesh=mesh,
+                replay=replay,
+                counts=executed_counts,
+                manifest=manifest,
+            )
+            return
 
         optimizer = _optimizer.build(400_000)
 
