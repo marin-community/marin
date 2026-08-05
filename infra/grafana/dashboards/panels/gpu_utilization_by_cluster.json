@@ -67,21 +67,6 @@
       {
         "matcher": {
           "id": "byName",
-          "options": "cw-us-west-04a"
-        },
-        "properties": [
-          {
-            "id": "color",
-            "value": {
-              "mode": "fixed",
-              "fixedColor": "#c98500"
-            }
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
           "options": "marin"
         },
         "properties": [
