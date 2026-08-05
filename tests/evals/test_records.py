@@ -243,7 +243,7 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
     }
 
 
-def test_record_json_includes_effective_evalchemy_configuration(tmp_path):
+def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
     record = _RECORD.model_copy(
         update={
             "evaluation": EvalRef(
@@ -262,7 +262,7 @@ def test_record_json_includes_effective_evalchemy_configuration(tmp_path):
                     max_gen_toks=2048,
                     max_eval_instances=64,
                     num_concurrent=16,
-                    batch_size=1,
+                    batch_size="1",
                     seed=1234,
                     extra_gen_kwargs={"temperature": "0"},
                     extra_model_args={"timeout": 900},
@@ -281,7 +281,7 @@ def test_record_json_includes_effective_evalchemy_configuration(tmp_path):
         "max_gen_toks": 2048,
         "max_eval_instances": 64,
         "num_concurrent": 16,
-        "batch_size": 1,
+        "batch_size": "1",
         "seed": 1234,
         "extra_gen_kwargs": {"temperature": "0"},
         "extra_model_args": {"timeout": 900},

@@ -117,7 +117,7 @@ and unknown task names fail during this preflight.
 `apply_chat_template`, `limit`, `batch_size`, `seed`, `gen_kwargs`, `extra_model_args`, `max_length`,
 and `max_tokens`. The model catalog supplies its chat-template and generation overlays, and an
 explicit launcher `--limit` overrides the file limit. `record.json` stores the resulting task options
-and effective Evalchemy client configuration under `eval.tasks` and `eval.evalchemy`.
+and normalized Evalchemy launch configuration under `eval.tasks` and `eval.evalchemy`.
 
 `--evalchemy-config` is additive with registry `--evals` and file-backed `--harbor-config`. The
 launcher preserves argument order by source: registry entries, Evalchemy files, then Harbor files.

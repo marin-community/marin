@@ -115,8 +115,8 @@ def test_preflight_evalchemy_configs_returns_pinned_normalized_config(tmp_path, 
         }
     ]
     monkeypatch.setattr(
-        "marin.evaluation.evalchemy.config._capture_driver",
-        lambda _request_path: SimpleNamespace(stdout=json.dumps(response)),
+        "marin.evaluation.evalchemy.config.capture_driver",
+        lambda _command, _environment: SimpleNamespace(stdout=json.dumps(response)),
     )
 
     (config,) = preflight_evalchemy_configs([config_path])
@@ -125,6 +125,7 @@ def test_preflight_evalchemy_configs_returns_pinned_normalized_config(tmp_path, 
     assert config.task_options["ifeval"].generation
     assert config.gen_kwargs == {"temperature": "0", "max_gen_toks": "2048"}
     assert config.extra_model_args == {"timeout": 900}
+    assert config.batch_size == "1"
     assert config.runtime_extras == ("ifeval",)
 
 

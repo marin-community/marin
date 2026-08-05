@@ -15,34 +15,20 @@ from pathlib import Path
 from rigging.config_discovery import find_project_root
 from rigging.tunnel import terminate_process_group
 
-from marin.evaluation.eval_env import env_vars_from_keys
+from marin.evaluation.isolated_driver import (
+    ISOLATED_REQUEST_MODE,
+    capture_driver,
+    driver_failure,
+    isolated_driver_environment,
+)
 from marin.external_dependencies import HARBOR
 from marin.inference.iris import InferenceBackendState
 
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
-_OWNER_ONLY_MODE = 0o600
 # Harbor can exhaust a trial's upstream retry budget in tens of seconds when an endpoint disappears.
 _BACKEND_POLL_SECONDS = 5.0
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
-_DRIVER_SYSTEM_ENV_KEYS = (
-    "CURL_CA_BUNDLE",
-    "HOME",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "NO_PROXY",
-    "PATH",
-    "PYTHONHASHSEED",
-    "REQUESTS_CA_BUNDLE",
-    "SSL_CERT_DIR",
-    "SSL_CERT_FILE",
-    "TMPDIR",
-    "UV_CACHE_DIR",
-    "XDG_CACHE_HOME",
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
-)
 
 
 class HarborBackendsUnavailable(RuntimeError):
@@ -145,30 +131,9 @@ def _driver_command(command: str, *paths: Path) -> list[str]:
 
 
 def _driver_environment(driver_env: Mapping[str, str] | None = None) -> dict[str, str]:
-    environment = env_vars_from_keys(_DRIVER_SYSTEM_ENV_KEYS + _DRIVER_STORAGE_ENV_KEYS)
-    environment.update(driver_env or {})
+    environment = isolated_driver_environment(_DRIVER_STORAGE_ENV_KEYS, driver_env)
     environment["PYTHONPATH"] = _DRIVER_PYTHONPATH
     return environment
-
-
-def _driver_failure(exc: subprocess.CalledProcessError) -> ValueError:
-    stderr = exc.stderr.strip() if isinstance(exc.stderr, str) else ""
-    stdout = exc.stdout.strip() if isinstance(exc.stdout, str) else ""
-    detail = stderr or stdout or f"driver exited with status {exc.returncode}"
-    return ValueError(detail)
-
-
-def _capture_driver(command: list[str]) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-            env=_driver_environment(),
-        )
-    except subprocess.CalledProcessError as exc:
-        raise _driver_failure(exc) from exc
 
 
 def _stream_driver(
@@ -197,7 +162,7 @@ def _stream_driver(
     if return_code:
         _raise_for_backend_state(backend_state())
         exc = subprocess.CalledProcessError(return_code, command)
-        raise _driver_failure(exc) from exc
+        raise driver_failure(exc) from exc
 
 
 def _raise_for_backend_state(state: InferenceBackendState) -> None:
@@ -270,9 +235,9 @@ def preflight_harbor_configs(
             request_path.write_text(json.dumps(request_payload, ensure_ascii=False, separators=(",", ":")))
         except (TypeError, ValueError) as exc:
             raise ValueError("Harbor model agent kwargs must be JSON-serializable") from exc
-        request_path.chmod(_OWNER_ONLY_MODE)
+        request_path.chmod(ISOLATED_REQUEST_MODE)
         try:
-            completed = _capture_driver(_driver_command("preflight", request_path))
+            completed = capture_driver(_driver_command("preflight", request_path), _driver_environment())
         except ValueError as exc:
             paths = ", ".join(str(path) for path, _ in requests)
             raise ValueError(f"invalid Harbor config in [{paths}]: {exc}") from exc
@@ -315,8 +280,8 @@ def run_harbor_driver(
             )
         except (TypeError, ValueError) as exc:
             raise ValueError("Harbor runtime overlay must be JSON-serializable") from exc
-        policy_path.chmod(_OWNER_ONLY_MODE)
-        overlay_path.chmod(_OWNER_ONLY_MODE)
+        policy_path.chmod(ISOLATED_REQUEST_MODE)
+        overlay_path.chmod(ISOLATED_REQUEST_MODE)
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
         _stream_driver(command, driver_env, backend_state)

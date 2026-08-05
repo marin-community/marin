@@ -84,7 +84,7 @@ def _install_fake_evalchemy_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
                 apply_chat_template=True,
                 limit=None,
                 num_fewshot=None,
-                batch_size=1,
+                batch_size="1",
                 seed=1234,
                 gen_kwargs={"max_gen_toks": "2048"},
                 extra_model_args={},
@@ -411,7 +411,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "max_gen_toks": 2048,
             "max_eval_instances": 2,
             "num_concurrent": 16,
-            "batch_size": 1,
+            "batch_size": "1",
             "seed": 1234,
             "extra_gen_kwargs": {},
             "extra_model_args": {},
@@ -512,19 +512,45 @@ def test_launch_dry_run_prints_resolved_federated_cluster_and_priority(
     assert f"priority={priority}" in result.output
 
 
-def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch):
-    config_path = _write_harbor_config(tmp_path / "incompatible.yaml")
+@pytest.mark.parametrize(
+    ("option", "contents", "preflight_target", "error"),
+    [
+        (
+            "--harbor-config",
+            "{}",
+            "experiments.evaluation.launch.preflight_harbor_configs",
+            "Harbor config must declare exactly one agent",
+        ),
+        (
+            "--evalchemy-config",
+            "tasks: [not_a_pinned_task]\n",
+            "experiments.evaluation.launch.preflight_evalchemy_configs",
+            "tasks are not recognized by pinned Evalchemy: ['not_a_pinned_task']",
+        ),
+    ],
+    ids=("harbor", "evalchemy"),
+)
+def test_launch_rejects_invalid_config_before_iris_submission(
+    tmp_path,
+    monkeypatch,
+    option,
+    contents,
+    preflight_target,
+    error,
+):
+    config_path = tmp_path / "invalid.yaml"
+    config_path.write_text(contents)
     iris_opened = False
 
     def reject_preflight(_requests):
-        raise ValueError("Harbor config must declare exactly one agent")
+        raise ValueError(error)
 
     def open_iris_client(**_kwargs):
         nonlocal iris_opened
         iris_opened = True
-        raise AssertionError("Iris must not be opened for an incompatible Harbor config")
+        raise AssertionError("Iris must not be opened for an invalid evaluator config")
 
-    monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", reject_preflight)
+    monkeypatch.setattr(preflight_target, reject_preflight)
     monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
 
     result = CliRunner().invoke(
@@ -533,45 +559,14 @@ def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_pa
             "launch",
             "--model",
             "qwen3-8b",
-            "--harbor-config",
+            option,
             str(config_path),
             "--no-wait",
         ],
     )
 
     assert result.exit_code == 2
-    assert not iris_opened
-
-
-def test_launch_rejects_unknown_evalchemy_task_before_iris_submission(tmp_path, monkeypatch):
-    config_path = tmp_path / "unknown.yaml"
-    config_path.write_text("tasks: [not_a_pinned_task]\n")
-    iris_opened = False
-
-    def reject_preflight(_paths):
-        raise ValueError("tasks are not recognized by pinned Evalchemy: ['not_a_pinned_task']")
-
-    def open_iris_client(**_kwargs):
-        nonlocal iris_opened
-        iris_opened = True
-        raise AssertionError("Iris must not be opened for an incompatible Evalchemy config")
-
-    monkeypatch.setattr("experiments.evaluation.launch.preflight_evalchemy_configs", reject_preflight)
-    monkeypatch.setattr("experiments.evaluation.cli.open_iris_client", open_iris_client)
-
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--evalchemy-config",
-            str(config_path),
-            "--no-wait",
-        ],
-    )
-
-    assert result.exit_code == 2
+    assert error in result.output
     assert not iris_opened
 
 

@@ -5,39 +5,21 @@
 
 from __future__ import annotations
 
-import importlib
 import json
-import os
-import re
-import subprocess
-import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from importlib import metadata
 from pathlib import Path
 
-_EVALCHEMY_ENV_CONFIG = ("config", "external", "evalchemy")
-_OWNER_ONLY_MODE = 0o600
-_EXTRA_NORMALIZER = re.compile(r"[-_.]+")
-_DRIVER_SYSTEM_ENV_KEYS = (
-    "CURL_CA_BUNDLE",
-    "HOME",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "NO_PROXY",
-    "PATH",
-    "PYTHONHASHSEED",
-    "REQUESTS_CA_BUNDLE",
-    "SSL_CERT_DIR",
-    "SSL_CERT_FILE",
-    "TMPDIR",
-    "UV_CACHE_DIR",
-    "XDG_CACHE_HOME",
-    "http_proxy",
-    "https_proxy",
-    "no_proxy",
+from marin.evaluation.isolated_driver import (
+    ISOLATED_REQUEST_MODE,
+    capture_driver,
+    isolated_driver_environment,
 )
+
+_EVALCHEMY_ENV_CONFIG = ("config", "external", "evalchemy")
+_PREFLIGHT_DRIVER = Path(__file__).with_name("preflight_driver.py")
+RESERVED_ENDPOINT_MODEL_ARGS = frozenset({"model", "base_url", "tokenizer", "tokenizer_backend", "tokenized_requests"})
 
 
 @dataclass(frozen=True)
@@ -53,14 +35,14 @@ class EvalchemyTaskOptions:
 
 @dataclass(frozen=True)
 class ValidatedEvalchemyConfig:
-    """One pinned-schema config plus the evaluator catalogs that recognized it."""
+    """One pinned-schema config plus the runtime extras selected from that package."""
 
     tasks: tuple[str, ...]
     task_options: Mapping[str, EvalchemyTaskOptions]
     apply_chat_template: bool
     limit: int | None
     num_fewshot: int | None
-    batch_size: int | str
+    batch_size: str
     seed: int | None
     gen_kwargs: Mapping[str, str]
     extra_model_args: Mapping[str, str | int | float | bool]
@@ -85,34 +67,9 @@ def _driver_command(request_path: Path) -> list[str]:
         "--project",
         str(_workspace_root().joinpath(*_EVALCHEMY_ENV_CONFIG)),
         "python",
-        str(Path(__file__)),
-        "preflight",
+        str(_PREFLIGHT_DRIVER),
         str(request_path),
     ]
-
-
-def _driver_environment() -> dict[str, str]:
-    return {key: os.environ[key] for key in _DRIVER_SYSTEM_ENV_KEYS if key in os.environ}
-
-
-def _driver_failure(exc: subprocess.CalledProcessError) -> ValueError:
-    stderr = exc.stderr.strip() if isinstance(exc.stderr, str) else ""
-    stdout = exc.stdout.strip() if isinstance(exc.stdout, str) else ""
-    detail = stderr or stdout or f"driver exited with status {exc.returncode}"
-    return ValueError(detail)
-
-
-def _capture_driver(request_path: Path) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            _driver_command(request_path),
-            check=True,
-            capture_output=True,
-            text=True,
-            env=_driver_environment(),
-        )
-    except subprocess.CalledProcessError as exc:
-        raise _driver_failure(exc) from exc
 
 
 def _parse_key_value_args(value: object, path: Path) -> dict[str, str]:
@@ -171,7 +128,7 @@ def _validated_config(payload: object, path: Path) -> ValidatedEvalchemyConfig:
         apply_chat_template=config.get("apply_chat_template", False),
         limit=config.get("limit"),
         num_fewshot=config.get("num_fewshot"),
-        batch_size=config.get("batch_size", 1),
+        batch_size=str(config.get("batch_size", 1)),
         seed=config.get("seed"),
         gen_kwargs=_parse_key_value_args(config.get("gen_kwargs"), path),
         extra_model_args=dict(extra_model_args),
@@ -188,9 +145,9 @@ def preflight_evalchemy_configs(paths: Sequence[Path]) -> tuple[ValidatedEvalche
     with tempfile.TemporaryDirectory(prefix="marin-evalchemy-preflight-") as temp_dir:
         request_path = Path(temp_dir) / "requests.json"
         request_path.write_text(json.dumps([str(path.resolve()) for path in paths], separators=(",", ":")))
-        request_path.chmod(_OWNER_ONLY_MODE)
+        request_path.chmod(ISOLATED_REQUEST_MODE)
         try:
-            completed = _capture_driver(request_path)
+            completed = capture_driver(_driver_command(request_path), isolated_driver_environment())
         except ValueError as exc:
             joined_paths = ", ".join(str(path) for path in paths)
             raise ValueError(f"invalid Evalchemy config in [{joined_paths}]: {exc}") from exc
@@ -203,52 +160,3 @@ def preflight_evalchemy_configs(paths: Sequence[Path]) -> tuple[ValidatedEvalche
         count = len(response) if isinstance(response, list) else "invalid"
         raise ValueError(f"Evalchemy preflight returned {count} result(s) for {len(paths)} config(s)")
     return tuple(_validated_config(payload, path) for payload, path in zip(response, paths, strict=True))
-
-
-def _preflight_driver(request_path: Path) -> None:
-    evalchemy_config = importlib.import_module("evalchemy_config")
-    eval_package = importlib.import_module("eval")
-    task_manager_module = importlib.import_module("lm_eval.tasks")
-
-    requested_paths = json.loads(request_path.read_text())
-    if not isinstance(requested_paths, list) or not all(isinstance(path, str) for path in requested_paths):
-        raise ValueError("Evalchemy preflight request must be a list of config paths")
-
-    native_tasks = task_manager_module.TaskManager()
-    custom_root = Path(eval_package.__file__).parent / "chat_benchmarks"
-    available_extras = set(metadata.metadata("evalchemy").get_all("Provides-Extra") or ())
-    response: list[dict[str, object]] = []
-    for raw_path in requested_paths:
-        path = Path(raw_path)
-        config = evalchemy_config.load_evaluation_config(path)
-        runtime_extras: list[str] = []
-        unknown_tasks: list[str] = []
-        for task in config.tasks:
-            is_custom = (custom_root / task / "eval_instruct.py").is_file()
-            is_native = bool(native_tasks.match_tasks([task]))
-            if is_custom and is_native:
-                raise ValueError(f"task {task!r} is ambiguous between Evalchemy and lm-eval catalogs")
-            if not is_custom and not is_native:
-                unknown_tasks.append(task)
-            extra = _EXTRA_NORMALIZER.sub("-", task).lower()
-            if extra in available_extras and extra not in runtime_extras:
-                runtime_extras.append(extra)
-        if unknown_tasks:
-            raise ValueError(f"tasks are not recognized by pinned Evalchemy: {unknown_tasks}")
-        response.append(
-            {
-                "config": config.model_dump(mode="json", exclude_none=True),
-                "runtime_extras": runtime_extras,
-            }
-        )
-    print(json.dumps(response, separators=(",", ":")))
-
-
-def main() -> None:
-    if len(sys.argv) != 3 or sys.argv[1] != "preflight":
-        raise SystemExit("usage: config.py preflight REQUESTS.json")
-    _preflight_driver(Path(sys.argv[2]))
-
-
-if __name__ == "__main__":
-    main()

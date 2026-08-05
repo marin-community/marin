@@ -34,6 +34,7 @@ from marin.inference.types import RunningModel
 logger = logging.getLogger(__name__)
 
 DEFAULT_NUM_CONCURRENT = 16
+DEFAULT_MAX_GEN_TOKS = 2048
 LOG_TAIL_LINES = 100
 _EVAL_CLIENT_SCRIPT = "lib/marin/src/marin/evaluation/evalchemy/client.py"
 _EVAL_JOB_ROLE = "eval"
@@ -98,10 +99,10 @@ class EvalchemyRunConfig:
     name: str
     tasks: tuple[EvalTaskConfig, ...]
     apply_chat_template: bool = False
-    max_gen_toks: int = 2048
+    max_gen_toks: int = DEFAULT_MAX_GEN_TOKS
     max_eval_instances: int | None = None
     num_concurrent: int = DEFAULT_NUM_CONCURRENT
-    batch_size: int | str | None = None
+    batch_size: str | None = None
     seed: int | None = None
     extra_gen_kwargs: dict[str, str] = field(default_factory=dict)
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)

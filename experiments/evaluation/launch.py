@@ -18,6 +18,7 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS
 from iris.client import IrisClient
 from iris.cluster.config import load_config
 from marin.evaluation.evalchemy.config import preflight_evalchemy_configs
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
@@ -184,7 +185,7 @@ def _preflight_definitions(
                     _ResolvedDefinition(
                         record_ref=definition.record_ref_for(config),
                         runtime_descriptor=definition.runtime_descriptor,
-                        executor=definition.executor_for(config),
+                        executor=EvalchemyExecutor(config),
                         secret_env=dict(definition.secret_env),
                     ),
                 )

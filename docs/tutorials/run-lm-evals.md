@@ -66,8 +66,8 @@ uv run python -m experiments.evaluation.cli launch \
 Each config file is one evaluation with its own `record.json`. Before opening Iris, the launcher
 normalizes Evalchemy files with the package pinned in `config/external/evalchemy/uv.lock` and resolves
 every requested name against that revision's Evalchemy and lm-eval task catalogs. The record keeps
-the effective task routing, few-shot counts, generation arguments, concurrency, context limit, and
-instance limit under `eval.tasks` and `eval.evalchemy`.
+the normalized launch-time task routing, few-shot counts, generation arguments, concurrency, context
+limit, and instance limit under `eval.tasks` and `eval.evalchemy`.
 
 ### Command recipes
 
@@ -271,8 +271,8 @@ TPU-routed runs default to `gs://marin-eval-metadata/evals`. CoreWeave GPU runs 
 `s3://marin-us-east-02a/marin/evals`. `--dry-run` prints the effective prefix.
 
 Every selected evaluation writes `{records_prefix}/{run_id}/record.json` plus its mechanism-specific
-results and normalized sample parquet. Evalchemy records include the normalized effective client
-configuration; Harbor records include the dataset, agent, environment, task limit, and source-policy
+results and normalized sample parquet. Evalchemy records include the normalized launch configuration;
+Harbor records include the dataset, agent, environment, task limit, and source-policy
 digest. Harbor also persists trial directories and trajectories in the same GCS or S3 results tree.
 A Harbor trial with `exception_info` marks the evaluation failed after its artifacts are saved; a
 verifier-scored zero without an exception remains a completed evaluation with a zero score.
