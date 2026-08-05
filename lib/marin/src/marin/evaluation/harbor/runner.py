@@ -8,8 +8,9 @@ Harbor agent at it (``hosted_vllm/<served-name>``), runs the dataset's trials on
 sandbox environment, and normalizes each finished trial into the shared eval
 contract: one agentic :class:`~marin.evaluation.samples.EvalSample` per task (its reward, its grading,
 and a reference to the saved trajectory) plus an aggregate this module's :class:`HarborResult` reads
-back for the record's metrics. Harbor's own per-trial resume is preserved by restoring completed
-trials from the durable output path before the job runs.
+back for the record's metrics. Harbor writes each trial's ``result.json`` and trajectory straight to
+the durable output path as it finishes, so a completed trial survives a driver killed before the job
+returns and Harbor's own per-trial resume reads it back from that path on the next run.
 
 The ``harbor`` dependency is optional and imported lazily, so importing this module never requires it.
 """
@@ -19,13 +20,15 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from rigging.filesystem import StoragePath, is_remote_path, prefix_join, url_to_fs
+from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 
 from marin.evaluation.harbor.dataset import materialize_harbor_dataset
 from marin.evaluation.harbor.driver_config import (
+    HarborBackendsUnavailable,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
     run_harbor_driver,
@@ -33,12 +36,19 @@ from marin.evaluation.harbor.driver_config import (
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import EvalSample, Grading, SampleKind, write_sample_parquet
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
 
+# Local scratch, used only to materialize a dataset before the isolated driver runs. Trial results
+# are written straight to the remote (or local) ``output_dir``, never staged here.
 _HARBOR_WORKDIR = Path("/tmp/harbor_workdir")
-_HARBOR_RESULTS_DIR = "harbor_results"
+# Harbor writes its job tree under ``output_dir/harbor_jobs/<job_name>/<trial>/`` as trials finish.
+_HARBOR_JOBS_SUBDIR = "harbor_jobs"
+# Trials normalize off independent per-trial reads on the remote job tree; fan them out so a
+# several-hundred-trial dataset is not a sequential round-trip per trial.
+_TRIAL_READ_WORKERS = 16
 _JOB_DATASET_LENGTH = 32
 _JOB_DIGEST_LENGTH = 12
 
@@ -56,7 +66,7 @@ class HarborTrial:
     task_id: str
     reward: float
     status: str
-    trajectory: str | None
+    trajectory_uri: str | None
     error: dict | None
 
 
@@ -102,68 +112,72 @@ def _job_name(dataset: str, identity: tuple[object, ...]) -> str:
     return f"harbor_{safe}_{digest}"
 
 
-def _job_paths(job_name: str) -> tuple[Path, Path]:
-    workdir = _HARBOR_WORKDIR / job_name
-    return workdir, workdir / _HARBOR_RESULTS_DIR
+def _jobs_dir(output_dir: str) -> StoragePath:
+    """The durable directory Harbor writes its jobs under: ``output_dir/harbor_jobs``."""
+    return StoragePath.parse(output_dir) / _HARBOR_JOBS_SUBDIR
 
 
-def _restore_completed_trials(out_path: str, job_dir: Path) -> int:
-    """Download completed trials (those with ``result.json``) from ``out_path`` so Harbor skips them."""
-    trials_root = prefix_join(out_path, "harbor_trials")
-    if not StoragePath(trials_root).exists():
-        return 0
-    restored = 0
-    for result_file in StoragePath(prefix_join(trials_root, "*/result.json")).glob():
-        trial_dir = result_file.parent
-        local = job_dir / trial_dir.name
-        if (local / "result.json").exists():
-            continue
-        trial_dir.download_to(str(local), recursive=True)
-        restored += 1
-    return restored
+def _job_dir(output_dir: str, job_name: str) -> StoragePath:
+    """The durable tree for one job: ``output_dir/harbor_jobs/<job_name>`` (Harbor appends the name)."""
+    return _jobs_dir(output_dir) / job_name
 
 
-def _read_trials(job_dir: Path) -> list[HarborTrial]:
-    """Read every finished trial under ``job_dir`` off its ``result.json`` and ``trajectory.json``."""
-    trials: list[HarborTrial] = []
-    for trial_dir in sorted(d for d in job_dir.iterdir() if d.is_dir()):
-        result_file = trial_dir / "result.json"
-        if not result_file.exists():
-            continue
-        data = json.loads(result_file.read_text())
-        task_id = data.get("task_name", trial_dir.name)
-        rewards = (data.get("verifier_result") or {}).get("rewards") or {}
-        reward = rewards.get("reward", 0.0)
-        reward = float(reward) if isinstance(reward, int | float) else 0.0
-        exc = data.get("exception_info")
-        error = {"type": exc.get("exception_type"), "message": exc.get("exception_message")} if exc else None
-        trajectory_file = trial_dir / "agent" / "trajectory.json"
-        trajectory = trajectory_file.read_text() if trajectory_file.exists() else None
-        trials.append(
-            HarborTrial(
-                task_id=task_id,
-                reward=reward,
-                status="failed" if exc else "completed",
-                trajectory=trajectory,
-                error=error,
+def _read_trial(result_file: StoragePath) -> HarborTrial:
+    """Normalize one finished trial off its ``result.json``, referencing its durable trajectory."""
+    trial_dir = result_file.parent
+    data = json.loads(result_file.read_text())
+    task_id = data.get("task_name", trial_dir.name)
+    rewards = (data.get("verifier_result") or {}).get("rewards") or {}
+    reward = rewards.get("reward", 0.0)
+    reward = float(reward) if isinstance(reward, int | float) else 0.0
+    exc = data.get("exception_info")
+    error = {"type": exc.get("exception_type"), "message": exc.get("exception_message")} if exc else None
+    # The trajectory is already durable in the job tree; reference it in place rather than reading it
+    # back and re-uploading a copy.
+    trajectory_file = trial_dir / "agent" / "trajectory.json"
+    trajectory_uri = str(trajectory_file) if trajectory_file.exists() else None
+    return HarborTrial(
+        task_id=task_id,
+        reward=reward,
+        status="failed" if exc else "completed",
+        trajectory_uri=trajectory_uri,
+        error=error,
+    )
+
+
+def _read_trials(job_dir: StoragePath) -> list[HarborTrial]:
+    """Read every finished trial under ``job_dir``, one parallel per-trial read each."""
+    result_files = sorted((job_dir / "*/result.json").glob(), key=lambda path: path.parent.name)
+    if not result_files:
+        return []
+    with ThreadPoolExecutor(max_workers=min(_TRIAL_READ_WORKERS, len(result_files))) as pool:
+        return list(pool.map(_read_trial, result_files))
+
+
+def _remove_unscored_trials(job_dir: StoragePath) -> None:
+    """Remove incomplete results so Harbor reruns them after a confirmed interruption."""
+    for result_file in (job_dir / "*/result.json").glob():
+        try:
+            result = json.loads(result_file.read_text())
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "removing unreadable Harbor trial result after inference interruption: %s (%s)", result_file, exc
             )
-        )
-    return trials
+            result_file.parent.rmtree()
+            continue
+        if result.get("verifier_result") is None:
+            result_file.parent.rmtree()
 
 
-def _sample_for(trial: HarborTrial, dataset: str, out_path: str) -> EvalSample:
-    """Normalize one trial into an agentic :class:`EvalSample`, saving its trajectory alongside."""
-    trajectory_uri: str | None = None
-    if trial.trajectory:
-        trajectory_uri = prefix_join(out_path, f"trajectories/{trial.task_id}.json")
-        StoragePath(trajectory_uri).write_text(trial.trajectory)
+def _sample_for(trial: HarborTrial, dataset: str) -> EvalSample:
+    """Normalize one trial into an agentic :class:`EvalSample`, referencing its durable trajectory."""
     solved = trial.reward >= SOLVED_REWARD
     detail = json.dumps({"reward": trial.reward, "error": trial.error}, ensure_ascii=False)
     return EvalSample(
         task=dataset,
         doc_id=trial.task_id,
         kind=SampleKind.AGENTIC,
-        trajectory_uri=trajectory_uri,
+        trajectory_uri=trial.trajectory_uri,
         grading=Grading(
             method="harbor:verifier",
             metric="reward",
@@ -180,7 +194,7 @@ def _write_samples(trials: list[HarborTrial], dataset: str, out_path: str) -> st
     """Write one agentic-sample parquet for the run; return its path (None if there were no trials)."""
     if not trials:
         return None
-    samples = [_sample_for(trial, dataset, out_path) for trial in trials]
+    samples = [_sample_for(trial, dataset) for trial in trials]
     dest = prefix_join(out_path, "samples_harbor.parquet")
     fs, _ = url_to_fs(dest)
     write_sample_parquet(fs, dest, samples)
@@ -203,39 +217,30 @@ def _aggregate(trials: list[HarborTrial], dataset: str, samples_path: str | None
     )
 
 
-def _upload_trials(job_dir: Path, out_path: str) -> None:
-    """Upload each finished trial directory under ``job_dir`` to ``out_path/harbor_trials`` for resume."""
-    for trial_dir in (d for d in job_dir.iterdir() if d.is_dir()):
-        if (trial_dir / "result.json").exists():
-            target = StoragePath(prefix_join(out_path, f"harbor_trials/{trial_dir.name}"))
-            target.upload_from(str(trial_dir), recursive=True)
-
-
 def _run_harbor_job(
     *,
     job_name: str,
-    workdir: Path,
     config: ValidatedHarborConfig,
     overlay: HarborRuntimeOverlay,
     dataset: str,
     environment: str,
     output_dir: str,
     driver_env: Mapping[str, str],
+    inference_session: RemoteInferenceSession,
 ) -> HarborRunResult:
-    results_dir = workdir / _HARBOR_RESULTS_DIR
-    results_dir.mkdir(parents=True, exist_ok=True)
-    job_dir = results_dir / job_name
-    if is_remote_path(output_dir):
-        restored = _restore_completed_trials(output_dir, job_dir)
-        if restored:
-            logger.info("restored %d completed Harbor trial(s) from %s", restored, output_dir)
-
-    logger.info("starting Harbor job %s (dataset=%s env=%s)", job_name, dataset, environment)
-    run_harbor_driver(config, overlay, driver_env)
+    job_dir = _job_dir(output_dir, job_name)
+    logger.info("starting Harbor job %s (dataset=%s env=%s jobs_dir=%s)", job_name, dataset, environment, job_dir)
+    while True:
+        try:
+            run_harbor_driver(config, overlay, driver_env, inference_session.backend_state)
+            break
+        except HarborBackendsUnavailable as exc:
+            logger.warning("pausing Harbor job %s while inference recovers: %s", job_name, exc)
+            _remove_unscored_trials(job_dir)
+            inference_session.wait_until_ready()
+            logger.info("inference recovered; resuming Harbor job %s", job_name)
 
     trials = _read_trials(job_dir)
-    if is_remote_path(output_dir):
-        _upload_trials(job_dir, output_dir)
     samples_path = _write_samples(trials, dataset, output_dir)
     result = _aggregate(trials, dataset, samples_path)
     StoragePath(prefix_join(output_dir, "harbor_result.json")).write_text(
@@ -296,13 +301,14 @@ class HarborExecutor:
         output_dir: str,
         hf_token: str | None,
         driver_env: Mapping[str, str],
+        inference_session: RemoteInferenceSession,
     ) -> HarborRunResult:
         dataset = self.config.record_dataset
         job_name = _job_name(
             dataset,
             (self.config.digest, model.endpoint.model, self.task_limit),
         )
-        workdir, results_dir = _job_paths(job_name)
+        workdir = _HARBOR_WORKDIR / job_name
         dataset_path = materialize_harbor_dataset(
             self.config,
             workdir,
@@ -310,7 +316,7 @@ class HarborExecutor:
         )
         overlay = HarborRuntimeOverlay(
             job_name=job_name,
-            jobs_dir=str(results_dir),
+            jobs_dir=str(_jobs_dir(output_dir)),
             dataset_path=str(dataset_path) if dataset_path is not None else None,
             endpoint_url=model.endpoint.base_url,
             served_model=model.endpoint.model,
@@ -319,26 +325,27 @@ class HarborExecutor:
         )
         return _run_harbor_job(
             job_name=job_name,
-            workdir=workdir,
             config=self.config,
             overlay=overlay,
             dataset=dataset,
             environment=self.config.environment,
             output_dir=output_dir,
             driver_env=driver_env,
+            inference_session=inference_session,
         )
 
     def __call__(
         self,
-        model: RunningModel,
+        session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
+        """Run Harbor while supervising a managed inference dependency."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token
         return _evaluation_outcome(
-            lambda: self._run(model, output_dir, hf_token, driver_env),
+            lambda: self._run(session.model, output_dir, hf_token, driver_env, session),
             output_dir,
         )

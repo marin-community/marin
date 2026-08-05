@@ -13,7 +13,9 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 ## Source Layout
 
 - `src/zephyr/dataset.py` — `Dataset` class, `ShardInfo`, all transformation operations including `group_by`, `deduplicate`, `sorted_merge_join`
-- `src/zephyr/execution.py` — `ZephyrContext`, `ZephyrCoordinator`, `ZephyrWorker`, `CounterSnapshot`, execution control flow
+- `src/zephyr/execution.py`: `ZephyrContext` and worker-pool lifecycle
+- `src/zephyr/coordinator.py`: pipeline state, task scheduling, counters, and result storage
+- `src/zephyr/worker.py`: worker polling, task threads, and heartbeats
 - `src/zephyr/plan.py` — `compute_plan`, `PhysicalPlan`, operation fusion
 - `src/zephyr/readers.py` — `load_jsonl`, `load_parquet`, `load_vortex`, `InputFileSpec`
 - `src/zephyr/writers.py` — `write_jsonl_file`, `write_parquet_file`, `write_vortex_file`, Levanter cache writer

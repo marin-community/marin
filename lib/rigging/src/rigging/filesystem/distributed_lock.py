@@ -174,11 +174,17 @@ class DistributedLease(abc.ABC):
 
     def has_active_holder(self) -> bool:
         """Check if any holder has an active (non-stale) lock."""
+        return self.active_holder_id() is not None
+
+    def active_holder_id(self) -> str | None:
+        """Return the active lock-owner ID, or None if no active lock exists."""
         try:
             _, lock_data = self._read_with_generation()
         except FileNotFoundError:
-            return False
-        return lock_data is not None and not lock_data.is_stale()
+            return None
+        if lock_data is None or lock_data.is_stale():
+            return None
+        return lock_data.worker_id
 
 
 # ---------------------------------------------------------------------------

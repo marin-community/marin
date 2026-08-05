@@ -145,6 +145,7 @@ def main() -> None:
             # Grafana 13's apiserver and search indexers run between requests and need CPU
             # while idle; the dashboards list hangs on them otherwise.
             cpu_always_allocated=True,
+            cpu="1",
             # The bridge lists finelog and controller VM internal IPs through the Compute API.
             service_account_roles=("roles/compute.viewer",),
             env=env,

@@ -16,7 +16,7 @@ from haliax.partitioning import ResourceMapping
 from rigging.filesystem import prefix_join
 
 import levanter.tracker
-from levanter.callbacks._core import StepInfo
+from levanter.callbacks._core import ProgressEvent, StepInfo, progress_event_scope
 from levanter.data.dataset import AsyncDataset
 from levanter.data.sharded_datasource import FirstRowsShardedDataSource, ShardedDataSource
 from levanter.data.text.datasets import LmDataConfig, LmDatasetSourceConfigBase
@@ -106,15 +106,19 @@ def cb_labeled_evaluate(
         if last_eval_step == step_count:
             return
 
-        if eval_current:
-            log_dict = eval_labeled_model(evaluator, step.model, prefix=prefix)
-            levanter.tracker.log(log_dict, step=step_count)
+        with progress_event_scope(
+            step.emit_event,
+            ProgressEvent.EVALUATION_STARTED,
+            ProgressEvent.EVALUATION_FINISHED,
+        ):
+            if eval_current:
+                log_dict = eval_labeled_model(evaluator, step.model, prefix=prefix)
+                levanter.tracker.log(log_dict, step=step_count)
 
-        if eval_model:
-            log_dict = eval_labeled_model(evaluator, step.eval_model, prefix=os.path.join(prefix, "eval_model"))
-            levanter.tracker.log(log_dict, step=step_count)
-
-        last_eval_step = step_count
+            if eval_model:
+                log_dict = eval_labeled_model(evaluator, step.eval_model, prefix=os.path.join(prefix, "eval_model"))
+                levanter.tracker.log(log_dict, step=step_count)
+            last_eval_step = step_count
 
     return eval_callback
 

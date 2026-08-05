@@ -35,6 +35,7 @@ from marin.datakit.download.huggingface import download_hf_step
 from marin.datakit.download.rollout_transforms import (
     TRAJECTORY_FAILED_TAG,
     TRAJECTORY_SOLVED_TAG,
+    TRAJECTORY_UNVERIFIED_TAG,
     load_parquet_batched,
     render_role_message,
     text_document,
@@ -55,10 +56,6 @@ EXCLUDED_TEACHER_MARKERS = frozenset({"gpt", "openai", "claude", "anthropic", "g
 ALLOWED_TEACHER_MARKERS = frozenset({"gpt-oss"})
 
 PROVENANCE_FIELDS = ("model", "model_provider", "original_teacher")
-
-# Prepended when the episode ended on a harness error, so an unverified
-# transcript is not conditioned on as either a success or a task failure.
-TRAJECTORY_UNVERIFIED_TAG = "This trajectory ended before the task was verified."
 
 # ``result`` mixes conventions across streams: swesmith uses these words,
 # r2egym a numeric reward, and every other value is an error class name.

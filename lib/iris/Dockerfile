@@ -12,7 +12,7 @@
 # Build the Vue SPA. Output is consumed by the deps stage at
 # /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
 # (see lib/iris/src/iris/cluster/dashboard_common.py).
-FROM node:22-slim AS dashboard
+FROM --platform=$BUILDPLATFORM node:22-slim AS dashboard
 
 WORKDIR /build/dashboard
 

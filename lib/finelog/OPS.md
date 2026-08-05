@@ -43,13 +43,15 @@ uv run finelog query marin 'SELECT * FROM "iris.profile" LIMIT 10'
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
 correct key with many segments points to a different problem than a
-misconfigured key. Do not reset a shared namespace such as `telltale` without
+misconfigured key. Do not reset a shared namespace such as `telemetry_v1` without
 checking which producers use it.
 
-Use native timestamp comparisons for timestamp columns:
+Use native timestamp comparisons for timestamp columns. For telemetry's epoch-millisecond column, keep the predicate numeric:
 
 ```sql
 WHERE ts >= now() - INTERVAL '5 minutes'
+-- telemetry_v1
+WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '5 minutes') * 1000 AS BIGINT)
 ```
 
 DataFusion folds `now()` to a literal and can push the resulting range into
@@ -138,6 +140,55 @@ uv run finelog query marin --format table \
    WHERE epoch_ms > (extract(epoch from now()) * 1000 - 600000)
    GROUP BY cluster'
 ```
+
+### Distinguishing missing regional logs from delayed hub forwarding
+
+The regional Finelog is the record; the `marin` hub is an asynchronous copy. If
+logs for a federated Iris task are absent from the hub, query the exact task key
+on both stores before diagnosing the pod-side shipper. Iris task keys include the
+attempt suffix, such as `:0`:
+
+```bash
+CLUSTER=cw-us-east-08a
+KEY=/user/job/task:0
+
+uv run finelog query marin --format table \
+  "SELECT seq, epoch_ms, source, data, cluster FROM \"log\"
+   WHERE key = '$KEY' AND cluster = '$CLUSTER' ORDER BY seq"
+uv run finelog query "$CLUSTER" --format table \
+  "SELECT seq, epoch_ms, source, data FROM \"log\"
+   WHERE key = '$KEY' ORDER BY seq"
+```
+
+Interpret the pair as follows:
+
+- Regional rows present and hub rows absent or only a prefix: forwarding is
+  delayed. Repeat the exact hub query; do not treat an immediate empty result as
+  loss.
+- Rows absent regionally but present in `kubectl logs <pod> -c task`: inspect
+  `kubectl logs <pod> -c log-shipper` and the regional Finelog ingest path.
+- Rows absent from both Finelog stores and the container runtime: the task did
+  not emit the expected output or its runtime logs are already unavailable.
+
+The forwarder gives every live namespace one batch-sized turn per round and
+starts another round immediately while work remains. A large telemetry backlog
+therefore does not monopolize forwarding ahead of new log rows. Hub or network
+failures can still delay a turn because forwarding is best effort.
+
+Inspect the sender's forwarder messages without changing the deployment. Read
+the deployment name and Kubernetes connection details from
+`lib/finelog/config/$CLUSTER.yaml`:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
+  logs deployment/<finelog-name> --since=30m --timestamps=true | \
+  rg 'finelog forwarder'
+```
+
+Warnings name the affected namespace. `backlog exceeds the lag cap` or `rows
+evicted before they were forwarded` means that namespace skipped source sequence
+positions; the cumulative `skipped_seqs` progress counter alone does not prove
+that `log` rows were dropped.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the

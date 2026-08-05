@@ -8,8 +8,9 @@ typed `provisioning:` section, and declares that cluster's resources. One stack 
 `pulumi up` provisions all of a stack's declared resources together. The provider decides
 which resources: CoreWeave declares the controller RBAC, reserved NodePools, Kueue objects,
 the Traefik/cert-manager/federation-ingress stack, and configured Cloudflare CNAMEs; GCP declares
-the reserved federation-egress static IPs and the Artifact Registry pull-through mirrors. Components not yet implemented
-(object storage, the CKS cluster object itself; GCP IAM/GCLB+IAP/buckets) are tracked in
+the reserved federation-egress static IPs, the Artifact Registry pull-through mirrors, and every
+IAM grant on the project (`iac.gcp.iam.GcpIam`, replacing `infra/permissions`). Components not
+yet implemented (object storage, the CKS cluster object itself, GCLB+IAP) are tracked in
 README.md's "Future work".
 """
 
@@ -32,6 +33,8 @@ from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
 from iac.coreweave.rbac import GrafanaObserverRbac, GrafanaObserverRbacArgs, IrisRbac, IrisRbacArgs
 from iac.coreweave.traefik import TraefikAddon, TraefikAddonArgs
 from iac.gcp.addresses import GcpStaticAddresses, GcpStaticAddressesArgs
+from iac.gcp.iam import GcpIam, GcpIamArgs
+from iac.gcp.iam_config import load_iam_config
 from iac.gcp.registries import GcpArtifactRegistries, GcpArtifactRegistriesArgs
 from iac.nodepools import derive_nodepools
 from rigging.secrets import resolve_secret_spec
@@ -106,7 +109,7 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         enable_patch_force=True,
     )
 
-    CoreweaveCluster(
+    coreweave_cluster = CoreweaveCluster(
         "cluster",
         CoreweaveClusterArgs(
             cluster=coreweave_provisioning.cluster,
@@ -142,6 +145,7 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
             adopt=adopt,
         ),
         k8s_provider=k8s_provider,
+        opts=pulumi.ResourceOptions(depends_on=[coreweave_cluster]),
     )
 
     controller_coreweave = iris_config.controller.coreweave
@@ -180,6 +184,7 @@ def _build_gcp(cluster: str, *, adopt: bool) -> None:
     provisioning = load_provisioning(cluster)
     assert provisioning.gcp is not None  # guaranteed by load_provisioning
     gcp_provisioning = provisioning.gcp
+    iam_config = load_iam_config()
 
     gcp_provider = gcp.Provider("gcp", project=gcp_provisioning.project)
     GcpStaticAddresses(
@@ -196,6 +201,25 @@ def _build_gcp(cluster: str, *, adopt: bool) -> None:
         GcpArtifactRegistriesArgs(
             project=gcp_provisioning.project,
             registries=gcp_provisioning.registries,
+            adopt=adopt,
+        ),
+        gcp_provider=gcp_provider,
+    )
+    GcpIam(
+        "iam",
+        GcpIamArgs(
+            project=gcp_provisioning.project,
+            kms_location=iam_config.kms_location,
+            kms_key_ring=iam_config.kms_key_ring,
+            kms_key=iam_config.kms_key,
+            custom_roles=iam_config.custom_roles,
+            owned_service_accounts=iam_config.owned_service_accounts,
+            project_grants=iam_config.project_grants,
+            kms_grants=iam_config.kms_grants,
+            secrets=iam_config.secrets,
+            buckets=iam_config.buckets,
+            artifact_repositories=iam_config.artifact_repositories,
+            service_accounts=iam_config.service_accounts,
             adopt=adopt,
         ),
         gcp_provider=gcp_provider,

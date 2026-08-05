@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
             pool_size=5,
             pool_pre_ping=True,
         )
-        app.state.model = TextEmbedding(search_config.EMBED_MODEL)
+        app.state.model = TextEmbedding(search_config.EMBED_MODEL, threads=search_config.INFERENCE_THREADS)
         app.state.reranker = reranking.text_cross_encoder()
         try:
             yield
@@ -289,7 +289,7 @@ class SearchCandidate:
 
 
 class RerankerModel(Protocol):
-    def rerank(self, query: str, documents: Iterable[str]) -> Iterable[float]: ...
+    def rerank(self, query: str, documents: Iterable[str], batch_size: int) -> Iterable[float]: ...
 
 
 def normalize_wiki_tags(tags: Iterable[str]) -> list[str]:
@@ -596,7 +596,13 @@ def rerank_candidates(
     selected = base[: search_config.RERANK_MAX_CANDIDATES]
     if not selected:
         return []
-    scores = list(reranker.rerank(search_config.expanded_query(query), [candidate.text for candidate in selected]))
+    scores = list(
+        reranker.rerank(
+            search_config.expanded_query(query),
+            [candidate.text for candidate in selected],
+            batch_size=search_config.RERANK_BATCH_SIZE,
+        )
+    )
     if len(scores) != len(selected):
         raise ValueError(f"reranker returned {len(scores)} scores for {len(selected)} candidates")
     model_order = sorted(range(len(selected)), key=lambda index: (-scores[index], index))

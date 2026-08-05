@@ -33,11 +33,11 @@ RUN npm run build
 # system protoc is needed.
 FROM rust:1-bookworm AS rustbuild
 
-# Cargo profile to build. Defaults to the fat-LTO `release` profile for
-# production images. Dev/test deploys pass `--build-arg CARGO_PROFILE=fast`
-# (no LTO, parallel codegen) for a far faster final link; see `[profile.fast]`
-# in lib/finelog/rust/Cargo.toml. The profile name is also the target/<profile>/ subdir
-# (true for `release` and any custom profile), so the cp below resolves it.
+# Cargo profile to build. The default `release` profile uses opt-level 3 without
+# LTO. Dev/test deploys may pass `--build-arg CARGO_PROFILE=fast` for opt-level
+# 2; see `[profile.fast]` in lib/finelog/rust/Cargo.toml. The profile name is
+# also the target/<profile>/ subdir (true for `release` and any custom profile),
+# so the cp below resolves it.
 ARG CARGO_PROFILE=release
 
 # mold: a fast, multi-threaded linker. The cargo build runs under `mold -run`,

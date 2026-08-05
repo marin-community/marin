@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "scripts": {
     "build": "rsbuild build",
-    "build:check": "vue-tsc --noEmit && rsbuild build"
+    "build:check": "vue-tsc --noEmit && rsbuild build",
+    "test": "node --test src/utils/dashboardSql.test.ts"
   },
   "dependencies": {
     "@fontsource-variable/noto-sans": "^5.2.10",

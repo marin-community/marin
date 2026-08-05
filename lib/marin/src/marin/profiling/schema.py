@@ -226,12 +226,14 @@ class OptimizationCandidate:
     suggestions: list[str]
 
 
-@dataclass(frozen=True)
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSummary:
     """Normalized, versioned profile summary for agents and automation."""
 
-    schema_version: str
-    generated_at_utc: str
     source_format: str
     source_path: str
     run_metadata: RunMetadata
@@ -246,6 +248,8 @@ class ProfileSummary:
     hierarchical_regions: list[RegionAggregate]
     gap_region_contexts: list[GapRegionContext]
     optimization_candidates: list[OptimizationCandidate]
+    schema_version: str = PROFILE_SUMMARY_SCHEMA_VERSION
+    generated_at_utc: str = field(default_factory=_utc_now_iso)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the summary to a JSON-serializable dictionary."""
@@ -254,46 +258,6 @@ class ProfileSummary:
     def to_json(self, *, indent: int = 2) -> str:
         """Render the summary as deterministic JSON."""
         return json.dumps(self.to_dict(), indent=indent, sort_keys=True)
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        source_format: str,
-        source_path: str,
-        run_metadata: RunMetadata,
-        trace_overview: TraceOverview,
-        trace_provenance: TraceProvenance,
-        step_time: StepTimeSummary,
-        time_breakdown: TimeBreakdown,
-        hot_ops: list[HotOp],
-        semantic_families: list[SemanticFamilyAggregate],
-        communication_ops: list[CommunicationOp],
-        gap_before_ops: list[GapBeforeOp],
-        hierarchical_regions: list[RegionAggregate],
-        gap_region_contexts: list[GapRegionContext],
-        optimization_candidates: list[OptimizationCandidate],
-    ) -> "ProfileSummary":
-        """Create a summary with default schema version and timestamp."""
-        generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        return cls(
-            schema_version=PROFILE_SUMMARY_SCHEMA_VERSION,
-            generated_at_utc=generated_at,
-            source_format=source_format,
-            source_path=source_path,
-            run_metadata=run_metadata,
-            trace_overview=trace_overview,
-            trace_provenance=trace_provenance,
-            step_time=step_time,
-            time_breakdown=time_breakdown,
-            hot_ops=hot_ops,
-            semantic_families=semantic_families,
-            communication_ops=communication_ops,
-            gap_before_ops=gap_before_ops,
-            hierarchical_regions=hierarchical_regions,
-            gap_region_contexts=gap_region_contexts,
-            optimization_candidates=optimization_candidates,
-        )
 
 
 def hierarchical_root_totals(summary: ProfileSummary) -> dict[str, float]:
