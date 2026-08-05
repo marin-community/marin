@@ -32,7 +32,7 @@ use tokio::sync::{watch, Notify, RwLock};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
-use crate::query::sidecar::read_header;
+use crate::query::sidecar::{read_header, SidecarManager};
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
@@ -1223,6 +1223,10 @@ impl Namespace {
             };
             match write_sidecar(p, &batches, &indexed, self.key_column.as_deref()) {
                 Ok(true) => {
+                    // The rewrite reuses the path, and the query cache keys on
+                    // path alone, so a reader holding the replaced header would
+                    // address the new file at the old offsets.
+                    SidecarManager::global().invalidate(&sidecar_path(p));
                     built += 1;
                     tracing::debug!(namespace = %self.name, path = %path, "backfilled trigram sidecar");
                 }

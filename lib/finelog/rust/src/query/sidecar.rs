@@ -96,6 +96,19 @@ impl SidecarManager {
         Some(self.insert_column(key, index, bytes))
     }
 
+    /// Drop every cached parse of the sidecar at `path`.
+    ///
+    /// Entries are keyed by path alone, so a sidecar rewritten in place would
+    /// otherwise keep serving the header it replaced. That is not merely a lost
+    /// speedup: adding a column shifts every payload offset, so a stale header's
+    /// directory addresses the wrong bytes of the new file, and those bytes can
+    /// still parse as a structurally valid — but wrong — Bloom filter, which
+    /// prunes row groups that do match. The one in-place rewriter is the sidecar
+    /// backfill; compaction writes to a path no query has seen.
+    pub fn invalidate(&self, path: &Path) {
+        self.cache.lock().unwrap().remove_path(path);
+    }
+
     /// Cache hit lookup: returns the entry and refreshes its recency.
     fn lookup(&self, key: &Key) -> Option<Cached> {
         let mut lru = self.cache.lock().unwrap();
@@ -151,6 +164,14 @@ enum Key {
     Column(PathBuf, String),
 }
 
+impl Key {
+    fn path(&self) -> &Path {
+        match self {
+            Key::Header(path) | Key::Column(path, _) => path,
+        }
+    }
+}
+
 struct Entry {
     value: Cached,
     bytes: usize,
@@ -184,6 +205,19 @@ impl Lru {
         let entry = self.map.get_mut(key)?;
         entry.last_used = tick;
         Some(entry.value.clone())
+    }
+
+    /// Drop the header and every column entry belonging to `path`.
+    fn remove_path(&mut self, path: &Path) {
+        let mut freed = 0usize;
+        self.map.retain(|key, entry| {
+            let keep = key.path() != path;
+            if !keep {
+                freed += entry.bytes;
+            }
+            keep
+        });
+        self.used_bytes -= freed;
     }
 
     /// Insert `value` (charging `bytes`), evicting least-recently-used entries
@@ -349,6 +383,67 @@ mod tests {
             vec![true]
         );
         assert_eq!(col.keep_mask("absent zzz string").unwrap(), vec![false]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Write a sidecar over `columns` for a two-column batch, at the same
+    /// segment path each time, so a later call rewrites an earlier one in place.
+    fn rewrite_sidecar(parquet: &Path, columns: &[&str]) {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("data", DataType::Utf8, false),
+            Field::new("note", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["/m/a"])),
+                Arc::new(StringArray::from(vec!["Bootstrap completed for TPU"])),
+                Arc::new(StringArray::from(vec!["nccl ring initialized"])),
+            ],
+        )
+        .unwrap();
+        write_sidecar(parquet, std::slice::from_ref(&batch), columns, Some("key")).unwrap();
+    }
+
+    /// Enabling a second index rewrites existing sidecars in place. The cache
+    /// keys on path alone, so without invalidation a reader keeps the header it
+    /// replaced — which does not know the new column, and whose directory
+    /// addresses the *old* payload offsets in the new file's bytes.
+    #[test]
+    fn a_rewritten_sidecar_is_dropped_from_the_cache() {
+        let dir = tempdir("rewrite");
+        let parquet = dir.join("seg_L1_0000000000000000001.parquet");
+        rewrite_sidecar(&parquet, &["data"]);
+        let sc = sidecar_path(&parquet);
+        let mgr = SidecarManager::with_budget_bytes(64 * 1024 * 1024);
+
+        let stale = mgr.get_header(&sc).expect("header");
+        assert!(mgr.get_column(&sc, &stale, "data").is_some());
+
+        // `note` gains an index: a directory entry and a payload ahead of `data`.
+        rewrite_sidecar(&parquet, &["note", "data"]);
+
+        assert!(
+            mgr.get_header(&sc).unwrap().column("note").is_none(),
+            "the cache still serves the replaced header",
+        );
+        mgr.invalidate(&sc);
+        let fresh = mgr.get_header(&sc).expect("header after invalidation");
+        assert!(fresh.column("note").is_some(), "the new column is visible");
+        assert_ne!(
+            stale.column("data").unwrap().offset,
+            fresh.column("data").unwrap().offset,
+            "the replaced header addresses the wrong bytes of the new file",
+        );
+        assert_eq!(
+            mgr.get_column(&sc, &fresh, "note")
+                .unwrap()
+                .keep_mask("nccl ring initialized")
+                .unwrap(),
+            vec![true],
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
