@@ -72,8 +72,10 @@ function shortLevel(level: string | undefined): string {
 function fmtTime(ts: LogEntry['timestamp']): string {
   const ms = Number(ts?.epochMs ?? 0)
   if (!ms) return ''
-  // Time of day only — the date is constant down a tailed stream and the
-  // column is narrow. The zone follows the header control.
+  // Time of day only — the date is constant down a tailed stream and the column
+  // is narrow. The zone follows the header control; in epoch mode there is no
+  // date prefix to drop, and the count is only useful whole.
+  if (timeZoneMode.value === 'raw') return formatTimestampMs(ms, 'raw')
   return formatTimestampMs(ms, timeZoneMode.value).slice(11)
 }
 

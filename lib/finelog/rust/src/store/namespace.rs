@@ -20,7 +20,7 @@
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
 //! freshly allocated seq under the lock, and never writes parquet.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -173,6 +173,39 @@ pub struct Namespace {
     /// instead of busy-waiting. Pushed to by `spawn_flush_task` /
     /// `spawn_maintenance_task`; drained by [`shutdown`](Namespace::shutdown).
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Segments the sidecar backfill has already rebuilt without reaching
+    /// coverage. See [`SidecarBackfillSkips`].
+    sidecar_backfill_skips: Mutex<SidecarBackfillSkips>,
+}
+
+/// Segments the sidecar backfill cannot bring up to date, and the indexed set
+/// that verdict was reached under.
+///
+/// A trigram index covers only the columns a segment actually has: one written
+/// before a column existed indexes nothing for it, and its sidecar can never
+/// satisfy the rebuild condition. Without this the backfill would re-read and
+/// re-serialize that segment on every maintenance tick forever, at one segment
+/// per tick starving every segment that can still make progress. Enabling
+/// another index resets the verdict, since the new column may well be present.
+#[derive(Default)]
+struct SidecarBackfillSkips {
+    indexed: Vec<String>,
+    paths: HashSet<String>,
+}
+
+impl SidecarBackfillSkips {
+    /// Drop the recorded verdicts when the indexed set changes, and forget
+    /// segments that are no longer local (compacted away or evicted).
+    fn reconcile(&mut self, indexed: &[&str], live: &HashSet<&str>) {
+        if self.indexed.len() != indexed.len()
+            || !self.indexed.iter().zip(indexed).all(|(a, b)| a == b)
+        {
+            self.indexed = indexed.iter().map(|c| c.to_string()).collect();
+            self.paths.clear();
+            return;
+        }
+        self.paths.retain(|p| live.contains(p.as_str()));
+    }
 }
 
 /// A namespace's sealed local segments as one consistent observation: the files a
@@ -286,6 +319,7 @@ impl Namespace {
             stop: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
+            sidecar_backfill_skips: Mutex::new(SidecarBackfillSkips::default()),
         });
 
         // Refresh the catalog from the adopted deque so the segments table
@@ -1151,11 +1185,19 @@ impl Namespace {
         // since file existence alone cannot tell the two cases apart.
         let candidates: Vec<String> = {
             let inner = self.inner.lock().unwrap();
+            let mut skips = self.sidecar_backfill_skips.lock().unwrap();
+            let live: HashSet<&str> = inner
+                .local_segments
+                .iter()
+                .map(|s| s.path.as_str())
+                .collect();
+            skips.reconcile(&indexed, &live);
             inner
                 .local_segments
                 .iter()
                 .filter(|s| s.level >= 1)
                 .map(|s| s.path.clone())
+                .filter(|p| !skips.paths.contains(p))
                 .filter(|p| sidecar_needs_rebuild(Path::new(p), &indexed))
                 .take(max)
                 .collect()
@@ -1188,6 +1230,21 @@ impl Namespace {
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: write failed")
                 }
+            }
+            // A rebuild that left the segment still qualifying is a rebuild that
+            // can never stop qualifying: the columns it is short of are not in
+            // the segment to index.
+            if sidecar_needs_rebuild(p, &indexed) {
+                tracing::debug!(
+                    namespace = %self.name,
+                    path = %path,
+                    "sidecar backfill: segment predates an indexed column; not retrying"
+                );
+                self.sidecar_backfill_skips
+                    .lock()
+                    .unwrap()
+                    .paths
+                    .insert(path);
             }
         }
         built
@@ -2127,6 +2184,76 @@ mod tests {
         ns.run_maintenance(true).await.unwrap();
 
         assert_eq!(ns.backfill_missing_sidecars(10), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A column indexed after a segment was written is not in that segment to
+    /// index, so its sidecar can never satisfy the rebuild condition. The
+    /// backfill must try once and drop it, or it re-reads that segment on every
+    /// tick and never reaches the segments that can still be indexed.
+    #[tokio::test]
+    async fn backfill_gives_up_on_a_segment_predating_an_indexed_column() {
+        let dir = tempdir();
+        let ns_dir = dir.join("iris.worker");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+
+        // Segments written under a schema with no `data` column at all.
+        let before = open_ns(
+            "iris.worker",
+            worker_schema(),
+            Some(ns_dir.clone()),
+            catalog.clone(),
+        );
+        before.append_aligned_batch(&aligned(3));
+        before.flush_once().unwrap();
+        let last = before.append_aligned_batch(&aligned(3));
+        before.flush_once().unwrap();
+        before
+            .await_persisted(last, Duration::from_secs(10))
+            .await
+            .unwrap();
+        before.run_maintenance(true).await.unwrap();
+        let segs = discover_segments(&ns_dir);
+        assert_eq!(segs.len(), 1, "two L0 merged into one L1");
+        assert!(!sidecar_path(&segs[0]).exists(), "nothing was indexed yet");
+        before.shutdown(Duration::from_secs(10)).await;
+
+        // Reopen with `data` added and indexed, as `merge_schemas` would leave it.
+        let mut columns = worker_schema().columns;
+        columns
+            .push(Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index());
+        let after = open_ns(
+            "iris.worker",
+            Schema::new(columns, "timestamp_ms"),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+
+        assert_eq!(after.backfill_missing_sidecars(10), 0, "nothing to index");
+        let path = segs[0].to_string_lossy().to_string();
+        assert!(
+            after
+                .sidecar_backfill_skips
+                .lock()
+                .unwrap()
+                .paths
+                .contains(&path),
+            "the segment is dropped from future ticks rather than retried",
+        );
+
+        // Indexing another column is a new question, so the verdict is dropped.
+        after
+            .sidecar_backfill_skips
+            .lock()
+            .unwrap()
+            .reconcile(&["data", "worker_id"], &HashSet::from([path.as_str()]));
+        assert!(after
+            .sidecar_backfill_skips
+            .lock()
+            .unwrap()
+            .paths
+            .is_empty());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 
