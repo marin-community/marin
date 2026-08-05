@@ -6,8 +6,11 @@
 //! write's sort cost lands once in the bg compactor, not on every flush.
 //! `write_segment` therefore writes the batch verbatim.
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use arrow::array::RecordBatch;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
@@ -202,13 +205,63 @@ pub fn segment_bounds(
     Some((num_rows, lo, hi))
 }
 
+/// Cached row-group counts, keyed by path and the file identity (length and
+/// modified time) the count was read from. Cleared wholesale past
+/// [`ROW_GROUP_COUNT_CACHE_ENTRIES`] rather than evicted one at a time: a segment
+/// is written once and read many times, so entries only go stale when a segment
+/// is compacted away, and re-reading a few footers after a clear is far cheaper
+/// than tracking liveness.
+static ROW_GROUP_COUNTS: OnceLock<Mutex<HashMap<PathBuf, CachedRowGroupCount>>> = OnceLock::new();
+
+/// A row-group count and the file identity it was read from.
+struct CachedRowGroupCount {
+    len: u64,
+    modified: SystemTime,
+    row_groups: usize,
+}
+
+/// Entries held before the row-group cache is cleared. A hub holds low thousands
+/// of segments across every namespace, so this is headroom, not a working limit.
+const ROW_GROUP_COUNT_CACHE_ENTRIES: usize = 8192;
+
 /// Footer-only row-group count for the parquet file at `path`, or `None` on an
 /// unreadable footer. Used by the trigram prune to confirm a sidecar's
 /// per-row-group entries align with the segment before attaching an access plan.
+///
+/// Reading it means parsing the whole footer — every row group's metadata, not
+/// just the count — which over a namespace's segments costs more than the scan
+/// the prune is there to avoid. Segments are immutable once written, so the
+/// count is cached against the file's length and modified time; a path written
+/// again is read again rather than answered from the old entry.
 pub fn segment_row_group_count(path: &Path) -> Option<usize> {
     let file = std::fs::File::open(path).ok()?;
-    let reader = SerializedFileReader::new(file).ok()?;
-    Some(reader.metadata().num_row_groups())
+    let meta = file.metadata().ok()?;
+    let (len, modified) = (meta.len(), meta.modified().ok()?);
+
+    let cache = ROW_GROUP_COUNTS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(entry) = cache.lock().unwrap().get(path) {
+        if entry.len == len && entry.modified == modified {
+            return Some(entry.row_groups);
+        }
+    }
+
+    let row_groups = SerializedFileReader::new(file)
+        .ok()?
+        .metadata()
+        .num_row_groups();
+    let mut cache = cache.lock().unwrap();
+    if cache.len() >= ROW_GROUP_COUNT_CACHE_ENTRIES {
+        cache.clear();
+    }
+    cache.insert(
+        path.to_path_buf(),
+        CachedRowGroupCount {
+            len,
+            modified,
+            row_groups,
+        },
+    );
+    Some(row_groups)
 }
 
 /// All `seg_L*_*.parquet` files in `dir`, sorted by filename (== by min_seq for
@@ -270,6 +323,32 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    /// The count is cached against the file's identity, not just its path, so a
+    /// path written again is re-read. Segments are immutable in practice, but a
+    /// stale count would make the trigram prune reject a valid sidecar (or, if it
+    /// were too small, attach a plan the opener rejects).
+    #[test]
+    fn row_group_count_is_reread_when_the_file_changes() {
+        let dir = tempdir();
+        let path = dir.join("seg_L1_0000000000000000001.parquet");
+
+        let one_group = batch_with_keys(1, (0..10).collect());
+        std::fs::write(&path, write_segment(&one_group, None).unwrap()).unwrap();
+        assert_eq!(segment_row_group_count(&path), Some(1));
+        assert_eq!(
+            segment_row_group_count(&path),
+            Some(1),
+            "second call cached"
+        );
+
+        // Two row groups at the same path: more rows than ROW_GROUP_SIZE.
+        let two_groups = batch_with_keys(1, (0..(ROW_GROUP_SIZE as i64 + 1)).collect());
+        std::fs::write(&path, write_segment(&two_groups, None).unwrap()).unwrap();
+        assert_eq!(segment_row_group_count(&path), Some(2));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

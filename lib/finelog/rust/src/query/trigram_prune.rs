@@ -335,24 +335,12 @@ fn build_access_plans(
                 }
             }
         }
-        // Guard against a stale sidecar BEFORE loading its blooms (a row-group
-        // mismatch would otherwise hard-error the opener).
-        let Some(rg_count) = segment_row_group_count(p) else {
-            continue;
-        };
-        if rg_count as u32 != header.rg_count {
-            tracing::warn!(
-                segment = basename,
-                sidecar_row_groups = header.rg_count,
-                parquet_row_groups = rg_count,
-                "stale trigram sidecar (row-group count mismatch); scanning unpruned"
-            );
-            continue;
-        }
         // A row group survives only if it survives EVERY constrained column's
         // needles. A column this segment's sidecar does not index can't prune, so
-        // it simply contributes no constraint here.
-        let mut keep = vec![true; rg_count];
+        // it simply contributes no constraint here. The mask is sized from the
+        // sidecar's own row-group count; the parquet is consulted below, only for
+        // a segment whose blooms actually pruned something.
+        let mut keep = vec![true; header.rg_count as usize];
         let mut applied_any = false;
         for (&col, needle_trigrams) in &trigrams_by_column {
             let Some(index) = manager.get_column(&sidecar, &header, col) else {
@@ -366,6 +354,22 @@ fn build_access_plans(
             }
         }
         if !applied_any || keep.iter().all(|&k| k) {
+            continue;
+        }
+        // Confirm the sidecar aligns with the segment before attaching a plan: a
+        // row-group mismatch would hard-error the opener. This parses the whole
+        // footer, so it runs last — after the cheap header and key-band checks,
+        // and only for a segment an access plan would be attached to.
+        let Some(rg_count) = segment_row_group_count(p) else {
+            continue;
+        };
+        if rg_count != keep.len() {
+            tracing::warn!(
+                segment = basename,
+                sidecar_row_groups = header.rg_count,
+                parquet_row_groups = rg_count,
+                "stale trigram sidecar (row-group count mismatch); scanning unpruned"
+            );
             continue;
         }
         let mut access = ParquetAccessPlan::new_all(rg_count);

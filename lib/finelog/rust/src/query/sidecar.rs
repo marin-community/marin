@@ -10,9 +10,11 @@
 //!
 //! - **Caching**: a parsed sidecar is read once and reused across queries. The
 //!   steady state for a repeating query is pure cache hits — zero I/O.
-//! - **Bounded memory**: parsed blooms live in a byte-budgeted LRU
-//!   ([`FINELOG_SIDECAR_CACHE_MB`], default [`DEFAULT_BUDGET_MB`]), so the resident
-//!   set never exceeds the budget no matter how many segments a query spans.
+//! - **Bounded memory**: parsed blooms live in a byte-budgeted LRU sized by
+//!   [`configure_sidecar_cache`] (default [`DEFAULT_BUDGET_MB`]), so the resident
+//!   set never exceeds the budget no matter how many segments a query spans. The
+//!   budget must cover the deployment's sidecars; below that, the LRU evicts what
+//!   the next query needs and the cache stops paying for itself.
 //! - **Partial reads**: the [`SidecarHeader`] is read with a single bounded
 //!   `pread`, so a key-scoped query can check a segment's key band and skip
 //!   reading its (large) bloom payload entirely when it is out of band.
@@ -32,15 +34,16 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::store::trigram::{self, ColumnIndex, SidecarHeader};
 
-/// Default sidecar cache budget when [`BUDGET_ENV`] is unset (MiB). The full
-/// 54-segment sample index measured at ~79 MiB, so 256 MiB holds a working set
-/// of several namespaces with headroom while staying well clear of the query
-/// memory pool (which it is deliberately separate from — this is index metadata,
-/// not query working set).
+/// Default sidecar cache budget (MiB) when the server is given none.
+///
+/// Sized to hold a working set, not a fixed number of segments: a namespace's
+/// sidecars run to ~1.7% of its indexed bytes, so 15 GiB of dense log text costs
+/// ~260 MiB on its own. A budget below the working set does not degrade
+/// gracefully — every query re-reads and re-parses the blooms the last one
+/// evicted — so a deployment holding more than a few GiB of indexed text should
+/// raise it. Deliberately separate from the query memory pool: this is index
+/// metadata, not query working set.
 const DEFAULT_BUDGET_MB: usize = 256;
-
-/// Override for the cache budget, in MiB.
-const BUDGET_ENV: &str = "FINELOG_SIDECAR_CACHE_MB";
 
 /// One bounded read that covers the header for any realistic column count
 /// (`name + 16` bytes per column). A pathological larger directory triggers an
@@ -52,11 +55,28 @@ pub struct SidecarManager {
     cache: Mutex<Lru>,
 }
 
+/// The budget [`SidecarManager::global`] is built with, set once at startup.
+static CONFIGURED_BUDGET_MB: OnceLock<usize> = OnceLock::new();
+
+/// Set the process-global sidecar cache budget, in MiB.
+///
+/// Call before the first query; the manager is built on first use and keeps
+/// whatever budget was in force then. Errors if the budget was already set.
+pub fn configure_sidecar_cache(budget_mb: usize) -> Result<(), &'static str> {
+    CONFIGURED_BUDGET_MB
+        .set(budget_mb)
+        .map_err(|_| "sidecar cache is already configured")
+}
+
 impl SidecarManager {
-    /// The process-global manager, sized from [`BUDGET_ENV`] on first use.
+    /// The process-global manager, sized by [`configure_sidecar_cache`] or
+    /// [`DEFAULT_BUDGET_MB`].
     pub fn global() -> &'static SidecarManager {
         static MANAGER: OnceLock<SidecarManager> = OnceLock::new();
-        MANAGER.get_or_init(|| SidecarManager::with_budget_bytes(budget_from_env()))
+        MANAGER.get_or_init(|| {
+            let mb = *CONFIGURED_BUDGET_MB.get_or_init(|| DEFAULT_BUDGET_MB);
+            SidecarManager::with_budget_bytes(mb.saturating_mul(1024 * 1024))
+        })
     }
 
     fn with_budget_bytes(budget_bytes: usize) -> SidecarManager {
@@ -253,14 +273,6 @@ impl Lru {
         }
         self.used_bytes += bytes;
     }
-}
-
-fn budget_from_env() -> usize {
-    let mb = std::env::var(BUDGET_ENV)
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_BUDGET_MB);
-    mb.saturating_mul(1024 * 1024)
 }
 
 /// Approximate heap footprint of a parsed header (its key band + column
