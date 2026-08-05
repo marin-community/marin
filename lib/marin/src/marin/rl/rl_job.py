@@ -47,10 +47,6 @@ class RLJob:
     def __init__(self, config: RLJobConfig):
         self.config = config
 
-    @staticmethod
-    def make_step_fn():
-        return lambda config: RLJob(config).run(config.run_id)
-
     def run(self, name: str) -> JobHandle:
         """Submit the RL job via the v2 orchestration layer.
 

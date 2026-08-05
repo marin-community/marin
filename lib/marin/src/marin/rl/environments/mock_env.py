@@ -353,7 +353,3 @@ class MockEnv(MarinEnv):
                 processed_answer=example["answer"],
                 metadata={"task_type": self.task_type},
             )
-
-    def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
-        """Get evaluation examples."""
-        return self.eval_examples[:n_examples]

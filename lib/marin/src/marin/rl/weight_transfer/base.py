@@ -80,7 +80,6 @@ class WeightTransferConfig:
     sync_interval_steps: int = 1
     coordinator_name: str = "weight_transfer_coordinator"
 
-    transfer_timeout: float = 600.0
     max_weight_transfer_wait_time: float = 0.0
     """Maximum time (in seconds) to wait for new weights before proceeding. 0 means run ahead without waiting."""
 
@@ -90,7 +89,6 @@ class WeightTransferConfig:
 
     # Arrow Flight specific
     flight_host: str = "0.0.0.0"
-    flight_port: int = 0  # 0 = auto-assign
     convert_to_bfloat16: bool = True
     """Whether to convert weights to bfloat16 during transfer. Reduces transfer size by 50% for float32 weights."""
     debug_weight_transfer: bool = False

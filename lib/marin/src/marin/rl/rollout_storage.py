@@ -355,18 +355,6 @@ class FileRolloutWriter(RolloutWriter):
         )
         self._batch_counter += 1
 
-    def clear_queue(self) -> None:
-        """Clear all batches from the queue (for testing/debugging)."""
-        pattern = f"{self.path}/*"
-        files = self.fs.glob(pattern)
-
-        for file_path in files:
-            self.fs.delete(file_path)
-
-        self._batch_counter = 0
-
-        logger.info(f"Cleared queue at {self.path}")
-
 
 class InMemoryRolloutQueue:
     """In-memory rollout queue for testing and development.
@@ -427,11 +415,6 @@ class InMemoryRolloutQueue:
     def writer(self) -> "InMemoryRolloutWriter":
         """Create a writer for this queue."""
         return InMemoryRolloutWriter(self)
-
-    def clear_queue(self) -> None:
-        """Clear all batches from the queue."""
-        with self._lock:
-            self._queue.clear()
 
 
 class InMemoryRolloutReader(RolloutReader):

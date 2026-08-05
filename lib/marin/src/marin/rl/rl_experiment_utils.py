@@ -110,7 +110,6 @@ class RLExperimentConfig:
     replay_buffer_max_samples: int = 1
 
     # execution
-    debug_mode: bool = False
     inflight_weight_updates: bool = False
     max_rollout_step_delay: int = 0
 
