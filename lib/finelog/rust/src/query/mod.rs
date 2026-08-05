@@ -704,7 +704,7 @@ mod tests {
             ],
         )
         .unwrap();
-        write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        write_segment_to_dir(&dir, 1, 1, &batch, Some("key")).unwrap();
         let paths: Vec<String> = discover_segments(&dir)
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
@@ -782,7 +782,7 @@ mod tests {
             ],
         )
         .unwrap();
-        write_segment_to_dir(&dir, 1, 1, &new_batch).unwrap();
+        write_segment_to_dir(&dir, 1, 1, &new_batch, Some("key")).unwrap();
 
         // A pre-evolution segment with no `cluster` column at all.
         let legacy_batch = RecordBatch::try_new(
@@ -797,7 +797,7 @@ mod tests {
             ],
         )
         .unwrap();
-        write_segment_to_dir(&dir, 1, 3, &legacy_batch).unwrap();
+        write_segment_to_dir(&dir, 1, 3, &legacy_batch, Some("key")).unwrap();
 
         let paths: Vec<String> = discover_segments(&dir)
             .iter()

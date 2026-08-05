@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { formatAxisTime } from '@/utils/formatting'
+import { timeZoneMode } from '@/composables/useDisplayPrefs'
 
 const props = defineProps<{
   rows: Record<string, unknown>[]
@@ -12,7 +14,7 @@ const LEFT = 64
 const RIGHT = 20
 const TOP = 18
 const BOTTOM = 42
-const COLORS = ['#1877F2', '#D31E3C', '#2A9142', '#EB630E', '#7C3AED', '#0891B2']
+const COLORS = Array.from({ length: 8 }, (_, i) => `var(--c-series-${i + 1})`)
 
 interface Point {
   time: number
@@ -129,7 +131,7 @@ const xTicks = computed(() => Array.from({ length: 5 }, (_, index) => {
   const time = model.value.minTime + ratio * (model.value.maxTime - model.value.minTime)
   return {
     x: LEFT + ratio * (WIDTH - LEFT - RIGHT),
-    label: new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    label: formatAxisTime(time, model.value.maxTime - model.value.minTime, timeZoneMode.value),
   }
 }))
 </script>

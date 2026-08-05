@@ -34,7 +34,7 @@ use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
-use crate::store::compaction::executor::{read_segment_batches, run_job, PlannedSwap};
+use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
 use crate::store::compaction::planner::plan;
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
@@ -42,7 +42,7 @@ use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
 use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
 use crate::store::segment::{discover_segments, read_segment_footer, write_segment_to_dir};
-use crate::store::trigram::{sidecar_path, write_sidecar};
+use crate::store::trigram::{parse_header, sidecar_path, write_sidecar};
 use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
 /// Best-effort removal of a segment's trigram sidecar (`<path>.tgm`), co-located
@@ -74,6 +74,33 @@ pub const MIN_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Default durability-await budget when the RPC carries no deadline.
 pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bytes read to inspect a sidecar's directory. The header is a few hundred
+/// bytes for a realistic column count; this bound matches the query-side reader
+/// so both agree on what "the header" is.
+const SIDECAR_HEADER_READ_BYTES: usize = 64 * 1024;
+
+/// Whether `segment`'s trigram sidecar is absent or predates one of `indexed`.
+///
+/// Reads only the sidecar's bounded header, so this stays cheap enough to run
+/// over every local segment on each maintenance tick. An unreadable or
+/// unrecognized-version sidecar counts as needing a rebuild — the same
+/// conservative direction the query path takes when it treats one as absent.
+fn sidecar_needs_rebuild(segment: &Path, indexed: &[&str]) -> bool {
+    let path = sidecar_path(segment);
+    let Ok(mut file) = std::fs::File::open(&path) else {
+        return true;
+    };
+    let mut prefix = vec![0u8; SIDECAR_HEADER_READ_BYTES];
+    let Ok(read) = std::io::Read::read(&mut file, &mut prefix) else {
+        return true;
+    };
+    prefix.truncate(read);
+    match parse_header(&prefix) {
+        Some(header) => !header.covers_columns(indexed),
+        None => true,
+    }
+}
 
 /// Trigram sidecars rebuilt per maintenance tick by the background backfill.
 /// Kept at one because a single index build over a terminal-level segment is
@@ -596,7 +623,13 @@ impl Namespace {
 
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
     fn write_sealed(&self, dir: &std::path::Path, sealed: &SealedBuffer) -> Result<(), StatsError> {
-        let (path, size) = write_segment_to_dir(dir, 0, sealed.min_seq, &sealed.batch)?;
+        let (path, size) = write_segment_to_dir(
+            dir,
+            0,
+            sealed.min_seq,
+            &sealed.batch,
+            self.key_column.as_deref(),
+        )?;
         let (min_key, max_key) = self.key_bounds(&sealed.batch);
         let seg = LocalSegment {
             path: path.to_string_lossy().into_owned(),
@@ -1125,6 +1158,10 @@ impl Namespace {
         if indexed.is_empty() {
             return 0;
         }
+        // A segment needs a sidecar when it has none, or when the one it has
+        // predates a column gaining its index — enabling an index on a live
+        // namespace is otherwise silently ineffective for existing segments,
+        // since file existence alone cannot tell the two cases apart.
         let candidates: Vec<String> = {
             let inner = self.inner.lock().unwrap();
             inner
@@ -1132,14 +1169,23 @@ impl Namespace {
                 .iter()
                 .filter(|s| s.level >= 1)
                 .map(|s| s.path.clone())
-                .filter(|p| !sidecar_path(Path::new(p)).exists())
+                .filter(|p| sidecar_needs_rebuild(Path::new(p), &indexed))
                 .take(max)
                 .collect()
         };
+        // The index only reads the indexed columns and the key, so project to
+        // those: a full read materializes every column as uncompressed Arrow,
+        // which is what makes this the heaviest maintenance step.
+        let mut projection: Vec<&str> = indexed.clone();
+        if let Some(key) = self.key_column.as_deref() {
+            if !projection.contains(&key) {
+                projection.push(key);
+            }
+        }
         let mut built = 0;
         for path in candidates {
             let p = Path::new(&path);
-            let batches = match read_segment_batches(p) {
+            let batches = match read_segment_projected(p, Some(&projection)) {
                 Ok(batches) => batches,
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: read failed");
@@ -1879,7 +1925,7 @@ mod tests {
     fn write_seg(dir: &Path, level: i32, first_seq: i64, n: i64) -> PathBuf {
         let arrow = schema_to_arrow(&worker_schema());
         let batch = stamp_seq_and_build(&aligned(n), first_seq, &arrow);
-        write_segment_to_dir(dir, level, first_seq, &batch)
+        write_segment_to_dir(dir, level, first_seq, &batch, Some("timestamp_ms"))
             .unwrap()
             .0
     }

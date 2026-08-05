@@ -599,7 +599,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
+        let (path, _) = write_segment_to_dir(dir, 1, 1, &batch, Some("key")).unwrap();
         crate::store::trigram::write_sidecar(
             &path,
             std::slice::from_ref(&batch),

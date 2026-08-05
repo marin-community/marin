@@ -630,8 +630,22 @@ mod tests {
     fn adopt_namespace_from_disk_sorts_and_fills_fields() {
         let ns_dir = tempdir("ns");
         // Two segments out of filename order: seqs 4..5, then 1..3.
-        write_segment_to_dir(&ns_dir, 0, 4, &worker_batch(4, vec![40, 50])).unwrap();
-        write_segment_to_dir(&ns_dir, 0, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            4,
+            &worker_batch(4, vec![40, 50]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            1,
+            &worker_batch(1, vec![10, 20, 30]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
 
         let rows = adopt_namespace_from_disk(&ns_dir, "iris.worker", &worker_store_schema());
         assert_eq!(rows.len(), 2);
@@ -693,8 +707,22 @@ mod tests {
         let data_dir = tempdir("store");
         let ns_dir = data_dir.join("iris.worker");
         std::fs::create_dir_all(&ns_dir).unwrap();
-        write_segment_to_dir(&ns_dir, 0, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
-        write_segment_to_dir(&ns_dir, 0, 4, &worker_batch(4, vec![40, 50])).unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            1,
+            &worker_batch(1, vec![10, 20, 30]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            4,
+            &worker_batch(4, vec![40, 50]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
 
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
         adopt_store_from_disk(&data_dir, &catalog).unwrap();
@@ -725,7 +753,14 @@ mod tests {
     #[test]
     fn adopt_schema_recovers_columns_and_implicit_seq() {
         let ns_dir = tempdir("schema");
-        write_segment_to_dir(&ns_dir, 0, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            1,
+            &worker_batch(1, vec![10, 20, 30]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
 
         let recovered = recover_schema_from_segments(&ns_dir).unwrap();
         // seq is first and re-marked Int64 non-nullable.
@@ -756,8 +791,22 @@ mod tests {
         let data_dir = tempdir("sentinel");
         let ns_dir = data_dir.join("iris.worker");
         std::fs::create_dir_all(&ns_dir).unwrap();
-        write_segment_to_dir(&ns_dir, 0, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
-        write_segment_to_dir(&ns_dir, 0, 4, &worker_batch(4, vec![40, 50])).unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            1,
+            &worker_batch(1, vec![10, 20, 30]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            4,
+            &worker_batch(4, vec![40, 50]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
 
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
         // Cold start: sentinel missing.
@@ -769,7 +818,14 @@ mod tests {
 
         // Second boot on the done sentinel: scan skipped (no new rows even if we
         // add a parquet, because the fast path returns before scanning).
-        write_segment_to_dir(&ns_dir, 0, 6, &worker_batch(6, vec![60])).unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            6,
+            &worker_batch(6, vec![60]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
         let catalog2 = Catalog::open(Some(&data_dir)).unwrap();
         ensure_catalog_adopted(Some(&data_dir), &catalog2).unwrap();
         let after_second = catalog2.aggregate_namespace_stats("iris.worker").unwrap();
@@ -788,7 +844,14 @@ mod tests {
         let data_dir = tempdir("reconcile");
         let worker_dir = data_dir.join("iris.worker");
         std::fs::create_dir_all(&worker_dir).unwrap();
-        write_segment_to_dir(&worker_dir, 0, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
+        write_segment_to_dir(
+            &worker_dir,
+            0,
+            1,
+            &worker_batch(1, vec![10, 20, 30]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
 
         // First boot: adopts iris.worker, stamps done.
         let catalog = Catalog::open(Some(&data_dir)).unwrap();
@@ -798,7 +861,14 @@ mod tests {
         // A namespace dir the catalog never learned about appears on disk.
         let probes_dir = data_dir.join("infra.canary.probes");
         std::fs::create_dir_all(&probes_dir).unwrap();
-        write_segment_to_dir(&probes_dir, 0, 1, &worker_batch(1, vec![40, 50])).unwrap();
+        write_segment_to_dir(
+            &probes_dir,
+            0,
+            1,
+            &worker_batch(1, vec![40, 50]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
 
         // Second boot on the done sentinel: the missing namespace is reconciled
         // in (the full scan stays skipped).
@@ -824,7 +894,14 @@ mod tests {
         let data_dir = tempdir("inprogress");
         let ns_dir = data_dir.join("iris.worker");
         std::fs::create_dir_all(&ns_dir).unwrap();
-        write_segment_to_dir(&ns_dir, 0, 1, &worker_batch(1, vec![10, 20, 30])).unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            1,
+            &worker_batch(1, vec![10, 20, 30]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
 
         // Simulate a crash mid-scan: stamp in-progress, no catalog rows.
         write_sentinel(&data_dir, AdoptionState::InProgress, now_ms(), None).unwrap();
@@ -843,7 +920,14 @@ mod tests {
         let data_dir = tempdir("malformed");
         let ns_dir = data_dir.join("iris.worker");
         std::fs::create_dir_all(&ns_dir).unwrap();
-        write_segment_to_dir(&ns_dir, 0, 1, &worker_batch(1, vec![10])).unwrap();
+        write_segment_to_dir(
+            &ns_dir,
+            0,
+            1,
+            &worker_batch(1, vec![10]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
         std::fs::write(data_dir.join(SENTINEL_FILENAME), b"{not json").unwrap();
         assert_eq!(read_sentinel_state(&data_dir), None);
 
@@ -908,7 +992,7 @@ mod tests {
             ],
         )
         .unwrap();
-        write_segment_to_dir(&ns_dir, 1, 1, &batch).unwrap();
+        write_segment_to_dir(&ns_dir, 1, 1, &batch, None).unwrap();
 
         let recovered =
             recover_schema_from_segments(&ns_dir).expect("microsecond ts segment must adopt");
@@ -977,8 +1061,14 @@ mod tests {
 
         // Seed a remote-only L1 segment by writing a real parquet then uploading.
         let staging = tempdir("staging");
-        let (l1_path, _) =
-            write_segment_to_dir(&staging, 1, 1, &worker_batch(1, vec![10, 20])).unwrap();
+        let (l1_path, _) = write_segment_to_dir(
+            &staging,
+            1,
+            1,
+            &worker_batch(1, vec![10, 20]),
+            Some("timestamp_ms"),
+        )
+        .unwrap();
         assert!(remote.upload("iris.worker", &l1_path).await);
 
         let catalog = Catalog::open(Some(&data_dir)).unwrap();

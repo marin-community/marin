@@ -52,8 +52,8 @@
 //! ## Row-group alignment
 //!
 //! `ArrowWriter` flushes a row group strictly every `ROW_GROUP_SIZE` rows (no
-//! byte cap is set), so the index — built by chunking the written `data` values
-//! at the same stride — aligns 1:1 with the parquet row groups by global row
+//! byte cap is set), so the index — built by chunking each indexed column's
+//! values at the same stride — aligns 1:1 with the parquet row groups by global row
 //! index. The prune path re-checks `index.len() == parquet.num_row_groups` and
 //! falls back to scan-all on any mismatch.
 
@@ -71,10 +71,10 @@ const TGM_VERSION: u8 = 1;
 /// needles index nothing and must fall back to a scan.
 pub const MIN_TRIGRAM_LEN: usize = 3;
 
-/// The single string column indexed for substring (`contains`) pruning in v1.
-/// `key` is already range-prunable, so it is not indexed; revisit if a
-/// `contains(key, …)` workload appears. The format itself is multi-column, so
-/// adding a second indexed column is an additive change.
+/// The `log` namespace's indexed column, used by tests to name the column their
+/// fixtures index. Which columns a namespace actually indexes comes from its
+/// schema (`ColumnIndex::trigram`), not from here — the writer, the sidecar
+/// format, and the prune path are all multi-column.
 pub const INDEXED_COLUMN: &str = "data";
 
 /// Target Bloom false-positive rate per row group. A false positive only keeps a
@@ -281,6 +281,18 @@ impl SidecarHeader {
         self.columns.iter().find(|c| c.name == name)
     }
 
+    /// Whether every column in `wanted` is present in this sidecar.
+    ///
+    /// A sidecar written before a column gained its index covers fewer columns
+    /// than the schema now asks for. It stays *correct* — an absent column just
+    /// scans unpruned — but the backfill uses this to notice that the file needs
+    /// rewriting, which file existence alone cannot tell it.
+    pub fn covers_columns(&self, wanted: &[&str]) -> bool {
+        wanted
+            .iter()
+            .all(|w| self.columns.iter().any(|c| c.name == *w))
+    }
+
     /// Whether the segment's key band can satisfy the inclusive query range
     /// `[lo, hi]`. Returns `false` only on a **provable** non-overlap — meaning
     /// the segment is out of band and its blooms need not be read. Unknown bounds
@@ -355,8 +367,8 @@ impl ColumnIndex {
 /// Serialize a segment's trigram index to the on-disk sidecar byte format.
 ///
 /// `rg_count` is the shared parquet row-group count; `key_min`/`key_max` are the
-/// segment's key band as raw bytes (string keys only); `columns` are the per-
-/// column blooms (one entry today, `INDEXED_COLUMN`).
+/// segment's key band as raw bytes (string keys only); `columns` are the
+/// per-column blooms, one per column the namespace's schema flags.
 pub fn serialize_sidecar(
     rg_count: u32,
     key_column: &str,
@@ -985,6 +997,21 @@ mod tests {
         assert_eq!(col.keep_mask("beta gamma").unwrap(), vec![true]);
         // An unindexed column is absent from the directory.
         assert!(read_column_from_bytes(&bytes, "nope").is_none());
+    }
+
+    #[test]
+    fn covers_columns_detects_a_sidecar_predating_a_new_index() {
+        // A sidecar written when only `data` was indexed. Enabling a second
+        // column later must be detectable from the header alone, since the file
+        // still exists and its row-group count is still correct.
+        let batch = log_batch(vec!["/m/a"], vec![Some("one two three")]);
+        let idx = TrigramIndex::build(std::slice::from_ref(&batch), "data").unwrap();
+        let header = parse_header(&serialize_data(&idx, None, None)).unwrap();
+
+        assert!(header.covers_columns(&["data"]));
+        assert!(header.covers_columns(&[]));
+        assert!(!header.covers_columns(&["data", "key"]));
+        assert!(!header.covers_columns(&["key"]));
     }
 
     #[test]

@@ -15,6 +15,7 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
+use parquet::schema::types::ColumnPath;
 
 use crate::errors::StatsError;
 use crate::store::types::{parse_seg_filename, seg_filename};
@@ -26,17 +27,35 @@ pub const ROW_GROUP_SIZE: usize = 16_384;
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
 /// Encoding contract: row-group 16384, zstd level 1 (not the library default 3),
-/// and bloom filters enabled (so EXACT-key FetchLogs / equality predicates get
-/// row-group pruning). Centralizing it keeps L0 and compacted segments using one
-/// consistent on-disk layout.
-pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
+/// and a bloom filter for `bloom_column` alone. Centralizing it keeps L0 and
+/// compacted segments using one consistent on-disk layout.
+///
+/// `bloom_column` is the key column for L0 and `None` for compacted output,
+/// because that is where a bloom filter can still change an answer's cost. L0 is
+/// written unsorted, so its key statistics span the namespace and a bloom is the
+/// only thing that prunes an EXACT-key `FetchLogs`. L1+ is sorted by
+/// `(key, seq)`, so min/max statistics already prune the key band, and a bloom on
+/// any other column answers "maybe" for nearly every row group because the data
+/// is not clustered by it.
+///
+/// Writing them for every column measured 15% of each segment's bytes
+/// (331 MB -> 281 MB over a sample of production `telemetry_v1` segments) and
+/// pruned zero of 86,920 candidate row groups on the `telemetry_v1` query that
+/// motivated this. Since the local query window is volume-bounded, those bytes
+/// are retained history given up for pruning that did not happen.
+pub fn segment_writer_properties(
+    bloom_column: Option<&str>,
+) -> Result<WriterProperties, StatsError> {
     let zstd =
         ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
-    Ok(WriterProperties::builder()
+    let mut builder = WriterProperties::builder()
         .set_max_row_group_row_count(Some(ROW_GROUP_SIZE))
         .set_compression(Compression::ZSTD(zstd))
-        .set_bloom_filter_enabled(true)
-        .build())
+        .set_bloom_filter_enabled(false);
+    if let Some(column) = bloom_column {
+        builder = builder.set_column_bloom_filter_enabled(ColumnPath::from(column), true);
+    }
+    Ok(builder.build())
 }
 
 /// Per-segment metadata recovered from filename + parquet footer.
@@ -55,9 +74,10 @@ pub struct SegmentMetadata {
     pub max_key_value: Option<i64>,
 }
 
-/// Encode `batch` to parquet bytes (UNSORTED L0, row-group 16384, zstd-1, bloom).
-pub fn write_segment(batch: &RecordBatch) -> Result<Vec<u8>, StatsError> {
-    let props = segment_writer_properties()?;
+/// Encode `batch` to parquet bytes (UNSORTED L0, row-group 16384, zstd-1, a
+/// bloom filter on `key_column`).
+pub fn write_segment(batch: &RecordBatch, key_column: Option<&str>) -> Result<Vec<u8>, StatsError> {
+    let props = segment_writer_properties(key_column)?;
     let mut buf: Vec<u8> = Vec::new();
     let opts = ArrowWriterOptions::new().with_properties(props);
     let mut writer = ArrowWriter::try_new_with_options(&mut buf, batch.schema(), opts)
@@ -79,8 +99,9 @@ pub fn write_segment_to_dir(
     level: i32,
     min_seq: i64,
     batch: &RecordBatch,
+    key_column: Option<&str>,
 ) -> Result<(PathBuf, i64), StatsError> {
-    let bytes = write_segment(batch)?;
+    let bytes = write_segment(batch, key_column)?;
     let filename = seg_filename(level, min_seq);
     let final_path = dir.join(&filename);
     let staging_path = dir.join(format!("{filename}.tmp"));
@@ -264,7 +285,7 @@ mod tests {
         let dir = tempdir();
         // non-monotonic keys: 30, 10, 20.
         let batch = batch_with_keys(1, vec![30, 10, 20]);
-        let (path, size) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
+        let (path, size) = write_segment_to_dir(&dir, 0, 1, &batch, Some("key")).unwrap();
         assert_eq!(
             path.file_name().unwrap().to_str().unwrap(),
             "seg_L0_0000000000000000001.parquet"
@@ -282,11 +303,39 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Column names carrying a parquet bloom filter in `path`'s first row group.
+    fn bloom_columns(path: &Path) -> Vec<String> {
+        let file = std::fs::File::open(path).unwrap();
+        let reader = SerializedFileReader::new(file).unwrap();
+        let rg = reader.metadata().row_group(0);
+        (0..rg.num_columns())
+            .filter(|&i| rg.column(i).bloom_filter_offset().is_some())
+            .map(|i| rg.column(i).column_path().string())
+            .collect()
+    }
+
+    #[test]
+    fn only_the_named_column_gets_a_bloom_filter() {
+        let dir = tempdir();
+        let batch = batch_with_keys(1, vec![30, 10, 20]);
+
+        // L0 carries one for its key, which is the only prune available on an
+        // unsorted segment.
+        let (keyed, _) = write_segment_to_dir(&dir, 0, 1, &batch, Some("key")).unwrap();
+        assert_eq!(bloom_columns(&keyed), vec!["key".to_string()]);
+
+        // Compacted output names no column, so the segment carries none.
+        let (unkeyed, _) = write_segment_to_dir(&dir, 0, 9, &batch, None).unwrap();
+        assert!(bloom_columns(&unkeyed).is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn l0_write_is_unsorted_preserving_row_order() {
         let dir = tempdir();
         let batch = batch_with_keys(1, vec![30, 10, 20]);
-        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch).unwrap();
+        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch, Some("key")).unwrap();
         // Read the rows back; their key order must be the on-write order.
         let file = std::fs::File::open(&path).unwrap();
         let builder =

@@ -61,7 +61,23 @@ timestamp conversion function.
 For a bounded query that is still slow, run `EXPLAIN ANALYZE` and compare
 `row_groups_pruned_statistics`, `bytes_scanned`, `metadata_load_time`, and
 `time_elapsed_opening`. High metadata/opening time with few scanned bytes means
-row-group pruning worked and file metadata is the remaining cost.
+row-group pruning worked and file metadata is the remaining cost. The
+`*_eval_time` metrics are accumulated elapsed time across concurrent per-file
+tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
+one as a place to look, not as a measured cost.
+
+An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
+carries a trigram index; otherwise it decodes the column for every row in the
+namespace. `ListNamespaces` reports which columns are indexed. Adding one is a
+`RegisterTable` away and does not need a reset, but the sidecar backfill runs at
+one segment per 30 s tick, so a large namespace speeds up over hours rather than
+at once. A time bound is the faster answer in the moment: `telemetry_v1` is keyed
+on `timestamp_ms` and a 10-minute window answers in about a second where the same
+query unbounded takes 30.
+
+`finelog query` applies a client deadline just past the server's own 60s one.
+Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
+needs longer.
 
 `query_metadata_cache_mb` in a deployment config overrides DataFusion's
 process-wide Parquet metadata cache limit. Leave it unset to retain DataFusion's

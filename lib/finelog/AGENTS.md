@@ -106,3 +106,32 @@ Regenerate protos after editing `proto/logging.proto`:
 ```bash
 cd lib/finelog && buf generate
 ```
+
+### Dashboard
+
+`npm run dev` serves the SPA with HMR and proxies RPC to a finelog on port
+10001 (`FINELOG_DEV_SERVER` to point elsewhere), so frontend work does not need
+a `npm run build` round trip into the `dist/` the Rust server reads from disk.
+
+`npm run test:e2e` drives the **built** dashboard with Playwright against an
+already-running server; it does not start one. `scripts/demo.py --keep` serves a
+seeded store on the default port. Point it at a store with real segments via
+`FINELOG_BASE_URL` and `FINELOG_TEST_NAMESPACE`.
+
+## Secondary indexes
+
+A column declared with `ColumnIndex.trigram` gets a per-row-group substring
+index in each segment's `.tgm` sidecar, which is what makes
+`contains(col, …)`/`col LIKE '%…%'` prune instead of full-scan. Today that is
+`log.data` and `telemetry_v1.name`.
+
+Enabling one is additive and can be done on a live namespace: `RegisterTable`
+turns an index on and never turns one off, and the maintenance backfill rebuilds
+any L≥1 sidecar that is missing or predates the column. Until a sidecar exists
+the query is unpruned, never wrong. Indexing a large namespace takes a while —
+the backfill is one segment per 30 s tick — so the speedup arrives gradually.
+
+Bloom filters are written only for **L0's key column**. L0 is unsorted, so a
+bloom is the only thing that prunes an exact-key lookup there; L1+ is sorted by
+`(key, seq)` and prunes the key band from min/max statistics instead. Writing
+them for every column cost 15% of each segment and pruned nothing measurable.
