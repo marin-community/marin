@@ -27,19 +27,21 @@ def sample() -> ArtifactStep[Artifact]:
 
 def build() -> ArtifactStep[Artifact]:
     documents = sample()
+    sample_config = documents.adopt_config
+    assert sample_config is not None
     return replace(
         ArtifactStep.adopt(
             name="datakit/embeddings/harrier-oss-v1-0.6b-50m",
-            version="2026.08.04",
+            version=documents.version,
             source="s3://marin-us-east-02a/marin/user/held/harrier-oss-v1-0.6b-50m",
             config={
                 "sample": f"{documents.name}@{documents.version}",
                 "model_id": "microsoft/harrier-oss-v1-0.6b",
                 "model_revision": "f9b9dc8d367d443f2479d27aa5d8d2850c0774ee",
-                "rows": 50_000_000,
+                "rows": sample_config["rows"],
                 "max_tokens": 8_192,
-                "producer_branch": "https://github.com/marin-community/marin/tree/held/harrier-50m-run",
-                "producer_commit": "46b4f8b2dd5ed4d2faa1ebdff13953e1a1001c75",
+                "producer_branch": sample_config["producer_branch"],
+                "producer_commit": sample_config["producer_commit"],
             },
         ),
         deps=(documents,),
