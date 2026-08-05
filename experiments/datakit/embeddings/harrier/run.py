@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Embed every source in Rav's completed 292-source dedup artifact with Harrier."""
+"""Embed every source represented by the pinned global fuzzy-dedup artifact with Harrier."""
 
 from fray.types import ResourceConfig
 from marin.datakit.normalize import NormalizedData
@@ -21,7 +21,8 @@ from experiments.datakit.embeddings.harrier.pipeline import (
 )
 from experiments.datakit.reference_pipeline import select_sources
 
-DEDUP_PATH = "s3://marin-us-east-02a/marin/datakit/dedup_709f5997"
+DEDUP_ID = "dedup_709f5997"
+DEDUP_PATH = f"s3://marin-us-east-02a/marin/datakit/{DEDUP_ID}"
 WORKERS_PER_SOURCE = 32
 MAX_CONCURRENT = 8
 COORDINATOR_RESOURCES = ResourceConfig(
@@ -49,7 +50,7 @@ def build() -> list[StepSpec]:
             name=f"datakit/embed/harrier/{source_name}",
             deps=[normalized],
             hash_attrs={
-                "dedup": "dedup_709f5997",
+                "dedup": DEDUP_ID,
                 "model": HARRIER_REPO,
                 "revision": HARRIER_REVISION,
                 "batch_size": DEFAULT_BATCH_SIZE,

@@ -19,7 +19,8 @@ Each H100 worker downloads and loads the model once, cached across shards by
 ``InlineRunner``. The driver job must enable ``marin-core:gpu`` so nested
 Zephyr workers inherit the CUDA PyTorch environment.
 
-Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``.
+Counters emitted: ``embed/docs_in``, ``embed/bytes_in``, ``embed/shards_in``,
+``embed/docs_dedup_dropped``.
 """
 
 import logging
@@ -57,6 +58,7 @@ HARRIER_TOKENIZE_BATCH_SIZE = 128
 HARRIER_MAX_RAW_TEXT_CHARS = 1_048_576
 HARRIER_MAX_INFERENCE_BATCH_TOKENS = 32_768
 HARRIER_MAX_INFERENCE_BATCH_SIZE = 64
+HARRIER_TARGET_CLUSTER = "cw-us-east-02a"
 HARRIER_MAX_WORKERS = 256
 
 _MODEL_ARCHIVE_NAME = "model.tar"
@@ -84,15 +86,14 @@ class EmbeddingAttrData(BaseModel):
     """Co-partitioned per-source embedding parquet shards.
 
     Mirrors :class:`~marin.processing.tokenize.attributes.TokenizedAttrData`.
-    One output parquet shard per source shard, sharing basename and row order
-    (sort-by-id invariant carries through). Persisted as the step's ``.artifact``.
+    One output parquet shard per source shard, sharing its basename. Without
+    deduplication, row order matches the source shard. Deduplicated outputs
+    contain only canonical rows and must be joined by id. Persisted as the step's ``.artifact``.
     Load via ``read_artifact(step.output_path, EmbeddingAttrData)``.
 
     Attributes:
         output_dir: Directory containing the per-shard parquet outputs.
         source_key: Prefix-relative identity of the ``NormalizedData.main_output_dir`` this mirrors.
-            Co-partitioning means consumers can join ``(basename, row_idx)``
-            without an id index.
         model_name: HuggingFace model id.
         embedding_dim: Vector dimension (1024 for Harrier 0.6B).
         quantization_scale: ``fp32 = int8.astype(float32) * scale``.
@@ -307,7 +308,7 @@ def embed_source(
     worker_resources: ResourceConfig | None = None,
     max_workers: int = HARRIER_MAX_WORKERS,
 ) -> EmbeddingAttrData:
-    """Map-only Zephyr embed of every shard under ``NormalizedData.main_output_dir``.
+    """Map-only Zephyr embed of selected shards under ``NormalizedData.main_output_dir``.
 
     Each Zephyr task reads one source parquet shard, encodes records in
     ``batch_size``-sized windows via Harrier, L2-normalizes, quantizes to int8, and writes one output
@@ -368,6 +369,7 @@ def embed_source(
             cpu=8,
             ram="32g",
             disk="32g",
+            target_cluster=HARRIER_TARGET_CLUSTER,
         )
 
     ctx = ZephyrContext(
