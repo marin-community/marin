@@ -1351,7 +1351,12 @@ impl Namespace {
     }
 
     /// Re-encode up to `max` segments whose physical layout predates the current
-    /// writer policy, newest first. Returns how many were rewritten.
+    /// writer policy, oldest first. Returns how many were rewritten.
+    ///
+    /// Oldest first because the deque is age-ordered and a leveled store keeps
+    /// nearly all of its bytes in the oldest, terminal-level segments — going the
+    /// other way spends the first hour rewriting small recent segments while the
+    /// footer this exists to shrink stays untouched.
     ///
     /// Costs no remote bandwidth: the rewrite keeps the filename, and the sync
     /// step only uploads segments the catalog still marks `Local`, so a segment
@@ -1376,7 +1381,7 @@ impl Namespace {
             let mut known = self.current_layouts.lock().unwrap();
             known.retain(|p| live.contains(p.as_str()));
             let mut out = Vec::new();
-            for seg in inner.local_segments.iter().rev() {
+            for seg in inner.local_segments.iter() {
                 if seg.level < 1 || known.contains(&seg.path) {
                     continue;
                 }
