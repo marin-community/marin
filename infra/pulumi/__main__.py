@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 import pulumi
 import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
-from iac.config import CLOUDFLARE_TOKEN_SECRET, Provider, load_iris_config, load_provisioning
+from finelog.deploy.config import load_finelog_config
+from iac.config import CLOUDFLARE_TOKEN_SECRET, Provider, finelog_config_path, load_iris_config, load_provisioning
 from iac.coreweave.cluster import CoreweaveCluster, CoreweaveClusterArgs
 from iac.coreweave.dns import FederationDns, FederationDnsArgs
 from iac.coreweave.kueue import KueueAddon, KueueAddonArgs
@@ -124,10 +125,21 @@ def _build_coreweave(cluster: str, *, adopt: bool) -> None:
         k8s_provider=k8s_provider,
     )
     if grafana_observer := coreweave_provisioning.grafana_observer_rbac:
+        finelog_service = (
+            load_finelog_config(str(finelog_config_path(iris_config.finelog.config))).name
+            if iris_config.finelog.config
+            else None
+        )
         GrafanaObserverRbac(
             "grafana-observer-rbac",
-            GrafanaObserverRbacArgs(usernames=grafana_observer.usernames, adopt=adopt),
+            GrafanaObserverRbacArgs(
+                namespace=namespace,
+                usernames=grafana_observer.usernames,
+                finelog_service=finelog_service,
+                adopt=adopt,
+            ),
             k8s_provider=k8s_provider,
+            opts=pulumi.ResourceOptions(depends_on=[rbac.namespace]),
         )
 
     kueue_config = kubernetes_provider.kueue if kubernetes_provider else None

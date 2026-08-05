@@ -232,3 +232,31 @@ event also reports the effective SQLite journal and synchronous modes. Remote
 reconcile runs after the listener binds and reports object listing, footer fetch,
 catalog update, and delete timings separately; a slow remote phase cannot explain
 pre-bind readiness delay.
+
+## Verifying Grafana's direct mirror probe
+
+`FinelogFleetUnhealthy` calls each mirror's `/health` endpoint through the Kubernetes
+API service proxy. It also checks the Deployment's desired and Ready replica counts.
+The alert evaluates every minute and pages after one minute if either check fails.
+
+The Grafana token's built-in CoreWeave `read` role does not include
+`services/proxy`. CoreWeave IAM leaves authorization for Kubernetes resources inside
+CKS to Kubernetes RBAC, so `infra/pulumi` adjusts the same token's clearance with a
+Role in the Iris namespace. The Role permits `get` only on
+`http:<finelog-service>:rpc` and binds the Managed Auth usernames under
+`provisioning.coreweave.grafana_observer_rbac`. A 403 with `error_class=auth` means
+the cluster stack does not contain the current token username or was not updated after
+the cluster's `finelog.config` changed.
+
+Deploy the `cw-us-east-02a`, `cw-us-east-08a`, and `cw-rno2a` Pulumi stacks before
+deploying a Grafana revision that uses the direct probe. Apply the Finelog probe Role
+and RoleBinding without including unrelated stack changes.
+
+After the RBAC update, the same named-port proxy path should return `ok` with an
+operator kubeconfig. The production bridge token exercises the identical path on every
+Grafana alert evaluation:
+
+```bash
+kubectl --kubeconfig ~/.kube/coreweave-iris --context <context> get --raw \
+  /api/v1/namespaces/iris/services/http:<finelog-service>:rpc/proxy/health
+```

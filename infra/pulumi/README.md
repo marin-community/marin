@@ -96,8 +96,10 @@ Everything comes from the per-cluster Iris config (`lib/iris/config/<cluster>.ya
   `iac` — a `src/<pkg>` layout mirroring `lib/*/src/<pkg>`.)
 - Grafana's CoreWeave Managed Auth usernames from
   `provisioning.coreweave.grafana_observer_rbac`. The stack binds those identities to `get`,
-  `list`, and `watch` on Nodes; the standard CoreWeave `read` group omits Nodes. Retain both
-  identities during a token rotation.
+  `list`, and `watch` on Nodes; the standard CoreWeave `read` group omits Nodes. When
+  the Iris cluster has a `finelog.config`, a namespace-scoped Role also grants `get` on
+  only that config's `http:<name>:rpc` Service proxy so Grafana can call `/health`.
+  Retain both identities during a token rotation.
 - Kueue's controller-manager memory request and limit default to `2Gi`.
   `manager_memory_limit` accepts larger per-cluster values and rejects values below `2Gi`.
 
@@ -193,6 +195,13 @@ A CoreWeave token rotation creates a new Managed Auth username (`cwtoken-…`). 
 `grafana_observer_rbac.usernames` in all four cluster configs and run a normal preview/up for
 each stack before switching Grafana to the new token. Remove the old username and update the
 stacks again only after the new Grafana revision passes its bridge checks.
+
+Apply the `cw-us-east-02a`, `cw-us-east-08a`, and `cw-rno2a` Finelog probe Role and
+RoleBinding before a Grafana revision that enables direct Finelog probes. Use the
+targeted rollout in [Finelog's operational guide](../../lib/finelog/OPS.md#verifying-grafanas-direct-mirror-probe);
+do not apply unrelated stack drift. Without the namespaced RoleBinding, the bridge
+receives HTTP 403 from `services/proxy`, and `FinelogFleetUnhealthy` pages with
+`error_class=auth`.
 
 ### Backend
 

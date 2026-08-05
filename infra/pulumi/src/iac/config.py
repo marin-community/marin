@@ -16,6 +16,7 @@ Namespace derives from `kubernetes_provider.namespace`, the Kueue ClusterQueue n
 
 import enum
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated, Literal
 
 from iris.cluster.config import IrisClusterConfig, load_config
@@ -35,6 +36,7 @@ from rigging.config_discovery import resolve_cluster_config
 # reproducible and review-gated, never from a private local override. Relative to the marin
 # project root (resolved by rigging.config_discovery).
 IAC_CLUSTER_CONFIG_DIR = "lib/iris/config"
+IAC_FINELOG_CONFIG_DIR = "lib/finelog/config"
 MIN_KUEUE_MANAGER_MEMORY = "2Gi"
 
 
@@ -129,7 +131,7 @@ class RbacSpec(BaseModel):
 
 
 class GrafanaObserverRbacSpec(BaseModel):
-    """CoreWeave Managed Auth usernames accepted during Grafana token rotation."""
+    """CoreWeave Managed Auth identities accepted during Grafana token rotation."""
 
     usernames: tuple[str, ...] = Field(min_length=1)
 
@@ -248,6 +250,11 @@ def load_iris_config(cluster: str) -> IrisClusterConfig:
     config (see IAC_CLUSTER_CONFIG_DIR).
     """
     return load_config(resolve_cluster_config(cluster, dirs=(IAC_CLUSTER_CONFIG_DIR,)))
+
+
+def finelog_config_path(name: str) -> Path:
+    """Resolve a Finelog config from the reviewed in-tree config directory."""
+    return resolve_cluster_config(name, dirs=(IAC_FINELOG_CONFIG_DIR,))
 
 
 def load_provisioning(cluster: str) -> ProvisioningConfig:

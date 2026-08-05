@@ -1,7 +1,7 @@
 {
   "type": "table",
   "title": "Finelog fleet health",
-  "description": "The marin hub reads one row from the log namespace and reports latency, exercising rotated segments. Each CoreWeave mirror reports its Kubernetes HTTP /health readiness.",
+  "description": "Both GCE servers read one row from the log namespace and report latency, exercising rotated segments. Each CoreWeave mirror is called directly at /health through the Kubernetes API service proxy; Deployment readiness is reported beside the measured latency.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"

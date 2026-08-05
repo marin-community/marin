@@ -17,7 +17,7 @@ from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
 from k8s_source import K8sFleet
 from loom_alerts import LoomAlertClient, LoomAlertDeliveryError
-from server import create_app, workload_overview
+from server import create_app, finelog_alert_rows, finelog_fleet_health_rows, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
 from wandb_source import WandbSource
@@ -27,7 +27,12 @@ from zephyr_stalls import zephyr_progress_query, zephyr_stall_alert_rows
 FROM_MS = 1_784_257_200_000
 TO_MS = FROM_MS + 3_600_000
 MARIN = ClusterTarget(
-    name="marin", project="p", zone="z", instance_filter="name = finelog-marin", controller_filter="labels.x=true"
+    name="marin",
+    project="p",
+    zone="z",
+    instance_filter="name = finelog-marin",
+    controller_filter="labels.x=true",
+    finelog_role=FinelogRole.HUB,
 )
 
 
@@ -435,14 +440,29 @@ def test_loom_alert_route_returns_retryable_failure_for_delivery_errors():
     assert resp.json() == {"error": "loom.example returned HTTP 503"}
 
 
-def test_finelog_fleet_health_combines_the_main_hub_and_k8s_mirrors():
+def test_finelog_fleet_health_combines_gce_servers_and_k8s_mirrors():
     fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
+    dev = FakeSource(
+        health=FinelogHealth(
+            cluster="marin-dev",
+            server="finelog-marin-dev",
+            role=FinelogRole.STANDALONE,
+            responsive=True,
+            ready=1,
+            desired=1,
+            latency_ms=9,
+            error_class="",
+            error="",
+        )
+    )
 
-    rows = _client(FakeSource(), k8s_fleet=fleet).get("/finelog/marin/fleet_health").json()
+    main = FakeSource()
+    rows = finelog_fleet_health_rows({"marin": main, "marin-dev": dev}, fleet)
 
-    assert [(row["cluster"], row["server"], row["role"], row["responsive"]) for row in rows] == [
-        ("marin", "finelog-marin", "hub", True),
-        ("cw-a", "finelog-cw-a", "mirror", True),
+    assert [(row.cluster, row.server, row.role, row.responsive) for row in rows] == [
+        ("marin", "finelog-marin", FinelogRole.HUB, True),
+        ("marin-dev", "finelog-marin-dev", FinelogRole.STANDALONE, True),
+        ("cw-a", "finelog-cw-a", FinelogRole.MIRROR, True),
     ]
 
 
@@ -464,7 +484,7 @@ def test_finelog_fleet_alert_marks_slow_and_unresponsive_servers():
     routes[FINELOG_DEPLOYMENTS_PATH] = [deployment("iris", "finelog-cw-a", ready=0, containers=("finelog",))]
     fleet = K8sFleet([make_k8s_source(k8s_api(routes))])
 
-    assert _client(slow_hub, k8s_fleet=fleet).get("/finelog/marin/alerts/fleet_health").json() == [
+    assert finelog_alert_rows(finelog_fleet_health_rows({"marin": slow_hub}, fleet)) == [
         {
             "cluster": "marin",
             "server": "finelog-marin",

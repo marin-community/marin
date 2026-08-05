@@ -43,7 +43,7 @@ from config import (
     WatchedComponent,
     WatchedWebhook,
 )
-from finelog_health import FinelogHealth, FinelogRole
+from finelog_health import FinelogHealth
 
 logger = logging.getLogger(__name__)
 
@@ -270,8 +270,10 @@ class K8sSource:
     def target(self) -> K8sClusterTarget:
         return self._target
 
-    def _get(self, path: str, params: dict | None = None, *, none_on_404: bool = False) -> dict | None:
-        """GET one API path as JSON, retrying a 429 once after its Retry-After."""
+    def _get_response(
+        self, path: str, params: dict | None = None, *, none_on_404: bool = False
+    ) -> httpx.Response | None:
+        """GET one API path, retrying a 429 once after its Retry-After."""
         if self._token is None:
             raise K8sError(K8sErrorClass.AUTH, "CW_READ_TOKEN is not set")
         for attempt in (1, 2):
@@ -292,8 +294,17 @@ class K8sSource:
                 raise K8sError(K8sErrorClass.AUTH, f"{path}: HTTP {response.status_code}")
             if response.status_code != 200:
                 raise K8sError(K8sErrorClass.HTTP, f"{path}: HTTP {response.status_code}")
-            return response.json()
+            return response
         raise AssertionError("unreachable")
+
+    def _get(self, path: str, params: dict | None = None, *, none_on_404: bool = False) -> dict | None:
+        response = self._get_response(path, params, none_on_404=none_on_404)
+        return None if response is None else response.json()
+
+    def _get_text(self, path: str) -> str:
+        response = self._get_response(path)
+        assert response is not None
+        return response.text
 
     def _list(self, path: str, params: dict | None = None) -> list[dict]:
         """LIST with limit/continue pagination, concatenating the pages' items."""
@@ -403,15 +414,15 @@ class K8sSource:
         )
 
     def finelog_health(self) -> FinelogHealth:
-        """Report the mirror's HTTP-probe readiness from its Deployment status."""
-        # Name and namespace belong to finelog's deploy config, which is not in this
-        # image; discover by the stable container name instead of mirroring config.
+        """Probe the mirror's Service directly and attach its Deployment readiness."""
+        role = self._target.finelog_role
+        assert role is not None
         deployments = self._finelog_deployments()
         if len(deployments) != 1:
             return FinelogHealth(
                 cluster=self._target.name,
                 server=_FINELOG_FALLBACK_SERVER,
-                role=FinelogRole.MIRROR,
+                role=role,
                 responsive=False,
                 ready=0,
                 desired=1,
@@ -420,20 +431,50 @@ class K8sSource:
                 error=f"expected one finelog Deployment, found {len(deployments)}",
             )
         deployment = deployments[0]
-        server = (deployment.get("metadata") or {}).get("name") or _FINELOG_FALLBACK_SERVER
+        metadata = deployment.get("metadata") or {}
+        server = metadata.get("name") or _FINELOG_FALLBACK_SERVER
+        namespace = metadata.get("namespace") or self._target.iris_namespace
         desired = (deployment.get("spec") or {}).get("replicas", 1)
         ready = (deployment.get("status") or {}).get("readyReplicas") or 0
-        responsive = desired > 0 and ready >= desired
+        probe_path = f"/api/v1/namespaces/{namespace}/services/http:{server}:rpc/proxy/health"
+        started = time.monotonic()
+        try:
+            probe_response = self._get_text(probe_path)
+        except K8sError as err:
+            return FinelogHealth(
+                cluster=self._target.name,
+                server=server,
+                role=role,
+                responsive=False,
+                ready=ready,
+                desired=desired,
+                latency_ms=None,
+                error_class=str(err.error_class),
+                error=str(err),
+            )
+        latency_ms = round((time.monotonic() - started) * 1000)
+        deployment_ready = desired > 0 and ready >= desired
+        probe_healthy = probe_response.strip() == "ok"
+        responsive = deployment_ready and probe_healthy
+        if not deployment_ready:
+            error_class = "readiness"
+            error = "Deployment does not have all desired replicas Ready"
+        elif not probe_healthy:
+            error_class = "probe"
+            error = "direct /health probe returned an unexpected response"
+        else:
+            error_class = ""
+            error = ""
         return FinelogHealth(
             cluster=self._target.name,
             server=server,
-            role=FinelogRole.MIRROR,
+            role=role,
             responsive=responsive,
             ready=ready,
             desired=desired,
-            latency_ms=None,
-            error_class="" if responsive else "readiness",
-            error="" if responsive else "HTTP /health probe is not Ready",
+            latency_ms=latency_ms,
+            error_class=error_class,
+            error=error,
         )
 
     def _finelog_deployments(self) -> list[dict]:
@@ -954,11 +995,13 @@ class K8sFleet:
         """One health row per k8s finelog mirror, including API failures."""
 
         def on_error(source: K8sSource, err: K8sError) -> list[FinelogHealth]:
+            role = source.target.finelog_role
+            assert role is not None
             return [
                 FinelogHealth(
                     cluster=source.target.name,
                     server=_FINELOG_FALLBACK_SERVER,
-                    role=FinelogRole.MIRROR,
+                    role=role,
                     responsive=False,
                     ready=0,
                     desired=1,
@@ -971,14 +1014,14 @@ class K8sFleet:
         return self._collect(
             lambda source: [source.finelog_health()],
             on_error,
-            sources=tuple(source for source in self._sources if source.target.finelog_expected),
+            sources=tuple(source for source in self._sources if source.target.finelog_role is not None),
         )
 
     def finelog_pods(self) -> list[FinelogPodResult]:
         return self._collect(
             lambda source: source.finelog_pods(),
             lambda source, err: [FinelogPodError(source.target.name, str(err.error_class), str(err))],
-            sources=tuple(source for source in self._sources if source.target.finelog_expected),
+            sources=tuple(source for source in self._sources if source.target.finelog_role is not None),
         )
 
     def alert_gpu_rack_trays(self) -> list[dict]:

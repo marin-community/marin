@@ -12,6 +12,7 @@ import pytest
 from config import K8sClusterTarget
 from conftest import (
     FINELOG_DEPLOYMENTS_PATH,
+    FINELOG_PROXY,
     IRIS_DEPLOY,
     KUEUE_DEPLOY,
     KUEUE_SLICES,
@@ -501,11 +502,22 @@ def test_finelog_health_reports_http_probe_readiness_for_each_mirror():
     assert (health.cluster, health.server, health.role) == ("cw-a", "finelog-cw-a", FinelogRole.MIRROR)
     assert health.responsive is True
     assert (health.ready, health.desired, health.error_class) == (1, 1, "")
+    assert isinstance(health.latency_ms, int)
+
+
+def test_finelog_health_fails_when_direct_service_probe_fails_despite_ready_deployment():
+    routes = healthy_k8s_routes()
+    routes[FINELOG_PROXY] = lambda _: httpx.Response(503, text="no endpoints available")
+
+    (health,) = _fleet(("cw-a", k8s_api(routes))).finelog_health()
+
+    assert health.responsive is False
+    assert (health.ready, health.desired, health.error_class) == (1, 1, "http")
 
 
 def test_finelog_health_omits_clusters_without_a_mirror():
     mirror = make_k8s_source(k8s_api(healthy_k8s_routes()), name="cw-a")
-    target = K8sClusterTarget("cw-ci", "https://api.example", finelog_expected=False)
+    target = K8sClusterTarget("cw-ci", "https://api.example")
     no_mirror = make_k8s_source(k8s_api(healthy_k8s_routes()), target=target)
 
     health = K8sFleet([mirror, no_mirror]).finelog_health()

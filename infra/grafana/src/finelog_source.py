@@ -17,7 +17,7 @@ from config import FINELOG_PORT, ClusterTarget
 from discovery import InstanceResolutionError, resolve_internal_ip
 from finelog.client.log_client import LogClient
 from finelog.errors import StatsError
-from finelog_health import FinelogHealth, FinelogRole
+from finelog_health import FinelogHealth
 from google.api_core.exceptions import GoogleAPIError
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class FinelogSource:
             return FinelogHealth(
                 cluster=self._target.name,
                 server=f"finelog-{self._target.name}",
-                role=FinelogRole.HUB,
+                role=self._target.finelog_role,
                 responsive=False,
                 ready=0,
                 desired=1,
@@ -84,7 +84,7 @@ class FinelogSource:
         return FinelogHealth(
             cluster=self._target.name,
             server=f"finelog-{self._target.name}",
-            role=FinelogRole.HUB,
+            role=self._target.finelog_role,
             responsive=True,
             ready=1,
             desired=1,

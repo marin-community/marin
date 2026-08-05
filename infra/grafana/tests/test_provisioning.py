@@ -81,7 +81,14 @@ def test_every_rule_alerts_on_nodata_and_error():
 
 class _FakeIris:
     def __init__(self, name: str) -> None:
-        self.target = ClusterTarget(name=name, project="p", zone="z", instance_filter="f", controller_filter="c")
+        self.target = ClusterTarget(
+            name=name,
+            project="p",
+            zone="z",
+            instance_filter="f",
+            controller_filter="c",
+            finelog_role=FinelogRole.STANDALONE,
+        )
 
     def health(self) -> list[dict]:
         return [{"reachable": True, "up": 1, "latency_ms": 3}]
@@ -100,7 +107,14 @@ class _FakeIris:
 
 class _FakeFinelog:
     def __init__(self, name: str) -> None:
-        self.target = ClusterTarget(name=name, project="p", zone="z", instance_filter="f", controller_filter="c")
+        self.target = ClusterTarget(
+            name=name,
+            project="p",
+            zone="z",
+            instance_filter="f",
+            controller_filter="c",
+            finelog_role=FinelogRole.HUB,
+        )
 
     def health(self) -> FinelogHealth:
         return FinelogHealth(
@@ -197,9 +211,9 @@ def test_critical_contact_point_reaches_email_slack_and_loom():
     assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
 
 
-def test_finelog_health_alert_pages_critical_after_five_minutes():
+def test_finelog_health_alert_pages_critical_after_one_minute():
     (rule,) = [rule for rule in _rules() if rule["uid"] == "finelog-fleet-unhealthy"]
-    assert rule["for"] == "5m"
+    assert rule["for"] == "1m"
     assert rule["labels"]["severity"] == "critical"
     assert rule["data"][0]["datasourceUid"] == "finelog-marin"
     assert rule["data"][0]["model"]["url"] == "/alerts/fleet_health"

@@ -30,7 +30,7 @@ fetch server-side, so nothing outside the container reaches it.
 
 ```
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
-GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
+GET /finelog/marin/fleet_health                  both GCE query probes + direct k8s mirror probes
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
 GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
 GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
@@ -72,11 +72,13 @@ latency/outcomes, and worst-replica freshness after a serve exits; reset-aware
 deltas preserve replica identity, and an explicit no-data row distinguishes
 missing telemetry from healthy application silence.
 
-`fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
-result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
-at or above 5 seconds is slow. The dedicated finelog dashboard adds effective pod
-resources, restart history, probe presence, node placement, PVC class/capacity, and
-recent matching Kubernetes Warning events.
+`fleet_health` reads one row from both `finelog-marin` and `finelog-marin-dev`, then
+calls each CoreWeave mirror's `/health` endpoint through the Kubernetes API service
+proxy. The mirror response latency and Deployment readiness share one row; either path
+failing marks the mirror unhealthy. A GCE query at or above 5 seconds is slow. The
+dedicated finelog dashboard adds effective pod resources, restart history, probe
+presence, node placement, PVC class/capacity, and recent matching Kubernetes Warning
+events.
 
 Iris: the bridge owns each query behind a fixed endpoint and returns flat rows, so the
 dashboard never sends raw admin SQL. `jobs` (root jobs by state — in-flight plus 24h
@@ -223,7 +225,9 @@ redeploy.
 
 Critical rules notify operators immediately: an unreachable cluster or
 federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
-dead production Iris controller, or an unhealthy finelog hub or mirror.
+dead production Iris controller, or an unhealthy Finelog GCE server or mirror.
+The Finelog rule evaluates every minute and pages after one minute of direct probe,
+Deployment readiness, discovery, RBAC, or hub-query failure.
 Warning rules remain in Grafana's home alert list without sending email, Slack,
 or Loom notifications: a degraded component, a failed infra probe, a GPU
 pod that stays node-bound and
@@ -313,9 +317,19 @@ unauthenticated and the build panel shows no data.
 (CKS binds it to the built-in `view` ClusterRole): read-only kubectl across every
 cluster in the org, no Secrets, no writes. The built-in role omits Nodes, so the
 CoreWeave Pulumi stacks bind each exact Managed Auth username to the nodes-only
-`marin-grafana-node-reader` role. The usernames live under
-`provisioning.coreweave.grafana_observer_rbac` in each Grafana cluster config so
-both tokens can retain access during a rotation.
+`marin-grafana-node-reader` role. On clusters with a standalone Finelog mirror, a
+namespace-scoped `marin-grafana-finelog-prober` Role also grants `get` on
+`services/proxy` for only `http:<finelog-service>:rpc`. Pulumi derives that name from
+the cluster's existing `finelog.config`; the bridge discovers the same Deployment
+through the read-only Kubernetes API. The usernames live under
+`provisioning.coreweave.grafana_observer_rbac` so both tokens can retain access during
+a rotation.
+
+[CoreWeave IAM does not govern Kubernetes resources inside CKS](https://docs.coreweave.com/security/iam/access-policies);
+those permissions use Kubernetes RBAC. The namespaced RoleBinding is therefore the
+clearance adjustment for the existing token. Keeping the provider token on its `read`
+role avoids general Kubernetes write access, and reusing its Managed Auth identity
+avoids a separate service-account credential and rotation path for every cluster.
 
 Rotation is overlap-safe:
 
@@ -327,8 +341,9 @@ Rotation is overlap-safe:
    `cw-us-west-04a.yaml`, retaining
    the old username during the handoff.
 3. Preview and update the four CoreWeave Pulumi stacks. Verify both tokens can
-   `list nodes`, while pod creation, Secret reads, and impersonation remain
-   denied.
+   `list nodes`; on each Finelog cluster, verify the configured service proxy returns
+   `ok`. Pod creation, Secret reads, arbitrary service proxies, and impersonation must
+   remain denied.
 4. Add the new token as a `marin-grafana-cw-read-token` version, deploy a fresh
    Grafana revision, and verify every k8s bridge route.
 5. Remove the old username from the four configs and update the stacks again.

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared health model for the main finelog and its k8s mirrors."""
+"""Shared health model for GCE Finelog servers and Kubernetes mirrors."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -11,12 +11,13 @@ class FinelogRole(StrEnum):
     """A server's place in the finelog forwarding topology."""
 
     HUB = "hub"
+    STANDALONE = "standalone"
     MIRROR = "mirror"
 
 
 @dataclass(frozen=True)
 class FinelogHealth:
-    """One finelog server's query or HTTP-readiness health."""
+    """One finelog server's query or direct HTTP health."""
 
     cluster: str
     server: str

@@ -22,7 +22,14 @@ from server import create_app
 from starlette.testclient import TestClient
 from wandb_source import WandbSource
 
-TARGET = ClusterTarget(name="marin", project="p", zone="z", instance_filter="f", controller_filter="c")
+TARGET = ClusterTarget(
+    name="marin",
+    project="p",
+    zone="z",
+    instance_filter="f",
+    controller_filter="c",
+    finelog_role=FinelogRole.HUB,
+)
 
 
 def _iris(handler) -> IrisSource:

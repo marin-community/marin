@@ -1,7 +1,7 @@
 {
   "uid": "marin-finelog",
   "title": "Finelog",
-  "description": "Finelog fleet health, Kubernetes pod provisioning, restart history, probes, and persistent storage. The fleet table includes the GCE hub and every CoreWeave mirror; pod and PVC details come from the read-only Kubernetes API.",
+  "description": "Finelog fleet health, Kubernetes pod provisioning, restart history, probes, and persistent storage. The fleet table includes both GCE servers and every expected CoreWeave mirror; pod and PVC details come from the read-only Kubernetes API.",
   "tags": [
     "marin",
     "generated",
