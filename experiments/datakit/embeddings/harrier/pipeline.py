@@ -60,6 +60,9 @@ HARRIER_MAX_INFERENCE_BATCH_SIZE = 64
 HARRIER_TARGET_CLUSTER = "cw-us-east-02a"
 HARRIER_MAX_WORKERS = 256
 
+_MODEL_ARCHIVE_NAME = "model.tar"
+_MODEL_DIRECTORY_NAME = "model"
+
 # Records held by each Zephyr window. GPU batches are formed separately by
 # padded-token budget inside :class:`_HarrierEmbedder`.
 DEFAULT_BATCH_SIZE = 4096
@@ -112,7 +115,7 @@ class EmbeddingAttrData(BaseModel):
     counters: dict[str, int | float] = {}
 
     def shard_paths(self) -> list[str]:
-        return sorted(str(m) for m in StoragePath(f"{self.output_dir.rstrip('/')}/*.parquet").glob())
+        return sorted(str(m) for m in (StoragePath(self.output_dir) / "*.parquet").glob())
 
 
 def quantize_to_int8(arr: np.ndarray) -> np.ndarray:
@@ -208,20 +211,22 @@ class _HarrierEmbedder:
 def _load_embedder_from_shared() -> _HarrierEmbedder:
     archive_url: str = zephyr_worker_ctx().get_shared(_HARRIER_SHARED_KEY)
     local_root = Path(tempfile.mkdtemp(prefix="harrier-"))
-    local_archive = local_root / "model.tar"
+    local_archive = local_root / _MODEL_ARCHIVE_NAME
     StoragePath(archive_url).download_to(local_archive)
     with tarfile.open(local_archive) as archive:
         archive.extractall(local_root, filter="data")
-    logger.info("Loading Harrier from %s (staged at %s)", local_root / "model", archive_url)
-    return _HarrierEmbedder(local_root / "model")
+    logger.info("Loading Harrier from %s (staged at %s)", local_root / _MODEL_DIRECTORY_NAME, archive_url)
+    return _HarrierEmbedder(local_root / _MODEL_DIRECTORY_NAME)
 
 
 def _stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
     """Download and archive the pinned model once in the output region."""
     sanitized_repo = repo_id.replace("/", "__")
-    staged_url = (
-        f"{marin_temp_bucket(ttl_days=1, prefix='harrier-staging', source_prefix=output_path)}"
-        f"/{sanitized_repo}/{revision}/model.tar"
+    staged_url = str(
+        StoragePath(marin_temp_bucket(ttl_days=1, prefix="harrier-staging", source_prefix=output_path))
+        / sanitized_repo
+        / revision
+        / _MODEL_ARCHIVE_NAME
     )
     staged = StoragePath(staged_url)
     if staged.exists():
@@ -230,11 +235,11 @@ def _stage_harrier(repo_id: str, revision: str, output_path: str) -> str:
 
     logger.info("Fetching Harrier model %s@%s on driver", repo_id, revision)
     with tempfile.TemporaryDirectory() as temporary_directory:
-        model_path = Path(temporary_directory) / "model"
+        model_path = Path(temporary_directory) / _MODEL_DIRECTORY_NAME
         snapshot_download(repo_id=repo_id, revision=revision, local_dir=model_path)
-        archive_path = Path(temporary_directory) / "model.tar"
+        archive_path = Path(temporary_directory) / _MODEL_ARCHIVE_NAME
         with tarfile.open(archive_path, "w", dereference=True) as archive:
-            archive.add(model_path, arcname="model")
+            archive.add(model_path, arcname=_MODEL_DIRECTORY_NAME)
         size_mb = archive_path.stat().st_size / 1e6
         logger.info("Uploading %.1f MB of Harrier weights to %s", size_mb, staged_url)
         staged.parent.mkdirs()
@@ -265,7 +270,7 @@ def _embed_shard(
         ids = [r["id"] for r in batch]
         texts = [r["text"][:HARRIER_MAX_RAW_TEXT_CHARS] for r in batch]
         n_docs += len(ids)
-        n_bytes += sum(len(t) for t in texts)
+        n_bytes += sum(len(text.encode()) for text in texts)
         raw = embedder.embed(texts)
         raw = _l2_normalize(raw)
         q = quantize_to_int8(raw)
@@ -300,7 +305,7 @@ def embed_source(
     ``batch_size``-sized windows via Harrier, L2-normalizes, quantizes to int8, and writes one output
     parquet shard with the same basename.
     """
-    source_shards = sorted(str(m) for m in StoragePath(f"{normalized.main_output_dir.rstrip('/')}/**/*.parquet").glob())
+    source_shards = sorted(str(m) for m in (StoragePath(normalized.main_output_dir) / "**" / "*.parquet").glob())
     if max_shards is not None:
         source_shards = source_shards[:max_shards]
     if not source_shards:
@@ -308,8 +313,8 @@ def embed_source(
 
     output_basenames = tuple(os.path.basename(p) for p in source_shards)
 
-    def _output_path(shard_idx: int, _total: int, bn: tuple[str, ...] = output_basenames) -> str:
-        return f"{output_path.rstrip('/')}/{bn[shard_idx]}"
+    def _output_path(shard_idx: int, _total: int, basenames: tuple[str, ...] = output_basenames) -> str:
+        return str(StoragePath(output_path) / basenames[shard_idx])
 
     logger.info(
         "Embedding %d shards from %s with %s (batch=%d)",
@@ -325,7 +330,7 @@ def embed_source(
     # extra read at 15 B-doc scale, and we don't need it.
     source_specs = [InputFileSpec(path=p, columns=["id", "text"]) for p in source_shards]
 
-    ds = (
+    dataset = (
         Dataset.from_list(source_specs)
         .flat_map(load_file)
         .window(batch_size)
@@ -351,7 +356,7 @@ def embed_source(
         stage_runner_factory=InlineRunner,
     )
     ctx.put(_HARRIER_SHARED_KEY, staged_url)
-    outcome = ctx.execute(ds, verbose=True)
+    outcome = ctx.execute(dataset, verbose=True)
 
     artifact = EmbeddingAttrData(
         output_dir=output_path,
