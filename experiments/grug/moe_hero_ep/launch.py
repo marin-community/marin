@@ -69,6 +69,7 @@ def build_hero_run(
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
+    microbatches: int = 1,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -115,6 +116,7 @@ def build_hero_run(
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
         expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
         replica_axis_size=1,
+        microbatches=microbatches,
         sharding_dump_path=None,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -217,6 +219,13 @@ def build_hero_run(
     help="Override the routed expert width.",
 )
 @click.option(
+    "--microbatches",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Split each step into this many forward/backward passes. Divides the EP dispatch buffers.",
+)
+@click.option(
     "--profile-steps",
     type=click.IntRange(min=0),
     default=0,
@@ -244,6 +253,7 @@ def main(
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
+    microbatches: int,
     profile_steps: int,
     profile_start_step: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -254,6 +264,7 @@ def main(
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
+        microbatches=microbatches,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
     )

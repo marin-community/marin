@@ -161,3 +161,47 @@ def test_ep_padded_newton_schulz_returns_to_parameter_sharding():
         output = jax.eval_shape(apply_ns, x)
 
     assert output.sharding == parameter_sharding
+
+
+def _metrics(dropped, counts, entropy):
+    return {
+        "moe/dropped_assignments": jnp.asarray(dropped, dtype=jnp.float32),
+        "train/router/routing_counts_per_layer": jnp.asarray(counts, dtype=jnp.float32),
+        "train/router/routing_entropy_mean": jnp.asarray(entropy, dtype=jnp.float32),
+        "qb_beta_per_layer": None,
+    }
+
+
+def test_fold_metrics_sums_drop_counts_and_averages_rates():
+    # `_drop_metrics` divides dropped assignments by the FULL batch's assignment total, so a mean
+    # fold here would understate the drop rate by exactly the microbatch count -- silently, and on
+    # the metric the capacity sweep is measuring.
+    folded = train._fold_metrics(
+        [
+            _metrics(100.0, [[6.0, 2.0]], 0.5),
+            _metrics(300.0, [[4.0, 8.0]], 1.5),
+        ]
+    )
+
+    assert float(folded["moe/dropped_assignments"]) == 400.0
+    assert folded["train/router/routing_counts_per_layer"].tolist() == [[10.0, 10.0]]
+    assert float(folded["train/router/routing_entropy_mean"]) == pytest.approx(1.0)
+    assert folded["qb_beta_per_layer"] is None
+
+
+def test_fold_metrics_rebuilds_routing_histogram_from_summed_counts():
+    folded = train._fold_metrics(
+        [
+            {**_metrics(0.0, [[6.0, 2.0]], 0.5), "train/router/layer_0/routing_hist": object()},
+            {**_metrics(0.0, [[4.0, 8.0]], 0.5), "train/router/layer_0/routing_hist": object()},
+        ]
+    )
+
+    # Summed counts are [10, 10], so the histogram's mean expert id is 0.5, not either input's.
+    assert float(folded["train/router/layer_0/routing_hist"].mean) == pytest.approx(0.5)
+
+
+def test_fold_metrics_rejects_an_unclassifiable_metric():
+    # A metric added later must not quietly default into the averaging bucket.
+    with pytest.raises(TypeError, match="unfoldable type"):
+        train._fold_metrics([{**_metrics(0.0, [[1.0]], 0.0), "train/new": "surprise"}] * 2)
