@@ -16,11 +16,11 @@
 //! match (Bloom false positive, or trigrams split across rows) is filtered there,
 //! not returned.
 //!
-//! `LIKE` extraction is deliberately narrow: only a single substring framed by
-//! `%` wildcards (`%lit%`, `lit%`, `%lit`) where `lit` has no `_`, `%`, or `\`.
-//! Anything else (`NOT LIKE`, `ILIKE`, an `_` single-char wildcard, an escape, or
-//! multiple `%`-separated fragments) is left unpruned rather than risk a needle
-//! that the match does not actually imply.
+//! A `LIKE` pattern contributes every literal run between its wildcards, since
+//! `%` and `_` only insert characters *between* those runs: `%a%b%` requires
+//! both `a` and `b`, and `%CUDA\_ERROR%` requires the single run `CUDA_ERROR`.
+//! `NOT LIKE`, `ILIKE`, and an explicit `ESCAPE` char are left unpruned — none of
+//! them imply the runs appear verbatim under the parse used here.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -163,20 +163,20 @@ fn apply_bound(range: &mut StringRange, op: Operator, value: Vec<u8>) {
     }
 }
 
-/// Substring needles from every top-level conjunct that constrains `column` to
-/// contain a literal — `contains(column, lit)` or `column LIKE '%lit%'`. A
-/// single-column probe over [`substring_column_needle`].
+/// The needles [`substring_needles_by_column`] would apply to `column`.
 #[cfg(test)]
 fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
-    filters
-        .iter()
-        .filter_map(|f| substring_needle(f, column))
-        .collect()
+    substring_needles_by_column(filters)
+        .remove(column)
+        .unwrap_or_default()
 }
 
 /// Substring needles grouped by the column each constrains, from every top-level
-/// `contains(col, lit)` / `col LIKE '%lit%'` conjunct whose literal is long
+/// `contains(col, lit)` / `col LIKE '%lit%'` conjunct, keeping the literals long
 /// enough to decompose into at least one trigram (`>= MIN_TRIGRAM_LEN`).
+///
+/// A column's needles are required together, so dropping a too-short one only
+/// loosens the constraint.
 ///
 /// Pure expr inspection (no I/O) — the provider calls this on the hot path to
 /// decide (cheaply) whether the substring prune applies at all before touching
@@ -185,30 +185,31 @@ fn substring_needles(filters: &[Expr], column: &str) -> Vec<String> {
 pub fn substring_needles_by_column(filters: &[Expr]) -> HashMap<String, Vec<String>> {
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
     for f in filters {
-        if let Some((column, needle)) = substring_column_needle(f) {
-            if needle.len() >= MIN_TRIGRAM_LEN {
-                out.entry(column).or_default().push(needle);
-            }
+        let Some((column, needles)) = substring_column_needles(f) else {
+            continue;
+        };
+        let usable: Vec<String> = needles
+            .into_iter()
+            .filter(|n| n.len() >= MIN_TRIGRAM_LEN)
+            .collect();
+        if usable.is_empty() {
+            continue;
         }
+        out.entry(column).or_default().extend(usable);
     }
     out
 }
 
-/// `Some(needle)` if `expr` constrains `column` to contain a literal substring.
-#[cfg(test)]
-fn substring_needle(expr: &Expr, column: &str) -> Option<String> {
-    substring_column_needle(expr)
-        .filter(|(c, _)| c == column)
-        .map(|(_, needle)| needle)
-}
-
-/// `Some((column, needle))` if `expr` constrains some column to contain a literal
-/// substring: `contains(<col>, <utf8 literal>)`, or a `<col> LIKE` whose pattern
-/// is a single wildcard-framed substring (see [`like_column_substring`]).
-fn substring_column_needle(expr: &Expr) -> Option<(String, String)> {
+/// `Some((column, needles))` if `expr` constrains some column to contain literal
+/// substrings — all of them, since they are ANDed: `contains(<col>, <utf8
+/// literal>)`, or the literal runs of a `<col> LIKE` pattern (see
+/// [`like_column_needles`]).
+fn substring_column_needles(expr: &Expr) -> Option<(String, Vec<String>)> {
     match expr {
-        Expr::ScalarFunction(sf) => contains_column_literal(sf),
-        Expr::Like(like) => like_column_substring(like),
+        Expr::ScalarFunction(sf) => {
+            contains_column_literal(sf).map(|(col, needle)| (col, vec![needle]))
+        }
+        Expr::Like(like) => like_column_needles(like),
         _ => None,
     }
 }
@@ -227,16 +228,15 @@ fn contains_column_literal(
     Some((col.name.clone(), needle))
 }
 
-/// `Some((column, needle))` if `like` is `<column> LIKE '<pattern>'` where the
-/// pattern is a single literal substring framed by `%` wildcards and free of the
-/// `_` single-char wildcard and `\` escape — so a match provably contains
-/// `needle`.
+/// `Some((column, needles))` if `like` is `<column> LIKE '<pattern>'`, where
+/// `needles` are the pattern's literal runs (see [`like_literal_runs`]). Every
+/// run is a substring of any matching value, so requiring all of them is sound.
 ///
-/// Conservative by construction: `NOT LIKE`, `ILIKE` (case-insensitive), an
-/// explicit escape char, or a pattern with `_`, `\`, or more than one
-/// `%`-separated fragment all return `None` (no prune), because none of those
-/// guarantee `needle` appears verbatim in a matching value.
-fn like_column_substring(like: &Like) -> Option<(String, String)> {
+/// `NOT LIKE` and `ILIKE` return `None`: a negated match implies nothing about
+/// the runs, and a case-insensitive one can match bytes the trigrams never saw.
+/// An explicit `ESCAPE` char also returns `None`, because it redefines the
+/// escape that [`like_literal_runs`] resolves.
+fn like_column_needles(like: &Like) -> Option<(String, Vec<String>)> {
     if like.negated || like.case_insensitive || like.escape_char.is_some() {
         return None;
     }
@@ -244,22 +244,33 @@ fn like_column_substring(like: &Like) -> Option<(String, String)> {
         return None;
     };
     let pattern = utf8_literal(&like.pattern)?;
-    // `\` is LIKE's implicit escape even with no explicit escape char; `_` is the
-    // single-char wildcard. A pattern carrying either has subtler semantics than
-    // "contains this literal", so refuse it.
-    if pattern.contains(['_', '\\']) {
-        return None;
+    Some((col.name.clone(), like_literal_runs(&pattern)))
+}
+
+/// The literal runs of a `LIKE` pattern, in order.
+///
+/// `%` (any sequence) and `_` (any single character) end a run, and `\` escapes
+/// the next character into the current one — so `%CUDA\_ERROR%` is the single run
+/// `CUDA_ERROR`, while the unescaped `%CUDA_ERROR%` is the two runs `CUDA` and
+/// `ERROR`. A trailing `\` is a literal backslash. This mirrors how the arrow
+/// `LIKE` kernel compiles a pattern with no explicit escape character; the
+/// [`crate::query`] tests pin the two against each other.
+fn like_literal_runs(pattern: &str) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut run = String::new();
+    let mut chars = pattern.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '%' | '_' if !run.is_empty() => runs.push(std::mem::take(&mut run)),
+            '%' | '_' => {}
+            '\\' => run.push(chars.next().unwrap_or('\\')),
+            c => run.push(c),
+        }
     }
-    // The literal text lives between the `%` wildcards. Exactly one non-empty
-    // fragment ⇒ a single required substring (`%lit%`, `lit%`, `%lit`). Zero
-    // fragments (all `%`) matches everything; two or more (`%a%b%`) is an AND of
-    // substrings we don't model in v1 — both yield no prunable needle.
-    let mut fragments = pattern.split('%').filter(|f| !f.is_empty());
-    let needle = fragments.next()?;
-    if fragments.next().is_some() {
-        return None;
+    if !run.is_empty() {
+        runs.push(run);
     }
-    Some((col.name.clone(), needle.to_string()))
+    runs
 }
 
 /// The string value of a Utf8 / LargeUtf8 / Utf8View literal, else `None`.
@@ -504,16 +515,35 @@ mod tests {
     }
 
     #[test]
+    fn like_extracts_every_literal_run() {
+        // Wildcards only insert characters between the runs, so each run is
+        // required and they are ANDed. An escaped `_` is part of its run; a bare
+        // one splits it.
+        let cases = [
+            ("%abc%def%", vec!["abc", "def"]),
+            (r"%CUDA\_ERROR\_OUT%", vec!["CUDA_ERROR_OUT"]),
+            ("%CUDA_ERROR%", vec!["CUDA", "ERROR"]),
+            ("foo%bar", vec!["foo", "bar"]),
+        ];
+        for (pattern, expected) in cases {
+            assert_eq!(
+                substring_needles(&[like_expr("data", pattern, false, false)], "data"),
+                expected,
+                "pattern {pattern:?}"
+            );
+        }
+    }
+
+    #[test]
     fn like_unsafe_patterns_are_not_extracted() {
         // Each of these would risk a needle the match does not imply, so the
         // prune must decline (scan unpruned) rather than over-prune.
         let unsafe_cases = [
-            ("%a_c%", false, false),     // `_` single-char wildcard
-            ("%a\\c%", false, false),    // `\` escape
-            ("%abc%def%", false, false), // two required fragments (AND, not one substring)
-            ("%%", false, false),        // matches everything: no needle
-            ("%abc%", true, false),      // NOT LIKE
-            ("%abc%", false, true),      // ILIKE (case-insensitive)
+            ("%a_c%", false, false),  // runs too short for a trigram
+            ("%a\\c%", false, false), // escape collapses to the 2-byte run `ac`
+            ("%%", false, false),     // matches everything: no needle
+            ("%abc%", true, false),   // NOT LIKE
+            ("%abc%", false, true),   // ILIKE (case-insensitive)
         ];
         for (pattern, negated, case_insensitive) in unsafe_cases {
             assert!(
@@ -529,6 +559,16 @@ mod tests {
         assert!(
             substring_needles(&[like_expr("source", "%abc%", false, false)], "data").is_empty()
         );
+        // An explicit ESCAPE redefines what `\` means, so the run parse no longer
+        // describes the pattern.
+        let escaped = Expr::Like(Like {
+            negated: false,
+            expr: Box::new(col("data")),
+            pattern: Box::new(lit("%abc!%def%")),
+            escape_char: Some('!'),
+            case_insensitive: false,
+        });
+        assert!(substring_needles(&[escaped], "data").is_empty());
     }
 
     #[test]
@@ -665,5 +705,75 @@ mod tests {
         assert!(build_access_plans(&paths, &needles, &out_of_band).is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn like_runs_are_implied_by_the_engines_own_match() {
+        // The prune is only sound if every row the engine's LIKE accepts really
+        // does contain each extracted run — an escape parse that disagreed with
+        // the kernel's would silently drop matching rows. Run the patterns
+        // through the real planner and check that against the runs.
+        use datafusion::arrow::array::{Array, RecordBatch, StringArray};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+
+        let values = [
+            "CUDA_ERROR_OUT_OF_MEMORY",
+            "CUDAxERRORx",
+            "cuda_error_out_of_memory",
+            "xxabcxxdefxx",
+            "foo123bar",
+            "foo123barbaz",
+            "at 100% capacity",
+            r"a back\slash here",
+        ];
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "v",
+            DataType::Utf8,
+            false,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(values.to_vec()))])
+                .unwrap();
+        let ctx = crate::query::make_ctx();
+        ctx.register_batch("t", batch).unwrap();
+
+        for pattern in [
+            r"%CUDA\_ERROR%",
+            "%CUDA_ERROR%",
+            "%abc%def%",
+            "foo%bar",
+            r"%100\%%",
+            r"%back\\slash%",
+        ] {
+            let runs = like_literal_runs(pattern);
+            let batches = ctx
+                .sql(&format!("SELECT v FROM t WHERE v LIKE '{pattern}'"))
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap();
+            let matched: Vec<String> = batches
+                .iter()
+                .flat_map(|b| {
+                    let col = b
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .unwrap()
+                        .clone();
+                    (0..col.len()).map(move |i| col.value(i).to_string())
+                })
+                .collect();
+            assert!(!matched.is_empty(), "pattern {pattern:?} matched nothing");
+            for value in &matched {
+                for run in &runs {
+                    assert!(
+                        value.contains(run.as_str()),
+                        "pattern {pattern:?} matched {value:?}, which lacks the run {run:?}"
+                    );
+                }
+            }
+        }
     }
 }

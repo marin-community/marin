@@ -68,7 +68,11 @@ one as a place to look, not as a measured cost.
 
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
 carries a trigram index; otherwise it decodes the column for every row in the
-namespace. `ListNamespaces` reports which columns are indexed. Adding one is a
+namespace. `ListNamespaces` reports which columns are indexed. How much it prunes
+depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
+`ERROR`, so any row group holding both survives, where `%CUDA\_ERROR%` — or
+`contains(data, 'CUDA_ERROR')` — gives the index the whole string. Escape the
+underscores when you mean them literally. Adding one is a
 `RegisterTable` away and does not need a reset, but the sidecar backfill runs at
 one segment per 30 s tick, so a large namespace speeds up over hours rather than
 at once. A time bound is the faster answer in the moment: `telemetry_v1` is keyed

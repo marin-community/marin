@@ -125,6 +125,12 @@ index in each segment's `.tgm` sidecar, which is what makes
 `contains(col, …)`/`col LIKE '%…%'` prune instead of full-scan. Today that is
 `log.data` and `telemetry_v1.name`.
 
+A `LIKE` pattern contributes every literal run between its wildcards, all
+required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the
+escaped `%CUDA\_ERROR%` prunes on the single run `CUDA_ERROR`. Runs under three
+bytes carry no trigram and drop out. `NOT LIKE`, `ILIKE`, and an explicit
+`ESCAPE` never prune.
+
 Enabling one is additive and can be done on a live namespace: `RegisterTable`
 turns an index on and never turns one off, and the maintenance backfill rebuilds
 any L≥1 sidecar that is missing or predates the column. Until a sidecar exists
