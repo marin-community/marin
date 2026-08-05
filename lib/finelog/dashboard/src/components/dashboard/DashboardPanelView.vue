@@ -2,9 +2,10 @@
 import { computed } from 'vue'
 
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
-import TimeSeriesChart from '@/components/dashboard/TimeSeriesChart.vue'
+import ResultChart from '@/components/shared/ResultChart.vue'
 import type { DashboardPanel } from '@/types/dashboard'
 import type { ArrowResult } from '@/utils/arrow'
+import { classifyColumns, isNumericType, isTemporalType, type ColumnKind } from '@/utils/columnKind'
 
 const props = defineProps<{
   panel: DashboardPanel
@@ -20,6 +21,38 @@ defineEmits<{ run: [] }>()
 const columns = computed<Column[]>(() =>
   (props.result?.columns ?? []).map((column) => ({ key: column, label: column, mono: true })),
 )
+
+/**
+ * A `timeseries` panel's SQL is authored by hand, so its output is checked
+ * against the shape the chart is wired to — `t`, `series`, `value` — and the
+ * mismatch is reported as the panel's result rather than as an empty chart.
+ */
+const timeseriesError = computed<string | null>(() => {
+  const result = props.result
+  if (props.panel.kind !== 'timeseries' || !result || result.rows.length === 0) return null
+  const missing = ['t', 'series', 'value'].filter((c) => !result.columns.includes(c))
+  if (missing.length) {
+    return `a timeseries panel must select t, series, value (missing ${missing.join(', ')} from ${result.columns.join(', ')})`
+  }
+  const timeType = result.types.t ?? ''
+  if (!isTemporalType(timeType) && !isNumericType(timeType)) {
+    return `t must be a timestamp, date, or number (received ${timeType || 'unknown'})`
+  }
+  if (!/Utf8/.test(result.types.series ?? '')) {
+    return `series must be a string (received ${result.types.series || 'unknown'})`
+  }
+  if (!isNumericType(result.types.value)) {
+    return `value must be a number (received ${result.types.value || 'unknown'})`
+  }
+  return null
+})
+
+/** `t` is an instant by the panel contract, whatever width the query returned it at. */
+const timeseriesKinds = computed<Record<string, ColumnKind>>(() => {
+  const result = props.result
+  if (!result) return {}
+  return { ...classifyColumns(result.columns, result.types, result.rows), t: 'timestamp' }
+})
 
 const stats = computed(() => {
   const row = props.result?.rows[0]
@@ -53,8 +86,23 @@ function formatStat(value: number): string {
       class="m-4 px-3 py-2 text-sm font-mono whitespace-pre-wrap text-status-danger bg-status-danger-bg border border-status-danger-border rounded"
     >{{ error }}</div>
     <div v-else-if="loading && !result" class="py-16 text-center text-sm text-text-muted">Running query…</div>
+    <div
+      v-else-if="timeseriesError"
+      class="m-4 px-3 py-2 text-sm font-mono text-status-danger bg-status-danger-bg border border-status-danger-border rounded"
+    >{{ timeseriesError }}</div>
     <div v-else-if="panel.kind === 'timeseries' && result" class="p-2">
-      <TimeSeriesChart :rows="result.rows" :types="result.types" />
+      <div v-if="result.rows.length === 0" class="py-12 text-center text-sm text-text-muted">
+        No points in this time range.
+      </div>
+      <ResultChart
+        v-else
+        :rows="result.rows"
+        :kinds="timeseriesKinds"
+        x="t"
+        y="value"
+        series="series"
+        mark="line"
+      />
     </div>
     <div v-else-if="panel.kind === 'stat' && result" class="p-5">
       <div v-if="stats.length" class="grid grid-cols-2 gap-4">

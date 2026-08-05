@@ -26,23 +26,15 @@ pub const ROW_GROUP_SIZE: usize = 16_384;
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
-/// Encoding contract: row-group 16384, zstd level 1 (not the library default 3),
-/// and a bloom filter for `bloom_column` alone. Centralizing it keeps L0 and
-/// compacted segments using one consistent on-disk layout.
+/// Sets row-group [`ROW_GROUP_SIZE`], zstd level 1 (not the library default 3),
+/// and bloom filters: `Some(col)` writes one for exactly that column, `None`
+/// writes none. Centralizing this keeps L0 and compacted segments on one
+/// consistent on-disk layout.
 ///
-/// `bloom_column` is the key column for L0 and `None` for compacted output,
-/// because that is where a bloom filter can still change an answer's cost. L0 is
+/// Callers pass the key column for L0 and `None` for compacted output. L0 is
 /// written unsorted, so its key statistics span the namespace and a bloom is the
-/// only thing that prunes an EXACT-key `FetchLogs`. L1+ is sorted by
-/// `(key, seq)`, so min/max statistics already prune the key band, and a bloom on
-/// any other column answers "maybe" for nearly every row group because the data
-/// is not clustered by it.
-///
-/// Writing them for every column measured 15% of each segment's bytes
-/// (331 MB -> 281 MB over a sample of production `telemetry_v1` segments) and
-/// pruned zero of 86,920 candidate row groups on the `telemetry_v1` query that
-/// motivated this. Since the local query window is volume-bounded, those bytes
-/// are retained history given up for pruning that did not happen.
+/// only thing that prunes an exact-key lookup; L1+ is sorted by `(key, seq)`, so
+/// min/max statistics already prune the key band.
 pub fn segment_writer_properties(
     bloom_column: Option<&str>,
 ) -> Result<WriterProperties, StatsError> {

@@ -18,7 +18,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ close: [] }>()
 
-const copied = ref(false)
+const copyState = ref<'idle' | 'copied' | 'failed'>('idle')
 const activeColumn = ref(props.column)
 
 watch(() => props.column, (next) => { activeColumn.value = next })
@@ -47,13 +47,22 @@ const annotation = computed(() => {
 
 const otherColumns = computed(() => Object.keys(props.row).filter((c) => c !== activeColumn.value))
 
+/**
+ * A clipboard write can be refused — an insecure origin, or a denied permission —
+ * and the refusal is the only thing that tells the reader the value is not on
+ * their clipboard, so it reaches the button rather than the console.
+ */
 async function copy() {
   try {
     await navigator.clipboard.writeText(text.value)
-    copied.value = true
-    setTimeout(() => { copied.value = false }, 1400)
-  } catch {}
+    copyState.value = 'copied'
+  } catch {
+    copyState.value = 'failed'
+  }
+  setTimeout(() => { copyState.value = 'idle' }, 1400)
 }
+
+const copyLabel = computed(() => ({ idle: 'Copy', copied: 'Copied', failed: 'Copy failed' })[copyState.value])
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
@@ -75,8 +84,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
         <div class="ml-auto flex items-center gap-2">
           <button
             class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised"
+            :class="copyState === 'failed' && 'text-status-danger border-status-danger-border'"
             @click="copy"
-          >{{ copied ? 'Copied' : 'Copy' }}</button>
+          >{{ copyLabel }}</button>
           <button
             class="text-xs px-2 py-1 rounded border border-surface-border hover:bg-surface-raised"
             aria-label="Close"

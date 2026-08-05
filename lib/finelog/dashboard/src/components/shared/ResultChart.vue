@@ -9,10 +9,9 @@
  */
 import { computed, ref } from 'vue'
 import type { ColumnKind } from '@/utils/columnKind'
+import { MAX_SERIES, type ChartMark } from '@/utils/chart'
 import { formatAxisTime, formatMetric, formatTimestampMs } from '@/utils/formatting'
 import { timeZoneMode } from '@/composables/useDisplayPrefs'
-
-export type ChartMark = 'line' | 'bar' | 'scatter'
 
 const props = defineProps<{
   rows: Record<string, unknown>[]
@@ -27,8 +26,6 @@ const WIDTH = 960
 const HEIGHT = 320
 const PAD = { left: 68, right: 16, top: 16, bottom: 40 }
 const SERIES_COLORS = Array.from({ length: 8 }, (_, i) => `var(--c-series-${i + 1})`)
-/** Above this, a legend stops being readable and the colours stop being distinct. */
-const MAX_SERIES = 12
 
 interface Point {
   xv: number

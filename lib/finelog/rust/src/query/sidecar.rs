@@ -242,7 +242,9 @@ fn header_heap_bytes(header: &SidecarHeader) -> usize {
 
 /// Read and parse a sidecar header with a single bounded `pread`, re-reading
 /// only if a (pathological) directory exceeds [`HEADER_PREFIX_BYTES`].
-fn read_header(path: &Path) -> Option<SidecarHeader> {
+///
+/// `None` when the file is missing, unreadable, or not a parseable sidecar.
+pub(crate) fn read_header(path: &Path) -> Option<SidecarHeader> {
     let file = std::fs::File::open(path).ok()?;
     let file_len = file.metadata().ok()?.len() as usize;
     let prefix_len = file_len.min(HEADER_PREFIX_BYTES);
@@ -280,9 +282,10 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     use super::*;
-    use crate::store::trigram::{
-        serialize_sidecar, sidecar_path, write_sidecar, TrigramIndex, INDEXED_COLUMN,
-    };
+    use crate::store::trigram::{serialize_sidecar, sidecar_path, write_sidecar, TrigramIndex};
+
+    /// The trigram-indexed column every fixture in this module writes.
+    const FIXTURE_COLUMN: &str = "data";
 
     fn tempdir(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -335,10 +338,10 @@ mod tests {
         let header = mgr.get_header(&sc).expect("header");
         assert_eq!(header.rg_count, 1);
         assert_eq!(header.key_min.as_deref(), Some(b"/m/a".as_slice()));
-        assert!(header.column(INDEXED_COLUMN).is_some());
+        assert!(header.column(FIXTURE_COLUMN).is_some());
 
         let col = mgr
-            .get_column(&sc, &header, INDEXED_COLUMN)
+            .get_column(&sc, &header, FIXTURE_COLUMN)
             .expect("column");
         assert_eq!(col.len(), 1);
         assert_eq!(
@@ -358,11 +361,11 @@ mod tests {
         let mgr = SidecarManager::with_budget_bytes(64 * 1024 * 1024);
 
         let h1 = mgr.get_header(&sc).unwrap();
-        let c1 = mgr.get_column(&sc, &h1, INDEXED_COLUMN).unwrap();
+        let c1 = mgr.get_column(&sc, &h1, FIXTURE_COLUMN).unwrap();
         // Deleting the file proves the second round is served from cache (no I/O).
         std::fs::remove_file(&sc).unwrap();
         let h2 = mgr.get_header(&sc).unwrap();
-        let c2 = mgr.get_column(&sc, &h2, INDEXED_COLUMN).unwrap();
+        let c2 = mgr.get_column(&sc, &h2, FIXTURE_COLUMN).unwrap();
         assert!(Arc::ptr_eq(&h1, &h2), "header must be the same cached Arc");
         assert!(Arc::ptr_eq(&c1, &c2), "column must be the same cached Arc");
 
@@ -425,7 +428,7 @@ mod tests {
         let probe = SidecarManager::with_budget_bytes(usize::MAX);
         let h0 = probe.get_header(&sidecars[0]).unwrap();
         let one = probe
-            .get_column(&sidecars[0], &h0, INDEXED_COLUMN)
+            .get_column(&sidecars[0], &h0, FIXTURE_COLUMN)
             .unwrap()
             .heap_bytes();
 
@@ -433,7 +436,7 @@ mod tests {
         let mut headers = Vec::new();
         for sc in &sidecars {
             let h = mgr.get_header(sc).unwrap();
-            mgr.get_column(sc, &h, INDEXED_COLUMN).unwrap();
+            mgr.get_column(sc, &h, FIXTURE_COLUMN).unwrap();
             headers.push(h);
         }
         // The budget cannot hold all three column payloads at once.
@@ -479,7 +482,7 @@ mod tests {
         let mgr = SidecarManager::with_budget_bytes(256 * 1024 * 1024);
         let header = mgr.get_header(&sc).expect("header from exact re-read");
         assert_eq!(header.key_min.as_deref(), Some(big_key.as_bytes()));
-        assert!(mgr.get_column(&sc, &header, INDEXED_COLUMN).is_some());
+        assert!(mgr.get_column(&sc, &header, FIXTURE_COLUMN).is_some());
         assert!(mgr.entry_count() >= 1);
         std::fs::remove_dir_all(&dir).ok();
     }

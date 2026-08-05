@@ -5,19 +5,17 @@ import { statsRpcCall } from '@/composables/useRpc'
 import { timeZoneMode } from '@/composables/useDisplayPrefs'
 import { decodeArrowIpc, type ArrowResult } from '@/utils/arrow'
 import { classifyColumns, type ColumnKind } from '@/utils/columnKind'
+import { MAX_SERIES, type ChartMark } from '@/utils/chart'
 import { formatMetric, formatTimestampMs } from '@/utils/formatting'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 import CellDetailPanel from '@/components/shared/CellDetailPanel.vue'
-import ResultChart, { type ChartMark } from '@/components/shared/ResultChart.vue'
+import ResultChart from '@/components/shared/ResultChart.vue'
 
 interface QueryResponse {
   arrowIpc?: string
   rowCount?: string | number
 }
-
-/** Above this many distinct values a column stops being a useful series split. */
-const MAX_SERIES_CARDINALITY = 12
 
 const route = useRoute()
 const sql = ref<string>(typeof route.query.sql === 'string' ? route.query.sql : 'SELECT 1')
@@ -47,7 +45,7 @@ const seriesCandidates = computed(() =>
   result.value.columns.filter((c) => {
     if (kinds.value[c] !== 'text') return false
     const distinct = new Set(result.value.rows.map((r) => String(r[c] ?? '')))
-    return distinct.size > 1 && distinct.size <= MAX_SERIES_CARDINALITY
+    return distinct.size > 1 && distinct.size <= MAX_SERIES
   }),
 )
 

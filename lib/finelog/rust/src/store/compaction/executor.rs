@@ -355,14 +355,11 @@ pub fn read_segment_batches(path: &Path) -> Result<Vec<RecordBatch>, StatsError>
     read_segment_projected(path, None)
 }
 
-/// Read `path`, keeping only `columns` when given.
+/// Read `path`, keeping only the columns named in `columns`; `None` reads every
+/// column.
 ///
-/// A projected read is what makes sidecar backfill affordable: the index needs
-/// the indexed columns and the key, which on a telemetry segment is a few
-/// percent of the bytes, while a full read materializes every column of the
-/// segment — including the `value` and `attributes_json` columns that dominate
-/// it — as uncompressed Arrow. Row order and count are unchanged, so the
-/// row-group stride the index chunks on still lines up.
+/// Rows come back in the file's order, both within a batch and across batches,
+/// and every row is returned — projection drops columns, never rows.
 ///
 /// A name in `columns` that the file does not have is skipped rather than
 /// erroring; the caller is asking for a subset, not asserting a schema.
@@ -395,13 +392,8 @@ pub fn read_segment_projected(
     Ok(out)
 }
 
-/// Write `batches` to `path` via `ArrowWriter` (rg=16384, zstd-1, no bloom —
-/// the shared `segment_writer_properties`).
-///
-/// Compacted output carries no bloom filter: these rows are sorted by
-/// `(key, seq)`, so the key band is already pruned by min/max statistics, and no
-/// other column is clustered well enough for a bloom to answer anything but
-/// "maybe". See `segment_writer_properties`.
+/// Write `batches` to `path` via `ArrowWriter`, using the shared
+/// `segment_writer_properties` with no bloom column.
 fn write_merged_segment(
     path: &Path,
     schema: &SchemaRef,

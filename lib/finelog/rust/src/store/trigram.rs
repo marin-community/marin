@@ -71,12 +71,6 @@ const TGM_VERSION: u8 = 1;
 /// needles index nothing and must fall back to a scan.
 pub const MIN_TRIGRAM_LEN: usize = 3;
 
-/// The `log` namespace's indexed column, used by tests to name the column their
-/// fixtures index. Which columns a namespace actually indexes comes from its
-/// schema (`ColumnIndex::trigram`), not from here — the writer, the sidecar
-/// format, and the prune path are all multi-column.
-pub const INDEXED_COLUMN: &str = "data";
-
 /// Target Bloom false-positive rate per row group. A false positive only keeps a
 /// row group that doesn't match (a wasted decode the scan filters out); it never
 /// drops a match. 1% trades a small over-scan for a ~2x smaller sidecar than an
