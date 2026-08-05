@@ -17,7 +17,6 @@ from experiments.datakit.embeddings.harrier.pipeline import (
     EMBEDDING_ATTR_DATA_VERSION,
     HARRIER_REPO,
     HARRIER_REVISION,
-    HARRIER_TARGET_CLUSTER,
     embed_source,
 )
 from experiments.datakit.reference_pipeline import select_sources
@@ -29,7 +28,6 @@ COORDINATOR_RESOURCES = ResourceConfig(
     cpu=2,
     ram="8g",
     disk="8g",
-    target_cluster=HARRIER_TARGET_CLUSTER,
 )
 
 
