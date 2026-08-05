@@ -98,7 +98,7 @@ class SamplesResponse(BaseModel):
 
 
 class ArtifactResponse(BaseModel):
-    """One sample-referenced artifact (trajectory/exchange) resolved to text for the browser.
+    """One sample-referenced artifact (the trajectory) resolved to text for the browser.
 
     ``available`` is False -- with a human-readable ``reason`` -- for every non-happy path (the run
     has no results directory, the reference is missing/unreadable, or it exceeds the size cap),

@@ -20,7 +20,6 @@ from collections import defaultdict
 from collections.abc import Sequence
 
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 from pyarrow.fs import FSSpecHandler, PyFileSystem
@@ -183,7 +182,9 @@ class CompositeReader:
         """The highest ``_seq`` any shard of ``table`` has persisted, or ``-1`` if it has none.
 
         A resuming writer starts its sequence counter one above this, so a row it appends now outranks
-        every row a prior session left behind. Reads only the ``_seq`` column of each shard footer.
+        every row a prior session left behind. Reads only each shard's Parquet footer -- the
+        per-row-group ``_seq`` max statistic -- never the column data, so a resume is cheap however
+        large the archive.
         """
         fs, _ = factory.url_to_fs(self.root)
         shards = self._list_shards(fs, table)
@@ -192,9 +193,14 @@ class CompositeReader:
         pa_fs = PyFileSystem(FSSpecHandler(fs))
         highest = -1
         for shard in shards:
-            column = pq.read_table(shard.path, columns=[SEQ_COLUMN], filesystem=pa_fs).column(SEQ_COLUMN)
-            if len(column):
-                highest = max(highest, pc.max(column).as_py())
+            metadata = pq.read_metadata(shard.path, filesystem=pa_fs)
+            if SEQ_COLUMN not in metadata.schema.names:
+                continue
+            column = metadata.schema.names.index(SEQ_COLUMN)
+            for group in range(metadata.num_row_groups):
+                stats = metadata.row_group(group).column(column).statistics
+                if stats is not None and stats.has_min_max:
+                    highest = max(highest, stats.max)
         return highest
 
     def keys(self, table: str) -> set[tuple]:

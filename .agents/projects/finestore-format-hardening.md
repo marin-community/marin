@@ -63,6 +63,19 @@ harbor `[s3]` memory-fs monkeypatch (which patches `rigging.filesystem.factory.u
 time (matches shard_writer's StoragePath/atomic_rename pattern). Locked by a finestore-level test that
 routes `s3://` to an in-memory store and round-trips write+seal+scan.
 
+## Flush + row-group calibration (borrowed from finelog)
+Maintainer steer: cap RAM to a reasonable amount + get decent row-group pruning; skip finelog's
+1-flush/sec floor (eval write volume does not need it).
+- Buffer flush trigger: `min(5s time ceiling, 100 MiB byte cap)`. Replaced the 20k-ROW cap with
+  `DEFAULT_MAX_BUFFER_BYTES` (finelog's SEGMENT_TARGET_BYTES) — rows are a bad memory proxy once one
+  row is a multi-MB blob. Cheap per-append `_estimate_bytes` (payload/text by length, recurse
+  containers, flat scalar). This alone collapses the RL 1.3M-tiny-blob path to ~3 shards (per 100 MB).
+- Row groups capped at `ROW_GROUP_ROWS = 16_384` (finelog's ROW_GROUP_SIZE) at BOTH L0 flush (via
+  `write_table(row_group_size=)`) and compaction batch, so a big flush still prunes by row group.
+- `max_seq` (resume) now reads footer `_seq` max stats only, never the column — finelog-style footer
+  recovery; cheap however large the archive.
+- NOT done: min-flush-interval floor, bloom filters (L0 point-lookup speed) — deferred as unneeded.
+
 ## Status: DONE. schema.py + finestore core (blobs/dedup/resume/seal/keys) + marin pinning +
 ## evaldash map reads all implemented and tested (finestore 29 + evaluation 91 green). Next: lint,
 ## commit, push to #7976, monitor CI. evaldash pulumi up still handed off to an authorized operator.

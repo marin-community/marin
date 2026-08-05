@@ -30,9 +30,9 @@ per-sample browser, and group siblings), and status (per-prefix ingest probes).
 The per-sample browser shows how each prediction was graded (the grader method, headline metric,
 score, and verbatim grader detail) and highlights the picked-versus-gold answer. Agentic (Harbor)
 samples reference a step trajectory by URI; the browser lazy-loads it through the artifact endpoint
-and renders the agent's turns, tool calls, observations, and reward. A sample's unbounded payloads
-(the trajectory, a prediction's raw exchange) live as sibling artifact files, so paging the light
-columns never materializes them.
+and renders the agent's turns, tool calls, observations, and reward. A sample's one unbounded
+payload, the trajectory, lives as an archive blob referenced by URI, so paging the light columns
+never materializes it.
 
 IAP is the only access gate; there is no application auth.
 
@@ -47,7 +47,7 @@ GET  /api/runs/{run_id}/jobs           live iris job + per-task attempt status f
 GET  /api/runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for one role
 GET  /api/runs/{run_id}/samples/tasks  tasks with exported per-sample parquets
 GET  /api/runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
-GET  /api/runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (trajectory/exchange) as text
+GET  /api/runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /api/runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /api/runs/{run_id}/group          sibling runs sharing the run's group_id
 GET  /api/models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)

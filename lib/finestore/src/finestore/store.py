@@ -5,7 +5,7 @@
 
 A store is one archive rooted at a URL prefix, written by one ``writer_id``. Appends buffer in
 memory; a background thread flushes each table's buffer to an immutable Parquet shard on a time
-ceiling (or when the buffer grows past a row cap). :meth:`DataStore.flush` and
+ceiling (or when the buffer's payload grows past a byte cap). :meth:`DataStore.flush` and
 :meth:`DataStore.close` block until every buffered row is durable, which is the "writes block until
 persisted" guarantee. Concurrent writers of the same run each use a distinct ``writer_id`` and write
 under their own key prefix, so they never coordinate; the reader composes and deduplicates them.
@@ -43,9 +43,12 @@ logger = logging.getLogger(__name__)
 # Flush on a time ceiling by default: eval writes are latency-sensitive and modestly sized, so a
 # small interval keeps shards fresh without a manifest commit per flush.
 DEFAULT_FLUSH_INTERVAL = 5.0
-# A safety cap so a burst of appends between ticks cannot grow the buffer without bound; a table
-# that crosses it is flushed immediately rather than waiting for the next tick.
-DEFAULT_MAX_BUFFER_ROWS = 20_000
+# Flush early when a table's buffered payload crosses this, so memory (and a single shard's size)
+# stays bounded regardless of row count. Bytes, not rows: one row can be a multi-MB trajectory blob
+# and another a small sample, so a row count is a poor proxy for the RAM a buffer holds. This is the
+# only backstop against an unbounded buffer -- finelog additionally floors the flush rate at one
+# per second, which eval's write volume does not need.
+DEFAULT_MAX_BUFFER_BYTES = 100 * 1024 * 1024
 
 
 def _default_writer_id() -> str:
@@ -80,6 +83,23 @@ def _drop_empty_struct_keys(rows: list[dict]) -> list[dict]:
     if not drop:
         return rows
     return [{k: v for k, v in row.items() if k not in drop} for row in rows]
+
+
+def _estimate_bytes(value: object) -> int:
+    """A cheap estimate of a value's in-RAM payload size, summed over a row to bound the write buffer.
+
+    Counts the sizes that vary by orders of magnitude -- byte and text payloads by length, containers
+    by recursion -- and charges a flat width for scalars, ignoring per-object overhead. It only has to
+    be good enough to keep a buffer's memory near a target, which a row count cannot do once one row is
+    a multi-MB blob and the next a small sample.
+    """
+    if isinstance(value, (bytes, str)):
+        return len(value)
+    if isinstance(value, dict):
+        return sum(len(str(key)) + _estimate_bytes(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return sum(_estimate_bytes(item) for item in value)
+    return 8
 
 
 def _with_stamp_columns(schema: pa.Schema) -> pa.Schema:
@@ -117,13 +137,13 @@ class DataStore:
         *,
         writer_id: str | None = None,
         flush_interval: float = DEFAULT_FLUSH_INTERVAL,
-        max_buffer_rows: int = DEFAULT_MAX_BUFFER_ROWS,
+        max_buffer_bytes: int = DEFAULT_MAX_BUFFER_BYTES,
     ) -> None:
         self.root = root.rstrip("/")
         self._layout = FineStoreLayout(self.root)
         self.writer_id = writer_id or _default_writer_id()
         self._flush_interval = flush_interval
-        self._max_buffer_rows = max_buffer_rows
+        self._max_buffer_bytes = max_buffer_bytes
         self._tables: dict[str, DataTable] = {}
         self._register_lock = threading.Lock()
         self._wake = threading.Event()
@@ -172,7 +192,7 @@ class DataStore:
                 name,
                 writer_id=self.writer_id,
                 layout=self._layout,
-                max_buffer_rows=self._max_buffer_rows,
+                max_buffer_bytes=self._max_buffer_bytes,
                 scheduler=self,
                 merge_key=key,
                 schema=schema,
@@ -262,7 +282,7 @@ class DataStore:
     # -- FlushScheduler (the seam DataTable talks to) ----------------------------------------------
 
     def request_flush(self) -> None:
-        """Wake the background flusher early because a table crossed its row cap."""
+        """Wake the background flusher early because a table's buffer crossed its byte cap."""
         self._wake.set()
 
     def raise_if_failed(self) -> None:
@@ -284,7 +304,7 @@ class DataTable:
         *,
         writer_id: str,
         layout: FineStoreLayout,
-        max_buffer_rows: int,
+        max_buffer_bytes: int,
         scheduler: FlushScheduler,
         merge_key: tuple[str, ...] | None,
         schema: pa.Schema | None,
@@ -296,10 +316,11 @@ class DataTable:
         self.schema_version = schema_version
         self._writer_id = writer_id
         self._layout = layout
-        self._max_buffer_rows = max_buffer_rows
+        self._max_buffer_bytes = max_buffer_bytes
         self._scheduler = scheduler
         self._schema = _with_stamp_columns(schema) if schema is not None else None
         self._pending: list[dict] = []
+        self._pending_bytes = 0
         self._next_seq = start_seq
         self._lock = threading.Lock()
 
@@ -319,7 +340,8 @@ class DataTable:
                 stamped[WRITER_COLUMN] = self._writer_id
                 self._next_seq += 1
                 self._pending.append(stamped)
-            over_cap = len(self._pending) >= self._max_buffer_rows
+                self._pending_bytes += _estimate_bytes(row)
+            over_cap = self._pending_bytes >= self._max_buffer_bytes
         if over_cap:
             self._scheduler.request_flush()
 
@@ -336,6 +358,7 @@ class DataTable:
                 return
             rows = self._pending
             self._pending = []
+            self._pending_bytes = 0
         table = pa.Table.from_pylist(_drop_empty_struct_keys(rows), schema=self._schema)
         min_seq = min(row[SEQ_COLUMN] for row in rows)
         path = self._layout.shard_path(self.name, self._writer_id, 0, min_seq, uuid.uuid4().hex[:8])

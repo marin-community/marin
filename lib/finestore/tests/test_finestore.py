@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
-from finestore import compaction
+from finestore import compaction, shard_writer
 from finestore.compaction import compact
 from finestore.layout import FORMAT_VERSION, ArchiveMetadata, FineStoreLayout, SealMarker, TableMetadata
 from finestore.reader import CompositeReader
-from finestore.store import DataStore
+from finestore.store import DataStore, DataTable
 from fsspec.implementations.memory import MemoryFileSystem
 from rigging.filesystem import StoragePath
 
@@ -112,6 +113,52 @@ def test_keys_lists_deduped_merge_keys(tmp_path):
     reader = CompositeReader(root)
     assert reader.keys("samples") == {("arc", "1"), ("arc", "2")}
     assert reader.keys("does-not-exist") == set()
+
+
+def test_byte_cap_requests_an_early_flush(tmp_path):
+    # The buffer flushes early when its estimated payload crosses the byte cap, whatever the row count:
+    # one large blob trips a small cap that a same-count batch of tiny rows would not. DataTable drives
+    # a flush through a narrow scheduler protocol, so a fake one records exactly when the cap fires.
+    class RecordingScheduler:
+        def __init__(self):
+            self.flushes = 0
+
+        def request_flush(self):
+            self.flushes += 1
+
+        def raise_if_failed(self):
+            pass
+
+    scheduler = RecordingScheduler()
+    table = DataTable(
+        "blobs",
+        writer_id="w1",
+        layout=FineStoreLayout(str(tmp_path / "run")),
+        max_buffer_bytes=1024,
+        scheduler=scheduler,
+        merge_key=("name",),
+        schema=None,
+        schema_version=1,
+    )
+    table.append({"name": "a", "data": b"x" * 100})  # 100 bytes: under the 1 KiB cap
+    assert scheduler.flushes == 0
+    table.append({"name": "b", "data": b"y" * 2000})  # one row crosses the cap on its own
+    assert scheduler.flushes == 1
+
+
+def test_large_flush_splits_into_prunable_row_groups(tmp_path, monkeypatch):
+    # A flush larger than the row-group cap writes several row groups, not one, so a reader can prune
+    # to the groups a filter needs. Shrink the cap so a handful of rows spans several groups.
+    monkeypatch.setattr(shard_writer, "ROW_GROUP_ROWS", 2)
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1", flush_interval=3600) as store:
+        table = store.table("samples", merge_key=("task", "doc_id"))
+        table.extend([{"task": "arc", "doc_id": f"{i:03d}"} for i in range(7)])
+        store.flush()
+    shard = CompositeReader(root).list_shards("samples")[0].path
+    metadata = pq.ParquetFile(shard).metadata
+    assert metadata.num_rows == 7
+    assert metadata.num_row_groups == 4  # ceil(7 / 2)
 
 
 def test_schema_evolution_null_promotes_missing_column(tmp_path):

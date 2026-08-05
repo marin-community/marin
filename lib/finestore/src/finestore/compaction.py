@@ -32,15 +32,17 @@ from rigging.filesystem import factory
 
 from finestore.layout import SEQ_COLUMN, FineStoreLayout, Shard
 from finestore.reader import CompositeReader
-from finestore.shard_writer import ShardWriter
+from finestore.shard_writer import ROW_GROUP_ROWS, ShardWriter
 
 logger = logging.getLogger(__name__)
 
 # The writer identity stamped on compacted shards, distinct from any live append writer.
 _COMPACTOR = "compactor"
 
-# Rows per output row group: the merge accumulates this many surviving rows, then flushes one group.
-_COMPACT_BATCH_ROWS = 10_000
+# Surviving rows the merge accumulates before writing one output batch. Matched to the writer's
+# row-group cap so a compacted shard's groups are the same size as a flush's, keeping read pruning
+# uniform; it also bounds the merge's working set independently of the archive's total size.
+_COMPACT_BATCH_ROWS = ROW_GROUP_ROWS
 
 # One item in the merge heap: (merge-key tuple, generation, seq, row dict). The key sorts the merge;
 # seq then generation breaks ties so the latest write of a key wins (same rule the reader applies).

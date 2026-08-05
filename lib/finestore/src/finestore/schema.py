@@ -32,9 +32,9 @@ _SCALARS: dict[type, pa.DataType] = {
 }
 
 
-def arrow_schema(model: type[BaseModel] | type | pa.Schema) -> pa.Schema:
+def arrow_schema(model: type | pa.Schema) -> pa.Schema:
     """Return a pyarrow schema for ``model``: a ``pa.Schema`` unchanged, or one derived from a
-    pydantic model or dataclass."""
+    pydantic model class or a dataclass."""
     if isinstance(model, pa.Schema):
         return model
     return pa.schema([pa.field(name, _arrow_type(annotation)) for name, annotation in _fields(model).items()])

@@ -72,12 +72,18 @@ impose one.
 `scan` lists a table's shards, unifies their footers' schemas (a column a later
 writer added is promoted to null for older shards), reads only the projected
 columns plus whatever the merge key needs, and deduplicates by merge key. For
-each key it keeps the row from the highest compaction generation, breaking ties
-by the highest `_seq`. That single rule makes a duplicate delivery, a retried
+each key it keeps the row with the highest `_seq`, breaking ties by the highest
+compaction generation. Because a writer resumes its `_seq` above every persisted
+row, a later write always outranks an earlier one — nothing can shadow it — and
+the generation only breaks the exact-`_seq` tie a compaction leaves when it
+re-emits a row unchanged. That single rule makes a duplicate delivery, a retried
 flush, and a crash mid-compaction all converge to one row without coordination.
 
 `point` returns the single row matching `key=value` for every key. Predicate
-filters support `==`, `!=`, and `in`, pushed into the Parquet scan.
+filters support `==`, `!=`, and `in`, pushed into the Parquet scan, where the
+row-group footer statistics prune to the groups that can match — a `point`
+lookup on a compacted (merge-key-sorted) shard reads one row group, not the
+whole table.
 
 Because schema unification is null-permissive, a reader that opened the archive
 without opening the writer — for example the dashboard — reads a run written by
@@ -88,12 +94,14 @@ the row model's defaults fill them in.
 
 Appends are non-blocking and buffer in memory. The background thread flushes
 each table on a time ceiling (`DEFAULT_FLUSH_INTERVAL`, 5s) so shards stay
-fresh, and immediately if a buffer crosses a row cap (`DEFAULT_MAX_BUFFER_ROWS`)
-so a burst cannot grow it without bound. `table.flush()` persists one table;
-`store.flush()` persists all of them; `flush` and `close` block until every
-buffered row is a durable object — the "writes block until persisted" guarantee.
-Each flush writes to a temporary key and atomically renames it into place, so a
-partial object is never visible.
+fresh, and immediately once a buffer's estimated payload crosses a byte cap
+(`DEFAULT_MAX_BUFFER_BYTES`, 100 MiB) so memory stays bounded whether a table
+holds many small samples or a few large blobs. `table.flush()` persists one
+table; `store.flush()` persists all of them; `flush` and `close` block until
+every buffered row is a durable object — the "writes block until persisted"
+guarantee. A flush splits its rows into row groups of at most `ROW_GROUP_ROWS`
+(16384) so a later filtered read prunes by row group, writes to a temporary key,
+and atomically renames it into place, so a partial object is never visible.
 
 Concurrent writers of one run (for example RL rollout workers) each open a
 `DataStore` with a distinct `writer_id`. They write under their own key prefix
