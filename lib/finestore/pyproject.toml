@@ -16,6 +16,8 @@ dependencies = [
 test = [
     "pytest>=8.3.2",
     "pytest-timeout",
+    # unified-unit runs pytest with `-n auto --dist=worksteal`, so the test env needs xdist.
+    "pytest-xdist",
 ]
 dev = [{ include-group = "test" }]
 
