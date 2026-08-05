@@ -87,12 +87,12 @@ function accept(choice: Completion) {
   if (!el) return
   const caret = el.selectionStart
   const { start } = tokenAt(props.modelValue, caret)
-  const next = props.modelValue.slice(0, start) + choice.value + props.modelValue.slice(caret)
+  const next = props.modelValue.slice(0, start) + choice.insert + props.modelValue.slice(caret)
   emit('update:modelValue', next)
   suggestions.value = []
   void nextTick(() => {
     el.focus()
-    const at = start + choice.value.length
+    const at = start + choice.insert.length
     el.setSelectionRange(at, at)
   })
 }

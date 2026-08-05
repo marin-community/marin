@@ -11,10 +11,35 @@
 export type CompletionKind = 'namespace' | 'column' | 'keyword'
 
 export interface Completion {
+  /** What the identifier is called; what the list shows. */
   value: string
+  /** What accepting it inserts — `value`, quoted when bare SQL would not parse. */
+  insert: string
   kind: CompletionKind
   /** Where the value comes from: a column's namespace, or a keyword's group. */
   detail: string
+}
+
+/**
+ * Identifiers the SQL dialect would otherwise swallow, and so must be inserted
+ * quoted.
+ *
+ * `cluster` is a column of both `telemetry_v1` and `log` and the one most worth
+ * grouping by, but `CLUSTER BY` is dialect syntax, so `SELECT name, cluster FROM
+ * …` is a parse error while `SELECT cluster, name FROM …` is fine. It is the
+ * only collision across the 124 distinct column names registered on the marin
+ * hub, so this is a list rather than the dialect's whole keyword set.
+ */
+const NEEDS_QUOTING = new Set(['cluster'])
+
+/**
+ * `name` as it must be written in SQL: bare where that parses, quoted where it
+ * would not. A namespace containing a dot (`iris.task`) always needs quoting —
+ * bare, it reads as schema-qualified and resolves to nothing.
+ */
+export function quoteIdentifier(name: string): string {
+  const bare = !name.includes('.') && !NEEDS_QUOTING.has(name.toLowerCase())
+  return bare ? name : `"${name}"`
 }
 
 /** A namespace and the columns it exposes, as the completer needs them. */
@@ -99,6 +124,7 @@ export function completionsFor(
   const { text, start } = tokenAt(sql, caret)
   const namespaces: Completion[] = schema.map((n) => ({
     value: n.namespace,
+    insert: quoteIdentifier(n.namespace),
     kind: 'namespace',
     detail: `${n.columns.length} columns`,
   }))
@@ -127,14 +153,19 @@ export function completionsFor(
   const trailing: Completion[] = []
   for (const [name, { type, namespaces: holders, relevant }] of byName) {
     const where = holders.length === 1 ? holders[0] : `${holders.length} namespaces`
-    ;(relevant ? columns : trailing).push({ value: name, kind: 'column', detail: `${where} · ${type}` })
+    ;(relevant ? columns : trailing).push({
+      value: name,
+      insert: quoteIdentifier(name),
+      kind: 'column',
+      detail: `${where} · ${type}`,
+    })
   }
   const vocabulary: Completion[] = [
     ...columns,
     ...trailing,
-    ...FUNCTIONS.map((f): Completion => ({ value: f, kind: 'keyword', detail: 'function' })),
+    ...FUNCTIONS.map((f): Completion => ({ value: f, insert: f, kind: 'keyword', detail: 'function' })),
     ...namespaces,
-    ...KEYWORDS.map((k): Completion => ({ value: k, kind: 'keyword', detail: 'keyword' })),
+    ...KEYWORDS.map((k): Completion => ({ value: k, insert: k, kind: 'keyword', detail: 'keyword' })),
   ]
   return rank(vocabulary, text).slice(0, limit)
 }

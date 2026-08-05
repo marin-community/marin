@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { completionsFor, tokenAt } from './sqlComplete.ts'
+import { completionsFor, quoteIdentifier, tokenAt } from './sqlComplete.ts'
 
 const schema = [
+  {
+    namespace: 'iris.task',
+    columns: [{ name: 'status', type: 'string' }],
+  },
   {
     namespace: 'telemetry_v1',
     columns: [
@@ -61,4 +65,22 @@ test('ranks columns of the namespaces the statement already names', () => {
 test('falls back to substring matches when nothing starts with the token', () => {
   const found = completionsFor('SELECT stamp', 12, schema)
   assert.equal(found[0].value, 'timestamp_ms')
+})
+
+test('inserts identifiers the dialect would swallow in quoted form', () => {
+  // `CLUSTER BY` is dialect syntax, so a bare `cluster` ends the select list.
+  assert.equal(quoteIdentifier('cluster'), '"cluster"')
+  // A dotted namespace reads as schema-qualified unless quoted.
+  assert.equal(quoteIdentifier('iris.task'), '"iris.task"')
+  assert.equal(quoteIdentifier('name'), 'name')
+})
+
+test('completion inserts the quoted form while listing the plain name', () => {
+  const [cluster] = completionsFor('SELECT name, clus', 17, schema)
+  assert.equal(cluster.value, 'cluster')
+  assert.equal(cluster.insert, '"cluster"')
+
+  const [ns] = completionsFor('SELECT * FROM iris', 18, schema)
+  assert.equal(ns.value, 'iris.task')
+  assert.equal(ns.insert, '"iris.task"')
 })
