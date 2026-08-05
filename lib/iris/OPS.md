@@ -263,6 +263,17 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 
 GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
 
+GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every two minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
+
+For a read-only one-shot check, first confirm the target task is `RUNNING`; a `BUILDING` task has no NCCL listener. Query from the task's own container and network namespace:
+
+```bash
+iris --cluster=<cluster> task exec <task-id> --timeout 15 -- \
+  python -m rigging.telemetry.probes.nccl_client --timeout 8
+```
+
+The command sends one status request, does not retry or write inside the task, and limits both socket time and response size. Exit code 3 means the task-local listener was unavailable. Do not restart, signal, or otherwise modify the task to make this check succeed.
+
 ## Scheduler & Autoscaler
 
 ```bash
@@ -625,9 +636,72 @@ State dir: `gs://marin-us-central2/iris/<cluster>/state/` — contains `bundles/
 
 ## CoreWeave (GPU) Operations
 
-Always read [`docs/coreweave.md`](docs/coreweave.md) before operating a
-GPU/CoreWeave cluster. Use `lib/iris/config/coreweave-*.yaml` for CoreWeave
-cluster configs.
+[`docs/coreweave.md`](docs/coreweave.md) describes the Kubernetes architecture.
+The named `cw-*` configs in `lib/iris/config/` are the source of truth for each
+cluster's kubeconfig, context, namespace, and accelerator groups.
+
+### Access and read-only status
+
+CoreWeave configs pin a Kubernetes context, so no `kubectl config use-context`
+step is needed. The configured kubeconfig path is used unless `KUBECONFIG` is
+set in the operator shell.
+
+```bash
+CLUSTER=cw-rno2a
+
+uv run iris cluster list
+uv run iris --cluster="$CLUSTER" cluster status                 # controller and port-forward
+uv run iris --cluster="$CLUSTER" rpc controller list-backends  # accelerators, nodes, and availability
+uv run iris --cluster="$CLUSTER" cluster dashboard              # blocks until Ctrl+C
+```
+
+CoreWeave has no Iris worker daemon or Iris autoscaler. Use `list-backends`, not
+the worker count in `cluster status`, for the Kubernetes resource view.
+
+For a pending task, inspect Kueue admission and NodePool provisioning without
+rendering Pod environment values:
+
+```bash
+CW_KUBECONFIG=~/.kube/coreweave-iris
+CW_CONTEXT=<platform.coreweave.kube_context>
+CW_NAMESPACE=<kubernetes_provider.namespace>
+
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" -n "$CW_NAMESPACE" \
+  get pods -l iris.task_id \
+  -o custom-columns='POD:.metadata.name,PHASE:.status.phase,SCHEDULING:.status.conditions[?(@.type=="PodScheduled")].reason,NODE:.spec.nodeName'
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" -n "$CW_NAMESPACE" \
+  get workloads.kueue.x-k8s.io \
+  -o custom-columns='WORKLOAD:.metadata.name,QUOTA:.status.conditions[?(@.type=="QuotaReserved")].status,ADMITTED:.status.conditions[?(@.type=="Admitted")].status,REASON:.status.conditions[?(@.type=="QuotaReserved")].reason'
+kubectl --kubeconfig "$CW_KUBECONFIG" --context "$CW_CONTEXT" \
+  get nodepools.compute.coreweave.com \
+  -o custom-columns='POOL:.metadata.name,CURRENT:.status.currentNodes,QUEUED:.status.queuedNodes,IN_PROGRESS:.status.inProgressNodes,CONDITION:.status.conditions[*].type,STATUS:.status.conditions[*].status,REASON:.status.conditions[*].reason'
+```
+
+`SchedulingGated` means Kueue still holds the Pod. `QuotaReserved=True` means
+the Workload has reserved quota; check `Admitted` if the Pod remains gated.
+NodePool conditions show provisioning failures or delays. These projections
+omit Pod environment values; do not use `kubectl describe pod` on task Pods.
+
+If Iris reports that the configured context does not exist, compare the shell
+override and the canonical CoreWeave kubeconfig before changing either config:
+
+```bash
+printf 'KUBECONFIG=%s\n' "${KUBECONFIG:-<unset>}"
+rg -n 'kubeconfig_path|kube_context|namespace' "lib/iris/config/${CLUSTER}.yaml"
+kubectl --kubeconfig ~/.kube/coreweave-iris config get-contexts -o name
+
+env -u KUBECONFIG uv run iris --cluster="$CLUSTER" cluster status
+```
+
+`cluster status`, `list-backends`, `task describe`, `task events`, logs, and
+plain Kubernetes `get` calls are read-only. `kubectl describe pod` does not
+mutate the cluster, but it can print literal environment values; avoid it on
+task Pods. Starting, stopping, or restarting a cluster or controller changes
+shared infrastructure. Run those commands only with explicit user approval;
+use the
+[`deploy-iris-controllers` skill](../../.agents/skills/deploy-iris-controllers/SKILL.md)
+for controller rollouts. Direct Kubernetes changes such as `apply`, `delete`,
+`scale`, `drain`, `cordon`, and `uncordon` also require explicit approval.
 
 ### Public LoadBalancer reachability
 

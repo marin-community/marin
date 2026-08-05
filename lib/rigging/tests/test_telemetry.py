@@ -405,6 +405,37 @@ def test_shutdown_returns_within_budget_when_transport_is_stuck(monkeypatch: pyt
     assert telemetry.runtime_status().configured is False
 
 
+def test_flush_drains_records_without_disabling_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = RecordingTransport()
+    configure(monkeypatch, transport, max_batch_records=1)
+    counter = telemetry.counter("flushed_record")
+
+    counter.add(1)
+    assert telemetry.flush(1.0)
+    assert telemetry.runtime_status().configured
+    counter.add(2)
+    assert telemetry.flush(1.0)
+
+    records = [record for request in transport.requests for record in json.loads(request[1])["records"]]
+    assert [record["value"] for record in records] == [1, 2]
+
+
+def test_flush_timeout_leaves_exporter_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = BlockingTransport()
+    configure(monkeypatch, transport)
+    telemetry.counter("stuck_record").add()
+    assert transport.started.wait(1)
+
+    started = time.monotonic()
+    assert not telemetry.flush(0.03)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.2
+    assert telemetry.runtime_status().configured
+    transport.release.set()
+    assert telemetry.flush(1.0)
+
+
 def test_shutdown_drains_multiple_queued_batches_after_success(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = BlockingTransport()
     configure(monkeypatch, transport, max_batch_records=1)

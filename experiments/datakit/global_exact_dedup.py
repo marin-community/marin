@@ -136,7 +136,7 @@ def _write_shard(file_idx: int, records: Iterator[_ExactRecord]) -> None:
     entry = entries[file_idx]
     duplicate_records = 0
 
-    def duplicate_rows() -> Iterator[dict[str, str | dict[str, bool]]]:
+    def duplicate_rows() -> Iterator[dict[str, str | bool]]:
         nonlocal duplicate_records
         for record in records:
             duplicate_records += 1
@@ -152,6 +152,7 @@ def global_exact_deduplicate(
     output_path: str,
     worker_resources: ResourceConfig,
     max_workers: int,
+    zephyr_context: ZephyrContext | None = None,
 ) -> GlobalExactDedupData:
     """Mark duplicate record IDs across all normalized sources.
 
@@ -162,10 +163,8 @@ def global_exact_deduplicate(
         raise ValueError("Global exact deduplication requires at least one source")
 
     entries, outputs = _build_shard_index(sources, output_path)
-    context = ZephyrContext(
-        name="datakit-global-exact-dedup",
-        resources=worker_resources,
-        max_workers=max_workers,
+    context = zephyr_context or ZephyrContext(
+        name="datakit-global-exact-dedup", resources=worker_resources, max_workers=max_workers
     )
     context.put(_SHARED_ENTRIES_KEY, entries)
     shuffle_shards = min(max_workers, len(entries))
@@ -186,7 +185,10 @@ def global_exact_deduplicate(
             sort_by=lambda record: record["id"],
         )
     )
-    outcome = context.execute(pipeline)
+    outcome = context.execute(
+        pipeline,
+        map_task_resources=worker_resources,
+    )
     write_copartitioned_source_manifest(
         output_path=output_path,
         attr_dirs={source_key: source.attr_dir for source_key, source in outputs.items()},

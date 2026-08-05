@@ -123,8 +123,11 @@ auth:
       -----BEGIN PUBLIC KEY-----
       MCowBQYDK2VwAyEA42ziFTlGKgaA/fQ1wJCONKOml7rx5Y8UAQqVLTCtrCo=
       -----END PUBLIC KEY-----
+  # GitHub GPU workflows submit through the marin hub as github-iris; the
+  # remaining non-openathena identities are interactive or probe principals.
   allowed_submitters:
     - "*@openathena.ai"
+    - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - wg0420@princeton.edu
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
     - infra-probes@hai-gcp-models.iam.gserviceaccount.com
@@ -135,10 +138,8 @@ kubernetes_provider:
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   controller_address: http://iris-controller-svc.iris.svc.cluster.local:10000
   kueue:
-    # Enables Kueue gang admission for multi-host GPU jobs. The ClusterQueue
-    # (cluster-scoped) and ResourceFlavor cw-ib are created out-of-band by
-    # lib/iris/scripts/install_kueue.py --with-queues; Iris reconciles the
-    # namespaced LocalQueue (cw-use08a-lq) bound to it at controller start.
+    # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
+    # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
   # CoreWeave's node health checker runs preemptible (priority -1) GPU
   # verification pods on idle nodes. Kueue TAS counts them as fixed node usage

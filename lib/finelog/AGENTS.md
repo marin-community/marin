@@ -52,13 +52,14 @@ one `jwt` key entry per sender. Each server therefore owns a keypair, distinct
 from the iris controller's signing key.
 
 The forwarder (`rust/src/server/forwarding.rs`) forwards **every table**, not just
-logs. Each poll it lists the live namespaces and, per namespace, reads the rows past
-a durable per-`(target, namespace)` cursor (`forward_state` in the catalog) and ships
-them through the generic `RegisterTable` + `WriteRows` (Arrow IPC) path — a namespace
-the hub lacks is created there first. Rows of a table with a `cluster` column are
-stamped with the origin and skipped if they already carry a foreign one, so a hub's
-own relayed rows never loop. The cursor is durable, so a restart resumes rather than
-replays.
+logs. Each round it lists the live namespaces and gives each one a batch-sized turn,
+then immediately starts another round while any namespace remains backlogged. Per
+namespace, it reads the rows past a durable per-`(target, namespace)` cursor
+(`forward_state` in the catalog) and ships them through the generic `RegisterTable` +
+`WriteRows` (Arrow IPC) path — a namespace the hub lacks is created there first. Rows
+of a table with a `cluster` column are stamped with the origin and skipped if they
+already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
+durable, so a restart resumes rather than replays.
 
 Forwarding is **best-effort by construction**: the sending store holds the record,
 the hub a convenience copy. A namespace that falls more than `MAX_FORWARD_LAG_SEQS`

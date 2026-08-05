@@ -12,10 +12,12 @@ from dataclasses import dataclass
 
 from iris.cluster.config import IrisClusterConfig
 from iris.cluster.platforms.k8s.nodepool_manifests import (
+    CPU_TOPOLOGY_NODE_LABELS,
     compute_target_racks,
     nodepool_name,
     nodepool_node_labels,
 )
+from iris.cluster.types import AcceleratorType
 
 
 @dataclass(frozen=True)
@@ -57,7 +59,16 @@ def derive_nodepools(config: IrisClusterConfig) -> list[NodePoolSpec]:
                 instance_type=coreweave.instance_type,
                 min_nodes=min_nodes,
                 max_nodes=max_nodes,
-                node_labels=nodepool_node_labels(label_prefix, name, min_nodes=min_nodes),
+                node_labels=nodepool_node_labels(
+                    label_prefix,
+                    name,
+                    min_nodes=min_nodes,
+                    topology_node_labels=(
+                        CPU_TOPOLOGY_NODE_LABELS
+                        if scale_group.resources is not None and scale_group.resources.device_type == AcceleratorType.CPU
+                        else ()
+                    ),
+                ),
                 autoscaling=target_racks is None,
                 target_racks=target_racks,
             )

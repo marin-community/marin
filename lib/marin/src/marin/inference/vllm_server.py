@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+import functools
 import logging
 import os
 import shutil
@@ -21,9 +22,10 @@ import requests
 from iris.runtime import telemetry as runtime_telemetry
 from rigging import telemetry
 from rigging.filesystem import marin_prefix
+from rigging.telemetry.metrics import MetricSnapshotPublisher
 from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
-from rigging.telemetry.prometheus import PrometheusForwarder
+from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
 from rigging.timing import Deadline, ExponentialBackoff, retry_with_backoff
 
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
@@ -50,6 +52,7 @@ _LINUX_PROC_ROOT = "/proc"
 _LINUX_DEAD_PROCESS_STATES = frozenset({"X", "Z"})
 _VLLM_METRICS_SERVICE = "vllm"
 _VLLM_METRIC_PREFIX = "vllm:"
+_MAX_VLLM_METRIC_SNAPSHOTS = 1024
 
 
 class _ProcessGroupStatus(StrEnum):
@@ -305,14 +308,14 @@ class VllmServerHandle:
     # Owns the reader threads and on-disk log files.
     log_pump: _LogPump | None = None
     # Polls the server's /metrics into direct process telemetry; None until ready.
-    metrics_forwarder: PrometheusForwarder | None = None
+    metrics_collector: PrometheusCollector | None = None
     # Collects communicator-local NCCL RAS evidence; None until telemetry is configured.
     nccl_probe: PeriodicProbe | None = None
 
     def stop(self, *, timeout_seconds: float = 10) -> None:
         # Stop the metrics poller before the process dies so it does not scrape a dead endpoint.
-        if self.metrics_forwarder is not None:
-            self.metrics_forwarder.stop(timeout=timeout_seconds)
+        if self.metrics_collector is not None:
+            self.metrics_collector.stop(timeout=timeout_seconds)
         if self.nccl_probe is not None:
             self.nccl_probe.shutdown(timeout_seconds)
 
@@ -934,16 +937,20 @@ def _start_vllm_native_server(
     if not telemetry.runtime_status().configured:
         return handle
     metrics_url = f"http://{host}:{resolved_port}/metrics"
-    metrics_forwarder = PrometheusForwarder(
-        metrics_url,
-        metric_prefix=_VLLM_METRIC_PREFIX,
+    metrics_collector = PrometheusCollector(
         metric_source=_VLLM_METRICS_SERVICE,
+        scraper=PrometheusScraper(metrics_url),
+        processor=functools.partial(prefixed_metric_snapshots, metric_prefix=_VLLM_METRIC_PREFIX),
+        publisher=MetricSnapshotPublisher(
+            max_records=_MAX_VLLM_METRIC_SNAPSHOTS,
+            attributes={"metric_source": _VLLM_METRICS_SERVICE},
+        ),
     )
-    metrics_forwarder.start()
+    metrics_collector.start()
     logger.info("Forwarding vLLM metrics from %s to telemetry_v1", metrics_url)
     nccl_probe = nccl.start() if isinstance(launcher, IsolatedCudaVllm) else None
     return dataclasses.replace(
         handle,
-        metrics_forwarder=metrics_forwarder,
+        metrics_collector=metrics_collector,
         nccl_probe=nccl_probe,
     )

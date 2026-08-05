@@ -9,8 +9,6 @@ via submitted jobs, and deferred actor handle resolution.
 """
 
 import logging
-import os
-import sys
 import threading
 import time
 from concurrent.futures import Future
@@ -20,6 +18,7 @@ from typing import Any, cast
 import cloudpickle
 from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
+from iris.actor.resolver import Resolver
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
@@ -305,36 +304,17 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     logger.info(f"Actor {actor_name} shutting down")
     server.stop()
 
-    failed = bool(actor_ctx._errors)
-    if failed:
-        logger.error(
-            "Actor %s recorded %d failure(s); first: %r",
-            actor_name,
-            len(actor_ctx._errors),
-            actor_ctx._errors[0],
-            exc_info=actor_ctx._errors[0],
-        )
-
-    # WORKAROUND for the pyqwest interpreter-shutdown crash: CPython
-    # finalization force-unwinds pyqwest's native (tokio) threads and aborts the
-    # process (SIGABRT/SIGSEGV, exit 134/139). Best-effort drain the in-task
-    # finelog client, then hard-exit via os._exit to skip finalization entirely.
-    # Success/failure is encoded in the exit code since this bypasses the raise.
-    if ctx.client is not None:
-        try:
-            ctx.client.shutdown()
-        except Exception:
-            logger.warning("in-task client shutdown failed (ignored before os._exit)", exc_info=True)
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(1 if failed else 0)
+    if actor_ctx._errors:
+        logger.error("Actor %s recorded %d failure(s); raising the first", actor_name, len(actor_ctx._errors))
+        raise actor_ctx._errors[0]
 
 
 class IrisActorHandle:
-    """Handle to an Iris-hosted actor. Resolves via iris_ctx()."""
+    """Handle to an Iris-hosted actor."""
 
-    def __init__(self, endpoint_name: str):
+    def __init__(self, endpoint_name: str, resolver: Resolver | None = None):
         self._endpoint_name = endpoint_name
+        self._resolver = resolver
         self._client: Any = None  # Lazily resolved ActorClient
         self._resolve_lock = threading.Lock()
 
@@ -344,6 +324,7 @@ class IrisActorHandle:
 
     def __setstate__(self, state: dict) -> None:
         self._endpoint_name = state["endpoint_name"]
+        self._resolver = None
         self._client = None
         self._resolve_lock = threading.Lock()
 
@@ -354,13 +335,16 @@ class IrisActorHandle:
         with self._resolve_lock:
             if self._client is not None:
                 return self._client
-            ctx = get_iris_ctx()
-            if ctx is None:
-                raise RuntimeError(
-                    "IrisActorHandle._resolve() requires IrisContext. "
-                    "Call from within an Iris job or set context via iris_ctx_scope()."
-                )
-            self._client = ActorClient(ctx.resolver, self._endpoint_name)
+            resolver = self._resolver
+            if resolver is None:
+                ctx = get_iris_ctx()
+                if ctx is None:
+                    raise RuntimeError(
+                        "IrisActorHandle._resolve() requires IrisContext. "
+                        "Call from within an Iris job or set context via iris_ctx_scope()."
+                    )
+                resolver = ctx.resolver
+            self._client = ActorClient(resolver, self._endpoint_name)
             return self._client
 
     def __getattr__(self, method_name: str) -> "_IrisActorMethod":
@@ -472,15 +456,17 @@ class _IrisActorMethod:
 class IrisActorGroup:
     """ActorGroup that polls the Iris resolver to discover actors as they start."""
 
-    def __init__(self, name: str, count: int, job_id: Any):
+    def __init__(self, name: str, count: int, job_id: Any, client: IrisClientLib | None = None):
         """Args:
         name: Actor name prefix
         count: Number of actors to discover
         job_id: JobId/JobName for the actor job
+        client: Client for driver-side discovery. Serialized groups use the Iris job context.
         """
         self._name = name
         self._count = count
         self._job_id = job_id
+        self._client = client
         self._handles: list[ActorHandle] = []
         self._discovered_names: set[str] = set()
 
@@ -496,11 +482,14 @@ class IrisActorGroup:
         self._name = state["name"]
         self._count = state["count"]
         self._job_id = state["job_id"]
+        self._client = None
         self._handles = []
         self._discovered_names = set()
 
     def _get_client(self) -> IrisClientLib:
-        """Get IrisClient from context."""
+        """Get the bound Iris client or the client from the Iris job context."""
+        if self._client is not None:
+            return self._client
         ctx = get_iris_ctx()
         if ctx is None or ctx.client is None:
             raise RuntimeError("IrisActorGroup requires IrisContext with client. Set context via iris_ctx_scope().")
@@ -531,13 +520,16 @@ class IrisActorGroup:
         endpoints = client.list_endpoints(prefix=prefix)
 
         newly_discovered: list[ActorHandle] = []
+        resolver = None
         for ep in endpoints:
             if target is not None and len(self._discovered_names) >= target:
                 break
             if ep.name in self._discovered_names:
                 continue
+            if resolver is None:
+                resolver = client.resolver_for_job(self._job_id)
             self._discovered_names.add(ep.name)
-            handle = IrisActorHandle(ep.name)
+            handle = IrisActorHandle(ep.name, resolver=resolver)
             self._handles.append(handle)
             newly_discovered.append(handle)
             logger.info(
@@ -773,6 +765,7 @@ class FrayIrisClient:
             name=name,
             count=count,
             job_id=job.job_id,
+            client=self._iris,
         )
 
     def shutdown(self, wait: bool = True) -> None:

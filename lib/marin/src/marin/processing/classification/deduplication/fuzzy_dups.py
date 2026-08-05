@@ -36,7 +36,7 @@ from fray.types import ResourceConfig
 from pydantic import BaseModel
 from zephyr import counters
 from zephyr.dataset import Dataset
-from zephyr.execution import MAX_WORKERS_PER_JOB, ZephyrContext
+from zephyr.execution import MAX_IRIS_WORKER_REPLICAS, ZephyrContext
 from zephyr.worker_context import zephyr_worker_ctx
 from zephyr.writers import write_parquet_file
 
@@ -225,11 +225,12 @@ def compute_fuzzy_dups_attrs(
     output_path: str,
     cc_max_iterations: int = 10,
     cc_resume: bool = False,
-    max_parallelism: int = MAX_WORKERS_PER_JOB,
+    max_parallelism: int = MAX_IRIS_WORKER_REPLICAS,
     worker_resources: ResourceConfig | None = None,
     coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
     reduce_task_resources: ResourceConfig | None = None,
+    zephyr_context: ZephyrContext | None = None,
 ) -> FuzzyDupsAttrData:
     """Mark fuzzy-duplicate cluster membership across one or more ``MinHashAttrData`` inputs.
 
@@ -258,6 +259,7 @@ def compute_fuzzy_dups_attrs(
         map_task_resources: ResourceConfig for map-stage tasks.
         reduce_task_resources: ResourceConfig for reduce-stage tasks (e.g.
             the per-shard ``group_by`` writer).
+        zephyr_context: Optional shared Zephyr context.
 
     Returns:
         :class:`FuzzyDupsAttrData` describing per-source attr directories,
@@ -289,18 +291,16 @@ def compute_fuzzy_dups_attrs(
         params,
     )
 
+    resources = worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g")
     ctx_kwargs: dict = {
         "name": "fuzzy-dups",
         "max_workers": max_parallelism,
-        "resources": worker_resources or ResourceConfig(cpu=1, ram="32g", disk="5g"),
+        "resources": resources,
     }
     if coordinator_resources is not None:
         ctx_kwargs["coordinator_resources"] = coordinator_resources
-    if map_task_resources is not None:
-        ctx_kwargs["map_task_resources"] = map_task_resources
-    if reduce_task_resources is not None:
-        ctx_kwargs["reduce_task_resources"] = reduce_task_resources
-    ctx = ZephyrContext(**ctx_kwargs)
+    ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
+    map_resources = map_task_resources or resources
 
     # Cap shard count at max_parallelism. Each group reads its attr files
     # sequentially and emits bucket records; file_idx is preserved on the entry
@@ -317,6 +317,9 @@ def compute_fuzzy_dups_attrs(
         output_dir=f"{output_path}/metadata/cc",
         max_iterations=cc_max_iterations,
         resume=cc_resume,
+        num_reduce_shards=max_parallelism,
+        map_task_resources=map_resources,
+        reduce_task_resources=reduce_task_resources,
     )
     if not converged:
         # A non-converged CC is still deterministic and reproducible across
@@ -359,7 +362,12 @@ def compute_fuzzy_dups_attrs(
         )
     )
 
-    outcome = ctx.execute(shard_pipeline, verbose=True)
+    outcome = ctx.execute(
+        shard_pipeline,
+        verbose=True,
+        map_task_resources=map_resources,
+        reduce_task_resources=reduce_task_resources,
+    )
     shard_results = outcome.results
     write_copartitioned_source_manifest(output_path=output_path, attr_dirs=attr_dirs)
 

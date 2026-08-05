@@ -28,6 +28,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
 from marin.evaluation.samples import export_lm_eval_samples
+from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
 logger = logging.getLogger(__name__)
@@ -265,12 +266,12 @@ class EvalchemyExecutor:
 
     def __call__(
         self,
-        model: RunningModel,
+        session: RemoteInferenceSession,
         output_dir: str,
         env_vars: Mapping[str, str],
     ) -> EvaluationOutcome:
         try:
-            outcome = run_evalchemy(model, self.config, output_dir, env_vars=env_vars)
+            outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
         except EvalPipelineError as exc:
             status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.INFRA_FAILED
             raise EvaluationError(

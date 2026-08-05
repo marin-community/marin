@@ -1,9 +1,10 @@
 # Loom production deployment
 
-The `marin-loom` Pulumi stack manages `loom.oa.dev`: its GCE host, persistent
-data disk, Artifact Registry repository, Secret Manager access, Cloudflare DNS,
-and scheduled disk snapshots. The runtime is built from the operator's local
-Loom worktree and runs as a Docker Compose application on the GCE host.
+The `marin-loom` Pulumi stack manages `loom.oa.dev`: its GCE host with a
+persistent root disk, Artifact Registry repository, Secret Manager access,
+Cloudflare DNS, and scheduled root-disk snapshots. The runtime is built from
+the operator's local Loom worktree and runs as a Docker Compose application on
+the GCE host.
 
 ## Prerequisites
 
@@ -55,10 +56,10 @@ pulumi config rm --cwd /path/to/marin/infra/loom --stack marin-loom buildContext
 ```
 
 Pulumi renders the Compose and Caddy configuration into VM metadata. The GCE
-startup unit mounts the persistent disk, reads one numbered `LOOM_DOTENV`
-version, pulls the digest-pinned image, runs `docker compose up -d`, applies the
-configured Loom deployment policy, and checks readiness. It does not clone a
-repository or build images on the VM.
+startup unit stores Docker state on the persistent root disk, reads one numbered
+`LOOM_DOTENV` version, pulls the digest-pinned image, runs
+`docker compose up -d`, applies the configured Loom deployment policy, and
+checks readiness. It does not clone a repository or build images on the VM.
 
 ## Update secrets
 
@@ -141,5 +142,5 @@ sessions are live because it removes their shared network.
 
 To roll back, check out the prior Loom tree, restore its numbered
 `dotenvSecretVersion` when necessary, and run the normal preview and update.
-The persistent data disk and its scheduled snapshots are protected Pulumi
-resources.
+The separately managed persistent root disk is protected, is not auto-deleted
+with the VM, and has scheduled snapshots.
