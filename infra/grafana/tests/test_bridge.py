@@ -6,7 +6,6 @@ cache's coalescing and eviction contract."""
 
 import threading
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pyarrow as pa
 from cache import TtlCache
@@ -393,18 +392,6 @@ def test_training_stall_query_bounds_enrollment_to_the_phase_heartbeat_window():
     )
     assert "name IN ('step', 'progress_time_seconds')" in recent_progress
     assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql
-
-
-def test_training_dashboard_uses_constant_foldable_macro_boundaries():
-    dashboard = (Path(__file__).parents[1] / "dashboards" / "training.json").read_text()
-    assert 'FROM \\"telemetry_v1\\"' in dashboard
-    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)" in dashboard
-    assert "timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)" in dashboard
-    assert "timestamp_ms >= {{from}}" not in dashboard
-    assert "json_get(attributes_json, 'run')" not in dashboard
-    assert "json_get(resource_attributes_json, 'run')" in dashboard
-    assert "name = 'throughput_tokens_per_second'" in dashboard
-    assert "name = 'throughput'" not in dashboard
 
 
 class FakeLoomAlerts(LoomAlertClient):

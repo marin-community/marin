@@ -23,9 +23,9 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Fleet",
+      "title": "Home",
       "type": "link",
-      "url": "/d/marin-fleet"
+      "url": "/d/marin-home"
     },
     {
       "asDropdown": false,
@@ -33,9 +33,9 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Iris",
+      "title": "Accelerators",
       "type": "link",
-      "url": "/d/marin-iris"
+      "url": "/d/marin-accel"
     },
     {
       "asDropdown": false,
@@ -43,9 +43,29 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "K8s",
+      "title": "Jobs",
       "type": "link",
-      "url": "/d/marin-k8s"
+      "url": "/d/marin-jobs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Runs",
+      "type": "link",
+      "url": "/d/marin-runs"
+    },
+    {
+      "asDropdown": false,
+      "icon": "dashboard",
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false,
+      "title": "Clusters",
+      "type": "link",
+      "url": "/d/marin-clusters"
     },
     {
       "asDropdown": false,
@@ -63,9 +83,9 @@
       "includeVars": false,
       "keepTime": true,
       "targetBlank": false,
-      "title": "Training",
+      "title": "Inference",
       "type": "link",
-      "url": "/d/marin-training"
+      "url": "/d/marin-inference"
     },
     {
       "asDropdown": false,

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Dashboards are code: they ship in the image under /etc/grafana/dashboards and
-# are reloaded from disk. UI edits do not persist — Grafana's SQLite is ephemeral
-# on Cloud Run, so anything not in git is lost at the next revision anyway.
-# Making that explicit here is kinder than letting someone discover it.
+# are reloaded from disk. UI edits are rejected, and the file set is authoritative
+# in both directions — deleting a dashboard from git deletes it from Grafana. That
+# matters because Grafana's state lives in the shared marin-metadata Postgres and
+# survives redeploys, so `disableDeletion: true` would leave a removed dashboard on
+# the site forever with no file left to explain it.
 apiVersion: 1
 
 providers:
@@ -12,7 +14,7 @@ providers:
     orgId: 1
     folder: Marin
     type: file
-    disableDeletion: true
+    disableDeletion: false
     allowUiUpdates: false
     updateIntervalSeconds: 60
     options:

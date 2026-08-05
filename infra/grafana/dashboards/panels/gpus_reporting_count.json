@@ -1,12 +1,11 @@
 {
   "type": "stat",
-  "title": "Stuck jobs",
-  "description": "Active root jobs with a task waiting over 15 minutes — oldest PENDING task un-dispatched, or oldest ASSIGNED/BUILDING task not yet RUNNING — across the selected clusters, latest iris.task_state snapshot within the last 2 minutes. A non-zero value is the queue-saturation signal; the Jobs dashboard names them.",
+  "title": "GPUs reporting",
+  "description": "Distinct GPUs with a power sample in the last 10 minutes.",
   "datasource": {
     "type": "yesoreyeram-infinity-datasource",
     "uid": "finelog-marin"
   },
-  "timeFrom": "2m",
   "fieldConfig": {
     "defaults": {
       "unit": "short",
@@ -14,14 +13,13 @@
         "mode": "absolute",
         "steps": [
           {
-            "color": "green",
+            "color": "text",
             "value": null
-          },
-          {
-            "color": "red",
-            "value": 1
           }
         ]
+      },
+      "color": {
+        "mode": "thresholds"
       }
     },
     "overrides": []
@@ -34,10 +32,10 @@
       "fields": "",
       "values": false
     },
-    "orientation": "auto",
-    "colorMode": "value",
+    "colorMode": "none",
     "graphMode": "none",
-    "textMode": "value"
+    "justifyMode": "auto",
+    "textMode": "auto"
   },
   "targets": [
     {
@@ -52,7 +50,7 @@
         "params": [
           {
             "key": "sql",
-            "value": "WITH r AS (SELECT root_job_id, GREATEST(oldest_pending_age_ms, oldest_building_age_ms) AS age, ROW_NUMBER() OVER (PARTITION BY \"cluster\", root_job_id ORDER BY ts DESC) AS rn FROM \"iris.task_state\" WHERE root_job_id <> '' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND ts >= {{from}} AND ts < {{to}}) SELECT COUNT(*) AS stuck FROM r WHERE rn = 1 AND age > 900000"
+            "value": "SELECT COUNT(DISTINCT json_get(attributes_json, 'gpu_uuid')) AS value FROM \"telemetry_v1\" WHERE service = 'iris-node-agent' AND name = 'gpu_power_watts' AND COALESCE(NULLIF(\"cluster\", ''), 'marin') IN (${cluster:sqlstring}) AND timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT) AND timestamp_ms < CAST(EXTRACT(EPOCH FROM {{to}}) * 1000 AS BIGINT)"
           },
           {
             "key": "from",
@@ -66,11 +64,12 @@
       },
       "columns": [
         {
-          "selector": "stuck",
-          "text": "stuck",
+          "selector": "value",
+          "text": "value",
           "type": "number"
         }
       ]
     }
-  ]
+  ],
+  "timeFrom": "10m"
 }
