@@ -2300,6 +2300,8 @@ def test_topology_plan_reverses_fresh_ep8_ep16_arms_and_adds_noop_control() -> N
             "example.invalid/image@sha256:" + "a" * 64,
             "--marin-commit",
             "b" * 40,
+            "--iris-priority",
+            "interactive",
             "--submitted-coscheduling",
             "nvlink.domain",
             "--ep8-concurrency",
@@ -2346,6 +2348,240 @@ def test_topology_plan_reverses_fresh_ep8_ep16_arms_and_adds_noop_control() -> N
     assert all(phase["case"] == "reference-ep8" for phase in followups)
     assert all(phase["request_transport"] == "chat" for phase in followups)
     assert [phase["r3_enabled"] for phase in followups] == [False, True]
+
+
+@pytest.mark.parametrize(
+    ("candidate", "order", "expected_cases"),
+    [
+        ("window1024-ep16", "ab", ["exact-reference-ep16", "window1024-ep16"]),
+        ("global-every4-ep16", "ba", ["global-every4-ep16", "exact-reference-ep16"]),
+    ],
+)
+def test_attention_pair_plan_is_a_fresh_reversed_pair_with_homogeneous_slices(
+    candidate: str,
+    order: str,
+    expected_cases: list[str],
+) -> None:
+    args = parse_args(
+        [
+            "submit-matrix",
+            "--plan",
+            "attention-pair-v1",
+            "--run-id",
+            f"exp4-{candidate}-{order}-unit",
+            "--task-image",
+            "example.invalid/image@sha256:" + "a" * 64,
+            "--priority",
+            "production",
+            "--ep16-instrument-run-id",
+            "instrument-run",
+            "--attention-candidate",
+            candidate,
+            "--attention-order",
+            order,
+        ]
+    )
+
+    grug_preflight._validate_matrix_args(args)
+    phases = grug_preflight._matrix_initial_phases(args)
+    command = grug_preflight._matrix_worker_argv(
+        args,
+        run_id=args.run_id,
+        image=args.task_image,
+        marin_commit="b" * 40,
+    )
+
+    assert [phase["case"] for phase in phases] == expected_cases
+    assert all(phase["homogeneous_slices"] is True for phase in phases)
+    assert all(phase["role"] == "attention-comparison" for phase in phases)
+    assert all(phase["r3_enabled"] is False for phase in phases)
+    assert all(phase["request_transport"] == "completion" for phase in phases)
+    assert command[command.index("--attention-candidate") + 1] == candidate
+    assert command[command.index("--attention-order") + 1] == order
+    assert command[command.index("--ep16-instrument-run-id") + 1] == "instrument-run"
+    assert command[command.index("--iris-priority") + 1] == "production"
+
+
+def test_attention_finalist_plan_runs_65k_trajectory_and_131k_capacity_on_fresh_servers() -> None:
+    args = parse_args(
+        [
+            "submit-matrix",
+            "--plan",
+            "attention-finalist-v1",
+            "--run-id",
+            "exp4-window1024-ep16-validation-unit",
+            "--task-image",
+            "example.invalid/image@sha256:" + "a" * 64,
+            "--priority",
+            "production",
+            "--ep16-instrument-run-id",
+            "instrument-run",
+            "--attention-finalist",
+            "window1024-ep16",
+        ]
+    )
+
+    grug_preflight._validate_matrix_args(args)
+    phases = grug_preflight._matrix_initial_phases(args)
+    command = grug_preflight._matrix_worker_argv(
+        args,
+        run_id=args.run_id,
+        image=args.task_image,
+        marin_commit="b" * 40,
+    )
+
+    assert [phase["case"] for phase in phases] == [
+        "exact-reference-131k-ep16",
+        "window1024-131k-ep16",
+    ]
+    assert all(phase["trajectory_65k"] is True for phase in phases)
+    assert all(phase["capacity_stress_131k"] is True for phase in phases)
+    assert all(phase["homogeneous_slices"] is False for phase in phases)
+    assert all(phase["r3_enabled"] is False for phase in phases)
+    assert command[command.index("--attention-finalist") + 1] == "window1024-ep16"
+    assert command[command.index("--ep16-instrument-run-id") + 1] == "instrument-run"
+    assert command[command.index("--iris-priority") + 1] == "production"
+
+
+def test_homogeneous_slice_uses_all_branches_and_keeps_each_root_on_one_dp_rank() -> None:
+    workload = grug_preflight.deterministic_workload(seed=grug_preflight.DUMMY_SEED)
+    case = CASES["exact-reference-ep16"]
+
+    schedule = grug_preflight._homogeneous_cohort_schedule(workload, case=case, cohort="long")
+
+    assert len(schedule) == 48
+    assert [item["request"]["request_id"] for item in schedule] == [
+        request["request_id"] for request in workload["requests"] if request["cohort"] == "long"
+    ]
+    assert all(item["data_parallel_rank"] == item["request"]["root"] % case.data_parallel_size for item in schedule)
+    assert len({item["request"]["root"] for item in schedule}) == 6
+
+
+def test_capacity_probe_reader_recomputes_raw_counters_events_and_kv_log() -> None:
+    case = CASES["exact-reference-131k-ep16"]
+    before_text = "\n".join(
+        (
+            'vllm:generation_tokens_total{engine="0"} 10',
+            'vllm:request_success_total{engine="0",finished_reason="length"} 3',
+            'vllm:num_preemptions_total{engine="0"} 0',
+        )
+    )
+    after_text = "\n".join(
+        (
+            'vllm:generation_tokens_total{engine="0"} 12',
+            'vllm:request_success_total{engine="0",finished_reason="length"} 4',
+            'vllm:num_preemptions_total{engine="0"} 0',
+        )
+    )
+    kv_groups = [
+        {
+            "engine_idx": engine,
+            "role": "attention",
+            "kind": "full_attention",
+            "active_requests": 1 if engine == 0 else 0,
+            "active_blocks": 1 if engine == 0 else 0,
+            "active_payload_bytes": 2 if engine == 0 else 0,
+            "active_padded_bytes": 2 if engine == 0 else 0,
+            "active_physical_bytes": 2 if engine == 0 else 0,
+            "reserved_physical_bytes": 100,
+        }
+        for engine in range(case.data_parallel_size)
+    ]
+    kv_text = "INFO GrugMoE KV group usage: " + json.dumps(kv_groups)
+    kv = grug_preflight._health_kv_summary_from_text(kv_text, case=case, target_concurrency=1)
+    kv["source"] = {
+        "path": "metrics/capacity-kv.log",
+        "bytes": len(kv_text.encode()),
+        "sha256": hashlib.sha256(kv_text.encode()).hexdigest(),
+    }
+    record = {
+        "request_id": "capacity-root-00-branch-00",
+        "root": 0,
+        "branch": 0,
+        "data_parallel_rank": 0,
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "final_token_count": 5,
+        "prompt_token_ids_sha256": "a" * 64,
+        "generated_token_ids_sha256": "b" * 64,
+        "final_prefix_token_ids_sha256": "c" * 64,
+        "sampled_token_logprobs_sha256": "d" * 64,
+        "sampled_token_logprobs_count": 2,
+    }
+    arm = {
+        "arm_id": "arm-capacity",
+        "matrix": {"case": case.name},
+        "capacity_stress_131k": {
+            "passed": True,
+            "gates": {"synthetic": True},
+            "engine_generation_tokens": 2,
+            "request_successes": 1,
+            "preemptions": 0,
+            "elapsed_seconds": 2.0,
+            "generation_tokens_per_second_per_gpu": 2 / 2 / case.data_parallel_size,
+            "request_provenance": [record],
+            "kv_cache": kv,
+            "metrics": {"boundary_start": "before.prom", "boundary_end": "after.prom"},
+        },
+    }
+    manifest = {
+        "request_count": 1,
+        "response_tokens": 2,
+        "requests": [
+            {
+                "request_id": record["request_id"],
+                "root": 0,
+                "branch": 0,
+                "data_parallel_rank": 0,
+                "prompt_token_count": 3,
+                "max_tokens": 2,
+                "final_token_count": 5,
+                "prompt_token_ids_sha256": "a" * 64,
+            }
+        ],
+        "roots": [],
+    }
+    event = {
+        "timestamp": "unit",
+        "monotonic_seconds": 2.0,
+        "event": "capacity_131k_request_completed",
+        "arm_id": arm["arm_id"],
+        **record,
+    }
+    contract = grug_preflight._matrix_sequence_probe_contract(
+        arm,
+        field="capacity_stress_131k",
+        manifest=manifest,
+        parsed_by_path={
+            "before.prom": parse_labeled_prometheus(before_text),
+            "after.prom": parse_labeled_prometheus(after_text),
+        },
+        snapshot_by_path={
+            "before.prom": {"monotonic_seconds": 1.0},
+            "after.prom": {"monotonic_seconds": 3.0},
+        },
+        event_records=[event],
+        kv_source_by_path={"metrics/capacity-kv.log": kv_text.encode()},
+    )
+
+    assert contract["passed"]
+    assert contract["kv_recomputed"]
+    missing_raw_kv = grug_preflight._matrix_sequence_probe_contract(
+        arm,
+        field="capacity_stress_131k",
+        manifest=manifest,
+        parsed_by_path={
+            "before.prom": parse_labeled_prometheus(before_text),
+            "after.prom": parse_labeled_prometheus(after_text),
+        },
+        snapshot_by_path={
+            "before.prom": {"monotonic_seconds": 1.0},
+            "after.prom": {"monotonic_seconds": 3.0},
+        },
+        event_records=[event],
+        kv_source_by_path={},
+    )
+    assert not missing_raw_kv["passed"]
 
 
 def test_matrix_reader_reconstructs_phase_commands_and_matched_chat_diff() -> None:

@@ -43,6 +43,7 @@ from iris.rpc import job_pb2
 
 from experiments.grug.moe.inference_preflight import (
     ARTIFACT_ROOT,
+    CAPACITY_FINAL_TOKENS,
     CASES,
     DUMMY_SEED,
     FROZEN_FIXTURE_PATH,
@@ -52,6 +53,8 @@ from experiments.grug.moe.inference_preflight import (
     aggregate_preflight_status,
     decode_routed_experts,
     deterministic_balanced_routing_fixture,
+    deterministic_capacity_stress_workload,
+    deterministic_trajectory_workload,
     deterministic_workload,
     expert_parallel_rank_histogram,
     frozen_manifest,
@@ -107,9 +110,24 @@ HEALTH_REPRESENTATIVE_WARM_UP_SUCCESSOR_WAVES = 1
 CALIBRATION_CONCURRENCIES = (24, 48, 72, 96, 144)
 CALIBRATION_MAX_NUM_BATCHED_TOKENS = (8192, 16384)
 CALIBRATION_MAX_NUM_SEQS = 144
-MATRIX_PLANS = ("instrument-v1", "ep8-calibration", "topology-v1")
+ATTENTION_CANDIDATES = ("window1024-ep16", "window2048-ep16", "global-every4-ep16")
+ATTENTION_FINALISTS = ("exact-reference-ep16", *ATTENTION_CANDIDATES)
+ATTENTION_ORDERS = ("ab", "ba")
+MATRIX_PLANS = (
+    "instrument-v1",
+    "ep8-calibration",
+    "topology-v1",
+    "attention-pair-v1",
+    "attention-finalist-v1",
+)
 HEALTH_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/inference-bench/grugmoe-architecture/experiment-0"
 TOPOLOGY_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/inference-bench/grugmoe-architecture/experiment-1"
+GLOBAL_CADENCE_ARTIFACT_ROOT = (
+    "s3://marin-us-east-02a/marin/users/romain/inference-bench/grugmoe-architecture/experiment-3"
+)
+SLIDING_WINDOW_ARTIFACT_ROOT = (
+    "s3://marin-us-east-02a/marin/users/romain/inference-bench/grugmoe-architecture/experiment-4"
+)
 MARINSKYRL_CONSUMER_SHA = "96a026abda71c1b9fc53b06a7ff3c9f90a122d78"
 HEALTH_SAMPLING_PARAMETERS = {
     "temperature": 0.0,
@@ -2277,6 +2295,7 @@ def _health_completion(
     request_transport: str = "completion",
     expected_prefix_routes: Any | None = None,
     keep_routes: bool = False,
+    keep_generated_tokens: bool = False,
 ) -> dict[str, Any]:
     payload, timing = _timed_completion(
         base_url,
@@ -2334,7 +2353,7 @@ def _health_completion(
         expected_prefix_routes=expected_prefix_routes,
         keep_routes=keep_routes,
     )
-    return {
+    result = {
         "request_id": request_id,
         "request_transport": request_transport,
         "data_parallel_rank": data_parallel_rank,
@@ -2354,6 +2373,9 @@ def _health_completion(
         "routes": route_summary,
         "route_array": routes,
     }
+    if keep_generated_tokens:
+        result["generated_token_ids"] = token_ids
+    return result
 
 
 def _health_warm_prompt(index: int, prompt_length: int) -> list[int]:
@@ -3653,9 +3675,11 @@ def _run_rolling_health_arm(
                 "transport": (
                     "OpenAI completion JSON choice.routed_experts; base64-encoded NumPy .npy"
                     if r3_enabled and request_transport == "completion"
-                    else "OpenAI chat JSON choice.routed_experts; generated-token-only nested integer lists"
-                    if r3_enabled
-                    else "absent"
+                    else (
+                        "OpenAI chat JSON choice.routed_experts; generated-token-only nested integer lists"
+                        if r3_enabled
+                        else "absent"
+                    )
                 ),
             },
             "balanced_control": {
@@ -3673,9 +3697,9 @@ def _run_rolling_health_arm(
             "by_data_parallel_rank": {
                 engine: {
                     "peak_running_requests": values["maximum"],
-                    "peak_kv_cache_usage_fraction": per_engine_plateau_series["vllm:kv_cache_usage_perc"]
-                    .get(engine, {})
-                    .get("maximum"),
+                    "peak_kv_cache_usage_fraction": (
+                        per_engine_plateau_series["vllm:kv_cache_usage_perc"].get(engine, {}).get("maximum")
+                    ),
                 }
                 for engine, values in per_engine_plateau_series["vllm:num_requests_running"].items()
             },
@@ -3685,6 +3709,683 @@ def _run_rolling_health_arm(
     }
     events.emit("arm_completed", arm_id=arm_id, passed=result["passed"], gates=gates)
     return result
+
+
+def _homogeneous_cohort_schedule(
+    workload: dict[str, Any],
+    *,
+    case: ModelCase,
+    cohort: str,
+) -> list[dict[str, Any]]:
+    cohort_requests = [request for request in workload["requests"] if request["cohort"] == cohort]
+    if cohort not in {"short", "medium", "long"} or len(cohort_requests) != 48:
+        raise ValueError(f"{cohort}: expected 48 frozen cohort requests")
+    return [
+        {
+            "slot": slot,
+            "data_parallel_rank": int(request["root"]) % case.data_parallel_size,
+            "request": request,
+        }
+        for slot, request in enumerate(cohort_requests)
+    ]
+
+
+def _run_homogeneous_cohort_slice(
+    base_url: str,
+    model: str,
+    workload: dict[str, Any],
+    *,
+    case: ModelCase,
+    artifact_dir: Path,
+    metrics_map: list[dict[str, Any]],
+    events: HealthEventWriter,
+    log_path: Path,
+    arm_id: str,
+    cohort: str,
+) -> dict[str, Any]:
+    """Measure one context point with an engine-counter-bounded homogeneous wave."""
+    schedule = _homogeneous_cohort_schedule(workload, case=case, cohort=cohort)
+    cohort_requests = [item["request"] for item in schedule]
+    slice_concurrency = len(schedule)
+    roots = {int(root["root"]): root for root in workload["roots"]}
+    population_keys = sorted({(int(item["data_parallel_rank"]), int(item["request"]["root"])) for item in schedule})
+    events.emit(
+        "cohort_slice_started",
+        arm_id=arm_id,
+        cohort=cohort,
+        slice_concurrency=slice_concurrency,
+        schedule_sha256=_sha256_json(
+            [
+                {
+                    "slot": item["slot"],
+                    "data_parallel_rank": item["data_parallel_rank"],
+                    "request_id": item["request"]["request_id"],
+                }
+                for item in schedule
+            ]
+        ),
+    )
+
+    def populate(item: tuple[int, int]) -> dict[str, Any]:
+        rank, root_index = item
+        result = _health_completion(
+            base_url,
+            model,
+            list(roots[root_index]["prefix_token_ids"]),
+            case=case,
+            max_tokens=1,
+            data_parallel_rank=rank,
+            request_id=f"{arm_id}-{cohort}-populate-r{rank:02d}-root-{root_index:02d}",
+            sampling_seed=_frozen_health_seed(f"slice-populate:{cohort}:{rank}:{root_index}"),
+            r3_enabled=False,
+        )
+        result.pop("route_array", None)
+        return result
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(population_keys)) as executor:
+        population = list(executor.map(populate, population_keys))
+
+    gate = threading.Event()
+    barrier = threading.Barrier(slice_concurrency + 1)
+
+    event_lock = threading.Lock()
+
+    def one(item: dict[str, Any]) -> dict[str, Any]:
+        request = item["request"]
+        gate.wait()
+        barrier.wait(timeout=60)
+        result = _health_completion(
+            base_url,
+            model,
+            materialize_prompt(workload, request),
+            case=case,
+            max_tokens=int(request["max_tokens"]),
+            data_parallel_rank=int(item["data_parallel_rank"]),
+            request_id=f"{arm_id}-{cohort}-slot-{int(item['slot']):03d}-{request['request_id']}",
+            sampling_seed=_frozen_health_seed(f"slice:{cohort}:{int(item['slot'])}:{request['request_id']}"),
+            r3_enabled=False,
+        )
+        result.pop("route_array", None)
+        result.update(
+            {
+                "manifest_request_id": str(request["request_id"]),
+                "cohort": cohort,
+                "slot": int(item["slot"]),
+                "data_parallel_rank": int(item["data_parallel_rank"]),
+            }
+        )
+        with event_lock:
+            events.emit(
+                "cohort_slice_request_completed",
+                arm_id=arm_id,
+                cohort=cohort,
+                request_id=result["request_id"],
+                manifest_request_id=result["manifest_request_id"],
+                data_parallel_rank=result["data_parallel_rank"],
+                completion_tokens=result["completion_tokens"],
+                prompt_token_ids_sha256=result["prompt_token_ids_sha256"],
+                generated_token_ids_sha256=result["generated_token_ids_sha256"],
+                final_prefix_token_ids_sha256=result["final_prefix_token_ids_sha256"],
+                sampled_token_logprobs_sha256=result["sampled_token_logprobs"]["sha256"],
+            )
+        return result
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=slice_concurrency)
+    futures = [executor.submit(one, item) for item in schedule]
+    before = _capture_health_metrics(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        phase=f"cohort-{cohort}-open",
+        log_path=log_path,
+    )
+    try:
+        gate.set()
+        barrier.wait(timeout=60)
+        records = [future.result() for future in futures]
+    finally:
+        gate.set()
+        barrier.abort()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    client_generated_tokens = sum(int(record["completion_tokens"]) for record in records)
+    _wait_for_health_counter(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        baseline=before,
+        metric="vllm:generation_tokens",
+        minimum_delta=client_generated_tokens,
+        timeout_seconds=600,
+    )
+    _wait_for_health_counter(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        baseline=before,
+        metric="vllm:request_success",
+        minimum_delta=len(records),
+        timeout_seconds=600,
+    )
+    after = _capture_health_metrics(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        phase=f"cohort-{cohort}-close",
+        log_path=log_path,
+    )
+    elapsed_seconds = after.monotonic_seconds - before.monotonic_seconds
+    generation_tokens = round(_health_metric_delta(before, after, "vllm:generation_tokens"))
+    request_successes = round(_health_metric_delta(before, after, "vllm:request_success"))
+    preemptions = round(_health_metric_delta(before, after, "vllm:num_preemptions"))
+    if before.leader_log_bytes is None or after.leader_log_bytes is None:
+        raise AssertionError("homogeneous slice omitted leader log boundaries")
+    kv_source_path = f"metrics/{arm_id}-{cohort}-kv.log"
+    log_payload = log_path.read_bytes() if log_path.exists() else b""
+    kv_payload = log_payload[before.leader_log_bytes : after.leader_log_bytes]
+    kv_source_file = artifact_dir / kv_source_path
+    kv_source_file.parent.mkdir(parents=True, exist_ok=True)
+    kv_source_file.write_bytes(kv_payload)
+    kv = _health_kv_summary(
+        kv_source_file,
+        start_offset=0,
+        case=case,
+        target_concurrency=slice_concurrency,
+    )
+    final_length = int(cohort_requests[0]["final_token_count"])
+    schedule_types = layer_types(case.num_hidden_layers, global_interval=case.global_every)
+    global_layers = schedule_types.count("full_attention")
+    local_layers = len(schedule_types) - global_layers
+    predicted_semantic_bytes = predict_kv_bytes(
+        sequence_length=final_length,
+        local_layers=local_layers,
+        global_layers=global_layers,
+        local_kv_heads=case.local_kv_heads,
+        global_kv_heads=case.global_kv_heads,
+        head_dim=case.head_dim,
+        sliding_window=case.sliding_window,
+    )
+    kv["attention_prediction"] = {
+        "final_context_tokens": final_length,
+        "local_layers": local_layers,
+        "global_layers": global_layers,
+        "per_live_sequence_bytes": predicted_semantic_bytes,
+        "scope": "semantic K and V payload before block rounding",
+    }
+    kv["source"] = {
+        "path": kv_source_path,
+        "bytes": len(kv_payload),
+        "sha256": hashlib.sha256(kv_payload).hexdigest(),
+        "boundary": "vLLM leader log bytes between homogeneous engine-counter snapshots",
+    }
+    sampled_logprobs = sum(int(record["sampled_token_logprobs"]["count"]) for record in records)
+    gates = {
+        "engine_client_token_reconciliation": generation_tokens == client_generated_tokens,
+        "request_success_reconciliation": request_successes == len(records),
+        "sampled_token_logprobs": sampled_logprobs == client_generated_tokens,
+        "zero_preemptions": preemptions == 0,
+        "kv_instrumentation": kv.get("passed") is True,
+        "positive_boundary": elapsed_seconds > 0 and generation_tokens > 0,
+    }
+    rate = generation_tokens / elapsed_seconds / case.data_parallel_size
+    result = {
+        "cohort": cohort,
+        "passed": all(gates.values()),
+        "gates": gates,
+        "final_context_tokens": final_length,
+        "slice_concurrency": slice_concurrency,
+        "population_requests": len(population),
+        "measured_requests": len(records),
+        "schedule": [
+            {
+                "slot": int(item["slot"]),
+                "data_parallel_rank": int(item["data_parallel_rank"]),
+                "request_id": str(item["request"]["request_id"]),
+                "prompt_token_ids_sha256": _sha256_json(materialize_prompt(workload, item["request"])),
+            }
+            for item in schedule
+        ],
+        "elapsed_seconds": elapsed_seconds,
+        "engine_generation_tokens": generation_tokens,
+        "generation_tokens_per_second_per_gpu": rate,
+        "gpu_seconds_per_generated_token": case.data_parallel_size * elapsed_seconds / generation_tokens,
+        "slowdown_from_short_percent": None,
+        "preemptions": preemptions,
+        "kv_cache": kv,
+        "metrics": {
+            "boundary_start": before.relative_path,
+            "boundary_end": after.relative_path,
+            "counter_deltas": {metric: _health_metric_delta(before, after, metric) for metric in HEALTH_COUNTER_METRICS},
+            "per_engine_series": _health_engine_series(
+                metrics_map,
+                first_index=before.index,
+                last_index=after.index,
+            ),
+        },
+        "latency": _health_percentiles([float(record["timing"]["client_e2e_seconds"]) for record in records]),
+    }
+    events.emit(
+        "cohort_slice_completed",
+        arm_id=arm_id,
+        cohort=cohort,
+        passed=result["passed"],
+        elapsed_seconds=elapsed_seconds,
+        generation_tokens=generation_tokens,
+        generation_tokens_per_second_per_gpu=rate,
+    )
+    return result
+
+
+def _sequence_probe_kv(
+    *,
+    artifact_dir: Path,
+    log_path: Path,
+    before: HealthMetricSnapshot,
+    after: HealthMetricSnapshot,
+    case: ModelCase,
+    target_concurrency: int,
+    source_path: str,
+    boundary: str,
+) -> dict[str, Any]:
+    if before.leader_log_bytes is None or after.leader_log_bytes is None:
+        raise AssertionError("sequence probe omitted leader log boundaries")
+    payload = log_path.read_bytes() if log_path.exists() else b""
+    log_slice = payload[before.leader_log_bytes : after.leader_log_bytes]
+    local_path = artifact_dir / source_path
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_bytes(log_slice)
+    kv = _health_kv_summary(
+        local_path,
+        start_offset=0,
+        case=case,
+        target_concurrency=target_concurrency,
+    )
+    kv["source"] = {
+        "path": source_path,
+        "bytes": len(log_slice),
+        "sha256": hashlib.sha256(log_slice).hexdigest(),
+        "boundary": boundary,
+    }
+    return kv
+
+
+def _run_four_turn_trajectory(
+    base_url: str,
+    model: str,
+    *,
+    case: ModelCase,
+    artifact_dir: Path,
+    metrics_map: list[dict[str, Any]],
+    events: HealthEventWriter,
+    log_path: Path,
+    arm_id: str,
+) -> dict[str, Any]:
+    """Run 144 sequential four-turn branches and carry every answer forward."""
+    workload = deterministic_trajectory_workload(seed=DUMMY_SEED)
+    roots = {int(root["root"]): root for root in workload["roots"]}
+
+    def populate(root: dict[str, Any]) -> None:
+        result = _health_completion(
+            base_url,
+            model,
+            list(root["prefix_token_ids"]),
+            case=case,
+            max_tokens=1,
+            data_parallel_rank=int(root["root"]) % case.data_parallel_size,
+            request_id=f"{arm_id}-trajectory-populate-root-{int(root['root']):02d}",
+            sampling_seed=_frozen_health_seed(f"trajectory-populate:{int(root['root'])}"),
+            r3_enabled=False,
+        )
+        result.pop("route_array", None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(roots)) as executor:
+        list(executor.map(populate, roots.values()))
+
+    gate = threading.Event()
+    barrier = threading.Barrier(len(workload["requests"]) + 1)
+    event_lock = threading.Lock()
+
+    def branch(request: dict[str, Any]) -> list[dict[str, Any]]:
+        carried = list(roots[int(request["root"])]["prefix_token_ids"])
+        records: list[dict[str, Any]] = []
+        gate.wait()
+        barrier.wait(timeout=60)
+        for turn in request["turns"]:
+            append = list(turn["append_token_ids"])
+            carried_prefix_sha256 = _sha256_json(carried)
+            prompt = [*carried, *append]
+            if len(prompt) != int(turn["prompt_token_count"]):
+                raise AssertionError(f"{request['request_id']} turn {turn['turn']} prompt length drifted")
+            completion = _health_completion(
+                base_url,
+                model,
+                prompt,
+                case=case,
+                max_tokens=int(turn["max_tokens"]),
+                data_parallel_rank=int(request["root"]) % case.data_parallel_size,
+                request_id=f"{arm_id}-{request['request_id']}-turn-{int(turn['turn'])}",
+                sampling_seed=_frozen_health_seed(f"trajectory:{request['request_id']}:{int(turn['turn'])}"),
+                r3_enabled=False,
+                keep_generated_tokens=True,
+            )
+            generated = completion.pop("generated_token_ids")
+            completion.pop("route_array", None)
+            carried = [*prompt, *generated]
+            if len(carried) != int(turn["final_token_count"]):
+                raise AssertionError(f"{request['request_id']} turn {turn['turn']} final length drifted")
+            record = {
+                "request_id": str(request["request_id"]),
+                "root": int(request["root"]),
+                "branch": int(request["branch"]),
+                "cohort": str(request["cohort"]),
+                "turn": int(turn["turn"]),
+                "data_parallel_rank": int(request["root"]) % case.data_parallel_size,
+                "carried_prefix_token_ids_sha256": carried_prefix_sha256,
+                "append_token_ids_sha256": _sha256_json(append),
+                "prompt_tokens": int(completion["prompt_tokens"]),
+                "completion_tokens": int(completion["completion_tokens"]),
+                "final_token_count": len(carried),
+                "prompt_token_ids_sha256": completion["prompt_token_ids_sha256"],
+                "generated_token_ids_sha256": completion["generated_token_ids_sha256"],
+                "final_prefix_token_ids_sha256": completion["final_prefix_token_ids_sha256"],
+                "sampled_token_logprobs_sha256": completion["sampled_token_logprobs"]["sha256"],
+                "sampled_token_logprobs_count": completion["sampled_token_logprobs"]["count"],
+            }
+            records.append(record)
+            with event_lock:
+                events.emit("trajectory_turn_completed", arm_id=arm_id, **record)
+        return records
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(workload["requests"]))
+    futures = [executor.submit(branch, request) for request in workload["requests"]]
+    before = _capture_health_metrics(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        phase="trajectory-open",
+        log_path=log_path,
+    )
+    try:
+        gate.set()
+        barrier.wait(timeout=60)
+        records = [record for future in futures for record in future.result()]
+    finally:
+        gate.set()
+        barrier.abort()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    expected_generation = sum(int(record["completion_tokens"]) for record in records)
+    _wait_for_health_counter(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        baseline=before,
+        metric="vllm:generation_tokens",
+        minimum_delta=expected_generation,
+        timeout_seconds=1800,
+    )
+    _wait_for_health_counter(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        baseline=before,
+        metric="vllm:request_success",
+        minimum_delta=len(records),
+        timeout_seconds=1800,
+    )
+    after = _capture_health_metrics(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        phase="trajectory-close",
+        log_path=log_path,
+    )
+    generation_delta = round(_health_metric_delta(before, after, "vllm:generation_tokens"))
+    success_delta = round(_health_metric_delta(before, after, "vllm:request_success"))
+    preemptions = round(_health_metric_delta(before, after, "vllm:num_preemptions"))
+    kv = _sequence_probe_kv(
+        artifact_dir=artifact_dir,
+        log_path=log_path,
+        before=before,
+        after=after,
+        case=case,
+        target_concurrency=len(workload["requests"]),
+        source_path=f"metrics/{arm_id}-trajectory-kv.log",
+        boundary="vLLM leader log bytes between four-turn trajectory counter snapshots",
+    )
+    final_by_cohort = {
+        cohort: sorted(
+            {
+                int(record["final_token_count"])
+                for record in records
+                if record["cohort"] == cohort and int(record["turn"]) == int(workload["turn_count"])
+            }
+        )
+        for cohort in ("short", "medium", "long")
+    }
+    gates = {
+        "exact_request_turn_count": len(records) == int(workload["request_count"]) * int(workload["turn_count"]),
+        "engine_client_token_reconciliation": generation_delta == expected_generation,
+        "request_success_reconciliation": success_delta == len(records),
+        "sampled_token_logprobs": (
+            sum(int(record["sampled_token_logprobs_count"]) for record in records) == expected_generation
+        ),
+        "answer_carry_chain": all(
+            turn == 1
+            or record["carried_prefix_token_ids_sha256"]
+            == next(
+                prior["final_prefix_token_ids_sha256"]
+                for prior in records
+                if prior["request_id"] == record["request_id"] and int(prior["turn"]) == turn - 1
+            )
+            for record in records
+            for turn in [int(record["turn"])]
+        ),
+        "final_context_lengths": final_by_cohort == {"short": [22_528], "medium": [43_008], "long": [65_536]},
+        "same_root_dp_rank": all(
+            int(record["data_parallel_rank"]) == int(record["root"]) % case.data_parallel_size for record in records
+        ),
+        "zero_preemptions": preemptions == 0,
+        "kv_instrumentation": kv.get("passed") is True,
+    }
+    elapsed = after.monotonic_seconds - before.monotonic_seconds
+    return {
+        "kind": workload["kind"],
+        "passed": all(gates.values()),
+        "gates": gates,
+        "request_count": int(workload["request_count"]),
+        "turn_count": int(workload["turn_count"]),
+        "completion_count": len(records),
+        "final_lengths_by_cohort": final_by_cohort,
+        "engine_generation_tokens": generation_delta,
+        "request_successes": success_delta,
+        "preemptions": preemptions,
+        "elapsed_seconds": elapsed,
+        "generation_tokens_per_second_per_gpu": generation_delta / elapsed / case.data_parallel_size,
+        "request_provenance": records,
+        "kv_cache": kv,
+        "metrics": {
+            "boundary_start": before.relative_path,
+            "boundary_end": after.relative_path,
+            "counter_deltas": {metric: _health_metric_delta(before, after, metric) for metric in HEALTH_COUNTER_METRICS},
+        },
+    }
+
+
+def _run_capacity_stress_131k(
+    base_url: str,
+    model: str,
+    *,
+    case: ModelCase,
+    artifact_dir: Path,
+    metrics_map: list[dict[str, Any]],
+    events: HealthEventWriter,
+    log_path: Path,
+    arm_id: str,
+) -> dict[str, Any]:
+    """Attempt one synchronized 48-branch wave ending at 131,072 tokens."""
+    workload = deterministic_capacity_stress_workload(seed=DUMMY_SEED)
+    roots = {int(root["root"]): root for root in workload["roots"]}
+
+    def populate(root: dict[str, Any]) -> None:
+        result = _health_completion(
+            base_url,
+            model,
+            list(root["prefix_token_ids"]),
+            case=case,
+            max_tokens=1,
+            data_parallel_rank=int(root["root"]) % case.data_parallel_size,
+            request_id=f"{arm_id}-capacity-populate-root-{int(root['root']):02d}",
+            sampling_seed=_frozen_health_seed(f"capacity-populate:{int(root['root'])}"),
+            r3_enabled=False,
+        )
+        result.pop("route_array", None)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(roots)) as executor:
+        list(executor.map(populate, roots.values()))
+
+    gate = threading.Event()
+    barrier = threading.Barrier(len(workload["requests"]) + 1)
+    event_lock = threading.Lock()
+
+    def one(request: dict[str, Any]) -> dict[str, Any]:
+        gate.wait()
+        barrier.wait(timeout=60)
+        prompt = [*roots[int(request["root"])]["prefix_token_ids"], *request["append_token_ids"]]
+        completion = _health_completion(
+            base_url,
+            model,
+            prompt,
+            case=case,
+            max_tokens=int(request["max_tokens"]),
+            data_parallel_rank=int(request["root"]) % case.data_parallel_size,
+            request_id=f"{arm_id}-{request['request_id']}",
+            sampling_seed=_frozen_health_seed(f"capacity:{request['request_id']}"),
+            r3_enabled=False,
+        )
+        completion.pop("route_array", None)
+        record = {
+            "request_id": str(request["request_id"]),
+            "root": int(request["root"]),
+            "branch": int(request["branch"]),
+            "data_parallel_rank": int(request["root"]) % case.data_parallel_size,
+            "prompt_tokens": int(completion["prompt_tokens"]),
+            "completion_tokens": int(completion["completion_tokens"]),
+            "final_token_count": int(completion["prompt_tokens"]) + int(completion["completion_tokens"]),
+            "prompt_token_ids_sha256": completion["prompt_token_ids_sha256"],
+            "generated_token_ids_sha256": completion["generated_token_ids_sha256"],
+            "final_prefix_token_ids_sha256": completion["final_prefix_token_ids_sha256"],
+            "sampled_token_logprobs_sha256": completion["sampled_token_logprobs"]["sha256"],
+            "sampled_token_logprobs_count": completion["sampled_token_logprobs"]["count"],
+        }
+        with event_lock:
+            events.emit("capacity_131k_request_completed", arm_id=arm_id, **record)
+        return record
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(workload["requests"]))
+    futures = [executor.submit(one, request) for request in workload["requests"]]
+    before = _capture_health_metrics(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        phase="capacity-131k-open",
+        log_path=log_path,
+    )
+    try:
+        gate.set()
+        barrier.wait(timeout=60)
+        records = [future.result() for future in futures]
+    finally:
+        gate.set()
+        barrier.abort()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    expected_generation = sum(int(record["completion_tokens"]) for record in records)
+    _wait_for_health_counter(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        baseline=before,
+        metric="vllm:generation_tokens",
+        minimum_delta=expected_generation,
+        timeout_seconds=1800,
+    )
+    _wait_for_health_counter(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        baseline=before,
+        metric="vllm:request_success",
+        minimum_delta=len(records),
+        timeout_seconds=1800,
+    )
+    after = _capture_health_metrics(
+        base_url,
+        artifact_dir=artifact_dir,
+        metrics_map=metrics_map,
+        arm_id=arm_id,
+        phase="capacity-131k-close",
+        log_path=log_path,
+    )
+    generation_delta = round(_health_metric_delta(before, after, "vllm:generation_tokens"))
+    success_delta = round(_health_metric_delta(before, after, "vllm:request_success"))
+    preemptions = round(_health_metric_delta(before, after, "vllm:num_preemptions"))
+    kv = _sequence_probe_kv(
+        artifact_dir=artifact_dir,
+        log_path=log_path,
+        before=before,
+        after=after,
+        case=case,
+        target_concurrency=len(records),
+        source_path=f"metrics/{arm_id}-capacity-131k-kv.log",
+        boundary="vLLM leader log bytes between 131K capacity counter snapshots",
+    )
+    final_lengths = sorted({int(record["final_token_count"]) for record in records})
+    gates = {
+        "exact_request_count": len(records) == int(workload["request_count"]),
+        "exact_final_context": final_lengths == [CAPACITY_FINAL_TOKENS],
+        "engine_client_token_reconciliation": generation_delta == expected_generation,
+        "request_success_reconciliation": success_delta == len(records),
+        "sampled_token_logprobs": (
+            sum(int(record["sampled_token_logprobs_count"]) for record in records) == expected_generation
+        ),
+        "same_root_dp_rank": all(
+            int(record["data_parallel_rank"]) == int(record["root"]) % case.data_parallel_size for record in records
+        ),
+        "zero_preemptions": preemptions == 0,
+        "kv_instrumentation": kv.get("passed") is True,
+    }
+    elapsed = after.monotonic_seconds - before.monotonic_seconds
+    return {
+        "kind": workload["kind"],
+        "passed": all(gates.values()),
+        "gates": gates,
+        "request_count": len(records),
+        "final_context_tokens": CAPACITY_FINAL_TOKENS,
+        "engine_generation_tokens": generation_delta,
+        "request_successes": success_delta,
+        "preemptions": preemptions,
+        "elapsed_seconds": elapsed,
+        "generation_tokens_per_second_per_gpu": generation_delta / elapsed / case.data_parallel_size,
+        "request_provenance": records,
+        "kv_cache": kv,
+        "metrics": {
+            "boundary_start": before.relative_path,
+            "boundary_end": after.relative_path,
+            "counter_deltas": {metric: _health_metric_delta(before, after, metric) for metric in HEALTH_COUNTER_METRICS},
+        },
+    }
 
 
 def _sha256_json(value: Any) -> str:
@@ -3794,6 +4495,109 @@ def _health_workload_manifest(
     return manifest
 
 
+def _trajectory_workload_manifest(workload: dict[str, Any], *, case: ModelCase) -> dict[str, Any]:
+    roots = [
+        {
+            "root": int(root["root"]),
+            "cohort": str(root["cohort"]),
+            "token_count": len(root["prefix_token_ids"]),
+            "token_ids_sha256": _sha256_json(root["prefix_token_ids"]),
+            "data_parallel_rank": int(root["root"]) % case.data_parallel_size,
+        }
+        for root in workload["roots"]
+    ]
+    requests = []
+    for request in workload["requests"]:
+        turns = []
+        for turn in request["turns"]:
+            turns.append(
+                {
+                    "turn": int(turn["turn"]),
+                    "append_token_count": int(turn["append_token_count"]),
+                    "append_token_ids_sha256": _sha256_json(turn["append_token_ids"]),
+                    "prompt_token_count": int(turn["prompt_token_count"]),
+                    "max_tokens": int(turn["max_tokens"]),
+                    "final_token_count": int(turn["final_token_count"]),
+                }
+            )
+        requests.append(
+            {
+                "request_id": str(request["request_id"]),
+                "root": int(request["root"]),
+                "branch": int(request["branch"]),
+                "cohort": str(request["cohort"]),
+                "initial_history_tokens": int(request["initial_history_tokens"]),
+                "data_parallel_rank": int(request["root"]) % case.data_parallel_size,
+                "turns": turns,
+                "final_token_count": int(request["final_token_count"]),
+            }
+        )
+    manifest = {
+        "schema_version": int(workload["schema_version"]),
+        "kind": workload["kind"],
+        "generator_seed": int(workload["seed"]),
+        "root_count": int(workload["root_count"]),
+        "branches_per_root": int(workload["branches_per_root"]),
+        "request_count": int(workload["request_count"]),
+        "turn_count": int(workload["turn_count"]),
+        "initial_history_lengths": workload["initial_history_lengths"],
+        "append_tokens_per_turn": int(workload["append_tokens_per_turn"]),
+        "response_tokens_per_turn": int(workload["response_tokens_per_turn"]),
+        "final_lengths": workload["final_lengths"],
+        "history_policy": "four sequential turns per branch; each generated answer is carried into the next prompt",
+        "roots": roots,
+        "requests": requests,
+    }
+    manifest["frozen_inputs_sha256"] = _sha256_json(manifest)
+    return manifest
+
+
+def _capacity_workload_manifest(workload: dict[str, Any], *, case: ModelCase) -> dict[str, Any]:
+    roots = [
+        {
+            "root": int(root["root"]),
+            "token_count": len(root["prefix_token_ids"]),
+            "token_ids_sha256": _sha256_json(root["prefix_token_ids"]),
+            "data_parallel_rank": int(root["root"]) % case.data_parallel_size,
+        }
+        for root in workload["roots"]
+    ]
+    requests = [
+        {
+            "request_id": str(request["request_id"]),
+            "root": int(request["root"]),
+            "branch": int(request["branch"]),
+            "prefix_token_count": int(request["prefix_token_count"]),
+            "append_token_count": int(request["append_token_count"]),
+            "append_token_ids_sha256": _sha256_json(request["append_token_ids"]),
+            "prompt_token_count": int(request["prompt_token_count"]),
+            "prompt_token_ids_sha256": _sha256_json(
+                [*workload["roots"][int(request["root"])]["prefix_token_ids"], *request["append_token_ids"]]
+            ),
+            "max_tokens": int(request["max_tokens"]),
+            "final_token_count": int(request["final_token_count"]),
+            "data_parallel_rank": int(request["root"]) % case.data_parallel_size,
+        }
+        for request in workload["requests"]
+    ]
+    manifest = {
+        "schema_version": int(workload["schema_version"]),
+        "kind": workload["kind"],
+        "generator_seed": int(workload["seed"]),
+        "root_count": int(workload["root_count"]),
+        "branches_per_root": int(workload["branches_per_root"]),
+        "request_count": int(workload["request_count"]),
+        "history_tokens": int(workload["history_tokens"]),
+        "append_tokens": int(workload["append_tokens"]),
+        "response_tokens": int(workload["response_tokens"]),
+        "final_tokens": int(workload["final_tokens"]),
+        "roots": roots,
+        "requests": requests,
+    }
+    manifest["frozen_inputs_sha256"] = _sha256_json(manifest)
+    return manifest
+
+
 def _health_result_markdown(result: dict[str, Any]) -> str:
     lines = [
         "# GrugMoE rolling benchmark health",
@@ -3883,6 +4687,19 @@ def _matrix_artifact_prefix(plan: str, run_id: str) -> str:
         return f"{TOPOLOGY_ARTIFACT_ROOT}/calibration/{run_id}/"
     if plan == "topology-v1":
         return f"{TOPOLOGY_ARTIFACT_ROOT}/topology-v1/{run_id}/"
+    if plan in {"attention-pair-v1", "attention-finalist-v1"}:
+        root = (
+            GLOBAL_CADENCE_ARTIFACT_ROOT
+            if "global-every4-ep16" in run_id
+            else (
+                SLIDING_WINDOW_ARTIFACT_ROOT
+                if any(candidate in run_id for candidate in ("window1024-ep16", "window2048-ep16"))
+                else HEALTH_ARTIFACT_ROOT if "exact-reference-ep16" in run_id else None
+            )
+        )
+        if root is None:
+            raise ValueError("attention run ID must include its candidate or finalist case")
+        return f"{root}/{plan}/{run_id}/"
     raise ValueError(f"unknown matrix plan: {plan}")
 
 
@@ -3899,7 +4716,7 @@ def _verified_calibration_source(
     expected_concurrency: int,
     expected_max_num_batched_tokens: int,
     expected_max_num_seqs: int,
-    marin_commit: str,
+    marin_commit: str | None,
     task_image: str,
 ) -> dict[str, Any]:
     """Verify one frozen calibration result and its independent receipt."""
@@ -3926,9 +4743,9 @@ def _verified_calibration_source(
             and result.get("run_id") == run_id
             and receipt.get("run_id") == run_id
         ),
-        "passed": result.get("passed") is True
-        and receipt.get("passed") is True
-        and receipt.get("benchmark_passed") is True,
+        "passed": (
+            result.get("passed") is True and receipt.get("passed") is True and receipt.get("benchmark_passed") is True
+        ),
         "selection": (
             selected.get("case") == expected_case
             and selected.get("target_concurrency") == expected_concurrency
@@ -3939,10 +4756,12 @@ def _verified_calibration_source(
             receipt.get("source_object_sha256", {}).get(relative) == digest for relative, digest in source_sha256.items()
         ),
         "provenance": (
-            provenance.get("marin_commit") == marin_commit
+            (marin_commit is None or provenance.get("marin_commit") == marin_commit)
+            and isinstance(provenance.get("marin_commit"), str)
+            and len(provenance["marin_commit"]) == 40
             and provenance.get("vllm_commit") == VLLM_SHA
             and provenance.get("task_image") == task_image
-            and receipt.get("reader_marin_commit") == marin_commit
+            and receipt.get("reader_marin_commit") == provenance.get("marin_commit")
             and receipt.get("task_image") == task_image
         ),
     }
@@ -4087,6 +4906,9 @@ def _matrix_phase(
     route_audit_mode: str | None = None,
     order: str | None = None,
     replicate: int | None = None,
+    homogeneous_slices: bool = False,
+    trajectory_65k: bool = False,
+    capacity_stress_131k: bool = False,
 ) -> dict[str, Any]:
     model_case = CASES[case]
     return {
@@ -4103,6 +4925,9 @@ def _matrix_phase(
         "route_audit_mode": route_audit_mode,
         "order": order,
         "replicate": replicate,
+        "homogeneous_slices": homogeneous_slices,
+        "trajectory_65k": trajectory_65k,
+        "capacity_stress_131k": capacity_stress_131k,
     }
 
 
@@ -4128,6 +4953,43 @@ def _matrix_initial_phases(args: argparse.Namespace) -> list[dict[str, Any]]:
                 max_num_batched_tokens=max_num_batched_tokens,
             )
             for max_num_batched_tokens in CALIBRATION_MAX_NUM_BATCHED_TOKENS
+        ]
+    if args.plan == "attention-pair-v1":
+        cases = ("exact-reference-ep16", args.attention_candidate)
+        if args.attention_order == "ba":
+            cases = tuple(reversed(cases))
+        return [
+            _matrix_phase(
+                f"{args.attention_order}-{position + 1}-{case}",
+                case=case,
+                role="attention-comparison",
+                concurrencies=[args.ep16_concurrency],
+                max_num_batched_tokens=args.ep16_max_num_batched_tokens,
+                max_num_seqs=args.topology_max_num_seqs,
+                order=args.attention_order,
+                replicate=1 if args.attention_order == "ab" else 2,
+                homogeneous_slices=True,
+            )
+            for position, case in enumerate(cases)
+        ]
+    if args.plan == "attention-finalist-v1":
+        base_cases = ["exact-reference-ep16"]
+        if args.attention_finalist != "exact-reference-ep16":
+            base_cases.append(args.attention_finalist)
+        return [
+            _matrix_phase(
+                f"finalist-{position + 1}-{base_case}",
+                case=f"{base_case.removesuffix('-ep16')}-131k-ep16",
+                role="attention-finalist-validation",
+                concurrencies=[args.ep16_concurrency],
+                max_num_batched_tokens=args.ep16_max_num_batched_tokens,
+                max_num_seqs=args.topology_max_num_seqs,
+                order="reference-then-finalist",
+                replicate=position + 1,
+                trajectory_65k=True,
+                capacity_stress_131k=True,
+            )
+            for position, base_case in enumerate(base_cases)
         ]
     if args.plan != "topology-v1":
         raise ValueError(f"unknown matrix plan: {args.plan}")
@@ -4317,9 +5179,11 @@ def _matrix_topology_summary(arms: list[dict[str, Any]]) -> dict[str, Any]:
                 "winner": (
                     "EP8"
                     if ep8_mean is not None and ep16_mean is not None and ep8_mean > ep16_mean
-                    else "EP16"
-                    if ep8_mean is not None and ep16_mean is not None and ep16_mean > ep8_mean
-                    else "tie-or-incomplete"
+                    else (
+                        "EP16"
+                        if ep8_mean is not None and ep16_mean is not None and ep16_mean > ep8_mean
+                        else "tie-or-incomplete"
+                    )
                 ),
             }
         )
@@ -4416,6 +5280,119 @@ def _matrix_topology_summary(arms: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _matrix_attention_pair_summary(arms: list[dict[str, Any]]) -> dict[str, Any]:
+    comparison = [arm for arm in arms if arm.get("matrix", {}).get("role") == "attention-comparison"]
+    candidates = {arm["matrix"]["case"]: arm for arm in comparison if arm["matrix"]["case"] != "exact-reference-ep16"}
+    reference = next(
+        (arm for arm in comparison if arm["matrix"]["case"] == "exact-reference-ep16"),
+        None,
+    )
+    if reference is None or len(candidates) != 1:
+        return {"passed": False, "error": "attention reference/candidate pair is incomplete"}
+    candidate_name, candidate = next(iter(candidates.items()))
+    reference_rate = float(reference["headline"]["generation_tokens_per_second_per_gpu"])
+    candidate_rate = float(candidate["headline"]["generation_tokens_per_second_per_gpu"])
+    reference_curve = {point["cohort"]: point for point in reference.get("coarse_curve", [])}
+    candidate_curve = {point["cohort"]: point for point in candidate.get("coarse_curve", [])}
+    curves = []
+    for cohort in ("short", "medium", "long"):
+        ref_point = reference_curve.get(cohort)
+        candidate_point = candidate_curve.get(cohort)
+        if ref_point is None or candidate_point is None:
+            curves.append({"cohort": cohort, "passed": False, "error": "coarse point is missing"})
+            continue
+        ref_rate = float(ref_point["generation_tokens_per_second_per_gpu"])
+        cand_rate = float(candidate_point["generation_tokens_per_second_per_gpu"])
+        curves.append(
+            {
+                "cohort": cohort,
+                "final_context_tokens": ref_point["final_context_tokens"],
+                "reference_generation_tokens_per_second_per_gpu": ref_rate,
+                "candidate_generation_tokens_per_second_per_gpu": cand_rate,
+                "candidate_over_reference_percent": 100 * (cand_rate / ref_rate - 1) if ref_rate else math.inf,
+                "reference_gpu_seconds_per_generated_token": ref_point["gpu_seconds_per_generated_token"],
+                "candidate_gpu_seconds_per_generated_token": candidate_point["gpu_seconds_per_generated_token"],
+                "reference_slowdown_from_short_percent": ref_point["slowdown_from_short_percent"],
+                "candidate_slowdown_from_short_percent": candidate_point["slowdown_from_short_percent"],
+                "reference_kv": ref_point["kv_cache"],
+                "candidate_kv": candidate_point["kv_cache"],
+                "passed": ref_point.get("passed") is True and candidate_point.get("passed") is True,
+            }
+        )
+    headline_delta = 100 * (candidate_rate / reference_rate - 1) if reference_rate else math.inf
+    return {
+        "passed": (
+            len(comparison) == 2
+            and reference.get("passed") is True
+            and candidate.get("passed") is True
+            and len(curves) == 3
+            and all(point.get("passed") is True for point in curves)
+        ),
+        "candidate": candidate_name,
+        "order": reference["matrix"]["order"],
+        "reference_arm": reference["arm_id"],
+        "candidate_arm": candidate["arm_id"],
+        "reference_generation_tokens_per_second_per_gpu": reference_rate,
+        "candidate_generation_tokens_per_second_per_gpu": candidate_rate,
+        "candidate_over_reference_percent": headline_delta,
+        "material_threshold_percent": 5.0,
+        "material_in_this_pair": abs(headline_delta) >= 5.0,
+        "curve": curves,
+        "interpretation": (
+            "one same-allocation order only; combine with the reversed fresh-allocation pair before a recommendation"
+        ),
+    }
+
+
+def _matrix_attention_finalist_summary(arms: list[dict[str, Any]]) -> dict[str, Any]:
+    validation = [arm for arm in arms if arm.get("matrix", {}).get("role") == "attention-finalist-validation"]
+    stretch: list[dict[str, Any]] = []
+    for arm in validation:
+        capacity = arm.get("capacity_stress_131k", {})
+        peak = capacity.get("kv_cache", {}).get("peak", {})
+        case = CASES[str(arm["matrix"]["case"])]
+        physical_per_sequence = peak.get("physical_active_bytes_per_live_sequence")
+        pools = peak.get("reserved_physical_bytes_per_engine", {})
+        minimum_pool = min((int(value) for value in pools.values()), default=0)
+        dense_stored_131k = (
+            2 * case.num_hidden_layers * case.num_key_value_heads * case.head_dim * CAPACITY_FINAL_TOKENS * 2
+        )
+        extrapolated = dense_stored_131k * 2
+        impractical = minimum_pool > 0 and extrapolated > minimum_pool
+        stretch.append(
+            {
+                "arm_id": arm["arm_id"],
+                "case": arm["matrix"]["case"],
+                "measured_131k_physical_bytes_per_live_sequence": physical_per_sequence,
+                "current_vllm_dense_stored_kv_bytes_per_sequence_131k": dense_stored_131k,
+                "minimum_reserved_physical_bytes_per_engine": minimum_pool,
+                "extrapolated_262k_physical_bytes_per_live_sequence": extrapolated,
+                "scale_factor": 2.0,
+                "status": "impractical-without-serving-or-sharding-change" if impractical else "not-proved-impractical",
+                "passed": physical_per_sequence is not None and minimum_pool > 0 and impractical,
+            }
+        )
+    return {
+        "passed": (
+            bool(validation)
+            and len(validation) <= 2
+            and all(arm.get("passed") is True for arm in validation)
+            and all(arm.get("trajectory_65k", {}).get("passed") is True for arm in validation)
+            and all(arm.get("capacity_stress_131k", {}).get("passed") is True for arm in validation)
+            and len(stretch) == len(validation)
+            and all(item.get("passed") is True for item in stretch)
+        ),
+        "arms": [arm["arm_id"] for arm in validation],
+        "trajectory_65k": [arm.get("trajectory_65k") for arm in validation],
+        "capacity_stress_131k": [arm.get("capacity_stress_131k") for arm in validation],
+        "stretch_262k": stretch,
+        "stretch_interpretation": (
+            "262K is not run when the measured 131K physical bytes extrapolate beyond one engine's fixed KV pool; "
+            "doing so would require a new serving or sharding topology"
+        ),
+    }
+
+
 def _matrix_result(
     *,
     plan: str,
@@ -4476,6 +5453,17 @@ def _matrix_result(
     elif plan == "topology-v1":
         analysis = _matrix_topology_summary(arms)
         expected_phase_count = 10 + (2 if analysis["ep8_is_targeted_chat_r3_finalist"] else 0)
+    elif plan == "attention-pair-v1":
+        analysis = _matrix_attention_pair_summary(arms)
+        expected_phase_count = 2
+    elif plan == "attention-finalist-v1":
+        analysis = _matrix_attention_finalist_summary(arms)
+        finalist_cases = {
+            str(phase.get("phase", {}).get("case"))
+            for phase in phase_results
+            if phase.get("phase", {}).get("role") == "attention-finalist-validation"
+        }
+        expected_phase_count = 1 if finalist_cases == {"exact-reference-131k-ep16"} else 2
     else:
         raise ValueError(f"unknown matrix plan: {plan}")
     passed = (
@@ -4532,7 +5520,7 @@ def _matrix_result_markdown(result: dict[str, Any]) -> str:
                     f"{carrier['r3_on_over_off_percent']:.3f}% versus matched R3-off."
                 )
             lines.append("This times the chat response carrier only. It is not a full MarinSkyRL benchmark.")
-    else:
+    elif result["plan"] == "topology-v1":
         lines.extend(["## Decision", "", analysis["recommendation"], ""])
         lines.extend(
             [
@@ -4557,6 +5545,50 @@ def _matrix_result_markdown(result: dict[str, Any]) -> str:
                         "This times the chat response carrier only. It is not a full MarinSkyRL benchmark.",
                     ]
                 )
+    elif result["plan"] == "attention-pair-v1":
+        lines.extend(
+            [
+                "## Same-allocation pair",
+                "",
+                f"Candidate: `{analysis.get('candidate', 'incomplete')}`; order: "
+                f"`{analysis.get('order', 'incomplete')}`.",
+                "",
+            ]
+        )
+        if analysis.get("candidate_over_reference_percent") is not None:
+            lines.append(f"Headline candidate over reference: {analysis['candidate_over_reference_percent']:.3f}%.")
+        lines.extend(
+            [
+                "This is one pair, not a recommendation. Combine it with the reversed fresh-allocation pair.",
+                "",
+                "| Context | Ref gen tok/s/GPU | Candidate gen tok/s/GPU | Candidate over ref | "
+                "Ref slowdown | Candidate slowdown |",
+                "|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for point in analysis.get("curve", []):
+            if point.get("passed") is not True:
+                continue
+            lines.append(
+                "| {final_context_tokens} | {reference_generation_tokens_per_second_per_gpu:.3f} | "
+                "{candidate_generation_tokens_per_second_per_gpu:.3f} | "
+                "{candidate_over_reference_percent:.3f}% | "
+                "{reference_slowdown_from_short_percent:.3f}% | "
+                "{candidate_slowdown_from_short_percent:.3f}% |".format(**point)
+            )
+    elif result["plan"] == "attention-finalist-v1":
+        lines.extend(
+            [
+                "## Finalist validation",
+                "",
+                "The reference and finalist each use a fresh server for the four-turn trajectory and 131K stress.",
+                "",
+                "262K is recorded as impractical only when the 131K physical-KV result extrapolates beyond the "
+                "fixed per-engine KV pool.",
+            ]
+        )
+    else:
+        raise ValueError(f"unknown matrix plan: {result['plan']}")
     lines.extend(
         [
             "",
@@ -5004,7 +6036,64 @@ def _run_matrix_phase(
                             "fresh_server": True,
                             "same_iris_allocation": str(info.job_id),
                         }
+                        validation_base_passed = arm.get("passed") is True
+                        # Retain the already-bounded rolling result even if a
+                        # later diagnostic probe fails or kills the server.
                         arms.append(arm)
+                        if phase.get("homogeneous_slices") and arm.get("passed") is True:
+                            curve = [
+                                _run_homogeneous_cohort_slice(
+                                    base_url,
+                                    model,
+                                    workload,
+                                    case=case,
+                                    artifact_dir=local_root,
+                                    metrics_map=metrics_map,
+                                    events=events,
+                                    log_path=server.log_path,
+                                    arm_id=arm_id,
+                                    cohort=cohort,
+                                )
+                                for cohort in ("short", "medium", "long")
+                            ]
+                            short_rate = float(curve[0]["generation_tokens_per_second_per_gpu"])
+                            for point in curve:
+                                point["slowdown_from_short_percent"] = (
+                                    100 * (1 - float(point["generation_tokens_per_second_per_gpu"]) / short_rate)
+                                    if short_rate
+                                    else math.inf
+                                )
+                            arm["coarse_curve"] = curve
+                            arm["gates"]["homogeneous_slices"] = all(point.get("passed") is True for point in curve)
+                            arm["passed"] = arm["passed"] and arm["gates"]["homogeneous_slices"]
+                        if phase.get("trajectory_65k") and validation_base_passed:
+                            trajectory = _run_four_turn_trajectory(
+                                base_url,
+                                model,
+                                case=case,
+                                artifact_dir=local_root,
+                                metrics_map=metrics_map,
+                                events=events,
+                                log_path=server.log_path,
+                                arm_id=arm_id,
+                            )
+                            arm["trajectory_65k"] = trajectory
+                            arm["gates"]["trajectory_65k"] = trajectory.get("passed") is True
+                            arm["passed"] = arm["passed"] and arm["gates"]["trajectory_65k"]
+                        if phase.get("capacity_stress_131k") and validation_base_passed:
+                            capacity = _run_capacity_stress_131k(
+                                base_url,
+                                model,
+                                case=case,
+                                artifact_dir=local_root,
+                                metrics_map=metrics_map,
+                                events=events,
+                                log_path=server.log_path,
+                                arm_id=arm_id,
+                            )
+                            arm["capacity_stress_131k"] = capacity
+                            arm["gates"]["capacity_stress_131k"] = capacity.get("passed") is True
+                            arm["passed"] = arm["passed"] and arm["gates"]["capacity_stress_131k"]
                         if arm.get("passed") is not True:
                             break
                     alive_before_stop = server.process.poll() is None
@@ -5181,6 +6270,20 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
                 marin_commit=args.marin_commit,
                 task_image=args.task_image,
             )
+        elif args.plan in {"attention-pair-v1", "attention-finalist-v1"}:
+            calibration_sources = {
+                "ep16": _verified_calibration_source(
+                    filesystem,
+                    plan="instrument-v1",
+                    run_id=args.ep16_instrument_run_id,
+                    expected_case="exact-reference-ep16",
+                    expected_concurrency=args.ep16_concurrency,
+                    expected_max_num_batched_tokens=args.ep16_max_num_batched_tokens,
+                    expected_max_num_seqs=args.topology_max_num_seqs,
+                    marin_commit=None,
+                    task_image=args.task_image,
+                )
+            }
         gpu_inventory = _local_gpu_inventory()
         if len(gpu_inventory) != LOCAL_DP_SIZE or not all("GB200" in gpu["name"] for gpu in gpu_inventory):
             raise RuntimeError(f"rank {rank} did not receive four GB200 GPUs: {gpu_inventory}")
@@ -5328,6 +6431,20 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
                 "concurrency, then the higher-throughput MBT at that concurrency"
             ),
             "failure_policy": "zero retry; preserve the first bounded result; no favorable reroll",
+            "attention_curve": {
+                "applicable": args.plan == "attention-pair-v1",
+                "cohorts": ["short", "medium", "long"] if args.plan == "attention-pair-v1" else [],
+                "requests_per_cohort": 48 if args.plan == "attention-pair-v1" else 0,
+                "root_affinity": "all eight branches of a root use root modulo 16 as their DP rank",
+                "boundary": "one 48-request homogeneous wave bounded by vllm:generation_tokens snapshots",
+                "headline_unchanged": True,
+            },
+            "attention_finalist": {
+                "applicable": args.plan == "attention-finalist-v1",
+                "trajectory": "18 roots, 8 branches per root, four sequential 1024+2048 turns with answer carry",
+                "capacity": "48 branches, 121856 cached + 1024 append + 8192 generation = 131072",
+                "stretch_262k": "run only without a new serving or sharding topology; otherwise extrapolate from 131K",
+            },
         },
         "phase_plan": executed_phases,
         "calibration_sources": calibration_sources,
@@ -5351,6 +6468,28 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
                 {phase["request_transport"] for phase in executed_phases if phase["case"] == name}
             )
         },
+        "trajectory_workloads": (
+            {
+                name: _trajectory_workload_manifest(
+                    deterministic_trajectory_workload(seed=DUMMY_SEED),
+                    case=CASES[name],
+                )
+                for name in workload_cases
+            }
+            if args.plan == "attention-finalist-v1"
+            else {}
+        ),
+        "capacity_workloads": (
+            {
+                name: _capacity_workload_manifest(
+                    deterministic_capacity_stress_workload(seed=DUMMY_SEED),
+                    case=CASES[name],
+                )
+                for name in workload_cases
+            }
+            if args.plan == "attention-finalist-v1"
+            else {}
+        ),
         "model_fixture": {
             "source": "dummy",
             "weight_dtype": "bfloat16",
@@ -5745,9 +6884,11 @@ def run_health_unattended_worker(args: argparse.Namespace) -> dict[str, Any]:
             "carrier": (
                 "OpenAI completion JSON choice.routed_experts; base64-encoded NumPy .npy"
                 if r3_enabled and request_transport == "completion"
-                else "OpenAI chat JSON choice.routed_experts; generated-token-only nested integer lists"
-                if r3_enabled
-                else "absent"
+                else (
+                    "OpenAI chat JSON choice.routed_experts; generated-token-only nested integer lists"
+                    if r3_enabled
+                    else "absent"
+                )
             ),
             "request_transport": request_transport,
             "consumer_commit": MARINSKYRL_CONSUMER_SHA if request_transport == "chat" else None,
@@ -7123,9 +8264,11 @@ def readback_health_artifacts(filesystem: Any, *, run_id: str) -> dict[str, Any]
             == (
                 "OpenAI completion JSON choice.routed_experts; base64-encoded NumPy .npy"
                 if server_settings["r3_enabled"] and request_transport == "completion"
-                else "OpenAI chat JSON choice.routed_experts; generated-token-only nested integer lists"
-                if server_settings["r3_enabled"]
-                else "absent"
+                else (
+                    "OpenAI chat JSON choice.routed_experts; generated-token-only nested integer lists"
+                    if server_settings["r3_enabled"]
+                    else "absent"
+                )
             )
             and manifest["r3"].get("request_transport", "completion") == request_transport
             and manifest["r3"].get("consumer_commit")
@@ -7371,6 +8514,379 @@ def _matrix_matched_chat_pair_contract(
     }
 
 
+def _matrix_coarse_curve_contract(
+    arm: dict[str, Any],
+    *,
+    workload: dict[str, Any],
+    parsed_by_path: dict[str, list[Any]],
+    snapshot_by_path: dict[str, dict[str, Any]],
+    event_records: list[dict[str, Any]],
+    kv_source_by_path: dict[str, bytes],
+) -> dict[str, Any]:
+    """Recompute each homogeneous context slice from raw counters and the frozen workload."""
+    case = CASES[str(arm["matrix"]["case"])]
+    requests = {str(request["request_id"]): request for request in workload["requests"]}
+    points = arm.get("coarse_curve", [])
+    point_checks: list[dict[str, Any]] = []
+    for point, cohort in zip(points, ("short", "medium", "long"), strict=False):
+        start_path = str(point["metrics"]["boundary_start"])
+        end_path = str(point["metrics"]["boundary_end"])
+        start = parsed_by_path.get(start_path, [])
+        end = parsed_by_path.get(end_path, [])
+        start_snapshot = snapshot_by_path.get(start_path, {})
+        end_snapshot = snapshot_by_path.get(end_path, {})
+        generation_delta = round(
+            prometheus_value(end, "vllm:generation_tokens") - prometheus_value(start, "vllm:generation_tokens")
+        )
+        success_delta = round(
+            prometheus_value(end, "vllm:request_success") - prometheus_value(start, "vllm:request_success")
+        )
+        preemption_delta = round(
+            prometheus_value(end, "vllm:num_preemptions") - prometheus_value(start, "vllm:num_preemptions")
+        )
+        elapsed = float(end_snapshot.get("monotonic_seconds", 0)) - float(start_snapshot.get("monotonic_seconds", 0))
+        expected_rate = generation_delta / elapsed / case.data_parallel_size if elapsed > 0 else math.inf
+        schedule = point.get("schedule", [])
+        scheduled_requests = [requests.get(str(item.get("request_id"))) for item in schedule]
+        expected_cohort_requests = [request for request in workload["requests"] if str(request.get("cohort")) == cohort]
+        expected_concurrency = len(expected_cohort_requests)
+        expected_generation = sum(int(request["max_tokens"]) for request in scheduled_requests if request is not None)
+        expected_population = len(
+            {
+                (int(item["data_parallel_rank"]), int(request["root"]))
+                for item, request in zip(schedule, scheduled_requests, strict=False)
+                if request is not None
+            }
+        )
+        cohort_requests = [request for request in scheduled_requests if request is not None]
+        final_lengths = {int(request["final_token_count"]) for request in cohort_requests}
+        schedule_valid = (
+            len(schedule) == expected_concurrency
+            and [int(item["slot"]) for item in schedule] == list(range(expected_concurrency))
+            and all(
+                request is not None
+                and request["cohort"] == cohort
+                and int(item["data_parallel_rank"]) == int(request["root"]) % case.data_parallel_size
+                and item["prompt_token_ids_sha256"] == request["prompt_token_ids_sha256"]
+                for item, request in zip(schedule, scheduled_requests, strict=False)
+            )
+            and [str(item["request_id"]) for item in schedule]
+            == [str(request["request_id"]) for request in expected_cohort_requests]
+            and {int(item["data_parallel_rank"]) for item in schedule}
+            == {int(request["root"]) % case.data_parallel_size for request in expected_cohort_requests}
+        )
+        expected_events = {
+            f"{arm['arm_id']}-{cohort}-slot-{int(item['slot']):03d}-{item['request_id']}": (
+                item,
+                request,
+            )
+            for item, request in zip(schedule, scheduled_requests, strict=False)
+            if request is not None
+        }
+        observed_events = {
+            str(event.get("request_id")): event
+            for event in event_records
+            if event.get("event") == "cohort_slice_request_completed"
+            and event.get("arm_id") == arm["arm_id"]
+            and event.get("cohort") == cohort
+        }
+        events_valid = set(observed_events) == set(expected_events) and all(
+            event.get("manifest_request_id") == item["request_id"]
+            and int(event.get("data_parallel_rank", -1)) == int(item["data_parallel_rank"])
+            and int(event.get("completion_tokens", -1)) == int(request["max_tokens"])
+            and event.get("prompt_token_ids_sha256") == request["prompt_token_ids_sha256"]
+            and all(
+                isinstance(event.get(field), str) and len(event[field]) == 64
+                for field in (
+                    "prompt_token_ids_sha256",
+                    "generated_token_ids_sha256",
+                    "final_prefix_token_ids_sha256",
+                    "sampled_token_logprobs_sha256",
+                )
+            )
+            for request_id, (item, request) in expected_events.items()
+            for event in [observed_events[request_id]]
+        )
+        schedule_types = layer_types(case.num_hidden_layers, global_interval=case.global_every)
+        expected_prediction = (
+            {
+                "final_context_tokens": next(iter(final_lengths)),
+                "local_layers": schedule_types.count("sliding_attention"),
+                "global_layers": schedule_types.count("full_attention"),
+                "per_live_sequence_bytes": predict_kv_bytes(
+                    sequence_length=next(iter(final_lengths)),
+                    local_layers=schedule_types.count("sliding_attention"),
+                    global_layers=schedule_types.count("full_attention"),
+                    local_kv_heads=case.local_kv_heads,
+                    global_kv_heads=case.global_kv_heads,
+                    head_dim=case.head_dim,
+                    sliding_window=case.sliding_window,
+                ),
+                "scope": "semantic K and V payload before block rounding",
+            }
+            if len(final_lengths) == 1
+            else None
+        )
+        kv = point.get("kv_cache", {})
+        kv_source = kv.get("source", {})
+        kv_source_path = str(kv_source.get("path", ""))
+        kv_source_payload = kv_source_by_path.get(kv_source_path, b"")
+        recomputed_kv = _health_kv_summary_from_text(
+            kv_source_payload.decode(errors="replace"),
+            case=case,
+            target_concurrency=expected_concurrency,
+        )
+        recomputed_kv["attention_prediction"] = expected_prediction
+        stored_kv_without_source = {key: value for key, value in kv.items() if key != "source"}
+        kv_recomputed = (
+            kv_source_path in kv_source_by_path
+            and int(kv_source.get("bytes", -1)) == len(kv_source_payload)
+            and kv_source.get("sha256") == hashlib.sha256(kv_source_payload).hexdigest()
+            and stored_kv_without_source == recomputed_kv
+        )
+        point_passed = (
+            point.get("cohort") == cohort
+            and bool(start)
+            and bool(end)
+            and point.get("passed") is True
+            and all(point.get("gates", {}).values())
+            and schedule_valid
+            and events_valid
+            and int(point.get("slice_concurrency", -1)) == expected_concurrency
+            and int(point.get("measured_requests", -1)) == expected_concurrency
+            and int(point.get("population_requests", -1)) == expected_population
+            and generation_delta == expected_generation == int(point.get("engine_generation_tokens", -1))
+            and success_delta == expected_concurrency
+            and preemption_delta == int(point.get("preemptions", -1)) == 0
+            and math.isclose(elapsed, float(point.get("elapsed_seconds", 0)), rel_tol=1e-12, abs_tol=1e-12)
+            and math.isclose(
+                expected_rate,
+                float(point.get("generation_tokens_per_second_per_gpu", math.inf)),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+            and math.isclose(
+                case.data_parallel_size * elapsed / generation_delta,
+                float(point.get("gpu_seconds_per_generated_token", math.inf)),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+            and len(final_lengths) == 1
+            and int(point.get("final_context_tokens", -1)) == next(iter(final_lengths))
+            and kv.get("passed") is True
+            and all(kv.get("gates", {}).values())
+            and kv.get("attention_prediction") == expected_prediction
+            and kv_recomputed
+        )
+        point_checks.append(
+            {
+                "cohort": cohort,
+                "passed": point_passed,
+                "schedule_valid": schedule_valid,
+                "events_valid": events_valid,
+                "kv_recomputed": kv_recomputed,
+                "generation_delta": generation_delta,
+                "success_delta": success_delta,
+                "preemption_delta": preemption_delta,
+                "elapsed_seconds": elapsed,
+                "expected_rate": expected_rate,
+            }
+        )
+    short_rate = float(points[0]["generation_tokens_per_second_per_gpu"]) if len(points) == 3 else math.inf
+    slowdown_valid = len(points) == 3 and all(
+        math.isclose(
+            float(point["slowdown_from_short_percent"]),
+            100 * (1 - float(point["generation_tokens_per_second_per_gpu"]) / short_rate),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+        for point in points
+    )
+    return {
+        "applicable": True,
+        "passed": (
+            [point.get("cohort") for point in points] == ["short", "medium", "long"]
+            and len(point_checks) == 3
+            and all(item["passed"] for item in point_checks)
+            and slowdown_valid
+        ),
+        "slowdown_valid": slowdown_valid,
+        "points": point_checks,
+    }
+
+
+def _matrix_sequence_probe_contract(
+    arm: dict[str, Any],
+    *,
+    field: str,
+    manifest: dict[str, Any],
+    parsed_by_path: dict[str, list[Any]],
+    snapshot_by_path: dict[str, dict[str, Any]],
+    event_records: list[dict[str, Any]],
+    kv_source_by_path: dict[str, bytes],
+) -> dict[str, Any]:
+    """Recompute a trajectory or capacity probe from raw counters and compact hashes."""
+    probe = arm.get(field, {})
+    event_name = "trajectory_turn_completed" if field == "trajectory_65k" else "capacity_131k_request_completed"
+    start_path = str(probe.get("metrics", {}).get("boundary_start", ""))
+    end_path = str(probe.get("metrics", {}).get("boundary_end", ""))
+    start = parsed_by_path.get(start_path, [])
+    end = parsed_by_path.get(end_path, [])
+    start_snapshot = snapshot_by_path.get(start_path, {})
+    end_snapshot = snapshot_by_path.get(end_path, {})
+    generation_delta = round(
+        prometheus_value(end, "vllm:generation_tokens") - prometheus_value(start, "vllm:generation_tokens")
+    )
+    success_delta = round(
+        prometheus_value(end, "vllm:request_success") - prometheus_value(start, "vllm:request_success")
+    )
+    preemption_delta = round(
+        prometheus_value(end, "vllm:num_preemptions") - prometheus_value(start, "vllm:num_preemptions")
+    )
+    elapsed = float(end_snapshot.get("monotonic_seconds", 0)) - float(start_snapshot.get("monotonic_seconds", 0))
+    provenance = probe.get("request_provenance", [])
+    observed_events = [
+        event for event in event_records if event.get("event") == event_name and event.get("arm_id") == arm.get("arm_id")
+    ]
+    compact_events = [
+        {key: value for key, value in event.items() if key not in {"timestamp", "monotonic_seconds", "event", "arm_id"}}
+        for event in observed_events
+    ]
+    event_sort_key = (
+        (lambda record: (str(record.get("request_id")), int(record.get("turn", -1))))
+        if field == "trajectory_65k"
+        else (lambda record: str(record.get("request_id")))
+    )
+    events_match_result = sorted(compact_events, key=event_sort_key) == sorted(provenance, key=event_sort_key)
+    request_by_id = {str(request["request_id"]): request for request in manifest.get("requests", [])}
+    root_by_id = {int(root["root"]): root for root in manifest.get("roots", [])}
+    event_hashes_valid = all(
+        all(
+            isinstance(record.get(key), str) and len(record[key]) == 64
+            for key in (
+                "prompt_token_ids_sha256",
+                "generated_token_ids_sha256",
+                "final_prefix_token_ids_sha256",
+                "sampled_token_logprobs_sha256",
+            )
+        )
+        for record in provenance
+    )
+    if field == "trajectory_65k":
+        by_key = {(str(record["request_id"]), int(record["turn"])): record for record in provenance}
+        expected_keys = {
+            (str(request["request_id"]), int(turn["turn"]))
+            for request in manifest.get("requests", [])
+            for turn in request.get("turns", [])
+        }
+        schedule_valid = (
+            len(provenance) == len(expected_keys)
+            and set(by_key) == expected_keys
+            and all(
+                bool(record)
+                and record["cohort"] == request["cohort"]
+                and int(record["root"]) == int(request["root"])
+                and int(record["branch"]) == int(request["branch"])
+                and int(record["data_parallel_rank"]) == int(request["data_parallel_rank"])
+                and int(record["prompt_tokens"]) == int(turn["prompt_token_count"])
+                and int(record["completion_tokens"]) == int(turn["max_tokens"])
+                and int(record["final_token_count"]) == int(turn["final_token_count"])
+                and int(record["sampled_token_logprobs_count"]) == int(turn["max_tokens"])
+                and record["append_token_ids_sha256"] == turn["append_token_ids_sha256"]
+                and (
+                    record["carried_prefix_token_ids_sha256"] == root_by_id[int(request["root"])]["token_ids_sha256"]
+                    if int(turn["turn"]) == 1
+                    else record["carried_prefix_token_ids_sha256"]
+                    == by_key[(str(request["request_id"]), int(turn["turn"]) - 1)]["final_prefix_token_ids_sha256"]
+                )
+                for request in manifest.get("requests", [])
+                for turn in request.get("turns", [])
+                for record in [by_key.get((str(request["request_id"]), int(turn["turn"])), {})]
+            )
+        )
+        expected_generation = (
+            int(manifest.get("request_count", 0))
+            * int(manifest.get("turn_count", 0))
+            * int(manifest.get("response_tokens_per_turn", 0))
+        )
+        expected_successes = int(manifest.get("request_count", 0)) * int(manifest.get("turn_count", 0))
+    else:
+        by_key = {str(record["request_id"]): record for record in provenance}
+        expected_keys = set(request_by_id)
+        schedule_valid = (
+            len(provenance) == len(expected_keys)
+            and set(by_key) == expected_keys
+            and all(
+                bool(record)
+                and int(record["root"]) == int(request["root"])
+                and int(record["branch"]) == int(request["branch"])
+                and int(record["data_parallel_rank"]) == int(request["data_parallel_rank"])
+                and int(record["prompt_tokens"]) == int(request["prompt_token_count"])
+                and int(record["completion_tokens"]) == int(request["max_tokens"])
+                and int(record["final_token_count"]) == int(request["final_token_count"])
+                and int(record["sampled_token_logprobs_count"]) == int(request["max_tokens"])
+                and record["prompt_token_ids_sha256"] == request["prompt_token_ids_sha256"]
+                for request_id, request in request_by_id.items()
+                for record in [by_key.get(request_id, {})]
+            )
+        )
+        expected_generation = int(manifest.get("request_count", 0)) * int(manifest.get("response_tokens", 0))
+        expected_successes = int(manifest.get("request_count", 0))
+    case = CASES[str(arm["matrix"]["case"])]
+    kv = probe.get("kv_cache", {})
+    kv_source = kv.get("source", {})
+    kv_source_path = str(kv_source.get("path", ""))
+    kv_source_payload = kv_source_by_path.get(kv_source_path, b"")
+    target_concurrency = int(manifest.get("request_count", 0))
+    recomputed_kv = _health_kv_summary_from_text(
+        kv_source_payload.decode(errors="replace"),
+        case=case,
+        target_concurrency=target_concurrency,
+    )
+    stored_kv_without_source = {key: value for key, value in kv.items() if key != "source"}
+    kv_recomputed = stored_kv_without_source == recomputed_kv
+    kv_source_valid = (
+        kv_source_path in kv_source_by_path
+        and int(kv_source.get("bytes", -1)) == len(kv_source_payload)
+        and kv_source.get("sha256") == hashlib.sha256(kv_source_payload).hexdigest()
+    )
+    expected_rate = generation_delta / elapsed / case.data_parallel_size if elapsed > 0 else math.inf
+    passed = (
+        bool(start)
+        and bool(end)
+        and probe.get("passed") is True
+        and all(probe.get("gates", {}).values())
+        and schedule_valid
+        and event_hashes_valid
+        and events_match_result
+        and generation_delta == expected_generation == int(probe.get("engine_generation_tokens", -1))
+        and success_delta == expected_successes == int(probe.get("request_successes", -1))
+        and preemption_delta == int(probe.get("preemptions", -1)) == 0
+        and math.isclose(elapsed, float(probe.get("elapsed_seconds", 0)), rel_tol=1e-12, abs_tol=1e-12)
+        and math.isclose(
+            expected_rate,
+            float(probe.get("generation_tokens_per_second_per_gpu", math.inf)),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+        and kv.get("passed") is True
+        and kv_recomputed
+        and kv_source_valid
+    )
+    return {
+        "applicable": True,
+        "passed": passed,
+        "field": field,
+        "schedule_valid": schedule_valid,
+        "events_match_result": events_match_result,
+        "generation_delta": generation_delta,
+        "success_delta": success_delta,
+        "preemption_delta": preemption_delta,
+        "kv_recomputed": kv_recomputed,
+        "kv_source_valid": kv_source_valid,
+    }
+
+
 def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dict[str, Any]:
     """Independently re-read the matrix and recompute every decision field."""
     artifact_prefix = _matrix_artifact_prefix(plan, run_id)
@@ -7438,14 +8954,29 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         }
         parsed_by_path[entry["path"]] = parsed
     checks["raw_metrics"] = {
-        "passed": bool(snapshots)
-        and len({entry["path"] for entry in snapshots}) == len(snapshots)
-        and all(item["passed"] for item in raw_checks.values()),
+        "passed": (
+            bool(snapshots)
+            and len({entry["path"] for entry in snapshots}) == len(snapshots)
+            and all(item["passed"] for item in raw_checks.values())
+        ),
         "snapshots": len(snapshots),
         "files": raw_checks,
     }
     snapshot_by_path = {entry["path"]: entry for entry in snapshots}
     event_records = [json.loads(line) for line in events_bytes.decode().splitlines() if line.strip()]
+    kv_source_paths = {
+        str(arm[field]["kv_cache"]["source"]["path"])
+        for arm in result.get("arms", [])
+        for field in ("trajectory_65k", "capacity_stress_131k")
+        if field in arm
+    }
+    kv_source_paths.update(
+        str(point["kv_cache"]["source"]["path"])
+        for arm in result.get("arms", [])
+        for point in arm.get("coarse_curve", [])
+        if point.get("kv_cache", {}).get("source", {}).get("path")
+    )
+    kv_sources = {path: read(path) for path in kv_source_paths}
     arm_checks: dict[str, Any] = {}
     for arm in result.get("arms", []):
         start_path = arm["metrics"]["boundary_start"]
@@ -7481,6 +9012,44 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         request_transport = arm["settings"]["request_transport"]
         workload = manifest["workloads"][f"{case.name}:{request_transport}"]
         request_by_id = {request["request_id"]: request for request in workload["requests"]}
+        curve_contract = (
+            _matrix_coarse_curve_contract(
+                arm,
+                workload=workload,
+                parsed_by_path=parsed_by_path,
+                snapshot_by_path=snapshot_by_path,
+                event_records=event_records,
+                kv_source_by_path=kv_sources,
+            )
+            if plan == "attention-pair-v1"
+            else {"applicable": False, "passed": "coarse_curve" not in arm}
+        )
+        trajectory_contract = (
+            _matrix_sequence_probe_contract(
+                arm,
+                field="trajectory_65k",
+                manifest=manifest.get("trajectory_workloads", {}).get(case.name, {}),
+                parsed_by_path=parsed_by_path,
+                snapshot_by_path=snapshot_by_path,
+                event_records=event_records,
+                kv_source_by_path=kv_sources,
+            )
+            if plan == "attention-finalist-v1"
+            else {"applicable": False, "passed": "trajectory_65k" not in arm}
+        )
+        capacity_contract = (
+            _matrix_sequence_probe_contract(
+                arm,
+                field="capacity_stress_131k",
+                manifest=manifest.get("capacity_workloads", {}).get(case.name, {}),
+                parsed_by_path=parsed_by_path,
+                snapshot_by_path=snapshot_by_path,
+                event_records=event_records,
+                kv_source_by_path=kv_sources,
+            )
+            if plan == "attention-finalist-v1"
+            else {"applicable": False, "passed": "capacity_stress_131k" not in arm}
+        )
         completion_events = [
             record
             for record in event_records
@@ -7578,6 +9147,9 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
                 and event_contract
                 and route_event_contract
                 and topology_no_response_routes
+                and curve_contract["passed"] is True
+                and trajectory_contract["passed"] is True
+                and capacity_contract["passed"] is True
             ),
             "generation_delta": generation_delta,
             "prompt_delta": prompt_delta,
@@ -7586,6 +9158,9 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
             "event_contract": event_contract,
             "route_event_contract": route_event_contract,
             "topology_no_response_routes": topology_no_response_routes,
+            "coarse_curve": curve_contract,
+            "trajectory_65k": trajectory_contract,
+            "capacity_stress_131k": capacity_contract,
         }
     checks["arm_recomputation"] = {
         "passed": bool(arm_checks) and all(item["passed"] for item in arm_checks.values()),
@@ -7604,6 +9179,160 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         "passed": bool(regenerated_workloads) and manifest.get("workloads") == regenerated_workloads,
         "contracts": sorted(regenerated_workloads),
     }
+    regenerated_trajectory = {
+        name: _trajectory_workload_manifest(
+            deterministic_trajectory_workload(seed=int(workload["generator_seed"])),
+            case=CASES[name],
+        )
+        for name, workload in manifest.get("trajectory_workloads", {}).items()
+    }
+    regenerated_capacity = {
+        name: _capacity_workload_manifest(
+            deterministic_capacity_stress_workload(seed=int(workload["generator_seed"])),
+            case=CASES[name],
+        )
+        for name, workload in manifest.get("capacity_workloads", {}).items()
+    }
+    checks["frozen_sequence_workloads"] = {
+        "passed": (
+            (
+                bool(regenerated_trajectory)
+                and bool(regenerated_capacity)
+                and manifest.get("trajectory_workloads") == regenerated_trajectory
+                and manifest.get("capacity_workloads") == regenerated_capacity
+            )
+            if plan == "attention-finalist-v1"
+            else manifest.get("trajectory_workloads", {}) == {} and manifest.get("capacity_workloads", {}) == {}
+        ),
+        "trajectory_cases": sorted(regenerated_trajectory),
+        "capacity_cases": sorted(regenerated_capacity),
+    }
+    expected_model_configs = {
+        name: dataclasses.asdict(CASES[name]) for name in sorted(manifest.get("model_configs", {}))
+    }
+    checks["frozen_model_configs"] = {
+        "passed": bool(expected_model_configs) and manifest.get("model_configs") == expected_model_configs,
+        "cases": sorted(expected_model_configs),
+    }
+    if plan == "attention-pair-v1":
+        planned_attention = [
+            phase for phase in manifest.get("phase_plan", []) if phase.get("role") == "attention-comparison"
+        ]
+        candidate_names = {
+            str(phase["case"]) for phase in planned_attention if phase.get("case") != "exact-reference-ep16"
+        }
+        candidate_name = next(iter(candidate_names)) if len(candidate_names) == 1 else None
+        expected_property = {
+            "window1024-ep16": "sliding_window",
+            "window2048-ep16": "sliding_window",
+            "global-every4-ep16": "global_every",
+        }.get(candidate_name)
+        changed_properties = (
+            {
+                key
+                for key, value in dataclasses.asdict(CASES["exact-reference-ep16"]).items()
+                if key != "name" and dataclasses.asdict(CASES[candidate_name])[key] != value
+            }
+            if candidate_name in ATTENTION_CANDIDATES
+            else set()
+        )
+        normalized_phases = []
+        for phase in planned_attention:
+            normalized = dict(phase)
+            normalized.pop("phase_id", None)
+            normalized.pop("case", None)
+            normalized_phases.append(normalized)
+        order = planned_attention[0].get("order") if len(planned_attention) == 2 else None
+        expected_sequence = (
+            ["exact-reference-ep16", candidate_name]
+            if order == "ab"
+            else [candidate_name, "exact-reference-ep16"] if order == "ba" else []
+        )
+        reference_workload = manifest.get("workloads", {}).get("exact-reference-ep16:completion")
+        candidate_workload = manifest.get("workloads", {}).get(f"{candidate_name}:completion")
+        checks["attention_pair_protocol"] = {
+            "applicable": True,
+            "passed": (
+                len(planned_attention) == 2
+                and candidate_name in ATTENTION_CANDIDATES
+                and changed_properties == {expected_property}
+                and [phase.get("case") for phase in planned_attention] == expected_sequence
+                and len(normalized_phases) == 2
+                and normalized_phases[0] == normalized_phases[1]
+                and all(phase.get("homogeneous_slices") is True for phase in planned_attention)
+                and reference_workload == candidate_workload
+            ),
+            "candidate": candidate_name,
+            "order": order,
+            "changed_properties": sorted(changed_properties),
+            "expected_property": expected_property,
+            "identical_frozen_workloads": reference_workload == candidate_workload,
+        }
+    else:
+        checks["attention_pair_protocol"] = {"applicable": False, "passed": True}
+    if plan == "attention-finalist-v1":
+        planned_finalist = [
+            phase for phase in manifest.get("phase_plan", []) if phase.get("role") == "attention-finalist-validation"
+        ]
+        cases = [str(phase.get("case")) for phase in planned_finalist]
+        reference_case = "exact-reference-131k-ep16"
+        candidate_cases = [case for case in cases if case != reference_case]
+        candidate_case = candidate_cases[0] if len(candidate_cases) == 1 else None
+        expected_property = {
+            "window1024-131k-ep16": "sliding_window",
+            "window2048-131k-ep16": "sliding_window",
+            "global-every4-131k-ep16": "global_every",
+        }.get(candidate_case)
+        changed_properties = (
+            {
+                key
+                for key, value in dataclasses.asdict(CASES[reference_case]).items()
+                if key != "name" and dataclasses.asdict(CASES[candidate_case])[key] != value
+            }
+            if candidate_case is not None
+            else set()
+        )
+        expected_cases = [reference_case, candidate_case] if candidate_case is not None else [reference_case]
+        normalized = []
+        for phase in planned_finalist:
+            item = dict(phase)
+            item.pop("phase_id", None)
+            item.pop("case", None)
+            item.pop("replicate", None)
+            normalized.append(item)
+        health_workloads = manifest.get("workloads", {})
+        trajectory_workloads = manifest.get("trajectory_workloads", {})
+        capacity_workloads = manifest.get("capacity_workloads", {})
+        comparison_cases = expected_cases if candidate_case is not None else [reference_case]
+        checks["attention_finalist_protocol"] = {
+            "applicable": True,
+            "passed": (
+                cases == expected_cases
+                and len(normalized) == len(expected_cases)
+                and all(item == normalized[0] for item in normalized)
+                and all(CASES[case].max_model_len == CAPACITY_FINAL_TOKENS for case in comparison_cases)
+                and all(phase.get("trajectory_65k") is True for phase in planned_finalist)
+                and all(phase.get("capacity_stress_131k") is True for phase in planned_finalist)
+                and all(phase.get("r3_enabled") is False for phase in planned_finalist)
+                and (candidate_case is None or changed_properties == {expected_property})
+                and len(
+                    {
+                        health_workloads.get(f"{case}:completion", {}).get("frozen_inputs_sha256")
+                        for case in comparison_cases
+                    }
+                )
+                == 1
+                and len({trajectory_workloads.get(case, {}).get("frozen_inputs_sha256") for case in comparison_cases})
+                == 1
+                and len({capacity_workloads.get(case, {}).get("frozen_inputs_sha256") for case in comparison_cases}) == 1
+            ),
+            "cases": cases,
+            "candidate_case": candidate_case,
+            "changed_properties": sorted(changed_properties),
+            "expected_property": expected_property,
+        }
+    else:
+        checks["attention_finalist_protocol"] = {"applicable": False, "passed": True}
     recomputed = _matrix_result(
         plan=plan,
         run_id=run_id,
@@ -7630,6 +9359,8 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         "instrument-v1": 5,
         "ep8-calibration": 2,
         "topology-v1": 10 + (2 if result.get("analysis", {}).get("ep8_is_targeted_chat_r3_finalist") else 0),
+        "attention-pair-v1": 2,
+        "attention-finalist-v1": len(manifest.get("phase_plan", [])),
     }[plan]
     phase_job_ids = {
         rank_record.get("job_id")
@@ -7673,6 +9404,46 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
                 marin_commit=str(provenance["marin_commit"]),
                 task_image=str(provenance["task_image"]),
             )
+            checks["calibration_sources"] = {
+                "applicable": True,
+                "passed": stored_sources == verified_sources,
+                "sources": verified_sources,
+            }
+        except Exception as exc:
+            checks["calibration_sources"] = {
+                "applicable": True,
+                "passed": False,
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }
+    elif plan in {"attention-pair-v1", "attention-finalist-v1"}:
+        try:
+            stored_sources = manifest["calibration_sources"]
+            reference_settings = {
+                (
+                    int(phase["concurrencies"][0]),
+                    int(phase["max_num_batched_tokens"]),
+                    int(phase["max_num_seqs"]),
+                )
+                for phase in planned_phases
+                if phase.get("role") in {"attention-comparison", "attention-finalist-validation"}
+                and phase.get("case") in {"exact-reference-ep16", "exact-reference-131k-ep16"}
+            }
+            if len(reference_settings) != 1:
+                raise ValueError("attention reference settings are not unique")
+            concurrency, max_num_batched_tokens, max_num_seqs = next(iter(reference_settings))
+            verified_sources = {
+                "ep16": _verified_calibration_source(
+                    filesystem,
+                    plan="instrument-v1",
+                    run_id=str(stored_sources["ep16"]["run_id"]),
+                    expected_case="exact-reference-ep16",
+                    expected_concurrency=concurrency,
+                    expected_max_num_batched_tokens=max_num_batched_tokens,
+                    expected_max_num_seqs=max_num_seqs,
+                    marin_commit=None,
+                    task_image=str(provenance["task_image"]),
+                )
+            }
             checks["calibration_sources"] = {
                 "applicable": True,
                 "passed": stored_sources == verified_sources,
@@ -7773,6 +9544,17 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         "result.md",
         *[entry["path"] for entry in snapshots],
         *[str(arm["kv_cache"]["source"]["path"]) for arm in result.get("arms", [])],
+        *[
+            str(point["kv_cache"]["source"]["path"])
+            for arm in result.get("arms", [])
+            for point in arm.get("coarse_curve", [])
+        ],
+        *[
+            str(arm[field]["kv_cache"]["source"]["path"])
+            for arm in result.get("arms", [])
+            for field in ("trajectory_65k", "capacity_stress_131k")
+            if field in arm
+        ],
     }
     checks["exact_layout"] = {
         "passed": found == expected_files,
@@ -7952,6 +9734,26 @@ def _matrix_worker_argv(
                 args.ep16_instrument_run_id,
             ]
         )
+    elif args.plan == "attention-pair-v1":
+        command.extend(
+            [
+                "--attention-candidate",
+                args.attention_candidate,
+                "--attention-order",
+                args.attention_order,
+                "--ep16-instrument-run-id",
+                args.ep16_instrument_run_id,
+            ]
+        )
+    elif args.plan == "attention-finalist-v1":
+        command.extend(
+            [
+                "--attention-finalist",
+                args.attention_finalist,
+                "--ep16-instrument-run-id",
+                args.ep16_instrument_run_id,
+            ]
+        )
     return command
 
 
@@ -7972,10 +9774,33 @@ def _validate_matrix_args(args: argparse.Namespace) -> None:
     if args.topology_max_num_seqs < max(args.ep8_concurrency, args.ep16_concurrency):
         raise ValueError("topology max-num-seqs must cover both selected concurrencies")
     source_run_ids = (args.ep8_calibration_run_id, args.ep16_instrument_run_id)
+    attention_fields = (args.attention_candidate, args.attention_order)
     if args.plan == "topology-v1" and not all(source_run_ids):
         raise ValueError("topology requires the EP8 calibration and EP16 instrument run IDs")
-    if args.plan != "topology-v1" and any(source_run_ids):
-        raise ValueError("calibration source run IDs are only valid for topology")
+    if args.plan == "topology-v1" and (any(attention_fields) or args.attention_finalist is not None):
+        raise ValueError("attention settings are only valid for attention plans")
+    if args.plan == "attention-pair-v1":
+        if args.ep8_calibration_run_id is not None or args.ep16_instrument_run_id is None:
+            raise ValueError("attention pairs require only the EP16 instrument run ID")
+        if args.attention_candidate not in ATTENTION_CANDIDATES or args.attention_order not in ATTENTION_ORDERS:
+            raise ValueError("attention pairs require a frozen candidate and order")
+        if args.run_id is not None and args.attention_candidate not in args.run_id:
+            raise ValueError("attention pair run ID must include its candidate case")
+        if args.attention_finalist is not None:
+            raise ValueError("attention finalist is only valid for finalist validation")
+    elif args.plan == "attention-finalist-v1":
+        if args.ep8_calibration_run_id is not None or args.ep16_instrument_run_id is None:
+            raise ValueError("attention finalist validation requires only the EP16 instrument run ID")
+        if any(attention_fields) or args.attention_finalist not in ATTENTION_FINALISTS:
+            raise ValueError("attention finalist validation requires one frozen finalist")
+        if args.run_id is not None and args.attention_finalist not in args.run_id:
+            raise ValueError("attention finalist run ID must include its finalist case")
+    elif args.plan != "topology-v1" and any(source_run_ids):
+        raise ValueError("calibration source run IDs are only valid for topology or attention pairs")
+    if args.plan != "attention-pair-v1" and any(attention_fields):
+        raise ValueError("attention candidate and order are only valid for attention pairs")
+    if args.plan != "attention-finalist-v1" and args.attention_finalist is not None:
+        raise ValueError("attention finalist is only valid for finalist validation")
 
 
 def submit_matrix(args: argparse.Namespace) -> dict[str, Any]:
@@ -7983,7 +9808,18 @@ def submit_matrix(args: argparse.Namespace) -> dict[str, Any]:
     checkout = _clean_pushed_checkout()
     image = _immutable_image(args.task_image)
     priority = Priority(args.priority)
-    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_id = args.run_id or (
+        f"exp{'3' if args.attention_candidate == 'global-every4-ep16' else '4'}-"
+        f"{args.attention_candidate}-{args.attention_order}-{timestamp}"
+        if args.plan == "attention-pair-v1"
+        else (
+            f"exp{'3' if args.attention_finalist == 'global-every4-ep16' else '4'}-"
+            f"{args.attention_finalist}-validation-{timestamp}"
+            if args.plan == "attention-finalist-v1"
+            else timestamp
+        )
+    )
     replicas = 2 if args.plan == "ep8-calibration" else 4
     coscheduling = CoschedulingConfig(group_by=UNATTENDED_COSCHEDULING)
     worker_argv = _matrix_worker_argv(
@@ -8037,6 +9873,19 @@ def submit_matrix(args: argparse.Namespace) -> dict[str, Any]:
             summary["calibration_source_run_ids"] = {
                 "ep8": args.ep8_calibration_run_id,
                 "ep16": args.ep16_instrument_run_id,
+            }
+        elif args.plan == "attention-pair-v1":
+            summary["attention_pair"] = {
+                "candidate": args.attention_candidate,
+                "order": args.attention_order,
+                "ep16_instrument_run_id": args.ep16_instrument_run_id,
+            }
+        elif args.plan == "attention-finalist-v1":
+            summary["attention_finalist"] = {
+                "finalist": args.attention_finalist,
+                "ep16_instrument_run_id": args.ep16_instrument_run_id,
+                "trajectory_65k": True,
+                "capacity_stress_131k": True,
             }
         print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
         if args.wait:
@@ -8230,6 +10079,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         command_parser.add_argument("--topology-max-num-seqs", type=int, default=CALIBRATION_MAX_NUM_SEQS)
         command_parser.add_argument("--ep8-calibration-run-id")
         command_parser.add_argument("--ep16-instrument-run-id")
+        command_parser.add_argument("--attention-candidate", choices=ATTENTION_CANDIDATES)
+        command_parser.add_argument("--attention-order", choices=ATTENTION_ORDERS)
+        command_parser.add_argument("--attention-finalist", choices=ATTENTION_FINALISTS)
 
     submit_matrix_parser = subparsers.add_parser(
         "submit-matrix",

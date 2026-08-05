@@ -16,7 +16,7 @@ import io
 import json
 import math
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,12 @@ ACCEPTANCE_HISTORY_LENGTHS = (10_240, 30_720, 62_464)
 ACCEPTANCE_APPEND_TOKENS = 1_024
 ACCEPTANCE_RESPONSE_TOKENS = 2_048
 ACCEPTANCE_FINAL_LENGTHS = (13_312, 33_792, 65_536)
+TRAJECTORY_INITIAL_HISTORY_LENGTHS = (10_240, 30_720, 53_248)
+TRAJECTORY_TURNS = 4
+CAPACITY_HISTORY_TOKENS = 121_856
+CAPACITY_APPEND_TOKENS = 1_024
+CAPACITY_RESPONSE_TOKENS = 8_192
+CAPACITY_FINAL_TOKENS = 131_072
 SITES = ("k", "v", "attn", "mlp")
 
 
@@ -343,7 +349,69 @@ CASES: dict[str, ModelCase] = {
         sliding_window=512,
         data_parallel_size=16,
     ),
+    "window1024-ep16": _case(
+        "window1024-ep16",
+        hidden_size=6144,
+        num_hidden_layers=48,
+        num_attention_heads=48,
+        num_key_value_heads=12,
+        local_kv_heads=12,
+        global_kv_heads=6,
+        num_experts=128,
+        num_experts_per_tok=4,
+        moe_intermediate_size=3072,
+        shared_expert_intermediate_size=6144,
+        max_model_len=65_536,
+        sliding_window=1024,
+        data_parallel_size=16,
+    ),
+    "window2048-ep16": _case(
+        "window2048-ep16",
+        hidden_size=6144,
+        num_hidden_layers=48,
+        num_attention_heads=48,
+        num_key_value_heads=12,
+        local_kv_heads=12,
+        global_kv_heads=6,
+        num_experts=128,
+        num_experts_per_tok=4,
+        moe_intermediate_size=3072,
+        shared_expert_intermediate_size=6144,
+        max_model_len=65_536,
+        sliding_window=2048,
+        data_parallel_size=16,
+    ),
+    "global-every4-ep16": _case(
+        "global-every4-ep16",
+        hidden_size=6144,
+        num_hidden_layers=48,
+        num_attention_heads=48,
+        num_key_value_heads=12,
+        local_kv_heads=12,
+        global_kv_heads=6,
+        num_experts=128,
+        num_experts_per_tok=4,
+        moe_intermediate_size=3072,
+        shared_expert_intermediate_size=6144,
+        max_model_len=65_536,
+        sliding_window=512,
+        data_parallel_size=16,
+        global_every=4,
+    ),
 }
+
+# The finalist validation changes only the advertised context ceiling. This
+# lets the 65K trajectory and 131K capacity attempt run on the same fresh
+# server without introducing a serving or sharding change.
+for _base_name in (
+    "exact-reference-ep16",
+    "window1024-ep16",
+    "window2048-ep16",
+    "global-every4-ep16",
+):
+    _base_case = CASES[_base_name]
+    _extended_name = f"{_base_name.removesuffix('-ep16')}-131k-ep16"
+    CASES[_extended_name] = replace(_base_case, name=_extended_name, max_model_len=CAPACITY_FINAL_TOKENS)
 
 P0_SMOKE_CASES: dict[str, tuple[str, ...]] = {
     "uniform-kv_every4_sconv-off": ("legacy-control-ep4",),
@@ -526,6 +594,122 @@ def deterministic_workload(
         "response_tokens": ACCEPTANCE_RESPONSE_TOKENS,
         "final_lengths": list(ACCEPTANCE_FINAL_LENGTHS),
         "roots": root_records,
+        "requests": requests,
+    }
+
+
+def deterministic_trajectory_workload(*, seed: int = DUMMY_SEED) -> dict[str, Any]:
+    """Build the frozen four-turn, 18-root, 144-branch 65K trajectory."""
+    rng = random.Random(seed)
+    roots: list[dict[str, Any]] = []
+    requests: list[dict[str, Any]] = []
+    for root in range(ROOT_COUNT):
+        cohort_index = root // 6
+        cohort = ("short", "medium", "long")[cohort_index]
+        history_length = TRAJECTORY_INITIAL_HISTORY_LENGTHS[cohort_index]
+        prefix = [1, *(rng.randrange(3, 255) for _ in range(history_length - 1))]
+        roots.append(
+            {
+                "root": root,
+                "cohort": cohort,
+                "prefix_token_ids": prefix,
+            }
+        )
+        for branch in range(BRANCHES_PER_ROOT):
+            turns: list[dict[str, Any]] = []
+            carried_tokens = history_length
+            for turn in range(TRAJECTORY_TURNS):
+                append_rng = random.Random(
+                    (seed << 20) + root * BRANCHES_PER_ROOT * TRAJECTORY_TURNS + branch * TRAJECTORY_TURNS + turn
+                )
+                append = [
+                    3 + ((root * 17 + branch * 29 + turn * 43 + position + append_rng.randrange(251)) % 252)
+                    for position in range(ACCEPTANCE_APPEND_TOKENS)
+                ]
+                prompt_tokens = carried_tokens + len(append)
+                final_tokens = prompt_tokens + ACCEPTANCE_RESPONSE_TOKENS
+                turns.append(
+                    {
+                        "turn": turn + 1,
+                        "append_token_ids": append,
+                        "append_token_count": len(append),
+                        "prompt_token_count": prompt_tokens,
+                        "max_tokens": ACCEPTANCE_RESPONSE_TOKENS,
+                        "final_token_count": final_tokens,
+                    }
+                )
+                carried_tokens = final_tokens
+            requests.append(
+                {
+                    "request_id": f"trajectory-root-{root:02d}-branch-{branch:02d}",
+                    "root": root,
+                    "branch": branch,
+                    "cohort": cohort,
+                    "initial_history_tokens": history_length,
+                    "turns": turns,
+                    "final_token_count": carried_tokens,
+                }
+            )
+    return {
+        "schema_version": 1,
+        "kind": "four-turn-trajectory-65k",
+        "seed": seed,
+        "root_count": ROOT_COUNT,
+        "branches_per_root": BRANCHES_PER_ROOT,
+        "request_count": len(requests),
+        "turn_count": TRAJECTORY_TURNS,
+        "initial_history_lengths": list(TRAJECTORY_INITIAL_HISTORY_LENGTHS),
+        "append_tokens_per_turn": ACCEPTANCE_APPEND_TOKENS,
+        "response_tokens_per_turn": ACCEPTANCE_RESPONSE_TOKENS,
+        "final_lengths": [
+            length + TRAJECTORY_TURNS * (ACCEPTANCE_APPEND_TOKENS + ACCEPTANCE_RESPONSE_TOKENS)
+            for length in TRAJECTORY_INITIAL_HISTORY_LENGTHS
+        ],
+        "roots": roots,
+        "requests": requests,
+    }
+
+
+def deterministic_capacity_stress_workload(*, seed: int = DUMMY_SEED) -> dict[str, Any]:
+    """Build six roots and 48 branches that end at exactly 131,072 tokens."""
+    rng = random.Random(seed ^ 0x131072)
+    roots: list[dict[str, Any]] = []
+    requests: list[dict[str, Any]] = []
+    root_count = 6
+    for root in range(root_count):
+        prefix = [1, *(rng.randrange(3, 255) for _ in range(CAPACITY_HISTORY_TOKENS - 1))]
+        roots.append({"root": root, "prefix_token_ids": prefix})
+        for branch in range(BRANCHES_PER_ROOT):
+            append_rng = random.Random((seed << 16) + root * BRANCHES_PER_ROOT + branch)
+            append = [
+                3 + ((root * 17 + branch * 29 + position + append_rng.randrange(251)) % 252)
+                for position in range(CAPACITY_APPEND_TOKENS)
+            ]
+            requests.append(
+                {
+                    "request_id": f"capacity-root-{root:02d}-branch-{branch:02d}",
+                    "root": root,
+                    "branch": branch,
+                    "prefix_token_count": CAPACITY_HISTORY_TOKENS,
+                    "append_token_ids": append,
+                    "append_token_count": CAPACITY_APPEND_TOKENS,
+                    "prompt_token_count": CAPACITY_HISTORY_TOKENS + CAPACITY_APPEND_TOKENS,
+                    "max_tokens": CAPACITY_RESPONSE_TOKENS,
+                    "final_token_count": CAPACITY_FINAL_TOKENS,
+                }
+            )
+    return {
+        "schema_version": 1,
+        "kind": "capacity-stress-131k",
+        "seed": seed,
+        "root_count": root_count,
+        "branches_per_root": BRANCHES_PER_ROOT,
+        "request_count": len(requests),
+        "history_tokens": CAPACITY_HISTORY_TOKENS,
+        "append_tokens": CAPACITY_APPEND_TOKENS,
+        "response_tokens": CAPACITY_RESPONSE_TOKENS,
+        "final_tokens": CAPACITY_FINAL_TOKENS,
+        "roots": roots,
         "requests": requests,
     }
 

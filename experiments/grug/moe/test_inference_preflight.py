@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import io
 import json
 
@@ -20,6 +21,8 @@ from experiments.grug.moe.inference_preflight import (
     decode_routed_experts,
     deterministic_balanced_routing_fixture,
     deterministic_boundary_workload,
+    deterministic_capacity_stress_workload,
+    deterministic_trajectory_workload,
     deterministic_workload,
     expert_parallel_rank_histogram,
     frozen_manifest,
@@ -234,7 +237,68 @@ def test_hybrid_cache_hit_alignment_matches_every_frozen_case() -> None:
         "reference-ep8": 32,
         "granular-ep16": 32,
         "exact-reference-ep16": 32,
+        "window1024-ep16": 32,
+        "window2048-ep16": 32,
+        "global-every4-ep16": 32,
+        "exact-reference-131k-ep16": 32,
+        "window1024-131k-ep16": 32,
+        "window2048-131k-ep16": 32,
+        "global-every4-131k-ep16": 32,
     }
+
+
+def test_attention_screen_cases_change_only_the_declared_property() -> None:
+    reference = CASES["exact-reference-ep16"]
+    for name, field, expected in (
+        ("window1024-ep16", "sliding_window", 1024),
+        ("window2048-ep16", "sliding_window", 2048),
+        ("global-every4-ep16", "global_every", 4),
+    ):
+        candidate = CASES[name]
+        changed = {
+            key
+            for key, value in dataclasses.asdict(reference).items()
+            if key != "name" and dataclasses.asdict(candidate)[key] != value
+        }
+        assert changed == {field}
+        assert getattr(candidate, field) == expected
+
+
+def test_131k_attention_cases_change_only_context_ceiling_from_screen_cases() -> None:
+    for base_name in (
+        "exact-reference-ep16",
+        "window1024-ep16",
+        "window2048-ep16",
+        "global-every4-ep16",
+    ):
+        extended_name = f"{base_name.removesuffix('-ep16')}-131k-ep16"
+        base = dataclasses.asdict(CASES[base_name])
+        extended = dataclasses.asdict(CASES[extended_name])
+        changed = {key for key, value in base.items() if key != "name" and extended[key] != value}
+        assert changed == {"max_model_len"}
+        assert extended["max_model_len"] == 131_072
+
+
+def test_trajectory_and_capacity_workloads_are_exact_and_deterministic() -> None:
+    trajectory = deterministic_trajectory_workload()
+    assert trajectory == deterministic_trajectory_workload()
+    assert trajectory != deterministic_trajectory_workload(seed=4321)
+    assert trajectory["request_count"] == 144
+    assert trajectory["turn_count"] == 4
+    assert trajectory["final_lengths"] == [22_528, 43_008, 65_536]
+    assert {tuple(turn["final_token_count"] for turn in request["turns"]) for request in trajectory["requests"]} == {
+        (13_312, 16_384, 19_456, 22_528),
+        (33_792, 36_864, 39_936, 43_008),
+        (56_320, 59_392, 62_464, 65_536),
+    }
+
+    capacity = deterministic_capacity_stress_workload()
+    assert capacity == deterministic_capacity_stress_workload()
+    assert capacity != deterministic_capacity_stress_workload(seed=4321)
+    assert capacity["root_count"] == 6
+    assert capacity["request_count"] == 48
+    assert {request["prompt_token_count"] for request in capacity["requests"]} == {122_880}
+    assert {request["final_token_count"] for request in capacity["requests"]} == {131_072}
 
 
 def test_workload_is_deterministic() -> None:
