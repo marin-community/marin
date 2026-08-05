@@ -96,14 +96,21 @@ than in-memory bytes is what matters: a telemetry row compresses to ~8 bytes
 against a log line's hundreds, so an in-memory target under-sizes worst exactly
 where the fix is needed.
 
-This applies only to segments written since the change, and the terminal level
-never re-compacts, so a namespace's bulk keeps its old row groups until eviction
-turns it over. That happens at the `max_bytes_per_namespace` cap, which is a time
-window in practice: `telemetry_v1`'s 15 GiB spans about four days and `log`'s
-about eight, so old layout ages out over that period rather than being rewritten.
-Confirm the era split before concluding a layout change did or did not land —
-compare footer bytes for segments modified before and after the deploy, since a
-whole-namespace average is dominated by the untouched terminal level.
+Each segment's footer carries the layout revision it was written with. Since the
+terminal level is never re-compacted, a maintenance pass re-encodes segments
+still on an older revision, a couple per namespace per 30 s tick — otherwise a
+namespace's bulk would keep its old row groups until eviction aged it out, which
+for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
+rewrite keeps the filename and preserves the rows and their order, so it costs no
+remote bandwidth: the archive keys objects by basename and only uploads segments
+still marked `Local`. A rewritten segment's remote copy keeps the old layout
+while holding the same rows.
+
+Watch it with the `rewrote segment layout` events, which report the before and
+after byte size per segment. Confirm the era split before concluding a layout
+change did or did not land — compare footer bytes for segments modified before
+and after the deploy, since a whole-namespace average is dominated by whatever
+has not been rewritten yet.
 
 `EXPLAIN ANALYZE` reports `row_groups_pruned_statistics` as `<total> total`,
 which is the count for the segments a query touched *after* any injected access

@@ -13,8 +13,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use arrow::array::RecordBatch;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::statistics::Statistics;
@@ -48,6 +50,21 @@ const TARGET_ROW_GROUP_BYTES: usize = 16 * 1024 * 1024;
 /// pruned with a row selection rather than skipped whole.
 const MAX_ROW_GROUP_ROWS: usize = 1_048_576;
 
+/// Physical layout revision stamped into every segment's parquet footer.
+///
+/// Bump this when the writer's row-group or encoding policy changes. It
+/// describes the file's physical shape ONLY — two segments at different
+/// versions hold identical rows in identical order — which is what lets
+/// maintenance re-encode a stale one in place without touching the catalog's
+/// view of its contents or its remote copy.
+const LAYOUT_VERSION: u32 = 1;
+const LAYOUT_VERSION_KEY: &str = "finelog.layout_version";
+
+/// Rows per batch when streaming a segment through a re-encode. Bounds the
+/// rewrite's memory to one batch rather than the whole segment, which for a
+/// terminal-level file is hundreds of MiB of Arrow.
+const REWRITE_BATCH_ROWS: usize = 8_192;
+
 /// Parquet `WriterProperties` shared by every finelog segment writer — the L0
 /// flush (`write_segment`) and the compaction output (`write_merged_segment`).
 ///
@@ -70,6 +87,10 @@ pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
         .set_max_row_group_row_count(Some(MAX_ROW_GROUP_ROWS))
         .set_compression(Compression::ZSTD(zstd))
         .set_bloom_filter_enabled(false)
+        .set_key_value_metadata(Some(vec![KeyValue::new(
+            LAYOUT_VERSION_KEY.to_string(),
+            LAYOUT_VERSION.to_string(),
+        )]))
         .build())
 }
 
@@ -140,6 +161,77 @@ pub fn write_segment_to_dir(
         .map_err(|e| StatsError::Internal(format!("stat {}: {e}", final_path.display())))?
         .len() as i64;
     Ok((final_path, size))
+}
+
+/// Whether `path` was written by the current [`LAYOUT_VERSION`]. A segment
+/// written before the stamp existed, or by an older policy, reads as stale.
+pub fn segment_layout_is_current(path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return true; // unreadable: leave it alone, not a rewrite candidate
+    };
+    let Ok(reader) = SerializedFileReader::new(file) else {
+        return true;
+    };
+    reader
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .and_then(|kvs| kvs.iter().find(|kv| kv.key == LAYOUT_VERSION_KEY))
+        .and_then(|kv| kv.value.as_deref())
+        .and_then(|v| v.parse::<u32>().ok())
+        .is_some_and(|v| v == LAYOUT_VERSION)
+}
+
+/// Re-encode `path` under the current writer properties into a sibling
+/// `.parquet.tmp`, preserving its rows and their order exactly. Returns the
+/// staging path and its size; the caller renames it over `path` to commit.
+///
+/// Staging and committing are separate because the rewrite is slow and takes no
+/// lock: eviction may unlink the segment while this runs, and renaming over a
+/// path the catalog has since dropped would resurrect an untracked file. The
+/// caller commits under the insertion lock, after re-checking the segment.
+///
+/// The FILENAME is unchanged, which is what makes this cheap: the remote archive
+/// keys objects by basename and only uploads segments the catalog still marks
+/// `Local`, so a rewritten segment is never re-uploaded. Its remote copy keeps
+/// the old physical layout while holding the same rows, and ages out normally.
+///
+/// Streams a batch at a time rather than materializing the segment, which for a
+/// terminal-level file would be hundreds of MiB of Arrow.
+pub fn stage_rewritten_segment(path: &Path) -> Result<(PathBuf, i64), StatsError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| StatsError::Internal(format!("open {}: {e}", path.display())))?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(|e| StatsError::Internal(format!("read {}: {e}", path.display())))?;
+    let schema = Arc::clone(builder.schema());
+    let reader = builder
+        .with_batch_size(REWRITE_BATCH_ROWS)
+        .build()
+        .map_err(|e| StatsError::Internal(format!("reader {}: {e}", path.display())))?;
+
+    let staging = PathBuf::from(format!("{}.tmp", path.display()));
+    let out = std::fs::File::create(&staging)
+        .map_err(|e| StatsError::Internal(format!("create {}: {e}", staging.display())))?;
+    let opts = ArrowWriterOptions::new().with_properties(segment_writer_properties()?);
+    let mut writer = ArrowWriter::try_new_with_options(out, schema, opts)
+        .map_err(|e| StatsError::Internal(format!("parquet writer init: {e}")))?;
+    for batch in reader {
+        let batch =
+            batch.map_err(|e| StatsError::Internal(format!("decode {}: {e}", path.display())))?;
+        writer
+            .write(&batch)
+            .map_err(|e| StatsError::Internal(format!("parquet write: {e}")))?;
+    }
+    let out = writer
+        .into_inner()
+        .map_err(|e| StatsError::Internal(format!("parquet close: {e}")))?;
+    out.sync_all()
+        .map_err(|e| StatsError::Internal(format!("fsync {}: {e}", staging.display())))?;
+    let size = out
+        .metadata()
+        .map_err(|e| StatsError::Internal(format!("stat {}: {e}", staging.display())))?
+        .len() as i64;
+    Ok((staging, size))
 }
 
 /// Read a segment's footer metadata: row count from the footer, `min_seq` from
@@ -404,6 +496,75 @@ mod tests {
             .filter(|&i| rg.column(i).bloom_filter_offset().is_some())
             .map(|i| rg.column(i).column_path().string())
             .collect()
+    }
+
+    /// Write `batch` the way an older policy did: a small fixed row-group count
+    /// and no layout stamp in the footer.
+    fn write_legacy_layout(path: &Path, batch: &RecordBatch, row_group_rows: usize) {
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(row_group_rows))
+            .set_compression(Compression::ZSTD(ZstdLevel::try_new(1).unwrap()))
+            .build();
+        let file = std::fs::File::create(path).unwrap();
+        let opts = ArrowWriterOptions::new().with_properties(props);
+        let mut w = ArrowWriter::try_new_with_options(file, batch.schema(), opts).unwrap();
+        w.write(batch).unwrap();
+        w.close().unwrap();
+    }
+
+    fn read_all(path: &Path) -> Vec<RecordBatch> {
+        let file = std::fs::File::open(path).unwrap();
+        ParquetRecordBatchReaderBuilder::try_new(file)
+            .unwrap()
+            .build()
+            .unwrap()
+            .map(|b| b.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn layout_stamp_distinguishes_current_from_legacy_segments() {
+        let dir = tempdir();
+        let batch = batch_with_keys(1, (0..100).collect());
+
+        let legacy = dir.join("seg_L1_0000000000000000001.parquet");
+        write_legacy_layout(&legacy, &batch, 8);
+        assert!(!segment_layout_is_current(&legacy));
+
+        let (current, _) = write_segment_to_dir(&dir, 1, 200, &batch).unwrap();
+        assert!(segment_layout_is_current(&current));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rewrite_reencodes_in_place_keeping_rows_and_filename() {
+        let dir = tempdir();
+        // Non-monotonic keys, so a reordering rewrite would be visible.
+        let batch = batch_with_keys(1, (0..400).map(|i| (i * 7919) % 400).collect());
+        let path = dir.join("seg_L1_0000000000000000001.parquet");
+        write_legacy_layout(&path, &batch, 8);
+
+        let before_groups = segment_row_group_rows(&path).unwrap().len();
+        let before_rows = read_all(&path);
+        assert!(before_groups > 1, "fixture must have several row groups");
+
+        let (staging, size) = stage_rewritten_segment(&path).unwrap();
+        std::fs::rename(&staging, &path).unwrap();
+
+        // Same file, same rows in the same order, now on the current layout.
+        assert!(path.exists());
+        assert_eq!(size, std::fs::metadata(&path).unwrap().len() as i64);
+        assert!(segment_layout_is_current(&path));
+        assert_eq!(read_all(&path), before_rows);
+        assert!(
+            segment_row_group_rows(&path).unwrap().len() < before_groups,
+            "the byte target should coalesce the legacy row groups"
+        );
+        // No stray staging file survives.
+        assert!(!dir.join("seg_L1_0000000000000000001.parquet.tmp").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

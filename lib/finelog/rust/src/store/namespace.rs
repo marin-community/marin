@@ -42,7 +42,10 @@ use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
 use crate::store::remote::{build_remote_store, RemoteStore};
 use crate::store::schema::{schema_to_arrow, AlignedBatch, Schema};
-use crate::store::segment::{discover_segments, read_segment_footer, write_segment_to_dir};
+use crate::store::segment::{
+    discover_segments, read_segment_footer, segment_layout_is_current, stage_rewritten_segment,
+    write_segment_to_dir,
+};
 use crate::store::trigram::{sidecar_path, write_sidecar};
 use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
@@ -98,6 +101,15 @@ fn sidecar_needs_rebuild(segment: &Path, indexed: &[&str]) -> bool {
 /// format bump does that — converges in tens of minutes instead of hours, during
 /// which its substring queries scan unpruned.
 pub const BACKFILL_SIDECARS_PER_TICK: usize = 4;
+
+/// Segments re-encoded onto the current physical layout per maintenance tick.
+///
+/// A rewrite reads and re-compresses a whole segment, so this is deliberately
+/// small: the layout change it propagates is a storage and footer-size win, not
+/// a correctness fix, and eviction would eventually deliver it anyway. Two per
+/// 30 s tick turns a terminal level over in hours instead of days without
+/// competing with compaction for the box.
+pub const REWRITE_LAYOUTS_PER_TICK: usize = 2;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -1317,7 +1329,105 @@ impl Namespace {
         })
         .await
         .map_err(|e| StatsError::Internal(format!("maintenance backfill task panicked: {e}")))?;
+
+        // Re-encode segments still on an older physical layout (blocking parquet
+        // read + write). Also lowest-priority and bounded: the terminal level is
+        // never re-compacted, so without this a namespace carries whatever layout
+        // it was written with until eviction ages it out.
+        let ns = Arc::clone(self);
+        tokio::task::spawn_blocking(move || ns.rewrite_stale_layouts(REWRITE_LAYOUTS_PER_TICK))
+            .await
+            .map_err(|e| StatsError::Internal(format!("maintenance rewrite task panicked: {e}")))?;
         Ok(())
+    }
+
+    /// Re-encode up to `max` segments whose physical layout predates the current
+    /// writer policy, newest first. Returns how many were rewritten.
+    ///
+    /// Costs no remote bandwidth: the rewrite keeps the filename, and the sync
+    /// step only uploads segments the catalog still marks `Local`, so a segment
+    /// already flipped to `Both` is never re-uploaded. Its remote copy keeps the
+    /// old layout while holding identical rows, and ages out normally.
+    ///
+    /// The trigram sidecar is left alone deliberately — spans are a fixed row
+    /// count, independent of row groups, and the prune reads each segment's
+    /// actual layout — so a rewritten segment keeps pruning with the sidecar it
+    /// already had.
+    fn rewrite_stale_layouts(&self, max: usize) -> usize {
+        if self.data_dir.is_none() || max == 0 {
+            return 0;
+        }
+        let candidates: Vec<(String, i64)> = {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .local_segments
+                .iter()
+                .rev()
+                .filter(|s| s.level >= 1)
+                .map(|s| (s.path.clone(), s.size_bytes))
+                .filter(|(p, _)| !segment_layout_is_current(Path::new(p)))
+                .take(max)
+                .collect()
+        };
+        let mut rewritten = 0;
+        for (path, was) in candidates {
+            let started = Instant::now();
+            let (staging, size) = match stage_rewritten_segment(Path::new(&path)) {
+                Ok(staged) => staged,
+                Err(e) => {
+                    tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,
+                        "layout rewrite failed; leaving the segment as it was");
+                    continue;
+                }
+            };
+            match self.commit_rewritten_segment(&path, &staging, size) {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::debug!(namespace = %self.name, segment = %basename(&path),
+                        "segment went away mid-rewrite; discarded the replacement");
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,
+                        "layout rewrite commit failed");
+                    continue;
+                }
+            }
+            tracing::info!(
+                namespace = %self.name,
+                segment = %basename(&path),
+                was_bytes = was,
+                now_bytes = size,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "rewrote segment layout"
+            );
+            rewritten += 1;
+        }
+        rewritten
+    }
+
+    /// Swap a staged rewrite over its segment and record the new size, under the
+    /// insertion lock. Returns `false` (discarding the staged file) when the
+    /// segment is no longer live — eviction can drop it while the rewrite runs,
+    /// and renaming over that path would resurrect a file nothing references.
+    fn commit_rewritten_segment(
+        &self,
+        path: &str,
+        staging: &Path,
+        byte_size: i64,
+    ) -> Result<bool, StatsError> {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(seg) = inner.local_segments.iter_mut().find(|s| s.path == path) else {
+            let _ = std::fs::remove_file(staging);
+            return Ok(false);
+        };
+        std::fs::rename(staging, path).map_err(|e| {
+            StatsError::Internal(format!("rename {} -> {path}: {e}", staging.display()))
+        })?;
+        seg.size_bytes = byte_size;
+        drop(inner);
+        self.catalog.set_byte_size(&self.name, path, byte_size)?;
+        Ok(true)
     }
 
     /// Backdate one segment's `created_at_ms` in the catalog. Test-only seam
@@ -1507,6 +1617,28 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
 ///
 /// The deque is sorted by `min_seq` so iteration matches the planner's
 /// oldest-first expectation. Catalog REMOTE rows are left untouched.
+/// Delete `*.parquet.tmp` left behind by a segment write or layout rewrite that
+/// died before its rename. Nothing references them: the catalog only ever names
+/// the final path, and `discover_segments` ignores the extension, so a survivor
+/// is disk the namespace's own byte accounting cannot see.
+fn discard_staging_files(dir: &std::path::Path, namespace: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("tmp") {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(namespace = %namespace, file = %path.display(),
+                "discarded an abandoned staging file"),
+            Err(e) => tracing::warn!(namespace = %namespace, file = %path.display(), error = %e,
+                "could not discard an abandoned staging file"),
+        }
+    }
+}
+
 fn adopt_local_segments(
     dir: &std::path::Path,
     key_column: Option<&str>,
@@ -1516,6 +1648,8 @@ fn adopt_local_segments(
     let started = Instant::now();
     let mut segs: Vec<LocalSegment> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    discard_staging_files(dir, namespace);
 
     let discover_started = Instant::now();
     let local_files: std::collections::HashMap<String, PathBuf> = discover_segments(dir)
@@ -2362,6 +2496,72 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].level, 1);
         assert_eq!(segs[0].location, SegmentLocation::Both);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn layout_rewrite_updates_the_local_segment_without_re_uploading() {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
+        use parquet::file::properties::WriterProperties;
+
+        let dir = tempdir();
+        let remote = dir.join("remote");
+        let ns_dir = dir.join("iris.worker");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns_remote(
+            "iris.worker",
+            worker_schema(),
+            Some(ns_dir),
+            catalog,
+            remote.to_str().unwrap(),
+            StoragePolicy::default(),
+        );
+        write_one(&ns).await;
+        ns.run_maintenance(true).await.unwrap();
+
+        let seg = ns.catalog.list_segments("iris.worker").unwrap().remove(0);
+        assert_eq!(seg.location, SegmentLocation::Both);
+        let remote_name = remote_files(&remote, "iris.worker").remove(0);
+        let remote_path = remote.join("iris.worker").join(&remote_name);
+        let remote_before = std::fs::read(&remote_path).unwrap();
+
+        // Put the local file back onto an older layout (no stamp), as a
+        // pre-existing segment would be.
+        let path = std::path::PathBuf::from(&seg.path);
+        let batches: Vec<RecordBatch> = {
+            let f = std::fs::File::open(&path).unwrap();
+            ParquetRecordBatchReaderBuilder::try_new(f)
+                .unwrap()
+                .build()
+                .unwrap()
+                .map(|b| b.unwrap())
+                .collect()
+        };
+        let out = std::fs::File::create(&path).unwrap();
+        let opts = ArrowWriterOptions::new().with_properties(WriterProperties::builder().build());
+        let mut w = ArrowWriter::try_new_with_options(out, batches[0].schema(), opts).unwrap();
+        for b in &batches {
+            w.write(b).unwrap();
+        }
+        w.close().unwrap();
+        assert_eq!(ns.rewrite_stale_layouts(4), 1);
+
+        // Local file adopted the current layout and the catalog followed it.
+        assert!(crate::store::segment::segment_layout_is_current(&path));
+        let after = ns.catalog.list_segments("iris.worker").unwrap().remove(0);
+        assert_eq!(
+            after.byte_size,
+            std::fs::metadata(&path).unwrap().len() as i64
+        );
+        assert_eq!(after.location, SegmentLocation::Both);
+
+        // The archive is untouched: same object, same bytes, no re-upload.
+        assert_eq!(remote_files(&remote, "iris.worker"), vec![remote_name]);
+        assert_eq!(std::fs::read(&remote_path).unwrap(), remote_before);
+
+        // A second pass finds nothing left to do.
+        assert_eq!(ns.rewrite_stale_layouts(4), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 

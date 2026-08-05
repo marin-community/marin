@@ -627,6 +627,25 @@ impl Catalog {
         Ok(())
     }
 
+    /// Update one segment's `byte_size` (after an in-place layout rewrite, which
+    /// re-encodes the same rows and leaves every other field correct).
+    pub fn set_byte_size(
+        &self,
+        namespace: &str,
+        path: &str,
+        byte_size: i64,
+    ) -> Result<(), StatsError> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .conn
+            .execute(
+                "UPDATE segments SET byte_size = ?1 WHERE namespace = ?2 AND path = ?3",
+                rusqlite::params![byte_size, namespace, path],
+            )
+            .map_err(sqlite_err)?;
+        Ok(())
+    }
+
     /// Drop one segment row. Idempotent.
     pub fn remove_segment(&self, namespace: &str, path: &str) -> Result<(), StatsError> {
         let inner = self.inner.lock().unwrap();

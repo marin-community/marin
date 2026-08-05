@@ -146,6 +146,19 @@ only partly covered. Sidecars carry a format version; bumping it makes every
 existing sidecar unreadable (queries scan unpruned) until the maintenance
 backfill rebuilds them, a few segments per namespace per 30 s tick.
 
+Every segment's parquet footer carries the physical layout revision it was
+written with, and maintenance re-encodes stale ones in place a couple per
+namespace per tick. This exists because the terminal level never re-compacts, so
+without it a writer-policy change would only reach a namespace's bulk as eviction
+aged it out. The rewrite preserves the rows, their order, and the filename, which
+is what makes it free: the archive keys objects by basename and the sync step
+only uploads segments the catalog still marks `Local`, so nothing is re-uploaded.
+Staging and committing are separate, with the rename taken under the insertion
+lock, because eviction may drop a segment during the seconds a rewrite runs and
+renaming over a dropped path would resurrect an untracked file. The trigram
+sidecar is deliberately left alone — spans are a fixed row count and the prune
+reads each segment's actual layout — so it stays valid across a rewrite.
+
 No segment carries a parquet bloom filter. Writing them for every column cost 15%
 of each segment and pruned nothing measurable; the key-column bloom that outlived
 that only served exact-key lookups against unsorted L0, which is a few hundred
