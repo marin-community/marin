@@ -1,0 +1,181 @@
+{
+  "name": "grug-67b-a2b-agentic-sft",
+  "teacher_tokenizer": "Qwen/Qwen3.5-122B-A10B-FP8",
+  "teacher_tokenizer_revision": "a099dee70ccfcd8d5dda56aaa0b60cb8ecadabc9",
+  "sources": [
+    {
+      "name": "code-contests-noblock",
+      "hf_dataset_id": "penfever/code-contests-noblock-qwen3.5-122b-131k-opencode-traces",
+      "revision": "42a75fe9fc9b253b1a5be25d241596b4bc037372",
+      "expected_rows": 4616
+    },
+    {
+      "name": "exp_rle_adversarial",
+      "hf_dataset_id": "penfever/exp_rle_adversarial-qwen3.5-122b-131k-opencode-traces",
+      "revision": "beac1fa129f02f1cd14e37156eadd1dc7fd280a8",
+      "expected_rows": 4130
+    },
+    {
+      "name": "exp_rpt_crosscodeeval-csharp-v4",
+      "hf_dataset_id": "penfever/exp_rpt_crosscodeeval-csharp-v4-qwen3.5-122b-131k-opencode-traces",
+      "revision": "3337d73e4873f2eb00aa47fe9c32794f13afe7fe",
+      "expected_rows": 1750
+    },
+    {
+      "name": "exp_rpt_crosscodeeval-java",
+      "hf_dataset_id": "penfever/exp_rpt_crosscodeeval-java-qwen3.5-122b-131k-opencode-traces",
+      "revision": "353bba9410064ce3113a3335613cc7139edd2342",
+      "expected_rows": 1947
+    },
+    {
+      "name": "exp_rpt_curriculum-easy",
+      "hf_dataset_id": "penfever/exp_rpt_curriculum-easy-qwen3.5-122b-131k-opencode-traces",
+      "revision": "9038e1c43568e96f3cb3e42235cd2757c9c46320",
+      "expected_rows": 466
+    },
+    {
+      "name": "exp_rpt_curriculum-hard",
+      "hf_dataset_id": "penfever/exp_rpt_curriculum-hard-qwen3.5-122b-131k-opencode-traces",
+      "revision": "404f3fc1ff0aad3818fcbd07a4d573892e316ffe",
+      "expected_rows": 22
+    },
+    {
+      "name": "exp_rpt_curriculum-medium",
+      "hf_dataset_id": "penfever/exp_rpt_curriculum-medium-qwen3.5-122b-131k-opencode-traces",
+      "revision": "0421a462d1d540ad6a48239cc12c0d1147307b34",
+      "expected_rows": 451
+    },
+    {
+      "name": "exp_rpt_e2egit-large",
+      "hf_dataset_id": "penfever/exp_rpt_e2egit-large-qwen3.5-122b-131k-opencode-traces",
+      "revision": "3a72d7f965c623ae83d61635b9cdfd3e14957b76",
+      "expected_rows": 4081
+    },
+    {
+      "name": "exp_rpt_e2egit-v2",
+      "hf_dataset_id": "penfever/exp_rpt_e2egit-v2-qwen3.5-122b-131k-opencode-traces",
+      "revision": "8d6994eef2fe3dc64af1f6944e0964b25c90e2a0",
+      "expected_rows": 475
+    },
+    {
+      "name": "exp_rpt_ghactions-v3",
+      "hf_dataset_id": "penfever/exp_rpt_ghactions-v3-qwen3.5-122b-131k-opencode-traces",
+      "revision": "9693178a7e82ecb667da1e56a7cc3ef004c39cfd",
+      "expected_rows": 7390
+    },
+    {
+      "name": "exp_rpt_issue",
+      "hf_dataset_id": "penfever/exp_rpt_issue-qwen3.5-122b-131k-opencode-traces",
+      "revision": "2feab9d16739008ec0da54c88dd8a01f8647bde1",
+      "expected_rows": 279
+    },
+    {
+      "name": "exp_rpt_multifile",
+      "hf_dataset_id": "penfever/exp_rpt_multifile-qwen3.5-122b-131k-opencode-traces",
+      "revision": "5573626ee08af8c23940b86dddaf281fc1f367e6",
+      "expected_rows": 99
+    },
+    {
+      "name": "exp_rpt_nemotron-junit",
+      "hf_dataset_id": "penfever/exp_rpt_nemotron-junit-qwen3.5-122b-131k-opencode-traces",
+      "revision": "9825ba3f19df7bc58baf06052cb8b5d528a0df22",
+      "expected_rows": 339
+    },
+    {
+      "name": "exp_rpt_pr",
+      "hf_dataset_id": "penfever/exp_rpt_pr-qwen3.5-122b-131k-opencode-traces",
+      "revision": "8c2dec6722d11983f0b67dbb6b21c448e72f673c",
+      "expected_rows": 3847
+    },
+    {
+      "name": "exp_rpt_stack-junit-v6",
+      "hf_dataset_id": "penfever/exp_rpt_stack-junit-v6-qwen3.5-122b-131k-opencode-traces",
+      "revision": "661a7d650950fb39dec283a1367ed063518364b6",
+      "expected_rows": 660
+    },
+    {
+      "name": "exp_rpt_stack-pytest-large",
+      "hf_dataset_id": "penfever/exp_rpt_stack-pytest-large-qwen3.5-122b-131k-opencode-traces",
+      "revision": "6a55d436cbe9336df81a11403d70c2971c5d6868",
+      "expected_rows": 1328
+    },
+    {
+      "name": "exp_rpt_stack-pytest-v2",
+      "hf_dataset_id": "penfever/exp_rpt_stack-pytest-v2-qwen3.5-122b-131k-opencode-traces",
+      "revision": "6272346a6b65eb780f87ab4c1fe72014b06e89aa",
+      "expected_rows": 472
+    },
+    {
+      "name": "exp_rpt_unitsyn-python-large",
+      "hf_dataset_id": "penfever/exp_rpt_unitsyn-python-large-qwen3.5-122b-131k-opencode-traces",
+      "revision": "ca48ec8836aea800601b76737489a62fa463e3de",
+      "expected_rows": 2195
+    },
+    {
+      "name": "exp_rpt_unitsyn-python-v3",
+      "hf_dataset_id": "penfever/exp_rpt_unitsyn-python-v3-qwen3.5-122b-131k-opencode-traces",
+      "revision": "1f7fbc7e1c1dba2dcc770d3256c9bb8e49b8b5f2",
+      "expected_rows": 130
+    },
+    {
+      "name": "inferredbugs-sandboxes-verifier",
+      "hf_dataset_id": "penfever/inferredbugs-sandboxes-verifier-qwen3.5-122b-131k-opencode-traces",
+      "revision": "682909ac12336b8d554d54409e274422a7189236",
+      "expected_rows": 5633
+    },
+    {
+      "name": "llm-verifier-freelancer",
+      "hf_dataset_id": "penfever/llm-verifier-freelancer-qwen3.5-122b-131k-opencode-traces",
+      "revision": "5c5f51e4b5c9bb91b7fde77c18b1f0352d7a7d5d",
+      "expected_rows": 510
+    },
+    {
+      "name": "mix_h4_binary_easy",
+      "hf_dataset_id": "penfever/mix_h4_binary_easy-qwen3.5-122b-131k-opencode-traces",
+      "revision": "13e4577ca5f28e81c0693b18b379683c0c3910ee",
+      "expected_rows": 1974
+    },
+    {
+      "name": "nemotron-code-oracle-filtered",
+      "hf_dataset_id": "penfever/nemotron-code-oracle-filtered-qwen3.5-122b-131k-opencode-traces",
+      "revision": "6cc0c0b5ccec0792a61a98c384a1612bb38c2309",
+      "expected_rows": 5441
+    },
+    {
+      "name": "nemotron-gym-agent-calendar",
+      "hf_dataset_id": "penfever/nemotron-gym-agent-calendar-qwen3.5-122b-131k-opencode-traces",
+      "revision": "c02c70fd6e1438f13092a9ade3f2a9e61cc9b099",
+      "expected_rows": 3228
+    },
+    {
+      "name": "nemotron-gym-identity-following-v2",
+      "hf_dataset_id": "penfever/nemotron-gym-identity-following-v2-qwen3.5-122b-131k-opencode-traces",
+      "revision": "150f9df4dd34cb57f48eccb71a302d54768b8a5a",
+      "expected_rows": 7749
+    },
+    {
+      "name": "nemotron-gym-instruction-following-structured",
+      "hf_dataset_id": "penfever/nemotron-gym-instruction-following-structured-qwen3.5-122b-131k-opencode-traces",
+      "revision": "283fcd5a86c6ac5d51c913383d5cf7996e761411",
+      "expected_rows": 9037
+    },
+    {
+      "name": "nemotron-gym-knowledge-web-search-mcqa",
+      "hf_dataset_id": "penfever/nemotron-gym-knowledge-web-search-mcqa-qwen3.5-122b-131k-opencode-traces",
+      "revision": "50ac63c57572c94c7ab1e732473b914ec78dee64",
+      "expected_rows": 2897
+    },
+    {
+      "name": "nemotron-gym-math-advanced-calculations-v3",
+      "hf_dataset_id": "penfever/nemotron-gym-math-advanced-calculations-v3-qwen3.5-122b-131k-opencode-traces",
+      "revision": "9c52619fdf4a4013b97b433998a02bb8fd4b5d58",
+      "expected_rows": 5233
+    },
+    {
+      "name": "nl2bash-tasks-cleaned-oracle",
+      "hf_dataset_id": "penfever/nl2bash-tasks-cleaned-oracle-qwen3.5-122b-131k-opencode-traces",
+      "revision": "863e49b07f0ac92a67c428070b2ea335b1a770e0",
+      "expected_rows": 633
+    }
+  ]
+}

@@ -148,3 +148,47 @@ Every completed trial becomes an agentic `EvalSample`. The verifier reward is st
 ingests the record and sample parquet in the same way as Evalchemy runs. `record.json` stores the
 deterministic source-policy digest and any Marin runtime task cap. A source policy's own `n_tasks`
 remains part of the policy digest.
+
+## Synthetic data and SFT export
+
+Evaluation and synthetic-data generation use the same Harbor execution path: model serving, dataset
+materialization, sandbox trials, resume, and durable trial upload. They differ after a trial
+finishes. Evaluation produces grading records and treats trial errors as an evaluation failure.
+Synthetic-data generation applies its own acceptance policy and exports training records. Do not
+introduce a separate launcher for the synthetic-data case.
+
+`marin.datakit.download.harbor_sft` converts durable trace datasets into structured SFT parquet.
+Use a pinned manifest with the standalone Datakit entrypoint:
+
+```bash
+uv run python -m experiments.datakit.harbor_sft \
+  --manifest experiments/datakit/manifests/grug_67b_a2b_agentic_sft.json \
+  --only exp_rpt_curriculum-hard
+```
+
+The converter scans the trace dataset's `agent` column and requires one uniform, recognized
+harness. It then selects one of two adapters:
+
+- `terminus-2` preserves the recorded `conversations` as literal SFT ground truth.
+- `opencode` reconstructs an installed OpenCode harness interaction from its recorded
+  `prompt_token_ids` and `completion_token_ids`, using the exact revision-pinned teacher tokenizer.
+
+The manifest may omit `harness` for automatic detection or set `terminus-2`/`opencode` as an
+assertion. Unknown agents, mixed-harness inputs, and manifest/provenance mismatches fail before
+conversion.
+
+Installed harnesses run in the sandbox and call the inference endpoint remotely. Harbor therefore
+cannot recover the served system prompt, tool schemas, or structured calls from the displayed
+`conversations` field. The literal adapter fails closed when those token columns are absent or
+misaligned; it never emits the lossy conversation projection as SFT data.
+Literal conversion also fails closed unless tokenizer provenance pins both the
+served model and its immutable revision (or the manifest supplies both
+explicitly).
+
+The output columns are `messages`, `tools`, `task`, `num_turns`, and `num_tool_calls`. Tool calls
+remain structured and tool observations use `role: tool`. The trainee's tools-aware chat template
+performs final rendering at tokenization time.
+
+The checked-in Grug manifest pins the 29 sources and accepted row counts used by the historical
+`grug-67b-a2b-agentic-sft` run. Its compact 22-row source is also a data-integration golden test,
+which compares the canonical output hash with the archived training parquet.
