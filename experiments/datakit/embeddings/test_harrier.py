@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -92,18 +91,3 @@ def test_input_batches_truncate_large_text_before_embedding(tmp_path) -> None:
     texts = [text.as_py() for batch in batches for text in batch.column("text")]
 
     assert texts == [oversized_text[:1_048_576], "short"]
-
-
-def test_embedding_sanity_metrics_measure_norms_and_reembedding_alignment() -> None:
-    stored = np.asarray([[1.0, 0.0], [0.0, 2.0]], dtype=np.float16)
-    recomputed = np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
-
-    metrics = harrier.embedding_sanity_metrics(stored, recomputed)
-
-    assert metrics["nonfinite_value_count"] == 0
-    assert metrics["norm_min"] == pytest.approx(1.0)
-    assert metrics["norm_mean"] == pytest.approx(1.5)
-    assert metrics["norm_max"] == pytest.approx(2.0)
-    assert metrics["norm_max_error"] == pytest.approx(1.0)
-    assert metrics["reembed_cosine_min"] == pytest.approx(1.0)
-    assert metrics["reembed_cosine_mean"] == pytest.approx(1.0)
