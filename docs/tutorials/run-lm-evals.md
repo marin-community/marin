@@ -28,7 +28,8 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 Run the resolved plan before submitting an unfamiliar model or suite. `--dry-run` prints the model
-location, serving backend, accelerator, target cluster or region, task names, and records prefix:
+location, serving backend, accelerator, target cluster or region, priority band, task names, and
+records prefix:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
@@ -81,6 +82,16 @@ Run a two-task Terminal-Bench 2 Harbor check on the validated Qwen3-32B GPU shap
 uv run python -m experiments.evaluation.cli launch \
   --model qwen3-32b \
   --evals tb2-lite
+```
+
+Route a GPU serve group to RNO2A at interactive priority:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-32b \
+  --evals tb2-lite \
+  --federated_cluster cw-rno2a \
+  --priority interactive
 ```
 
 Run one capped Evalchemy task and one capped Harbor benchmark against the same model server:
@@ -201,8 +212,12 @@ documents how to register a Hugging Face model or object-store checkpoint.
 - `--platform tpu|gpu` overrides the model's default platform when the model resource hint supports
   that platform.
 - `--accelerator v6e-8` or `--accelerator H100x8` requests an exact compatible slice.
+- `--federated_cluster cw-rno2a` overrides the GPU fleet profile's target cluster. The launcher
+  always submits through the `marin` Iris controller.
+- `--priority production|interactive|batch` sets the orchestrator and serve priority band. Omitting
+  it preserves Iris priority inheritance.
 - `--version` and `--description` attach run metadata.
-- `--cluster` changes the submitting Iris cluster. `--records-prefix` changes the result store.
+- `--records-prefix` changes the result store.
 
 Each invocation serves the model once and evaluates the selected keys in order. An evaluation
 failure gets its own terminal record and does not skip later evaluations. An inference failure

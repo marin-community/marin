@@ -12,6 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
+from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
+from iris.rpc import job_pb2
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -132,6 +134,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
             resource_hint=ResourceHint(hbm_gb=3),
         ),
         accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         capability_origin="https://iris.example",
         api_model="model",
         evaluations=(
@@ -188,6 +191,7 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
             resource_hint=ResourceHint(hbm_gb=3),
         ),
         accelerator=AcceleratorChoice(platform=Platform.TPU, tpu_type="v6e-4", region="us-central1"),
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         capability_origin="https://iris.example",
         api_model="model",
         evaluations=(evaluation,),
@@ -201,6 +205,36 @@ def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_b
     assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
 
 
+def test_submit_evaluation_batch_uses_resolved_federated_cluster_and_priority(monkeypatch):
+    captured: dict = {}
+
+    class Client:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(job_id="/eval/job")
+
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    spec = LaunchSpec(
+        model="qwen3-32b",
+        evals=("mmlu-smoke",),
+        harbor_configs=(),
+        platform=Platform.GPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        federated_cluster="cw-rno2a",
+        priority_band=job_pb2.PRIORITY_BAND_INTERACTIVE,
+    )
+
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+    submit_evaluation_batch(batch, Client())
+
+    assert captured["constraints"] == [
+        Constraint.create(key=CLUSTER_CONSTRAINT_KEY, op=ConstraintOp.EQ, value="cw-rno2a")
+    ]
+    assert captured["priority_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE
+
+
 def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
@@ -212,7 +246,8 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
         accelerator=None,
         limit=1,
         records_prefix="memory://records",
-        cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
     )
 
     batch = build_evaluation_batch(
@@ -242,7 +277,8 @@ def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
         accelerator=None,
         limit=1,
         records_prefix="memory://records",
-        cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
     )
 
     batch = build_evaluation_batch(
@@ -274,7 +310,8 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
         accelerator=None,
         limit=1,
         records_prefix="memory://records",
-        cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
     )
 
     with pytest.raises(ValueError, match="conflicting secret specifications for EVAL_TOKEN"):
@@ -297,7 +334,8 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
         accelerator=None,
         limit=2,
         records_prefix="memory://records",
-        cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
     )
 
     batch = build_evaluation_batch(
@@ -370,6 +408,40 @@ def test_build_evaluation_batch_combines_registry_and_file_harbor_configs(tmp_pa
     assert captured["overlay"].model_agent_kwargs["extra_body"] == ('{"chat_template_kwargs":{"enable_thinking":true}}')
 
 
+@pytest.mark.parametrize(
+    ("overrides", "target_cluster", "priority"),
+    [
+        ((), "cw-us-east-02a", "inherit"),
+        (("--federated_cluster", "cw-rno2a", "--priority", "interactive"), "cw-rno2a", "interactive"),
+    ],
+)
+def test_launch_dry_run_prints_resolved_federated_cluster_and_priority(
+    overrides,
+    target_cluster,
+    priority,
+    monkeypatch,
+):
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-32b",
+            "--evals",
+            "mmlu-smoke",
+            *overrides,
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "controller_cluster=marin" in result.output
+    assert f"target_cluster={target_cluster}" in result.output
+    assert f"priority={priority}" in result.output
+
+
 def test_launch_rejects_incompatible_harbor_config_before_iris_submission(tmp_path, monkeypatch):
     config_path = _write_harbor_config(tmp_path / "incompatible.yaml")
     iris_opened = False
@@ -439,7 +511,8 @@ def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
         accelerator=None,
         limit=1,
         records_prefix=None,
-        cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
     )
 
     batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")

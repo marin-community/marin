@@ -14,6 +14,8 @@ from pathlib import Path
 
 import click
 from iris.cli.connect import open_iris_client
+from iris.rpc import job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
@@ -24,6 +26,7 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.evals import EVALS, SUITES
 from experiments.evaluation.launch import (
+    EVALUATION_CONTROLLER_CLUSTER,
     HarborConfigSelection,
     LaunchSpec,
     launch_group,
@@ -43,7 +46,12 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
 
 
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
-    click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}")
+    click.echo(
+        f"model: {spec.model}  platform: {spec.platform.value}  "
+        f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
+        f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
+        f"priority={priority_band_name(batch.priority_band)}"
+    )
     for evaluation in batch.evaluations:
         tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
         click.echo(
@@ -96,7 +104,17 @@ def cli() -> None:
     default=None,
     help="Object-store prefix for run records; defaults to GCS, or CW S3 for CoreWeave-routed runs.",
 )
-@click.option("--cluster", default="marin", envvar="IRIS_CLUSTER", help="Named iris cluster to submit to.")
+@click.option(
+    "--federated_cluster",
+    default=None,
+    help="Override the federated cluster for GPU serving; defaults to the fleet profile.",
+)
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Iris priority band for the orchestrator and serve jobs; defaults to inherit.",
+)
 def launch(
     model: str,
     evals_arg: str | None,
@@ -109,7 +127,8 @@ def launch(
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
-    cluster: str,
+    federated_cluster: str | None,
+    priority: str | None,
 ) -> None:
     """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
     catalog = models()
@@ -137,7 +156,8 @@ def launch(
         accelerator=accelerator,
         limit=limit,
         records_prefix=records_prefix,
-        cluster=cluster,
+        federated_cluster=federated_cluster,
+        priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
         version=version,
         description=description,
     )
@@ -149,10 +169,11 @@ def launch(
     if dry_run:
         _print_plan(spec, batch)
         return
-    with open_iris_client(cluster_name=cluster, workspace=find_project_root()) as client:
+    with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
         group = launch_group(batch, client)
         click.echo(
-            f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) to cluster {cluster!r}"
+            f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) "
+            f"through cluster {EVALUATION_CONTROLLER_CLUSTER!r}"
         )
         for evaluation in group.evaluations:
             click.echo(f"  {evaluation.run_id}  ({group.model_name} / {evaluation.eval_name})")

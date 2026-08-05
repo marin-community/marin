@@ -36,12 +36,18 @@ uv run python -m experiments.evaluation.cli launch --model llama3.1-8b-instruct 
 
 # GPU-only model routes to its CoreWeave peer automatically.
 uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8k-smoke
+
+# Override GPU placement and scheduling priority.
+uv run python -m experiments.evaluation.cli launch --model snowball --evals gsm8k-smoke \
+  --federated_cluster cw-rno2a --priority interactive
 ```
 
 Key options: `--evals` takes a suite name (`smoke`, `core`) or comma-separated eval keys
 (`gsm8k,mmlu-smoke`); `--platform tpu|gpu` overrides the model's default; `--accelerator` overrides the
 sizing heuristic with an exact slice (`v6e-8` or `H100x8`); `--limit` caps eval instances;
-`--records-prefix` and `--cluster` override where records land and which iris cluster to submit to.
+`--federated_cluster` overrides the GPU fleet's target cluster; `--priority` sets the Iris priority
+band for the orchestrator and serve jobs; `--records-prefix` overrides where records land. The
+launcher always submits through the `marin` Iris controller.
 
 Suites: `smoke` is a fast cluster check (capped mmlu cut + capped gsm8k). `core` is the comprehensive
 per-model benchmark set (`CORE_EVALS` in `evals.py`: mmlu, gsm8k, arc-challenge, hellaswag,

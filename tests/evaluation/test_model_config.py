@@ -6,6 +6,7 @@
 import textwrap
 
 import pytest
+from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import (
     ModelConfig,
@@ -139,7 +140,12 @@ def test_gpu_lowering_emits_no_swap_space_or_trust_remote_code():
         ),
     )
     choice = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=2)
-    engine_args = inference_config_for_model(model, choice, env_vars={}).engine.extra_args
+    engine_args = inference_config_for_model(
+        model,
+        choice,
+        env_vars={},
+        priority=job_pb2.PRIORITY_BAND_INHERIT,
+    ).engine.extra_args
     assert "--swap-space" not in engine_args
     assert "--trust-remote-code" not in engine_args
 

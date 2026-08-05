@@ -10,7 +10,7 @@ import os
 import socket
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -52,6 +52,8 @@ from experiments.evaluation.evals import (
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
 from experiments.evaluation.models import models
 
+EVALUATION_CONTROLLER_CLUSTER = "marin"
+
 
 @dataclass(frozen=True)
 class HarborConfigSelection:
@@ -72,7 +74,8 @@ class LaunchSpec:
     accelerator: str | None
     limit: int | None
     records_prefix: str | None
-    cluster: str
+    federated_cluster: str | None
+    priority_band: int
     version: str | None = None
     description: str | None = None
 
@@ -196,6 +199,10 @@ def build_evaluation_batch(
     """Resolve experiment names into one model-serving evaluation batch."""
     model = models()[spec.model]
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
+    if spec.federated_cluster is not None:
+        if accelerator.platform is not Platform.GPU:
+            raise ValueError("--federated_cluster requires a GPU accelerator")
+        accelerator = replace(accelerator, target_cluster=spec.federated_cluster)
     definitions = _preflight_definitions(_evaluation_definitions(spec), model, spec.limit)
     records_prefix = records_prefix_for(accelerator, spec)
     created_at = datetime.now(UTC).isoformat()
@@ -222,7 +229,7 @@ def build_evaluation_batch(
             )
         )
 
-    endpoint_cluster = accelerator.target_cluster or spec.cluster
+    endpoint_cluster = accelerator.target_cluster or EVALUATION_CONTROLLER_CLUSTER
     return EvaluationBatch(
         group_id=_group_id(spec.model),
         user=user,
@@ -231,6 +238,7 @@ def build_evaluation_batch(
         records_prefix=records_prefix,
         model=model,
         accelerator=accelerator,
+        priority_band=spec.priority_band,
         capability_origin=_capability_origin(endpoint_cluster),
         api_model=canonical_served_name(model.name),
         evaluations=tuple(evaluations),
