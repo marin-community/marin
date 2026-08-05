@@ -205,14 +205,11 @@ def validate_harbor_resume_root(output_dir: str, config: ValidatedHarborConfig) 
 def _bind_harbor_results_root(output_dir: str, config: ValidatedHarborConfig) -> None:
     """Persist exact dataset identity, upgrading a compatible legacy root on first use."""
     identity_path = StoragePath.parse(output_dir) / _RESUME_IDENTITY_FILE
-    if identity_path.exists():
-        validate_harbor_resume_root(output_dir, config)
-        return
-
     root_entries = tuple((StoragePath.parse(output_dir) / "*").glob())
     if root_entries:
         validate_harbor_resume_root(output_dir, config)
-    identity_path.write_text(json.dumps(_resume_identity(config), indent=2))
+    if not identity_path.exists():
+        identity_path.write_text(json.dumps(_resume_identity(config), indent=2))
 
 
 def _read_trial(result_file: StoragePath) -> HarborTrial:

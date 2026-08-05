@@ -40,7 +40,7 @@ from marin.evaluation.runner import (
     submit_evaluation_batch,
 )
 from rigging.config_discovery import resolve_cluster_config
-from rigging.filesystem import prefix_join
+from rigging.filesystem import StoragePath, prefix_join
 from rigging.secrets import SecretSpec
 
 from experiments.evaluation.evals import (
@@ -201,7 +201,7 @@ def build_evaluation_batch(
     if spec.resume_results_path is not None:
         if len(definitions) != 1 or not isinstance(definitions[0][1].executor, HarborExecutor):
             raise ValueError("--resume-results-path requires exactly one Harbor evaluation")
-        if "://" not in spec.resume_results_path:
+        if not StoragePath.parse(spec.resume_results_path).is_remote:
             raise ValueError("--resume-results-path must be an object-store path")
         validate_harbor_resume_root(spec.resume_results_path, definitions[0][1].executor.config)
     records_prefix = records_prefix_for(accelerator, spec)
