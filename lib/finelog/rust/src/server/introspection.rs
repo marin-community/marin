@@ -29,7 +29,7 @@ use crate::store::segment::{
     segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS, TARGET_ROW_GROUP_BYTES,
 };
 use crate::store::trigram::{sidecar_path, SIDECAR_SPAN_ROWS};
-use crate::store::types::SegmentRow;
+use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
 
 /// When this process started, stamped at router-build time so uptime counts
@@ -286,14 +286,6 @@ fn to_segment_info(row: SegmentRow, physical: bool) -> SegmentInfo {
         min_key_value: row.min_key_value,
         max_key_value: row.max_key_value,
     }
-}
-
-fn basename(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path)
-        .to_string()
 }
 
 async fn get_segments(

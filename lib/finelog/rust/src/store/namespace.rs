@@ -47,7 +47,7 @@ use crate::store::segment::{
     write_segment_to_dir,
 };
 use crate::store::trigram::{sidecar_path, write_sidecar};
-use crate::store::types::{LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
+use crate::store::types::{basename, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
 /// Best-effort removal of a segment's trigram sidecar (`<path>.tgm`), co-located
 /// with every parquet unlink. A missing sidecar (an L0 / unindexed-namespace
@@ -1396,19 +1396,30 @@ impl Namespace {
         };
         let deadline = Instant::now() + budget;
         let mut rewritten = 0;
-        while let Some((path, was)) = self.next_stale_layout() {
+        // A segment that fails to stage or commit stays stale, so it would be
+        // picked again immediately; skipping it for the rest of the pass is what
+        // keeps one unreadable file from starving every other segment. The next
+        // tick retries it, because the set is per-pass.
+        let mut failed: HashSet<String> = HashSet::new();
+        while Instant::now() < deadline {
+            let Some((path, was)) = self.next_stale_layout(&failed) else {
+                break;
+            };
             let started = Instant::now();
             let (staging, size) = match stage_rewritten_segment(Path::new(&path)) {
                 Ok(staged) => staged,
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,
                         "layout rewrite failed; leaving the segment as it was");
+                    failed.insert(path);
                     continue;
                 }
             };
             match self.commit_rewritten_segment(&path, &staging, size) {
                 Ok(true) => {}
                 Ok(false) => {
+                    // Evicted mid-rewrite: it is gone from the deque, so it will
+                    // not come back around.
                     tracing::debug!(namespace = %self.name, segment = %basename(&path),
                         "segment went away mid-rewrite; discarded the replacement");
                     continue;
@@ -1416,6 +1427,7 @@ impl Namespace {
                 Err(e) => {
                     tracing::warn!(namespace = %self.name, segment = %basename(&path), error = %e,
                         "layout rewrite commit failed");
+                    failed.insert(path);
                     continue;
                 }
             }
@@ -1429,19 +1441,17 @@ impl Namespace {
                 "rewrote segment layout"
             );
             rewritten += 1;
-            if Instant::now() >= deadline {
-                break;
-            }
         }
         rewritten
     }
 
     /// The oldest local segment not yet known to carry the current layout, as
-    /// `(path, size)`. `None` once every segment is current.
+    /// `(path, size)`, ignoring anything in `skip`. `None` once every segment is
+    /// current.
     ///
     /// Reads footers OUTSIDE the insertion lock — the lock guards only a snapshot
     /// of candidate paths — so a slow filesystem cannot stall writers behind this.
-    fn next_stale_layout(&self) -> Option<(String, i64)> {
+    fn next_stale_layout(&self, skip: &HashSet<String>) -> Option<(String, i64)> {
         let candidates: Vec<(String, i64)> = {
             let inner = self.inner.lock().unwrap();
             let live: HashSet<&str> = inner
@@ -1454,7 +1464,7 @@ impl Namespace {
             inner
                 .local_segments
                 .iter()
-                .filter(|s| s.level >= 1 && !known.contains(&s.path))
+                .filter(|s| s.level >= 1 && !known.contains(&s.path) && !skip.contains(&s.path))
                 .map(|s| (s.path.clone(), s.size_bytes))
                 .collect()
         };
@@ -1609,14 +1619,6 @@ impl Namespace {
     }
 }
 
-fn basename(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path)
-        .to_string()
-}
-
 /// Debug-only deque invariant: no two entries share a path.
 ///
 /// A same-path duplicate is a phantom reference — two entries for one seq range,
@@ -1656,6 +1658,28 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
     }
 }
 
+/// Delete `*.parquet.tmp` left behind by a segment write or layout rewrite that
+/// died before its rename. Nothing references them: the catalog only ever names
+/// the final path, and `discover_segments` ignores the extension, so a survivor
+/// is disk the namespace's own byte accounting cannot see.
+fn discard_staging_files(dir: &std::path::Path, namespace: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("tmp") {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(namespace = %namespace, file = %path.display(),
+                "discarded an abandoned staging file"),
+            Err(e) => tracing::warn!(namespace = %namespace, file = %path.display(), error = %e,
+                "could not discard an abandoned staging file"),
+        }
+    }
+}
+
 /// Adopt segments at boot, reconciling catalog rows against local files.
 ///
 /// Two-pass reconcile:
@@ -1679,28 +1703,6 @@ fn segment_to_row(namespace: &str, seg: &LocalSegment) -> SegmentRow {
 ///
 /// The deque is sorted by `min_seq` so iteration matches the planner's
 /// oldest-first expectation. Catalog REMOTE rows are left untouched.
-/// Delete `*.parquet.tmp` left behind by a segment write or layout rewrite that
-/// died before its rename. Nothing references them: the catalog only ever names
-/// the final path, and `discover_segments` ignores the extension, so a survivor
-/// is disk the namespace's own byte accounting cannot see.
-fn discard_staging_files(dir: &std::path::Path, namespace: &str) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("tmp") {
-            continue;
-        }
-        match std::fs::remove_file(&path) {
-            Ok(()) => tracing::info!(namespace = %namespace, file = %path.display(),
-                "discarded an abandoned staging file"),
-            Err(e) => tracing::warn!(namespace = %namespace, file = %path.display(), error = %e,
-                "could not discard an abandoned staging file"),
-        }
-    }
-}
-
 fn adopt_local_segments(
     dir: &std::path::Path,
     key_column: Option<&str>,

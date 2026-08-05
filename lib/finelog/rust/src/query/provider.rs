@@ -311,16 +311,7 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let ids: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let column = b.column(0);
-                let c = StringValues::new(column).expect("string column");
-                (0..column.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let ids = first_column_strings(&batches);
         assert_eq!(ids, vec!["w-1", "w-2", "w-3"]);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -459,6 +450,21 @@ mod tests {
         assert_eq!(total, 2);
         std::fs::remove_dir_all(&wdir).ok();
         std::fs::remove_dir_all(&tdir).ok();
+    }
+
+    /// The first column of `batches` as strings, in row order — what a
+    /// single-column projection assertion compares against.
+    fn first_column_strings(batches: &[RecordBatch]) -> Vec<String> {
+        batches
+            .iter()
+            .flat_map(|b| {
+                let column = b.column(0);
+                let c = StringValues::new(column).expect("string column");
+                (0..column.len())
+                    .map(|i| c.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     /// Log-form schema: seq, key, data (the columns the trigram prune touches).
@@ -615,16 +621,7 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let got: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let column = b.column(0);
-                let c = StringValues::new(column).expect("string column");
-                (0..column.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let got = first_column_strings(&batches);
         assert_eq!(
             got,
             vec![
@@ -719,16 +716,7 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let got: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let column = b.column(0);
-                let c = StringValues::new(column).expect("string column");
-                (0..column.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let got = first_column_strings(&batches);
         assert_eq!(
             got,
             vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()],

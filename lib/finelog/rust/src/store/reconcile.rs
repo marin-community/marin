@@ -21,7 +21,7 @@ use futures::StreamExt;
 use crate::errors::StatsError;
 use crate::store::catalog::Catalog;
 use crate::store::remote::RemoteStore;
-use crate::store::types::{parse_seg_filename, SegmentLocation, SegmentRow};
+use crate::store::types::{basename, parse_seg_filename, SegmentLocation, SegmentRow};
 
 /// Bounded concurrency for the boot reconcile's remote footer reads. High enough
 /// to hide cross-region round-trip latency (a sequential await chain costs O(N)
@@ -213,12 +213,4 @@ pub async fn reconcile_remote_segments(
         "finelog remote reconcile complete"
     );
     Ok(())
-}
-
-fn basename(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path)
-        .to_string()
 }

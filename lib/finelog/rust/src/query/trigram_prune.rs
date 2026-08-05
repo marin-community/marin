@@ -693,7 +693,7 @@ mod tests {
         let mut data: Vec<String> = (0..SIDECAR_SPAN_ROWS)
             .map(|_| "idle heartbeat ok".to_string())
             .collect();
-        data.push(needle.to_string()); // row group 1
+        data.push(needle.to_string()); // the only row in the second span
         let n = data.len() as i64;
         let batch = RecordBatch::try_new(
             schema,
