@@ -80,6 +80,7 @@ class Target:
     ram: str
     disk: str
     attention_implementation: str
+    use_syrk: bool
 
     @property
     def expert_axis_size(self) -> int:
@@ -89,15 +90,17 @@ class Target:
 # These models are small enough to hold a whole rack's worth of experts on one node, so the H100
 # target keeps the all-to-all inside a single NVLink domain instead of crossing InfiniBand.
 #
-# The attention backend follows the accelerator. `gpu_fa4_cute` is Blackwell-only: its MMA op
-# accepts sm_100/sm_103/sm_110 and rejects H100's sm_90a outright. `gpu_fa4_thd` dispatches on the
-# architecture family and carries real SM90 forward and backward kernels.
+# Kernel availability follows the accelerator, in two places. `gpu_fa4_cute` is Blackwell-only: its
+# MMA op accepts sm_100/sm_103/sm_110 and rejects H100's sm_90a outright, and `gpu_fa4_thd` needs
+# fixed-shape THD segment metadata this model does not supply, so Hopper falls back to reference
+# attention. MuonH's `use_syrk` likewise routes the 4D expert-stack Newton-Schulz through QuACK's
+# SM100 symmetric GEMM, so Hopper takes the plain vmapped path instead.
 TARGETS: dict[str, Target] = {
-    "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute"),
+    "gb200-rack": Target("GB200", HERO_GPUS_PER_NODE, HERO_EP_NODES, 120, "850g", "1t", "gpu_fa4_cute", True),
     # 8 nodes, not 1: capacity is per (sender shard, expert) cell, so the shard count sets how
     # readily cells overflow. EP8 would give 4,096-row cells against 512 at EP64 and would drop far
     # less on the same routing, which is not the behavior these runs are meant to reproduce.
-    "h100-8node": Target("H100", 8, 8, 120, "1900g", "900g", "reference"),
+    "h100-8node": Target("H100", 8, 8, 120, "1900g", "900g", "reference", False),
 }
 
 
@@ -182,11 +185,14 @@ def build_small_run(
     shape = SMALL_SHAPES[size]
     fleet = TARGETS[target]
     model = _small_model(shape, capacity_factor, fleet.attention_implementation)
-    optimizer = MoeHeuristic().build_optimizer_config(
-        num_train_steps=shape.num_steps,
-        batch_size=SMALL_BATCH_SIZE,
-        hidden_dim=model.hidden_dim,
-        seq_len=SEQ_LEN,
+    optimizer = dataclasses.replace(
+        MoeHeuristic().build_optimizer_config(
+            num_train_steps=shape.num_steps,
+            batch_size=SMALL_BATCH_SIZE,
+            hidden_dim=model.hidden_dim,
+            seq_len=SEQ_LEN,
+        ),
+        use_syrk=fleet.use_syrk,
     )
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
