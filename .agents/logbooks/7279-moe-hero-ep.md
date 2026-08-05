@@ -797,3 +797,26 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Purpose: Price the drop correction that the MHEP-009 versus MHEP-010 comparison currently carries.
 - Cluster note: Seven of our gangs are queued at once against a saturated A08. They serialize. This
   is a deliberate choice to keep the queue full while 12-rack runs cycle.
+
+### 2026-08-05 02:45 UTC - Size ladder result: the one-rack ceiling is between 592 B and 650 B
+
+- 591.6 B (`mhep-011`, 256 x i2560, top-4, 19.9 B active) PASSES. Median MFU is 24.0032%, tokens/s
+  is 307,778, step time is 13.6277 s, final loss is 6.0396, and the drop fraction is 12.2660%.
+  Four whole experts land on each device. Nothing this large ran on one rack before.
+- 649.6 B (`mhep-012c`, 256 x i2816) FAILS with `JaxRuntimeError: INTERNAL: NCCL operation
+  ncclAlltoAll(...)` on several ranks, from `NCCL WARN Cuda failure 2 'out of memory'`. Stopped
+  after repeated retries.
+- 707.6 B (`mhep-013c`, 256 x i3072) stopped without a clean measurement. It is larger than the
+  configuration that already fails, thus it is declared too big for one rack.
+- Failure mechanism: XLA reserves the model, then NCCL allocates its all-to-all send and receive
+  buffers outside the XLA pool through `cudaMalloc`. With `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`
+  XLA grows on demand and keeps no headroom, thus NCCL fails instead of XLA. The buffers are about
+  3.2 GiB each for send and receive at this shape, plus internal channels.
+- Correction: An earlier entry in this session called the 650 B failure not-an-OOM, because
+  `RESOURCE_EXHAUSTED`, allocator, and `XlaRuntimeError` searches returned nothing. That search
+  missed the NCCL path. It is an out-of-memory failure.
+- Estimate limit: The `resident = 53.8 GiB + 0.1465 x params_B` curve counts XLA-side memory only.
+  It omits NCCL buffers, thus it overstates what fits. Use 592 B as the measured pass and 650 B as
+  the measured fail, not the arithmetic ceiling.
+- Untested lever: Cap XLA with `XLA_PYTHON_CLIENT_MEM_FRACTION` instead of `cuda_async`, or lower
+  `NCCL_BUFFSIZE`, to leave the communicator room. Neither was measured.
