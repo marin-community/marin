@@ -508,3 +508,47 @@ def test_wrap_multiprocess_requires_gpu() -> None:
 def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
         wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)
+
+
+def test_wrap_nsys_is_a_noop_without_the_environment_variable(monkeypatch):
+    monkeypatch.delenv(iris_backend.NSYS_TASKS_ENV, raising=False)
+    entrypoint = IrisEntrypoint(command=["bash", "-c", "exec $IRIS_PYTHON -u run.py"])
+
+    assert iris_backend.wrap_nsys(entrypoint).command == entrypoint.command
+
+
+def test_wrap_nsys_composes_the_hook_into_a_shell_entrypoint(monkeypatch):
+    monkeypatch.setenv(iris_backend.NSYS_TASKS_ENV, "first")
+    entrypoint = IrisEntrypoint(
+        command=["bash", "-c", "exec $IRIS_PYTHON -u run.py"],
+        workdir_files={"run.py": b"print(1)"},
+    )
+
+    wrapped = iris_backend.wrap_nsys(entrypoint)
+
+    assert wrapped.command == [
+        "bash",
+        "-c",
+        "exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks first -- $IRIS_PYTHON -u run.py",
+    ]
+    assert wrapped.workdir_files == entrypoint.workdir_files
+
+
+def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
+    monkeypatch.setenv(iris_backend.NSYS_TASKS_ENV, "0,3")
+    entrypoint = IrisEntrypoint(command=["python", "train.py", "--steps", "5"])
+
+    wrapped = iris_backend.wrap_nsys(entrypoint)
+
+    assert wrapped.command == [
+        "$IRIS_PYTHON",
+        "-m",
+        "iris.hooks.nsys_main",
+        "--tasks",
+        "0,3",
+        "--",
+        "python",
+        "train.py",
+        "--steps",
+        "5",
+    ]
