@@ -470,6 +470,11 @@ def _make_train_step(
             # Accumulate in place rather than collecting a list: the gradient tree is parameter
             # sized, so holding one per microbatch would cost more memory than the smaller
             # activations save. Adding each microbatch's grads immediately lets XLA free them.
+            #
+            # The barrier is what makes that actually happen. Without it XLA is free to schedule
+            # every microbatch's forward before any backward, which raises peak memory instead of
+            # lowering it and defeats the point of microbatching. Sequencing the accumulator keeps
+            # one microbatch in flight at a time.
             micro_size = batch.tokens.shape[0] // microbatches
             loss = None
             grads = None
@@ -477,8 +482,13 @@ def _make_train_step(
             for index in range(microbatches):
                 micro = _slice_microbatch(batch, index * micro_size, micro_size)
                 (micro_loss, micro_metrics), micro_grads = grad_fn(qb_params, micro)
-                loss = micro_loss if loss is None else loss + micro_loss
-                grads = micro_grads if grads is None else jax.tree_util.tree_map(jnp.add, grads, micro_grads)
+                if loss is None:
+                    loss, grads = micro_loss, micro_grads
+                else:
+                    loss = loss + micro_loss
+                    grads = jax.tree_util.tree_map(jnp.add, grads, micro_grads)
+                if index + 1 < microbatches:
+                    loss, grads = jax.lax.optimization_barrier((loss, grads))
                 per_microbatch.append(micro_metrics)
             # Each microbatch loss is already a token mean over an equal slice, so averaging the
             # means reproduces the whole-batch mean, and likewise for its gradient.
