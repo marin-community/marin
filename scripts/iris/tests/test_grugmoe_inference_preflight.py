@@ -2457,6 +2457,155 @@ def test_homogeneous_slice_uses_all_branches_and_keeps_each_root_on_one_dp_rank(
     assert len({item["request"]["root"] for item in schedule}) == 6
 
 
+def test_coarse_curve_reader_recomputes_raw_inputs_and_rejects_duplicate_events() -> None:
+    case = CASES["exact-reference-ep16"]
+    raw_workload = grug_preflight.deterministic_workload(seed=grug_preflight.DUMMY_SEED)
+    workload = grug_preflight._health_workload_manifest(raw_workload, case=case, concurrencies=[144])
+    manifest_requests = {request["request_id"]: request for request in workload["requests"]}
+    kv_groups = [
+        {
+            "engine_idx": engine,
+            "role": "attention",
+            "kind": "full_attention",
+            "active_requests": 1,
+            "active_blocks": 1,
+            "active_payload_bytes": 2,
+            "active_padded_bytes": 2,
+            "active_physical_bytes": 2,
+            "reserved_physical_bytes": 100,
+        }
+        for engine in range(case.data_parallel_size)
+    ]
+    kv_payload = ("INFO GrugMoE KV group usage: " + json.dumps(kv_groups)).encode()
+    curve = []
+    parsed_by_path = {}
+    snapshot_by_path = {}
+    kv_sources = {}
+    events = []
+    for cohort_index, cohort in enumerate(("short", "medium", "long")):
+        raw_schedule = grug_preflight._homogeneous_cohort_schedule(raw_workload, case=case, cohort=cohort)
+        schedule = [
+            {
+                "slot": item["slot"],
+                "data_parallel_rank": item["data_parallel_rank"],
+                "request_id": item["request"]["request_id"],
+                "prompt_token_ids_sha256": manifest_requests[item["request"]["request_id"]]["prompt_token_ids_sha256"],
+            }
+            for item in raw_schedule
+        ]
+        expected_generation = sum(manifest_requests[item["request_id"]]["max_tokens"] for item in schedule)
+        before_path = f"metrics/{cohort}-before.prom"
+        after_path = f"metrics/{cohort}-after.prom"
+        parsed_by_path[before_path] = parse_labeled_prometheus(
+            "\n".join(
+                (
+                    'vllm:generation_tokens_total{engine="0"} 0',
+                    'vllm:request_success_total{engine="0",finished_reason="length"} 0',
+                    'vllm:num_preemptions_total{engine="0"} 0',
+                )
+            )
+        )
+        parsed_by_path[after_path] = parse_labeled_prometheus(
+            "\n".join(
+                (
+                    f'vllm:generation_tokens_total{{engine="0"}} {expected_generation}',
+                    'vllm:request_success_total{engine="0",finished_reason="length"} 48',
+                    'vllm:num_preemptions_total{engine="0"} 0',
+                )
+            )
+        )
+        snapshot_by_path[before_path] = {"monotonic_seconds": float(cohort_index * 10 + 1)}
+        snapshot_by_path[after_path] = {"monotonic_seconds": float(cohort_index * 10 + 3)}
+        kv_path = f"metrics/arm-{cohort}-kv.log"
+        kv = grug_preflight._health_kv_summary_from_text(
+            kv_payload.decode(),
+            case=case,
+            target_concurrency=48,
+        )
+        final_context_tokens = manifest_requests[schedule[0]["request_id"]]["final_token_count"]
+        layer_schedule = grug_preflight.layer_types(case.num_hidden_layers, global_interval=case.global_every)
+        kv["attention_prediction"] = {
+            "final_context_tokens": final_context_tokens,
+            "local_layers": layer_schedule.count("sliding_attention"),
+            "global_layers": layer_schedule.count("full_attention"),
+            "per_live_sequence_bytes": grug_preflight.predict_kv_bytes(
+                sequence_length=final_context_tokens,
+                local_layers=layer_schedule.count("sliding_attention"),
+                global_layers=layer_schedule.count("full_attention"),
+                local_kv_heads=case.local_kv_heads,
+                global_kv_heads=case.global_kv_heads,
+                head_dim=case.head_dim,
+                sliding_window=case.sliding_window,
+            ),
+            "scope": "semantic K and V payload before block rounding",
+        }
+        kv["source"] = {
+            "path": kv_path,
+            "bytes": len(kv_payload),
+            "sha256": hashlib.sha256(kv_payload).hexdigest(),
+        }
+        kv_sources[kv_path] = kv_payload
+        rate = expected_generation / 2 / case.data_parallel_size
+        curve.append(
+            {
+                "cohort": cohort,
+                "passed": True,
+                "gates": {"synthetic": True},
+                "final_context_tokens": final_context_tokens,
+                "slice_concurrency": 48,
+                "population_requests": 6,
+                "measured_requests": 48,
+                "schedule": schedule,
+                "elapsed_seconds": 2.0,
+                "engine_generation_tokens": expected_generation,
+                "generation_tokens_per_second_per_gpu": rate,
+                "gpu_seconds_per_generated_token": case.data_parallel_size * 2 / expected_generation,
+                "slowdown_from_short_percent": 0.0,
+                "preemptions": 0,
+                "kv_cache": kv,
+                "metrics": {"boundary_start": before_path, "boundary_end": after_path},
+            }
+        )
+        events.extend(
+            {
+                "event": "cohort_slice_request_completed",
+                "arm_id": "arm",
+                "cohort": cohort,
+                "request_id": f"arm-{cohort}-slot-{item['slot']:03d}-{item['request_id']}",
+                "manifest_request_id": item["request_id"],
+                "data_parallel_rank": item["data_parallel_rank"],
+                "completion_tokens": manifest_requests[item["request_id"]]["max_tokens"],
+                "prompt_token_ids_sha256": item["prompt_token_ids_sha256"],
+                "generated_token_ids_sha256": "b" * 64,
+                "final_prefix_token_ids_sha256": "c" * 64,
+                "sampled_token_logprobs_sha256": "d" * 64,
+            }
+            for item in schedule
+        )
+
+    arm = {"arm_id": "arm", "matrix": {"case": case.name}, "coarse_curve": curve}
+    contract = grug_preflight._matrix_coarse_curve_contract(
+        arm,
+        workload=workload,
+        parsed_by_path=parsed_by_path,
+        snapshot_by_path=snapshot_by_path,
+        event_records=events,
+        kv_source_by_path=kv_sources,
+    )
+    duplicate_contract = grug_preflight._matrix_coarse_curve_contract(
+        arm,
+        workload=workload,
+        parsed_by_path=parsed_by_path,
+        snapshot_by_path=snapshot_by_path,
+        event_records=[*events, events[0]],
+        kv_source_by_path=kv_sources,
+    )
+
+    assert contract["passed"]
+    assert all(point["kv_recomputed"] for point in contract["points"])
+    assert not duplicate_contract["passed"]
+
+
 def test_capacity_probe_reader_recomputes_raw_counters_events_and_kv_log() -> None:
     case = CASES["exact-reference-131k-ep16"]
     before_text = "\n".join(

@@ -8583,29 +8583,34 @@ def _matrix_coarse_curve_contract(
             for item, request in zip(schedule, scheduled_requests, strict=False)
             if request is not None
         }
-        observed_events = {
-            str(event.get("request_id")): event
+        observed_event_records = [
+            event
             for event in event_records
             if event.get("event") == "cohort_slice_request_completed"
             and event.get("arm_id") == arm["arm_id"]
             and event.get("cohort") == cohort
-        }
-        events_valid = set(observed_events) == set(expected_events) and all(
-            event.get("manifest_request_id") == item["request_id"]
-            and int(event.get("data_parallel_rank", -1)) == int(item["data_parallel_rank"])
-            and int(event.get("completion_tokens", -1)) == int(request["max_tokens"])
-            and event.get("prompt_token_ids_sha256") == request["prompt_token_ids_sha256"]
+        ]
+        observed_events = {str(event.get("request_id")): event for event in observed_event_records}
+        events_valid = (
+            len(observed_event_records) == len(expected_events)
+            and set(observed_events) == set(expected_events)
             and all(
-                isinstance(event.get(field), str) and len(event[field]) == 64
-                for field in (
-                    "prompt_token_ids_sha256",
-                    "generated_token_ids_sha256",
-                    "final_prefix_token_ids_sha256",
-                    "sampled_token_logprobs_sha256",
+                event.get("manifest_request_id") == item["request_id"]
+                and int(event.get("data_parallel_rank", -1)) == int(item["data_parallel_rank"])
+                and int(event.get("completion_tokens", -1)) == int(request["max_tokens"])
+                and event.get("prompt_token_ids_sha256") == request["prompt_token_ids_sha256"]
+                and all(
+                    isinstance(event.get(field), str) and len(event[field]) == 64
+                    for field in (
+                        "prompt_token_ids_sha256",
+                        "generated_token_ids_sha256",
+                        "final_prefix_token_ids_sha256",
+                        "sampled_token_logprobs_sha256",
+                    )
                 )
+                for request_id, (item, request) in expected_events.items()
+                for event in [observed_events[request_id]]
             )
-            for request_id, (item, request) in expected_events.items()
-            for event in [observed_events[request_id]]
         )
         schedule_types = layer_types(case.num_hidden_layers, global_interval=case.global_every)
         expected_prediction = (
