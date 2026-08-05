@@ -70,7 +70,13 @@ def _run(fn, capacity_factor, inputs):
     sharded = shard_map(
         local,
         mesh=mesh,
-        in_specs=(P("expert", None), P("expert", None), P("expert", None), P("expert", None, None), P("expert", None, None)),
+        in_specs=(
+            P("expert", None),
+            P("expert", None),
+            P("expert", None),
+            P("expert", None, None),
+            P("expert", None, None),
+        ),
         out_specs=(P("expert", None), P()),
         check_rep=False,
     )

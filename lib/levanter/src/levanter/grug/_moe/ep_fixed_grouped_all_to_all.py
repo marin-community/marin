@@ -128,9 +128,11 @@ def _moe_mlp_ep_fixed_grouped_a2a_local(
 
         # Invert once and gather, rather than scatter the rows themselves: the backward pass of a
         # gather is a scatter-add over indices, not over hidden-sized rows.
-        source = jnp.full((send_size + 1,), send_size, dtype=jnp.int32).at[target].set(
-            jnp.arange(send_size, dtype=jnp.int32)
-        )[:send_size]
+        source = (
+            jnp.full((send_size + 1,), send_size, dtype=jnp.int32)
+            .at[target]
+            .set(jnp.arange(send_size, dtype=jnp.int32))[:send_size]
+        )
         padded_recv = jnp.concatenate(
             [received.reshape(send_size, hidden_dim), jnp.zeros((1, hidden_dim), received.dtype)], axis=0
         )
@@ -143,9 +145,7 @@ def _moe_mlp_ep_fixed_grouped_a2a_local(
         expert_output = ragged_dot(activation_fn(gate) * up, moe_w2_local, group_sizes)
 
     with jax.named_scope("combine"):
-        padded_output = jnp.concatenate(
-            [expert_output, jnp.zeros((1, hidden_dim), expert_output.dtype)], axis=0
-        )
+        padded_output = jnp.concatenate([expert_output, jnp.zeros((1, hidden_dim), expert_output.dtype)], axis=0)
         unsorted = padded_output[target].reshape(expert_shards, group_capacity, hidden_dim)
         returned = jax.lax.all_to_all(unsorted, "expert", split_axis=0, concat_axis=0, tiled=True)
         send_output = tree_checkpoint_name(returned, _CHECKPOINT_MOE_OUTPUT).reshape(send_size, hidden_dim)
