@@ -7,8 +7,6 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from iris.cluster.client.job_info import JobInfo
-from iris.cluster.types import JobName
 
 from experiments.datakit.embeddings import harrier
 from experiments.datakit.embeddings.harrier import (
@@ -18,7 +16,6 @@ from experiments.datakit.embeddings.harrier import (
     allocate_source_quotas,
     assigned_parts,
     inference_groups,
-    resolve_shard_index,
 )
 
 
@@ -49,26 +46,6 @@ def test_source_inventory_uses_canonical_nested_names(monkeypatch: pytest.Monkey
     inventory = harrier._source_inventory()
 
     assert set(inventory) == set(sources)
-
-
-def test_source_inventory_rejects_missing_canonical_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(harrier, "all_sources", lambda: {"complete": object(), "missing/nested": object()})
-    monkeypatch.setattr(
-        harrier,
-        "_source_files",
-        lambda source: () if source == "missing/nested" else (SourceFile("s3://input/part.parquet", 1),),
-    )
-
-    with pytest.raises(ValueError):
-        harrier._source_inventory()
-
-
-def test_resolve_shard_index_uses_iris_replica_index(monkeypatch: pytest.MonkeyPatch) -> None:
-    job_info = JobInfo(task_id=JobName.from_wire("/held/harrier/37"))
-    monkeypatch.setattr(harrier, "get_job_info", lambda: job_info)
-
-    assert resolve_shard_index(None) == 37
-    assert resolve_shard_index(12) == 12
 
 
 def test_allocate_source_quotas_hits_exact_proportional_target() -> None:

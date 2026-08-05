@@ -3,7 +3,6 @@
 
 """Create a proportional 50M-document Harrier embedding sample."""
 
-import argparse
 import hashlib
 import json
 import logging
@@ -474,40 +473,17 @@ def run_embed(shard_index: int, num_shards: int) -> dict[str, Any]:
     }
 
 
-def resolve_shard_index(shard_index: int | None) -> int:
-    """Resolve an explicit shard or the current Iris replica index."""
-    if shard_index is not None:
-        return shard_index
-    job_info = get_job_info()
-    if job_info is None:
-        raise ValueError("No --shard-index and no Iris task identity")
-    return job_info.task_index
-
-
 def build() -> ArtifactStep[Artifact]:
     """Return the adopted artifact for the completed Harrier embedding run."""
     return HARRIER_EMBEDDINGS_ARTIFACT
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("stage-model", "embed"), required=True)
-    parser.add_argument("--shard-index", type=int)
-    parser.add_argument("--num-shards", type=int)
-    arguments = parser.parse_args()
-    if arguments.mode == "embed" and arguments.num_shards is None:
-        parser.error("embed mode requires --num-shards")
-    return arguments
-
-
 def main() -> None:
-    """Run one stage of the fixed Harrier embedding workflow."""
-    arguments = parse_args()
-    if arguments.mode == "stage-model":
-        result = stage_model()
-    else:
-        result = run_embed(resolve_shard_index(arguments.shard_index), arguments.num_shards)
-    Path(f"/tmp/harrier-50m-{arguments.mode}").write_text(json.dumps(result, sort_keys=True))
+    """Run the fixed Harrier embedding worker for this Iris task."""
+    job_info = get_job_info()
+    if job_info is None:
+        raise ValueError("Harrier embedding must run as an Iris job")
+    result = run_embed(job_info.task_index, job_info.num_tasks)
     logger.info("HARRIER_50M=%s", json.dumps(result, sort_keys=True))
 
 
