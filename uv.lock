@@ -5131,7 +5131,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "marin-dupekit-native", specifier = ">=0.1.4.dev30223685542" },
+    { name = "marin-dupekit-native", specifier = ">=0.1.5.dev30957455498" },
     { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
     { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
 ]
@@ -5155,17 +5155,17 @@ test = [
 
 [[package]]
 name = "marin-dupekit-native"
-version = "0.1.4.dev30223685542"
+version = "0.1.5.dev30957455498"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f0/9f/a600c79a10c3fe5e0c7ffdfb3f24ce44c8278d1c8920ab562877cf172088/marin_dupekit_native-0.1.4.dev30223685542.tar.gz", hash = "sha256:c5ec1d753b2077bdded6cca403ac96ed822e4268062be26e8cbaa04e33fef9aa", size = 22174, upload-time = "2026-07-26T23:25:30.878Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/0c/d18c67033acc09b3e46a04ed8f834c45681e2eb92d2009e6fbe06b1539d1/marin_dupekit_native-0.1.5.dev30957455498.tar.gz", hash = "sha256:769f855af0ad92d5712afd48086641e47a6eca0cfefcbb745902d89532ecc4fd", size = 22359, upload-time = "2026-08-04T22:49:25.439Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/72/89906afb7a8ce3841255125eacce2896eb60815e1bcb0b20c933fe1d4df7/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:45253c786e4eac29b9c93d05e71f49b2df672625af85a014bdb10c7f8ec2608c", size = 4526972, upload-time = "2026-07-26T23:25:22.588Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/d9/74b84bf3f1d9edf18f1960037b874e43909dd91db73883d9b6f27316812b/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:499d4ad1524f2df5afa29633cbaa27c72e172cd78eddef42455dcc1919d76dc6", size = 4181542, upload-time = "2026-07-26T23:25:24.495Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/e3/8e1ac37084980a912420d6168445baa407862771a806439dbc788bbbc4fa/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:942b9b6e46ca0966ae8e0b584e6195baf2a35c135e35d71158b33060351142c8", size = 4392908, upload-time = "2026-07-26T23:25:26.404Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/92/209e2a5e15a90b17ae71bf601a2d137d96656e7144552681b212c1ef5b75/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b15cf50e1ae166f1912fd8c1ffc7fae7a2a834d7a445db9be0ef38087db79fa1", size = 4723800, upload-time = "2026-07-26T23:25:28.134Z" },
+    { url = "https://files.pythonhosted.org/packages/23/a9/02b6a12c66f4365eab7d10e6daa68f2593465793a609922a0871db5df286/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:34e0e4892d95cb9c576838f7a92fe02315f793d8ef8bbe09b1d69be424d1f14c", size = 3964882, upload-time = "2026-08-04T22:49:17.823Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/fe/0414b2d4994887c0f46cbf5933d9b48cdec447d3f8a2b667e7ea597a9a9b/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:bfc43e9decaaa7635740ef018c04802921178941f2aff8ddc105542ea3f4f3cb", size = 3654072, upload-time = "2026-08-04T22:49:19.992Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/89/070afd632907acf0d1416f6dcb36f86a847c42e57a4094714c598d76db6e/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:cb49390e74a5bca1e843b5d05213b7e31891dc2d6657884de225b23773d5cd92", size = 3833758, upload-time = "2026-08-04T22:49:21.569Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/99/43cf7ab011f22d047c0bd9978984dc3530ac92a29aa6f53fccbbf7632213/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e466e25c33cb2618b4d168ac4c9e77aab32e5406e8f845dca94e4cf55e91952d", size = 4116806, upload-time = "2026-08-04T22:49:23.013Z" },
 ]
 
 [[package]]
