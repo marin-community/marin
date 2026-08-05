@@ -61,6 +61,7 @@ MAX_INFERENCE_BATCH_TOKENS = 32_768
 MAX_INFERENCE_BATCH_SIZE = 64
 PARQUET_ROW_GROUP_SIZE = 8_192
 INVENTORY_WORKERS = 16
+MODEL_STAGE_POLL_INTERVAL = 5
 INFERENCE_DTYPE = "bfloat16"
 STORAGE_DTYPE = np.float16
 
@@ -274,6 +275,15 @@ def stage_model() -> dict[str, Any]:
     return {"model_archive_url": archive_url, "reused": False}
 
 
+def stage_model_for_job(task_index: int) -> None:
+    """Stage the model once and wait until every Iris task can read it."""
+    if task_index == 0:
+        stage_model()
+    archive_path = StoragePath(_model_archive_url())
+    while not archive_path.exists():
+        time.sleep(MODEL_STAGE_POLL_INTERVAL)
+
+
 def _download_staged_model(local_root: Path) -> None:
     with tempfile.TemporaryDirectory() as temporary_directory:
         archive_path = Path(temporary_directory) / "model.tar"
@@ -483,6 +493,7 @@ def main() -> None:
     job_info = get_job_info()
     if job_info is None:
         raise ValueError("Harrier embedding must run as an Iris job")
+    stage_model_for_job(job_info.task_index)
     result = run_embed(job_info.task_index, job_info.num_tasks)
     logger.info("HARRIER_50M=%s", json.dumps(result, sort_keys=True))
 
