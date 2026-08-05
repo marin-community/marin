@@ -24,9 +24,27 @@ sharding strategies keep the same analytic FLOP count, and their MFU values are 
 The `fsdp` shape also keeps the FSDP hero's host offload of the optimizer state.
 `tests/test_moe_hero_ep.py` fails if the two model specs drift apart in more fields.
 
-Capacity is the one behavior that the transport changes: the local FSDP backend computes every
-assignment, but EP drops each assignment above the fixed cell capacity. Read the drop fraction with
-the MFU value.
+Capacity is the one behavior that the transport changes. The two backends enforce it differently,
+and EP discards more: the measured pair below drops 9.9683% against 1.8779%. MFU credits every
+assignment in the analytic FLOP count, thus a run that drops more is credited for work it did not
+do. Read the drop fraction with the MFU value.
+
+## Measured result at the FSDP shape
+
+One rack, 25 steps, batch 1024, one hour apart on `cw-us-east-08a`.
+
+| | EP64 (`--shape fsdp`) | FSDP64 (`moe_hero_fsdp --dp-racks 1`) |
+| --- | --- | --- |
+| median MFU | 27.7544% | 19.3951% |
+| tokens/s (last sample) | 316,473 | 235,125 |
+| step time (last sample) | 13.2533 s | 17.8386 s |
+| MoE drop fraction | 9.9683% | 1.8779% |
+| final loss | 6.0498 | 6.0754 |
+
+EP measures 8.3593 percentage points more median MFU, or 43.1% relative. A first-order correction
+for the assignments each arm skipped leaves EP about 6 points ahead. Both runs took 26 MFU samples
+that include compile and warmup, so their deviations are 6.5623 and 5.5456. Use the medians, and
+run 200 steps before you trust a smaller difference.
 
 ## Configuration
 
