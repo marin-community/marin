@@ -167,9 +167,8 @@ class ControllerDashboard:
     """HTTP dashboard with Connect RPC and web UI.
 
     The dashboard serves a single-page web UI that fetches all data directly
-    via Connect RPC calls to the ControllerService. This eliminates the need
-    for a separate REST API layer and ensures the dashboard shows exactly
-    what the RPC returns.
+    via Connect RPC calls. This eliminates the need for a separate REST API
+    layer and ensures the dashboard shows exactly what the RPC returns.
     """
 
     def __init__(
@@ -234,10 +233,7 @@ class ControllerDashboard:
             compressions=IRIS_RPC_COMPRESSIONS,
         )
 
-        # Leased service-discovery registry on its own wire surface. The legacy
-        # ControllerService.{Register,Unregister,List}Endpoint RPCs forward into
-        # the same backend in-process (see ControllerServiceImpl); new clients
-        # call this service directly to learn their lease and renew.
+        # Leased service-discovery registry on its own wire surface.
         endpoint_rpc_app = EndpointServiceASGIApplication(
             service=AsyncServiceAdapter(self._endpoint_service),
             interceptors=controller_interceptors,

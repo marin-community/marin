@@ -396,11 +396,7 @@ def test_list_workers_returns_healthy_status(client, state):
     assert healthy_count == 2
 
 
-# Exercise both the canonical EndpointService route and the deprecated
-# ControllerService forwarding shim, so the shim keeps serving pre-migration
-# callers until it is removed.
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_endpoints_only_returned_for_running_jobs(client, state, job_request, service_name):
+def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     """ListEndpoints returns endpoints for non-terminal jobs.
 
     Endpoints are associated with tasks and deleted when tasks reach terminal states,
@@ -442,7 +438,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request, se
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service="EndpointService")
     endpoints = resp.get("endpoints", [])
 
     assert len(endpoints) == 2
@@ -450,8 +446,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request, se
     assert endpoint_names == {"pending-svc", "running-svc"}
 
 
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_list_endpoints_returns_task_id(client, state, job_request, service_name):
+def test_list_endpoints_returns_task_id(client, state, job_request):
     """ListEndpoints returns the task_id so the dashboard can derive the owning job."""
     job_id = submit_job(state, "ep-job", job_request)
     set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
@@ -470,7 +465,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request, service_name
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service="EndpointService")
     endpoints = resp.get("endpoints", [])
     assert len(endpoints) == 1
     # The response must carry the full task_id (including task index) so the
@@ -478,8 +473,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request, service_name
     assert endpoints[0]["taskId"] == task_id.to_wire()
 
 
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_list_endpoints_filters_by_task_ids(client, state, service_name):
+def test_list_endpoints_filters_by_task_ids(client, state):
     """ListEndpoints(task_ids=[...]) returns only endpoints owned by those tasks.
 
     The dashboard's task list and detail pages use this to render a proxy link
@@ -510,7 +504,7 @@ def test_list_endpoints_filters_by_task_ids(client, state, service_name):
                 ),
             )
 
-    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service="EndpointService")
     endpoints = resp.get("endpoints", [])
     assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
     assert endpoints[0]["name"] == "/svc/ep-0"
