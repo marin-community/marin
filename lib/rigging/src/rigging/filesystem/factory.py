@@ -35,6 +35,8 @@ from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 logger = logging.getLogger(__name__)
 
+# fsspec has no constructor-default hook shared by raw and guarded entry points.
+# Its environment/file config is loaded before this point, so explicit cache settings win.
 configure_listing_cache_defaults()
 
 

@@ -12,18 +12,12 @@ _LISTING_CACHE_OPTIONS = frozenset({"use_listings_cache", "listings_expiry_time"
 
 
 def configure_listing_cache_defaults() -> None:
-    """Expire cloud listings immediately unless the process configured a cache.
-
-    fsspec applies protocol config to raw constructors as well as Marin's guarded
-    factories. Long-lived GCS and S3 instances have otherwise hidden writes from
-    other processes (#1632, #7975). A zero-second expiry bounds staleness while
-    allowing callers to opt into a finite cache with ``listings_expiry_time`` or
-    gcsfs's ``cache_timeout``.
-    """
+    """Set zero-second GCS/S3 listing expiry unless cache options already exist."""
     for protocols in _CLOUD_PROTOCOL_GROUPS:
         configured = any(
             _LISTING_CACHE_OPTIONS.intersection(fsspec.config.conf.get(protocol) or {}) for protocol in protocols
         )
         if configured:
             continue
+        # fsspec otherwise caches external writes indefinitely (#1632, #7975).
         fsspec.config.conf.setdefault(protocols[0], {})["listings_expiry_time"] = DEFAULT_LISTINGS_EXPIRY_TIME
