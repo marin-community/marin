@@ -100,7 +100,7 @@ against cumulative training tokens. Grafana receives flat rows and never needs a
 one fleet row and one row per resource pool. Each row contains outcome counts, success
 ratio, latency, and pool-health fields from the former status page.
 
-k8s: the bridge polls the four CoreWeave clusters' public CKS API servers with plain
+k8s: the bridge polls the three production CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
 read-role bearer token from `CW_READ_TOKEN` — genuine read-only kubectl, no Secrets, no
 writes. Each response aggregates every cluster with a `cluster` column: watched
@@ -335,15 +335,14 @@ Rotation is overlap-safe:
    line with no CR/LF; Secret Manager preserves trailing newlines.
 2. Use the token against one cluster's `SelfSubjectReview` to get its
    `cwtoken-…` username. Append it to `grafana_observer_rbac.usernames` in
-   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, `cw-rno2a.yaml`, and
-   `cw-us-west-04a.yaml`, retaining
+   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, and `cw-rno2a.yaml`, retaining
    the old username during the handoff.
-3. Preview and update the four CoreWeave Pulumi stacks. Verify both tokens can
+3. Preview and update the three CoreWeave Pulumi stacks. Verify both tokens can
    `list nodes`, while pod creation, Secret reads, and impersonation remain
    denied.
 4. Add the new token as a `marin-grafana-cw-read-token` version, deploy a fresh
    Grafana revision, and verify every k8s bridge route.
-5. Remove the old username from the four configs and update the stacks again.
+5. Remove the old username from the three configs and update the stacks again.
    Then disable the old secret version and revoke the old CoreWeave token.
 
 The same Secret Manager overlap pattern applies to the Slack webhook and SMTP

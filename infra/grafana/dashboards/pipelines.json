@@ -21,7 +21,7 @@
         "label": "Cluster",
         "type": "custom",
         "description": "The clusters the bridge serves (infra/grafana/src/config.py). A custom list rather than a query so a cluster that has gone silent -- exactly when you want to select it -- is still in the dropdown.",
-        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,cw-us-west-04a,marin,marin-dev",
+        "query": "cw-rno2a,cw-us-east-02a,cw-us-east-08a,marin,marin-dev",
         "options": [
           {
             "selected": false,
@@ -37,11 +37,6 @@
             "selected": false,
             "text": "cw-us-east-08a",
             "value": "cw-us-east-08a"
-          },
-          {
-            "selected": false,
-            "text": "cw-us-west-04a",
-            "value": "cw-us-west-04a"
           },
           {
             "selected": false,
