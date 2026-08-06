@@ -3,10 +3,10 @@
 
 """Live adapters for failure-injection and concurrency boundaries."""
 
-import fsspec.core
 import pytest
 from iris.chaos import enable_chaos, reset_chaos
 from iris.rpc import controller_pb2, job_pb2
+from rigging.filesystem import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 
 from .helpers import TestJobs
@@ -65,13 +65,13 @@ def test_checkpoint_rpc_publishes_filesystem_snapshot_and_metadata(cluster):
     cluster.wait(job, timeout=30)
 
     response = cluster.controller_client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest())
-    filesystem, checkpoint_path = fsspec.core.url_to_fs(response.checkpoint_path)
+    checkpoint_path = StoragePath(response.checkpoint_path)
 
     assert response.created_at.epoch_ms > 0
     assert response.job_count >= 1
     assert response.task_count >= 1
-    assert response.checkpoint_path.rstrip("/").endswith(str(response.created_at.epoch_ms))
-    assert filesystem.isfile(f"{checkpoint_path}/controller.sqlite3.zst")
+    assert checkpoint_path.name == str(response.created_at.epoch_ms)
+    assert (checkpoint_path / "controller.sqlite3.zst").isfile()
 
 
 @pytest.mark.slow

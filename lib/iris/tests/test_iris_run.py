@@ -15,24 +15,7 @@ from iris.cli.job import (
 from iris.cli.job import run as run_cmd
 from iris.cluster.config import load_config
 from iris.cluster.constraints import ConstraintOp, WellKnownAttribute, availability_key
-from iris.cluster.types import JobName
 from iris.rpc import job_pb2
-
-
-@pytest.fixture
-def recorded_submission(monkeypatch):
-    submissions: list[dict[str, object]] = []
-
-    class FakeJob:
-        job_id = JobName.from_wire("/test-user/test-job")
-
-    class FakeClient:
-        def submit(self, **kwargs):
-            submissions.append(kwargs)
-            return FakeJob()
-
-    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *args, **kwargs: FakeClient())
-    return submissions
 
 
 def _invoke_run(args: list[str]):
@@ -134,10 +117,10 @@ def test_build_resources_gpu():
     assert spec.device.gpu.count == 1
 
 
-def test_run_iris_job_adds_zone_constraint(recorded_submission):
+def test_run_iris_job_adds_zone_constraint(recorded_job_submissions):
     result = _invoke_run(["--zone", "us-central2-b"])
     assert result.exit_code == 0, result.output
-    constraints = recorded_submission[0]["constraints"]
+    constraints = recorded_job_submissions[0]["constraints"]
     assert constraints is not None
 
     zone_constraints = [c for c in constraints if c.key == WellKnownAttribute.ZONE]
@@ -146,10 +129,10 @@ def test_run_iris_job_adds_zone_constraint(recorded_submission):
     assert zone_constraints[0].values[0].value == "us-central2-b"
 
 
-def test_run_iris_job_passes_reserve_as_availability_constraint(recorded_submission):
+def test_run_iris_job_passes_reserve_as_availability_constraint(recorded_job_submissions):
     result = _invoke_run(["--reserve", "4:H100x8"])
     assert result.exit_code == 0, result.output
-    constraints = recorded_submission[0]["constraints"]
+    constraints = recorded_job_submissions[0]["constraints"]
     assert constraints is not None
     availability = [c for c in constraints if c.key == availability_key("H100")]
     assert len(availability) == 1
@@ -157,10 +140,10 @@ def test_run_iris_job_passes_reserve_as_availability_constraint(recorded_submiss
     assert not availability[0].is_soft
 
 
-def test_run_iris_job_adds_region_and_zone_constraints(recorded_submission):
+def test_run_iris_job_adds_region_and_zone_constraints(recorded_job_submissions):
     result = _invoke_run(["--region", "us-central2", "--zone", "us-central2-b"])
     assert result.exit_code == 0, result.output
-    constraints = recorded_submission[0]["constraints"]
+    constraints = recorded_job_submissions[0]["constraints"]
     assert constraints is not None
 
     region_constraints = [c for c in constraints if c.key == WellKnownAttribute.REGION]
@@ -174,30 +157,20 @@ def test_run_iris_job_adds_region_and_zone_constraints(recorded_submission):
     assert zone_constraints[0].values[0].value == "us-central2-b"
 
 
-def test_run_iris_job_passes_priority_band(recorded_submission):
+def test_run_iris_job_passes_priority_band(recorded_job_submissions):
     result = _invoke_run(["--priority", "batch"])
     assert result.exit_code == 0, result.output
-    assert recorded_submission[0]["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
+    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_BATCH
 
 
-def test_run_iris_job_default_priority_inherit(recorded_submission):
+def test_run_iris_job_default_priority_inherit(recorded_job_submissions):
     result = _invoke_run([])
     assert result.exit_code == 0, result.output
-    assert recorded_submission[0]["priority_band"] == job_pb2.PRIORITY_BAND_INHERIT
+    assert recorded_job_submissions[0]["priority_band"] == job_pb2.PRIORITY_BAND_INHERIT
 
 
-def test_no_wait_prints_job_id(monkeypatch):
+def test_no_wait_prints_job_id(recorded_job_submissions):
     """--no-wait prints the job ID to stdout."""
-
-    class FakeJob:
-        job_id = JobName.from_wire("/test-user/test-job")
-
-    class FakeClient:
-        def submit(self, **kwargs):
-            return FakeJob()
-
-    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *a, **kw: FakeClient())
-
     runner = CliRunner()
     result = runner.invoke(
         run_cmd,

@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from copy import deepcopy
+
 import pytest
 from iris.cluster.backends.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
@@ -12,9 +14,12 @@ from iris.cluster.backends.k8s.tasks import (
     PodConfig,
 )
 from iris.cluster.controller.reads import ControlSnapshot
+from iris.cluster.controller.reconcile.snapshot import TaskUpdate
+from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.runtime.env import build_common_iris_env
+from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
 
@@ -101,6 +106,33 @@ def make_batch(
         running_tasks=running_tasks or [],
         tasks_to_run=tasks_to_run or [],
     )
+
+
+def observe_pod_update(pod: dict, workload: dict | None = None) -> TaskUpdate:
+    """Reconcile a seeded pod through the public Kubernetes provider boundary."""
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0)
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    try:
+        provider.sync(make_batch(tasks_to_run=[make_run_req("/job/0")]))
+        applied = k8s.list_json(K8sResource.PODS)[0]
+        observed = deepcopy(pod)
+        observed["kind"] = "Pod"
+        observed_metadata = observed.setdefault("metadata", {})
+        observed_metadata["name"] = applied["metadata"]["name"]
+        observed_metadata["labels"] = {
+            **applied["metadata"]["labels"],
+            **observed_metadata.get("labels", {}),
+        }
+        k8s.seed_resource(K8sResource.PODS, observed_metadata["name"], observed)
+        if workload is not None:
+            workload_name = workload.get("metadata", {}).get("name", "workload")
+            k8s.seed_resource(K8sResource.WORKLOADS, workload_name, deepcopy(workload))
+        updates = provider.sync(make_batch(running_tasks=[entry]))
+        assert len(updates) == 1
+        return updates[0]
+    finally:
+        provider.close()
 
 
 # A Kueue admission message for an over-large GPU request (cpu=160 on 128-vCPU

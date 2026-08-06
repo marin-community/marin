@@ -42,22 +42,6 @@ def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
     return IrisClusterConfig(scale_groups=scale_groups)
 
 
-@pytest.fixture
-def recorded_submissions(monkeypatch):
-    submissions: list[dict[str, object]] = []
-
-    class FakeJob:
-        job_id = JobName.from_wire("/test-user/test-job")
-
-    class FakeClient:
-        def submit(self, **kwargs):
-            submissions.append(kwargs)
-            return FakeJob()
-
-    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *args, **kwargs: FakeClient())
-    return submissions
-
-
 def _run_cli(args: list[str], *, config: IrisClusterConfig | None = None):
     return CliRunner().invoke(
         run,
@@ -66,18 +50,18 @@ def _run_cli(args: list[str], *, config: IrisClusterConfig | None = None):
     )
 
 
-def test_validate_region_zone_valid_region(recorded_submissions):
+def test_validate_region_zone_valid_region(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
     result = _run_cli(["--region", "us-central2"], config=config)
     assert result.exit_code == 0, result.output
-    assert len(recorded_submissions) == 1
+    assert len(recorded_job_submissions) == 1
 
 
-def test_validate_region_zone_valid_zone(recorded_submissions):
+def test_validate_region_zone_valid_zone(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b", "europe-west4-a"])
     result = _run_cli(["--zone", "europe-west4-a"], config=config)
     assert result.exit_code == 0, result.output
-    assert len(recorded_submissions) == 1
+    assert len(recorded_job_submissions) == 1
 
 
 def test_validate_region_zone_invalid_region_raises():
@@ -110,19 +94,19 @@ def test_validate_region_zone_invalid_zone_suggests_closest():
     assert "Did you mean 'us-central2-b'" in result.output
 
 
-def test_job_run_accepts_unresolved_placement_without_cluster_metadata(recorded_submissions):
+def test_job_run_accepts_unresolved_placement_without_cluster_metadata(recorded_job_submissions):
     # Without cluster metadata, accepting an unresolved placement constraint is the public contract.
     result = _run_cli(["--region", "nonexistent", "--zone", "nonexistent"])
     assert result.exit_code == 0, result.output
-    assert len(recorded_submissions) == 1
+    assert len(recorded_job_submissions) == 1
 
 
-def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_submissions):
+def test_job_run_accepts_unconstrained_placement_with_cluster_metadata(recorded_job_submissions):
     config = _make_config_with_zones(["us-central2-b"])
     # A configured cluster does not require callers to constrain placement.
     result = _run_cli([], config=config)
     assert result.exit_code == 0, result.output
-    assert len(recorded_submissions) == 1
+    assert len(recorded_job_submissions) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -322,12 +306,12 @@ def test_job_wait_reports_terminal_state_and_exit_status(
 # ---------------------------------------------------------------------------
 
 
-def test_tpu_multi_variant_parsing(recorded_submissions):
+def test_tpu_multi_variant_parsing(recorded_job_submissions):
     result = _run_cli(
         ["--enable-extra-resources", "--tpu", " v6e-4 , v5litepod-4 , v5p-8 "],
     )
     assert result.exit_code == 0, result.output
-    submission = recorded_submissions[0]
+    submission = recorded_job_submissions[0]
     assert submission["resources"].device.tpu.variant == "v6e-4"
     device_constraint = next(c for c in submission["constraints"] if c.key == WellKnownAttribute.DEVICE_VARIANT)
     assert [value.value for value in device_constraint.values] == ["v6e-4", "v5litepod-4", "v5p-8"]
@@ -372,10 +356,10 @@ def test_validate_extra_resources(args, error):
         ["--enable-extra-resources", "--disk", "100GB"],
     ],
 )
-def test_validate_extra_resources_accepts_supported_requests(args, recorded_submissions):
+def test_validate_extra_resources_accepts_supported_requests(args, recorded_job_submissions):
     result = _run_cli(args)
     assert result.exit_code == 0, result.output
-    assert len(recorded_submissions) == 1
+    assert len(recorded_job_submissions) == 1
 
 
 def _task(index: int, state, *, peak_mb: int, cur_mb: int, exit_code: int, duration_ms: int, error: str = ""):

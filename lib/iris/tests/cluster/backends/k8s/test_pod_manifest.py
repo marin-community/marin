@@ -6,6 +6,7 @@
 import json
 from collections.abc import Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 
 import pytest
 from iris.cluster.backends.k8s.tasks import (
@@ -179,12 +180,19 @@ def _build_task_script(request: job_pb2.RunTaskRequest) -> str:
     return _build_pod_manifest(request, pod_config())["spec"]["containers"][0]["command"][2]
 
 
+@dataclass(frozen=True)
+class _InitContainerSpec:
+    containers: list[dict]
+    workdir_volumes: list[dict]
+    configmap_name: str | None
+
+
 def _build_init_container_spec(
     request: job_pb2.RunTaskRequest,
     _pod_name_hint: str,
     default_image: str,
     controller_address: str | None,
-) -> tuple[list[dict], list[dict], str | None]:
+) -> _InitContainerSpec:
     manifest = _build_pod_manifest(
         request,
         pod_config(default_image=default_image, controller_address=controller_address),
@@ -194,7 +202,7 @@ def _build_init_container_spec(
     stage_workdir = [
         container for container in manifest["spec"].get("initContainers", []) if container["name"] == "stage-workdir"
     ]
-    return stage_workdir, workdir_volumes, configmap_name
+    return _InitContainerSpec(stage_workdir, workdir_volumes, configmap_name)
 
 
 def _is_coordinator_task(request: job_pb2.RunTaskRequest) -> bool:
@@ -1100,22 +1108,22 @@ def test_init_container_created_when_bundle_id_present():
     req = make_run_req("/my-job/task-0")
     req.bundle_id = "bundle-abc"
 
-    init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-my-job-task-0-abcd1234-0",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert len(init_containers) == 1
-    ic = init_containers[0]
+    assert len(spec.containers) == 1
+    ic = spec.containers[0]
     assert ic["name"] == "stage-workdir"
     assert ic["image"] == "myrepo/iris:latest"
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert env_by_name["IRIS_BUNDLE_ID"] == "bundle-abc"
     assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
-    assert configmap_name is None
-    assert extra_volumes == []
+    assert spec.configmap_name is None
+    assert spec.workdir_volumes == []
 
 
 def test_init_container_records_its_log_tail_on_failure():
@@ -1124,14 +1132,14 @@ def test_init_container_records_its_log_tail_on_failure():
     req = make_run_req("/my-job/task-0")
     req.bundle_id = "bundle-abc"
 
-    init_containers, _, _ = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-my-job-task-0-abcd1234-0",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert init_containers[0]["terminationMessagePolicy"] == "FallbackToLogsOnError"
+    assert spec.containers[0]["terminationMessagePolicy"] == "FallbackToLogsOnError"
 
 
 def test_no_init_container_when_no_bundle_or_files():
@@ -1139,16 +1147,16 @@ def test_no_init_container_when_no_bundle_or_files():
     req = make_run_req("/my-job/task-0")
     req.bundle_id = ""
 
-    init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert init_containers == []
-    assert extra_volumes == []
-    assert configmap_name is None
+    assert spec.containers == []
+    assert spec.workdir_volumes == []
+    assert spec.configmap_name is None
 
 
 def test_init_container_for_workdir_files():
@@ -1157,21 +1165,21 @@ def test_init_container_for_workdir_files():
     req.entrypoint.workdir_files["config.yaml"] = b"key: value"
     req.entrypoint.workdir_files["sub/data.txt"] = b"hello"
 
-    init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         None,
     )
 
-    assert len(init_containers) == 1
-    assert configmap_name is not None
-    assert configmap_name.endswith("-wf")
-    assert len(extra_volumes) == 1
-    assert extra_volumes[0]["name"] == "workdir-files"
-    assert extra_volumes[0]["configMap"]["name"] == configmap_name
+    assert len(spec.containers) == 1
+    assert spec.configmap_name is not None
+    assert spec.configmap_name.endswith("-wf")
+    assert len(spec.workdir_volumes) == 1
+    assert spec.workdir_volumes[0]["name"] == "workdir-files"
+    assert spec.workdir_volumes[0]["configMap"]["name"] == spec.configmap_name
 
-    ic = init_containers[0]
+    ic = spec.containers[0]
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert env_by_name["IRIS_WORKDIR_FILES_SRC"] == "/iris/staged-workdir-files"
 
@@ -1186,20 +1194,20 @@ def test_init_container_bundle_and_workdir_files():
     req.bundle_id = "bundle-xyz"
     req.entrypoint.workdir_files["run.sh"] = b"#!/bin/bash"
 
-    init_containers, extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert len(init_containers) == 1
-    ic = init_containers[0]
+    assert len(spec.containers) == 1
+    ic = spec.containers[0]
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert "IRIS_BUNDLE_ID" in env_by_name
     assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
-    assert configmap_name is not None
-    assert len(extra_volumes) == 1
+    assert spec.configmap_name is not None
+    assert len(spec.workdir_volumes) == 1
 
 
 def test_init_container_for_workdir_file_refs():
@@ -1207,22 +1215,22 @@ def test_init_container_for_workdir_file_refs():
     req = make_run_req("/my-job/task-0")
     req.entrypoint.workdir_file_refs["_callable.pkl"] = "abcd1234" * 8
 
-    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert len(init_containers) == 1
-    ic = init_containers[0]
+    assert len(spec.containers) == 1
+    ic = spec.containers[0]
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
     assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
 
     refs = json.loads(env_by_name["IRIS_WORKDIR_BLOB_REFS"])
     assert refs == {"_callable.pkl": "abcd1234" * 8}
-    assert configmap_name is None
+    assert spec.configmap_name is None
 
 
 def test_no_init_container_for_blob_refs_without_controller():
@@ -1230,15 +1238,15 @@ def test_no_init_container_for_blob_refs_without_controller():
     req = make_run_req("/my-job/task-0")
     req.entrypoint.workdir_file_refs["_callable.pkl"] = "abcd1234" * 8
 
-    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         None,
     )
 
-    assert init_containers == []
-    assert configmap_name is None
+    assert spec.containers == []
+    assert spec.configmap_name is None
 
 
 def test_init_container_workdir_files_and_blob_refs():
@@ -1247,19 +1255,19 @@ def test_init_container_workdir_files_and_blob_refs():
     req.entrypoint.workdir_files["small.txt"] = b"tiny"
     req.entrypoint.workdir_file_refs["big.pkl"] = "deadbeef" * 8
 
-    init_containers, _extra_volumes, configmap_name = _build_init_container_spec(
+    spec = _build_init_container_spec(
         req,
         "iris-pod-name",
         "myrepo/iris:latest",
         "http://ctrl:8080",
     )
 
-    assert len(init_containers) == 1
-    ic = init_containers[0]
+    assert len(spec.containers) == 1
+    ic = spec.containers[0]
     env_by_name = {e["name"]: e["value"] for e in ic["env"]}
     assert "IRIS_WORKDIR_FILES_SRC" in env_by_name
     assert "IRIS_WORKDIR_BLOB_REFS" in env_by_name
-    assert configmap_name is not None
+    assert spec.configmap_name is not None
 
 
 # ---------------------------------------------------------------------------
