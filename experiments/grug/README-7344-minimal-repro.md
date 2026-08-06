@@ -15,9 +15,25 @@ runtime flags of the production training job, and nothing else.
 | `minimal_wedge_repro.py` | the reproducer. Dependencies: `jax`, `numpy`. Nothing else. |
 | `minrepro_launch.py` | Iris/marin launcher. Only needed on our cluster (see below). |
 
+## Prerequisites
+
+**Standalone path** (any cluster): a Python environment with `jax` built against CUDA, plus
+`numpy`. Nothing else. Verified with jax 0.11.0, NCCL 2.28.9, driver 595.71.05 on GB200. A
+CPU-only jaxlib will run but silently exercises no GPU collectives -- the program prints
+`backend=cpu` in its banner, so check that line.
+
+**Iris path** (this repo): a fresh clone has no environment. `uv run` builds one from the
+committed `uv.lock` on first use, which takes several minutes and a few GB:
+
+```bash
+git clone --branch mcwitt/7344-minimal-repro https://github.com/marin-community/marin.git
+cd marin
+uv sync            # or let the first `uv run --frozen ...` below do it
+```
+
 ## Running it
 
-### Anywhere with Slurm or OpenMPI (what an external collaborator wants)
+### Anywhere with Slurm or OpenMPI (no wrapper needed)
 
 `minimal_wedge_repro.py` is self-contained and needs no wrapper. `--distributed auto`
 detects Slurm/OMPI coordinator env vars:
