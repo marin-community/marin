@@ -5695,6 +5695,18 @@ def _write_and_upload_health_artifacts(
     result_md_path = artifact_dir / "result.md"
     result_md_path.write_text(result_markdown if result_markdown is not None else _health_result_markdown(result))
     kv_source_paths = [str(arm["kv_cache"]["source"]["path"]) for arm in result.get("arms", [])]
+    kv_source_paths.extend(
+        str(point["kv_cache"]["source"]["path"])
+        for arm in result.get("arms", [])
+        for point in arm.get("coarse_curve", [])
+        if point.get("kv_cache", {}).get("source", {}).get("path")
+    )
+    kv_source_paths.extend(
+        str(arm[field]["kv_cache"]["source"]["path"])
+        for arm in result.get("arms", [])
+        for field in ("trajectory_65k", "capacity_stress_131k")
+        if arm.get(field, {}).get("kv_cache", {}).get("source", {}).get("path")
+    )
     if len(kv_source_paths) != len(set(kv_source_paths)) or any(
         not path.startswith("metrics/") or ".." in Path(path).parts for path in kv_source_paths
     ):

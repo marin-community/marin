@@ -2228,6 +2228,75 @@ def test_matrix_calibration_uses_frozen_95_percent_lowest_concurrency_rule() -> 
     assert followups[2]["r3_enabled"] is True
 
 
+def test_artifact_writer_uploads_nested_matrix_kv_evidence(tmp_path: Path) -> None:
+    class MemoryFilesystem:
+        def __init__(self) -> None:
+            self.data: dict[str, bytes] = {}
+
+        def open(self, key: str, _: str) -> object:
+            filesystem = self
+
+            class Sink:
+                def __init__(self) -> None:
+                    self.buffer = io.BytesIO()
+
+                def __enter__(self) -> object:
+                    return self
+
+                def write(self, payload: bytes) -> int:
+                    return self.buffer.write(payload)
+
+                def __exit__(self, *_: object) -> None:
+                    filesystem.data[key] = self.buffer.getvalue()
+
+            return Sink()
+
+        def cat_file(self, key: str) -> bytes:
+            return self.data[key]
+
+    kv_paths = [
+        "metrics/arm-kv.log",
+        "metrics/coarse-medium-kv.log",
+        "metrics/coarse-long-kv.log",
+        "metrics/trajectory-kv.log",
+        "metrics/capacity-kv.log",
+    ]
+    (tmp_path / "events.jsonl").write_text("{}\n")
+    for path in kv_paths:
+        destination = tmp_path / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(f"evidence for {path}\n")
+    result = {
+        "arms": [
+            {
+                "kv_cache": {"source": {"path": kv_paths[0]}},
+                "coarse_curve": [
+                    {"kv_cache": {"source": {"path": kv_paths[1]}}},
+                    {"kv_cache": {"source": {"path": kv_paths[2]}}},
+                ],
+                "trajectory_65k": {"kv_cache": {"source": {"path": kv_paths[3]}}},
+                "capacity_stress_131k": {"kv_cache": {"source": {"path": kv_paths[4]}}},
+            }
+        ]
+    }
+    filesystem = MemoryFilesystem()
+
+    records = grug_preflight._write_and_upload_health_artifacts(
+        filesystem,
+        artifact_dir=tmp_path,
+        artifact_prefix="s3://unit-bucket/matrix/run/",
+        result=result,
+        manifest={},
+        metrics_map=[],
+        result_markdown="# unit\n",
+    )
+
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert set(kv_paths) <= set(manifest["claimed_files"])
+    assert {record["path"] for record in records} >= {f"s3://unit-bucket/matrix/run/{path}" for path in kv_paths}
+    assert {f"unit-bucket/matrix/run/{path}" for path in kv_paths} <= set(filesystem.data)
+
+
 def test_matrix_model_configs_use_the_artifact_json_domain() -> None:
     configs = grug_preflight._matrix_model_configs(["exact-reference-ep16"])
 
