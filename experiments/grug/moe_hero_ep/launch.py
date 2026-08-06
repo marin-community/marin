@@ -107,7 +107,6 @@ def build_hero_run(
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
     flavor: str = "ep",
-    microbatches: int = 1,
     eval_every: int = 0,
     profile_steps: int = 0,
     profile_start_step: int = 5,
@@ -167,7 +166,6 @@ def build_hero_run(
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
         expert_axis_size=sharding.expert_axis_size,
         replica_axis_size=1,
-        microbatches=microbatches,
         sharding_dump_path=None,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -297,13 +295,6 @@ def build_hero_run(
     help="Run the paloma/uncheatable suites every N steps. 0 disables eval (throughput-only run).",
 )
 @click.option(
-    "--microbatches",
-    type=click.IntRange(min=1),
-    default=1,
-    show_default=True,
-    help="Split each step into this many forward/backward passes. Divides the EP dispatch buffers.",
-)
-@click.option(
     "--profile-steps",
     type=click.IntRange(min=0),
     default=0,
@@ -334,7 +325,6 @@ def main(
     capacity_factor: float | None,
     flavor: str,
     eval_every: int,
-    microbatches: int,
     profile_steps: int,
     profile_start_step: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -348,7 +338,6 @@ def main(
         capacity_factor=capacity_factor,
         flavor=flavor,
         eval_every=eval_every,
-        microbatches=microbatches,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
     )
