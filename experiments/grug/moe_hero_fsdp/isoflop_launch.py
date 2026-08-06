@@ -241,7 +241,9 @@ def build_isoflop_run(
                 watch_targets=["grads", "params", "opt_state", "updates"],
                 include_norms=True,
                 include_per_parameter_norms=True,
-                include_histograms=True,
+                # Histograms ravel each leaf to 1D, which JAX rejects for 2D-sharded stacked params
+                # (ShardingTypeError, no out_sharding); norms use optax.global_norm (reduction) and are safe.
+                include_histograms=False,
                 split_scan_layers=False,  # stacked-layer unstack OOMs at step ~10
                 interval=1,
             ),
