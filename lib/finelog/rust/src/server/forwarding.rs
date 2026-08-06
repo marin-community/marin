@@ -52,6 +52,7 @@ use arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Field, Int64Type, Schema as ArrowSchema};
 use connectrpc::client::{CallOptions, ClientConfig, ServiceTransport};
+use connectrpc::compression::{CompressionRegistry, GzipProvider, ZstdProvider};
 use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::TokioExecutor;
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
@@ -89,10 +90,8 @@ const FORWARD_BATCH_ROWS: i64 = 50_000;
 /// chunk toward this budget.
 const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (1 << 20);
 
-/// Arrow IPC contains repeated strings, especially for telemetry resource attributes.
-/// Zstd is supported by every Finelog server and avoids sending that redundancy over
-/// the cross-cluster link.
-pub(super) const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
+const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
+const FINELOG_ZSTD_LEVEL: i32 = 1;
 
 /// How far a namespace's cursor may trail its durability watermark before the forwarder
 /// gives up on the backlog and jumps to `persisted - MAX_FORWARD_LAG_SEQS`, keeping the
@@ -245,11 +244,19 @@ fn build_client(target: &str) -> Result<StatsServiceClient<HttpsTransport>, Stri
         .wrap_connector(http);
 
     let transport = ServiceTransport::new(HyperClient::builder(TokioExecutor::new()).build(https));
-    let config = ClientConfig::new(uri)
-        .proto()
-        .compress_requests(FORWARD_REQUEST_COMPRESSION)
-        .with_default_max_message_size(MAX_MESSAGE_BYTES);
+    let config = forward_client_config(uri);
     Ok(StatsServiceClient::new(transport, config))
+}
+
+pub(super) fn forward_client_config(uri: http::Uri) -> ClientConfig {
+    let compression = CompressionRegistry::new()
+        .register(GzipProvider::default())
+        .register(ZstdProvider::with_level(FINELOG_ZSTD_LEVEL));
+    ClientConfig::new(uri)
+        .proto()
+        .with_compression(compression)
+        .compress_requests(FORWARD_REQUEST_COMPRESSION)
+        .with_default_max_message_size(MAX_MESSAGE_BYTES)
 }
 
 /// Everything the forward loop needs, resolved once at startup.

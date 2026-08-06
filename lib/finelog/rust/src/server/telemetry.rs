@@ -1,22 +1,26 @@
 //! Bounded JSON telemetry ingestion backed by the ordinary `Store::write_rows` path.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::error::Error;
 use std::future::Future;
 use std::sync::Arc;
 
 use arrow::array::{Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use axum::body::{to_bytes, Body};
 use axum::extract::{Request, State};
-use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
+use axum::http::header::{ACCEPT_ENCODING, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
+use http_body_util::LengthLimitError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, OnceCell, OwnedSemaphorePermit, Semaphore};
+use tower_http::decompression::RequestDecompressionLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
 use crate::errors::StatsError;
@@ -141,6 +145,17 @@ impl ApiError {
     fn too_large(message: impl Into<String>) -> Self {
         Self::new(StatusCode::PAYLOAD_TOO_LARGE, "request_too_large", message)
     }
+}
+
+fn request_body_error(error: axum::Error) -> ApiError {
+    let mut cause = error.source();
+    while let Some(current) = cause {
+        if current.is::<LengthLimitError>() {
+            return ApiError::too_large(format!("request body exceeds {MAX_BODY_BYTES} bytes"));
+        }
+        cause = current.source();
+    }
+    ApiError::bad_request("request body could not be decoded")
 }
 
 impl IntoResponse for ApiError {
@@ -276,6 +291,11 @@ pub fn router(
     Router::new()
         .route("/v1/telemetry", post(post_telemetry))
         .with_state(state)
+        .layer(RequestDecompressionLayer::new())
+        .layer(SetResponseHeaderLayer::if_not_present(
+            ACCEPT_ENCODING,
+            HeaderValue::from_static("zstd"),
+        ))
         .layer(from_fn_with_state(auth, auth_gate))
 }
 
@@ -319,7 +339,7 @@ async fn post_telemetry(
     };
     let body = to_bytes(request.into_body(), MAX_BODY_BYTES)
         .await
-        .map_err(|_| ApiError::too_large(format!("request body exceeds {MAX_BODY_BYTES} bytes")))?;
+        .map_err(request_body_error)?;
     let work = complete_request(
         Arc::clone(&state),
         permit,
