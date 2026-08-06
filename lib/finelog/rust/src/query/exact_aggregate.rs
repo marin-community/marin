@@ -84,7 +84,7 @@ pub fn count_request(plan: &LogicalPlan) -> Option<CountRequest> {
     }
     let mode = match &count.params.args[0] {
         Expr::Column(column) if column.name == group.name => CountMode::GroupingColumn,
-        Expr::Literal(_, _) => CountMode::AllRows,
+        Expr::Literal(value, _) if !value.is_null() => CountMode::AllRows,
         _ => return None,
     };
     let LogicalPlan::TableScan(scan) = aggregate.input.as_ref() else {
@@ -269,6 +269,10 @@ mod tests {
         assert!(count_request(
             &plan("SELECT service, count(DISTINCT service) FROM telemetry_v1 GROUP BY service")
                 .await
+        )
+        .is_none());
+        assert!(count_request(
+            &plan("SELECT service, count(NULL) FROM telemetry_v1 GROUP BY service").await
         )
         .is_none());
     }
