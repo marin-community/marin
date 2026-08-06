@@ -15,7 +15,7 @@ import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit, urlunsplit
 
 ROOT = Path(__file__).parents[1]
 EXTERNAL_ROOT = Path(__file__).with_name("external")
@@ -50,6 +50,12 @@ class LockedDependency:
 
 
 @dataclass(frozen=True)
+class LockedGitSource:
+    repository: str
+    commit: str
+
+
+@dataclass(frozen=True)
 class UpstreamCommit:
     commit: str
     subject: str
@@ -81,8 +87,13 @@ class VllmGpuRelease:
 
 EXTERNAL_PROJECTS = (
     ExternalProject("evalchemy", "evalchemy", "EVALCHEMY"),
-    ExternalProject("harbor", "harbor", "HARBOR", runtime_distributions=("daytona", "gcsfs", "s3fs")),
-    ExternalProject("MarinSkyRL", "skyrl", "MARIN_SKYRL"),
+    ExternalProject(
+        "harbor",
+        "harbor",
+        "HARBOR",
+        runtime_distributions=("daytona", "gcsfs", "pydantic-settings", "s3fs"),
+    ),
+    ExternalProject("MarinSkyRL", "marinskyrl", "MARIN_SKYRL"),
 )
 
 
@@ -95,31 +106,34 @@ def locked_package(lock_path: Path, distribution: str) -> dict:
     return packages[0]
 
 
-def locked_git_source(lock_path: Path, distribution: str) -> tuple[str, str]:
+def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
     """Read and validate one distribution's immutable Git source."""
     package = locked_package(lock_path, distribution)
     source = package["source"]["git"]
-    repository_with_query, separator, commit = source.partition("#")
-    if not separator or GIT_COMMIT_PATTERN.fullmatch(commit) is None:
+    parsed = urlsplit(source)
+    commit = parsed.fragment
+    if GIT_COMMIT_PATTERN.fullmatch(commit) is None:
         raise ValueError(f"{lock_path}: expected a Git source ending in a full commit, found {source!r}")
-    repository, _, _ = repository_with_query.partition("?")
-    return repository, commit
+    if "subdirectory" in parse_qs(parsed.query):
+        raise ValueError(f"{lock_path}: expected a root Git source, found {source!r}")
+    repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    return LockedGitSource(repository=repository, commit=commit)
 
 
 def locked_dependency(project: ExternalProject) -> LockedDependency:
     """Read an external package and its runtime requirements from its uv lockfile."""
     lock_path = project.directory / "uv.lock"
     package = locked_package(lock_path, project.distribution)
-    repository, commit = locked_git_source(lock_path, project.distribution)
+    source = locked_git_source(lock_path, project.distribution)
     requirements = tuple(
         f"{distribution}=={locked_package(lock_path, distribution)['version']}"
         for distribution in project.runtime_distributions
     )
     return LockedDependency(
         project=project,
-        repository=repository,
+        repository=source.repository,
         version=package["version"],
-        commit=commit,
+        commit=source.commit,
         runtime_requirements=requirements,
     )
 

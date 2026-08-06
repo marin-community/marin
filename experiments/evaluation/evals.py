@@ -322,3 +322,14 @@ SUITES: dict[str, tuple[str, ...]] = {
     "code": CODE_EVALS,
     "agentic": AGENTIC_EVALS,
 }
+
+
+def resolve_eval_keys(selection: str) -> tuple[str, ...]:
+    """Resolve a named suite or comma-separated evaluation keys."""
+    keys = SUITES.get(selection) or tuple(part.strip() for part in selection.split(",") if part.strip())
+    if not keys:
+        raise ValueError("no evals selected")
+    unknown = [key for key in keys if key not in EVALS]
+    if unknown:
+        raise ValueError(f"unknown eval(s) {unknown}; known: {sorted(EVALS)} or suites {sorted(SUITES)}")
+    return keys

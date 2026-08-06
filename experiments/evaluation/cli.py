@@ -25,7 +25,7 @@ from marin.evaluation.runner import EvaluationBatch, wait_and_report
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.evaluation.evals import EVALS, SUITES, EvalchemyDefinition, HarborDefinition
+from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
 from experiments.evaluation.launch import (
     EVALUATION_CONTROLLER_CLUSTER,
     LaunchSpec,
@@ -36,13 +36,10 @@ from experiments.evaluation.models import models
 
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
-    keys: tuple[str, ...] = SUITES.get(evals_arg) or tuple(part.strip() for part in evals_arg.split(",") if part.strip())
-    if not keys:
-        raise click.BadParameter("no evals selected")
-    unknown = [key for key in keys if key not in EVALS]
-    if unknown:
-        raise click.BadParameter(f"unknown eval(s) {unknown}; known: {sorted(EVALS)} or suites {sorted(SUITES)}")
-    return keys
+    try:
+        return resolve_eval_keys(evals_arg)
+    except ValueError as error:
+        raise click.BadParameter(str(error)) from error
 
 
 def resolve_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig:
@@ -195,6 +192,7 @@ def launch(
         accelerator=accelerator,
         limit=limit,
         records_prefix=records_prefix,
+        submission_cluster=EVALUATION_CONTROLLER_CLUSTER,
         federated_cluster=federated_cluster,
         priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
         version=version,

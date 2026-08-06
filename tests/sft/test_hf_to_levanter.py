@@ -106,6 +106,24 @@ def test_raw_path_requires_explicit_arch_and_tokenizer():
     assert train_config.model == arch
 
 
+def test_training_handle_resolves_native_checkpoint_series_directory():
+    """A training artifact owns its layout; SFT resolves its checkpoint-series accessor."""
+    upstream: ArtifactStep[LevanterCheckpoint] = ArtifactStep(
+        name="checkpoints/upstream",
+        version="2026.07.17",
+        artifact_type=LevanterCheckpoint,
+        run=lambda config: None,
+        build_config=lambda ctx: {},
+    )
+    model = LevanterCheckpointModel(init_from=upstream, model=_tiny_arch(), tokenizer_path="gs://tok")
+    step = sft_step(_spec(model), ResourceConfig.with_cpu())
+
+    assert upstream in step.deps
+    train_config = materialized_config(step, _PREFIX).train_config
+    expected = LevanterCheckpoint(path=upstream.path(_PREFIX)).checkpoint_dir
+    assert train_config.initialize_model_from_checkpoint_path == expected
+
+
 def test_epoch_chat_tokenize_declares_the_conversion_dependency():
     """The epoch path tokenizes off-pod, resolving the tokenizer through the conversion step, so the
     chat-tokenize step must declare it as a dep (else StepContext rejects the undeclared reference)."""

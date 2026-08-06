@@ -56,9 +56,10 @@ The external configurations intentionally model only what Marin needs:
   by each evaluation at runtime.
 - `harbor` resolves the Git checkout and pinned Daytona SDK used only by the
   isolated evaluation driver. Harbor is absent from Marin's workspace lock.
-- `MarinSkyRL` tracks the repository-root package. It does not resolve the
-  CUDA-heavy `skyrl-train` subproject because Marin has no runtime consumer for
-  it yet.
+- `MarinSkyRL` tracks the repository-root `marinskyrl` distribution. The
+  external lock resolves its CPU-safe base for the isolated launcher. The
+  launcher synchronizes the selected `fsdp` or `megatron` profile from that
+  revision's frozen root lock inside the cluster's standard Iris task image.
 - `vllm` records only promoted GPU wheels. Workspace and TPU source requirements
   continue to come from the root `uv.lock`.
 

@@ -67,6 +67,7 @@ class LaunchSpec:
     accelerator: str | None
     limit: int | None
     records_prefix: str | None
+    submission_cluster: str
     federated_cluster: str | None
     priority_band: int
     version: str | None = None
@@ -239,6 +240,7 @@ def build_evaluation_batch(
         api_model=canonical_served_name(model.name),
         evaluations=tuple(evaluations),
         provenance=provenance,
+        submission_cluster=spec.submission_cluster,
         secret_env=secret_env,
     )
 

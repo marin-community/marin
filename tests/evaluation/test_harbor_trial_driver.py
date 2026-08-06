@@ -84,6 +84,86 @@ def _preflight(
     return _external_python(str(_DRIVER), "preflight", str(request_path), hash_seed=hash_seed, check=check)
 
 
+def _run_single_turn_aime_agent(
+    tmp_path: Path,
+    *,
+    content: str,
+    finish_reason: str | None = None,
+    transient_failures: int = 0,
+) -> dict[str, object]:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    answer_path = tmp_path / "answer.txt"
+    choice: dict[str, object] = {"message": {"content": content}}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    response_bytes = json.dumps({"choices": [choice]}).encode()
+    script = textwrap.dedent(
+        f"""
+        import asyncio
+        import io
+        import json
+        import subprocess
+        import urllib.error
+        from types import SimpleNamespace
+
+        from marin.evaluation.harbor import single_turn_aime_agent as agent_module
+
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self.close()
+
+
+        attempts = 0
+
+
+        def urlopen(request, timeout):
+            global attempts
+            attempts += 1
+            if attempts <= {transient_failures}:
+                raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", None, None)
+            return Response({response_bytes!r})
+
+
+        class Environment:
+            async def exec(self, command, **kwargs):
+                completed = subprocess.run(
+                    ["/bin/sh", "-c", command],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                return SimpleNamespace(
+                    return_code=completed.returncode,
+                    stdout=completed.stdout,
+                    stderr=completed.stderr,
+                )
+
+
+        agent_module.urllib.request.urlopen = urlopen
+        agent = agent_module.SingleTurnAimeAgent(
+            logs_dir=agent_module.Path({str(logs_dir)!r}),
+            model_name="hosted_vllm/iceball-micro",
+            api_base="https://inference.example/v1",
+            answer_path={str(answer_path)!r},
+            max_tokens=256,
+            request_retry_initial=0.001,
+        )
+        asyncio.run(agent.run("Solve this AIME problem", Environment(), object()))
+        print(json.dumps({{
+            "answer": agent_module.Path({str(answer_path)!r}).read_text(),
+            "response": agent_module.Path({str(logs_dir / "response.txt")!r}).read_text(),
+            "attempts": attempts,
+        }}))
+        """
+    )
+    return json.loads(_external_python("-c", script).stdout)
+
+
 @pytest.fixture(scope="module")
 def checked_policies(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp("harbor-policies")
@@ -100,6 +180,29 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     expected = checked_policies[path.name]
     assert all(result["stable_policy_json"] == expected["stable_policy_json"] for result in seeded)
     assert all(result["digest"] == expected["digest"] for result in seeded)
+
+
+def test_external_environment_imports_harbor_agent_factory():
+    completed = _external_python("-c", "from harbor.agents.factory import AgentFactory; print(AgentFactory.__name__)")
+
+    assert completed.stdout.strip() == "AgentFactory"
+
+
+def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):
+    content = "A long incomplete derivation mentions 12. The final result is \\boxed{137}."
+    result = _run_single_turn_aime_agent(tmp_path, content=content, finish_reason="length")
+
+    assert result == {"answer": "137\n", "response": content, "attempts": 1}
+
+
+def test_single_turn_aime_agent_retries_transient_proxy_failure(tmp_path):
+    result = _run_single_turn_aime_agent(
+        tmp_path,
+        content="Final answer: 42",
+        transient_failures=1,
+    )
+
+    assert result == {"answer": "42\n", "response": "Final answer: 42", "attempts": 2}
 
 
 def test_terminus_policies_retry_transient_endpoint_errors(tmp_path, checked_policies):
