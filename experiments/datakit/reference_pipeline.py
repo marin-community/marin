@@ -136,6 +136,7 @@ from experiments.datakit.decontam.config import (
 )
 from experiments.datakit.decontam.prepare_eval_corpus import DECON_EXCLUDED_EVAL_TASKS
 from experiments.datakit.embeddings.luxical.pipeline import (
+    EMBED_DOC_SAMPLE_CHARS,
     EMBEDDING_ATTR_DATA_VERSION,
     LUXICAL_REPO,
     LUXICAL_REVISION,
@@ -343,6 +344,9 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
             "luxical_weights": LUXICAL_WEIGHTS_FILE,
             "luxical_revision": LUXICAL_REVISION,
             "batch_size": scale.embed_batch_size,
+            # Truncation changes the vector for any document above the cap, so it is
+            # part of the embed step identity per the contract above.
+            "doc_sample_chars": EMBED_DOC_SAMPLE_CHARS,
             "v": EMBEDDING_ATTR_DATA_VERSION,
         },
         fn=remote(
@@ -351,6 +355,7 @@ def _build_embed_step(name: str, normalize_step: StepSpec, scale: PipelineScale)
                 normalized=read_artifact(np, NormalizedData),
                 revision=LUXICAL_REVISION,
                 batch_size=scale.embed_batch_size,
+                doc_sample_chars=EMBED_DOC_SAMPLE_CHARS,
                 worker_resources=scale.pool.worker,
                 max_workers=scale.pool.n_workers,
             ),
