@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -779,6 +780,10 @@ class MoEMLP(eqx.Module):
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
                 hidden_dim=expert_width,
+                # The single `initializer_std` is derived from `hidden_dim`. Under LatentMoE the
+                # gate/up fan-in is `latent_dim`, so without this the routed path stays attenuated
+                # by sqrt(hidden/latent) even after the latent RMSNorm.
+                gate_up_initializer_std=(None if latent is None else cfg.initializer_std * math.sqrt(d / expert_width)),
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
