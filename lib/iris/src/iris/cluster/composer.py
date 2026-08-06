@@ -44,14 +44,15 @@ from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, projects_task_env_secret
 from iris.cluster.platforms.factory import ProviderBundle, create_provider_bundle
 from iris.cluster.platforms.k8s.coreweave_topology import KueueTopologyBinding
+from iris.cluster.platforms.k8s.kueue_manifests import PROTECTED_WORKLOAD_PRIORITY_CLASSES
 from iris.cluster.platforms.k8s.service import CloudK8sService
 from iris.cluster.platforms.types import local_queue_name
 from iris.rpc import job_pb2
 
 logger = logging.getLogger(__name__)
 
-# Maps the band names used as keys in KueueConfig.priority_classes (and
-# kubernetes_provider.priority_classes) to the PriorityBand enum stamped on pods.
+# Maps the band names used by Kueue and kubernetes_provider.priority_classes to
+# the PriorityBand enum stamped on pods.
 _KUEUE_PRIORITY_BANDS = {
     "production": job_pb2.PRIORITY_BAND_PRODUCTION,
     "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
@@ -97,14 +98,11 @@ def make_task_backend(
         managed_label = f"iris-{label_prefix}-managed" if label_prefix else ""
 
         priority_classes: dict[int, str] = {}
-        for band_name, wpc in kp.kueue.priority_classes.items():
-            band = _KUEUE_PRIORITY_BANDS.get(band_name)
-            if band is None:
-                raise ValueError(
-                    f"Unknown Kueue priority band {band_name!r} in kueue.priority_classes; "
-                    f"valid bands: {sorted(_KUEUE_PRIORITY_BANDS)}"
-                )
-            priority_classes[band] = wpc
+        if kp.kueue.protect_accelerator_workloads:
+            priority_classes = {
+                _KUEUE_PRIORITY_BANDS[priority_class.band]: priority_class.name
+                for priority_class in PROTECTED_WORKLOAD_PRIORITY_CLASSES
+            }
 
         # Start from the iris-{band} defaults; override with any explicit config.
         pod_priority_classes: dict[int, str] = dict(_DEFAULT_PRIORITY_CLASS_NAMES)
@@ -144,7 +142,7 @@ def make_task_backend(
                 task_env=dict(config.defaults.task_env),
                 env_secret_name=env_secret_name,
                 local_queue=local_queue,
-                kueue_priority_classes=priority_classes,
+                protected_priority_classes=priority_classes,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
             ),

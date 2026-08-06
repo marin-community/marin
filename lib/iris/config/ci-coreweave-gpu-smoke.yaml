@@ -37,6 +37,7 @@ kubernetes_provider:
   controller_address: http://iris-gang-controller-svc.iris-gang-smoke.svc.cluster.local:10000
   kueue:
     cluster_queue: iris-cq   # admin-provisioned; empty topologies => CoreWeave-default pool->leafgroup
+    protect_accelerator_workloads: true
 
 defaults:
   task_env:

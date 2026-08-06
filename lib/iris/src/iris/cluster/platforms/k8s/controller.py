@@ -34,6 +34,10 @@ from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import COREWEAVE_INTERRUPTABLE_TOLERATION, NVIDIA_GPU_TOLERATION
+from iris.cluster.platforms.k8s.kueue_manifests import (
+    PROTECTED_WORKLOAD_PRIORITY_CLASSES,
+    WORKLOAD_PRIORITY_CLASS_SOURCE,
+)
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
 from iris.cluster.platforms.k8s.rbac_manifests import cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
@@ -42,6 +46,7 @@ from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASSES,
     K8sResource,
     build_priority_class_manifest,
+    parse_k8s_quantity,
     parse_k8s_timestamp,
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
@@ -129,6 +134,37 @@ class PrerequisitesNotProvisionedError(InfraError):
 
     Message enumerates every missing object and prints the `pulumi up` remediation.
     """
+
+
+class UnsafeWorkloadPriorityActivationError(InfraError):
+    """Raised when protected Kueue priorities would endanger legacy work."""
+
+
+def _workload_requests_resource(workload: dict, resource_name: str) -> bool:
+    for pod_set in workload.get("spec", {}).get("podSets", []):
+        containers = pod_set.get("template", {}).get("spec", {}).get("containers", [])
+        for container in containers:
+            resources = container.get("resources", {})
+            quantity = resources.get("requests", {}).get(resource_name) or resources.get("limits", {}).get(resource_name)
+            if quantity and parse_k8s_quantity(quantity) > 0:
+                return True
+    return False
+
+
+def _is_protected_workload_shape(workload: dict) -> bool:
+    has_gpu = _workload_requests_resource(workload, "nvidia.com/gpu")
+    if has_gpu:
+        return True
+    has_tpu = _workload_requests_resource(workload, "google.com/tpu")
+    pod_count = sum(int(pod_set.get("count", 1)) for pod_set in workload.get("spec", {}).get("podSets", []))
+    return pod_count <= 1 and not has_tpu
+
+
+def _workload_is_finished(workload: dict) -> bool:
+    return any(
+        condition.get("type") == "Finished" and condition.get("status") == "True"
+        for condition in workload.get("status", {}).get("conditions", [])
+    )
 
 
 def _ingress_class_from_provisioning(config: IrisClusterConfig) -> str | None:
@@ -717,11 +753,12 @@ class K8sControllerProvider:
     def verify_prerequisites(self, config: IrisClusterConfig) -> None:
         """Assert IaC-provisioned prerequisites exist before starting the controller.
 
-        Presence-only (not exact spec): the Namespace, iris-controller ServiceAccount,
-        namespace-qualified ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
-        scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, and
-        (best-effort) the IngressClass. All of these are provisioned by `infra/pulumi`'s
-        Pulumi program (spec.md §4) — this method creates nothing. Raises
+        Checks the Namespace, iris-controller ServiceAccount, namespace-qualified
+        ClusterRole/ClusterRoleBinding, one NodePool per non-skipped
+        scale group, the Kueue ClusterQueue and its referenced ResourceFlavors, configured
+        WorkloadPriorityClasses, and (best-effort) the IngressClass. All of these are
+        provisioned by `infra/pulumi`'s Pulumi program (spec.md §4) — this method creates
+        nothing. Raises
         PrerequisitesNotProvisionedError enumerating every missing object if any are absent.
         """
         missing: list[str] = []
@@ -759,6 +796,16 @@ class K8sControllerProvider:
                 if self._kubectl.get_json(K8sResource.RESOURCE_FLAVORS, flavor_name) is None:
                     missing.append(f"ResourceFlavor/{flavor_name}")
 
+        if config.kubernetes_provider.kueue.protect_accelerator_workloads:
+            protected_classes = PROTECTED_WORKLOAD_PRIORITY_CLASSES
+        else:
+            protected_classes = ()
+        for protected_class in protected_classes:
+            priority_class = self._kubectl.get_json(K8sResource.WORKLOAD_PRIORITY_CLASSES, protected_class.name)
+            expected_value = protected_class.value
+            if priority_class is None or priority_class.get("value") != expected_value:
+                missing.append(f"WorkloadPriorityClass/{protected_class.name}(value={expected_value})")
+
         ingress_class = _ingress_class_from_provisioning(config)
         if ingress_class and self._kubectl.get_json(K8sResource.INGRESS_CLASSES, ingress_class) is None:
             missing.append(f"IngressClass/{ingress_class}")
@@ -768,6 +815,59 @@ class K8sControllerProvider:
                 "IaC-provisioned prerequisites missing: "
                 + ", ".join(missing)
                 + f". Run: cd infra/pulumi && pulumi stack select {config.name} && pulumi up"
+            )
+
+        self.verify_protected_priority_activation(config)
+
+    def verify_protected_priority_activation(self, config: IrisClusterConfig) -> None:
+        """Reject a priority rollout that could preempt legacy protected work."""
+        if not config.kubernetes_provider.kueue.protect_accelerator_workloads:
+            return
+        protected_classes = {
+            priority_class.band: priority_class.name for priority_class in PROTECTED_WORKLOAD_PRIORITY_CLASSES
+        }
+
+        priority_class_names = {
+            name.removeprefix("iris-"): name
+            for name, _, _ in IRIS_PRIORITY_CLASSES
+            if name != IRIS_PRIORITY_CLASS_SYSTEM
+        }
+        priority_class_names.update(config.kubernetes_provider.priority_classes)
+        band_by_priority_class = {class_name: band for band, class_name in priority_class_names.items()}
+        queue_name = local_queue_name(self._label_prefix)
+        unsafe: list[str] = []
+
+        for workload in self._kubectl.list_json(K8sResource.WORKLOADS):
+            spec = workload.get("spec", {})
+            if spec.get("queueName") != queue_name or _workload_is_finished(workload):
+                continue
+            if not _is_protected_workload_shape(workload):
+                continue
+
+            pod_priority_classes = {
+                pod_set.get("template", {}).get("spec", {}).get("priorityClassName", "")
+                for pod_set in spec.get("podSets", [])
+            }
+            bands = {band_by_priority_class.get(class_name) for class_name in pod_priority_classes}
+            bands.discard(None)
+            if len(bands) != 1:
+                unsafe.append(workload.get("metadata", {}).get("name", "<unknown>"))
+                continue
+            expected_class = protected_classes.get(bands.pop())
+            if expected_class is None:
+                continue
+            if (
+                spec.get("priorityClassName") != expected_class
+                or spec.get("priorityClassSource") != WORKLOAD_PRIORITY_CLASS_SOURCE
+            ):
+                unsafe.append(workload.get("metadata", {}).get("name", "<unknown>"))
+
+        if unsafe:
+            names = ", ".join(sorted(unsafe))
+            raise UnsafeWorkloadPriorityActivationError(
+                "Cannot enable protected Kueue priorities while unfinished legacy GPU or coordinator "
+                f"Workloads exist: {names}. Let them finish or remove "
+                "kubernetes_provider.kueue.protect_accelerator_workloads before restarting the controller."
             )
 
     # -- Kueue ------------------------------------------------------------------

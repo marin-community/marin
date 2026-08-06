@@ -4,11 +4,13 @@
 """Regression guards for the Kueue manifests Iris renders."""
 
 from iris.cluster.platforms.k8s.kueue_manifests import (
+    PROTECTED_WORKLOAD_PRIORITY_CLASSES,
     build_cks_values,
     build_cluster_queue,
     build_resource_flavor,
     build_upstream_values,
 )
+from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, IRIS_PRIORITY_CLASSES
 
 
 def _gate(gates: list[dict], name: str) -> bool | None:
@@ -47,3 +49,17 @@ def test_resource_flavor_and_cluster_queue_use_one_all_node_tas_flavor():
     assert flavor["metadata"]["name"] == "cw-tas"
     assert flavor["spec"]["nodeLabels"] == {"iris.kueue": "true"}
     assert [entry["name"] for entry in queue["spec"]["resourceGroups"][0]["flavors"]] == ["cw-tas"]
+
+
+def test_protected_workload_priority_classes_preserve_band_ordering():
+    native_values = {
+        class_name.removeprefix("iris-"): value
+        for class_name, value, _ in IRIS_PRIORITY_CLASSES
+        if class_name != IRIS_PRIORITY_CLASS_SYSTEM
+    }
+    protected_values = {
+        priority_class.band: priority_class.value for priority_class in PROTECTED_WORKLOAD_PRIORITY_CLASSES
+    }
+
+    assert protected_values.keys() == native_values.keys()
+    assert all(protected_values[band] == value + 1 for band, value in native_values.items())

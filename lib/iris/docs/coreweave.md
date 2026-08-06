@@ -159,6 +159,20 @@ in the same flavor as GPU gangs. `preemption.withinClusterQueue: LowerPriority`
 can then remove a lower-priority CPU Workload from the topology snapshot before
 retrying a blocked GPU gang's fit.
 
+`kubernetes_provider.kueue.protect_accelerator_workloads` gives GPU Workloads a
+Kueue-only one-point offset within their Iris band: batch uses `1`, interactive
+uses `11`, and production uses `1001`. Ordinary CPU Workloads remain at `0`,
+`10`, and `1000`, so GPU work can reclaim its requested host CPU from same-band
+CPU work without crossing a user-selected priority band. Single-task CPU
+coordinators receive the same offset because Kueue deletes preemption victims
+without consulting their PodDisruptionBudget. Pod `priorityClassName` stays at
+the ordinary Iris band; the offset changes Kueue admission only.
+
+The first controller start with this mapping refuses activation while an
+unfinished GPU or coordinator Workload still uses the old priority. Let those
+Workloads finish before rollout. This prevents the first offset Workload from
+selecting existing same-band protected work as a victim.
+
 Accelerator-free jobs use any compatible node by default. Iris does not expose
 a CPU-only placement constraint; rare jobs that require hard CPU-node placement
 must use Kubernetes-native scheduling outside Iris. GPU and RDMA resource
@@ -229,6 +243,7 @@ their Kubernetes service account inside the cluster.
 | `kubernetes_provider.cache_dir` | Node-local cache root. CoreWeave configs use `/mnt/local/iris-cache`. |
 | `kubernetes_provider.controller_address` | In-cluster controller address injected into task Pods. |
 | `kubernetes_provider.kueue.cluster_queue` | Pulumi-owned ClusterQueue to which Iris binds its LocalQueue. This is required. |
+| `kubernetes_provider.kueue.protect_accelerator_workloads` | Enables the Kueue-only GPU/coordinator priority offset. |
 | `kubernetes_provider.kueue.topologies` | Optional `group_by` to CoreWeave node-label mappings. |
 | `kubernetes_provider.preempt_namespaces` | Namespaces containing provider health-check Pods that Iris may clear when they block an admitted GPU job. |
 
