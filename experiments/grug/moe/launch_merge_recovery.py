@@ -3,6 +3,7 @@
 
 """Lazy artifact graph for one-pair Grug expert matching and recovery."""
 
+import dataclasses
 import os
 from dataclasses import dataclass
 from enum import StrEnum
@@ -39,11 +40,12 @@ from experiments.grug.moe.merge_jobs import (
     run_recovery,
 )
 from experiments.grug.moe.merge_recovery import RecoveryStage
+from experiments.grug.moe.optimizer import TiedExpertLrScale
 
 _RESOURCES_KEY = "merge_resources"
 _EXPERIMENT_REGION = "us-central1"
 _MERGE_RESOURCES = ResourceConfig.with_tpu("v5p-8", regions=[_EXPERIMENT_REGION])
-_BUDGET = 1e18
+_BUDGET = 3.82e17
 _HIDDEN_DIM = 512
 _TARGET_STEPS = 2**14
 _SEQUENCE_LENGTH = 4096
@@ -94,6 +96,13 @@ def build_merge_recovery_pipeline(
     )
     if base_model.num_layers != 6:
         raise ValueError(f"one-pair d512 merge requires six layers, got {base_model.num_layers}")
+    base_model = dataclasses.replace(base_model, expert_bank_for_layer=tuple(range(base_model.num_layers)))
+    base_optimizer = dataclasses.replace(
+        base_optimizer,
+        expert_bank_group_sizes=base_model.expert_bank_group_sizes,
+        tied_expert_lr_scale=TiedExpertLrScale.UNSCALED,
+        schedule_horizon_steps=source_steps,
+    )
     train = grug_moe_training_datasets()
     validation = grug_moe_validation_datasets()
     data_deps: tuple[ArtifactStep[TokenizedCache], ...] = (*train, *validation)

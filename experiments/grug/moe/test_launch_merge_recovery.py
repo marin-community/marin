@@ -7,6 +7,7 @@ from rigging.filesystem import prefix_join
 
 from experiments.grug.moe.expert_merge import AssignmentMode
 from experiments.grug.moe.launch_merge_recovery import MergeBranchName, build_merge_recovery_pipeline
+from experiments.grug.moe.launch_tied_experts import TiedExpertPhase, tied_expert_runs
 from experiments.grug.moe.merge_recovery import RecoveryStage
 
 _PREFIX = "gs://marin-us-central1/test"
@@ -80,3 +81,21 @@ def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeyp
         materialized_config(branch.converted, _PREFIX)
         materialized_config(branch.stage_a, _PREFIX)
         materialized_config(branch.stage_b, _PREFIX)
+
+
+def test_merge_source_matches_full_untied_teacher_config(monkeypatch) -> None:
+    monkeypatch.setattr("experiments.grug.moe.launch_merge_recovery.mixture", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("experiments.grug.moe.launch_tied_experts.mixture", lambda *_args, **_kwargs: None)
+    pipeline = _pipeline()
+    baseline = tied_expert_runs(
+        version="dev",
+        phase=TiedExpertPhase.FULL,
+        variant_names=("baseline",),
+    )[0]
+
+    merge_source = materialized_config(pipeline.calibration, _PREFIX).source
+    baseline_config = materialized_config(baseline, _PREFIX)
+
+    assert merge_source.model == baseline_config.model
+    assert merge_source.optimizer == baseline_config.optimizer
+    assert merge_source.training_steps == baseline_config.steps
