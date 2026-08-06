@@ -6,6 +6,18 @@ serve time. `experiments.evaluation.models.models()` scans this directory once a
 with the Python factory entries defined in `models.py`. Files and directories whose names start with
 `_` or `.` are skipped.
 
+The launcher also accepts one file with this schema directly, without adding it to the catalog:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model-config /path/to/model.yaml \
+  --evals smoke \
+  --dry-run
+```
+
+Exactly one of `--model <registry-key>` or `--model-config <path>` is required. Each new
+`record.json` stores the normalized schema under `model.config`.
+
 ## Schema
 
 ```yaml

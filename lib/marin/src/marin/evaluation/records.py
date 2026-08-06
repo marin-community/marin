@@ -56,13 +56,19 @@ class RunStatus(StrEnum):
 
 
 class ModelRef(BaseModel):
-    """The evaluated model's identity: registry name, weight location, and serving backend."""
+    """The evaluated model's identity and normalized launch-time model configuration.
+
+    ``config`` is optional so records written before model configuration capture remain readable.
+    New launcher records include the complete catalog-schema configuration for both registry and
+    file-backed models.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     name: str
     location: str
     backend: str
+    config: dict[str, object] | None = None
 
 
 class EvalTaskRef(BaseModel):

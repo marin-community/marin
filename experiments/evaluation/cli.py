@@ -18,6 +18,7 @@ from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
+from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
 from marin.evaluation.runner import EvaluationBatch, wait_and_report
 from marin.evaluation.samples import export_lm_eval_samples
@@ -44,9 +45,28 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
     return keys
 
 
+def _resolve_model(model_key: str | None, config_path: Path | None) -> ModelConfig:
+    if (model_key is None) == (config_path is None):
+        raise click.BadParameter(
+            "specify exactly one of --model or --model-config",
+            param_hint="--model/--model-config",
+        )
+    if config_path is not None:
+        try:
+            return load_model_config(config_path)
+        except Exception as exc:
+            raise click.BadParameter(str(exc), param_hint="--model-config") from exc
+
+    assert model_key is not None
+    catalog = models()
+    if model_key not in catalog:
+        raise click.BadParameter(f"unknown model {model_key!r}; known: {sorted(catalog)}", param_hint="--model")
+    return catalog[model_key]
+
+
 def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
     click.echo(
-        f"model: {spec.model}  platform: {spec.platform.value}  "
+        f"model: {spec.model.name}  platform: {spec.platform.value}  "
         f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
         f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
         f"priority={priority_band_name(batch.priority_band)}"
@@ -68,7 +88,13 @@ def cli() -> None:
 
 
 @cli.command()
-@click.option("--model", required=True, help="Model registry key.")
+@click.option("--model", default=None, help="Model registry key. Mutually exclusive with --model-config.")
+@click.option(
+    "--model-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Model catalog YAML or JSON. Mutually exclusive with --model.",
+)
 @click.option(
     "--evals",
     "evals_arg",
@@ -121,7 +147,8 @@ def cli() -> None:
     help="Iris priority band for the orchestrator and serve jobs; defaults to inherit.",
 )
 def launch(
-    model: str,
+    model: str | None,
+    model_config: Path | None,
     evals_arg: str | None,
     evalchemy_config: tuple[Path, ...],
     harbor_config: tuple[Path, ...],
@@ -137,11 +164,8 @@ def launch(
     priority: str | None,
 ) -> None:
     """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
-    catalog = models()
-    if model not in catalog:
-        raise click.BadParameter(f"unknown model {model!r}; known: {sorted(catalog)}")
-    model_config = catalog[model]
-    resolved_platform = Platform(platform) if platform else default_platform(model_config)
+    selected_model = _resolve_model(model, model_config)
+    resolved_platform = Platform(platform) if platform else default_platform(selected_model)
     evalchemy_definitions = [
         EvalchemyDefinition(
             name=canonical_served_name(path.stem),
@@ -162,7 +186,7 @@ def launch(
         else (() if evalchemy_definitions or harbor_definitions else _resolve_eval_keys("smoke"))
     )
     spec = LaunchSpec(
-        model=model,
+        model=selected_model,
         evals=evals,
         evalchemy_definitions=tuple(evalchemy_definitions),
         harbor_definitions=tuple(harbor_definitions),

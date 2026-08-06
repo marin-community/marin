@@ -6,7 +6,7 @@
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,6 +39,7 @@ from experiments.evaluation.launch import (
     LaunchSpec,
     build_evaluation_batch,
 )
+from experiments.evaluation.models import models
 
 
 def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,6 +66,24 @@ def _install_fake_harbor_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _write_harbor_config(path: Path) -> Path:
     path.write_text("{}")
+    return path
+
+
+def _write_model_config(path: Path) -> Path:
+    path.write_text(
+        """\
+name: fresh-rl-checkpoint
+location: s3://marin-us-east-02a/marin/exports/rl/fresh-checkpoint/
+tokenizer: Qwen/Qwen3-8B
+resource_hint:
+  gpu:
+    H100: 8
+serve:
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  auto_overrides: false
+"""
+    )
     return path
 
 
@@ -154,6 +173,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
     assert succeeded.provenance.eval_runtime == "test-runtime"
+    assert succeeded.model.config == json.loads(json.dumps(asdict(batch.model)))
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
 
 
@@ -214,7 +234,7 @@ def test_submit_evaluation_batch_uses_resolved_federated_cluster_and_priority(mo
 
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
-        model="qwen3-32b",
+        model=models()["qwen3-32b"],
         evals=("mmlu-smoke",),
         evalchemy_definitions=(),
         harbor_definitions=(),
@@ -239,7 +259,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
-        model="qwen3-8b",
+        model=models()["qwen3-8b"],
         evals=("aime-harbor", "tb2"),
         evalchemy_definitions=(),
         harbor_definitions=(),
@@ -271,7 +291,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
 def test_build_evaluation_batch_records_evalchemy_benchmark_extras(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
-        model="qwen3-8b",
+        model=models()["qwen3-8b"],
         evals=("math500",),
         evalchemy_definitions=(),
         harbor_definitions=(),
@@ -299,7 +319,7 @@ def test_file_evalchemy_chat_template_overrides_model_default(monkeypatch):
         config_path=Path("experiments/evaluation/configs/evalchemy/ifeval.yaml"),
     )
     spec = LaunchSpec(
-        model="llama-3.1-8b-base",
+        model=models()["llama-3.1-8b-base"],
         evals=(),
         evalchemy_definitions=(definition,),
         harbor_definitions=(),
@@ -335,7 +355,7 @@ def test_build_evaluation_batch_rejects_conflicting_secret_specs(monkeypatch):
     monkeypatch.setitem(EVALS, "secret-first", first)
     monkeypatch.setitem(EVALS, "secret-second", second)
     spec = LaunchSpec(
-        model="qwen3-8b",
+        model=models()["qwen3-8b"],
         evals=("secret-first", "secret-second"),
         evalchemy_definitions=(),
         harbor_definitions=(),
@@ -362,7 +382,7 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
     config_path = _write_harbor_config(tmp_path / "aime-policy.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
-        model="qwen3-8b",
+        model=models()["qwen3-8b"],
         evals=("mmlu-smoke",),
         evalchemy_definitions=(EvalchemyDefinition(name="ifeval", config_path=evalchemy_config_path),),
         harbor_definitions=(HarborDefinition(name="aime-policy", config_path=config_path),),
@@ -506,6 +526,57 @@ def test_launch_dry_run_prints_resolved_federated_cluster_and_priority(
     assert f"priority={priority}" in result.output
 
 
+def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
+    config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model-config",
+            str(config_path),
+            "--evals",
+            "mmlu-smoke",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "model: fresh-rl-checkpoint" in result.output
+    assert "location=s3://marin-us-east-02a/marin/exports/rl/fresh-checkpoint/" in result.output
+    assert "backend=vllm" in result.output
+    assert "accel=H100x8" in result.output
+
+
+def test_launch_rejects_registry_and_file_model_selectors_together(tmp_path):
+    config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--model-config",
+            str(config_path),
+            "--evals",
+            "mmlu-smoke",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "exactly one of --model or --model-config" in result.output
+
+
+def test_launch_requires_one_model_selector():
+    result = CliRunner().invoke(cli, ["launch", "--evals", "mmlu-smoke", "--dry-run"])
+
+    assert result.exit_code == 2
+    assert "exactly one of --model or --model-config" in result.output
+
+
 def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, monkeypatch):
     config_path = tmp_path / "invalid.yaml"
     config_path.write_text("{}")
@@ -623,7 +694,7 @@ def test_launch_accepts_registry_ifeval_and_repeated_harbor_configs(tmp_path, mo
 def test_build_evaluation_batch_defaults_results_to_eval_root(monkeypatch):
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     spec = LaunchSpec(
-        model="qwen3-8b",
+        model=models()["qwen3-8b"],
         evals=("mmlu-smoke",),
         evalchemy_definitions=(),
         harbor_definitions=(),
