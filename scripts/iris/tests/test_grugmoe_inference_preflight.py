@@ -2245,6 +2245,7 @@ def test_topology_calibration_sources_require_independent_frozen_selections() ->
 
     filesystem = MemoryFilesystem()
     marin_commit = "b" * 40
+    reader_marin_commit = "d" * 40
     task_image = "example.invalid/image@sha256:" + "a" * 64
 
     def add_source(*, plan: str, run_id: str, case: str, concurrency: int, mbt: int) -> None:
@@ -2282,7 +2283,7 @@ def test_topology_calibration_sources_require_independent_frozen_selections() ->
             "run_id": run_id,
             "passed": True,
             "benchmark_passed": True,
-            "reader_marin_commit": marin_commit,
+            "reader_marin_commit": reader_marin_commit,
             "task_image": task_image,
             "source_object_sha256": {
                 "manifest.json": hashlib.sha256(manifest_bytes).hexdigest(),
@@ -2316,6 +2317,8 @@ def test_topology_calibration_sources_require_independent_frozen_selections() ->
 
     assert sources["ep8"]["selection"]["target_concurrency"] == 96
     assert sources["ep16"]["selection"]["max_num_batched_tokens"] == 8192
+    assert sources["ep16"]["provenance"]["marin_commit"] == marin_commit
+    assert sources["ep16"]["provenance"]["reader_marin_commit"] == reader_marin_commit
     with pytest.raises(RuntimeError, match="selection"):
         grug_preflight._verified_topology_calibration_sources(
             filesystem,

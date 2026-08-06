@@ -4741,6 +4741,7 @@ def _verified_calibration_source(
     receipt = json.loads(receipt_bytes)
     selected = result.get("analysis", {}).get("calibration", {}).get("selected", {})
     provenance = manifest.get("provenance", {})
+    reader_marin_commit = receipt.get("reader_marin_commit")
     source_sha256 = {
         "manifest.json": hashlib.sha256(manifest_bytes).hexdigest(),
         "result.json": hashlib.sha256(result_bytes).hexdigest(),
@@ -4772,7 +4773,8 @@ def _verified_calibration_source(
             and len(provenance["marin_commit"]) == 40
             and provenance.get("vllm_commit") == VLLM_SHA
             and provenance.get("task_image") == task_image
-            and receipt.get("reader_marin_commit") == provenance.get("marin_commit")
+            and isinstance(reader_marin_commit, str)
+            and len(reader_marin_commit) == 40
             and receipt.get("task_image") == task_image
         ),
     }
@@ -4792,6 +4794,7 @@ def _verified_calibration_source(
         },
         "provenance": {
             "marin_commit": provenance["marin_commit"],
+            "reader_marin_commit": reader_marin_commit,
             "vllm_commit": provenance["vllm_commit"],
             "task_image": provenance["task_image"],
         },
