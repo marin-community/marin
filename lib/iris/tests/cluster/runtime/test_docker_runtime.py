@@ -84,8 +84,17 @@ def test_prepare_workdir_is_noop(tmp_path, runtime):
     runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
 
 
-@pytest.mark.parametrize("device", [None, "tpu"])
-def test_run_container_shm_limit_matches_memory_request(monkeypatch, tmp_path, runtime, device):
+@pytest.mark.parametrize(
+    ("device", "memory_bytes", "expected_shm_mb"),
+    [
+        (None, 12 * 1024**3, 12 * 1024),
+        ("tpu", 12 * 1024**3, 12 * 1024),
+        ("tpu", 0, 100 * 1024),
+    ],
+)
+def test_run_container_shm_limit_matches_memory_or_tpu_fallback(
+    monkeypatch, tmp_path, runtime, device, memory_bytes, expected_shm_mb
+):
     commands: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):
@@ -97,7 +106,7 @@ def test_run_container_shm_limit_matches_memory_request(monkeypatch, tmp_path, r
 
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
-    resources = job_pb2.ResourceSpecProto(memory_bytes=12 * 1024**3)
+    resources = job_pb2.ResourceSpecProto(memory_bytes=memory_bytes)
     if device == "tpu":
         resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v5p", count=4))
     config = ContainerConfig(
@@ -114,8 +123,11 @@ def test_run_container_shm_limit_matches_memory_request(monkeypatch, tmp_path, r
     runtime.create_container(config).run()
 
     create_command = next(command for command in commands if command[:2] == ["docker", "create"])
-    assert create_command[create_command.index("--memory") + 1] == "12288m"
-    assert create_command[create_command.index("--shm-size") + 1] == "12288m"
+    if memory_bytes:
+        assert create_command[create_command.index("--memory") + 1] == f"{expected_shm_mb}m"
+    else:
+        assert "--memory" not in create_command
+    assert create_command[create_command.index("--shm-size") + 1] == f"{expected_shm_mb}m"
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):

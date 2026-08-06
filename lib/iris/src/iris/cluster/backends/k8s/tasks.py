@@ -90,7 +90,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.types import MountKind
+from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
     IrisProfile,
@@ -427,13 +427,13 @@ def _lookup_pod(
 
 def _build_volumes_and_mounts(
     cache_dir: str,
-    memory_limit_bytes: int,
+    shm_limit_bytes: int,
 ) -> tuple[list[dict], list[dict]]:
     """Build standard pod volumes and container volume mounts.
 
     Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
     they persist across pods on the same node. /dev/shm is memory-backed and
-    shares the task container's memory limit.
+    shares the task container's memory limit when one is set.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -458,8 +458,8 @@ def _build_volumes_and_mounts(
         mounts.append({"name": spec.name, "mountPath": spec.container_path})
 
     shm_spec: dict = {"medium": "Memory"}
-    if memory_limit_bytes:
-        shm_spec["sizeLimit"] = str(memory_limit_bytes)
+    if shm_limit_bytes:
+        shm_spec["sizeLimit"] = str(shm_limit_bytes)
     volumes.append({"name": "dshm", "emptyDir": shm_spec})
     mounts.append({"name": "dshm", "mountPath": "/dev/shm"})
 
@@ -852,7 +852,11 @@ def _build_pod_manifest(
             resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
 
     is_gang = bool(run_req.coscheduling.group_by)
-    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, memory_limit_bytes=memory_limit_bytes)
+    has_accelerator = gpu_count > 0 or has_tpu
+    shm_limit_bytes = memory_limit_bytes
+    if not shm_limit_bytes and has_accelerator:
+        shm_limit_bytes = ACCELERATOR_SHM_FALLBACK_BYTES
+    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, shm_limit_bytes=shm_limit_bytes)
 
     container: dict = {
         "name": "task",

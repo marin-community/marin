@@ -821,6 +821,20 @@ def test_shm_limit_matches_memory_request(device):
     assert parse_k8s_quantity(empty_dir["sizeLimit"]) == req.resources.memory_bytes
 
 
+@pytest.mark.parametrize("device", ["gpu", "tpu"])
+def test_accelerator_shm_keeps_fallback_without_memory_request(device):
+    req = make_run_req("/test-job/0")
+    req.resources.memory_bytes = 0
+    if device == "gpu":
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
+    else:
+        req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+
+    manifest = _build_pod_manifest(req, pod_config())
+    dshm_volume = next(volume for volume in manifest["spec"]["volumes"] if volume["name"] == "dshm")
+    assert parse_k8s_quantity(dshm_volume["emptyDir"]["sizeLimit"]) == 100 * 1024**3
+
+
 def test_tpu_adds_sys_resource_capability():
     """TPU pods get SYS_RESOURCE capability for memlock ulimits."""
     req = make_run_req("/test-job/0")

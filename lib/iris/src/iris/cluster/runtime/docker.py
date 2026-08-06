@@ -42,6 +42,7 @@ from iris.cluster.runtime.profile import (
     wrap_with_kill_watchdog,
 )
 from iris.cluster.runtime.types import (
+    ACCELERATOR_SHM_FALLBACK_BYTES,
     ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
@@ -738,10 +739,16 @@ exec {quoted_cmd}
         effective_memory_mb = memory_limit_mb or config.get_memory_mb()
         if effective_memory_mb:
             cmd.extend(["--memory", f"{effective_memory_mb}m"])
-            # Docker charges tmpfs pages to this same cgroup. Matching the
-            # filesystem ceiling lets tasks spend their requested memory on
-            # any mix of anonymous memory and /dev/shm.
-            cmd.extend(["--shm-size", f"{effective_memory_mb}m"])
+
+        # Docker charges tmpfs pages to the container cgroup. Matching the
+        # filesystem ceiling lets tasks spend their requested memory on any
+        # mix of anonymous memory and /dev/shm. Preserve the old TPU fallback
+        # for raw requests that omit a memory limit.
+        shm_size_mb = effective_memory_mb
+        if not shm_size_mb and is_tpu_run:
+            shm_size_mb = ACCELERATOR_SHM_FALLBACK_BYTES // (1024 * 1024)
+        if shm_size_mb:
+            cmd.extend(["--shm-size", f"{shm_size_mb}m"])
 
         # Device env vars (TPU/GPU) are now included in config.env by
         # build_common_iris_env(), so no separate device_env merge needed.
