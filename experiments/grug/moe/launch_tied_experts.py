@@ -100,6 +100,7 @@ def tied_expert_runs(
     phase: TiedExpertPhase | None = None,
     run_id_prefix: str | None = None,
     ferry_date: str | None = None,
+    variant_names: Sequence[str] | None = None,
 ) -> list[ArtifactStep[LevanterCheckpoint]]:
     if phase is None:
         phase = TiedExpertPhase(os.environ.get("GRUG_TIED_PHASE", TiedExpertPhase.SMOKE).lower())
@@ -107,6 +108,8 @@ def tied_expert_runs(
         run_id_prefix = os.environ.get("GRUG_RUN_ID")
     if ferry_date is None:
         ferry_date = os.environ.get("FERRY_DATE")
+    if variant_names is None and (requested := os.environ.get("GRUG_TIED_VARIANTS")):
+        variant_names = tuple(name.strip() for name in requested.split(",") if name.strip())
     base_model, base_optimizer, batch_size, full_steps = build_from_heuristic(
         budget=_BUDGET,
         hidden_dim=_HIDDEN_DIM,
@@ -122,8 +125,21 @@ def tied_expert_runs(
     train = grug_moe_training_datasets()
     validation = grug_moe_validation_datasets()
 
+    variants = list(_matrix(phase))
+    if variant_names is not None:
+        if len(set(variant_names)) != len(variant_names):
+            raise ValueError(f"GRUG_TIED_VARIANTS contains duplicates: {variant_names}")
+        available = {variant.name for variant in variants}
+        unknown = set(variant_names) - available
+        if unknown:
+            raise ValueError(f"unknown {phase.value} tied-expert variants: {sorted(unknown)}")
+        requested_names = set(variant_names)
+        variants = [variant for variant in variants if variant.name in requested_names]
+        if not variants:
+            raise ValueError("GRUG_TIED_VARIANTS selected no runs")
+
     runs: list[ArtifactStep[LevanterCheckpoint]] = []
-    for variant in _matrix(phase):
+    for variant in variants:
         name = f"grug/tied_experts/{_MODEL_LABEL}/{phase.value}/{variant.name}"
         resolved_version = resolve_version(name, version)
         model = dataclasses.replace(base_model, expert_bank_for_layer=variant.topology)

@@ -256,3 +256,13 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
   - `/Users/dlwh/src/marin/.venv/bin/pyrefly check` over the seven merge runtime and launch files.
 - Result: two read-only reviews found cross-region data validation, mutable-output provenance, routed-output capture, and recovery gate-metric gaps. The follow-up validates the calibration mixture before JAX initialization, records an 8,192-token aligned trace per affected layer, rejects stale prefit/conversion checkpoints, records source commit provenance when supplied, and persists throughput, routing, capacity-overflow, Paloma, and recovery metrics. Converted checkpoints no longer store an unused full source optimizer state. Resume-at-milestone evaluation retains teacher deltas. The six focused files passed 24 tests; targeted Pyrefly reported zero errors; changed-file lint passed.
 - Next action: commit the review fixes. External publication and TPU dispatch remain pending authorization and a same-region teacher artifact.
+
+### 2026-08-06 08:00 - GRUG-XEM-001 regional launch audit
+
+- Commit Hash: `8d40777e7f004f84c94cdf76446314722ab68636` plus the cost-control launcher diff.
+- Commands:
+  - `gcloud storage ls` for representative Nemotron and Paloma cache paths in `gs://marin-us-central1`.
+  - `MARIN_PREFIX=gs://marin-us-central1 .venv/bin/python` no-run construction of the two smoke waves.
+  - `/Users/dlwh/src/marin/.venv/bin/python -m pytest --session-timeout=3600 -q experiments/grug/moe/test_launch_tied_experts.py`
+- Result: the required training and evaluation cache families resolve under the `us-central1` bucket, while all seven fixed output paths for version `2026.08.06` are unused. The launcher now accepts `GRUG_TIED_VARIANTS`, allowing a four-run baseline/pairwise wave followed by a three-run middle-four wave without changing artifact identities. Two no-launch tests and targeted Pyrefly pass. The isolated worktree's `.venv/bin/python` must be used; the main checkout interpreter imports stale Grug modules. The controller must set `MARIN_PREFIX=gs://marin-us-central1` because a local controller otherwise defaults artifact records to `/tmp/marin`.
+- Next action: after dispatch authorization, run wave 1 from the isolated worktree with the regional prefix and babysit it before starting wave 2.
