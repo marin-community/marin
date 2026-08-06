@@ -374,8 +374,8 @@ def test_write_case_freezes_config_workload_and_manifest(tmp_path) -> None:
     assert len(set(IDENTITY_CHAT_TOKENS)) == 256
     assert all(len(token) == 1 and not token.isspace() for token in IDENTITY_CHAT_TOKENS)
     prompt_ids = [index % 256 for index in range(65_535)]
-    content = " ".join(IDENTITY_CHAT_TOKENS[token_id] for token_id in prompt_ids)
-    assert len(content) == 131_069
+    content = "".join(IDENTITY_CHAT_TOKENS[token_id] for token_id in prompt_ids)
+    assert len(content) == len(prompt_ids) == 65_535
     assert Tokenizer.from_file(str(tmp_path / "tokenizer.json")).encode(content).ids == prompt_ids
     expected_manifest = json.loads(json.dumps(frozen_manifest(CASES["tiny"], run_id="unit", git_sha="f" * 40)))
     assert manifest == expected_manifest

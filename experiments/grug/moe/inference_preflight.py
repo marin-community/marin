@@ -921,11 +921,12 @@ def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) 
     # ``--skip-tokenizer-init``.  The matched MarinSkyRL carrier check must use
     # ``/v1/chat/completions`` instead.  This tiny tokenizer makes the chat
     # renderer an identity map over the exact frozen 0..255 model vocabulary.
-    # One-codepoint tokens plus spaces fit vLLM's conservative two-characters-
-    # per-token frontend guard exactly: 65,535 tokens serialize to 131,069
-    # characters. The U+0100..U+01FF range contains no whitespace, so the
-    # whitespace pre-tokenizer preserves the exact frozen 0..255 token IDs. It
-    # adds no role markers, BOS token, EOS token, or suffix.
+    # vLLM bounds text length by the longest vocabulary spelling before it
+    # tokenizes. Every spelling here is one codepoint, so the carrier must also
+    # use exactly one codepoint per model token. The empty-regex split isolates
+    # each Unicode codepoint and preserves the exact frozen 0..255 token IDs
+    # without separators. It adds no role markers, BOS token, EOS token, or
+    # suffix.
     vocabulary = {token: token_id for token_id, token in enumerate(IDENTITY_CHAT_TOKENS)}
     tokenizer = {
         "version": "1.0",
@@ -933,7 +934,12 @@ def write_case(output_dir: Path, *, case: ModelCase, run_id: str, git_sha: str) 
         "padding": None,
         "added_tokens": [],
         "normalizer": None,
-        "pre_tokenizer": {"type": "WhitespaceSplit"},
+        "pre_tokenizer": {
+            "type": "Split",
+            "pattern": {"Regex": ""},
+            "behavior": "Isolated",
+            "invert": False,
+        },
         "post_processor": None,
         "decoder": {"type": "WordPiece", "prefix": "##", "cleanup": False},
         "model": {

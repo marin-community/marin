@@ -741,7 +741,7 @@ def _timed_completion(
         body = {
             "model": model,
             "messages": [
-                {"role": "user", "content": " ".join(IDENTITY_CHAT_TOKENS[token_id] for token_id in prompt_token_ids)}
+                {"role": "user", "content": "".join(IDENTITY_CHAT_TOKENS[token_id] for token_id in prompt_token_ids)}
             ],
             "max_tokens": max_tokens,
             **CHAT_HEALTH_SAMPLING_PARAMETERS,
