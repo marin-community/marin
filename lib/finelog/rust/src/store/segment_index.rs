@@ -222,7 +222,7 @@ impl TrigramCoverage {
         else {
             return true;
         };
-        !hi.is_some_and(|value| value < key_min) && !lo.is_some_and(|value| value > key_max)
+        hi.is_none_or(|value| value >= key_min) && lo.is_none_or(|value| value <= key_max)
     }
 }
 

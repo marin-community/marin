@@ -657,14 +657,11 @@ fn classify_coverage(
         };
         covered_segments += 1;
         for (value, count) in counts {
-            let Some(total) = combined
+            let total = combined
                 .get(value)
                 .copied()
                 .unwrap_or_default()
-                .checked_add(*count)
-            else {
-                return None;
-            };
+                .checked_add(*count)?;
             *combined.entry(value.clone()).or_default() = total;
             if combined.len() > MAX_COMBINED_COUNT_VALUES {
                 return None;
