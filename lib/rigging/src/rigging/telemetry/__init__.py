@@ -17,8 +17,10 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 import requests
+import zstandard
 
 from rigging.telemetry import serialization
+from rigging.telemetry.compression import FINELOG_ZSTD_LEVEL
 from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
@@ -159,12 +161,17 @@ class _Transport(Protocol):
 class _RequestsTransport:
     def __init__(self) -> None:
         self._session = requests.Session()
+        self._compressor = zstandard.ZstdCompressor(level=FINELOG_ZSTD_LEVEL)
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> requests.Response:
         return self._session.post(
             endpoint,
-            data=body,
-            headers={"Content-Type": "application/json", "Idempotency-Key": batch_id},
+            data=self._compressor.compress(body),
+            headers={
+                "Content-Encoding": "zstd",
+                "Content-Type": "application/json",
+                "Idempotency-Key": batch_id,
+            },
             timeout=timeout,
         )
 

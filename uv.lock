@@ -5934,6 +5934,7 @@ dependencies = [
     { name = "requests" },
     { name = "s3fs" },
     { name = "starlette" },
+    { name = "zstandard" },
 ]
 
 [package.optional-dependencies]
@@ -5984,6 +5985,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "starlette", specifier = ">=0.40" },
+    { name = "zstandard", specifier = ">=0.22" },
 ]
 provides-extras = ["iap", "prometheus", "secrets"]
 

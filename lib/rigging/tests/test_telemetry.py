@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import pytest
 import requests
+import zstandard
 from rigging import telemetry
 
 
@@ -70,6 +71,27 @@ class RecordingTransport:
         self.closed.set()
 
 
+class RecordingSession:
+    def __init__(self) -> None:
+        self.request: tuple[str, bytes, dict[str, str], tuple[float, float]] | None = None
+        self.closed = False
+
+    def post(
+        self,
+        endpoint: str,
+        *,
+        data: bytes,
+        headers: dict[str, str],
+        timeout: tuple[float, float],
+    ) -> FakeResponse:
+        self.request = (endpoint, data, headers, timeout)
+        batch_id = headers["Idempotency-Key"]
+        return FakeResponse(200, {"batch_id": batch_id, "status": "accepted"}, {})
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class BlockingTransport(RecordingTransport):
     def __init__(self) -> None:
         super().__init__()
@@ -115,6 +137,28 @@ def test_unconfigured_instruments_are_noops() -> None:
     telemetry.event("ready", telemetry.serialization.EventBody({"worker": 3}))
 
     assert telemetry.runtime_status() == telemetry.TelemetryStatus(False, 0, 0, 0, 0, 0, 0, 0, None, 0.0)
+
+
+def test_requests_transport_sends_zstd_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = RecordingSession()
+    monkeypatch.setattr(telemetry.requests, "Session", lambda: session)
+    transport = telemetry._RequestsTransport()
+    record = b'{"name":"worker_cpu","value":1}'
+    body = b'{"records":[' + b",".join([record] * 100) + b"]}"
+
+    transport.post("http://finelog/v1/telemetry", body, "batch-1", (1.0, 2.0))
+
+    assert session.request is not None
+    endpoint, compressed, headers, timeout = session.request
+    assert endpoint == "http://finelog/v1/telemetry"
+    assert headers == {
+        "Content-Encoding": "zstd",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "batch-1",
+    }
+    assert timeout == (1.0, 2.0)
+    assert len(compressed) < len(body)
+    assert zstandard.ZstdDecompressor().decompress(compressed) == body
 
 
 def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> None:

@@ -5,6 +5,7 @@ use std::time::Duration;
 use arrow::array::{Array, AsArray};
 use bytes::Bytes;
 use connectrpc::client::{full_body, ClientBody};
+use connectrpc::compression::{CompressionProvider, ZstdProvider};
 use http::{HeaderMap, Request, StatusCode};
 use http_body_util::BodyExt;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -79,13 +80,14 @@ async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAdd
     addr
 }
 
-async fn post(
+async fn post_encoded(
     client: &TestHttpClient,
     addr: SocketAddr,
     body: Vec<u8>,
     batch_id: Option<&str>,
     content_type: Option<&str>,
     bearer: Option<&str>,
+    content_encoding: Option<&str>,
 ) -> TestResponse {
     let mut request = Request::post(format!("http://{addr}/v1/telemetry"));
     if let Some(batch_id) = batch_id {
@@ -96,6 +98,9 @@ async fn post(
     }
     if let Some(bearer) = bearer {
         request = request.header("authorization", format!("Bearer {bearer}"));
+    }
+    if let Some(content_encoding) = content_encoding {
+        request = request.header("content-encoding", content_encoding);
     }
     let response = client
         .request(request.body(full_body(Bytes::from(body))).unwrap())
@@ -111,6 +116,21 @@ async fn post(
         headers,
         payload,
     }
+}
+
+async fn post(
+    client: &TestHttpClient,
+    addr: SocketAddr,
+    body: Vec<u8>,
+    batch_id: Option<&str>,
+    content_type: Option<&str>,
+    bearer: Option<&str>,
+) -> TestResponse {
+    post_encoded(client, addr, body, batch_id, content_type, bearer, None).await
+}
+
+fn zstd_body(body: &[u8]) -> Vec<u8> {
+    ZstdProvider::with_level(1).compress(body).unwrap().to_vec()
 }
 
 fn batch(batch_id: &str) -> Vec<u8> {
@@ -224,6 +244,42 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
         2
     );
     assert_eq!(bounded[0].column(2).as_string::<i32>().value(0), "run-1");
+}
+
+#[tokio::test]
+async fn zstd_batch_is_accepted_and_queryable() {
+    let store = disk_store("telemetry-zstd");
+    let (addr, _) = serve(Arc::clone(&store), AuthPolicy::allow_localhost()).await;
+    let client = http_client();
+    let batch_id = "9d159e5a-2f32-4d50-8e31-6d8522147520";
+    let body = batch(batch_id);
+    let compressed = zstd_body(&body);
+    assert!(compressed.len() < body.len());
+
+    let response = post_encoded(
+        &client,
+        addr,
+        compressed,
+        Some(batch_id),
+        Some("application/json"),
+        None,
+        Some("zstd"),
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    store
+        .await_persisted("telemetry_v1", 1, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let rows = query(&store, "SELECT count(*) AS n FROM telemetry_v1").await;
+    assert_eq!(
+        rows[0]
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int64Type>()
+            .value(0),
+        2
+    );
 }
 
 #[tokio::test]
@@ -343,10 +399,23 @@ async fn body_and_normalized_amplification_limits_return_413() {
     let response = post(
         &client,
         addr,
-        oversized,
+        oversized.clone(),
         Some(batch_id),
         Some("application/json"),
         None,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.payload["error"]["code"], "request_too_large");
+
+    let response = post_encoded(
+        &client,
+        addr,
+        zstd_body(&oversized),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+        Some("zstd"),
     )
     .await;
     assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);

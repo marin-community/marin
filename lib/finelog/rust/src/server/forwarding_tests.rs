@@ -5,7 +5,6 @@
 //! and the hub it forwards to, both served over loopback sockets.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
@@ -14,7 +13,7 @@ use crate::proto::finelog::logging::{FetchLogsRequest, LogEntry, MatchScope, Pus
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{AuthIdentity, AuthPolicy};
 use crate::server::test_support::{
-    client, disk_store, serve, serve_rejecting, stats_client, TestTransport, PRIV_A,
+    client, disk_store, serve, serve_rejecting, stats_client, RequestStats, TestTransport, PRIV_A,
     PRIV_UNTRUSTED, PUB_A,
 };
 use crate::store::policy::StoragePolicy;
@@ -66,7 +65,7 @@ struct Fixture {
     target_store: Option<Arc<Store>>,
     target_addr: SocketAddr,
     target_url: String,
-    target_requests: Arc<AtomicUsize>,
+    target_requests: Arc<RequestStats>,
 }
 
 impl Fixture {
@@ -91,7 +90,7 @@ impl Fixture {
         tag: &str,
         target_store: Option<Arc<Store>>,
         target_addr: SocketAddr,
-        target_requests: Arc<AtomicUsize>,
+        target_requests: Arc<RequestStats>,
     ) -> Self {
         let source = disk_store(&format!("{tag}_source"));
         let (source_addr, _) = serve(Arc::clone(&source), AuthPolicy::allow_localhost()).await;
@@ -143,7 +142,11 @@ impl Fixture {
     }
 
     fn requests(&self) -> usize {
-        self.target_requests.load(Ordering::SeqCst)
+        self.target_requests.total()
+    }
+
+    fn zstd_requests(&self) -> usize {
+        self.target_requests.zstd()
     }
 
     /// Forward until `namespace`'s watermark settles at the source's current tip, then
@@ -282,13 +285,13 @@ async fn wait_for_cursor(store: &Store, target: &str, namespace: &str, expected:
 /// Poll `counter` until the hub has served at least `expected` requests. Lets a test
 /// that asserts on the *absence* of an effect first wait for the attempt that would have
 /// produced it.
-async fn wait_for_requests(counter: &AtomicUsize, expected: usize) {
+async fn wait_for_requests(counter: &RequestStats, expected: usize) {
     poll_until(
-        || counter.load(Ordering::SeqCst) >= expected,
+        || counter.total() >= expected,
         || {
             format!(
                 "hub never served {expected} requests (saw {})",
-                counter.load(Ordering::SeqCst)
+                counter.total()
             )
         },
     )
@@ -782,6 +785,7 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
     write_id_rows(&fx.source, "events", FORWARD_BATCH_ROWS as usize).await;
     fx.forward_from_start("events");
     let requests_before = fx.requests();
+    let zstd_before = fx.zstd_requests();
 
     fx.drain(PRIV_A, "events").await;
 
@@ -789,6 +793,11 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
         fx.requests() - requests_before,
         2,
         "one compact read turn needs one RegisterTable and one WriteRows request"
+    );
+    assert_eq!(
+        fx.zstd_requests() - zstd_before,
+        1,
+        "the large WriteRows body is zstd encoded while the small registration stays identity"
     );
 }
 
