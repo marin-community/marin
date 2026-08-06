@@ -94,6 +94,8 @@ class GrugModelConfig:
     num_experts: int = 256
     num_experts_per_token: int = 4
     num_layers: int = 6
+    expert_bank_for_layer: tuple[int, ...] | None = None
+    """Routed-expert bank ID used by each layer. ``None`` keeps every layer untied."""
     num_heads: int = 4
     num_kv_heads: int = 1
     head_dim: int | None = None
@@ -150,6 +152,8 @@ class GrugModelConfig:
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
+        if self.num_layers <= 0:
+            raise ValueError("num_layers must be positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.vocab_size <= 0:
@@ -164,7 +168,32 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        bank_for_layer = self.resolved_expert_bank_for_layer
+        bank_ids = set(bank_for_layer)
+        expected_bank_ids = set(range(len(bank_ids)))
+        if bank_ids != expected_bank_ids:
+            raise ValueError(
+                "expert_bank_for_layer must use contiguous bank IDs starting at zero; " f"got {bank_for_layer}"
+            )
         resolve_moe_implementation(self.moe_implementation)
+
+    @property
+    def resolved_expert_bank_for_layer(self) -> tuple[int, ...]:
+        if self.expert_bank_for_layer is None:
+            return tuple(range(self.num_layers))
+        if len(self.expert_bank_for_layer) != self.num_layers:
+            raise ValueError(
+                "expert_bank_for_layer must contain one bank ID per layer; "
+                f"got {len(self.expert_bank_for_layer)} entries for {self.num_layers} layers"
+            )
+        if any(bank_id < 0 for bank_id in self.expert_bank_for_layer):
+            raise ValueError("expert_bank_for_layer bank IDs must be non-negative")
+        return self.expert_bank_for_layer
+
+    @property
+    def expert_bank_group_sizes(self) -> tuple[int, ...]:
+        bank_for_layer = self.resolved_expert_bank_for_layer
+        return tuple(bank_for_layer.count(bank_id) for bank_id in range(max(bank_for_layer) + 1))
 
     @property
     def inferred_head_dim(self) -> int:
@@ -503,38 +532,23 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
 
 
 class MoEMLP(eqx.Module):
-    """QB-routed MoE with sigmoid combine weights."""
+    """Per-layer QB router and dispatch logic for an explicit expert bank."""
 
     router: jax.Array
     router_bias: jax.Array
-    expert_mlp: MoEExpertMlp
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
         if cfg.num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
-        if not cfg.split_w_gate_up:
-            raise ValueError("the current Levanter MoE API only supports split w_gate and w_up weights")
-
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router=reshard(_init_weight(key, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            expert_mlp=MoEExpertMlp.init(
-                num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
-                intermediate_dim=cfg.intermediate_dim,
-                initializer_std=cfg.initializer_std,
-                key=k_expert,
-                implementation=cfg.moe_implementation,
-                activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
-            ),
             cfg=cfg,
         )
 
@@ -542,6 +556,7 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        expert_bank: MoEExpertMlp,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -588,7 +603,7 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat, dropped_assignments = self.expert_mlp(
+        routed_flat, dropped_assignments = expert_bank(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
@@ -600,6 +615,49 @@ class MoEMLP(eqx.Module):
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
+
+
+def _expert_key_from_block_key(block_key: PRNGKeyArray) -> PRNGKeyArray:
+    _, mlp_key, _, _, _ = random.split(block_key, 5)
+    _, expert_key = random.split(mlp_key, 2)
+    return expert_key
+
+
+def _init_expert_bank(cfg: GrugModelConfig, *, block_key: PRNGKeyArray) -> MoEExpertMlp:
+    """Initialize a bank from the expert subkey used by the former per-block MoEMLP."""
+    if not cfg.split_w_gate_up:
+        raise ValueError("the current Levanter MoE API only supports split w_gate and w_up weights")
+    return MoEExpertMlp.init(
+        num_experts=cfg.num_experts,
+        hidden_dim=cfg.hidden_dim,
+        intermediate_dim=cfg.intermediate_dim,
+        initializer_std=cfg.initializer_std,
+        key=_expert_key_from_block_key(block_key),
+        implementation=cfg.moe_implementation,
+        activation=ActivationFunctionEnum.silu,
+        capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+    )
+
+
+def _init_stacked_expert_banks(
+    cfg: GrugModelConfig,
+    *,
+    block_keys: jax.Array,
+    first_layer_for_bank: tuple[int, ...],
+) -> ArrayStacked[MoEExpertMlp]:
+    if not cfg.split_w_gate_up:
+        raise ValueError("the current Levanter MoE API only supports split w_gate and w_up weights")
+    expert_keys = jnp.stack([_expert_key_from_block_key(block_keys[layer]) for layer in first_layer_for_bank])
+    return ArrayStacked.init(len(first_layer_for_bank), MoEExpertMlp)(
+        num_experts=cfg.num_experts,
+        hidden_dim=cfg.hidden_dim,
+        intermediate_dim=cfg.intermediate_dim,
+        initializer_std=cfg.initializer_std,
+        key=expert_keys,
+        implementation=cfg.moe_implementation,
+        activation=ActivationFunctionEnum.silu,
+        capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+    )
 
 
 class Block(eqx.Module):
@@ -614,6 +672,7 @@ class Block(eqx.Module):
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        router_key, _ = random.split(mlp_key, 2)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
@@ -625,7 +684,7 @@ class Block(eqx.Module):
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=MoEMLP.init(cfg, key=mlp_key),
+            mlp=MoEMLP.init(cfg, key=router_key),
             shared=shared,
         )
 
@@ -636,6 +695,7 @@ class Block(eqx.Module):
         short_mask: AttentionMask | jax.Array,
         long_mask: AttentionMask | jax.Array,
         use_long_mask: Bool[Array, ""] | bool,
+        expert_bank: MoEExpertMlp,
         use_pko: bool = False,
         disable_long_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
@@ -657,7 +717,7 @@ class Block(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        mlp_out, router_stats = self.mlp(mlp_in, expert_bank)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
@@ -680,6 +740,7 @@ class Transformer(eqx.Module):
     #   - ``stacked_blocks``: stacked path (homogeneous Block, lax.scan)
     blocks: tuple[Block, ...] | None
     stacked_blocks: ArrayStacked[Block] | None
+    expert_banks: tuple[MoEExpertMlp, ...] | ArrayStacked[MoEExpertMlp]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -700,15 +761,26 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
+        bank_for_layer = cfg.resolved_expert_bank_for_layer
+        first_layer_for_bank = tuple(bank_for_layer.index(bank_id) for bank_id in range(max(bank_for_layer) + 1))
 
         blocks: tuple[Block, ...] | None
         stacked_blocks: ArrayStacked[Block] | None
+        expert_banks: tuple[MoEExpertMlp, ...] | ArrayStacked[MoEExpertMlp]
         if cfg.use_array_stacked_blocks:
             blocks = None
             stacked_blocks = ArrayStacked.init(cfg.num_layers, Block)(cfg=cfg, key=block_keys)
+            expert_banks = _init_stacked_expert_banks(
+                cfg,
+                block_keys=block_keys,
+                first_layer_for_bank=first_layer_for_bank,
+            )
         else:
             blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
             stacked_blocks = None
+            expert_banks = tuple(
+                _init_expert_bank(cfg, block_key=block_keys[layer_index]) for layer_index in first_layer_for_bank
+            )
 
         return Transformer(
             token_embed=token_embed,
@@ -717,6 +789,7 @@ class Transformer(eqx.Module):
             output_proj=output_proj,
             blocks=blocks,
             stacked_blocks=stacked_blocks,
+            expert_banks=expert_banks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -748,14 +821,16 @@ class Transformer(eqx.Module):
             remat_policy = None
 
         if self.blocks is not None:
+            assert isinstance(self.expert_banks, tuple)
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
             for i, block in enumerate(self.blocks):
                 is_last = i == num_blocks - 1
                 is_long = i % 4 == 3 or is_last
                 use_pko = is_long and not cfg.disable_pko
+                expert_bank = self.expert_banks[cfg.resolved_expert_bank_for_layer[i]]
                 hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                    hidden, short_mask, long_mask, is_long, use_pko, cfg.disable_long_rope
+                    hidden, short_mask, long_mask, is_long, expert_bank, use_pko, cfg.disable_long_rope
                 )
                 moe_router_stats.append(router_stats)
             router_metrics = {
@@ -768,21 +843,30 @@ class Transformer(eqx.Module):
             }
         else:
             assert self.stacked_blocks is not None
+            assert isinstance(self.expert_banks, ArrayStacked)
             mask_schedule = _long_layer_schedule(cfg.num_layers)
+            bank_schedule = jnp.asarray(cfg.resolved_expert_bank_for_layer, dtype=jnp.int32)
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
-                scan_inputs: tuple[Block, Bool[Array, ""]],
+                scan_inputs: tuple[Block, Bool[Array, ""], Int[Array, ""]],
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-                layer, layer_use_long_mask = scan_inputs
+                layer, layer_use_long_mask, expert_bank_index = scan_inputs
+                expert_bank = self.expert_banks.get_layer(expert_bank_index)
                 return eqx.filter_checkpoint(layer, policy=remat_policy)(
-                    carry_hidden, short_mask, long_mask, layer_use_long_mask, False, cfg.disable_long_rope
+                    carry_hidden,
+                    short_mask,
+                    long_mask,
+                    layer_use_long_mask,
+                    expert_bank,
+                    False,
+                    cfg.disable_long_rope,
                 )
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers,
                 hidden,
-                xs=(self.stacked_blocks.stacked, mask_schedule),
+                xs=(self.stacked_blocks.stacked, mask_schedule, bank_schedule),
             )
             router_metrics = {
                 "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
