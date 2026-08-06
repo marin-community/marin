@@ -5,6 +5,7 @@
 
 import importlib.util
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -45,10 +46,6 @@ class DatabaseConnection(Protocol):
     def rollback(self) -> None: ...
 
 
-class MigrationModule(Protocol):
-    def migrate(self, connection: DatabaseConnection, backend: DatabaseBackend) -> None: ...
-
-
 @dataclass(frozen=True)
 class Migration:
     version: int
@@ -74,18 +71,17 @@ def _migration_files() -> list[Migration]:
     return migrations
 
 
-def _load_migration(migration: Migration) -> MigrationModule:
-    """Load one migration module from its numbered file."""
+def _load_migration(migration: Migration) -> Callable[[DatabaseConnection, DatabaseBackend], None]:
+    """Load the callable exposed by one numbered migration file."""
     spec = importlib.util.spec_from_file_location(migration.name, migration.path)
     if spec is None or spec.loader is None:
         raise ValueError(f"cannot load Grafana migration: {migration.path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return cast(MigrationModule, module)
+    return cast(Callable[[DatabaseConnection, DatabaseBackend], None], module.__dict__["migrate"])
 
 
 def _insert_migration(connection: DatabaseConnection, backend: DatabaseBackend, migration: Migration) -> None:
-    """Record one applied migration."""
     query = INSERT_SQLITE_MIGRATION if backend == DatabaseBackend.SQLITE else INSERT_POSTGRES_MIGRATION
     connection.execute(query, (migration.version, migration.name))
 
@@ -109,7 +105,7 @@ def migrate(connection: DatabaseConnection, backend: DatabaseBackend) -> list[st
         try:
             if backend == DatabaseBackend.SQLITE:
                 connection.execute("BEGIN IMMEDIATE")
-            _load_migration(migration).migrate(connection, backend)
+            _load_migration(migration)(connection, backend)
             _insert_migration(connection, backend, migration)
             connection.commit()
         except Exception:

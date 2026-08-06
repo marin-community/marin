@@ -81,7 +81,7 @@ def test_migrate_rolls_back_failed_migration(tmp_path: Path, monkeypatch: pytest
     migrations_dir.mkdir()
     (migrations_dir / "m0001_fails.py").write_text(
         """
-def migrate(connection, backend):
+def migrate(connection, _backend):
     connection.execute("CREATE TABLE partial_migration (id INTEGER)")
     raise RuntimeError("migration failed")
 """,
