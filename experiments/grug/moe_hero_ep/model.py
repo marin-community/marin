@@ -742,8 +742,9 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
-    # LatentMoE projections. Both None for a standard MoE, in which case the layer is unchanged.
+    # LatentMoE projections. All None for a standard MoE, in which case the layer is unchanged.
     w_latent_down: jax.Array | None
+    latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
@@ -769,6 +770,7 @@ class MoEMLP(eqx.Module):
                 if latent is None
                 else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
             ),
+            latent_norm=None if latent is None else RMSNorm.init(latent, cfg.layer_norm_eps),
             w_latent_up=(
                 None
                 if latent is None
@@ -842,13 +844,18 @@ class MoEMLP(eqx.Module):
         # `latent_dim`-wide rows in both directions. The router above already read the full-width
         # token, and the shared experts in the enclosing block never see this path.
         routed_input = x_flat
-        if self.w_latent_down is not None:
+        if self.w_latent_down is not None and self.latent_norm is not None:
             routed_input = jnp.einsum(
                 "td,dl->tl",
                 x_flat,
                 self.w_latent_down.astype(x_flat.dtype),
                 out_sharding=_batch_spec(),
             )
+            # The expert weights carry an initializer std tuned for a `hidden_dim` fan-in, and the
+            # down-projection shrinks the signal on top of that, so without this the routed path
+            # starts about 2.8x attenuated relative to a standard MoE. Normalizing here also makes
+            # the expert input independent of how W_down was initialized.
+            routed_input = self.latent_norm(routed_input)
         moe_out = self.expert_mlp(
             routed_input,
             selected_experts.astype(jnp.int32),

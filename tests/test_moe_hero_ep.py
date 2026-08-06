@@ -220,6 +220,8 @@ def test_latent_moe_shrinks_the_dispatched_width_but_not_the_token():
         out = jax.eval_shape(lambda t: model.Transformer.init(cfg, key=jax.random.key(0))(t)[0], tokens)
 
     assert built.w_latent_down.shape == (cfg.hidden_dim, 192)
+    # Normalizing the latent keeps the expert input at unit scale despite the down-projection.
+    assert built.latent_norm.weight.shape == (192,)
     assert built.w_latent_up.shape == (192, cfg.hidden_dim)
     # Expert banks are latent-wide: this is what narrows the dispatch.
     assert built.expert_mlp.w_gate.shape[1] == 192
@@ -240,6 +242,7 @@ def test_latent_moe_is_absent_by_default():
     with set_mesh(mesh):
         built = jax.eval_shape(lambda: model.MoEMLP.init(cfg, key=jax.random.key(0)))
     assert built.w_latent_down is None and built.w_latent_up is None
+    assert built.latent_norm is None
     assert built.expert_mlp.w_gate.shape[1] == cfg.hidden_dim
 
 
