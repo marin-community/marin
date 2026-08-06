@@ -20,10 +20,11 @@ import requests
 import zstandard
 
 from rigging.telemetry import serialization
-from rigging.telemetry.compression import FINELOG_ZSTD_LEVEL
 from rigging.timing import ExponentialBackoff
 
 logger = logging.getLogger(__name__)
+
+_FINELOG_ZSTD_LEVEL = 1
 
 DEFAULT_MAX_QUEUE_RECORDS = 10_000
 DEFAULT_MAX_QUEUE_BYTES = 16 << 20
@@ -161,7 +162,7 @@ class _Transport(Protocol):
 class _RequestsTransport:
     def __init__(self) -> None:
         self._session = requests.Session()
-        self._compressor = zstandard.ZstdCompressor(level=FINELOG_ZSTD_LEVEL)
+        self._compressor = zstandard.ZstdCompressor(level=_FINELOG_ZSTD_LEVEL)
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> requests.Response:
         return self._session.post(
