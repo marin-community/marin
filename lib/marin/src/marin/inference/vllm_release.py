@@ -6,7 +6,12 @@
 import platform
 from dataclasses import dataclass
 
-VLLM_WHEEL_PROVENANCE_ENV_VAR = "MARIN_VLLM_WHEEL_PROVENANCE"
+_RELEASE_TAG = "marin-vllm-gpu-20260805-fa50698a9a30"
+_RELEASE_VERSION = "0.0.0.dev20260805+marin.fa50698a9a30.cu129"
+_RELEASE_ASSET_PREFIX = (
+    f"https://github.com/marin-community/vllm/releases/download/{_RELEASE_TAG}/"
+    "vllm-0.0.0.dev20260805%2Bmarin.fa50698a9a30.cu129-cp38-abi3-"
+)
 
 
 @dataclass(frozen=True)
@@ -71,29 +76,21 @@ class VllmGpuRelease:
 # Update these fields together from the promoted release manifest after both Iris GPU lanes pass:
 # https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260805-fa50698a9a30/marin-vllm-gpu-manifest.json
 MARIN_VLLM_GPU_RELEASE = VllmGpuRelease(
-    release_tag="marin-vllm-gpu-20260805-fa50698a9a30",
+    release_tag=_RELEASE_TAG,
     source_commit="fa50698a9a303f7282aa0e969f35717703de4911",
-    version="0.0.0.dev20260805+marin.fa50698a9a30.cu129",
+    version=_RELEASE_VERSION,
     torch_backend="cu129",
     wheels=(
         VllmGpuWheel(
             architecture="x86_64",
             sm_targets=("9.0",),
-            url=(
-                "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260805-fa50698a9a30/"
-                "vllm-0.0.0.dev20260805%2Bmarin.fa50698a9a30.cu129-cp38-abi3-manylinux_2_28_x86_64.whl"
-            ),
+            url=f"{_RELEASE_ASSET_PREFIX}manylinux_2_28_x86_64.whl",
             sha256="d4e5d6e19da49c0f1dd030bd14d3ab795a10b8f1185c55162ae5daf6745c98eb",
         ),
         VllmGpuWheel(
             architecture="aarch64",
             sm_targets=("10.0",),
-            url=(
-                "https://github.com/marin-community/vllm/releases/download/"
-                "marin-vllm-gpu-20260805-fa50698a9a30/"
-                "vllm-0.0.0.dev20260805%2Bmarin.fa50698a9a30.cu129-cp38-abi3-manylinux_2_28_aarch64.whl"
-            ),
+            url=f"{_RELEASE_ASSET_PREFIX}manylinux_2_28_aarch64.whl",
             sha256="a248408d444425906a0e878513c8f31a43582ddf6e82e32a1573b6c714b677f9",
         ),
     ),

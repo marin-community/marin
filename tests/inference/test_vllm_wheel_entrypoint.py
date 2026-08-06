@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import os
 import subprocess
@@ -9,16 +10,14 @@ from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
+from marin.inference.vllm_release import MARIN_VLLM_GPU_RELEASE
 
-VERSION = "0.0.0.dev20260805+marin.fa50698a9a30.cu129"
-PROVENANCE = {
-    "release_tag": "marin-vllm-gpu-20260805-fa50698a9a30",
-    "sm_targets": ["9.0"],
-    "source_commit": "fa50698a9a303f7282aa0e969f35717703de4911",
-    "version": VERSION,
-    "wheel_sha256": "d4e5d6e19da49c0f1dd030bd14d3ab795a10b8f1185c55162ae5daf6745c98eb",
-    "wheel_url": "https://example.invalid/vllm.whl",
-}
+VERSION = MARIN_VLLM_GPU_RELEASE.version
+WHEEL = MARIN_VLLM_GPU_RELEASE.wheel_for_architecture("x86_64")
+
+
+def _provenance() -> dict[str, object]:
+    return json.loads(json.dumps(dataclasses.asdict(MARIN_VLLM_GPU_RELEASE.provenance(WHEEL))))
 
 
 def _write_fake_vllm(
@@ -26,7 +25,7 @@ def _write_fake_vllm(
     *,
     version: str = VERSION,
     include_extension: bool = True,
-    wheel_sha256: str = PROVENANCE["wheel_sha256"],
+    wheel_sha256: str = WHEEL.sha256,
     compute_capability: tuple[int, int] = (9, 0),
 ) -> None:
     package = tmp_path / "vllm"
@@ -52,14 +51,12 @@ def _write_fake_vllm(
         json.dumps(
             {
                 "archive_info": {"hashes": {"sha256": wheel_sha256}},
-                "url": PROVENANCE["wheel_url"],
+                "url": WHEEL.url,
             }
         )
     )
     (tmp_path / "torch.py").write_text(
-        "class cuda:\n"
-        "    @staticmethod\n"
-        f"    def get_device_capability(): return {compute_capability!r}\n"
+        "class cuda:\n" "    @staticmethod\n" f"    def get_device_capability(): return {compute_capability!r}\n"
     )
 
 
@@ -68,7 +65,7 @@ def _run_entrypoint(
     *,
     version: str = VERSION,
     include_extension: bool = True,
-    wheel_sha256: str = PROVENANCE["wheel_sha256"],
+    wheel_sha256: str = WHEEL.sha256,
     compute_capability: tuple[int, int] = (9, 0),
 ):
     _write_fake_vllm(
@@ -84,13 +81,12 @@ def _run_entrypoint(
     environment.update(
         {
             "FAKE_VLLM_MARKER": str(marker),
-            "MARIN_VLLM_WHEEL_PROVENANCE": json.dumps(PROVENANCE),
             "PYTHONPATH": str(tmp_path),
         }
     )
     return (
         subprocess.run(
-            [sys.executable, str(entrypoint), "serve", "test/model"],
+            [sys.executable, str(entrypoint), json.dumps(_provenance()), "serve", "test/model"],
             capture_output=True,
             text=True,
             env=environment,
@@ -109,9 +105,9 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path):
         for line in result.stdout.splitlines()
         for sentinel, _, payload in (line.partition("="),)
     }
-    assert records["MARIN_VLLM_WHEEL_SELECTED"] == PROVENANCE
+    assert records["MARIN_VLLM_WHEEL_SELECTED"] == _provenance()
     assert records["MARIN_VLLM_WHEEL_VERIFIED"] == {
-        **PROVENANCE,
+        **_provenance(),
         "compute_capability": "9.0",
         "extension_path": str(tmp_path / "vllm" / "_C.py"),
     }
@@ -121,10 +117,10 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path):
 @pytest.mark.parametrize(
     ("version", "include_extension", "wheel_sha256", "compute_capability"),
     [
-        ("0.0.0.dev0+wrong", True, PROVENANCE["wheel_sha256"], (9, 0)),
-        (VERSION, False, PROVENANCE["wheel_sha256"], (9, 0)),
+        ("0.0.0.dev0+wrong", True, WHEEL.sha256, (9, 0)),
+        (VERSION, False, WHEEL.sha256, (9, 0)),
         (VERSION, True, "0" * 64, (9, 0)),
-        (VERSION, True, PROVENANCE["wheel_sha256"], (8, 0)),
+        (VERSION, True, WHEEL.sha256, (8, 0)),
     ],
 )
 def test_wheel_entrypoint_fails_before_cli_for_unverified_install(
@@ -142,5 +138,5 @@ def test_wheel_entrypoint_fails_before_cli_for_unverified_install(
     selected_record = result.stdout.splitlines()[0]
     sentinel, _, payload = selected_record.partition("=")
     assert sentinel == "MARIN_VLLM_WHEEL_SELECTED"
-    assert json.loads(payload) == PROVENANCE
+    assert json.loads(payload) == _provenance()
     assert not marker.exists()

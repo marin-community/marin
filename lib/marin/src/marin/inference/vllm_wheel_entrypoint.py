@@ -3,48 +3,72 @@
 
 """Verify a Marin vLLM wheel before invoking its normal CLI."""
 
+import dataclasses
 import importlib
 import importlib.metadata
 import json
-import os
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
 
-_PROVENANCE_ENV_VAR = "MARIN_VLLM_WHEEL_PROVENANCE"
 _SELECTED_SENTINEL = "MARIN_VLLM_WHEEL_SELECTED="
 _VERIFIED_SENTINEL = "MARIN_VLLM_WHEEL_VERIFIED="
 
 
+@dataclass(frozen=True)
+class _WheelProvenance:
+    release_tag: str
+    sm_targets: tuple[str, ...]
+    source_commit: str
+    version: str
+    wheel_sha256: str
+    wheel_url: str
+
+    @classmethod
+    def from_json(cls, value: str) -> "_WheelProvenance":
+        payload = json.loads(value)
+        return cls(
+            release_tag=payload["release_tag"],
+            sm_targets=tuple(payload["sm_targets"]),
+            source_commit=payload["source_commit"],
+            version=payload["version"],
+            wheel_sha256=payload["wheel_sha256"],
+            wheel_url=payload["wheel_url"],
+        )
+
+    def record(self) -> dict[str, object]:
+        return dataclasses.asdict(self)
+
+
 def main() -> None:
-    expected = json.loads(os.environ[_PROVENANCE_ENV_VAR])
-    print(f"{_SELECTED_SENTINEL}{json.dumps(expected, sort_keys=True)}", flush=True)
+    expected = _WheelProvenance.from_json(sys.argv.pop(1))
+    print(f"{_SELECTED_SENTINEL}{json.dumps(expected.record(), sort_keys=True)}", flush=True)
 
     distribution = importlib.metadata.distribution("vllm")
     installed_version = distribution.version
-    if installed_version != expected["version"]:
+    if installed_version != expected.version:
         raise RuntimeError(
-            f"Installed vLLM version {installed_version} does not match verified wheel {expected['version']}"
+            f"Installed vLLM version {installed_version} does not match verified wheel {expected.version}"
         )
 
     direct_url_text = distribution.read_text("direct_url.json")
     if direct_url_text is None:
         raise RuntimeError("Installed vLLM does not record direct wheel provenance")
     direct_url = json.loads(direct_url_text)
-    if unquote(direct_url["url"]) != unquote(expected["wheel_url"]):
-        raise RuntimeError(f"Installed vLLM URL {direct_url['url']} does not match {expected['wheel_url']}")
+    if unquote(direct_url["url"]) != unquote(expected.wheel_url):
+        raise RuntimeError(f"Installed vLLM URL {direct_url['url']} does not match {expected.wheel_url}")
     installed_sha256 = direct_url["archive_info"]["hashes"]["sha256"]
-    if installed_sha256 != expected["wheel_sha256"]:
-        raise RuntimeError(
-            f"Installed vLLM SHA-256 {installed_sha256} does not match {expected['wheel_sha256']}"
-        )
+    if installed_sha256 != expected.wheel_sha256:
+        raise RuntimeError(f"Installed vLLM SHA-256 {installed_sha256} does not match {expected.wheel_sha256}")
 
     torch = importlib.import_module("torch")
     major, minor = torch.cuda.get_device_capability()
     compute_capability = f"{major}.{minor}"
-    if compute_capability not in expected["sm_targets"]:
+    if compute_capability not in expected.sm_targets:
         raise RuntimeError(
             f"GPU compute capability {compute_capability} is not supported by verified wheel "
-            f"targets {expected['sm_targets']}"
+            f"targets {expected.sm_targets}"
         )
 
     vllm_extension = importlib.import_module("vllm._C")
@@ -56,7 +80,7 @@ def main() -> None:
         raise RuntimeError(f"vllm._C loaded outside the verified distribution: {resolved_extension_path}")
 
     provenance = {
-        **expected,
+        **expected.record(),
         "compute_capability": compute_capability,
         "extension_path": str(resolved_extension_path),
     }
