@@ -27,7 +27,6 @@ from jax.tree_util import register_dataclass
 from jaxtyping import PRNGKeyArray
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
-from levanter.checkpoint import load_checkpoint
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_batch_schedule
@@ -42,7 +41,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.june_tpu_67b_a2b.checkpointing import restore_grug_state_from_checkpoint
+from experiments.june_tpu_67b_a2b.checkpointing import load_june_checkpoint, restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
 
@@ -377,7 +376,7 @@ def init_weights_only_from_checkpoint(
     *,
     mesh: Mesh | None,
     load_ema: bool,
-    _load_fn: Callable[..., object] = load_checkpoint,
+    _load_fn: Callable[..., object] = load_june_checkpoint,
 ) -> GrugTrainState:
     """Load only model weights from an external checkpoint, resetting the optimizer.
 
