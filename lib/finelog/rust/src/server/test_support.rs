@@ -63,7 +63,7 @@ impl RequestStats {
         self.total.load(Ordering::SeqCst)
     }
 
-    pub fn zstd(&self) -> usize {
+    pub fn zstd_requests(&self) -> usize {
         self.zstd.load(Ordering::SeqCst)
     }
 }

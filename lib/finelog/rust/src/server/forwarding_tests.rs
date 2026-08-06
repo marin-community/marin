@@ -146,7 +146,7 @@ impl Fixture {
     }
 
     fn zstd_requests(&self) -> usize {
-        self.target_requests.zstd()
+        self.target_requests.zstd_requests()
     }
 
     /// Forward until `namespace`'s watermark settles at the source's current tip, then
