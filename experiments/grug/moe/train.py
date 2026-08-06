@@ -199,7 +199,8 @@ def build_tagged_evaluator(
         )
         per_pos_loss = jax.sharding.reshard(per_pos_loss, eval_array_sharding)
         per_pos_weight = jax.sharding.reshard(batch.loss_weight, eval_array_sharding)
-        per_pos_token_id = jnp.roll(batch.tokens, -1, axis=-1)
+        wrapped_token = jax.sharding.reshard(batch.tokens[:, :1], eval_array_sharding)
+        per_pos_token_id = jnp.concatenate([batch.tokens[:, 1:], wrapped_token], axis=-1)
         return per_pos_loss, per_pos_weight, per_pos_token_id
 
     return TaggedEvaluator(

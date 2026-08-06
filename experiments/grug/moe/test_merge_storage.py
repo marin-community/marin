@@ -37,6 +37,38 @@ def test_merge_storage_checks_every_material_path_without_source_skips():
     assert all(region == "us-central1" and not local_ok for _, _, region, local_ok in checked)
 
 
+def test_merge_storage_checks_matching_prefit_and_both_recovery_stages():
+    checked = []
+    paths = MergeStoragePaths(
+        teacher_checkpoint="gs://marin-us-central1/xem/teacher",
+        calibration="gs://marin-us-central1/xem/calibration",
+        matching="gs://marin-us-central1/xem/matching",
+        prefit_checkpoint="gs://marin-us-central1/xem/prefit",
+        converted_checkpoint="gs://marin-us-central1/xem/converted",
+        recovery_output="gs://marin-us-central1/xem/stage-b",
+        stage_a_output="gs://marin-us-central1/xem/stage-a",
+        stage_b_output="gs://marin-us-central1/xem/stage-b",
+    )
+
+    validate_merge_storage_region(
+        paths,
+        local_ok=False,
+        region="us-central1",
+        path_checker=lambda key, *_: checked.append(key),
+    )
+
+    assert set(checked) == {
+        "teacher_checkpoint",
+        "calibration",
+        "matching",
+        "prefit_checkpoint",
+        "converted_checkpoint",
+        "recovery_output",
+        "stage_a_output",
+        "stage_b_output",
+    }
+
+
 def test_merge_storage_rejects_local_artifacts_on_accelerator_workers():
     paths = _paths()
     local_calibration = MergeStoragePaths(
@@ -67,3 +99,15 @@ def test_merge_storage_allows_all_local_smoke_artifacts():
     validate_merge_storage_region(paths, local_ok=True, region=None, region_getter=region_getter)
 
     assert region_lookups == 1
+
+
+def test_merge_storage_rejects_hybrid_local_and_gcs_smoke():
+    paths = MergeStoragePaths(
+        teacher_checkpoint="gs://marin-us-central1/xem/teacher",
+        calibration="/tmp/calibration",
+        converted_checkpoint="/tmp/converted",
+        recovery_output="/tmp/recovery",
+    )
+
+    with pytest.raises(ValueError, match="must be all local or all GCS"):
+        validate_merge_storage_region(paths, local_ok=True, region="us-central1")

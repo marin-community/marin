@@ -12,6 +12,7 @@ from experiments.grug.moe.expert_merge import convert_one_expert_pair, forward_w
 from experiments.grug.moe.merge_recovery import (
     MergeRecoveryConfig,
     RecoveryStage,
+    chunked_output_kl,
     initial_recovery_state,
     make_recovery_train_step,
     recovery_forward,
@@ -20,6 +21,37 @@ from experiments.grug.moe.merge_recovery import (
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 
 _AFFECTED_LAYERS = (1, 2)
+
+
+def test_chunked_output_kl_matches_dense_teacher_to_student_kl():
+    student_hidden = jax.random.normal(jax.random.key(10), (2, 3, 5))
+    teacher_hidden = jax.random.normal(jax.random.key(11), (2, 3, 5))
+    student_output = jax.random.normal(jax.random.key(12), (5, 13))
+    teacher_output = jax.random.normal(jax.random.key(13), (5, 13))
+    weights = jnp.asarray([[1.0, 1.0, 0.0], [0.5, 1.0, 1.0]], dtype=jnp.float32)
+
+    actual = chunked_output_kl(
+        student_hidden,
+        student_output,
+        teacher_hidden,
+        teacher_output,
+        weights,
+        vocab_chunk_size=4,
+    )
+    student_logits = jnp.einsum("bsh,hv->bsv", student_hidden, student_output)
+    teacher_logits = jnp.einsum("bsh,hv->bsv", teacher_hidden, teacher_output)
+    teacher_probs = jax.nn.softmax(teacher_logits.astype(jnp.float32), axis=-1)
+    dense_by_token = jnp.sum(
+        teacher_probs
+        * (
+            jax.nn.log_softmax(teacher_logits.astype(jnp.float32), axis=-1)
+            - jax.nn.log_softmax(student_logits.astype(jnp.float32), axis=-1)
+        ),
+        axis=-1,
+    )
+    expected = jnp.sum(dense_by_token * weights) / jnp.sum(weights)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
 def _tiny_config() -> GrugModelConfig:
@@ -100,6 +132,30 @@ def test_recovery_forward_evaluates_teacher_moe_on_current_student_state():
     expected_nrmse = jnp.sqrt(jnp.stack(expected_errors))
     np.testing.assert_allclose(actual.moe_output_nrmse, expected_nrmse, rtol=1e-6, atol=1e-6)
     assert not np.allclose(actual.moe_output_nrmse, jnp.sqrt(jnp.stack(teacher_rollout_errors)))
+    np.testing.assert_allclose(actual.router_top1_agreement_with_teacher, 1.0)
+    np.testing.assert_allclose(actual.router_topk_agreement_with_teacher, 1.0)
+
+
+def test_recovery_router_agreement_accounts_for_source_expert_permutation():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        teacher = Transformer.init(_tiny_config(), key=jax.random.key(21))
+        permutation = (1, 0, 3, 2)
+        student = convert_one_expert_pair(
+            teacher,
+            representative_layer=_AFFECTED_LAYERS[0],
+            source_layer=_AFFECTED_LAYERS[1],
+            source_to_shared=np.asarray(permutation),
+        )
+        actual = recovery_forward(
+            student,
+            teacher,
+            jnp.arange(8, dtype=jnp.int32).reshape(1, 8),
+            affected_layers=_AFFECTED_LAYERS,
+            source_to_shared=permutation,
+        )
+
+    np.testing.assert_allclose(actual.router_top1_agreement_with_teacher, 1.0)
+    np.testing.assert_allclose(actual.router_topk_agreement_with_teacher, 1.0)
 
 
 def test_local_recovery_updates_only_shared_bank_and_keeps_qb_frozen():

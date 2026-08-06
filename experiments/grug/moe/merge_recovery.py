@@ -13,6 +13,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
+from jax.sharding import PartitionSpec as P
+from jax.sharding import get_abstract_mesh
 from jax.tree_util import register_dataclass
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
@@ -39,6 +41,7 @@ class MergeRecoveryConfig:
     stage: RecoveryStage
     moe_loss_weight: float = 1.0
     logit_kl_weight: float = 0.0
+    source_to_shared: tuple[int, ...] | None = None
     normalization_epsilon: float = _DEFAULT_NORMALIZATION_EPSILON
 
     def __post_init__(self) -> None:
@@ -56,12 +59,19 @@ class MergeRecoveryConfig:
             raise ValueError("local recovery does not include logit KL")
         if self.normalization_epsilon <= 0:
             raise ValueError("normalization_epsilon must be positive")
+        if self.source_to_shared is not None:
+            expected = list(range(len(self.source_to_shared)))
+            if sorted(self.source_to_shared) != expected:
+                raise ValueError("source_to_shared must be a bijection")
 
 
 class RecoveryForward(NamedTuple):
     hidden: jax.Array
     moe_loss: jax.Array
     moe_output_nrmse: jax.Array
+    block_output_nrmse: jax.Array
+    router_top1_agreement_with_teacher: jax.Array
+    router_topk_agreement_with_teacher: jax.Array
     qb_beta_per_layer: jax.Array
 
 
@@ -71,13 +81,97 @@ class RecoveryLosses(NamedTuple):
     moe: jax.Array
     logit_kl: jax.Array
     moe_output_nrmse: jax.Array
+    block_output_nrmse: jax.Array
+    router_top1_agreement_with_teacher: jax.Array
+    router_topk_agreement_with_teacher: jax.Array
     qb_beta_per_layer: jax.Array
 
 
 LogitKlLoss = Callable[
-    [Transformer, Transformer, jax.Array, AttentionMask | jax.Array | None, jax.Array],
+    [Transformer, Transformer, jax.Array, AttentionMask | jax.Array | None, jax.Array, jax.Array],
     jax.Array,
 ]
+
+
+def chunked_output_kl(
+    student_hidden: jax.Array,
+    student_output_proj: jax.Array,
+    teacher_hidden: jax.Array,
+    teacher_output_proj: jax.Array,
+    loss_weight: jax.Array,
+    *,
+    vocab_chunk_size: int,
+) -> jax.Array:
+    """Compute exact teacher-to-student KL without materializing full vocabulary logits."""
+    if student_hidden.shape != teacher_hidden.shape:
+        raise ValueError("student and teacher hidden states must have identical shapes")
+    if student_output_proj.shape != teacher_output_proj.shape:
+        raise ValueError("student and teacher output projections must have identical shapes")
+    if loss_weight.shape != student_hidden.shape[:-1]:
+        raise ValueError(f"loss_weight must have shape {student_hidden.shape[:-1]}, got {loss_weight.shape}")
+    if vocab_chunk_size <= 0:
+        raise ValueError("vocab_chunk_size must be positive")
+
+    vocab_size = student_output_proj.shape[-1]
+
+    def chunk_logits(hidden: jax.Array, output_proj: jax.Array, start: int, stop: int) -> jax.Array:
+        return jnp.einsum("bsh,hv->bsv", hidden, output_proj[:, start:stop]).astype(jnp.float32)
+
+    student_log_partition = jnp.full(student_hidden.shape[:-1], -jnp.inf, dtype=jnp.float32)
+    teacher_log_partition = jnp.full(teacher_hidden.shape[:-1], -jnp.inf, dtype=jnp.float32)
+    for start in range(0, vocab_size, vocab_chunk_size):
+        stop = min(start + vocab_chunk_size, vocab_size)
+        student_chunk = chunk_logits(student_hidden, student_output_proj, start, stop)
+        teacher_chunk = chunk_logits(teacher_hidden, teacher_output_proj, start, stop)
+        student_log_partition = jnp.logaddexp(
+            student_log_partition,
+            jax.scipy.special.logsumexp(student_chunk, axis=-1),
+        )
+        teacher_log_partition = jnp.logaddexp(
+            teacher_log_partition,
+            jax.scipy.special.logsumexp(teacher_chunk, axis=-1),
+        )
+
+    kl_by_token = jnp.zeros(student_hidden.shape[:-1], dtype=jnp.float32)
+    for start in range(0, vocab_size, vocab_chunk_size):
+        stop = min(start + vocab_chunk_size, vocab_size)
+        student_log_probs = (
+            chunk_logits(student_hidden, student_output_proj, start, stop) - student_log_partition[..., None]
+        )
+        teacher_log_probs = (
+            chunk_logits(teacher_hidden, teacher_output_proj, start, stop) - teacher_log_partition[..., None]
+        )
+        teacher_probs = jnp.exp(teacher_log_probs)
+        kl_by_token += jnp.sum(teacher_probs * (teacher_log_probs - student_log_probs), axis=-1)
+
+    weights = loss_weight.astype(jnp.float32)
+    return jnp.sum(kl_by_token * weights) / jnp.maximum(jnp.sum(weights), 1.0)
+
+
+def make_chunked_logit_kl(vocab_chunk_size: int) -> LogitKlLoss:
+    """Build the exact streaming KL callback used by preservation recovery."""
+    if vocab_chunk_size <= 0:
+        raise ValueError("vocab_chunk_size must be positive")
+
+    def logit_kl(
+        student: Transformer,
+        teacher: Transformer,
+        token_ids: jax.Array,
+        mask: AttentionMask | jax.Array | None,
+        student_hidden: jax.Array,
+        loss_weight: jax.Array,
+    ) -> jax.Array:
+        teacher_hidden, _ = teacher(token_ids, mask=mask)
+        return chunked_output_kl(
+            student_hidden,
+            student.output_proj,
+            jax.lax.stop_gradient(teacher_hidden),
+            jax.lax.stop_gradient(teacher.output_proj),
+            loss_weight,
+            vocab_chunk_size=vocab_chunk_size,
+        )
+
+    return logit_kl
 
 
 @register_dataclass
@@ -163,6 +257,7 @@ def recovery_forward(
     token_ids: jax.Array,
     *,
     affected_layers: tuple[int, int],
+    source_to_shared: tuple[int, ...] | None = None,
     mask: AttentionMask | jax.Array | None = None,
     normalization_epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
 ) -> RecoveryForward:
@@ -182,6 +277,9 @@ def recovery_forward(
     hidden = student.embed_inputs(token_ids)
     affected_layer_set = set(affected_layers)
     normalized_errors: list[jax.Array] = []
+    block_normalized_errors: list[jax.Array] = []
+    router_top1_agreements: list[jax.Array] = []
+    router_topk_agreements: list[jax.Array] = []
     qb_betas: list[jax.Array] = []
     for layer_index, student_block in enumerate(student.blocks):
         options = student.block_call_options(mask, layer_index)
@@ -198,18 +296,37 @@ def recovery_forward(
 
         teacher_block = teacher.blocks[layer_index]
         teacher_bank = teacher.expert_banks[teacher_block.expert_bank_index]
-        teacher_output, _ = teacher_block.mlp(trace.mlp_input, teacher_bank)
-        teacher_output = jax.lax.stop_gradient(teacher_output.astype(jnp.float32))
+        teacher_trace = teacher_block.mlp.forward_with_trace(trace.mlp_input, teacher_bank)
+        teacher_output = jax.lax.stop_gradient(teacher_trace.routed_output.astype(jnp.float32))
         student_output = trace.routed_output.astype(jnp.float32)
         numerator = jnp.mean(jnp.square(student_output - teacher_output))
         denominator = jax.lax.stop_gradient(jnp.mean(jnp.square(teacher_output))) + normalization_epsilon
         normalized_errors.append(numerator / denominator)
+
+        teacher_block_output = trace.hidden.astype(jnp.float32) + teacher_output - student_output
+        block_denominator = jax.lax.stop_gradient(jnp.mean(jnp.square(teacher_block_output))) + normalization_epsilon
+        block_normalized_errors.append(numerator / block_denominator)
+
+        teacher_selected = teacher_trace.routing.selected_experts
+        if layer_index == affected_layers[1] and source_to_shared is not None:
+            assignment = jnp.asarray(source_to_shared, dtype=teacher_selected.dtype)
+            teacher_selected = assignment[teacher_selected]
+        student_selected = trace.selected_experts
+        router_top1_agreements.append(jnp.mean(student_selected[:, 0] == teacher_selected[:, 0]))
+        overlap = jnp.sum(
+            jnp.any(student_selected[:, :, None] == teacher_selected[:, None, :], axis=-1),
+            axis=-1,
+        )
+        router_topk_agreements.append(jnp.mean(overlap / student_selected.shape[-1]))
 
     normalized_error = jnp.stack(normalized_errors)
     return RecoveryForward(
         hidden=student.final_gated_norm(student.final_norm(hidden)),
         moe_loss=jnp.mean(normalized_error),
         moe_output_nrmse=jnp.sqrt(normalized_error),
+        block_output_nrmse=jnp.sqrt(jnp.stack(block_normalized_errors)),
+        router_top1_agreement_with_teacher=jnp.stack(router_top1_agreements),
+        router_topk_agreement_with_teacher=jnp.stack(router_topk_agreements),
         qb_beta_per_layer=jnp.stack(qb_betas),
     )
 
@@ -230,6 +347,7 @@ def recovery_objective(
         teacher,
         token_ids,
         affected_layers=config.affected_layers,
+        source_to_shared=config.source_to_shared,
         mask=mask,
         normalization_epsilon=config.normalization_epsilon,
     )
@@ -240,7 +358,10 @@ def recovery_objective(
     else:
         if loss_weight is None:
             raise ValueError("preservation recovery requires per-token loss weights")
-        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        final_label = jnp.zeros_like(token_ids[:, :1])
+        labels = jnp.concatenate([token_ids[:, 1:], final_label], axis=1).astype(jnp.int32)
+        if not get_abstract_mesh().empty:
+            labels = jax.sharding.reshard(labels, P(("replica_dcn", "data", "expert"), None))
         cross_entropy = fused_linear_softmax_cross_entropy_loss(
             forward.hidden,
             student.output_proj,
@@ -259,7 +380,9 @@ def recovery_objective(
                 "logit KL requires an explicit streaming or fused implementation; "
                 "merge recovery does not materialize full-vocabulary logits"
             )
-        logit_kl = logit_kl_loss(student, teacher, token_ids, mask, forward.hidden)
+        if loss_weight is None:
+            raise ValueError("logit KL requires per-token loss weights")
+        logit_kl = logit_kl_loss(student, teacher, token_ids, mask, forward.hidden, loss_weight)
 
     total = cross_entropy + config.moe_loss_weight * forward.moe_loss + config.logit_kl_weight * logit_kl
     return RecoveryLosses(
@@ -268,6 +391,9 @@ def recovery_objective(
         moe=forward.moe_loss,
         logit_kl=logit_kl,
         moe_output_nrmse=forward.moe_output_nrmse,
+        block_output_nrmse=forward.block_output_nrmse,
+        router_top1_agreement_with_teacher=forward.router_top1_agreement_with_teacher,
+        router_topk_agreement_with_teacher=forward.router_topk_agreement_with_teacher,
         qb_beta_per_layer=forward.qb_beta_per_layer,
     )
 

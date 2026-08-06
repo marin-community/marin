@@ -16,6 +16,16 @@ class MergeStoragePaths:
     calibration: str
     converted_checkpoint: str
     recovery_output: str
+    matching: str | None = None
+    prefit_checkpoint: str | None = None
+    stage_a_output: str | None = None
+    stage_b_output: str | None = None
+
+
+def _material_paths(paths: MergeStoragePaths) -> list[tuple[str, str]]:
+    return [
+        (field.name, value) for field in dataclasses.fields(paths) if (value := getattr(paths, field.name)) is not None
+    ]
 
 
 def validate_merge_storage_region(
@@ -27,11 +37,19 @@ def validate_merge_storage_region(
     path_checker: Callable[[str, str, str, bool], None] | None = None,
 ) -> None:
     """Fail before work begins unless every material merge path is local or same-region GCS."""
+    material_paths = _material_paths(paths)
     if not local_ok:
-        for field in dataclasses.fields(paths):
-            value = getattr(paths, field.name)
+        for field_name, value in material_paths:
             if not value.startswith("gs://"):
-                raise ValueError(f"{field.name} must be a GCS path on accelerator workers, got {value}")
+                raise ValueError(f"{field_name} must be a GCS path on accelerator workers, got {value}")
+    else:
+        gcs_fields = [field_name for field_name, value in material_paths if value.startswith("gs://")]
+        local_fields = [field_name for field_name, value in material_paths if not value.startswith("gs://")]
+        if gcs_fields and local_fields:
+            raise ValueError(
+                "local merge smoke paths must be all local or all GCS; "
+                f"GCS fields={gcs_fields}, local fields={local_fields}"
+            )
     check_gcs_paths_same_region(
         paths,
         local_ok=local_ok,

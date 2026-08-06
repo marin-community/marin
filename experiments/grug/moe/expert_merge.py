@@ -11,6 +11,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.sharding import PartitionSpec as P
+from jax.sharding import get_abstract_mesh
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MoEExpertMlp
 from levanter.utils.activation import ActivationFunctionEnum
@@ -490,21 +492,29 @@ def spectral_directions(
         )
     scaled_basis = jnp.asarray(manifold.scaled_basis)
     centers_array = jnp.asarray(centers)
-    w_gate = jnp.asarray(np.asarray(jax.device_get(bank.w_gate))[expert_index])
-    w_up = jnp.asarray(np.asarray(jax.device_get(bank.w_up))[expert_index])
-    w_down = jnp.asarray(np.asarray(jax.device_get(bank.w_down))[expert_index])
+    w_gate = bank.w_gate[expert_index]
+    w_up = bank.w_up[expert_index]
+    w_down = bank.w_down[expert_index]
     activation_fn = (
         bank.activation.to_jax_fn() if isinstance(bank.activation, ActivationFunctionEnum) else bank.activation
     )
+    model_sharding = None if get_abstract_mesh().empty else P("model")
+    data_sharding = None if get_abstract_mesh().empty else P("data")
+    replicated_matrix_sharding = None if get_abstract_mesh().empty else P(None, None)
 
     def center_gram(center: jax.Array) -> jax.Array:
         def expert_fn(value: jax.Array) -> jax.Array:
-            gate = value @ w_gate
-            up = value @ w_up
-            return (activation_fn(gate) * up) @ w_down
+            gate = jnp.einsum("d,di->i", value, w_gate, out_sharding=model_sharding)
+            up = jnp.einsum("d,di->i", value, w_up, out_sharding=model_sharding)
+            return jnp.einsum(
+                "i,id->d",
+                activation_fn(gate) * up,
+                w_down,
+                out_sharding=data_sharding,
+            )
 
         tangents = jax.vmap(lambda direction: jax.jvp(expert_fn, (center,), (direction,))[1])(scaled_basis.T)
-        return tangents @ tangents.T
+        return jnp.einsum("kd,ld->kl", tangents, tangents, out_sharding=replicated_matrix_sharding)
 
     sensitivity_gram = jnp.mean(jax.vmap(center_gram)(centers_array), axis=0)
     eigenvalues, covariance_directions = jnp.linalg.eigh(sensitivity_gram)

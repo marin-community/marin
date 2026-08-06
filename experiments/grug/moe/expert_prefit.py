@@ -10,6 +10,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+from jax.sharding import PartitionSpec as P
+from jax.sharding import get_abstract_mesh
 from jax.tree_util import register_dataclass
 from levanter.grug.grug_moe import MoEExpertMlp
 
@@ -179,9 +181,19 @@ def prefit_loss(
         predictions = predictions[0]
     squared_error = jnp.sum(jnp.square(predictions - batch.targets), axis=-1)
     num_sources = batch.target_power_by_source.shape[0]
-    error_by_source = jax.ops.segment_sum(squared_error, batch.source_indices, num_segments=num_sources)
-    count_by_source = jax.ops.segment_sum(jnp.ones_like(squared_error), batch.source_indices, num_segments=num_sources)
-    normalized_mse = error_by_source / count_by_source / (batch.target_power_by_source + epsilon)
+    source_mask = jax.nn.one_hot(batch.source_indices, num_sources, dtype=squared_error.dtype)
+    replicated_sharding = None if get_abstract_mesh().empty else P(None)
+    error_by_source = jnp.einsum("n,ns->s", squared_error, source_mask, out_sharding=replicated_sharding)
+    count_by_source = jnp.einsum(
+        "n,ns->s",
+        jnp.ones_like(squared_error),
+        source_mask,
+        out_sharding=replicated_sharding,
+    )
+    target_power_by_source = batch.target_power_by_source
+    if replicated_sharding is not None:
+        target_power_by_source = jax.sharding.reshard(target_power_by_source, replicated_sharding)
+    normalized_mse = error_by_source / count_by_source / (target_power_by_source + epsilon)
     return jnp.mean(normalized_mse), jnp.sqrt(normalized_mse)
 
 

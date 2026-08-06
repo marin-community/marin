@@ -1008,7 +1008,10 @@ class Transformer(eqx.Module):
         return_router_metrics: bool = False,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         hidden, router_metrics = self(token_ids, mask=mask)
-        labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+        final_label = jnp.zeros_like(token_ids[:, :1])
+        if not get_abstract_mesh().empty:
+            final_label = jax.sharding.reshard(final_label, _batch_spec())
+        labels = jnp.concatenate([token_ids[:, 1:], final_label], axis=1).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
