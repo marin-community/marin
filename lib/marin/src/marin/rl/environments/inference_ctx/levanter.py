@@ -91,9 +91,6 @@ class LevanterInferenceContext(BaseInferenceContext):
             api_key="marin",
         )
 
-    def openai_address(self) -> str:
-        return f"http://{self._inference_server.address()}/v1"
-
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
         assert model is not None or state_dict is not None, "Either model or state_dict must be provided"
         if model is None and state_dict is not None:

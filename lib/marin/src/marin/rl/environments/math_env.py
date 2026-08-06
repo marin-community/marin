@@ -242,24 +242,6 @@ class MathEnv(MarinEnv):
 
         return reward, format_valid, correct_answer
 
-    def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
-        """Sample evaluation examples deterministically."""
-
-        if not self.eval_examples:
-            return []
-
-        eval_key = jax.random.PRNGKey(42)
-        n_to_sample = min(n_examples, len(self.eval_examples))
-        indices = jax.random.choice(eval_key, len(self.eval_examples), shape=(n_to_sample,), replace=False)
-        return [
-            {
-                "prompt": self.eval_examples[int(idx)].processed_prompt,
-                "answer": self.eval_examples[int(idx)].processed_answer,
-                "example_id": self.eval_examples[int(idx)].example_id,
-            }
-            for idx in indices
-        ]
-
     def clean_example(self, raw_prompt: str, raw_answer: str, example_id: str) -> DataExample:
         """Clean and process a single example."""
         # Show the transformation pipeline

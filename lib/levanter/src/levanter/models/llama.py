@@ -538,7 +538,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         else:
             lm_head = hnn.Linear.init(In=config.Embed, Out=Vocab, key=k_emb, use_bias=False, out_first=True)
 
-        return LlamaLMHeadModel(transformer, embeddings, lm_head)
+        return cls(transformer, embeddings, lm_head)
 
     def __call__(
         self,

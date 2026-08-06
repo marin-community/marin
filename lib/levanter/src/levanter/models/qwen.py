@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Type, cast
+from typing import Dict, Optional, Type
 
 import equinox as eqx
 import jax.random as jrandom
@@ -22,7 +22,6 @@ from levanter.layers.rotary import RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaLMHeadModel, LlamaMlp, LlamaTransformer
 from levanter.models.lm_model import LmConfig, LmHeadModel, resize_embeddings_and_lm_head
 from levanter.utils.activation import ActivationFunctionEnum
-from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 
 
@@ -112,32 +111,9 @@ class QwenConfig(LlamaConfig):
     def model_type(self) -> Type["QwenLMHeadModel"]:  # pyrefly: ignore[bad-override]
         return QwenLMHeadModel
 
-    def flops_per_token(self, vocab_size: int, context_length: int):
-        return lm_flops_per_token(
-            hidden_dim=self.hidden_dim,
-            intermediate_dim=self.intermediate_dim,
-            num_layers=self.num_layers,
-            num_kv_heads=self.num_kv_heads,
-            num_heads=self.num_heads,
-            seq_len=context_length,
-            vocab_size=vocab_size,
-            glu=True,
-        )
-
     def attention_config(self) -> AttentionConfig:
-        """Convert this LlamaConfig to an AttentionConfig for use with Attention."""
-        return AttentionConfig(
-            Embed=self.Embed,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_kv_heads,
-            # qwen2 uses bias for qkv projections but not for output projection
-            use_bias=True,  # Qwen2 qkv projections always have bias
-            use_output_bias=False,  # Qwen2 specifically has no bias on o_proj
-            upcast_attn=self.upcast_attn,
-            attn_backend=self.attn_backend,
-            flash_attention_block_size=self.flash_attention_block_size,
-            rope=self.rope,
-        )
+        # Qwen2 always biases the qkv projections and never biases o_proj.
+        return dataclasses.replace(super().attention_config(), use_bias=True, use_output_bias=False)
 
 
 # Modified decoder layer for Qwen
@@ -196,7 +172,6 @@ class QwenTransformer(LlamaTransformer):
     # Qwen types (LSP narrowing; pyrefly flags the same)
     config: QwenConfig = eqx.field(static=True)  # pyrefly: ignore[bad-override]
     layers: BlockFoldable[QwenDecoderLayer]  # pyrefly: ignore[bad-override]
-    norm: hnn.RmsNorm
 
     @staticmethod
     def init(config: QwenConfig, *, key) -> "QwenTransformer":  # pyrefly: ignore[bad-override]
@@ -212,15 +187,6 @@ class QwenTransformer(LlamaTransformer):
 
         ln_f = config.mk_LayerNorm(config.Embed)
         return QwenTransformer(config, layers, ln_f)
-
-    @named_call
-    def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
-        keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
-        x = self.norm(x)
-        return x
 
 
 # Modified LM head model for Qwen
@@ -383,14 +349,3 @@ class Qwen3Config(LlamaConfig):
 
 class Qwen3LMHeadModel(LlamaLMHeadModel):
     """Identical to LlamaLMHeadModel except built off a Qwen3Config."""
-
-    @classmethod
-    def init(cls, Vocab: Axis, config: Qwen3Config, *, key):  # type: ignore[override]
-        k_t, k_emb = jrandom.split(key, 2)
-        transformer = LlamaTransformer.init(config, key=k_t)
-        embeddings = LlamaEmbedding.init(Vocab, config, key=k_emb)
-        if config.tie_word_embeddings:
-            lm_head = None
-        else:
-            lm_head = hnn.Linear.init(In=config.Embed, Out=Vocab, key=k_emb, use_bias=False, out_first=True)
-        return Qwen3LMHeadModel(transformer, embeddings, lm_head)

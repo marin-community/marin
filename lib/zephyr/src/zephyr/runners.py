@@ -62,7 +62,7 @@ from zephyr.stats import (
     StatsWriter,
     ZephyrWorkerStatStatus,
 )
-from zephyr.worker_context import Aggregation, CounterEntry, CounterSnapshot, _worker_ctx_var
+from zephyr.worker_context import Aggregation, CounterEntry, _worker_ctx_var
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,6 @@ class _InProcessWorkerContext:
         self._stage_name = stage_name
         self._shared_data_cache: dict[str, Any] = {}
         self._counters: dict[str, CounterEntry] = {}
-        self._generation = 0
         self.task_memory_bytes = task_memory_bytes
 
     def get_shared(self, name: str) -> Any:
@@ -142,16 +141,18 @@ class _InProcessWorkerContext:
     def current_stage_name(self) -> str:
         return self._stage_name
 
-    def get_counters(self, stage: str | None = None) -> dict[str, int | float]:
-        """Flat view of counter values, for use by stats emission code."""
-        return {k: e.value for k, e in self._counters.items() if stage is None or e.stage == stage}
+    def counter_values(self, stage: str | None) -> dict[str, int | float]:
+        """Values of the counters recorded under exactly ``stage``.
 
-    def get_counter_snapshot(self) -> CounterSnapshot:
-        self._generation += 1
-        return CounterSnapshot(
-            counters={k: CounterEntry(e.value, e.aggregation, e.stage, e.count) for k, e in self._counters.items()},
-            generation=self._generation,
-        )
+        ``None`` selects pipeline-scoped counters, not every counter — the
+        scope a caller asks for is the scope it gets. Use
+        ``all_counter_values`` to cross stage boundaries.
+        """
+        return {k: e.value for k, e in self._counters.items() if e.stage == stage}
+
+    def all_counter_values(self) -> dict[str, int | float]:
+        """Values of every counter regardless of stage, for stats emission."""
+        return {k: e.value for k, e in self._counters.items()}
 
 
 _T = TypeVar("_T")
@@ -234,7 +235,7 @@ def _periodic_sampler(
                 execution_id,
                 ZephyrWorkerStatStatus.RUNNING,
                 start_time,
-                ctx.get_counters(),
+                ctx.all_counter_values(),
             )
         except Exception:
             logger.warning("Failed to sample/emit process stats", exc_info=True)
@@ -267,7 +268,7 @@ def _shard_stats_session(
     start_time = time.monotonic()
 
     stats_writer.emit_worker_stat(
-        task.stage_name, task.shard_idx, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx.get_counters()
+        task.stage_name, task.shard_idx, execution_id, ZephyrWorkerStatStatus.START, start_time, ctx.all_counter_values()
     )
 
     stop_event = threading.Event()
@@ -306,7 +307,7 @@ def _shard_stats_session(
                 logger.warning("Failed to take final process stats sample", exc_info=True)
         status = ZephyrWorkerStatStatus.FAILED if failed else ZephyrWorkerStatStatus.END
         stats_writer.emit_worker_stat(
-            task.stage_name, task.shard_idx, execution_id, status, start_time, ctx.get_counters()
+            task.stage_name, task.shard_idx, execution_id, status, start_time, ctx.all_counter_values()
         )
 
 

@@ -76,7 +76,7 @@ def _periodic_status_logger(
             return
         elapsed = time.monotonic() - monotonic_start
         # Map-only stages never populate these counters; logging zeros is misleading.
-        throughput = _stage_throughput(ctx.get_counters(stage_name), elapsed)
+        throughput = _stage_throughput(ctx.counter_values(stage_name), elapsed)
         if throughput is None:
             continue
         logger.info(

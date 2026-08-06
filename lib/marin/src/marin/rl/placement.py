@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 from fray.current_client import current_client
 from fray.iris_backend import FrayIrisClient
-from rigging.filesystem import data_config, marin_region
+from rigging.filesystem import marin_region
 
 logger = logging.getLogger(__name__)
 
@@ -118,14 +118,6 @@ def resolve_launcher_region(train_tpu_type: str, inference_tpu_type: str | None)
         f"Could not determine a launcher region for requested TPU variants {variants}. "
         "Launch the root Iris job with --region/--zone or set MARIN_PREFIX to a regional bucket."
     )
-
-
-def marin_prefix_for_region(region: str) -> str:
-    """Return the canonical Marin bucket prefix for a region."""
-    spec = data_config().region_buckets.get(region.lower())
-    if spec is None:
-        raise ValueError(f"No Marin data bucket configured for region {region!r}.")
-    return f"gs://{spec.name}"
 
 
 def singleton_region_list(region: str) -> list[str]:

@@ -82,10 +82,6 @@ class DecodingConfig:
                     f"{invalid_fields}"
                 )
 
-    def with_temperature(self, temperature: float) -> "DecodingConfig":
-        """Return a copy with a different temperature."""
-        return replace(self, temperature=temperature)
-
     def as_trace(self) -> RolloutDecodingTrace:
         """Convert to a rollout-stable decoding trace."""
         return RolloutDecodingTrace(

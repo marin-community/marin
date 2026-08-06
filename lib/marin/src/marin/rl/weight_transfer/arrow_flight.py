@@ -657,9 +657,6 @@ class ArrowFlightClient(WeightTransferClient):
         """
         self.metrics.total_polls += 1
 
-        # if old_model is None:
-        #     raise ValueError("old_model is required for Arrow Flight weight transfer to preserve model structure")
-
         try:
             start_time = time.time()
             logger.info("receive_weights: polling for step > %s", self._last_weight_id)

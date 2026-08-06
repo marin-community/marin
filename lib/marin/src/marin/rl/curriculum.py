@@ -77,9 +77,6 @@ class LessonConfig:
     dependencies: list[LessonDependency] = field(default_factory=list)
     """Prerequisites that must be satisfied before this lesson unlocks."""
 
-    start_threshold: float = 0.0
-    """Minimum eval performance required to begin training on this lesson once unlocked."""
-
     stop_threshold: float = 1.0
     """Performance threshold for graduation consideration."""
 

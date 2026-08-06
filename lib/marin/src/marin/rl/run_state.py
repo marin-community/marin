@@ -53,9 +53,6 @@ class RLRunState:
         self._train_step: int = -1
         self._rollout_transfer_counters: dict[int, RolloutTransferCounters] = {}
 
-    def get_status(self) -> str:
-        return self._status.value
-
     def get_snapshot(self) -> RunStateSnapshot:
         return RunStateSnapshot(
             status=self._status.value,
@@ -63,15 +60,9 @@ class RLRunState:
             failure_message=self._failure_message,
         )
 
-    def is_terminal(self) -> bool:
-        return self._status != RunStatus.RUNNING
-
     def update_train_step(self, step: int) -> None:
         if step > self._train_step:
             self._train_step = step
-
-    def get_train_step(self) -> int:
-        return self._train_step
 
     def get_rollout_transfer_counters(self, worker_index: int) -> RolloutTransferCounters:
         return self._rollout_transfer_counters.get(worker_index, RolloutTransferCounters())
@@ -106,6 +97,3 @@ class RLRunState:
             self._status = RunStatus.FAILED
             self._failure_message = message
             logger.info("RL run marked as failed: %s", message)
-
-    def get_failure_message(self) -> str | None:
-        return self._failure_message
