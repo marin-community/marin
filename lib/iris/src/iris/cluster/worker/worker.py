@@ -143,6 +143,7 @@ class Worker:
         port_allocator: PortAllocator | None = None,
         threads: ThreadContainer | None = None,
         worker_metadata: job_pb2.WorkerMetadata | None = None,
+        log_client: LogClient | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
         profile_duration_seconds: int = 10,
     ):
@@ -205,7 +206,7 @@ class Worker:
         # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
         # case where the controller assigns the id is handled by re-attaching
         # post-register.
-        self._log_client: LogClient | None = None
+        self._log_client: LogClient | None = log_client
         self._log_handler: RemoteLogHandler | None = None
         # Stats Tables for the iris.worker / iris.task / iris.profile namespaces.
         # Set in start() after the controller client is built so the LogClient
@@ -213,6 +214,8 @@ class Worker:
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
         self._profile_table: Table | None = None
+        if log_client is not None:
+            self._register_stats_tables(log_client)
 
         self._service = WorkerServiceImpl(self)
         self._dashboard = WorkerDashboard(
@@ -260,11 +263,12 @@ class Worker:
             interceptors = (BearerTokenInjector(StaticTokenProvider(self._config.auth_token), "authorization"),)
 
         if self._config.controller_address:
-            self._log_client = LogClient.connect(
-                LOG_SERVER_ENDPOINT_NAME,
-                interceptors=interceptors,
-                resolver=self._resolve_log_service,
-            )
+            if self._log_client is None:
+                self._log_client = LogClient.connect(
+                    LOG_SERVER_ENDPOINT_NAME,
+                    interceptors=interceptors,
+                    resolver=self._resolve_log_service,
+                )
             self._controller_client = ControllerServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=10_000,
@@ -282,9 +286,8 @@ class Worker:
             # Register stats namespaces eagerly. Schema bugs surface here at
             # startup rather than silently producing empty namespaces.
             assert self._log_client is not None
-            self._worker_stats_table = self._log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
-            self._task_stats_table = self._log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
-            self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+            if self._worker_stats_table is None:
+                self._register_stats_tables(self._log_client)
 
         # Try to adopt running containers from a previous worker process.
         # If adoption succeeds, skip the destructive cleanup that would kill them.
@@ -325,6 +328,11 @@ class Worker:
         removed = self._runtime.remove_all_iris_containers()
         if removed > 0:
             logger.info("Startup cleanup: removed %d iris containers", removed)
+
+    def _register_stats_tables(self, log_client: LogClient) -> None:
+        self._worker_stats_table = log_client.get_table(WORKER_STATS_NAMESPACE, IrisWorkerStat)
+        self._task_stats_table = log_client.get_table(TASK_STATS_NAMESPACE, IrisTaskStat)
+        self._profile_table = log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
 
     def adopt_running_containers(self) -> int:
         """Discover and adopt running containers from a previous worker process.

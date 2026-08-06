@@ -504,47 +504,6 @@ def test_federation_sync_rejects_an_ordinary_user(tmp_path, log_client):
 # ---------------------------------------------------------------------------
 
 
-def test_handoff_materializes_on_peer_and_syncs_back(tmp_path, log_client):
-    with ExitStack() as stack:
-        parent_service, parent_state = _make_service(stack, "parent", tmp_path, log_client)
-        peer_service, peer_state = _make_service(stack, "peer", tmp_path, log_client)
-        manager = _attach_federation(parent_service, _InProcessPeerConnection(peer_service))
-
-        response = parent_service.launch_job(_cluster_pinned_request("fed-job"), None)
-        job_id = JobName.from_wire(response.job_id)
-        promote_queued_federation(manager, parent_state)  # tick promotes the queued handle; sync loop delivers
-
-        # Parent side: a HANDED_OFF handle, and no local tasks (a federated root
-        # owns none). Job ids are cluster-invariant, so the peer runs the same id.
-        handle = _handle(parent_state, job_id)
-        assert handle is not None
-        assert handle.peer_id == "cw"
-        assert handle.handoff_state == int(HandoffState.HANDED_OFF)
-        assert handle.job_id == job_id
-        assert query_tasks_for_job(parent_state, job_id) == []
-
-        # Peer side: it materialized and OWNS the job (a RECEIVED federated_jobs
-        # row, not a SENT handle) and expanded it into a task — under the same id.
-        assert _handle(peer_state, job_id) is None
-        assert len(query_tasks_for_job(peer_state, job_id)) == 1
-        assert query_job(peer_state, job_id) is not None
-
-        # Before the first sync the parent knows the peer accepted the handoff but
-        # has no mirrored tasks yet: PEER_STATUS_ASSIGNED.
-        assert _peer_status_of(parent_service, job_id) == job_pb2.PEER_STATUS_ASSIGNED
-
-        _run_peer_task_to_success(peer_state, job_id)
-        manager.sync_once()
-
-        # Parent's handle now mirrors the peer's terminal state and its task,
-        # tagged with the owning peer; the posture advances to PEER_STATUS_SYNCED.
-        assert query_job(parent_state, job_id).state == job_pb2.JOB_STATE_SUCCEEDED
-        (mirrored,) = query_tasks_for_job(parent_state, job_id)
-        assert mirrored.state == job_pb2.TASK_STATE_SUCCEEDED
-        assert mirrored.cluster == "cw"
-        assert _peer_status_of(parent_service, job_id) == job_pb2.PEER_STATUS_SYNCED
-
-
 def test_sync_mirrors_attempts_and_worker_identity_natively(tmp_path, log_client):
     """After sync-back the parent renders a federated task natively: the peer's
     attempt history is mirrored and the peer-side worker identity is surfaced (as

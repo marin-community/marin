@@ -1,96 +1,112 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The per-task ``status_message``: the one-liner explaining why a k8s task is stuck
-in BUILDING (Kueue admission verdict, image-pull error), harvested from the pod and
-its Kueue Workload and carried on ``TaskUpdate.status_message``. This is the signal
-that turns a silent "Building 18m" into an explained wait on the dashboard and, once
-mirrored, on a federating hub."""
+"""Kubernetes scheduling messages observed at the provider boundary."""
 
-from iris.cluster.backends.k8s.tasks import (
-    _TASK_CONTAINER_NAME,
-    _build_pod_statuses,
-    _pod_status_message,
-    _task_update_from_pod,
-)
+from copy import deepcopy
+
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.controller.task_state import RunningTaskEntry
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 
 from .conftest import (
     gated_pod,
     imagepull_pod,
+    make_batch,
+    make_run_req,
+    pod_config,
     singleton_gated_pod,
     singleton_unadmitted_workload,
     unadmitted_workload,
 )
 
 
+def _observe_pod(pod: dict, workload: dict | None = None):
+    k8s = InMemoryK8sService(namespace="iris")
+    provider = K8sTaskProvider(kubectl=k8s, pods=pod_config(), cluster_scan_interval=0.0)
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    try:
+        provider.sync(make_batch(tasks_to_run=[make_run_req("/job/0")]))
+        applied = k8s.list_json(K8sResource.PODS)[0]
+        observed = deepcopy(pod)
+        observed["kind"] = "Pod"
+        observed_metadata = observed.setdefault("metadata", {})
+        observed_metadata["name"] = applied["metadata"]["name"]
+        observed_metadata["labels"] = {
+            **applied["metadata"]["labels"],
+            **observed_metadata.get("labels", {}),
+        }
+        k8s.seed_resource(K8sResource.PODS, observed_metadata["name"], observed)
+        if workload is not None:
+            workload_name = workload.get("metadata", {}).get("name", "workload")
+            k8s.seed_resource(K8sResource.WORKLOADS, workload_name, deepcopy(workload))
+        updates = provider.sync(make_batch(running_tasks=[entry]))
+        assert len(updates) == 1
+        return updates[0]
+    finally:
+        provider.close()
+
+
 def test_status_message_surfaces_kueue_admission_verdict():
-    """A SchedulingGated pod's message carries the Workload's 'couldn't assign flavors'
-    verdict — an over-large GPU request Kueue can never admit, previously invisible."""
-    msg = _pod_status_message(gated_pod(), unadmitted_workload())
-    assert "SchedulingGated" in msg
-    assert "couldn't assign flavors" in msg
-    assert 'excluded: resource "cpu"' in msg
-    assert "cw-use02a-lq" in msg
+    update = _observe_pod(gated_pod(), unadmitted_workload())
+    assert update.status_message is not None
+    assert "SchedulingGated" in update.status_message
+    assert "couldn't assign flavors" in update.status_message
+    assert 'excluded: resource "cpu"' in update.status_message
+    assert "cw-use02a-lq" in update.status_message
 
 
 def test_pod_status_singleton_surfaces_kueue_admission_verdict():
-    """A singleton Pod resolves the auto-generated Workload through its Pod UID."""
-    statuses = _build_pod_statuses([singleton_gated_pod()], [singleton_unadmitted_workload()])
-
-    assert len(statuses) == 1
-    assert "couldn't assign flavors" in statuses[0].message
-    assert 'excluded: resource "cpu"' in statuses[0].message
+    update = _observe_pod(singleton_gated_pod(), singleton_unadmitted_workload())
+    assert update.status_message is not None
+    assert "couldn't assign flavors" in update.status_message
+    assert 'excluded: resource "cpu"' in update.status_message
 
 
 def test_status_message_when_workload_not_yet_created():
-    """Gated but no Workload seen yet: still explain the wait rather than go silent."""
-    msg = _pod_status_message(gated_pod(), None)
-    assert "SchedulingGated" in msg
-    assert "Kueue" in msg
+    update = _observe_pod(gated_pod())
+    assert update.status_message is not None
+    assert "SchedulingGated" in update.status_message
+    assert "Kueue" in update.status_message
 
 
 def test_status_message_surfaces_image_pull_error():
-    """An image-pull failure surfaces the container waiting reason + registry detail."""
-    msg = _pod_status_message(imagepull_pod(), None)
-    assert "ImagePullBackOff" in msg
-    assert "ghcr.io/nope" in msg
+    update = _observe_pod(imagepull_pod())
+    assert update.status_message is not None
+    assert "ImagePullBackOff" in update.status_message
+    assert "ghcr.io/nope" in update.status_message
 
 
 def test_status_message_empty_for_healthy_running_pod():
-    """A running pod with a live container has nothing to say — the message clears."""
     pod = {
-        "metadata": {"name": "iris-job-0-0"},
-        "status": {"phase": "Running", "containerStatuses": [{"name": _TASK_CONTAINER_NAME, "state": {"running": {}}}]},
+        "metadata": {},
+        "status": {"phase": "Running", "containerStatuses": [{"name": "task", "state": {"running": {}}}]},
     }
-    assert _pod_status_message(pod, None) == ""
+    assert _observe_pod(pod).status_message == ""
 
 
 def test_task_update_carries_status_message_while_building():
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
-    update = _task_update_from_pod(entry, gated_pod(), unadmitted_workload())
+    update = _observe_pod(gated_pod(), unadmitted_workload())
     assert update.new_state == job_pb2.TASK_STATE_BUILDING
     assert update.status_message is not None
     assert "couldn't assign flavors" in update.status_message
 
 
 def test_task_update_clears_status_message_on_running_and_terminal():
-    """Running/terminal updates set status_message to "" so a stale BUILDING reason
-    does not linger on a task that has moved on."""
-    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
     running = {
-        "metadata": {"name": "iris-job-0-0"},
-        "status": {"phase": "Running", "containerStatuses": [{"name": _TASK_CONTAINER_NAME, "state": {"running": {}}}]},
+        "metadata": {},
+        "status": {"phase": "Running", "containerStatuses": [{"name": "task", "state": {"running": {}}}]},
     }
-    assert _task_update_from_pod(entry, running).status_message == ""
+    assert _observe_pod(running).status_message == ""
 
     failed = {
-        "metadata": {"name": "iris-job-0-0"},
+        "metadata": {},
         "status": {
             "phase": "Failed",
-            "containerStatuses": [{"name": _TASK_CONTAINER_NAME, "state": {"terminated": {"exitCode": 1}}}],
+            "containerStatuses": [{"name": "task", "state": {"terminated": {"exitCode": 1}}}],
         },
     }
-    assert _task_update_from_pod(entry, failed).status_message == ""
+    assert _observe_pod(failed).status_message == ""

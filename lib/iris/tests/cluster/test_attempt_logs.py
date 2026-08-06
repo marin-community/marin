@@ -10,7 +10,7 @@ failure + retry, using the ServiceTestHarness (parameterized GCP + K8s).
 from finelog.rpc import logging_pb2
 from finelog.rpc.logging_connect import LogServiceClientSync
 from iris.cluster.log_keys import task_log_key
-from iris.cluster.types import TaskAttempt
+from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import controller_pb2, job_pb2
 
 from .conftest import ServiceTestHarness
@@ -27,37 +27,35 @@ def _push_task_logs(log_service: LogServiceClientSync, task_id, lines: list[str]
     log_service.push_logs(logging_pb2.PushLogsRequest(key=key, entries=entries))
 
 
-def test_task_status_shows_attempts(harness: ServiceTestHarness):
-    """Retried task has multiple attempts visible in task status."""
+def _only_task_id(harness: ServiceTestHarness, job_id: JobName) -> JobName:
+    response = harness.service.list_tasks(
+        controller_pb2.Controller.ListTasksRequest(job_id=job_id.to_wire()),
+        None,
+    )
+    assert len(response.tasks) == 1
+    return JobName.from_wire(response.tasks[0].task_id)
+
+
+def test_get_task_status_after_retry_returns_attempt_history(harness: ServiceTestHarness):
     if harness.provider_type == "gcp":
         harness.register_gcp_worker("w1")
 
     job_id = harness.submit("retry-status", max_retries_failure=1, max_task_failures=1)
-    tasks = harness._query_tasks(job_id)
-    assert len(tasks) == 1
-    task_id = tasks[0].task_id
+    task_id = _only_task_id(harness, job_id)
 
-    # Drive first attempt to FAILED
     harness.drive_task_state(task_id, job_pb2.TASK_STATE_FAILED)
-
-    # After failure with retries remaining, task goes back to PENDING.
-    # Drive the retry attempt to SUCCEEDED.
     harness.drive_task_state(task_id, job_pb2.TASK_STATE_SUCCEEDED)
 
-    # Check via RPC that attempts are visible
     req = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id.to_wire())
     resp = harness.service.get_task_status(req, None)
     attempts = resp.task.attempts
 
-    assert len(attempts) >= 2, f"Expected >=2 attempts, got {len(attempts)}"
-
-    # First attempt should have failed
+    assert len(attempts) == 2
     assert attempts[0].state in (
         job_pb2.TASK_STATE_FAILED,
         job_pb2.TASK_STATE_WORKER_FAILED,
     )
-    # Last attempt should have succeeded
-    assert attempts[-1].state == job_pb2.TASK_STATE_SUCCEEDED
+    assert attempts[1].state == job_pb2.TASK_STATE_SUCCEEDED
 
 
 def test_get_task_status_surfaces_root_cause_highlights(harness: ServiceTestHarness, log_service: LogServiceClientSync):
@@ -66,7 +64,7 @@ def test_get_task_status_surfaces_root_cause_highlights(harness: ServiceTestHarn
         harness.register_gcp_worker("w1")
 
     job_id = harness.submit("root-cause")
-    task_id = harness._query_tasks(job_id)[0].task_id
+    task_id = _only_task_id(harness, job_id)
     harness.drive_task_state(task_id, job_pb2.TASK_STATE_FAILED)
 
     _push_task_logs(
@@ -97,7 +95,7 @@ def test_get_task_status_no_highlights_for_succeeded_task(
         harness.register_gcp_worker("w1")
 
     job_id = harness.submit("no-root-cause")
-    task_id = harness._query_tasks(job_id)[0].task_id
+    task_id = _only_task_id(harness, job_id)
     harness.drive_task_state(task_id, job_pb2.TASK_STATE_SUCCEEDED)
 
     _push_task_logs(log_service, task_id, ["RuntimeError: this ran on an earlier, since-retried attempt"])

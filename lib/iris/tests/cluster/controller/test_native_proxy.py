@@ -19,7 +19,7 @@ from iris.cluster.controller.auth import (
 )
 from iris.cluster.controller.endpoint_service import ProxyEndpointMapping, ProxyRegistrySnapshot
 from iris.cluster.controller.native_proxy import PROXY_DECISION_PATH, NativeProxy
-from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry
+from iris.cluster.controller.native_proxy_metrics import NativeProxyTelemetry, flush_native_proxy_metrics
 from iris.managed_thread import ThreadContainer
 from rigging import telemetry
 from rigging.testing import RecordingTelemetryTransport
@@ -195,7 +195,7 @@ def test_native_rpc_metrics_aggregate_controllers_in_one_process(make_controller
         "upstream": "controller",
     }
 
-    controllers[0]._native_proxy_metrics.publish_once()
+    flush_native_proxy_metrics()
     telemetry_transport.wait_for_value("rpc_requests_total", labels, 2)
     telemetry_transport.wait_for_value("rpc_responses_total", {**labels, "status": "200"}, 2)
     telemetry_transport.wait_for_value("rpc_in_flight", labels, 0)
@@ -269,45 +269,84 @@ def test_native_metrics_polling_recovers_after_initial_snapshot_failure(telemetr
         publisher.detach(proxy)
 
 
-def test_native_metrics_concurrent_detach_and_reattach_does_not_revive_old_poll_loop(monkeypatch) -> None:
-    first_poll = threading.Event()
-    release_first_poll = threading.Event()
-    next_poll = threading.Event()
-    poll_lock = threading.Lock()
-    poll_count = 0
+def test_native_metrics_concurrent_detach_and_reattach_publishes_new_proxy_snapshot(
+    telemetry_transport,
+) -> None:
+    class BlockingMetricsProxy:
+        def __init__(self) -> None:
+            self.first_read_started = threading.Event()
+            self.release_first_read = threading.Event()
+            self.next_read_started = threading.Event()
+            self.reads = 0
 
-    def controlled_poll() -> None:
-        nonlocal poll_count
-        with poll_lock:
-            poll_count += 1
-            current_poll = poll_count
-        if current_poll == 1:
-            first_poll.set()
-            release_first_poll.wait()
-        else:
-            next_poll.set()
+        @property
+        def rpc_metrics_json(self) -> str:
+            self.reads += 1
+            if self.reads == 1:
+                self.first_read_started.set()
+                assert self.release_first_read.wait(1)
+            else:
+                self.next_read_started.set()
+            return json.dumps(
+                {
+                    "series": [
+                        {
+                            "service": "iris.test.Service",
+                            "method": "ConcurrentAttach",
+                            "upstream": "controller",
+                            "requests": self.reads,
+                            "responses": {},
+                            "in_flight": 0,
+                            "latency_buckets": [],
+                            "latency_count": 0,
+                            "latency_sum_seconds": 0.0,
+                        }
+                    ]
+                }
+            )
 
-    proxy = cast(NativeProxy, object())
+        @property
+        def proxy_metrics_json(self) -> str:
+            return json.dumps(
+                {
+                    "aggregate": {
+                        "endpoint": "",
+                        "method": "",
+                        "route_kind": "",
+                        "requests": 0,
+                        "responses": {},
+                        "in_flight": 0,
+                        "latency_buckets": [],
+                        "latency_count": 0,
+                        "latency_sum_seconds": 0.0,
+                        "request_bytes": 0,
+                        "response_bytes": 0,
+                    },
+                    "series": [],
+                }
+            )
+
+    telemetry.configure(endpoint="http://finelog/v1/telemetry", service="iris-controller")
+    fake = BlockingMetricsProxy()
+    proxy = cast(NativeProxy, fake)
     publisher = NativeProxyTelemetry(interval=0.01)
-    monkeypatch.setattr(publisher, "publish_once", controlled_poll)
     publisher.attach(proxy)
-    assert first_poll.wait(1)
+    assert fake.first_read_started.wait(1)
 
     detacher = threading.Thread(target=publisher.detach, args=(proxy,))
     detacher.start()
-
-    def reattached_and_polling() -> bool:
-        publisher.attach(proxy)
-        return next_poll.is_set()
-
-    ExponentialBackoff(initial=0.001, maximum=0.01).wait_until(
-        reattached_and_polling,
-        timeout=Duration.from_seconds(1),
-    )
-    release_first_poll.set()
+    fake.release_first_read.set()
     detacher.join(timeout=1)
+    assert not detacher.is_alive()
+
+    publisher.attach(proxy)
     try:
-        assert not detacher.is_alive()
+        assert fake.next_read_started.wait(1)
+        telemetry_transport.wait_for_value(
+            "rpc_requests_total",
+            {"service": "iris.test.Service", "method": "ConcurrentAttach", "upstream": "controller"},
+            2,
+        )
     finally:
         publisher.detach(proxy)
 
@@ -334,7 +373,7 @@ def test_native_proxy_transport_metrics_count_forwarded_bytes(make_controller, t
             assert client.post("/iris.cluster.ControllerService/ListJobs", json={}).status_code == 200
         assert response.status_code == 200
 
-        controller._native_proxy_metrics.publish_once()
+        flush_native_proxy_metrics()
         total = {"scope": "total"}
         telemetry_transport.wait_for_value("proxy_requests_total", total, 1)
         telemetry_transport.wait_for_value("proxy_request_bytes_total", total, len(payload))

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
+import sys
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import NoReturn
@@ -17,7 +19,6 @@ from iris.cluster.client.job_info import set_job_info
 from iris.hooks.multigpu import IRIS_MULTIGPU_PROCESS_INDEX_ENV
 from iris.hooks.nsys import NsysHook
 from iris.hooks.nsys_main import (
-    _supervise,
     build_nsys_argv,
     default_output_uri,
     report_path,
@@ -29,8 +30,6 @@ from iris.hooks.nsys_main import (
 from iris.hooks.nsys_main import main as nsys_main
 
 CMD = ["python", "train.py", "--steps", "10"]
-# Positional signature of iris.hooks.nsys_main.run, as main() calls it.
-_RUN_PARAMS = ("tasks", "trace", "capture_range", "output_uri", "argv")
 OUT = "s3://bucket/tmp/ttl=30d/nsys"
 
 
@@ -117,18 +116,11 @@ def test_resolve_nsys_bin_requires_a_gpu_image(monkeypatch: pytest.MonkeyPatch) 
         resolve_nsys_bin()
 
 
-def test_main_argv_round_trips_into_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The user (or multigpu --wrap) builds this argv and main() parses it into run()."""
-    seen: dict[str, object] = {}
-    monkeypatch.setattr("iris.hooks.nsys_main.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
-    nsys_main(["--tasks", "0,7", "--trace", "cuda,nvtx", "--output-uri", OUT, "--capture-range", "--", "python", "x.py"])
-    assert seen == {
-        "tasks": "0,7",
-        "trace": "cuda,nvtx",
-        "capture_range": True,
-        "output_uri": OUT,
-        "argv": ["python", "x.py"],
-    }
+def _child(exit_code: int = 0, marker: Path | None = None) -> list[str]:
+    marker_write = ""
+    if marker is not None:
+        marker_write = f"pathlib.Path({str(marker)!r}).write_text('ran');"
+    return [sys.executable, "-c", f"import pathlib,sys;{marker_write}sys.exit({exit_code})"]
 
 
 class _Execed(Exception):
@@ -136,17 +128,6 @@ class _Execed(Exception):
 
     def __init__(self, argv: list[str]) -> None:
         self.argv = argv
-
-
-class _FakePopen:
-    def __init__(self, returncode: int) -> None:
-        self._returncode = returncode
-
-    def send_signal(self, signum: int) -> None:
-        raise AssertionError("nothing should signal an already-exited child")
-
-    def wait(self) -> int:
-        return self._returncode
 
 
 @pytest.fixture
@@ -167,33 +148,71 @@ def test_unselected_unit_execs_command_unwrapped(monkeypatch: pytest.MonkeyPatch
 
 @pytest.fixture
 def selected_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Put this process at index 0 with an nsys on PATH, and return the workdir."""
+    """Put this process at index 0 and return its workdir."""
     monkeypatch.setenv("IRIS_TASK_ID", "/user/job/0")
     monkeypatch.setenv("IRIS_NUM_TASKS", "2")
     monkeypatch.setenv("IRIS_WORKDIR", str(tmp_path))
-    monkeypatch.setattr("iris.hooks.nsys_main.shutil.which", lambda _: "/usr/local/bin/nsys")
     return tmp_path
 
 
-def _fake_supervise(returncode: int, write_report: bool):
-    """Stand in for nsys, which writes <output>.nsys-rep once the child exits."""
+@pytest.fixture
+def fake_nsys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Install a deterministic external nsys executable on PATH."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    executable = bin_dir / "nsys"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "import pathlib\n"
+        "import subprocess\n"
+        "import sys\n"
+        "if signal_number := os.environ.get('FAKE_NSYS_SIGNAL'):\n"
+        "    os.kill(os.getpid(), int(signal_number))\n"
+        "output_index = sys.argv.index('-o') + 1\n"
+        "command_index = output_index + 1\n"
+        "while command_index < len(sys.argv) and sys.argv[command_index].startswith('--capture-range'):\n"
+        "    command_index += 1\n"
+        "returncode = subprocess.call(sys.argv[command_index:])\n"
+        "if os.environ.get('FAKE_NSYS_WRITE_REPORT') == '1':\n"
+        "    pathlib.Path(sys.argv[output_index] + '.nsys-rep').write_bytes(b'fake report')\n"
+        "sys.exit(returncode)\n"
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return executable
 
-    def _run(nsys_argv: Sequence[str], command: Sequence[str]) -> int:
-        assert nsys_argv[1] == "profile"
-        assert list(command) == CMD
-        output = Path(nsys_argv[nsys_argv.index("-o") + 1])
-        if write_report:
-            output.with_name(output.name + ".nsys-rep").write_bytes(b"fake report")
-        return returncode
 
-    return _run
+def test_main_argv_runs_profiled_command(monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path) -> None:
+    destination = selected_task / "main-uploads"
+    marker = selected_task / "main-child-ran"
+    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
+
+    with pytest.raises(SystemExit) as excinfo:
+        nsys_main(
+            [
+                "--tasks",
+                "0,7",
+                "--trace",
+                "cuda,nvtx",
+                "--output-uri",
+                f"file://{destination}",
+                "--capture-range",
+                "--",
+                *_child(marker=marker),
+            ]
+        )
+
+    assert excinfo.value.code == 0
+    assert marker.read_text() == "ran"
+    assert len(list(destination.glob("*.nsys-rep"))) == 1
 
 
-def test_selected_unit_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
-    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(0, write_report=True))
+def test_selected_unit_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path) -> None:
+    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
     destination = selected_task / "uploads"
     with pytest.raises(SystemExit) as excinfo:
-        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
+        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=_child())
     assert excinfo.value.code == 0
     uploaded = list(destination.iterdir())
     assert len(uploaded) == 1
@@ -202,64 +221,71 @@ def test_selected_unit_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selec
     assert os.environ["TMPDIR"] == str(selected_task / "nsys")  # /tmp is noexec
 
 
-def test_run_uploads_to_the_default_when_output_uri_unset(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
-    destination = selected_task / "default-dest"
-    monkeypatch.setattr("iris.hooks.nsys_main.default_output_uri", lambda: f"file://{destination}")
-    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(0, write_report=True))
+def test_run_uploads_to_the_default_when_output_uri_unset(
+    monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path
+) -> None:
+    monkeypatch.setenv("MARIN_PREFIX", f"file://{selected_task / 'cluster'}/marin")
+    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
+    destination = Path(default_output_uri().removeprefix("file://"))
     with pytest.raises(SystemExit) as excinfo:
-        run(tasks="first", trace="cuda", capture_range=False, output_uri=None, argv=CMD)
+        run(tasks="first", trace="cuda", capture_range=False, output_uri=None, argv=_child())
     assert excinfo.value.code == 0
     assert len(list(destination.iterdir())) == 1
 
 
-def test_failing_command_still_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
+def test_failing_command_still_uploads_its_report(
+    monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path
+) -> None:
     """A crash is exactly when the profile is worth keeping."""
-    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(7, write_report=True))
+    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
     destination = selected_task / "uploads"
     with pytest.raises(SystemExit) as excinfo:
-        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
+        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=_child(7))
     assert excinfo.value.code == 7
     assert len(list(destination.iterdir())) == 1
 
 
-def test_supervise_normalizes_a_signalled_child(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Popen.wait reports a SIGTERM'd child as -15; 128 + signum is the convention."""
-    monkeypatch.setattr("subprocess.Popen", lambda argv: _FakePopen(-signal.SIGTERM))
-    assert _supervise(["nsys", "profile"], ["true"]) == 143
+def test_profiled_nsys_signal_is_normalized(
+    monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path
+) -> None:
+    monkeypatch.setenv("FAKE_NSYS_SIGNAL", str(signal.SIGTERM))
+    with pytest.raises(SystemExit) as excinfo:
+        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{selected_task / 'up'}", argv=_child())
+    assert excinfo.value.code == 128 + signal.SIGTERM
 
 
-def test_missing_report_surfaces_the_command_exit_code(monkeypatch: pytest.MonkeyPatch, selected_task: Path) -> None:
-    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(3, write_report=False))
+def test_missing_report_surfaces_the_command_exit_code(selected_task: Path, fake_nsys: Path) -> None:
     destination = selected_task / "uploads"
     with pytest.raises(SystemExit) as excinfo:
-        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=CMD)
+        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=_child(3))
     assert excinfo.value.code == 3
     assert not destination.exists()
 
 
-def test_missing_report_fails_even_when_the_command_succeeded(
-    monkeypatch: pytest.MonkeyPatch, selected_task: Path
-) -> None:
-    monkeypatch.setattr("iris.hooks.nsys_main._supervise", _fake_supervise(0, write_report=False))
+def test_missing_report_fails_even_when_the_command_succeeded(selected_task: Path, fake_nsys: Path) -> None:
     with pytest.raises(SystemExit) as excinfo:
-        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{selected_task / 'up'}", argv=CMD)
+        run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{selected_task / 'up'}", argv=_child())
     assert excinfo.value.code != 0
 
 
-def test_hook_wrap_builds_the_command_the_entry_point_parses(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The programmatic wrap emits exactly what nsys_main's parser accepts."""
-    wrapped = NsysHook(output_uri=OUT, tasks="0,7", trace="cuda,nvtx", capture_range=True).wrap(["python", "x.py"])
-    assert wrapped[:3] == ["python", "-m", "iris.hooks.nsys_main"]
-    seen: dict[str, object] = {}
-    monkeypatch.setattr("iris.hooks.nsys_main.run", lambda *a: seen.update(zip(_RUN_PARAMS, a, strict=True)))
-    nsys_main(wrapped[3:])
-    assert seen == {
-        "tasks": "0,7",
-        "trace": "cuda,nvtx",
-        "capture_range": True,
-        "output_uri": OUT,
-        "argv": ["python", "x.py"],
-    }
+def test_hook_wrap_command_runs_through_entry_point(
+    monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path
+) -> None:
+    destination = selected_task / "hook-uploads"
+    marker = selected_task / "hook-child-ran"
+    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
+    wrapped = NsysHook(
+        output_uri=f"file://{destination}",
+        tasks="0,7",
+        trace="cuda,nvtx",
+        capture_range=True,
+    ).wrap(_child(marker=marker))
+
+    result = subprocess.run(wrapped, env=os.environ.copy(), check=False)
+
+    assert result.returncode == 0
+    assert marker.read_text() == "ran"
+    assert len(list(destination.glob("*.nsys-rep"))) == 1
 
 
 def test_hook_omits_output_uri_when_unset() -> None:

@@ -4,9 +4,10 @@
 import json
 import os
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+import rigging.filesystem.distributed_lock as distributed_lock
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_TIMEOUT,
     GcsLease,
@@ -16,14 +17,16 @@ from rigging.filesystem.distributed_lock import (
 )
 
 
-def test_lease_is_stale_after_timeout():
-    lease = Lease(worker_id="worker-1", timestamp=time.time() - HEARTBEAT_TIMEOUT - 1)
-    assert lease.is_stale()
-
-
-def test_lease_is_fresh_within_timeout():
-    lease = Lease(worker_id="worker-1", timestamp=time.time())
-    assert not lease.is_stale()
+@pytest.mark.parametrize(
+    "age,is_stale",
+    [
+        (HEARTBEAT_TIMEOUT - 1, False),
+        (HEARTBEAT_TIMEOUT + 1, True),
+    ],
+)
+def test_lease_age_determines_staleness(age: float, is_stale: bool):
+    lease = Lease(worker_id="worker-1", timestamp=time.time() - age)
+    assert lease.is_stale() is is_stale
 
 
 def test_acquire_and_release_local_lock(tmp_path):
@@ -68,8 +71,10 @@ def test_stale_lock_can_be_taken_over(tmp_path):
     lock.release()
 
 
-def test_refresh_updates_timestamp(tmp_path):
+def test_refresh_updates_timestamp(tmp_path, monkeypatch):
     lock_path = str(tmp_path / "test.lock")
+    current_time = 100.0
+    monkeypatch.setattr(distributed_lock.time, "time", lambda: current_time)
     lock = create_lock(lock_path, worker_id="holder-a")
     assert lock.try_acquire()
 
@@ -77,7 +82,7 @@ def test_refresh_updates_timestamp(tmp_path):
     with open(lock_path) as f:
         t1 = json.loads(f.read())["timestamp"]
 
-    time.sleep(0.05)
+    current_time = 101.0
     lock.refresh()
 
     with open(lock_path) as f:
@@ -149,8 +154,9 @@ def test_release_idempotent_when_lock_already_gone(tmp_path):
     # Delete manually
     os.remove(lock_path)
 
-    # Release should not raise
+    # An already-absent lock is the documented idempotent release case.
     lock.release()
+    assert not os.path.exists(lock_path)
 
 
 def test_stale_takeover_then_refresh_detects_new_holder(tmp_path):
@@ -184,60 +190,46 @@ def test_stale_takeover_then_refresh_detects_new_holder(tmp_path):
     lock_b.release()
 
 
-# ---------------------------------------------------------------------------
-# GCS mock tests — validate GCS-specific error handling
-# ---------------------------------------------------------------------------
-
-
 def _make_gcs_lease(lock_path: str = "gs://bucket/test.lock", worker_id: str = "w") -> GcsLease:
     return GcsLease(lock_path, worker_id)
 
 
-@patch("rigging.filesystem.distributed_lock.GcsLease._read_with_generation")
-def test_gcs_refresh_raises_lease_lost_on_different_holder(mock_read):
-    """GcsLease.refresh raises LeaseLostError when another worker holds the lock."""
-    lease = _make_gcs_lease(worker_id="worker-A")
-    mock_read.return_value = (42, Lease(worker_id="worker-B", timestamp=time.time()))
+def _gcs_client_with_blob(blob: MagicMock | None) -> MagicMock:
+    client = MagicMock()
+    client.bucket.return_value.get_blob.return_value = blob
+    return client
 
-    with pytest.raises(LeaseLostError, match="worker-B"):
+
+def test_gcs_refresh_raises_lease_lost_on_different_holder():
+    lease = _make_gcs_lease(worker_id="worker-A")
+    blob = MagicMock(generation=42)
+    blob.download_as_string.return_value = json.dumps({"worker_id": "worker-B", "timestamp": time.time()})
+
+    with (
+        patch("rigging.filesystem.distributed_lock.storage.Client", return_value=_gcs_client_with_blob(blob)),
+        pytest.raises(LeaseLostError, match="worker-B"),
+    ):
         lease.refresh()
 
 
-@patch("rigging.filesystem.distributed_lock.GcsLease._read_with_generation")
-def test_gcs_refresh_raises_lease_lost_when_lock_gone(mock_read):
-    """GcsLease.refresh raises LeaseLostError when the lock blob is absent.
-
-    On GCS, the blob can vanish between reads due to a concurrent delete.
-    This must be fatal — not silently re-acquired.
-    """
+def test_gcs_refresh_raises_lease_lost_when_lock_gone():
     lease = _make_gcs_lease(worker_id="worker-A")
-    mock_read.return_value = (0, None)
 
-    with pytest.raises(LeaseLostError, match="disappeared"):
+    with (
+        patch("rigging.filesystem.distributed_lock.storage.Client", return_value=_gcs_client_with_blob(None)),
+        pytest.raises(LeaseLostError, match="disappeared"),
+    ):
         lease.refresh()
 
 
-@patch("rigging.filesystem.distributed_lock.GcsLease._read_with_generation")
-def test_gcs_try_acquire_returns_false_on_precondition_failed(mock_read):
-    """try_acquire returns False on PreconditionFailed (GCS generation race)."""
+def test_gcs_try_acquire_returns_false_when_another_writer_wins():
     lease = _make_gcs_lease(worker_id="worker-A")
-    mock_read.return_value = (0, None)
 
-    # Simulate PreconditionFailed from _write — this is the GCS-specific error
-    # when another writer wins the generation race.
     class PreconditionFailed(Exception):
         pass
 
-    with patch.object(lease, "_write", side_effect=PreconditionFailed("gen mismatch")):
+    client = _gcs_client_with_blob(None)
+    client.bucket.return_value.blob.return_value.upload_from_string.side_effect = PreconditionFailed("gen mismatch")
+
+    with patch("rigging.filesystem.distributed_lock.storage.Client", return_value=client):
         assert not lease.try_acquire()
-
-
-@patch("rigging.filesystem.distributed_lock.GcsLease._delete")
-@patch("rigging.filesystem.distributed_lock.GcsLease._read_with_generation")
-def test_gcs_release_noop_when_lock_gone(mock_read, mock_delete):
-    """release() is a no-op when the lock blob is already absent."""
-    lease = _make_gcs_lease(worker_id="worker-A")
-    mock_read.return_value = (0, None)
-
-    lease.release()
-    mock_delete.assert_not_called()

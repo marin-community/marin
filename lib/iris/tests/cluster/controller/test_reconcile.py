@@ -16,12 +16,11 @@ Three layers, exercised in order:
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar
 
 import pytest
 from iris.cluster.backends.rpc.backend import (
     WORKER_RECONCILE_TEARDOWN_REASON,
-    FleetObservation,
     RpcTaskBackend,
 )
 from iris.cluster.controller import ops, writes
@@ -38,7 +37,6 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.backend_store import BackendWorkerStore
 from iris.cluster.controller.ops.task import Assignment
-from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.loader import load_closed_snapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.worker import (
@@ -60,7 +58,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEventKind,
     WorkerHealthTracker,
 )
-from iris.cluster.types import AttemptUid, JobName, WorkerId
+from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import job_pb2, worker_pb2
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import select
@@ -74,6 +72,7 @@ from tests.cluster.controller.transition_driver import (
 )
 
 from .conftest import (
+    assign_task,
     dispatch_task,
     make_controller_state,
     make_job_request,
@@ -630,101 +629,93 @@ def _provider_with_stub(stub: _FakeWorkerStub | None = None) -> tuple[RpcTaskBac
     return RpcTaskBackend(stub_factory=factory), stub
 
 
-def _reconcile_snapshot(worker_addresses: dict[WorkerId, str]) -> ControlSnapshot:
-    return ControlSnapshot(
-        worker_addresses=worker_addresses,
-        reconcile_rows=[],
-        timeout_rows=[],
+def _bind_provider(provider: RpcTaskBackend, state: ControllerTestState) -> None:
+    provider.bind_runtime(
+        BackendRuntime(
+            backend_id=DEFAULT_BACKEND_ID,
+            db=state._db,
+            owns_scale_group=lambda _scale_group: True,
+            budget_defaults=UserBudgetDefaults(),
+        )
     )
+    provider.seed_liveness()
 
 
-@dataclass
-class _StubWorkerStore:
-    """A worker store that hands the backend a fixed reconcile snapshot.
+def test_dispatch_reconcile_plans_empty_short_circuits(state):
+    provider, stub = _provider_with_stub()
+    _bind_provider(provider, state)
 
-    The dispatch-layer tests exercise ``RpcTaskBackend.reconcile``'s fan-out and
-    health-event derivation given a known snapshot; the backend now sources that
-    snapshot itself, so the test supplies it through this stub.
-    """
+    result = provider.reconcile(ReconcileRequest())
 
-    snapshot: ControlSnapshot
-
-    def reconcile_snapshot(self) -> ControlSnapshot:
-        return self.snapshot
-
-    def scheduling_inputs(self):
-        raise NotImplementedError
-
-    def worker_status(self):
-        raise NotImplementedError
+    assert result.effects.is_empty
+    assert stub.reconcile_calls == []
 
 
-def _reconcile_with(provider: RpcTaskBackend, worker_addresses: dict[WorkerId, str]) -> FleetObservation:
-    provider._store = cast(BackendWorkerStore, _StubWorkerStore(_reconcile_snapshot(worker_addresses)))
-    return provider._observe_fleet()
-
-
-def _reconcile_one(provider: RpcTaskBackend, plan: WorkerReconcilePlan, *, address: str = _W1_ADDR):
-    # The backend now builds plans from the snapshot; ``plan`` here only fixes
-    # which worker is reconciled. The RPC fan-out and observation surfacing are
-    # what these dispatch-layer tests exercise.
-    observation = _reconcile_with(provider, {plan.worker_id: address})
-    return [r for _, r in observation.worker_results]
-
-
-def test_dispatch_reconcile_plans_empty_short_circuits():
-    provider, _ = _provider_with_stub()
-    assert _reconcile_with(provider, {}).worker_results == []
-
-
-def test_reconcile_rpc_forwards_observations():
-    """One Reconcile RPC per plan; observed observations surface verbatim."""
-    observation = _obs("uid-a", job_pb2.TASK_STATE_RUNNING)
-    stub = _FakeWorkerStub(
-        address=_W1_ADDR,
-        reconcile_response=worker_pb2.Worker.ReconcileResponse(observed=[observation]),
-    )
-    provider, _ = _provider_with_stub(stub)
-    plan = _make_plan(_W1, desired=[_desired_run("uid-a")])
-
-    results = _reconcile_one(provider, plan)
-
-    assert len(stub.reconcile_calls) == 1
-    assert stub.reconcile_calls[0].worker_id == _W1
-    assert len(results) == 1
-    assert results[0].worker_id == WorkerId(_W1)
-    assert results[0].error is None
-    assert list(results[0].observations) == [observation]
-
-
-def test_reconcile_rpc_failure_returns_error_and_empty_observations():
-    stub = _FakeWorkerStub(address=_W1_ADDR, reconcile_exc=RuntimeError("boom"))
-    provider, _ = _provider_with_stub(stub)
-
-    results = _reconcile_one(provider, _make_plan(_W1))
-
-    assert results[0].error == "boom"
-    assert list(results[0].observations) == []
-
-
-def test_reconcile_matching_responder_id_is_reached():
-    """A healthy reply stamped with the targeted worker's id counts as REACHED."""
+def test_reconcile_rpc_forwards_observations(state):
+    """The public backend converts a worker observation into committable task effects."""
+    worker_id = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    [task] = submit_job(state, "reconcile-observation", make_job_request("reconcile-observation"))
+    assign_task(state, task, worker_id)
+    attempt = query_attempt(state, task.task_id, 0)
+    assert attempt is not None
+    observation = _obs(attempt.attempt_uid, job_pb2.TASK_STATE_RUNNING)
     stub = _FakeWorkerStub(
         address=_W1_ADDR,
         reconcile_response=worker_pb2.Worker.ReconcileResponse(
-            worker_id=_W1, health=worker_pb2.Worker.WorkerHealth(healthy=True)
+            worker_id=_W1,
+            health=worker_pb2.Worker.WorkerHealth(healthy=True),
+            observed=[observation],
         ),
     )
-    factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
-    provider = RpcTaskBackend(stub_factory=factory)
+    provider, _ = _provider_with_stub(stub)
+    _bind_provider(provider, state)
 
-    result = _reconcile_with(provider, {WorkerId(_W1): _W1_ADDR})
+    result = provider.reconcile(ReconcileRequest())
 
-    assert result.transport_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.REACHED)]
-    assert _W1_ADDR in factory.stubs  # healthy worker's stub kept
+    assert len(stub.reconcile_calls) == 1
+    assert stub.reconcile_calls[0].worker_id == _W1
+    assert [desired.attempt_uid for desired in stub.reconcile_calls[0].desired] == [attempt.attempt_uid]
+    assert result.effects.tasks[task.task_id].state == job_pb2.TASK_STATE_RUNNING
 
 
-def test_reconcile_recycled_address_is_unreachable_not_reached():
+def test_reconcile_rpc_failure_marks_worker_unreachable_without_task_effects(state):
+    register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    stub = _FakeWorkerStub(address=_W1_ADDR, reconcile_exc=RuntimeError("boom"))
+    provider, _ = _provider_with_stub(stub)
+    _bind_provider(provider, state)
+
+    result = provider.reconcile(ReconcileRequest())
+
+    assert result.effects.tasks == {}
+    assert result.effects.attempts == {}
+    assert result.effects.jobs == {}
+    assert provider.health.liveness(WorkerId(_W1)).consecutive_failures == 1
+
+
+def test_reconcile_matching_responder_id_resets_unreachable_counter(state):
+    """A healthy reply stamped with the targeted worker's id counts as REACHED."""
+    register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    stub = _FakeWorkerStub(
+        address=_W1_ADDR,
+        reconcile_response=worker_pb2.Worker.ReconcileResponse(
+            worker_id=_W1,
+            health=worker_pb2.Worker.WorkerHealth(healthy=True),
+        ),
+    )
+    provider, _ = _provider_with_stub(stub)
+    _bind_provider(provider, state)
+    provider.health.apply(
+        [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)],
+        now_ms=Timestamp.now().epoch_ms(),
+    )
+    assert provider.health.liveness(WorkerId(_W1)).consecutive_failures == 1
+
+    provider.reconcile(ReconcileRequest())
+
+    assert provider.health.liveness(WorkerId(_W1)).consecutive_failures == 0
+
+
+def test_reconcile_recycled_address_marks_target_worker_unreachable(state):
     """A healthy reply stamped with a DIFFERENT worker_id (recycled IP) is UNREACHABLE.
 
     Regression: after a worker's VM is deleted GCP recycles its internal IP onto
@@ -734,20 +725,20 @@ def test_reconcile_recycled_address_is_unreachable_not_reached():
     that accepts and kills every task assigned to it. The mismatched id must mark
     the dead worker UNREACHABLE so it is reaped, and the impostor's stub dropped.
     """
+    register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     stub = _FakeWorkerStub(
         address=_W1_ADDR,
         reconcile_response=worker_pb2.Worker.ReconcileResponse(
             worker_id=_W2, health=worker_pb2.Worker.WorkerHealth(healthy=True)
         ),
     )
-    factory = _FakeStubFactory(stubs={_W1_ADDR: stub})
-    provider = RpcTaskBackend(stub_factory=factory)
+    provider, _ = _provider_with_stub(stub)
+    _bind_provider(provider, state)
 
-    result = _reconcile_with(provider, {WorkerId(_W1): _W1_ADDR})
+    result = provider.reconcile(ReconcileRequest())
 
-    assert result.transport_events == [WorkerHealthEvent(WorkerId(_W1), WorkerHealthEventKind.UNREACHABLE)]
-    # The stale stub is evicted so the next tick re-resolves the address.
-    assert _W1_ADDR not in factory.stubs
+    assert result.effects.is_empty
+    assert provider.health.liveness(WorkerId(_W1)).consecutive_failures == 1
 
 
 # ===========================================================================

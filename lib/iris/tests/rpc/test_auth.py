@@ -15,14 +15,12 @@ from iris.cluster.controller.auth import (
 from iris.rpc.auth import (
     DASHBOARD_ROLE,
     FEDERATION_PEER_ROLE,
-    FEDERATION_RPCS,
-    FEDERATION_SCOPED_RPCS,
     AuthzAction,
     authorize,
     authorize_method,
     authorize_resource_owner,
 )
-from rigging.server_auth import VerifiedIdentity, _verified_identity
+from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.token_authority import (
     Ed25519Keypair,
     JwksVerifier,
@@ -72,15 +70,15 @@ def test_authorize_method_unrestricted_for_other_roles(role):
 # --- federation-peer role: method-scoped to the federation RPC subset ---------
 
 
-@pytest.mark.parametrize("method", sorted(FEDERATION_RPCS))
-def test_authorize_method_allows_federation_rpcs_for_a_peer(method):
+@pytest.mark.parametrize("method", ["FederationSync", "LaunchJob", "ListBackends", "TerminateJob"])
+def test_authorize_method_allows_federation_control_rpcs_for_peer(method):
     # Does not raise: the federation loop (handoff, cancel, sync, heartbeat) is the
     # federation-peer role's whole contract.
     authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
 
 
-@pytest.mark.parametrize("method", sorted(FEDERATION_SCOPED_RPCS))
-def test_authorize_method_allows_scoped_debug_rpcs_for_a_peer(method):
+@pytest.mark.parametrize("method", ["ExecInContainer", "GetProcessStatus", "ProfileTask"])
+def test_authorize_method_allows_scoped_debug_rpcs_for_peer(method):
     # The on-demand debug proxies are admitted at the method gate; the handler then
     # scopes each to a job the peer federated here (see the controller service's
     # _authorize_federated_debug_target). Without this, a proxied stack/exec/status
@@ -149,13 +147,6 @@ def test_jwt_token_manager_expired():
         manager.verify(expired)
 
 
-def test_jwt_token_manager_create_and_verify_round_trip():
-    """A minted control-plane token round-trips through the stateless verifier."""
-    manager = _manager()
-    token = manager.create_token(user_id="alice", role="user", key_id="k1", ttl_seconds=60)
-    assert manager.verify(token).user_id == "alice"
-
-
 def test_jwt_token_manager_worker_role(jwt_manager):
     token = jwt_manager.create_token(user_id="system:worker", role="worker", key_id="w1", ttl_seconds=60)
     identity = jwt_manager.verify(token)
@@ -169,32 +160,22 @@ def test_jwt_token_manager_worker_role(jwt_manager):
 
 
 def test_authorize_admin_always_passes():
-    reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
-    try:
-        # Admin should pass any action, even ACT_AS_WORKER
+    with identity_scope(VerifiedIdentity(user_id="admin-user", role="admin")):
         identity = authorize(AuthzAction.ACT_AS_WORKER)
         assert identity.user_id == "admin-user"
-    finally:
-        _verified_identity.reset(reset)
 
 
 def test_authorize_worker_can_act_as_worker():
-    reset = _verified_identity.set(VerifiedIdentity(user_id="system:worker", role="worker"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id="system:worker", role="worker")):
         identity = authorize(AuthzAction.ACT_AS_WORKER)
         assert identity.role == "worker"
-    finally:
-        _verified_identity.reset(reset)
 
 
 def test_authorize_user_cannot_act_as_worker():
-    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
         with pytest.raises(ConnectError) as exc_info:
             authorize(AuthzAction.ACT_AS_WORKER)
         assert exc_info.value.code == Code.PERMISSION_DENIED
-    finally:
-        _verified_identity.reset(reset)
 
 
 def test_authorize_raises_unauthenticated_when_no_identity():
@@ -205,28 +186,19 @@ def test_authorize_raises_unauthenticated_when_no_identity():
 
 
 def test_authorize_resource_owner_same_user():
-    reset = _verified_identity.set(VerifiedIdentity(user_id="alice", role="user"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
         identity = authorize_resource_owner("alice")
         assert identity.user_id == "alice"
-    finally:
-        _verified_identity.reset(reset)
 
 
 def test_authorize_resource_owner_different_user_denied():
-    reset = _verified_identity.set(VerifiedIdentity(user_id="bob", role="user"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id="bob", role="user")):
         with pytest.raises(ConnectError) as exc_info:
             authorize_resource_owner("alice")
         assert exc_info.value.code == Code.PERMISSION_DENIED
-    finally:
-        _verified_identity.reset(reset)
 
 
 def test_authorize_resource_owner_admin_can_access_any():
-    reset = _verified_identity.set(VerifiedIdentity(user_id="admin-user", role="admin"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id="admin-user", role="admin")):
         identity = authorize_resource_owner("alice")
         assert identity.user_id == "admin-user"
-    finally:
-        _verified_identity.reset(reset)

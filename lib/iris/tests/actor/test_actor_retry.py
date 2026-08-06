@@ -182,8 +182,15 @@ def test_actor_client_does_not_retry_on_application_error():
     server = ActorServer(host="127.0.0.1")
 
     class Divider:
+        def __init__(self) -> None:
+            self.attempts = 0
+
         def divide(self, a: int, b: int) -> float:
+            self.attempts += 1
             return a / b
+
+        def invocation_count(self) -> int:
+            return self.attempts
 
     server.register("divider", Divider())
     port = server.serve_background()
@@ -192,10 +199,9 @@ def test_actor_client_does_not_retry_on_application_error():
         resolver = FixedResolver({"divider": f"http://127.0.0.1:{port}"})
         client = ActorClient(resolver, "divider", max_call_attempts=3)
 
-        # ZeroDivisionError is an application error, not a transient RPC error.
-        # It should propagate immediately without retry.
         with pytest.raises(ZeroDivisionError):
             client.divide(1, 0)
+        assert client.invocation_count() == 1
     finally:
         server.stop()
 

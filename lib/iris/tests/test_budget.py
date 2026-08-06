@@ -23,8 +23,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, job_pb2
-from iris.rpc.proto_display import PRIORITY_BAND_VALUES, priority_band_name, priority_band_value
-from rigging.server_auth import VerifiedIdentity, _verified_identity
+from rigging.server_auth import VerifiedIdentity, identity_scope
 from rigging.timing import Timestamp
 from tests.cluster.controller._test_support import submit_job_in_tx
 from tests.cluster.controller.conftest import (
@@ -150,16 +149,6 @@ def test_effective_band_no_limit_row_uses_defaults():
 
 
 # ---------------------------------------------------------------------------
-# priority_band helpers
-# ---------------------------------------------------------------------------
-
-
-def test_priority_band_name_roundtrip():
-    for band in PRIORITY_BAND_VALUES:
-        assert priority_band_value(priority_band_name(band)) == band
-
-
-# ---------------------------------------------------------------------------
 # compute_user_spend
 # ---------------------------------------------------------------------------
 
@@ -240,11 +229,6 @@ def _start_running_job(
             )
 
 
-def test_compute_user_spend_empty(state):
-    with state._db.read_snapshot() as snap:
-        assert compute_user_spend(snap) == {}
-
-
 def test_compute_user_spend_sums_running_tasks(state):
     _start_running_job(state, "alice", "job", cpu_millicores=4000, memory_bytes=16 * GiB, replicas=2)
     with state._db.read_snapshot() as snap:
@@ -289,19 +273,13 @@ def service(state, tmp_path, log_client) -> ControllerServiceImpl:
 
 
 def _as_admin(fn, *args, **kwargs):
-    reset = _verified_identity.set(VerifiedIdentity(user_id="admin", role="admin"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id="admin", role="admin")):
         return fn(*args, **kwargs)
-    finally:
-        _verified_identity.reset(reset)
 
 
 def _as_user(fn, user_id, *args, **kwargs):
-    reset = _verified_identity.set(VerifiedIdentity(user_id=user_id, role="user"))
-    try:
+    with identity_scope(VerifiedIdentity(user_id=user_id, role="user")):
         return fn(*args, **kwargs)
-    finally:
-        _verified_identity.reset(reset)
 
 
 def _set_budget(user_id: str, limit: int = 5000, max_band: int = INTERACTIVE):

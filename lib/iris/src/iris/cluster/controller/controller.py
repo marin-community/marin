@@ -116,7 +116,7 @@ from iris.cluster.federation.manager import (
     DEFAULT_MAX_HANDOFFS_PER_CYCLE,
     FederationManager,
 )
-from iris.cluster.federation.peer import build_peers
+from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.types import (
@@ -360,6 +360,8 @@ class Controller:
             backends (the meta-scheduler index + allow policies) and to map each
             worker's scale group to its owning backend. Defaults to one implicit
             worker-daemon backend per entry in ``backends``.
+        federation_peers: Optional prebuilt peer connections for an embedding
+            that owns transport composition. Production builds peers from config.
     """
 
     def __init__(
@@ -370,6 +372,7 @@ class Controller:
         threads: ThreadContainer | None = None,
         db: ControllerDB | None = None,
         backend_configs: dict[str, BackendConfig] | None = None,
+        federation_peers: Sequence[FederationPeer] | None = None,
     ):
         if not config.remote_state_dir:
             raise ValueError(
@@ -445,8 +448,13 @@ class Controller:
             else None
         )
         self._bundle_store = BundleStore(storage_dir=prefix_join(config.remote_state_dir, "bundles"))
+        peers = (
+            list(federation_peers)
+            if federation_peers is not None
+            else build_peers(config.peers, federation_token_provider=federation_token_provider)
+        )
         self._federation = FederationManager(
-            build_peers(config.peers, federation_token_provider=federation_token_provider),
+            peers,
             threads=self._threads,
             store=ControllerFederationStore(
                 self._db,
@@ -984,6 +992,7 @@ class Controller:
         schedule_limiter: RateLimiter,
         reconcile_limiter: RateLimiter,
         autoscale_limiter: RateLimiter,
+        force_timeout_scan: bool = False,
     ) -> None:
         """Run one control tick: one read snapshot, due phases per backend, one write txn.
 
@@ -1012,7 +1021,7 @@ class Controller:
         run_schedule = woken or run_autoscale or schedule_limiter.should_run()
         run_reconcile = self._force_reconcile or reconcile_limiter.should_run()
         self._force_reconcile = False
-        scan_timeouts = run_reconcile and self._timeout_rate_limiter.should_run()
+        scan_timeouts = run_reconcile and (force_timeout_scan or self._timeout_rate_limiter.should_run())
 
         inputs = self._build_tick_inputs(
             now=now,
@@ -1767,6 +1776,25 @@ class Controller:
         """Submit a job to the controller."""
         return self._service.launch_job(request, None)
 
+    def run_control_tick(self) -> None:
+        """Run one complete control cycle synchronously before :meth:`start`.
+
+        This is the deterministic embedding boundary for callers that own the
+        controller lifecycle themselves. It drives scheduling, reconciliation,
+        and autoscaling once without starting background threads. A running
+        controller already owns its control loop, so mixing the two modes is an
+        error.
+        """
+        if self.started:
+            raise RuntimeError("run_control_tick cannot be used after Controller.start")
+        self._control_tick(
+            woken=True,
+            schedule_limiter=RateLimiter(interval_seconds=0.0),
+            reconcile_limiter=RateLimiter(interval_seconds=0.0),
+            autoscale_limiter=RateLimiter(interval_seconds=0.0),
+            force_timeout_scan=True,
+        )
+
     def get_job_status(
         self,
         job_id: str,
@@ -1775,6 +1803,16 @@ class Controller:
         request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)
 
+    def list_tasks(self, job_id: str) -> controller_pb2.Controller.ListTasksResponse:
+        """List the public Task status rows for a Job."""
+        request = controller_pb2.Controller.ListTasksRequest(job_id=job_id)
+        return self._service.list_tasks(request, None)
+
+    def get_task_status(self, task_id: str) -> controller_pb2.Controller.GetTaskStatusResponse:
+        """Get one Task and its Attempt history."""
+        request = controller_pb2.Controller.GetTaskStatusRequest(task_id=task_id)
+        return self._service.get_task_status(request, None)
+
     def terminate_job(
         self,
         job_id: str,
@@ -1782,6 +1820,17 @@ class Controller:
         """Terminate a running job."""
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
+
+    def federation_sync(
+        self,
+        request: controller_pb2.Controller.FederationSyncRequest,
+    ) -> controller_pb2.Controller.FederationSyncResponse:
+        """Apply one authenticated federation sync request in-process."""
+        return self._service.federation_sync(request, None)
+
+    def list_peers(self) -> controller_pb2.Controller.ListPeersResponse:
+        """List configured federation peers through the public service path."""
+        return self._service.list_peers(controller_pb2.Controller.ListPeersRequest(), None)
 
     # Properties
 

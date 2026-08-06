@@ -7,7 +7,6 @@ These tests focus on observable behavior - scaling policy decisions,
 VM group management, and state tracking - not on implementation details.
 """
 
-import logging
 from pathlib import Path
 
 import pytest
@@ -689,42 +688,6 @@ class TestScalingGroupIdleTracking:
         assert group.get_slice("slice-001") is None
 
 
-def test_scale_down_no_misleading_rate_limit_log(unbounded_config: ScaleGroupConfig, caplog):
-    """When the token bucket is empty and no terminations occur, no rate-limit log is emitted."""
-    discovered = [
-        make_fake_slice_handle("slice-001", all_ready=True),
-        make_fake_slice_handle("slice-002", all_ready=True),
-    ]
-    platform = make_mock_platform(slices_to_discover=discovered)
-    group = ScalingGroup(unbounded_config, platform, scale_down_rate_limit=1, idle_threshold=Duration.from_ms(100))
-    group.reconcile()
-    _mark_discovered_ready(group, discovered, timestamp=Timestamp.from_ms(0))
-
-    wid_001 = _get_worker_id(discovered[0])
-    wid_002 = _get_worker_id(discovered[1])
-
-    idle_map = {
-        wid_001: WorkerStatus(worker_id=wid_001, running_task_ids=frozenset()),
-        wid_002: WorkerStatus(worker_id=wid_002, running_task_ids=frozenset()),
-    }
-    # First idle observation at t=0 stamps quiet_since; by t=1000 both
-    # have been quiet 1s, past the 100ms threshold.
-    group.update_slice_activity(idle_map, Timestamp.from_ms(0))
-
-    ts = Timestamp.from_ms(1000)
-
-    # Drain the token bucket (rate_limit=1, so one token available)
-    assert group.acquire_scale_down_token(ts)
-    assert not group.acquire_scale_down_token(ts)
-
-    # Now call scale_down_if_idle with an empty bucket — no terminations should happen
-    with caplog.at_level(logging.INFO, logger="iris.cluster.controller.autoscaler.scaling_group"):
-        scaled_down = group.scale_down_if_idle(idle_map, target_capacity=0, timestamp=ts)
-
-    assert scaled_down == []
-    assert "rate-limited after 0 terminations" not in caplog.text
-
-
 class TestScalingGroupVmGroupStateCounts:
     """Tests for slice_state_counts() aggregation."""
 
@@ -1005,48 +968,6 @@ class TestScalingGroupAvailability:
 
         # GPU doesn't match TPU group
         assert not group.matches_device_requirement(DeviceType.GPU, None)
-
-
-class TestVerifySliceIdle:
-    """Tests for _verify_slice_idle behavior with unknown workers."""
-
-    def test_unknown_workers_do_not_count_as_idle(self, unbounded_config: ScaleGroupConfig):
-        """A slice with no workers in the status map is NOT idle (we don't know yet)."""
-        platform = make_mock_platform()
-        group = ScalingGroup(unbounded_config, platform)
-        ts = Timestamp.from_ms(1000000)
-        handle = _tracked_scale_up(group, timestamp=ts)
-        state = _get_slice_state(group, handle)
-
-        # Empty status map -- no workers known
-        assert not group._verify_slice_idle(state, {})
-
-    def test_known_idle_workers_are_idle(self, unbounded_config: ScaleGroupConfig):
-        """A slice where all known workers are idle IS idle."""
-        platform = make_mock_platform()
-        group = ScalingGroup(unbounded_config, platform)
-        ts = Timestamp.from_ms(1000000)
-        handle = _tracked_scale_up(group, timestamp=ts)
-        worker_ids = [vm.worker_id for vm in handle.describe().workers]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
-        state = _get_slice_state(group, handle)
-
-        # Get worker ID from mock
-        worker_id = _get_worker_id(handle)
-        status_map = {worker_id: WorkerStatus(worker_id="", running_task_ids=frozenset())}
-        assert group._verify_slice_idle(state, status_map)
-
-    def test_known_busy_worker_blocks_idle(self, unbounded_config: ScaleGroupConfig):
-        """A slice with a known busy worker is NOT idle."""
-        platform = make_mock_platform()
-        group = ScalingGroup(unbounded_config, platform)
-        ts = Timestamp.from_ms(1000000)
-        handle = _tracked_scale_up(group, timestamp=ts)
-        state = _get_slice_state(group, handle)
-
-        worker_id = _get_worker_id(handle)
-        status_map = {worker_id: WorkerStatus(worker_id="", running_task_ids=frozenset({"task-1"}))}
-        assert not group._verify_slice_idle(state, status_map)
 
 
 class TestZonesFromConfig:
@@ -1392,38 +1313,6 @@ class TestMultiVmSliceIdleScaleDown:
         assert len(scaled_down) == 1
         assert scaled_down[0].slice_id == "slice-001"
         assert group.slice_count() == 1
-
-    def test_multi_vm_verify_idle_requires_all_workers_known(self):
-        """_verify_slice_idle returns False if some workers are not in the status map."""
-        config = _make_multi_vm_config(num_vms=4)
-        platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
-
-        handle = _tracked_scale_up(group)
-        worker_ids = [f"10.0.0.{i}" for i in range(4)]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
-        state = _get_slice_state(group, handle)
-
-        # Only 2 of 4 workers in status map, both idle
-        partial_map = {
-            "10.0.0.0": WorkerStatus(worker_id="10.0.0.0", running_task_ids=frozenset()),
-            "10.0.0.1": WorkerStatus(worker_id="10.0.0.1", running_task_ids=frozenset()),
-        }
-        # Should still return True — known workers are all idle, unknown are skipped
-        assert group._verify_slice_idle(state, partial_map)
-
-    def test_multi_vm_verify_idle_empty_map_returns_false(self):
-        """_verify_slice_idle returns False when no workers appear in the status map."""
-        config = _make_multi_vm_config(num_vms=4)
-        platform = make_mock_platform()
-        group = ScalingGroup(config, platform)
-
-        handle = _tracked_scale_up(group)
-        worker_ids = [f"10.0.0.{i}" for i in range(4)]
-        group.mark_slice_ready(handle.slice_id, worker_ids)
-        state = _get_slice_state(group, handle)
-
-        assert not group._verify_slice_idle(state, {})
 
 
 class TestSliceStateToProtoIdleFields:

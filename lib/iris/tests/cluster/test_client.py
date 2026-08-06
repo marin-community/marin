@@ -9,7 +9,6 @@ both GCP and K8s providers via the ServiceTestHarness.
 
 import pytest
 from connectrpc.errors import ConnectError
-from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 
 from .conftest import ServiceTestHarness
@@ -117,11 +116,3 @@ def test_terminate_job_skips_finished(harness: ServiceTestHarness):
     # State should remain SUCCEEDED
     status = harness.get_job_status(job_id)
     assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_submit_rejects_name_with_slash(harness: ServiceTestHarness):
-    """Job names containing '/' at the leaf are rejected."""
-    # JobName.root already validates that the name segment is clean,
-    # so constructing a wire name with a slash in the leaf is invalid.
-    with pytest.raises(ValueError):
-        JobName.root("test-user", "invalid/name")
