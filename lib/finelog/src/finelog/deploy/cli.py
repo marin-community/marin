@@ -39,11 +39,10 @@ from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_tar
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
 
-# Sits just past the server's own 60s query deadline so a long query is ended by
+# Sits just past the server's own 10s query deadline so a long query is ended by
 # the server, which reports why, rather than by a client-side timeout that
-# reports only that time ran out. The client default is 10s, which is shorter
-# than several real queries against a full namespace.
-DEFAULT_REQUEST_TIMEOUT = 65.0
+# reports only that time ran out.
+DEFAULT_REQUEST_TIMEOUT = 15.0
 
 
 @contextmanager
@@ -297,7 +296,7 @@ _PRINTERS = {
     type=float,
     default=DEFAULT_REQUEST_TIMEOUT,
     show_default=True,
-    help="Seconds to wait for the query result. The server applies its own 60s deadline.",
+    help="Seconds to wait for the query result. The server applies its own 10s deadline.",
 )
 def query_cmd(
     name: str,

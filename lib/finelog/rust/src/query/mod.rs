@@ -301,7 +301,7 @@ fn slow_query_log_ms() -> u128 {
 /// pathological query can no longer run unbounded and crash-loop the hub on
 /// memory. This bounds the SERVER independently of any client deadline, which
 /// a caller may set huge or omit entirely.
-const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Parse the `FINELOG_QUERY_TIMEOUT_MS` override: an integer millisecond budget,
 /// `0` to disable the deadline entirely (ops escape hatch for a known-heavy
@@ -317,13 +317,28 @@ fn parse_query_timeout(raw: Option<&str>) -> Option<Duration> {
     }
 }
 
-/// The server-side Query deadline, resolved once from `FINELOG_QUERY_TIMEOUT_MS`
-/// (see [`parse_query_timeout`]). `None` disables it.
-pub(crate) fn query_timeout() -> Option<Duration> {
+fn earliest_timeout(
+    server_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
+) -> Option<Duration> {
+    match (server_timeout, request_timeout) {
+        (Some(server), Some(request)) => Some(server.min(request)),
+        (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
+        (None, None) => None,
+    }
+}
+
+/// The earlier of the server Query deadline and the caller's remaining budget.
+///
+/// `FINELOG_QUERY_TIMEOUT_MS` configures the server deadline (see
+/// [`parse_query_timeout`]); `0` disables only that ceiling, so a caller's
+/// shorter deadline still cancels its scan.
+pub(crate) fn query_timeout(request_timeout: Option<Duration>) -> Option<Duration> {
     static TIMEOUT: OnceLock<Option<Duration>> = OnceLock::new();
-    *TIMEOUT.get_or_init(|| {
+    let server_timeout = *TIMEOUT.get_or_init(|| {
         parse_query_timeout(std::env::var("FINELOG_QUERY_TIMEOUT_MS").ok().as_deref())
-    })
+    });
+    earliest_timeout(server_timeout, request_timeout)
 }
 
 /// Cap arbitrary (possibly user-supplied) SQL for a single log line. Truncates on
@@ -559,7 +574,11 @@ mod tests {
     #[test]
     fn parse_query_timeout_variants() {
         // Absent, unparseable, and negative-ish garbage all fall back to the default.
-        assert_eq!(parse_query_timeout(None), Some(DEFAULT_QUERY_TIMEOUT));
+        assert_eq!(
+            parse_query_timeout(None),
+            Some(Duration::from_secs(10)),
+            "the default must shed work before dashboard clients retry"
+        );
         assert_eq!(
             parse_query_timeout(Some("nonsense")),
             Some(DEFAULT_QUERY_TIMEOUT)
@@ -576,6 +595,23 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    #[test]
+    fn query_timeout_uses_the_earliest_available_deadline() {
+        let server = Some(Duration::from_secs(10));
+        let short_request = Some(Duration::from_secs(3));
+        let long_request = Some(Duration::from_secs(30));
+
+        assert_eq!(
+            earliest_timeout(server, short_request),
+            short_request,
+            "a caller deadline must stop work before the server ceiling"
+        );
+        assert_eq!(earliest_timeout(server, long_request), server);
+        assert_eq!(earliest_timeout(None, short_request), short_request);
+        assert_eq!(earliest_timeout(server, None), server);
+        assert_eq!(earliest_timeout(None, None), None);
     }
 
     #[tokio::test]

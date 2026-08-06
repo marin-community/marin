@@ -8,6 +8,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa
+import pytest
 from cache import TtlCache
 from config import ClusterTarget
 from conftest import FINELOG_DEPLOYMENTS_PATH, bridge_config, deployment, healthy_k8s_routes, k8s_api, make_k8s_source
@@ -377,21 +378,22 @@ def test_alert_queries_use_int64_epoch_boundaries_and_project_timestamps():
         assert "timestamp_ms >= TIMESTAMP" not in sql
 
 
-def test_training_stall_query_bounds_enrollment_to_the_phase_heartbeat_window():
-    """Unbounded, this CTE scanned every telemetry_v1 row once a minute.
+def test_training_stall_query_bounds_each_metric_family_to_its_detection_window():
+    """Wide scans read telemetry_v1 once a minute and can saturate Finelog.
 
     Levanter republishes `phase` every 60s, so a live job always has an
-    enrollment row inside this window and the scan can prune by time.
+    enrollment row inside the stall window. Progress needs one extra stall
+    window so a metric that just became stale remains observable.
     """
     sql = telemetry_query(datetime(2026, 7, 28, 12, tzinfo=UTC))
-    phase_enrollment, recent_progress = sql.split("), recent_progress AS (")
 
-    assert "name = 'phase'" in phase_enrollment
+    assert sql.count('FROM "telemetry_v1"') == 1
+    assert "name IN ('phase', 'step', 'progress_time_seconds')" in sql
+    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:30:00') * 1000 AS BIGINT)" in sql
     assert (
-        "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:45:00') * 1000 AS BIGINT)" in phase_enrollment
+        "name <> 'phase' OR timestamp_ms >= "
+        "CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-28 11:45:00') * 1000 AS BIGINT)" in sql
     )
-    assert "name IN ('step', 'progress_time_seconds')" in recent_progress
-    assert "timestamp_ms >= CAST(EXTRACT(EPOCH FROM TIMESTAMP '2026-07-27 12:00:00') * 1000 AS BIGINT)" in sql
 
 
 class FakeLoomAlerts(LoomAlertClient):
@@ -509,6 +511,21 @@ def test_cache_coalesces_concurrent_misses_on_one_key():
 
     assert len(calls) == 1
     assert results == [7, 7, 7, 7]
+
+
+def test_cache_reuses_compute_failures_until_the_ttl_expires():
+    cache: TtlCache[int] = TtlCache(ttl=60.0)
+    calls: list[int] = []
+
+    def compute() -> int:
+        calls.append(1)
+        raise ValueError("upstream timed out")
+
+    for _ in range(3):
+        with pytest.raises(ValueError, match="upstream timed out"):
+            cache.get_or_compute("k", compute)
+
+    assert calls == [1]
 
 
 def test_cache_prunes_expired_entries_on_write():
