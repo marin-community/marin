@@ -767,10 +767,12 @@ class MoEMLP(eqx.Module):
             w_latent_down=(
                 None
                 if latent is None
-                else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(None, None))
+                else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(_FSDP_AXES, "model"))
             ),
             w_latent_up=(
-                None if latent is None else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P(None, None))
+                None
+                if latent is None
+                else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P("model", _FSDP_AXES))
             ),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
@@ -844,7 +846,7 @@ class MoEMLP(eqx.Module):
             routed_input = jnp.einsum(
                 "td,dl->tl",
                 x_flat,
-                reshard(self.w_latent_down, P(None, None)).astype(x_flat.dtype),
+                self.w_latent_down.astype(x_flat.dtype),
                 out_sharding=_batch_spec(),
             )
         moe_out = self.expert_mlp(
@@ -867,7 +869,7 @@ class MoEMLP(eqx.Module):
             routed_flat = jnp.einsum(
                 "tl,ld->td",
                 routed_flat,
-                reshard(self.w_latent_up, P(None, None)).astype(routed_flat.dtype),
+                self.w_latent_up.astype(routed_flat.dtype),
                 out_sharding=_batch_spec(),
             )
 
