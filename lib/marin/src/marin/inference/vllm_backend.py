@@ -7,9 +7,10 @@ import contextlib
 import os
 import socket
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -18,12 +19,12 @@ from marin.inference.config import (
     VllmLauncherType,
     VllmSource,
 )
-from marin.inference.tpu_vllm_pins import tpu_inference_fork_ref, vllm_fork_ref
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
     VllmEnvironment,
     VllmLauncher,
+    VllmLauncherWithEnvironment,
     VllmType,
     WorkspaceVllm,
 )
@@ -33,7 +34,10 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     if config.launcher is VllmLauncherType.WORKSPACE:
         return WorkspaceVllm()
     if config.launcher is VllmLauncherType.TPU:
-        return IsolatedTpuVllm(vllm_ref=vllm_fork_ref(), tpu_inference_ref=tpu_inference_fork_ref())
+        return IsolatedTpuVllm(
+            vllm_ref=VLLM_FORK_REQUIREMENT,
+            tpu_inference_ref=TPU_INFERENCE_FORK_REQUIREMENT,
+        )
     source = VllmType.MARIN_FORK if config.source is VllmSource.MARIN_FORK else VllmType.UPSTREAM
     version = config.version if source is VllmType.UPSTREAM else None
     if source is VllmType.UPSTREAM and version is None:
@@ -44,6 +48,15 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
         with_packages=config.uv_with_packages,
         extra_index_urls=config.uv_extra_index_urls,
     )
+
+
+def _with_subprocess_env(
+    launcher: VllmLauncher,
+    subprocess_env: Mapping[str, str] | None,
+) -> VllmLauncher:
+    if not subprocess_env:
+        return launcher
+    return VllmLauncherWithEnvironment(launcher, subprocess_env)
 
 
 def _reserve_localhost_port(host: str) -> int:
@@ -74,9 +87,7 @@ class VllmServedModel:
     environment: VllmEnvironment
 
     def check_alive(self) -> None:
-        server = self.environment.vllm_server
-        if server is not None and server.process.poll() is not None:
-            raise RuntimeError(f"vLLM server exited unexpectedly with code {server.process.returncode}")
+        self.environment.check_alive()
 
 
 @dataclass(frozen=True)
@@ -88,7 +99,60 @@ class VllmBackend:
 
     @contextlib.contextmanager
     def serve(self, spec: ModelSpec) -> Iterator[VllmServedModel]:
+        with self.start(spec) as environment:
+            environment.wait_until_ready()
+            yield VllmServedModel(
+                base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
+                model_id=spec.api_model,
+                environment=environment,
+            )
+
+    @contextlib.contextmanager
+    def start(
+        self,
+        spec: ModelSpec,
+        *,
+        extra_args: Sequence[str] = (),
+        subprocess_env: Mapping[str, str] | None = None,
+    ) -> Iterator[VllmEnvironment]:
+        """Start vLLM without imposing HTTP readiness on the caller."""
         resolved_port = _reserve_localhost_port(self.host) if self.port is None else self.port
+        model = self._model_config(spec)
+        launcher = _with_subprocess_env(vllm_launcher(self.config), subprocess_env)
+        with _chat_template_argument(spec.chat_template_content) as chat_template_args:
+            with VllmEnvironment(
+                model=model,
+                host=self.host,
+                port=resolved_port,
+                timeout_seconds=self.config.startup_timeout_seconds,
+                extra_args=self._serve_args(spec, chat_template_args, extra_args),
+                launcher=launcher,
+                compilation_cache_mode=self.config.compilation_cache,
+                wait_for_ready=False,
+            ) as environment:
+                yield environment
+
+    def _serve_args(
+        self,
+        spec: ModelSpec,
+        chat_template_args: Sequence[str],
+        extra_args: Sequence[str],
+    ) -> list[str]:
+        return [
+            *(
+                ("--tensor-parallel-size", str(spec.tensor_parallel_size))
+                if spec.tensor_parallel_size is not None
+                else ()
+            ),
+            "--served-model-name",
+            spec.api_model,
+            *(("--revision", spec.revision) if spec.revision is not None else ()),
+            *chat_template_args,
+            *self.config.extra_args,
+            *extra_args,
+        ]
+
+    def _model_config(self, spec: ModelSpec) -> InferenceModelConfig:
         engine_kwargs: dict[str, object] = {"dtype": spec.dtype}
         if spec.max_model_len is not None:
             engine_kwargs["max_model_len"] = spec.max_model_len
@@ -96,33 +160,4 @@ class VllmBackend:
             engine_kwargs["max_num_batched_tokens"] = self.config.max_num_batched_tokens
         if self.config.max_num_seqs is not None:
             engine_kwargs["max_num_seqs"] = self.config.max_num_seqs
-        model = InferenceModelConfig(name=spec.weights, path=spec.weights, engine_kwargs=engine_kwargs)
-        revision_args = ("--revision", spec.revision) if spec.revision is not None else ()
-        with _chat_template_argument(spec.chat_template_content) as chat_template_args:
-            with VllmEnvironment(
-                model=model,
-                host=self.host,
-                port=resolved_port,
-                timeout_seconds=self.config.startup_timeout_seconds,
-                extra_args=[
-                    *(
-                        ("--tensor-parallel-size", str(spec.tensor_parallel_size))
-                        if spec.tensor_parallel_size is not None
-                        else ()
-                    ),
-                    "--served-model-name",
-                    spec.api_model,
-                    *revision_args,
-                    *chat_template_args,
-                    *self.config.extra_args,
-                ],
-                launcher=vllm_launcher(self.config),
-                compilation_cache_mode=self.config.compilation_cache,
-            ) as environment:
-                if environment.model_id is None:
-                    raise RuntimeError("vLLM server did not report a model id")
-                yield VllmServedModel(
-                    base_url=environment.server_url.removesuffix(OPENAI_API_SUFFIX),
-                    model_id=spec.api_model,
-                    environment=environment,
-                )
+        return InferenceModelConfig(name=spec.weights, path=spec.weights, engine_kwargs=engine_kwargs)
