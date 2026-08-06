@@ -223,68 +223,82 @@ def sample_document(text: str, max_chars: int = EMBED_DOC_SAMPLE_CHARS) -> str:
 _READ_CHUNK_TARGET_BYTES = 64 * 1024 * 1024
 
 
-def _load_records_bounded(source: InputFileSpec | str) -> Iterator[dict]:
-    """Yield Parquet records without materializing a whole row group as Python objects.
+def rows_per_chunk(num_rows: int, nbytes: int, target_bytes: int = _READ_CHUNK_TARGET_BYTES) -> int:
+    """Rows to materialize at once, from a batch's own average row size.
 
-    Same records, same order as ``zephyr.readers.load_parquet``; only the
-    materialization granularity differs. Rows per chunk come from the batch's own
-    average row size, so megabyte-document sources get small chunks and small-document
-    sources get large ones.
+    Megabyte-document sources get small chunks and small-document sources get large
+    ones, without either needing to know the other's shape.
     """
+    if num_rows <= 0:
+        return 1
+    avg_row_bytes = max(1, nbytes // num_rows)
+    return max(1, target_bytes // avg_row_bytes)
+
+
+def _load_records_bounded(
+    source: InputFileSpec | str,
+    doc_sample_chars: int = EMBED_DOC_SAMPLE_CHARS,
+) -> Iterator[dict]:
+    """Yield Parquet records, truncated, without materializing a whole row group.
+
+    Truncation happens **here** rather than in the map: the map runs downstream of
+    ``window``, so truncating there would still let a window retain ``batch_size``
+    untruncated documents and scale with raw document size. Truncating at read time
+    bounds the reader, the window, and the embedder call at once.
+
+    Same records and order as ``zephyr.readers.load_parquet``, with ``text`` truncated.
+    """
+    n_bytes_in = 0
+    n_bytes_embedded = 0
+    n_truncated = 0
+
+    def prepare(records: list[dict]) -> Iterator[dict]:
+        nonlocal n_bytes_in, n_bytes_embedded, n_truncated
+        for record in records:
+            raw = record.get("text") or ""
+            kept = sample_document(raw, doc_sample_chars)
+            n_bytes_in += len(raw)
+            n_bytes_embedded += len(kept)
+            n_truncated += len(kept) < len(raw)
+            record["text"] = kept
+            yield record
+
     for batch in load_parquet_batch(source):
         if batch.num_rows == 0:
             continue
-        avg_row_bytes = max(1, batch.nbytes // batch.num_rows)
-        rows_per_chunk = max(1, _READ_CHUNK_TARGET_BYTES // avg_row_bytes)
-        if rows_per_chunk >= batch.num_rows:
-            yield from batch.to_pylist()
-            continue
-        for offset in range(0, batch.num_rows, rows_per_chunk):
-            yield from batch.slice(offset, rows_per_chunk).to_pylist()
+        per_chunk = rows_per_chunk(batch.num_rows, batch.nbytes, _READ_CHUNK_TARGET_BYTES)
+        for offset in range(0, batch.num_rows, per_chunk):
+            yield from prepare(batch.slice(offset, per_chunk).to_pylist())
+
+    counters.pipeline.update_counter("embed/bytes_in", n_bytes_in)
+    counters.pipeline.update_counter("embed/bytes_embedded", n_bytes_embedded)
+    counters.pipeline.update_counter("embed/docs_truncated", n_truncated)
 
 
 def _embed_shard(
     batches: Iterator[list[dict]],
     shard: ShardInfo,
-    doc_sample_chars: int = EMBED_DOC_SAMPLE_CHARS,
 ) -> Iterator[dict]:
     """Per-shard map: each ``batches`` window is one ``embedder(texts)`` call.
 
     Yields ``{id, embedding}`` records preserving input order. Emits zephyr
-    counters with the totals for the shard. Each document is first truncated to at most
-    ``doc_sample_chars`` via :func:`sample_document`, which bounds both the per-call
-    text and, with it, the whole window.
+    counters with the totals for the shard. ``text`` arrives already truncated from
+    :func:`_load_records_bounded`, so a window cannot retain oversized documents.
     """
     embedder = _load_embedder_from_shared()
     n_docs = 0
-    n_bytes = 0
-    n_bytes_embedded = 0
-    n_truncated = 0
     for batch in batches:
         ids = [r["id"] for r in batch]
-        raw_texts = [r["text"] or "" for r in batch]
-        texts = [sample_document(t, doc_sample_chars) for t in raw_texts]
+        texts = [r["text"] for r in batch]
         n_docs += len(ids)
-        n_bytes += sum(len(t) for t in raw_texts)
-        n_bytes_embedded += sum(len(t) for t in texts)
-        n_truncated += sum(1 for raw, kept in zip(raw_texts, texts, strict=True) if len(kept) < len(raw))
         raw = np.asarray(embedder(texts, progress_bars=False), dtype=np.float32)
         raw = _l2_normalize(raw)
         q = quantize_to_int8(raw)
         for i, did in enumerate(ids):
             yield {"id": did, "embedding": q[i].tolist()}
     counters.pipeline.update_counter("embed/docs_in", n_docs)
-    counters.pipeline.update_counter("embed/bytes_in", n_bytes)
-    counters.pipeline.update_counter("embed/bytes_embedded", n_bytes_embedded)
-    counters.pipeline.update_counter("embed/docs_truncated", n_truncated)
     counters.pipeline.update_counter("embed/shards_in", 1)
-    logger.info(
-        "shard %d/%d: %d docs (%.1f MB) encoded",
-        shard.shard_idx,
-        shard.total_shards,
-        n_docs,
-        n_bytes / 1024 / 1024,
-    )
+    logger.info("shard %d/%d: %d docs encoded", shard.shard_idx, shard.total_shards, n_docs)
 
 
 def embed_source(
@@ -339,9 +353,9 @@ def embed_source(
 
     ds = (
         Dataset.from_list(source_specs)
-        .flat_map(_load_records_bounded)
+        .flat_map(lambda spec, dsc=doc_sample_chars: _load_records_bounded(spec, dsc))
         .window(batch_size)
-        .map_shard(lambda batches, shard, dsc=doc_sample_chars: _embed_shard(batches, shard, dsc))
+        .map_shard(_embed_shard)
         .write_parquet(_output_path, schema=_EMBEDDING_SCHEMA, skip_existing=True)
     )
 
