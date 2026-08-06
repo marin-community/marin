@@ -39,6 +39,7 @@ def _artifact_names(package: str, version: str) -> list[str]:
                 "marin_zephyr",
                 "marin_levanter",
                 "marin_haliax",
+                "marin_finestore",
             )
             for filename in (
                 f"{distribution}-{version}-py3-none-any.whl",
