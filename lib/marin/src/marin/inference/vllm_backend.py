@@ -38,7 +38,12 @@ def vllm_launcher(config: VllmEngineConfig) -> VllmLauncher:
     version = config.version if source is VllmType.UPSTREAM else None
     if source is VllmType.UPSTREAM and version is None:
         version = DEFAULT_CUDA_VLLM_VERSION
-    return IsolatedCudaVllm(source=source, version=version)
+    return IsolatedCudaVllm(
+        source=source,
+        version=version,
+        with_packages=config.uv_with_packages,
+        extra_index_urls=config.uv_extra_index_urls,
+    )
 
 
 def _reserve_localhost_port(host: str) -> int:
