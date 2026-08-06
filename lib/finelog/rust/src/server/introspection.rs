@@ -22,7 +22,6 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::query::index_cache::IndexCache;
 use crate::query::metadata_cache_stats;
 use crate::server::diagnostics::read_proc_self_status_kb;
 use crate::store::segment::{
@@ -237,7 +236,7 @@ async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
     let started = process_started();
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
-    let (corrupt_bundles, corrupt_sections) = IndexCache::global().corruption_counts();
+    let corruption = store.index_cache().corruption_counts();
     Json(ServerInfoResponse {
         build: build_info(),
         process: ProcessInfo {
@@ -265,8 +264,8 @@ async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
             hits: cache.hits as i64,
         },
         index_cache: IndexCacheInfo {
-            corrupt_bundles: corrupt_bundles as i64,
-            corrupt_sections: corrupt_sections as i64,
+            corrupt_bundles: corruption.bundles as i64,
+            corrupt_sections: corruption.sections as i64,
         },
         format: FormatInfo {
             layout_version: LAYOUT_VERSION,
@@ -279,11 +278,14 @@ async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
 
 /// Read `path`'s footer and index bundle. `None` when the file is not readable here,
 /// which is the normal state of a `REMOTE` segment after eviction.
-fn physical_info(path: &str) -> Option<PhysicalInfo> {
+fn physical_info(
+    path: &str,
+    index_cache: &crate::query::index_cache::IndexCache,
+) -> Option<PhysicalInfo> {
     let path = Path::new(path);
     let physical = segment_physical(path).ok()?;
     let (source_id, rows) = segment_id_and_row_group_rows(path)?;
-    let index_bundle = IndexCache::global()
+    let index_bundle = index_cache
         .get_header(path, source_id, rows.iter().sum::<usize>() as u64)
         .map(|header| IndexBundleInfo {
             bytes: header.bundle_len as i64,
@@ -313,9 +315,15 @@ fn physical_info(path: &str) -> Option<PhysicalInfo> {
     })
 }
 
-fn to_segment_info(row: SegmentRow, physical: bool) -> SegmentInfo {
+fn to_segment_info(
+    row: SegmentRow,
+    physical: bool,
+    index_cache: &crate::query::index_cache::IndexCache,
+) -> SegmentInfo {
     SegmentInfo {
-        physical: physical.then(|| physical_info(&row.path)).flatten(),
+        physical: physical
+            .then(|| physical_info(&row.path, index_cache))
+            .flatten(),
         path: basename(&row.path),
         level: row.level,
         min_seq: row.min_seq,
@@ -334,12 +342,13 @@ async fn get_segments(
     Query(q): Query<SegmentsQuery>,
 ) -> impl IntoResponse {
     let namespace = q.namespace.clone();
+    let index_cache = Arc::clone(store.index_cache());
     // Footer reads are blocking file I/O, and a large namespace has hundreds of
     // them, so the whole listing runs off the async runtime.
     let listed = tokio::task::spawn_blocking(move || {
         store.list_segments(&q.namespace).map(|rows| {
             rows.into_iter()
-                .map(|row| to_segment_info(row, q.physical))
+                .map(|row| to_segment_info(row, q.physical, &index_cache))
                 .collect::<Vec<_>>()
         })
     })

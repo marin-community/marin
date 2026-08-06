@@ -19,6 +19,7 @@ use arrow::datatypes::SchemaRef;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
+use crate::query::index_cache::IndexCache;
 use crate::query::provider::NamespaceProvider;
 use crate::query::RegisteredProvider;
 use crate::store::catalog::{Catalog, RegisteredNamespace};
@@ -76,6 +77,7 @@ pub struct NamespaceSnapshot {
     pub schema: SchemaRef,
     pub paths: Vec<String>,
     pub min_seq: Option<i64>,
+    pub index_cache: Arc<IndexCache>,
 }
 
 /// Store backed by the Rust catalog plus per-namespace durability engines.
@@ -106,6 +108,8 @@ pub struct Store {
     /// write-preference is safer here — it cannot starve compaction/eviction under
     /// a steady query stream.
     query_visibility: Arc<tokio::sync::RwLock<()>>,
+    index_cache: Arc<IndexCache>,
+    index_backfill_slot: Arc<Mutex<()>>,
 }
 
 impl Store {
@@ -115,7 +119,11 @@ impl Store {
     ///
     /// `remote_log_dir` configures the per-namespace offload target (empty
     /// disables sync). Pass it through to each `Namespace`.
-    pub fn new(data_dir: Option<PathBuf>, remote_log_dir: String) -> Result<Store, StatsError> {
+    pub fn new(
+        data_dir: Option<PathBuf>,
+        remote_log_dir: String,
+        index_cache_mb: usize,
+    ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
             std::fs::create_dir_all(dir).map_err(|e| {
@@ -143,6 +151,8 @@ impl Store {
             catalog,
             engines: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
+            index_cache: Arc::new(IndexCache::new(index_cache_mb)),
+            index_backfill_slot: Arc::new(Mutex::new(())),
         };
         // Register/evolve the privileged `log` schema in the catalog BEFORE
         // rehydrate builds the engines, so the log engine is opened exactly once
@@ -254,6 +264,8 @@ impl Store {
             ns_dir,
             Arc::clone(&self.catalog),
             Arc::clone(&self.query_visibility),
+            Arc::clone(&self.index_cache),
+            Arc::clone(&self.index_backfill_slot),
             &self.remote_log_dir,
             policy,
         )?;
@@ -492,8 +504,11 @@ impl Store {
             };
             let arrow_schema = Arc::clone(engine.arrow_schema());
             let paths = engine.query_snapshot().paths;
-            let provider = NamespaceProvider::build(arrow_schema, &paths)
-                .map_err(|e| StatsError::Internal(format!("build provider {:?}: {e}", ns.name)))?;
+            let provider =
+                NamespaceProvider::build(arrow_schema, &paths, Arc::clone(&self.index_cache))
+                    .map_err(|e| {
+                        StatsError::Internal(format!("build provider {:?}: {e}", ns.name))
+                    })?;
             out.push(RegisteredProvider {
                 name: ns.name,
                 provider,
@@ -513,7 +528,12 @@ impl Store {
             schema: Arc::clone(engine.arrow_schema()),
             paths: segments.paths,
             min_seq: segments.min_seq,
+            index_cache: Arc::clone(&self.index_cache),
         })
+    }
+
+    pub fn index_cache(&self) -> &Arc<IndexCache> {
+        &self.index_cache
     }
 
     /// `name`'s durability high-water mark: every row with `seq <= value` has been sealed
@@ -718,7 +738,12 @@ mod tests {
     }
 
     fn mem_store() -> Store {
-        Store::new(None, String::new()).unwrap()
+        Store::new(
+            None,
+            String::new(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1047,7 +1072,12 @@ mod tests {
 
         // Boot over that catalog: the schema gains the nullable `cluster` column,
         // appended after the original five, and the policy is preserved.
-        let store = Store::new(Some(dir.clone()), String::new()).unwrap();
+        let store = Store::new(
+            Some(dir.clone()),
+            String::new(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+        )
+        .unwrap();
         let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
         assert_eq!(
             schema.column_names(),

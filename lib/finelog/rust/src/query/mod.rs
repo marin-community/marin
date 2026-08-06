@@ -439,12 +439,15 @@ pub async fn run_query_over(
     providers: Vec<RegisteredProvider>,
     sql: &str,
 ) -> DFResult<QueryResult> {
-    let summary_paths: HashMap<String, Vec<String>> = providers
+    let aggregate_sources: HashMap<String, exact_aggregate::AggregateSource> = providers
         .iter()
         .map(|provider| {
             (
                 provider.name.clone(),
-                provider.provider.segment_paths().to_vec(),
+                exact_aggregate::AggregateSource {
+                    segment_paths: provider.provider.segment_paths().to_vec(),
+                    index_cache: Arc::clone(provider.provider.index_cache()),
+                },
             )
         })
         .collect();
@@ -456,7 +459,7 @@ pub async fn run_query_over(
         ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))?;
     }
     ctx.add_optimizer_rule(Arc::new(exact_aggregate::ExactAggregateRewrite::new(
-        summary_paths,
+        aggregate_sources,
     )));
     let started = Instant::now();
     let result = async {
@@ -625,18 +628,6 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
-    }
-
-    #[test]
-    fn query_context_parallelizes_narrow_parquet_scans() {
-        let ctx = make_ctx();
-        let state = ctx.state();
-        let options = state.config_options();
-        assert_eq!(
-            options.optimizer.repartition_file_min_size,
-            PARQUET_REPARTITION_FILE_MIN_BYTES
-        );
-        assert!(options.execution.parquet.enable_page_index);
     }
 
     #[test]
@@ -828,7 +819,12 @@ mod tests {
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
 
-        let provider = NamespaceProvider::build(schema, &paths).unwrap();
+        let provider = NamespaceProvider::build(
+            schema,
+            &paths,
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap();
         let preds = build_log_predicates("/a/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
         let ctx = make_ctx();
         let rows = fetch_log_rows(
@@ -928,9 +924,13 @@ mod tests {
             let mut preds =
                 build_log_predicates("/job/", 0, MatchScope::MATCH_SCOPE_PREFIX).unwrap();
             add_cluster_filter(&mut preds.where_parts, cluster);
-            NamespaceProvider::build(Arc::clone(&full), &paths)
-                .map(|provider| (provider, preds))
-                .unwrap()
+            NamespaceProvider::build(
+                Arc::clone(&full),
+                &paths,
+                crate::query::index_cache::test_index_cache(),
+            )
+            .map(|provider| (provider, preds))
+            .unwrap()
         };
         let sorted_keys = |mut rows: Vec<crate::store::log_read::LogRow>| {
             rows.sort_by(|a, b| a.key.cmp(&b.key));

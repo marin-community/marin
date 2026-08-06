@@ -158,6 +158,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
         Store::new(
             Some(unique_dir("telemetry-query")),
             remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
         )
         .unwrap(),
     );

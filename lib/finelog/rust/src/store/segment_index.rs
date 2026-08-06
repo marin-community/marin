@@ -8,7 +8,7 @@ use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
 
 use crate::store::exact::{
-    self, ExactColumn, ExactIndexConfig, ExactSidecar, ProjectionDescriptor,
+    self, ExactColumn, ExactIndexConfig, ExactSection, ProjectionDescriptor,
 };
 use crate::store::index_bundle::{self, Exactness, SectionInput, SectionKind, SegmentBinding};
 use crate::store::schema::CoveringProjection;
@@ -19,6 +19,7 @@ const TRIGRAM_METHOD_VERSION: u8 = 1;
 const EXACT_POSTINGS_METHOD_VERSION: u8 = 1;
 const VALUE_COUNTS_METHOD_VERSION: u8 = 1;
 const PROJECTION_METHOD_VERSION: u8 = 1;
+pub const SOURCE_ROW_OFFSET_IDENTITY: &str = "source_segment_row_offset";
 
 /// Complete secondary-index policy for a namespace segment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -223,7 +224,7 @@ pub fn read_exact_section(
     bundle_path: &Path,
     header: &index_bundle::BundleHeader,
     kind: SectionKind,
-) -> Option<ExactSidecar> {
+) -> Option<ExactSection> {
     let section = header
         .sections
         .iter()
@@ -296,9 +297,15 @@ pub fn write_segment_index(
             "segment row count overflow",
         ));
     };
-    let Some((source_segment_id, _)) = segment_id_and_row_group_rows(parquet_path) else {
-        return Ok(SegmentIndexWrite::NotApplicable);
-    };
+    let (source_segment_id, _) = segment_id_and_row_group_rows(parquet_path).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "cannot read source segment footer for index build: {}",
+                parquet_path.display()
+            ),
+        )
+    })?;
 
     let mut sections = build_trigram_sections(batches, config);
     let mut referenced_projection_paths = BTreeSet::new();
@@ -333,7 +340,7 @@ pub fn write_segment_index(
                 descriptor,
                 file_segment_id: projection_segment_id.to_string(),
                 file_bytes: std::fs::metadata(&projection_path)?.len(),
-                row_identity: "source_segment_row_offset".to_string(),
+                row_identity: SOURCE_ROW_OFFSET_IDENTITY.to_string(),
             };
             sections.push(SectionInput {
                 id: projection_section_id(&projection.name),
@@ -405,10 +412,9 @@ fn build_trigram_sections(
         .collect()
 }
 
-fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSidecar) {
-    let postings = ExactSidecar {
+fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSection) {
+    let postings = ExactSection {
         total_rows: sidecar.total_rows,
-        projection_rows: None,
         columns: sidecar
             .columns
             .iter()
@@ -441,9 +447,8 @@ fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSideca
         });
     }
 
-    let counts = ExactSidecar {
+    let counts = ExactSection {
         total_rows: sidecar.total_rows,
-        projection_rows: None,
         columns: sidecar
             .columns
             .iter()
@@ -478,39 +483,66 @@ fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSideca
     }
 }
 
-fn remove_legacy_artifacts(parquet_path: &Path) {
-    for path in [
+pub fn legacy_artifact_paths(parquet_path: &Path) -> [PathBuf; 3] {
+    [
         trigram::sidecar_path(parquet_path),
         exact::sidecar_path(parquet_path),
         exact::projection_path(parquet_path),
-    ] {
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "failed to remove legacy index artifact")
-            }
+    ]
+}
+
+pub fn covering_projection_paths(parquet_path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let (Some(directory), Some(file_name)) = (parquet_path.parent(), parquet_path.file_name())
+    else {
+        return Ok(Vec::new());
+    };
+    let prefix = format!(
+        "{}{}",
+        file_name.to_string_lossy(),
+        exact::NAMED_PROJECTION_MARKER
+    );
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with(&prefix) && name.ends_with(".parquet") {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+pub fn remove_if_exists(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_legacy_artifacts(parquet_path: &Path) {
+    for path in legacy_artifact_paths(parquet_path) {
+        if let Err(error) = remove_if_exists(&path) {
+            tracing::warn!(path = %path.display(), %error, "failed to remove legacy index artifact");
         }
     }
 }
 
 fn remove_unreferenced_projections(parquet_path: &Path, referenced: &BTreeSet<PathBuf>) {
-    let (Some(directory), Some(file_name)) = (parquet_path.parent(), parquet_path.file_name())
-    else {
-        return;
+    let paths = match covering_projection_paths(parquet_path) {
+        Ok(paths) => paths,
+        Err(error) => {
+            tracing::warn!(path = %parquet_path.display(), %error, "failed to enumerate covering projections");
+            return;
+        }
     };
-    let prefix = format!("{}.fidx.", file_name.to_string_lossy());
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for path in entries.flatten().map(|entry| entry.path()) {
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !name.starts_with(&prefix) || !name.ends_with(".parquet") || referenced.contains(&path) {
+    for path in paths {
+        if referenced.contains(&path) {
             continue;
         }
-        match std::fs::remove_file(&path) {
+        match remove_if_exists(&path) {
             Ok(()) => {
                 tracing::debug!(path = %path.display(), "removed unreferenced covering projection")
             }
@@ -536,7 +568,13 @@ mod tests {
     use super::*;
     use crate::store::segment::write_segment_to_dir;
 
-    fn fixture() -> (PathBuf, RecordBatch, SegmentIndexConfig) {
+    struct Fixture {
+        parquet: PathBuf,
+        batch: RecordBatch,
+        config: SegmentIndexConfig,
+    }
+
+    fn fixture() -> Fixture {
         let directory = crate::test_support::unique_dir("segment_index_bundle");
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("seq", DataType::Int64, false),
@@ -586,12 +624,20 @@ mod tests {
             ],
             key_column: Some("service".to_string()),
         };
-        (parquet, batch, config)
+        Fixture {
+            parquet,
+            batch,
+            config,
+        }
     }
 
     #[test]
     fn one_bundle_contains_independent_methods_and_narrow_projection() {
-        let (parquet, batch, config) = fixture();
+        let Fixture {
+            parquet,
+            batch,
+            config,
+        } = fixture();
         assert_eq!(
             write_segment_index(&parquet, &[batch], &config).unwrap(),
             SegmentIndexWrite::Written
@@ -629,7 +675,11 @@ mod tests {
 
     #[test]
     fn policy_change_requires_rebuild() {
-        let (parquet, batch, config) = fixture();
+        let Fixture {
+            parquet,
+            batch,
+            config,
+        } = fixture();
         write_segment_index(&parquet, &[batch], &config).unwrap();
         assert!(!needs_rebuild(&parquet, 4, &config));
 
@@ -643,7 +693,11 @@ mod tests {
 
     #[test]
     fn rebuilding_removes_projection_no_longer_in_policy() {
-        let (parquet, batch, config) = fixture();
+        let Fixture {
+            parquet,
+            batch,
+            config,
+        } = fixture();
         write_segment_index(&parquet, std::slice::from_ref(&batch), &config).unwrap();
         let projection = exact::named_projection_path(&parquet, "training-status");
         assert!(projection.exists());

@@ -1,19 +1,21 @@
-//! Process-wide, memory-bounded cache for parsed `.fidx` bundle sections.
+//! Memory-bounded cache for parsed `.fidx` bundle sections.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-use crate::store::exact::ExactSidecar;
+use crate::store::exact::ExactSection;
 use crate::store::index_bundle::{self, BundleHeader, SectionKind};
+use crate::store::segment::segment_id_and_row_group_rows;
 use crate::store::segment_index::{
     parse_trigram_coverage, read_exact_section, trigram_section_id, TrigramCoverage,
 };
 use crate::store::trigram::{self, ColumnIndex};
 
-const DEFAULT_BUDGET_MB: usize = 256;
+pub const DEFAULT_INDEX_CACHE_MB: usize = 256;
 
 pub struct IndexCache {
     cache: Mutex<Lru>,
@@ -21,21 +23,29 @@ pub struct IndexCache {
     corrupt_sections: AtomicU64,
 }
 
-static CONFIGURED_BUDGET_MB: OnceLock<usize> = OnceLock::new();
+impl fmt::Debug for IndexCache {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IndexCache")
+            .field("corruption_counts", &self.corruption_counts())
+            .finish_non_exhaustive()
+    }
+}
 
-pub fn configure_index_cache(budget_mb: usize) -> Result<(), &'static str> {
-    CONFIGURED_BUDGET_MB
-        .set(budget_mb)
-        .map_err(|_| "index cache is already configured")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CorruptionCounts {
+    pub bundles: u64,
+    pub sections: u64,
+}
+
+pub struct IndexedSegment {
+    pub header: Arc<BundleHeader>,
+    pub row_group_rows: Arc<[usize]>,
 }
 
 impl IndexCache {
-    pub fn global() -> &'static Self {
-        static CACHE: OnceLock<IndexCache> = OnceLock::new();
-        CACHE.get_or_init(|| {
-            let budget = *CONFIGURED_BUDGET_MB.get_or_init(|| DEFAULT_BUDGET_MB);
-            Self::with_budget_bytes(budget.saturating_mul(1024 * 1024))
-        })
+    pub fn new(budget_mb: usize) -> Self {
+        Self::with_budget_bytes(budget_mb.saturating_mul(1024 * 1024))
     }
 
     fn with_budget_bytes(budget_bytes: usize) -> Self {
@@ -44,6 +54,17 @@ impl IndexCache {
             corrupt_bundles: AtomicU64::new(0),
             corrupt_sections: AtomicU64::new(0),
         }
+    }
+
+    /// Resolve the source footer and its matching bundle header as one lookup.
+    pub fn indexed_segment(&self, parquet_path: &Path) -> Option<IndexedSegment> {
+        let (source_id, row_group_rows) = segment_id_and_row_group_rows(parquet_path)?;
+        let source_rows = row_group_rows.iter().sum::<usize>() as u64;
+        let header = self.get_header(parquet_path, source_id, source_rows)?;
+        Some(IndexedSegment {
+            header,
+            row_group_rows,
+        })
     }
 
     /// Load a bundle only when it is bound to the current source segment.
@@ -121,7 +142,7 @@ impl IndexCache {
         parquet_path: &Path,
         header: &BundleHeader,
         kind: SectionKind,
-    ) -> Option<Arc<ExactSidecar>> {
+    ) -> Option<Arc<ExactSection>> {
         let bundle_path = index_bundle::bundle_path(parquet_path);
         let section = header
             .sections
@@ -148,11 +169,11 @@ impl IndexCache {
         self.cache.lock().unwrap().remove_path(bundle_path);
     }
 
-    pub fn corruption_counts(&self) -> (u64, u64) {
-        (
-            self.corrupt_bundles.load(Ordering::Relaxed),
-            self.corrupt_sections.load(Ordering::Relaxed),
-        )
+    pub fn corruption_counts(&self) -> CorruptionCounts {
+        CorruptionCounts {
+            bundles: self.corrupt_bundles.load(Ordering::Relaxed),
+            sections: self.corrupt_sections.load(Ordering::Relaxed),
+        }
     }
 
     fn lookup(&self, key: &Key) -> Option<Cached> {
@@ -179,6 +200,11 @@ impl IndexCache {
     }
 }
 
+#[cfg(test)]
+pub fn test_index_cache() -> Arc<IndexCache> {
+    Arc::new(IndexCache::new(16))
+}
+
 trait CachedValue<T> {
     fn value(self) -> Option<Arc<T>>;
 }
@@ -201,8 +227,8 @@ impl CachedValue<ColumnIndex> for Cached {
     }
 }
 
-impl CachedValue<ExactSidecar> for Cached {
-    fn value(self) -> Option<Arc<ExactSidecar>> {
+impl CachedValue<ExactSection> for Cached {
+    fn value(self) -> Option<Arc<ExactSection>> {
         match self {
             Self::Exact(value) => Some(value),
             _ => None,
@@ -214,7 +240,7 @@ impl CachedValue<ExactSidecar> for Cached {
 enum Cached {
     Header(Arc<BundleHeader>),
     Trigram(Arc<ColumnIndex>),
-    Exact(Arc<ExactSidecar>),
+    Exact(Arc<ExactSection>),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -340,9 +366,8 @@ mod tests {
             method_version: 1,
             exactness: Exactness::ExactRows,
             coverage: b"name".to_vec(),
-            payload: crate::store::exact::serialize(&ExactSidecar {
+            payload: crate::store::exact::serialize(&ExactSection {
                 total_rows: 7,
-                projection_rows: None,
                 columns: BTreeMap::new(),
             }),
         }
@@ -359,7 +384,13 @@ mod tests {
 
         index_bundle::write_bundle(&parquet, &binding(second_id), &[exact_section()]).unwrap();
         assert!(cache.get_header(&parquet, second_id, 7).is_some());
-        assert_eq!(cache.corruption_counts(), (0, 0));
+        assert_eq!(
+            cache.corruption_counts(),
+            CorruptionCounts {
+                bundles: 0,
+                sections: 0,
+            }
+        );
         std::fs::remove_file(index_bundle::bundle_path(&parquet)).ok();
     }
 
@@ -381,7 +412,13 @@ mod tests {
         assert!(cache
             .get_exact(&parquet, &header, SectionKind::ExactPostings)
             .is_none());
-        assert_eq!(cache.corruption_counts(), (0, 1));
+        assert_eq!(
+            cache.corruption_counts(),
+            CorruptionCounts {
+                bundles: 0,
+                sections: 1,
+            }
+        );
         std::fs::remove_file(path).ok();
 
         let parquet = temp_path("bundle_corruption.parquet");
@@ -394,7 +431,13 @@ mod tests {
             .write_all_at(&[0xff], 0)
             .unwrap();
         assert!(cache.get_header(&parquet, segment_id, 7).is_none());
-        assert_eq!(cache.corruption_counts(), (1, 1));
+        assert_eq!(
+            cache.corruption_counts(),
+            CorruptionCounts {
+                bundles: 1,
+                sections: 1,
+            }
+        );
         std::fs::remove_file(path).ok();
     }
 }

@@ -33,7 +33,6 @@ use datafusion_datasource_parquet::ParquetAccessPlan;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 
 use crate::query::index_cache::IndexCache;
-use crate::store::segment::segment_id_and_row_group_rows;
 use crate::store::trigram::{needle_trigrams, MIN_TRIGRAM_LEN};
 
 /// An inclusive key range constraining a single column, distilled from a query's
@@ -62,11 +61,12 @@ pub fn apply_with_needles(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
+    index_cache: &IndexCache,
 ) -> Arc<dyn ExecutionPlan> {
     if needles.is_empty() {
         return plan;
     }
-    let access_plans = build_access_plans(segment_paths, needles, key_ranges);
+    let access_plans = build_access_plans(segment_paths, needles, key_ranges, index_cache);
     if access_plans.is_empty() {
         return plan;
     }
@@ -290,13 +290,14 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
 /// out of scope, nothing pruned) is skipped — the file then scans unpruned,
 /// which is correct.
 ///
-/// Bundle reads go through the process-global [`IndexCache`], so a repeated
-/// query (the dashboard's poll loop) reuses parsed blooms instead of re-reading
-/// them, and the resident bytes stay within the cache budget.
+/// Bundle reads go through the store's shared [`IndexCache`], so a repeated
+/// query reuses parsed blooms and resident bytes stay within the configured
+/// budget.
 fn build_access_plans(
     segment_paths: &[String],
     needles: &HashMap<String, Vec<String>>,
     key_ranges: &HashMap<String, StringRange>,
+    manager: &IndexCache,
 ) -> HashMap<String, ParquetAccessPlan> {
     // Decompose each constrained column's needles into trigram sets ONCE, not
     // once per segment — a single query commonly spans dozens of segments.
@@ -313,7 +314,6 @@ fn build_access_plans(
         return HashMap::new();
     }
 
-    let manager = IndexCache::global();
     let mut out = HashMap::new();
     let mut total_row_groups = 0usize;
     let mut skipped_row_groups = 0usize;
@@ -325,11 +325,7 @@ fn build_access_plans(
         let Some(basename) = p.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let Some((source_id, row_group_rows)) = segment_id_and_row_group_rows(p) else {
-            continue;
-        };
-        let total_rows = row_group_rows.iter().sum::<usize>() as u64;
-        let Some(header) = manager.get_header(p, source_id, total_rows) else {
+        let Some(segment) = manager.indexed_segment(p) else {
             // No valid bundle: expected for L0 or an unindexed namespace.
             // segments. The file just scans unpruned — correct, never a false
             // negative.
@@ -348,7 +344,7 @@ fn build_access_plans(
         let mut span_rows = None;
         let mut applied_any = false;
         for (&col, needle_trigrams) in &trigrams_by_column {
-            let Some((coverage, index)) = manager.get_trigram(p, &header, col) else {
+            let Some((coverage, index)) = manager.get_trigram(p, &segment.header, col) else {
                 continue;
             };
             if !coverage.key_column.is_empty() {
@@ -387,19 +383,22 @@ fn build_access_plans(
         // Map the span mask onto the segment's row groups. This parses the whole
         // footer, so it runs last — after the cheap header and key-band checks,
         // and only for a segment an access plan would be attached to.
-        let Some(access) = span_access_plan(&keep, span_rows.unwrap_or_default(), &row_group_rows)
-        else {
+        let Some(access) = span_access_plan(
+            &keep,
+            span_rows.unwrap_or_default(),
+            &segment.row_group_rows,
+        ) else {
             tracing::warn!(
                 segment = basename,
                 index_spans = keep.len(),
                 index_span_rows = span_rows,
-                parquet_rows = row_group_rows.iter().sum::<usize>(),
+                parquet_rows = segment.row_group_rows.iter().sum::<usize>(),
                 "stale trigram section (spans do not cover the segment); scanning unpruned"
             );
             continue;
         };
-        total_row_groups += row_group_rows.len();
-        skipped_row_groups += row_group_rows.len() - access.row_group_indexes().len();
+        total_row_groups += segment.row_group_rows.len();
+        skipped_row_groups += segment.row_group_rows.len() - access.row_group_indexes().len();
         total_spans += keep.len();
         skipped_spans += keep.iter().filter(|&&k| !k).count();
         out.insert(basename.to_string(), access);
@@ -729,9 +728,10 @@ mod tests {
             "data".to_string(),
             vec!["Bootstrap completed for TPU".to_string()],
         )]);
+        let index_cache = IndexCache::new(16);
 
         // No key constraint: the needle prunes row group 0, so a plan is produced.
-        let unscoped = build_access_plans(&paths, &needles, &HashMap::new());
+        let unscoped = build_access_plans(&paths, &needles, &HashMap::new(), &index_cache);
         assert_eq!(
             unscoped.len(),
             1,
@@ -746,7 +746,10 @@ mod tests {
                 hi: Some(b"/system/z".to_vec()),
             },
         )]);
-        assert_eq!(build_access_plans(&paths, &needles, &inband).len(), 1);
+        assert_eq!(
+            build_access_plans(&paths, &needles, &inband, &index_cache).len(),
+            1
+        );
 
         // Out-of-band key range: the segment is scoped out before its blooms load,
         // so no access plan is emitted (the key statistics prune it at scan time).
@@ -757,7 +760,7 @@ mod tests {
                 hi: Some(b"/zzz9".to_vec()),
             },
         )]);
-        assert!(build_access_plans(&paths, &needles, &out_of_band).is_empty());
+        assert!(build_access_plans(&paths, &needles, &out_of_band, &index_cache).is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }

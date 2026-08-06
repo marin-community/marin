@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::store::trigram::ByteReader;
+
 const MAGIC: &[u8; 4] = b"FIDX";
 const VERSION: u8 = 1;
 const FIXED_PREFIX_LEN: usize = 4 + 1 + 1 + 4;
@@ -232,7 +234,7 @@ pub fn serialize(binding: &SegmentBinding, sections: &[SectionInput]) -> Option<
 }
 
 pub fn parse_header(bytes: &[u8]) -> Option<BundleHeader> {
-    let mut input = Cursor::new(bytes);
+    let mut input = ByteReader::new(bytes);
     if input.take(4)? != MAGIC || input.u8()? != VERSION {
         return None;
     }
@@ -259,11 +261,11 @@ pub fn parse_header(bytes: &[u8]) -> Option<BundleHeader> {
         let method_version = input.u8()?;
         let exactness = Exactness::from_byte(input.u8()?)?;
         let section_checksum_algorithm = ChecksumAlgorithm::from_byte(input.u8()?)?;
-        let id = String::from_utf8(input.bytes_u16()?.to_vec()).ok()?;
+        let id = String::from_utf8(take_bytes_u16(&mut input)?.to_vec()).ok()?;
         if !ids.insert(id.clone()) {
             return None;
         }
-        let coverage = input.bytes_u32()?.to_vec();
+        let coverage = take_bytes_u32(&mut input)?.to_vec();
         let offset = input.u64()?;
         let len = input.u64()?;
         let checksum = input.array::<CHECKSUM_LEN>()?;
@@ -284,7 +286,12 @@ pub fn parse_header(bytes: &[u8]) -> Option<BundleHeader> {
             checksum,
         });
     }
-    if input.position().checked_add(CHECKSUM_LEN)? != header_len {
+    if bytes
+        .len()
+        .checked_sub(input.remaining())?
+        .checked_add(CHECKSUM_LEN)?
+        != header_len
+    {
         return None;
     }
     let expected_directory_checksum = input.array::<CHECKSUM_LEN>()?;
@@ -372,56 +379,14 @@ fn put_bytes_u32(out: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
     Some(())
 }
 
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    position: usize,
+fn take_bytes_u16<'a>(input: &mut ByteReader<'a>) -> Option<&'a [u8]> {
+    let len = input.u16()? as usize;
+    input.take(len)
 }
 
-impl<'a> Cursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, position: 0 }
-    }
-
-    fn position(&self) -> usize {
-        self.position
-    }
-
-    fn take(&mut self, len: usize) -> Option<&'a [u8]> {
-        let end = self.position.checked_add(len)?;
-        let bytes = self.bytes.get(self.position..end)?;
-        self.position = end;
-        Some(bytes)
-    }
-
-    fn array<const N: usize>(&mut self) -> Option<[u8; N]> {
-        self.take(N)?.try_into().ok()
-    }
-
-    fn u8(&mut self) -> Option<u8> {
-        Some(self.take(1)?[0])
-    }
-
-    fn u16(&mut self) -> Option<u16> {
-        Some(u16::from_le_bytes(self.array()?))
-    }
-
-    fn u32(&mut self) -> Option<u32> {
-        Some(u32::from_le_bytes(self.array()?))
-    }
-
-    fn u64(&mut self) -> Option<u64> {
-        Some(u64::from_le_bytes(self.array()?))
-    }
-
-    fn bytes_u16(&mut self) -> Option<&'a [u8]> {
-        let len = self.u16()? as usize;
-        self.take(len)
-    }
-
-    fn bytes_u32(&mut self) -> Option<&'a [u8]> {
-        let len = self.u32()? as usize;
-        self.take(len)
-    }
+fn take_bytes_u32<'a>(input: &mut ByteReader<'a>) -> Option<&'a [u8]> {
+    let len = input.u32()? as usize;
+    input.take(len)
 }
 
 #[cfg(test)]

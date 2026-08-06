@@ -7,9 +7,9 @@ use std::sync::Arc;
 use crate::query::index_cache::IndexCache;
 use crate::store::exact::{coalesce_runs, RowRun};
 use crate::store::index_bundle::SectionKind;
-use crate::store::segment::{segment_id, segment_id_and_row_group_rows, segment_row_group_rows};
+use crate::store::segment::{segment_id, segment_row_group_rows};
 use crate::store::segment_index::{
-    parse_projection_reference, projection_path, ProjectionReference,
+    parse_projection_reference, projection_path, ProjectionReference, SOURCE_ROW_OFFSET_IDENTITY,
 };
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_plan::ExecutionPlan;
@@ -22,8 +22,8 @@ use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 const MAX_POSTINGS_SELECTED_NUMERATOR: u64 = 1;
 const MAX_POSTINGS_SELECTED_DENOMINATOR: u64 = 4;
 
-/// Exact string values implied for each column by top-level `=` and `IN`
-/// conjuncts. Multiple constraints on one column are intersected.
+/// Exact string values implied by top-level `=`, `IN`, and same-column `OR`
+/// expressions. Multiple conjunctive constraints on one column are intersected.
 pub fn values_by_column(filters: &[Expr]) -> HashMap<String, Vec<String>> {
     let mut constraints: HashMap<String, BTreeSet<String>> = HashMap::new();
     for filter in filters {
@@ -116,14 +116,17 @@ pub fn apply(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
+    index_cache: &IndexCache,
 ) -> Arc<dyn ExecutionPlan> {
     if constraints.is_empty() {
         return plan;
     }
-    let projections = build_projection_files(segment_paths, constraints, required_columns);
+    let projections =
+        build_projection_files(segment_paths, constraints, required_columns, index_cache);
     let projected_segments = projections.keys().cloned().collect();
     let plan = rewrite_projection_files(plan, &projections);
-    let access_plans = build_access_plans(segment_paths, constraints, &projected_segments);
+    let access_plans =
+        build_access_plans(segment_paths, constraints, &projected_segments, index_cache);
     if access_plans.is_empty() {
         return plan;
     }
@@ -141,6 +144,7 @@ fn build_projection_files(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
+    index_cache: &IndexCache,
 ) -> HashMap<String, ProjectionFile> {
     let mut projections = HashMap::new();
     let mut projected_rows = 0_u64;
@@ -150,14 +154,12 @@ fn build_projection_files(
         let Some(basename) = parquet.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some((source_id, rows)) = segment_id_and_row_group_rows(parquet) else {
+        let Some(segment) = index_cache.indexed_segment(parquet) else {
             continue;
         };
-        let source_rows = rows.iter().sum::<usize>() as u64;
-        let Some(header) = IndexCache::global().get_header(parquet, source_id, source_rows) else {
-            continue;
-        };
-        let Some(reference) = header
+        let source_rows = segment.row_group_rows.iter().sum::<usize>() as u64;
+        let Some(reference) = segment
+            .header
             .sections
             .iter()
             .filter(|section| section.kind == SectionKind::CoveringProjection)
@@ -216,7 +218,7 @@ fn projection_covers(
     constraints: &HashMap<String, Vec<String>>,
     required_columns: &BTreeSet<String>,
 ) -> bool {
-    reference.row_identity == "source_segment_row_offset"
+    reference.row_identity == SOURCE_ROW_OFFSET_IDENTITY
         && required_columns
             .iter()
             .all(|column| reference.descriptor.columns.contains(column))
@@ -233,11 +235,12 @@ fn build_access_plans(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
     projected_segments: &BTreeSet<String>,
+    index_cache: &IndexCache,
 ) -> HashMap<String, ParquetAccessPlan> {
     let mut plans = HashMap::new();
     let mut selected_rows = 0_u64;
     let mut total_rows = 0_u64;
-    let mut high_selectivity_segments = 0_usize;
+    let mut nonselective_segments = 0_usize;
     for segment in segment_paths {
         let parquet = Path::new(segment);
         let Some(basename) = parquet.file_name().and_then(|name| name.to_str()) else {
@@ -246,16 +249,12 @@ fn build_access_plans(
         if projected_segments.contains(basename) {
             continue;
         }
-        let Some((source_id, row_group_rows)) = segment_id_and_row_group_rows(parquet) else {
+        let Some(segment) = index_cache.indexed_segment(parquet) else {
             continue;
         };
-        let total_segment_rows = row_group_rows.iter().sum::<usize>() as u64;
-        let Some(header) = IndexCache::global().get_header(parquet, source_id, total_segment_rows)
-        else {
-            continue;
-        };
+        let total_segment_rows = segment.row_group_rows.iter().sum::<usize>() as u64;
         let Some(index) =
-            IndexCache::global().get_exact(parquet, &header, SectionKind::ExactPostings)
+            index_cache.get_exact(parquet, &segment.header, SectionKind::ExactPostings)
         else {
             continue;
         };
@@ -283,14 +282,14 @@ fn build_access_plans(
         };
         let segment_selected_rows = selected.iter().map(|run| run.len).sum::<u64>();
         if !postings_are_selective(segment_selected_rows, total_segment_rows) {
-            high_selectivity_segments += 1;
+            nonselective_segments += 1;
             continue;
         }
         selected_rows += segment_selected_rows;
         total_rows += total_segment_rows;
         plans.insert(
             basename.to_string(),
-            runs_access_plan(&selected, &row_group_rows),
+            runs_access_plan(&selected, &segment.row_group_rows),
         );
     }
     if !plans.is_empty() {
@@ -301,9 +300,9 @@ fn build_access_plans(
             "exact-value prune"
         );
     }
-    if high_selectivity_segments > 0 {
+    if nonselective_segments > 0 {
         tracing::debug!(
-            high_selectivity_segments,
+            nonselective_segments,
             max_selected_numerator = MAX_POSTINGS_SELECTED_NUMERATOR,
             max_selected_denominator = MAX_POSTINGS_SELECTED_DENOMINATOR,
             "exact postings retained too many rows; scanning those segments contiguously"

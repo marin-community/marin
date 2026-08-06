@@ -36,8 +36,6 @@ use crate::store::compaction::merge::{
     kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
 };
 use crate::store::compaction::planner::aggregate_key_bounds;
-use crate::store::exact::ExactIndexConfig;
-use crate::store::schema::CoveringProjection;
 use crate::store::segment::{segment_bounds, segment_writer_properties};
 use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
@@ -74,36 +72,6 @@ pub struct PlannedSwap {
     pub input_arrow_bytes: i64,
 }
 
-/// Derived indexes to write beside a merged segment.
-#[derive(Clone, Copy)]
-pub struct CompactionIndexes<'a> {
-    trigram_columns: &'a [&'a str],
-    exact: &'a [ExactIndexConfig],
-    projections: &'a [CoveringProjection],
-}
-
-impl<'a> CompactionIndexes<'a> {
-    pub fn new(trigram_columns: &'a [&'a str], exact: &'a [ExactIndexConfig]) -> Self {
-        Self {
-            trigram_columns,
-            exact,
-            projections: &[],
-        }
-    }
-
-    pub fn with_projections(
-        trigram_columns: &'a [&'a str],
-        exact: &'a [ExactIndexConfig],
-        projections: &'a [CoveringProjection],
-    ) -> Self {
-        Self {
-            trigram_columns,
-            exact,
-            projections,
-        }
-    }
-}
-
 /// Resolve `job` into a `PlannedSwap`, performing the heavy read/merge/write for
 /// a multi-input job. `dir` is the namespace directory; `arrow_schema` is the
 /// store-form schema (with `seq`); `key_column` is the namespace's ordering key.
@@ -120,7 +88,7 @@ pub fn run_job(
     dir: &Path,
     arrow_schema: &SchemaRef,
     key_column: Option<&str>,
-    indexes: CompactionIndexes<'_>,
+    index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
     input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
@@ -132,7 +100,7 @@ pub fn run_job(
             dir,
             arrow_schema,
             key_column,
-            indexes,
+            index_config,
             max_merge_arrow_bytes,
             &input_key_bounds,
         )
@@ -220,7 +188,7 @@ fn apply_merge(
     dir: &Path,
     arrow_schema: &SchemaRef,
     key_column: Option<&str>,
-    indexes: CompactionIndexes<'_>,
+    index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
@@ -340,13 +308,7 @@ fn apply_merge(
     // consuming this segment rebuilds it. A terminal-level segment that is never
     // re-merged (or one written before bundles existed) stays unindexed until
     // maintenance backfills it a few segments per tick.
-    let index_config = SegmentIndexConfig::from_policies(
-        indexes.trigram_columns.iter().copied(),
-        indexes.exact,
-        indexes.projections,
-        key_column.map(str::to_string),
-    );
-    if let Err(error) = write_segment_index(&merged_path, &merged, &index_config) {
+    if let Err(error) = write_segment_index(&merged_path, &merged, index_config) {
         tracing::warn!(path = %merged_path.display(), %error, "segment index bundle write failed");
     }
 
@@ -461,7 +423,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
     use super::*;
+    use crate::store::exact::ExactIndexConfig;
     use crate::store::index_bundle::{self, SectionKind};
+    use crate::store::schema::CoveringProjection;
     use crate::store::segment::{read_segment_footer, write_segment_to_dir};
     use crate::store::segment_index::{parse_projection_reference, read_exact_section};
     use crate::store::types::{seg_filename, SegmentRow};
@@ -606,7 +570,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::with_projections(&[], std::slice::from_ref(&exact), &projections),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                std::slice::from_ref(&exact),
+                &projections,
+                Some("key".to_string()),
+            ),
             i64::MAX,
             bounds,
         )
@@ -725,7 +694,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             one * 2 + 1,
             |_| (None, None),
         )
@@ -752,7 +726,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             i64::MAX,
             |_| (None, None),
         )
@@ -787,7 +766,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             i64::MAX,
             |_| (None, None),
         )
@@ -833,7 +817,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             i64::MAX,
             |_| (None, None),
         )
@@ -887,7 +876,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             i64::MAX,
             |_| (None, None),
         )
@@ -923,7 +917,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             1,
             |_| (None, None),
         )
@@ -980,7 +979,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             i64::MAX,
             bounds,
         )
@@ -1024,7 +1028,12 @@ mod tests {
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             i64::MAX,
             bounds,
         )
@@ -1100,7 +1109,7 @@ mod tests {
             &dir,
             &log,
             Some("key"),
-            CompactionIndexes::new(&["data"], &[]),
+            &SegmentIndexConfig::from_policies(["data"], &[], &[], Some("key".to_string())),
             i64::MAX,
             |_| (None, None),
         )
@@ -1108,14 +1117,14 @@ mod tests {
 
         // The merged output carries a trigram section whose mask prunes correctly.
         let out = PathBuf::from(&added_seg(&swap).path);
-        let sc = index_bundle::bundle_path(&out);
-        assert!(sc.exists(), "merge output must have an index bundle");
-        let header = index_bundle::read_header(&sc).unwrap();
+        let bundle = index_bundle::bundle_path(&out);
+        assert!(bundle.exists(), "merge output must have an index bundle");
+        let header = index_bundle::read_header(&bundle).unwrap();
         let section = header.section("trigram:data").unwrap();
         let coverage =
             crate::store::segment_index::parse_trigram_coverage(&section.coverage).unwrap();
         let index = crate::store::trigram::parse_column(
-            &index_bundle::read_section(&sc, &header, "trigram:data").unwrap(),
+            &index_bundle::read_section(&bundle, &header, "trigram:data").unwrap(),
             coverage.span_count,
         )
         .unwrap();
@@ -1222,7 +1231,12 @@ mod tests {
             &dir,
             &wide,
             Some("key"),
-            CompactionIndexes::new(&[], &[]),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
             i64::MAX,
             |_| (None, None),
         )

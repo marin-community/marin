@@ -69,8 +69,8 @@ class Column:
     # ``contains(col, …)`` / ``col LIKE '%…%'`` queries prune row groups instead
     # of full-scanning. Only meaningful for STRING columns; ignored otherwise.
     trigram_index: bool = False
-    # Exact string values covered by segment metadata and a compact filtered
-    # Parquet projection for equality and IN-list queries.
+    # Exact string values covered by source-row postings for equality and
+    # IN-list queries. Named covering projections are configured separately.
     exact_values: tuple[str, ...] = ()
     # Persist exact per-value counts for GROUP BY + COUNT queries.
     value_counts: bool = False

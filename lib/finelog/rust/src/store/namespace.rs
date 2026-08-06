@@ -35,13 +35,9 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::query::index_cache::IndexCache;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
-use crate::store::compaction::executor::{
-    read_segment_projected, run_job, CompactionIndexes, PlannedSwap,
-};
+use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
 use crate::store::compaction::planner::plan;
-use crate::store::exact::{
-    projection_path as exact_projection_path, sidecar_path as exact_sidecar_path, ExactIndexConfig,
-};
+use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
@@ -52,56 +48,46 @@ use crate::store::segment::{
     write_segment_to_dir,
 };
 use crate::store::segment_index::{
-    needs_rebuild as segment_index_needs_rebuild, write_segment_index, SegmentIndexConfig,
-    SegmentIndexWrite,
+    covering_projection_paths, legacy_artifact_paths, needs_rebuild as segment_index_needs_rebuild,
+    remove_if_exists, write_segment_index, SegmentIndexConfig, SegmentIndexWrite,
 };
-use crate::store::trigram::sidecar_path;
 use crate::store::types::{basename, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
 /// Best-effort removal of a segment's derived index files, co-located with every
 /// parquet unlink. Missing artifacts are not errors.
 fn remove_index_artifacts(parquet_path: &str) {
     let parquet = Path::new(parquet_path);
-    let mut artifacts = vec![
-        (
-            crate::store::index_bundle::bundle_path(parquet),
-            "index bundle",
-        ),
-        (sidecar_path(parquet), "legacy trigram"),
-        (exact_sidecar_path(parquet), "legacy exact"),
-        (exact_projection_path(parquet), "legacy exact projection"),
-    ];
-    if let (Some(directory), Some(file_name)) = (parquet.parent(), parquet.file_name()) {
-        let prefix = format!("{}.fidx.", file_name.to_string_lossy());
-        if let Ok(entries) = std::fs::read_dir(directory) {
-            artifacts.extend(entries.flatten().filter_map(|entry| {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                (name.starts_with(&prefix) && name.ends_with(".parquet"))
-                    .then(|| (entry.path(), "covering projection"))
-            }));
+    let mut artifacts = vec![(
+        crate::store::index_bundle::bundle_path(parquet),
+        "index bundle",
+    )];
+    artifacts.extend(
+        legacy_artifact_paths(parquet)
+            .into_iter()
+            .map(|path| (path, "legacy index")),
+    );
+    match covering_projection_paths(parquet) {
+        Ok(paths) => artifacts.extend(paths.into_iter().map(|path| (path, "covering projection"))),
+        Err(error) => {
+            tracing::warn!(path = %parquet.display(), %error, "failed to enumerate segment index artifacts");
         }
     }
     for (path, kind) in artifacts {
-        if let Err(e) = std::fs::remove_file(&path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(path = %path.display(), error = %e, index_artifact = kind, "failed to remove segment index artifact");
-            }
+        if let Err(error) = remove_if_exists(&path) {
+            tracing::warn!(path = %path.display(), %error, index_artifact = kind, "failed to remove segment index artifact");
         }
     }
 }
 
 fn remove_orphaned_index_artifact(namespace: &str, path: &Path, kind: &str) {
-    if let Err(error) = std::fs::remove_file(path) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(
-                namespace,
-                path = %path.display(),
-                index_artifact = kind,
-                %error,
-                "failed to remove orphaned segment index artifact"
-            );
-        }
+    if let Err(error) = remove_if_exists(path) {
+        tracing::warn!(
+            namespace,
+            path = %path.display(),
+            index_artifact = kind,
+            %error,
+            "failed to remove orphaned segment index artifact"
+        );
     }
 }
 
@@ -159,14 +145,6 @@ const REWRITE_LAYOUT_BUDGET: Duration = Duration::from_secs(3);
 /// A namespace that cannot take the permit skips the step for this tick rather
 /// than queueing behind it, which would stall the rest of its maintenance.
 static REWRITE_SLOT: Mutex<()> = Mutex::new(());
-
-/// Process-wide permit for historical index construction.
-///
-/// Projection builds scan and compress source columns, so allowing every
-/// namespace's maintenance loop to backfill concurrently can recreate the CPU
-/// and page-cache pressure this index family is meant to prevent. A namespace
-/// that misses the permit retries on its next maintenance tick.
-static INDEX_BACKFILL_SLOT: Mutex<()> = Mutex::new(());
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -256,6 +234,10 @@ pub struct Namespace {
     /// long after there is nothing left to rewrite. A path's layout only ever
     /// changes because this pass changed it.
     current_layouts: Mutex<HashSet<String>>,
+    index_cache: Arc<IndexCache>,
+    /// Shared by every namespace in this store so historical projection builds
+    /// cannot saturate the process with concurrent scans and compression.
+    index_backfill_slot: Arc<Mutex<()>>,
 }
 
 /// Segments the index backfill cannot bring up to date, and the indexed set
@@ -293,18 +275,6 @@ struct BackfillCandidate {
     expected_rows: i64,
 }
 
-#[derive(Clone, Copy)]
-enum BackfillWrite {
-    Written,
-    NotApplicable,
-}
-
-struct BackfillRun<'a> {
-    projection: &'a [&'a str],
-    skips: &'a Mutex<IndexBackfillSkips>,
-    kind: &'static str,
-}
-
 /// A namespace's sealed local segments as one consistent observation: the files a
 /// scan may read, and the lowest `seq` any of them holds.
 pub struct SegmentSnapshot {
@@ -335,6 +305,8 @@ impl Namespace {
         data_dir: Option<PathBuf>,
         catalog: Arc<Catalog>,
         query_visibility: Arc<RwLock<()>>,
+        index_cache: Arc<IndexCache>,
+        index_backfill_slot: Arc<Mutex<()>>,
         remote_log_dir: &str,
         storage_policy: StoragePolicy,
     ) -> Result<Arc<Namespace>, StatsError> {
@@ -418,6 +390,8 @@ impl Namespace {
             task_handles: Mutex::new(Vec::new()),
             index_backfill_skips: Mutex::new(IndexBackfillSkips::default()),
             current_layouts: Mutex::new(HashSet::new()),
+            index_cache,
+            index_backfill_slot,
         });
 
         // Refresh the catalog from the adopted deque so the segments table
@@ -871,6 +845,12 @@ impl Namespace {
     fn run_one_job(&self, dir: &std::path::Path, job: &CompactionJob) -> Result<(), StatsError> {
         let indexed = self.indexed_columns();
         let exact_indexes = self.exact_indexes();
+        let index_config = SegmentIndexConfig::from_policies(
+            indexed.iter().copied(),
+            &exact_indexes,
+            &self.schema.projections,
+            self.key_column.clone(),
+        );
         let started = Instant::now();
         tracing::info!(
             namespace = %self.name,
@@ -885,7 +865,7 @@ impl Namespace {
             dir,
             &self.arrow_schema,
             self.key_column.as_deref(),
-            CompactionIndexes::with_projections(&indexed, &exact_indexes, &self.schema.projections),
+            &index_config,
             self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
         )?;
@@ -1018,11 +998,7 @@ impl Namespace {
             })?;
             // The query path no longer reads legacy containers. A source rename
             // would orphan them, so delete them instead of carrying them forward.
-            for legacy in [
-                sidecar_path(from),
-                exact_sidecar_path(from),
-                exact_projection_path(from),
-            ] {
+            for legacy in legacy_artifact_paths(from) {
                 remove_orphaned_index_artifact(&self.name, &legacy, "legacy index");
             }
             let (bundle_from, bundle_to) = (
@@ -1038,27 +1014,28 @@ impl Namespace {
             if let (Some(directory), Some(from_name), Some(to_name)) =
                 (from.parent(), from.file_name(), to.file_name())
             {
-                let prefix = format!("{}.fidx.", from_name.to_string_lossy());
-                if let Ok(entries) = std::fs::read_dir(directory) {
-                    for entry in entries.flatten() {
-                        let name = entry.file_name();
-                        let name = name.to_string_lossy();
-                        let Some(suffix) = name.strip_prefix(&prefix) else {
-                            continue;
-                        };
-                        if !suffix.ends_with(".parquet") {
-                            continue;
+                let prefix = format!("{}{NAMED_PROJECTION_MARKER}", from_name.to_string_lossy());
+                match covering_projection_paths(from) {
+                    Ok(projections) => {
+                        for source in projections {
+                            let name = source.file_name().and_then(|name| name.to_str()).unwrap();
+                            let suffix = name.strip_prefix(&prefix).unwrap();
+                            let destination = directory.join(format!(
+                                "{}{NAMED_PROJECTION_MARKER}{suffix}",
+                                to_name.to_string_lossy()
+                            ));
+                            if let Err(error) = std::fs::rename(&source, &destination) {
+                                tracing::warn!(namespace = %self.name, from = %source.display(), %error, "failed to carry covering projection on level bump");
+                                remove_orphaned_index_artifact(
+                                    &self.name,
+                                    &source,
+                                    "covering projection",
+                                );
+                            }
                         }
-                        let destination =
-                            directory.join(format!("{}.fidx.{suffix}", to_name.to_string_lossy()));
-                        if let Err(error) = std::fs::rename(entry.path(), &destination) {
-                            tracing::warn!(namespace = %self.name, from = %entry.path().display(), %error, "failed to carry covering projection on level bump");
-                            remove_orphaned_index_artifact(
-                                &self.name,
-                                &entry.path(),
-                                "covering projection",
-                            );
-                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(namespace = %self.name, path = %from.display(), %error, "failed to enumerate covering projections on level bump")
                     }
                 }
             }
@@ -1309,95 +1286,6 @@ impl Namespace {
 
     // ----- segment index backfill ---------------------------------------
 
-    fn index_backfill_candidates(
-        &self,
-        skips: &Mutex<IndexBackfillSkips>,
-        fingerprint: &[&str],
-        max: usize,
-        select: impl Fn(&LocalSegment) -> Option<BackfillCandidate>,
-    ) -> Vec<BackfillCandidate> {
-        let segments: Vec<LocalSegment> = self
-            .inner
-            .lock()
-            .unwrap()
-            .local_segments
-            .iter()
-            .cloned()
-            .collect();
-        let mut skips = skips.lock().unwrap();
-        let live: HashSet<&str> = segments
-            .iter()
-            .map(|segment| segment.path.as_str())
-            .collect();
-        skips.reconcile(fingerprint, &live);
-        segments
-            .iter()
-            .filter(|segment| !skips.paths.contains(&segment.path))
-            .filter_map(select)
-            .take(max)
-            .collect()
-    }
-
-    fn run_index_backfill(
-        &self,
-        candidates: Vec<BackfillCandidate>,
-        run: BackfillRun<'_>,
-        write: impl Fn(&Path, &[RecordBatch]) -> std::io::Result<BackfillWrite>,
-        still_missing: impl Fn(&BackfillCandidate) -> bool,
-        on_written: impl Fn(&Path),
-    ) -> usize {
-        let mut built = 0;
-        for candidate in candidates {
-            let path = Path::new(&candidate.path);
-            let batches = match read_segment_projected(path, Some(run.projection)) {
-                Ok(batches) => batches,
-                Err(error) => {
-                    tracing::warn!(
-                        namespace = %self.name,
-                        path = %candidate.path,
-                        index_artifact = run.kind,
-                        %error,
-                        "index backfill read failed"
-                    );
-                    continue;
-                }
-            };
-            match write(path, &batches) {
-                Ok(BackfillWrite::Written) => {
-                    on_written(path);
-                    built += 1;
-                    tracing::debug!(
-                        namespace = %self.name,
-                        path = %candidate.path,
-                        index_artifact = run.kind,
-                        "backfilled segment index"
-                    );
-                }
-                Ok(BackfillWrite::NotApplicable) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        namespace = %self.name,
-                        path = %candidate.path,
-                        index_artifact = run.kind,
-                        %error,
-                        "index backfill write failed"
-                    );
-                    continue;
-                }
-            }
-            if still_missing(&candidate) {
-                tracing::debug!(
-                    namespace = %self.name,
-                    path = %candidate.path,
-                    index_artifact = run.kind,
-                    "segment cannot satisfy the current index policy; not retrying"
-                );
-                run.skips.lock().unwrap().paths.insert(candidate.path);
-            }
-        }
-        built
-    }
-
     /// Rebuild complete segment-index bundles for up to `max` local L>=1 files.
     ///
     /// All methods share one projected source read. The bundle is published
@@ -1411,53 +1299,78 @@ impl Namespace {
         if config.is_empty() {
             return 0;
         }
-        let Ok(_slot) = INDEX_BACKFILL_SLOT.try_lock() else {
+        let Ok(_slot) = self.index_backfill_slot.try_lock() else {
             return 0;
         };
+        let segments: Vec<LocalSegment> = self
+            .inner
+            .lock()
+            .unwrap()
+            .local_segments
+            .iter()
+            .cloned()
+            .collect();
         let fingerprint = format!("{:?}", config.policy_fingerprint());
-        let candidates = self.index_backfill_candidates(
-            &self.index_backfill_skips,
-            &[fingerprint.as_str()],
-            max,
-            |segment| {
-                (segment.level >= 1
-                    && self.layout_is_current(&segment.path)
-                    && segment_index_needs_rebuild(
-                        Path::new(&segment.path),
-                        segment.row_count,
-                        &config,
-                    ))
-                .then(|| BackfillCandidate {
+        let candidates = {
+            let mut skips = self.index_backfill_skips.lock().unwrap();
+            let live: HashSet<&str> = segments
+                .iter()
+                .map(|segment| segment.path.as_str())
+                .collect();
+            skips.reconcile(&[fingerprint.as_str()], &live);
+            segments
+                .iter()
+                .filter(|segment| !skips.paths.contains(&segment.path))
+                .filter(|segment| {
+                    segment.level >= 1
+                        && self.layout_is_current(&segment.path)
+                        && segment_index_needs_rebuild(
+                            Path::new(&segment.path),
+                            segment.row_count,
+                            &config,
+                        )
+                })
+                .take(max)
+                .map(|segment| BackfillCandidate {
                     path: segment.path.clone(),
                     expected_rows: segment.row_count,
                 })
-            },
-        );
+                .collect::<Vec<_>>()
+        };
         let projection = config.input_columns();
-        self.run_index_backfill(
-            candidates,
-            BackfillRun {
-                projection: &projection,
-                skips: &self.index_backfill_skips,
-                kind: "index bundle",
-            },
-            |path, batches| {
-                write_segment_index(path, batches, &config).map(|written| match written {
-                    SegmentIndexWrite::Written => BackfillWrite::Written,
-                    SegmentIndexWrite::NotApplicable => BackfillWrite::NotApplicable,
-                })
-            },
-            |candidate| {
-                segment_index_needs_rebuild(
-                    Path::new(&candidate.path),
-                    candidate.expected_rows,
-                    &config,
-                )
-            },
-            |path| {
-                IndexCache::global().invalidate(&crate::store::index_bundle::bundle_path(path));
-            },
-        )
+        let mut built = 0;
+        for candidate in candidates {
+            let path = Path::new(&candidate.path);
+            let batches = match read_segment_projected(path, Some(&projection)) {
+                Ok(batches) => batches,
+                Err(error) => {
+                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill read failed");
+                    continue;
+                }
+            };
+            match write_segment_index(path, &batches, &config) {
+                Ok(SegmentIndexWrite::Written) => {
+                    self.index_cache
+                        .invalidate(&crate::store::index_bundle::bundle_path(path));
+                    built += 1;
+                    tracing::debug!(namespace = %self.name, path = %candidate.path, "backfilled segment index bundle");
+                }
+                Ok(SegmentIndexWrite::NotApplicable) => {}
+                Err(error) => {
+                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill write failed");
+                    continue;
+                }
+            }
+            if segment_index_needs_rebuild(path, candidate.expected_rows, &config) {
+                tracing::debug!(namespace = %self.name, path = %candidate.path, "segment cannot satisfy the current index policy; not retrying");
+                self.index_backfill_skips
+                    .lock()
+                    .unwrap()
+                    .paths
+                    .insert(candidate.path);
+            }
+        }
+        built
     }
 
     fn layout_is_current(&self, path: &str) -> bool {
@@ -2197,6 +2110,8 @@ mod tests {
             data_dir,
             catalog,
             Arc::new(RwLock::new(())),
+            crate::query::index_cache::test_index_cache(),
+            Arc::new(Mutex::new(())),
             "",
             StoragePolicy::default(),
         )
@@ -2218,6 +2133,8 @@ mod tests {
             data_dir,
             catalog,
             Arc::new(RwLock::new(())),
+            crate::query::index_cache::test_index_cache(),
+            Arc::new(Mutex::new(())),
             remote_log_dir,
             policy,
         )

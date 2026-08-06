@@ -2,15 +2,15 @@
 //!
 //! The fast path is deliberately narrow. It recognizes one unfiltered table
 //! scan, one string grouping column, and one ordinary `COUNT(*)` or
-//! `COUNT(grouping_column)`. Any extra relational operation falls back to
-//! DataFusion. Likewise, every visible segment must have a complete count
-//! summary; partial backfill never contributes a partial answer.
+//! `COUNT(grouping_column)`. Because the optimizer rewrites bottom-up, outer
+//! projections, sorts, and limits continue to compose around the indexed
+//! aggregate. Every visible segment must have a complete count summary;
+//! partial backfill never contributes a partial answer.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
@@ -33,11 +33,8 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use crate::query::index_cache::IndexCache;
 use crate::query::QueryResult;
 use crate::store::index_bundle::SectionKind;
-use crate::store::segment::segment_id_and_row_group_rows;
 
 const MAX_COMBINED_COUNT_VALUES: usize = 16_384;
-
-static NEXT_RESULT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CountMode {
@@ -63,8 +60,7 @@ pub struct CountRequest {
 /// Logical node emitted when every visible segment has an exact count section.
 #[derive(Clone)]
 struct ExactAggregateNode {
-    result_id: u64,
-    result: QueryResult,
+    result: Arc<QueryResult>,
     schema: DFSchemaRef,
     table: String,
     column: String,
@@ -74,7 +70,6 @@ struct ExactAggregateNode {
 impl fmt::Debug for ExactAggregateNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExactAggregateNode")
-            .field("result_id", &self.result_id)
             .field("table", &self.table)
             .field("column", &self.column)
             .field("segments", &self.segments)
@@ -84,7 +79,7 @@ impl fmt::Debug for ExactAggregateNode {
 
 impl PartialEq for ExactAggregateNode {
     fn eq(&self, other: &Self) -> bool {
-        self.result_id == other.result_id
+        Arc::ptr_eq(&self.result, &other.result)
     }
 }
 
@@ -92,13 +87,13 @@ impl Eq for ExactAggregateNode {}
 
 impl PartialOrd for ExactAggregateNode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.result_id.partial_cmp(&other.result_id)
+        (Arc::as_ptr(&self.result) as usize).partial_cmp(&(Arc::as_ptr(&other.result) as usize))
     }
 }
 
 impl Hash for ExactAggregateNode {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.result_id.hash(state);
+        (Arc::as_ptr(&self.result) as usize).hash(state);
     }
 }
 
@@ -144,12 +139,18 @@ impl UserDefinedLogicalNodeCore for ExactAggregateNode {
 /// Replaces a supported grouped count with a planner-visible exact-index node.
 #[derive(Debug)]
 pub struct ExactAggregateRewrite {
-    segment_paths: HashMap<String, Vec<String>>,
+    sources: HashMap<String, AggregateSource>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AggregateSource {
+    pub segment_paths: Vec<String>,
+    pub index_cache: Arc<IndexCache>,
 }
 
 impl ExactAggregateRewrite {
-    pub fn new(segment_paths: HashMap<String, Vec<String>>) -> Self {
-        Self { segment_paths }
+    pub fn new(sources: HashMap<String, AggregateSource>) -> Self {
+        Self { sources }
     }
 }
 
@@ -170,21 +171,19 @@ impl OptimizerRule for ExactAggregateRewrite {
         let Some(request) = count_request(&plan) else {
             return Ok(Transformed::no(plan));
         };
-        let Some(paths) = self.segment_paths.get(&request.table) else {
+        let Some(source) = self.sources.get(&request.table) else {
             return Ok(Transformed::no(plan));
         };
         let schema = Arc::clone(plan.schema());
-        let Some(result) = execute(&request, paths)? else {
+        let Some(result) = execute(&request, &source.segment_paths, &source.index_cache)? else {
             return Ok(Transformed::no(plan));
         };
-        let result_id = NEXT_RESULT_ID.fetch_add(1, Ordering::Relaxed);
         let node = ExactAggregateNode {
-            result_id,
-            result,
+            result: Arc::new(result),
             schema,
             table: request.table,
             column: request.column,
-            segments: paths.len(),
+            segments: source.segment_paths.len(),
         };
         Ok(Transformed::yes(LogicalPlan::Extension(Extension {
             node: Arc::new(node),
@@ -234,8 +233,8 @@ impl QueryPlanner for FinelogQueryPlanner {
     }
 }
 
-/// Recognize the exact aggregate shape without accepting semantically richer
-/// plans such as filters, sorts, limits, distinct aggregates, or joins.
+/// Recognize the exact aggregate shape without accepting filters, distinct
+/// aggregates, joins, or other operations below the grouped count.
 pub fn count_request(plan: &LogicalPlan) -> Option<CountRequest> {
     let (aggregate, output) = match plan {
         LogicalPlan::Projection(projection) => {
@@ -329,19 +328,18 @@ fn output_column(expr: &Expr, group_name: &str, count_name: &str) -> Option<Outp
 ///
 /// `Ok(None)` means at least one segment is absent, stale, malformed, or lacks
 /// the requested column summary; the caller must execute the original query.
-pub fn execute(request: &CountRequest, segment_paths: &[String]) -> DFResult<Option<QueryResult>> {
+pub fn execute(
+    request: &CountRequest,
+    segment_paths: &[String],
+    index_cache: &IndexCache,
+) -> DFResult<Option<QueryResult>> {
     let mut combined: BTreeMap<Option<String>, u64> = BTreeMap::new();
     for path in segment_paths {
         let parquet = Path::new(path);
-        let Some((source_id, row_groups)) = segment_id_and_row_group_rows(parquet) else {
+        let Some(segment) = index_cache.indexed_segment(parquet) else {
             return Ok(None);
         };
-        let parquet_rows = row_groups.iter().sum::<usize>() as u64;
-        let Some(header) = IndexCache::global().get_header(parquet, source_id, parquet_rows) else {
-            return Ok(None);
-        };
-        let Some(index) =
-            IndexCache::global().get_exact(parquet, &header, SectionKind::ValueCounts)
+        let Some(index) = index_cache.get_exact(parquet, &segment.header, SectionKind::ValueCounts)
         else {
             return Ok(None);
         };
@@ -533,7 +531,8 @@ mod tests {
             ])),
         };
         let paths = vec![parquet.to_string_lossy().into_owned()];
-        let result = execute(&request, &paths).unwrap().unwrap();
+        let index_cache = IndexCache::new(16);
+        let result = execute(&request, &paths, &index_cache).unwrap().unwrap();
         let values = result.batches[0]
             .column(0)
             .as_any()
@@ -555,8 +554,8 @@ mod tests {
         assert_eq!(rows, vec![(None, 0), (Some("api"), 1), (Some("worker"), 2)]);
 
         std::fs::remove_file(crate::store::index_bundle::bundle_path(&parquet)).unwrap();
-        IndexCache::global().invalidate(&crate::store::index_bundle::bundle_path(&parquet));
-        assert!(execute(&request, &paths).unwrap().is_none());
+        index_cache.invalidate(&crate::store::index_bundle::bundle_path(&parquet));
+        assert!(execute(&request, &paths, &index_cache).unwrap().is_none());
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -593,6 +592,7 @@ mod tests {
         let provider = crate::query::provider::NamespaceProvider::build(
             source_schema,
             std::slice::from_ref(&path),
+            crate::query::index_cache::test_index_cache(),
         )
         .unwrap();
         let ctx = crate::query::make_ctx();
@@ -600,7 +600,10 @@ mod tests {
             .unwrap();
         ctx.add_optimizer_rule(Arc::new(ExactAggregateRewrite::new(HashMap::from([(
             "telemetry_v1".to_string(),
-            vec![path],
+            AggregateSource {
+                segment_paths: vec![path],
+                index_cache: crate::query::index_cache::test_index_cache(),
+            },
         )]))));
         let batches = ctx
             .sql("EXPLAIN SELECT service, count(service) FROM telemetry_v1 GROUP BY service")

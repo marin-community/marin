@@ -110,7 +110,7 @@ impl Column {
         self
     }
 
-    /// Builder: maintain a filtered projection for selected string values.
+    /// Builder: maintain exact source-row postings for selected string values.
     pub fn with_exact_values(
         mut self,
         values: impl IntoIterator<Item = impl Into<String>>,
@@ -559,7 +559,7 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
     Ok(resolved)
 }
 
-/// Reject index policies whose implementation cannot consume the column type.
+/// Validate index column types and named covering-projection definitions.
 pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
     for column in &schema.columns {
         let has_exact_index = column.index.value_counts || !column.index.exact_values.is_empty();
@@ -650,6 +650,8 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
 ///   scans unpruned — so a newer client can add an index to a live namespace
 ///   without a reset. An older client that does not know about the field can
 ///   never clear one, mirroring the storage-policy rule.
+/// - a new named covering projection is added monotonically; reusing a
+///   registered name with a different definition is a conflict.
 pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
     if registered.key_column != requested.key_column {
         tracing::warn!(

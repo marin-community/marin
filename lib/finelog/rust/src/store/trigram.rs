@@ -820,6 +820,10 @@ impl<'a> ByteReader<'a> {
         Some(slice)
     }
 
+    pub(crate) fn array<const N: usize>(&mut self) -> Option<[u8; N]> {
+        self.take(N)?.try_into().ok()
+    }
+
     pub(crate) fn u8(&mut self) -> Option<u8> {
         Some(self.take(1)?[0])
     }
