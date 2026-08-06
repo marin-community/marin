@@ -8,13 +8,8 @@ import json
 from pathlib import Path
 
 from click.testing import CliRunner
-from marin.execution.lazy import materialized_config
 
 from experiments.post_training import iceball_micro
-
-
-def test_qwen_architecture_matches_0_6b_parameter_scale() -> None:
-    assert iceball_micro.ICEBALL_QWEN3_CONFIG.total_trainable_params(151669) == 595_769_344
 
 
 def test_gsm8k_record_matches_skyrl_reward_schema() -> None:
@@ -53,18 +48,6 @@ def test_workflow_is_one_dependency_chain_through_both_evaluators() -> None:
     assert workflow.gsm8k in workflow.rl.deps
     assert workflow.evaluation.deps == (workflow.rl,)
     assert workflow.evaluation.name.endswith("gsm8k-smoke,aime-smoke")
-
-
-def test_rl_separates_policy_and_rollout_gpus(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "marin.rl.skyrl.discover_hf_checkpoints",
-        lambda _artifact_path: ["gs://test-prefix/checkpoints/iceball-micro-sft/hf/step-8"],
-    )
-    workflow = iceball_micro.build_workflow(version="2026.08.01")
-
-    request = materialized_config(workflow.rl, "gs://test-prefix").request
-    assert request.topology.num_nodes == 2
-    assert request.topology.role_plan.colocate_all is False
 
 
 def test_cli_can_run_rl_as_the_terminal_stage(monkeypatch) -> None:

@@ -51,6 +51,8 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
 _UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
+# CoreWeave task images provide the NVIDIA driver but not nvcc. FlashInfer JIT-compiles SM100
+# attention, MoE, sampling, and all-reduce kernels even when vLLM itself comes from a native wheel.
 _CUDA_TOOLCHAIN_REQUIREMENTS = (
     "nvidia-cuda-nvcc==13.0.88",
     "nvidia-cuda-crt==13.0.88",

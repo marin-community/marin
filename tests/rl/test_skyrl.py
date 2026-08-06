@@ -37,7 +37,7 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 
-from experiments.evaluation.pipeline import eval_model_step
+from experiments.evaluation.pipeline import eval_step
 
 
 def _model_step() -> ArtifactStep[LevanterCheckpoint]:
@@ -76,10 +76,7 @@ def _spec() -> SkyRLSpec:
         name="tests/iceball-rl",
         version="2026.08.01",
         config_yaml="trainer:\n  max_steps: 8\n",
-        runtime=SkyRLRuntime(
-            commit=MARIN_SKYRL.commit,
-            profile=SkyRLRuntimeProfile.FSDP,
-        ),
+        runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -164,7 +161,7 @@ def test_terminal_policy_composes_into_shared_evaluation_step() -> None:
         ),
     )
 
-    evaluation = eval_model_step(model, "gsm8k", version="2026.08.01", accelerator="GB200x1")
+    evaluation = eval_step(model, "gsm8k", version="2026.08.01", accelerator="GB200x1")
 
     assert evaluation.deps == (rl,)
     assert evaluation.name == "evals/iceball-micro/gsm8k"
@@ -204,14 +201,6 @@ def test_evaluation_uses_the_validated_training_tokenizer() -> None:
 
     assert model.location == terminal.policy_export_uri
     assert model.tokenizer == terminal.tokenizer_uri
-
-
-def test_skyrl_runtime_rejects_commit_different_from_external_pin() -> None:
-    with pytest.raises(ValueError, match="Marin pins"):
-        SkyRLRuntime(
-            commit="0" * 40,
-            profile=SkyRLRuntimeProfile.FSDP,
-        )
 
 
 def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,6 +275,10 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
     assert model.policy_export_uri.endswith("global_step_8/policy")
     assert model.global_step == 8
     assert model.iris_job_id == "01KTEST"
+    assert launch_envelopes[0]["request"]["runtime"] == {
+        "commit": MARIN_SKYRL.commit,
+        "profile": SkyRLRuntimeProfile.FSDP.value,
+    }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
     assert launch_envelopes[0]["execution"]["target_cluster"] is None
     assert launch_envelopes[0]["execution"]["parent_cluster_config"] is None

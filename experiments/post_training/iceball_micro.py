@@ -52,7 +52,6 @@ from marin.execution.remote import remote
 from marin.experiment.cli import build_options
 from marin.experiment.data import tokenized
 from marin.experiment.train import train_lm
-from marin.external_dependencies import MARIN_SKYRL
 from marin.processing.tokenize.tokenize import TokenizedCache
 from marin.rl.skyrl import (
     SKYRL_POLICY_LOCATION,
@@ -72,7 +71,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import StoragePath, prefix_join
 from zephyr.writers import write_parquet_file
 
-from experiments.evaluation.pipeline import EvaluationResult, eval_model_step
+from experiments.evaluation.pipeline import EvaluationResult, eval_step
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, resources_from_accelerator, sft_step
 
 logger = logging.getLogger(__name__)
@@ -427,10 +426,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             name=rl_name,
             version=version or resolve_version(rl_name, None),
             config_yaml=ICEBALL_RL_CONFIG,
-            runtime=SkyRLRuntime(
-                commit=MARIN_SKYRL.commit,
-                profile=SkyRLRuntimeProfile.FSDP,
-            ),
+            runtime=SkyRLRuntime(profile=SkyRLRuntimeProfile.FSDP),
             model=ArtifactHfModel(
                 step=sft,
                 tokenizer_uri=QWEN_TOKENIZER,
@@ -459,7 +455,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     )
 
     evaluation_name = f"evals/{ICEBALL_MODEL_NAME}/{ICEBALL_EVALS}"
-    evaluation = eval_model_step(
+    evaluation = eval_step(
         SkyRLEvaluationModel(
             step=rl,
             model=ModelConfig(

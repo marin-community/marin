@@ -91,6 +91,7 @@ def _run_single_turn_aime_agent(
     finish_reason: str | None = None,
     transient_failures: int = 0,
 ) -> dict[str, object]:
+    """Exercise the agent in Harbor's frozen environment with fake HTTP and sandbox I/O boundaries."""
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     answer_path = tmp_path / "answer.txt"

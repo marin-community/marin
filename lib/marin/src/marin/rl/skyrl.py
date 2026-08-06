@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 import uuid
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import cast
@@ -40,12 +40,8 @@ class SkyRLRuntimeProfile(StrEnum):
 class SkyRLRuntime:
     """Identity-bearing SkyRL revision and locked dependency profile."""
 
-    commit: str
     profile: SkyRLRuntimeProfile
-
-    def __post_init__(self) -> None:
-        if self.commit != MARIN_SKYRL.commit:
-            raise ValueError(f"SkyRL runtime requests {self.commit}, but Marin pins {MARIN_SKYRL.commit}")
+    commit: str = field(init=False, default=MARIN_SKYRL.commit)
 
 
 @dataclass(frozen=True)

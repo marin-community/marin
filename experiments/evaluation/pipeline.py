@@ -116,7 +116,7 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> EvaluationResult:
     )
 
 
-def eval_model_step(
+def eval_step(
     model: EvaluationModelSource,
     evals: str,
     *,
@@ -159,35 +159,8 @@ def eval_model_step(
     )
 
 
-def eval_step(
-    model: str,
-    evals: str,
-    *,
-    version: str,
-    limit: int | None = None,
-    accelerator: str | None = None,
-    submission_cluster: str = EVALUATION_CONTROLLER_CLUSTER,
-    federated_cluster: str | None = None,
-) -> ArtifactStep[EvaluationResult]:
-    """A lazy handle for one eval run of ``model`` on ``evals`` (a suite name or eval key).
-
-    ``model``/``evals``/``limit`` and ``version`` bear the artifact's identity. Accelerator and
-    cluster placement are runtime choices, so changing them never forks the artifact.
-    """
-
-    return eval_model_step(
-        CatalogEvaluationModel(model),
-        evals,
-        version=version,
-        limit=limit,
-        accelerator=accelerator,
-        submission_cluster=submission_cluster,
-        federated_cluster=federated_cluster,
-    )
-
-
 def main() -> None:
-    step = eval_step("qwen3-1.7b", "smoke", version="2026.07.19")
+    step = eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")
     StepRunner().run([step.lower()])
 
 
