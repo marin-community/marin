@@ -31,6 +31,7 @@ from iris.hooks.nsys_main import main as nsys_main
 
 CMD = ["python", "train.py", "--steps", "10"]
 OUT = "s3://bucket/tmp/ttl=30d/nsys"
+_FAKE_NSYS_WRITE_REPORT_ENV = "FAKE_NSYS_WRITE_REPORT"
 
 
 @pytest.fixture(autouse=True)
@@ -174,7 +175,7 @@ def fake_nsys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         "while command_index < len(sys.argv) and sys.argv[command_index].startswith('--capture-range'):\n"
         "    command_index += 1\n"
         "returncode = subprocess.call(sys.argv[command_index:])\n"
-        "if os.environ.get('FAKE_NSYS_WRITE_REPORT') == '1':\n"
+        f"if os.environ.get('{_FAKE_NSYS_WRITE_REPORT_ENV}') == '1':\n"
         "    pathlib.Path(sys.argv[output_index] + '.nsys-rep').write_bytes(b'fake report')\n"
         "sys.exit(returncode)\n"
     )
@@ -186,7 +187,7 @@ def fake_nsys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def test_main_argv_runs_profiled_command(monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path) -> None:
     destination = selected_task / "main-uploads"
     marker = selected_task / "main-child-ran"
-    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
+    monkeypatch.setenv(_FAKE_NSYS_WRITE_REPORT_ENV, "1")
 
     with pytest.raises(SystemExit) as excinfo:
         nsys_main(
@@ -209,7 +210,7 @@ def test_main_argv_runs_profiled_command(monkeypatch: pytest.MonkeyPatch, select
 
 
 def test_selected_unit_uploads_its_report(monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path) -> None:
-    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
+    monkeypatch.setenv(_FAKE_NSYS_WRITE_REPORT_ENV, "1")
     destination = selected_task / "uploads"
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=_child())
@@ -225,7 +226,7 @@ def test_run_uploads_to_the_default_when_output_uri_unset(
     monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path
 ) -> None:
     monkeypatch.setenv("MARIN_PREFIX", f"file://{selected_task / 'cluster'}/marin")
-    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
+    monkeypatch.setenv(_FAKE_NSYS_WRITE_REPORT_ENV, "1")
     destination = Path(default_output_uri().removeprefix("file://"))
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=None, argv=_child())
@@ -237,7 +238,7 @@ def test_failing_command_still_uploads_its_report(
     monkeypatch: pytest.MonkeyPatch, selected_task: Path, fake_nsys: Path
 ) -> None:
     """A crash is exactly when the profile is worth keeping."""
-    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
+    monkeypatch.setenv(_FAKE_NSYS_WRITE_REPORT_ENV, "1")
     destination = selected_task / "uploads"
     with pytest.raises(SystemExit) as excinfo:
         run(tasks="first", trace="cuda", capture_range=False, output_uri=f"file://{destination}", argv=_child(7))
@@ -273,7 +274,7 @@ def test_hook_wrap_command_runs_through_entry_point(
 ) -> None:
     destination = selected_task / "hook-uploads"
     marker = selected_task / "hook-child-ran"
-    monkeypatch.setenv("FAKE_NSYS_WRITE_REPORT", "1")
+    monkeypatch.setenv(_FAKE_NSYS_WRITE_REPORT_ENV, "1")
     wrapped = NsysHook(
         output_uri=f"file://{destination}",
         tasks="0,7",

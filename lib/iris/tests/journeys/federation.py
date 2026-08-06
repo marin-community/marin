@@ -17,6 +17,7 @@ from tests.journeys.world import JobRef, JourneyWorld, TaskRef
 
 PARENT_CLUSTER_ID = "journey-parent"
 PEER_ID = "peer-b"
+_PEER_CONTROLLER_ADDRESS = "http://peer-b.invalid"
 _PEER_IDENTITY = VerifiedIdentity(user_id=PARENT_CLUSTER_ID, role="admin")
 _READER_IDENTITY = VerifiedIdentity(user_id="journey-reader", role="admin")
 
@@ -81,7 +82,7 @@ class FederationJourney:
         self.connection = InProcessPeerConnection(self.peer.controller)
         self._federation_peer = FederationPeer(
             PEER_ID,
-            PeerConfig(controller_address="http://peer-b.invalid"),
+            PeerConfig(controller_address=_PEER_CONTROLLER_ADDRESS),
             self.connection,
         )
         self._federation_peer.probe()
@@ -89,7 +90,7 @@ class FederationJourney:
             root / "parent",
             monkeypatch,
             cluster_id=PARENT_CLUSTER_ID,
-            peer_configs={PEER_ID: PeerConfig(controller_address="http://peer-b.invalid")},
+            peer_configs={PEER_ID: PeerConfig(controller_address=_PEER_CONTROLLER_ADDRESS)},
             federation_peers=[self._federation_peer],
         )
         self.manager = self.parent.controller.federation

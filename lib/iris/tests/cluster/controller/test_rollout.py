@@ -17,6 +17,7 @@ from iris.cluster.controller.rollout import (
     write_rollout_record,
 )
 from iris.cluster.controller.writes import meta_value_set
+from rigging.filesystem import prefix_join
 
 _MARKER_KEY = "test_rollout_marker"
 
@@ -140,7 +141,8 @@ def test_prepare_controller_state_restores_requested_checkpoint_when_local_absen
 
 def test_prepare_controller_state_rejects_missing_checkpoint(tmp_path: Path) -> None:
     remote_state_dir = _remote_state(tmp_path)
-    missing = f"{remote_state_dir}/controller-state/999"
+    checkpoint_root = prefix_join(remote_state_dir, "controller-state")
+    missing = prefix_join(checkpoint_root, "999")
 
     with pytest.raises(ValueError, match="Checkpoint not found"):
         prepare_controller_state(tmp_path / "db", remote_state_dir, fresh=False, checkpoint_path=missing)
@@ -148,7 +150,8 @@ def test_prepare_controller_state_rejects_missing_checkpoint(tmp_path: Path) -> 
 
 def test_prepare_controller_state_rejects_checkpoint_without_numeric_epoch(tmp_path: Path) -> None:
     remote_state_dir = _remote_state(tmp_path)
-    malformed = f"{remote_state_dir}/controller-state/not-an-epoch"
+    checkpoint_root = prefix_join(remote_state_dir, "controller-state")
+    malformed = prefix_join(checkpoint_root, "not-an-epoch")
 
     with pytest.raises(ValueError, match="numeric epoch"):
         prepare_controller_state(tmp_path / "db", remote_state_dir, fresh=False, checkpoint_path=malformed)

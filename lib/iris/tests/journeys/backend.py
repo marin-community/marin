@@ -27,7 +27,7 @@ from iris.cluster.controller.reconcile.loader import TransitionReader
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
 from iris.cluster.controller.worker_health import WorkerHealthTracker
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from rigging.timing import Timestamp
 
@@ -46,7 +46,7 @@ class BackendEvent:
     task_id: str
     attempt_id: int
     state: int | None = None
-    backend_id: str = "default"
+    backend_id: str = DEFAULT_BACKEND_ID
 
 
 class ScriptedTaskBackend:
@@ -63,7 +63,7 @@ class ScriptedTaskBackend:
     autoscaler = None
     health: WorkerHealthTracker | None = None
 
-    def __init__(self, transition_reader: TransitionReader, *, backend_id: str = "default") -> None:
+    def __init__(self, transition_reader: TransitionReader, *, backend_id: str = DEFAULT_BACKEND_ID) -> None:
         self._transition_reader = transition_reader
         self.backend_id = backend_id
         self._queued: dict[str, deque[ScriptedObservation]] = defaultdict(deque)

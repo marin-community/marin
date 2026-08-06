@@ -2387,12 +2387,7 @@ class K8sTaskProvider:
         """No-op: a cluster backend tracks no Iris workers to reap."""
 
     def collect_garbage(self) -> None:
-        """Synchronously collect terminal and deferred Kubernetes resources.
-
-        Normal controller operation uses the periodic collector. Lifecycle
-        hosts may use this explicit tick when cleanup must complete before
-        control returns.
-        """
+        """Run one garbage-collection pass for eligible Kubernetes resources."""
         self._gc_terminal_resources(self._list_active_pods())
 
     def teardown(self, dead_workers: list[WorkerId], *, reason: str) -> None:

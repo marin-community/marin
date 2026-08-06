@@ -488,7 +488,6 @@ def _detect_fd_leaks(request):
 
 
 def assert_visible(page, selector: str, *, timeout: int = 10_000) -> None:
-    """Assert a selector is visible."""
     from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
 
     expect(page.locator(selector).first).to_be_visible(timeout=timeout)

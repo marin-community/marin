@@ -5,7 +5,6 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.constraints import WellKnownAttribute
@@ -116,7 +115,7 @@ class WorkerFleet:
         self.daemons[address] = daemon
         return daemon
 
-    def get_stub(self, address: str) -> Any:
+    def get_stub(self, address: str) -> _AddressWorkerStub:
         return _AddressWorkerStub(address, self)
 
     def evict(self, address: str) -> None:

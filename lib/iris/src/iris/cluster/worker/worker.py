@@ -197,20 +197,16 @@ class Worker:
 
         self._host_metrics = HostMetricsCollector(disk_path=str(self._cache_dir))
 
-        # LogClient and RemoteLogHandler are created in start() before container
-        # adoption and registration. Building before adoption ensures adopted
-        # attempts capture a live client (regression #5261). Building before
-        # registration ensures pre-register failures (container bring-up,
-        # disk/health probes, registration rejection) leave remote logs.
+        # When no client is injected, start() creates one before container
+        # adoption and registration. This gives adopted attempts a live client
+        # and preserves logs for failures that happen before registration.
         # Attachment relies on ``self._worker_id`` having been resolved locally
         # (IRIS_WORKER_ID, slice_id + TPU index, or GCE instance name); the rare
         # case where the controller assigns the id is handled by re-attaching
         # post-register.
         self._log_client: LogClient | None = log_client
         self._log_handler: RemoteLogHandler | None = None
-        # Stats Tables for the iris.worker / iris.task / iris.profile namespaces.
-        # Set in start() after the controller client is built so the LogClient
-        # resolver works.
+        # Stats tables are registered as soon as a LogClient is available.
         self._worker_stats_table: Table | None = None
         self._task_stats_table: Table | None = None
         self._profile_table: Table | None = None

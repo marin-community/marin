@@ -143,6 +143,7 @@ logger = logging.getLogger(__name__)
 _RPC_HANDLER_THREADS = 64
 _CONTROLLER_KEEPALIVE = 120
 _PRIVATE_CONTROLLER_HOST = "127.0.0.1"
+_SYNCHRONOUS_PHASE_INTERVAL = 0.0
 
 
 def _install_rpc_executor(server: uvicorn.Server, *, max_workers: int) -> None:
@@ -1789,9 +1790,9 @@ class Controller:
             raise RuntimeError("run_control_tick cannot be used after Controller.start")
         self._control_tick(
             woken=True,
-            schedule_limiter=RateLimiter(interval_seconds=0.0),
-            reconcile_limiter=RateLimiter(interval_seconds=0.0),
-            autoscale_limiter=RateLimiter(interval_seconds=0.0),
+            schedule_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
+            reconcile_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
+            autoscale_limiter=RateLimiter(interval_seconds=_SYNCHRONOUS_PHASE_INTERVAL),
             force_timeout_scan=True,
         )
 
@@ -1807,11 +1808,11 @@ class Controller:
         self,
         request: controller_pb2.Controller.ListJobsRequest | None = None,
     ) -> controller_pb2.Controller.ListJobsResponse:
-        """List Jobs through the public service boundary."""
+        """Return Jobs matching the request query."""
         return self._service.list_jobs(request or controller_pb2.Controller.ListJobsRequest(), None)
 
     def list_tasks(self, job_id: str) -> controller_pb2.Controller.ListTasksResponse:
-        """List the public Task status rows for a Job."""
+        """Return current public Task rows for a Job."""
         request = controller_pb2.Controller.ListTasksRequest(job_id=job_id)
         return self._service.list_tasks(request, None)
 
@@ -1832,28 +1833,28 @@ class Controller:
         self,
         request: controller_pb2.Controller.KickTasksRequest,
     ) -> controller_pb2.Controller.KickTasksResponse:
-        """Queue administrative Task state overrides through the public service."""
+        """Queue validated administrative state overrides for Tasks."""
         return self._service.kick_tasks(request, None)
 
     def register_endpoint(
         self,
         request: controller_pb2.Controller.RegisterEndpointRequest,
     ) -> controller_pb2.Controller.RegisterEndpointResponse:
-        """Register or renew a Task endpoint through the public endpoint service."""
+        """Register or renew a Task endpoint."""
         return self._service.endpoint_service.register_endpoint(request, None)
 
     def list_endpoints(
         self,
         request: controller_pb2.Controller.ListEndpointsRequest | None = None,
     ) -> controller_pb2.Controller.ListEndpointsResponse:
-        """List Task endpoints through the public endpoint service."""
+        """Return Task endpoints matching the optional query."""
         return self._service.endpoint_service.list_endpoints(
             request or controller_pb2.Controller.ListEndpointsRequest(),
             None,
         )
 
     def unregister_endpoint(self, endpoint_id: str) -> job_pb2.Empty:
-        """Unregister a Task endpoint through the public endpoint service."""
+        """Remove a Task endpoint by ID."""
         request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
         return self._service.endpoint_service.unregister_endpoint(request, None)
 
@@ -1861,11 +1862,11 @@ class Controller:
         self,
         request: controller_pb2.Controller.SetUserBudgetRequest,
     ) -> controller_pb2.Controller.SetUserBudgetResponse:
-        """Set one user's budget through the public service boundary."""
+        """Set the budget limit and maximum priority band for one user."""
         return self._service.set_user_budget(request, None)
 
     def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
-        """Read one user's configured budget and current spend."""
+        """Return one user's budget configuration and current spend."""
         request = controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id)
         return self._service.get_user_budget(request, None)
 
@@ -1873,18 +1874,18 @@ class Controller:
         self,
         request: controller_pb2.Controller.RegisterRequest,
     ) -> controller_pb2.Controller.RegisterResponse:
-        """Register a worker through the public service boundary."""
+        """Register or renew a worker identity and capacity."""
         return self._service.register(request, None)
 
     def list_workers(
         self,
         request: controller_pb2.Controller.ListWorkersRequest | None = None,
     ) -> controller_pb2.Controller.ListWorkersResponse:
-        """List workers through the public service boundary."""
+        """Return workers matching the optional request filters."""
         return self._service.list_workers(request or controller_pb2.Controller.ListWorkersRequest(), None)
 
     def get_worker_status(self, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
-        """Read one worker through the public service boundary."""
+        """Return current health and metadata for one worker."""
         request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
         return self._service.get_worker_status(request, None)
 
@@ -1892,11 +1893,11 @@ class Controller:
         self,
         request: controller_pb2.Controller.FederationSyncRequest,
     ) -> controller_pb2.Controller.FederationSyncResponse:
-        """Apply one authenticated federation sync request in-process."""
+        """Apply an authenticated federation delta from a peer."""
         return self._service.federation_sync(request, None)
 
     def list_peers(self) -> controller_pb2.Controller.ListPeersResponse:
-        """List configured federation peers through the public service path."""
+        """Return configured federation peers and their current status."""
         return self._service.list_peers(controller_pb2.Controller.ListPeersRequest(), None)
 
     # Properties
