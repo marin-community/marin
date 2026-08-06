@@ -188,6 +188,7 @@ class _RequestsTransport:
         return response
 
     def _observe_request_encodings(self, response: _Response) -> frozenset[str] | None:
+        """Cache advertised encodings; ``None`` preserves and an empty set clears."""
         advertised = _accepted_request_encodings(response)
         if advertised is not None:
             self._server_request_encodings = advertised

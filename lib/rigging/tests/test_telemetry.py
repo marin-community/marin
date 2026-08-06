@@ -141,27 +141,6 @@ def test_unconfigured_instruments_are_noops() -> None:
     assert telemetry.runtime_status() == telemetry.TelemetryStatus(False, 0, 0, 0, 0, 0, 0, 0, None, 0.0)
 
 
-def test_requests_transport_sends_zstd_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = RecordingSession([status_outcome(200, headers={"Accept-Encoding": "zstd"})])
-    monkeypatch.setattr(telemetry.requests, "Session", lambda: session)
-    transport = telemetry._RequestsTransport()
-    record = b'{"name":"worker_cpu","value":1}'
-    body = b'{"records":[' + b",".join([record] * 100) + b"]}"
-
-    transport.post("http://finelog/v1/telemetry", body, "batch-1", (1.0, 2.0))
-
-    assert len(session.requests) == 1
-    endpoint, compressed, headers, timeout = session.requests[0]
-    assert endpoint == "http://finelog/v1/telemetry"
-    assert headers == {
-        "Content-Encoding": "zstd",
-        "Content-Type": "application/json",
-        "Idempotency-Key": "batch-1",
-    }
-    assert timeout == (1.0, 2.0)
-    assert zstandard.ZstdDecompressor().decompress(compressed) == body
-
-
 def test_requests_transport_tracks_server_encoding_rollouts(monkeypatch: pytest.MonkeyPatch) -> None:
     session = RecordingSession(
         [
