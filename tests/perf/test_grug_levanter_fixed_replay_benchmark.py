@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import subprocess
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -10,10 +13,56 @@ from scripts.perf.grug_fixed_replay import (
     repacked_operational_micro_loss,
 )
 from scripts.perf.grug_levanter_fixed_replay_benchmark import (
+    runtime_git_revision,
     tree_finite_evidence,
     validate_hardware_evidence,
     validate_output,
 )
+
+
+def test_runtime_git_revision_uses_clean_iris_launch_provenance(monkeypatch):
+    requested = "74635e90aeb917368ca3c53b89754f02b91c8bf3"
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.CalledProcessError(128, "git")),
+    )
+    monkeypatch.setenv(
+        "MARIN_PROVENANCE",
+        json.dumps({"base_commit": requested[:10], "tree_hash": "abc123def", "dirty": False}),
+    )
+
+    actual, evidence = runtime_git_revision(requested)
+
+    assert actual == requested
+    assert evidence == {
+        "method": "iris_launch_provenance",
+        "base_commit": requested[:10],
+        "tree_hash": "abc123def",
+        "dirty": False,
+    }
+
+
+def test_runtime_git_revision_rejects_dirty_or_wrong_iris_provenance(monkeypatch):
+    requested = "74635e90aeb917368ca3c53b89754f02b91c8bf3"
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.CalledProcessError(128, "git")),
+    )
+    monkeypatch.setenv(
+        "MARIN_PROVENANCE",
+        json.dumps({"base_commit": requested[:10], "tree_hash": "abc123def", "dirty": True}),
+    )
+    with pytest.raises(RuntimeError, match="dirty source bundle"):
+        runtime_git_revision(requested)
+
+    monkeypatch.setenv(
+        "MARIN_PROVENANCE",
+        json.dumps({"base_commit": "deadbeef00", "tree_hash": "abc123def", "dirty": False}),
+    )
+    with pytest.raises(RuntimeError, match="does not identify requested"):
+        runtime_git_revision(requested)
 
 
 def test_build_loss_weight_matches_skyrl_action_logprob_slice():

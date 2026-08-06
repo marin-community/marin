@@ -31,6 +31,7 @@ import gc
 import hashlib
 import importlib
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -130,16 +131,41 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def runtime_git_revision() -> str:
+def runtime_git_revision(requested_revision: str) -> tuple[str, dict[str, Any]]:
     repo_root = Path(__file__).resolve().parents[2]
-    completed = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return completed.stdout.strip()
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        raw_provenance = os.environ.get("MARIN_PROVENANCE")
+        if not raw_provenance:
+            raise RuntimeError("runtime has neither a git checkout nor MARIN_PROVENANCE") from None
+        try:
+            provenance = json.loads(raw_provenance)
+            base_commit = str(provenance["base_commit"])
+            tree_hash = str(provenance["tree_hash"])
+            dirty = bool(provenance["dirty"])
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise RuntimeError("runtime MARIN_PROVENANCE is malformed") from error
+        if dirty:
+            raise RuntimeError("runtime MARIN_PROVENANCE describes a dirty source bundle") from None
+        if len(base_commit) < 8 or not requested_revision.startswith(base_commit):
+            raise RuntimeError(
+                f"runtime provenance base commit {base_commit!r} does not identify requested {requested_revision!r}"
+            ) from None
+        return requested_revision, {
+            "method": "iris_launch_provenance",
+            "base_commit": base_commit,
+            "tree_hash": tree_hash,
+            "dirty": dirty,
+        }
+    actual_revision = completed.stdout.strip()
+    return actual_revision, {"method": "git", "base_commit": actual_revision, "dirty": False}
 
 
 def numpy_bytes(value: np.ndarray) -> memoryview:
@@ -813,7 +839,7 @@ def _config_evidence(
 
 def main() -> None:
     args = parse_args()
-    actual_source_revision = runtime_git_revision()
+    actual_source_revision, runtime_source_evidence = runtime_git_revision(args.source_revision)
     if args.source_revision != actual_source_revision:
         raise RuntimeError(
             f"source revision mismatch: requested {args.source_revision}, running {actual_source_revision}"
@@ -1040,6 +1066,7 @@ def main() -> None:
             "mode": args.mode,
             "source_revision": args.source_revision,
             "runtime_source_revision": actual_source_revision,
+            "runtime_source_evidence": runtime_source_evidence,
             "image": args.image,
             "checkpoint": args.checkpoint,
             "job": str(job_info.job_id) if job_info is not None else None,
