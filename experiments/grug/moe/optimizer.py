@@ -14,6 +14,7 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+from experiments.grug.moe.model import Transformer
 
 
 class TiedExpertLrScale(StrEnum):
@@ -244,12 +245,15 @@ class GrugMoeAdamHConfig(OptimizerConfig):
 class GrugMoeMuonHConfig(OptimizerConfig):
     """May Recipe MuonH optimizer with bank-aware tied-expert learning rates.
 
-    Three LR groups:
-    - ``muonh``: matrices (attn, MoE MLP, shared) **and** all GatedNorms.
+    Base LR groups:
+    - ``muonh``: matrices (attention, untied expert banks, shared MLPs) and all GatedNorms.
       Newton-Schulz orthogonalisation + Frobenius hyperball scale-invariant step.
     - ``adamh``: ``lm_head`` / ``output_proj``.
     - ``adam``: ``token_embed`` / ``router`` / ``router_bias`` / ``attn_gate``
       / 1-D norm weights.
+
+    Reused expert banks get a ``muonh_expert_g*`` group whose learning rate is
+    divided according to ``tied_expert_lr_scale``.
 
     ``max_grad_norm`` defaults to ``None`` here (no clipping) for the 1pct-noclip
     schedule used by the May Recipe baseline.
@@ -343,12 +347,12 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         if self.expert_bank_group_sizes is not None:
             if any(group_size <= 0 for group_size in self.expert_bank_group_sizes):
                 raise ValueError(f"expert_bank_group_sizes must be positive: {self.expert_bank_group_sizes}")
-            if hasattr(params, "expert_banks") and len(params.expert_banks) != len(self.expert_bank_group_sizes):
-                raise ValueError(
-                    "expert_bank_group_sizes must contain one entry per expert bank; "
-                    f"got {self.expert_bank_group_sizes} for {len(params.expert_banks)} banks"
-                )
-            if hasattr(params, "config"):
+            if isinstance(params, Transformer):
+                if len(params.expert_banks) != len(self.expert_bank_group_sizes):
+                    raise ValueError(
+                        "expert_bank_group_sizes must contain one entry per expert bank; "
+                        f"got {self.expert_bank_group_sizes} for {len(params.expert_banks)} banks"
+                    )
                 model_group_sizes = params.config.expert_bank_group_sizes
                 if tuple(self.expert_bank_group_sizes) != tuple(model_group_sizes):
                     raise ValueError(

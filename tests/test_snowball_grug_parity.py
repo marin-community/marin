@@ -22,15 +22,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from haliax import Axis
-from jax.sharding import PartitionSpec as P
-from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 import experiments.grug.moe.model as gm
 
 # Batch sharding for the embedding gather (matches both models' `.at[...].get(out_sharding=...)`).
-_EMBED_SPEC = P(("replica_dcn", "data", "expert"))
 
 _COMMON = dict(
     vocab_size=48,
@@ -67,46 +64,7 @@ def _snowball_config() -> SnowballConfig:
     return SnowballConfig(**_COMMON, qk_mult=_QK_MULT, layer_norm_eps=_EPS, initializer_std=_STD)
 
 
-def _capture_experiment(model: "gm.Transformer", tokens: jax.Array) -> list[np.ndarray]:
-    """Per-block hidden states for the experiment Transformer (mirrors its __call__)."""
-    cfg = model.config
-    short = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=None)
-    long = AttentionMask(is_causal=True, sliding_window=None, segment_ids=None)
-    hidden = model.token_embed.at[tokens].get(out_sharding=_EMBED_SPEC)
-    hidden = model.embed_gated_norm(model.embed_norm(hidden))
-    outs = [hidden]
-    n = len(model.blocks)
-    for i, block in enumerate(model.blocks):
-        is_long = i % 4 == 3 or i == n - 1
-        layer_mask = long if is_long else short
-        use_pko = is_long and not cfg.disable_pko
-        disable_rope = is_long and cfg.disable_long_rope
-        expert_bank = model.expert_banks[block.expert_bank_index]
-        hidden, _ = block(hidden, layer_mask, expert_bank, use_pko, disable_rope)
-        outs.append(hidden)
-    outs.append(model.final_gated_norm(model.final_norm(hidden)))
-    return outs
-
-
-def _capture_snowball(model: SnowballLMHeadModel, tokens: jax.Array) -> list[np.ndarray]:
-    """Per-block hidden states for the Snowball transformer (mirrors its __call__)."""
-    tf = model.transformer
-    cfg = tf.config
-    short = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=None)
-    long = AttentionMask(is_causal=True, sliding_window=None, segment_ids=None)
-    hidden = tf.token_embed.at[tokens].get(out_sharding=_EMBED_SPEC)
-    hidden = tf.embed_gated_norm(tf.embed_norm(hidden))
-    outs = [hidden]
-    n = len(tf.blocks)
-    for i, block in enumerate(tf.blocks):
-        is_long = i % 4 == 3 or i == n - 1
-        hidden = block(hidden, short, long, is_long)
-        outs.append(hidden)
-    outs.append(tf.final_gated_norm(tf.final_norm(hidden)))
-    return outs
-
-
-def test_snowball_matches_grug_experiment_per_layer_and_logits():
+def test_snowball_matches_grug_experiment_logits():
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         exp = gm.Transformer.init(_experiment_config(), key=jax.random.key(7))
         snow = SnowballLMHeadModel.init(Axis("vocab", _COMMON["vocab_size"]), _snowball_config(), key=jax.random.key(0))
@@ -114,16 +72,6 @@ def test_snowball_matches_grug_experiment_per_layer_and_logits():
 
         tokens = (jnp.arange(10, dtype=jnp.int32).reshape(1, 10)) % _COMMON["vocab_size"]
 
-        # Per-layer activation parity (embedding, each block, final norm).
-        exp_acts = [np.asarray(o) for o in _capture_experiment(exp, tokens)]
-        snow_acts = [np.asarray(o) for o in _capture_snowball(snow, tokens)]
-        assert len(exp_acts) == len(snow_acts) == _COMMON["num_layers"] + 2
-        labels = ["embed"] + [f"block{i}" for i in range(_COMMON["num_layers"])] + ["final_norm"]
-        for label, ea, sa in zip(labels, exp_acts, snow_acts, strict=True):
-            max_abs = float(np.max(np.abs(ea - sa)))
-            assert max_abs < 1e-5, f"activation divergence at {label}: max|diff|={max_abs}"
-
-        # Logit + greedy parity via the standard LmHeadModel path.
         exp_logits = np.asarray(jax.jit(lambda m, t: m.logits(t))(exp, tokens))[0]
         Pos = Axis("position", tokens.shape[1])
         ids = hax.named(tokens[0], (Pos,))

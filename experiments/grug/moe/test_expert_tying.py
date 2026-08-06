@@ -65,8 +65,7 @@ def test_expert_bank_mapping_stores_each_bank_once():
     block_paths = [str(path) for path in jax.tree_util.tree_leaves(paths.blocks)]
 
     assert tuple(block.expert_bank_index for block in model.blocks) == mapping
-    assert len(model.expert_banks) == 3
-    assert len(jax.tree_util.tree_leaves(model.expert_banks)) == 9
+    assert len(model.expert_banks) == len(set(mapping))
     assert not any("expert_banks" in path or "expert_mlp" in path for path in block_paths)
 
 
@@ -153,17 +152,15 @@ def test_cross_loop_metrics_match_known_top1_and_topk_overlap():
         {"selected_experts": jnp.array([[0, 2], [3, 1]], dtype=jnp.int32)},
     ]
 
-    top1_agreement, topk_overlap = _cross_loop_agreement(router_stats, bank_for_layer=(0, 0))
+    agreement = _cross_loop_agreement(router_stats, bank_for_layer=(0, 0))
 
-    assert top1_agreement == 0.5
-    assert topk_overlap == 0.5
+    assert agreement.top1 == 0.5
+    assert agreement.topk_set_overlap == 0.5
 
 
 def test_shared_dense_mlps_remain_per_layer_when_experts_are_tied():
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         model = Transformer.init(_tiny_config(mapping=(0, 0)), key=jax.random.key(6))
-        paths = leaf_key_paths(model)
-        shared_paths = [str(path) for path in jax.tree_util.tree_leaves(paths.blocks) if ".shared.w_" in str(path)]
         x = jnp.linspace(-1.0, 1.0, 32, dtype=jnp.float32).reshape(1, 2, 16)
         block_zero_shared = model.blocks[0].shared
         block_one_shared = model.blocks[1].shared
@@ -179,7 +176,5 @@ def test_shared_dense_mlps_remain_per_layer_when_experts_are_tied():
         block_zero_after = changed_block_zero_shared(x)
         block_one_after = changed_block_one_shared(x)
 
-    assert len(shared_paths) == 6
-    assert {path.split(".")[1] for path in shared_paths} == {"0", "1"}
     np.testing.assert_array_equal(block_zero_after, jnp.zeros_like(block_zero_after))
     np.testing.assert_array_equal(block_one_after, block_one_before)

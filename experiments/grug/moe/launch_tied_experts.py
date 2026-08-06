@@ -88,8 +88,13 @@ def _matrix(phase: TiedExpertPhase) -> Sequence[TiedExpertVariant]:
     raise ValueError(f"unknown tied-expert phase: {phase}")
 
 
-def tied_expert_runs(*, version: str | None = None) -> list[ArtifactStep[LevanterCheckpoint]]:
-    phase = TiedExpertPhase(os.environ.get("GRUG_TIED_PHASE", TiedExpertPhase.SMOKE).lower())
+def tied_expert_runs(
+    *,
+    version: str | None = None,
+    phase: TiedExpertPhase | None = None,
+) -> list[ArtifactStep[LevanterCheckpoint]]:
+    if phase is None:
+        phase = TiedExpertPhase(os.environ.get("GRUG_TIED_PHASE", TiedExpertPhase.SMOKE).lower())
     base_model, base_optimizer, batch_size, full_steps = build_from_heuristic(
         budget=_BUDGET,
         hidden_dim=_HIDDEN_DIM,

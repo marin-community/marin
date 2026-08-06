@@ -9,7 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import equinox as eqx
 import jax
@@ -132,8 +132,8 @@ def _hf_config_attr(config: HfConfig, names: tuple[str, ...], default: Any = Non
 class GrugModelConfig:
     """Hyperparameters for the grug MoE transformer.
 
-    Architecture choices (GatedNorm, XSA, QB routing) are hardcoded.
-    Only shape/size knobs live here. All layers are MoE.
+    GatedNorm, XSA, and QB routing are fixed. Shape, attention, and routed-expert
+    sharing topology are configurable. All layers are MoE.
     """
 
     vocab_size: int
@@ -567,10 +567,20 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     return out
 
 
+class CrossLoopAgreement(NamedTuple):
+    top1: jax.Array
+    topk_set_overlap: jax.Array
+
+
 def _cross_loop_agreement(
     router_stats: list[dict[str, jax.Array]],
     bank_for_layer: tuple[int, ...],
-) -> tuple[jax.Array, jax.Array]:
+) -> CrossLoopAgreement:
+    """Return top-1 agreement and normalized top-k overlap across tied layers.
+
+    Both values are NaN when no bank is reused because cross-layer agreement is
+    undefined for an untied topology.
+    """
     top1_agreements: list[jax.Array] = []
     topk_overlaps: list[jax.Array] = []
     for bank_id in range(max(bank_for_layer) + 1):
@@ -588,8 +598,11 @@ def _cross_loop_agreement(
 
     if not top1_agreements:
         nan = jnp.asarray(jnp.nan, dtype=jnp.float32)
-        return nan, nan
-    return jnp.mean(jnp.stack(top1_agreements)), jnp.mean(jnp.stack(topk_overlaps))
+        return CrossLoopAgreement(top1=nan, topk_set_overlap=nan)
+    return CrossLoopAgreement(
+        top1=jnp.mean(jnp.stack(top1_agreements)),
+        topk_set_overlap=jnp.mean(jnp.stack(topk_overlaps)),
+    )
 
 
 def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
@@ -867,7 +880,7 @@ class Transformer(eqx.Module):
             moe_router_stats.append(router_stats)
             activation_norms.append(jnp.sqrt(jnp.mean(jnp.square(hidden.astype(jnp.float32)))))
 
-        top1_agreement, topk_overlap = _cross_loop_agreement(
+        cross_loop_agreement = _cross_loop_agreement(
             moe_router_stats,
             cfg.resolved_expert_bank_for_layer,
         )
@@ -880,8 +893,8 @@ class Transformer(eqx.Module):
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
             "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
             "activation_norm_per_layer": jnp.stack(activation_norms, axis=0),
-            "top1_cross_loop_agreement": top1_agreement,
-            "topk_set_overlap": topk_overlap,
+            "top1_cross_loop_agreement": cross_loop_agreement.top1,
+            "topk_set_overlap": cross_loop_agreement.topk_set_overlap,
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics

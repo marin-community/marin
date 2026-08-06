@@ -191,3 +191,16 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Result: 23 focused tests passed in 56.37 seconds; targeted production-file type checking reported zero errors; the no-launch graph produced the baseline and six topology/LR ablation artifacts. Advisory findings led to shared dataset construction, typed launch variants, centralized RNG/group-name constants, exact cross-loop metric assertions, and a full-Transformer tied-gradient equivalence test. The existing monolithic training entry point was not refactored because splitting unrelated trainer setup is outside this architecture experiment.
 - Interpretation: the experiment snapshot is ready to push and launch. The stronger gradient test verifies that one tied bank's gradient equals the sum of the corresponding two independent bank gradients for otherwise identical full Transformer computations.
 - Next action: commit the review fixes, push the research branch, create the experiment issue, and launch the smoke matrix.
+
+### 2026-08-06 00:45 - GRUG-XEM-001 compatibility audit
+
+- Hypothesis: Removing per-block expert ownership must not strand the repository's manual legacy-checkpoint conversion path.
+- Commit Hash: `2af135eaa534af5e66aba2b9bab0699a5311b7c4` before the compatibility-fix commit.
+- Commands:
+  - `./infra/pre-commit.py --review --agent-command='codex exec'`
+  - `/Users/dlwh/src/marin/.venv/bin/python -m pytest -q experiments/grug/moe/test_expert_tying.py experiments/grug/moe/test_optimizer.py tests/test_snowball_grug_parity.py tests/test_grug_checkpointing.py`
+  - `/Users/dlwh/src/marin/.venv/bin/python -m py_compile tests/vllm/grugmoe_real_checkpoint_backend.py`
+- Config: explicit `TiedExpertPhase.SMOKE` graph construction; no accelerator launch.
+- Result: 23 focused tests passed in 41.48 seconds; changed-file lint and targeted production type checking passed. The legacy real-checkpoint backend now loads the historical split-expert tree without assuming current blocks own experts, then constructs an explicit-bank Transformer for execution. End-to-end Snowball logit parity replaces a test helper that duplicated production layer dispatch.
+- Interpretation: all second-pass findings were fixed or narrowed. The undefined cross-loop baseline metric is explicitly documented as NaN, and reused-bank optimizer groups are documented separately from the three base groups.
+- Next action: commit and push the compatibility fixes, file the tracking issue, then launch the seven-run smoke matrix.

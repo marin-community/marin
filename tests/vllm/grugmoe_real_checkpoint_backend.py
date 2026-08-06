@@ -330,12 +330,24 @@ def _load_legacy_split_expert_checkpoint(checkpoint_path: str, model_cfg: Any):
         w_down: jax.Array
         cfg: Any = eqx.field(static=True)
 
+    class LegacySplitTransformer(eqx.Module):
+        token_embed: jax.Array
+        embed_norm: Any
+        embed_gated_norm: Any
+        output_proj: jax.Array
+        blocks: tuple[Any, ...]
+        final_norm: Any
+        final_gated_norm: Any
+        config: Any = eqx.field(static=True)
+
     def legacy_split_expert_template(cfg: Any, vocab: Axis, *, key: jax.Array):
-        model = cfg.build(vocab, key=key)
+        current = cfg.build(vocab, key=key)
+        blocks = []
         for layer_index in range(cfg.num_layers):
-            expert = model.blocks[layer_index].mlp.expert_mlp
+            block = current.blocks[layer_index]
+            expert = current.expert_banks[block.expert_bank_index]
             gate, up = jnp.split(expert.w_gate_up, [cfg.intermediate_dim], axis=-1)
-            original_mlp = model.blocks[layer_index].mlp
+            original_mlp = block.mlp
             split_mlp = LegacySplitMoEMLP(
                 router=original_mlp.router,
                 router_bias=original_mlp.router_bias,
@@ -344,8 +356,17 @@ def _load_legacy_split_expert_checkpoint(checkpoint_path: str, model_cfg: Any):
                 w_down=expert.w_down,
                 cfg=original_mlp.cfg,
             )
-            model = eqx.tree_at(lambda m, i=layer_index: m.blocks[i].mlp, model, split_mlp)
-        return model
+            blocks.append(eqx.tree_at(lambda current_block: current_block.mlp, block, split_mlp))
+        return LegacySplitTransformer(
+            token_embed=current.token_embed,
+            embed_norm=current.embed_norm,
+            embed_gated_norm=current.embed_gated_norm,
+            output_proj=current.output_proj,
+            blocks=tuple(blocks),
+            final_norm=current.final_norm,
+            final_gated_norm=current.final_gated_norm,
+            config=current.config,
+        )
 
     vocab = Axis("vocab", model_cfg.vocab_size)
     key = jax.random.PRNGKey(0)
@@ -652,30 +673,44 @@ def _executable_model_from_legacy_split(model: Any) -> Any:
     from levanter.grug.grug_moe import MoEExpertMlp  # noqa: PLC0415
     from levanter.utils.activation import ActivationFunctionEnum  # noqa: PLC0415
 
-    from experiments.grug.moe.model import MoEMLP  # noqa: PLC0415
+    from experiments.grug.moe.model import MoEMLP, Transformer  # noqa: PLC0415
 
-    def executable_mlp_from_legacy_split(split_mlp: Any) -> MoEMLP:
+    def expert_bank_from_legacy_split(split_mlp: Any) -> MoEExpertMlp:
         w_gate_up = jnp.concatenate([split_mlp.w_gate, split_mlp.w_up], axis=-1)
-        expert_mlp = MoEExpertMlp(
+        return MoEExpertMlp(
             w_gate_up=w_gate_up,
             w_down=split_mlp.w_down,
             implementation=split_mlp.cfg.moe_implementation,
             activation=ActivationFunctionEnum.silu,
             capacity_factor=1.0,
         )
+
+    def executable_mlp_from_legacy_split(split_mlp: Any) -> MoEMLP:
         return MoEMLP(
             router=split_mlp.router,
             router_bias=split_mlp.router_bias,
-            expert_mlp=expert_mlp,
             cfg=split_mlp.cfg,
         )
 
-    for layer_index, block in enumerate(model.blocks):
-        if hasattr(block.mlp, "expert_mlp"):
-            continue
-        executable_mlp = executable_mlp_from_legacy_split(block.mlp)
-        model = eqx.tree_at(lambda m, i=layer_index: m.blocks[i].mlp, model, executable_mlp)
-    return model
+    blocks = []
+    expert_banks = []
+    for block in model.blocks:
+        split_mlp = block.mlp
+        expert_banks.append(expert_bank_from_legacy_split(split_mlp))
+        blocks.append(
+            eqx.tree_at(lambda current_block: current_block.mlp, block, executable_mlp_from_legacy_split(split_mlp))
+        )
+    return Transformer(
+        token_embed=model.token_embed,
+        embed_norm=model.embed_norm,
+        embed_gated_norm=model.embed_gated_norm,
+        output_proj=model.output_proj,
+        blocks=tuple(blocks),
+        expert_banks=tuple(expert_banks),
+        final_norm=model.final_norm,
+        final_gated_norm=model.final_gated_norm,
+        config=model.config,
+    )
 
 
 def _greedy_decode(
