@@ -57,8 +57,7 @@ RUN /opt/bridge/venv/bin/python -m dashboard_stitch \
     && rm -rf /tmp/dashboards-src
 COPY nginx.conf /etc/nginx/marin.conf
 COPY entrypoint.sh /opt/entrypoint.sh
-RUN mkdir -p /tmp/nginx/client-body /tmp/nginx/proxy \
-    && nginx -t -c /etc/nginx/marin.conf \
+RUN mkdir -p /tmp/nginx/client-body /tmp/nginx/fastcgi /tmp/nginx/proxy /tmp/nginx/scgi /tmp/nginx/uwsgi \
     && chmod +x /opt/entrypoint.sh \
     && chown -R grafana:root /opt/bridge /etc/grafana/dashboards /tmp/nginx
 

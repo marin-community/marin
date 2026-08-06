@@ -15,7 +15,11 @@ UPDATE_VIEWERS = "UPDATE org_user SET role = 'Editor', updated = CURRENT_TIMESTA
 
 
 def upgrade_sqlite(database_path: Path) -> int:
-    """Upgrade Viewer memberships in a SQLite Grafana database."""
+    """Upgrade Viewer memberships in a SQLite Grafana database.
+
+    Returns:
+        Number of upgraded memberships, or zero when the schema is absent.
+    """
     with sqlite3.connect(database_path) as connection:
         table = connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'org_user'").fetchone()
         if table is None:
@@ -26,7 +30,11 @@ def upgrade_sqlite(database_path: Path) -> int:
 
 
 def upgrade_postgres(database_url: str) -> int:
-    """Upgrade Viewer memberships in a PostgreSQL Grafana database."""
+    """Upgrade Viewer memberships in a PostgreSQL Grafana database.
+
+    Returns:
+        Number of upgraded memberships, or zero when the schema is absent.
+    """
     with psycopg.connect(database_url) as connection, connection.cursor() as cursor:
         cursor.execute("SELECT to_regclass('public.org_user')")
         table = cursor.fetchone()

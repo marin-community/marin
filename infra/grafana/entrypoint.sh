@@ -11,19 +11,24 @@ set -eu
 
 # Grafana stays on loopback. Nginx listens on Cloud Run's public container port
 # and adds the fixed Grafana role after IAP has authenticated the request.
-public_port="${PORT:-8080}"
+default_public_port=8080
+grafana_port=3000
+public_port="${PORT:-${default_public_port}}"
 case "${public_port}" in
   "" | *[!0-9]*)
     echo "entrypoint: PORT must be numeric, got ${public_port}" >&2
     exit 1
     ;;
 esac
-export GF_SERVER_HTTP_PORT=3000
+export GF_SERVER_HTTP_PORT="${grafana_port}"
 
 # The image creates these directories, but make them again in case the runtime
 # mounts an empty tmpfs over /tmp.
-mkdir -p /tmp/nginx/client-body /tmp/nginx/proxy
-sed "s/listen 8080;/listen ${public_port};/" /etc/nginx/marin.conf > /tmp/nginx.conf
+mkdir -p /tmp/nginx/client-body /tmp/nginx/fastcgi /tmp/nginx/proxy /tmp/nginx/scgi /tmp/nginx/uwsgi
+sed \
+  -e "s/PUBLIC_PORT/${public_port}/" \
+  -e "s/GRAFANA_PORT/${grafana_port}/" \
+  /etc/nginx/marin.conf > /tmp/nginx.conf
 nginx -t -c /tmp/nginx.conf
 
 # Grafana's host/port database settings reject Cloud SQL socket paths (the
