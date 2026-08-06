@@ -162,13 +162,16 @@ def test_requests_transport_sends_zstd_body(monkeypatch: pytest.MonkeyPatch) -> 
     assert zstandard.ZstdDecompressor().decompress(compressed) == body
 
 
-def test_requests_transport_falls_back_until_server_advertises_zstd(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_requests_transport_tracks_server_encoding_rollouts(monkeypatch: pytest.MonkeyPatch) -> None:
     session = RecordingSession(
         [
             status_outcome(400),
             status_outcome(200),
-            status_outcome(200, headers={"Accept-Encoding": "zstd"}),
-            status_outcome(200, headers={"Accept-Encoding": "zstd"}),
+            status_outcome(200, headers={"Accept-Encoding": "gzip, zstd"}),
+            status_outcome(200, headers={"Accept-Encoding": "gzip, zstd"}),
+            status_outcome(400),
+            status_outcome(200),
+            status_outcome(200),
         ]
     )
     monkeypatch.setattr(telemetry.requests, "Session", lambda: session)
@@ -178,16 +181,22 @@ def test_requests_transport_falls_back_until_server_advertises_zstd(monkeypatch:
     transport.post("http://finelog/v1/telemetry", body, "batch-1", (1.0, 2.0))
     transport.post("http://finelog/v1/telemetry", body, "batch-2", (1.0, 2.0))
     transport.post("http://finelog/v1/telemetry", body, "batch-3", (1.0, 2.0))
+    transport.post("http://finelog/v1/telemetry", body, "batch-4", (1.0, 2.0))
+    transport.post("http://finelog/v1/telemetry", body, "batch-5", (1.0, 2.0))
 
-    assert len(session.requests) == 4
-    assert session.requests[0][2]["Content-Encoding"] == "zstd"
-    assert zstandard.ZstdDecompressor().decompress(session.requests[0][1]) == body
-    assert session.requests[1][1] == body
-    assert "Content-Encoding" not in session.requests[1][2]
-    assert session.requests[2][1] == body
-    assert "Content-Encoding" not in session.requests[2][2]
-    assert session.requests[3][2]["Content-Encoding"] == "zstd"
-    assert zstandard.ZstdDecompressor().decompress(session.requests[3][1]) == body
+    assert [request[2].get("Content-Encoding") for request in session.requests] == [
+        "zstd",
+        None,
+        None,
+        "zstd",
+        "zstd",
+        None,
+        None,
+    ]
+    for index in (0, 3, 4):
+        assert zstandard.ZstdDecompressor().decompress(session.requests[index][1]) == body
+    for index in (1, 2, 5, 6):
+        assert session.requests[index][1] == body
 
 
 def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> None:

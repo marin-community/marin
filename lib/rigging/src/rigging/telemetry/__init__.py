@@ -160,32 +160,38 @@ class _Transport(Protocol):
     def close(self) -> None: ...
 
 
-class _ServerCompression(enum.Enum):
-    UNKNOWN = enum.auto()
-    SUPPORTED = enum.auto()
-    UNSUPPORTED = enum.auto()
-
-
 class _RequestsTransport:
     def __init__(self) -> None:
         self._session = requests.Session()
         self._compressor = zstandard.ZstdCompressor(level=_FINELOG_ZSTD_LEVEL)
-        self._server_compression = _ServerCompression.UNKNOWN
+        self._server_request_encodings: frozenset[str] | None = None
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> requests.Response:
-        content_encoding = None if self._server_compression is _ServerCompression.UNSUPPORTED else _ZSTD_ENCODING
+        content_encoding = (
+            _ZSTD_ENCODING
+            if self._server_request_encodings is None or _ZSTD_ENCODING in self._server_request_encodings
+            else None
+        )
         response = self._post(endpoint, body, batch_id, timeout, content_encoding)
-        if _accepts_zstd(response):
-            self._server_compression = _ServerCompression.SUPPORTED
-            return response
-        if self._server_compression is not _ServerCompression.UNKNOWN or response.status_code not in {400, 415}:
+        advertised = self._observe_request_encodings(response)
+        encoding_rejected = (
+            content_encoding is not None
+            and response.status_code in {400, 415}
+            and (advertised is None or content_encoding not in advertised)
+        )
+        if not encoding_rejected:
             return response
 
+        self._server_request_encodings = advertised or frozenset()
         response = self._post(endpoint, body, batch_id, timeout, None)
-        self._server_compression = (
-            _ServerCompression.SUPPORTED if _accepts_zstd(response) else _ServerCompression.UNSUPPORTED
-        )
+        self._observe_request_encodings(response)
         return response
+
+    def _observe_request_encodings(self, response: _Response) -> frozenset[str] | None:
+        advertised = _accepted_request_encodings(response)
+        if advertised is not None:
+            self._server_request_encodings = advertised
+        return advertised
 
     def _post(
         self,
@@ -213,9 +219,15 @@ class _RequestsTransport:
         self._session.close()
 
 
-def _accepts_zstd(response: _Response) -> bool:
-    encodings = response.headers.get("Accept-Encoding", "")
-    return any(encoding.strip().lower() == _ZSTD_ENCODING for encoding in encodings.split(","))
+def _accepted_request_encodings(response: _Response) -> frozenset[str] | None:
+    header = response.headers.get("Accept-Encoding")
+    if header is None:
+        return None
+    return frozenset(
+        encoding.partition(";")[0].strip().lower()
+        for encoding in header.split(",")
+        if encoding.partition(";")[0].strip()
+    )
 
 
 @dataclass(frozen=True)
