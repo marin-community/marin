@@ -1,6 +1,6 @@
 ---
 name: write-design-doc
-description: Produce a 1-page design doc, spec, PR, and Discord review ping when the user explicitly asks to design a planned repository change. Do not use to answer or evaluate an idea inline.
+description: Produce a 1-page design proposal for an explicit design task or a design-level change identified by another change workflow. Do not use to answer or evaluate an idea inline.
 ---
 
 # Skill: Design Doc Workflow
@@ -21,12 +21,16 @@ The template lives at `.agents/projects/design-template.md`. New docs go to a sl
 
 ## When to use this skill
 
-This is a change-mode publishing workflow. Use it only when the user explicitly
-asks for a design doc/one-pager/proposal, or asks to design an intended
-implementation whose review artifact should be committed. Do **not** use it for
-questions, walkthroughs, informal architecture reviews, or requests to assess
-whether an idea is reasonable. Investigate those requests and answer inline;
-start this workflow only after an explicit follow-up asks to publish a design.
+This is a change-mode design workflow. Use it only when the user explicitly
+asks for a design doc/one-pager/proposal, or when another change-mode playbook
+such as `fix-issue` identifies a design-level change and invokes this skill.
+Follow the calling playbook's delivery target: `fix-issue` embeds the proposal
+in its issue comment, while a standalone design task uses the repository files
+and publishing steps below. Do **not** use this skill for questions,
+walkthroughs, informal architecture reviews, or requests to assess whether an
+idea is reasonable. Investigate those requests and answer inline; start a
+standalone design workflow only after an explicit follow-up asks to publish a
+design.
 
 - A task will likely take more than a day, or is load-bearing for other work.
 - A change crosses subproject boundaries (e.g. iris ↔ levanter, marin ↔ zephyr).
@@ -40,7 +44,11 @@ normal implementation workflow instead of manufacturing a design doc.
 
 # Workflow
 
-Seven phases. Confirm with the user at natural decision points (after Research, Draft, Spec, before Publish), but don't ask permission when the next step is obvious.
+The standalone workflow has seven phases. A calling change-mode playbook may
+reuse the design guidance while overriding persistence and publication, as
+`fix-issue` does for a single issue comment. Confirm with the user at natural
+decision points (after Research, Draft, Spec, before Publish), but don't ask
+permission when the next step is obvious.
 
 ## 1. Frame
 
