@@ -16,8 +16,9 @@ author: dlwh
 
 ## Current TL;DR
 
-- `GRUG-XEM-001` has local snapshots for explicit expert-bank ownership, tied-bank LR ablations, and the seven-run d512 architecture smoke matrix. No accelerator run has launched.
-- The one-pair layers 2-3 conversion prototype now covers calibration reservoirs, native/spectral assignment, balanced bank prefit, topology-native checkpoint conversion, and constrained recovery. It has local numerical tests but remains gated on the architecture smoke and a contemporaneous untied checkpoint.
+- `GRUG-XEM-001` passed the d512 architecture gate on matched 1.44B-token runs in `us-central1`. Pairwise unscaled and `1/sqrt(g)` tying finished +0.02050 and +0.02203 Paloma macro loss above the 3.58622 untied control; middle-four variants finished +0.03817 and +0.04541, all inside their screening thresholds. Routing remained healthy and middle-four tying removed 50% of unique routed-expert parameters.
+- `GRUG-XEM-002` is running the layers 2-3 spectral-plus-prefit conversion in `us-central1` from the matched untied checkpoint. Calibration is committed; the current retry is in matching after two fixed sharding failures. No downstream artifact is being launched until matching commits.
+- `GRUG-XEM-003` ports explicit expert banks and legacy-checkpoint migration into the array-stacked June 67B-A2B implementation. The selected no-copy teacher, data caches, eval caches, output bucket, and TPU resources are all in `us-central2`; no checkpoint payload has been read outside that region.
 - The isolated branch is `research/grug-cross-layer-expert-merging` in `/tmp/marin-grug-xem`. It has not been pushed, and no issue or PR exists.
 
 ## Baseline
@@ -30,16 +31,14 @@ author: dlwh
 
 ### Active
 
-- `GRUG-XEM-H1`: Pairwise middle-layer routed-expert tying `(0,1,1,2,2,3)` is stable and finishes within 0.03 Paloma macro loss of a matched untied control. Next test: 500-step d512 smoke after topology and optimizer tests pass.
-- `GRUG-XEM-H2`: Four middle layers sharing one routed-expert bank `(0,1,1,1,1,2)` remain within 0.06 Paloma macro loss of the matched control without routing or update concentration. Next test: add after pairwise smoke is healthy.
-- `GRUG-XEM-H3`: Scaling a bank's expert LR by `1/sqrt(g)` avoids update-scale artifacts and outperforms an unscaled LR; `1/g` is the conservative control. Next test: matched d512 smoke ablation.
-- `GRUG-XEM-H4`: After architecture validation, functional matching plus shared-bank prefit can merge one adjacent middle-layer pair more efficiently than identity-ID conversion. Next test: collect layers 2-3 calibration states from the matched untied checkpoint after the architecture gate.
+- `GRUG-XEM-H4`: Functional matching plus shared-bank prefit can merge one adjacent middle-layer pair more efficiently than identity-ID conversion. Current test: layers 2-3 spectral-plus-prefit pipeline from the matched d512 untied checkpoint.
 - `GRUG-XEM-H5`: Covariance-aware finite-difference spectral matching materially improves immediate MoE error, validation-loss spike, or recovery tokens over native-state-only matching. Next test: compare saved identity, native-only, and spectral cost matrices on the same calibration artifact; drop spectral probes if they miss the stated 15%/20% gates.
+- `GRUG-XEM-H6`: A recent June 67B-A2B checkpoint admits a one-pair middle-layer merge without cross-region checkpoint or data movement. Next test: validate legacy schema migration locally, then dispatch a central2-only one-pair smoke from step 105149 after the d512 surgery gate passes.
 
 ### Blocked
 
-- `GRUG-XEM-H4`: Blocker: architecture gate and source checkpoint. Resume when: d512 baseline and tied-from-scratch runs finish.
-- `GRUG-XEM-H5`: Blocker: no trained untied checkpoint or calibration artifact. Resume when: the d512 architecture gate finishes and calibration runs in the checkpoint region.
+- `GRUG-XEM-H5`: Blocker: the shared spectral matching artifact has not committed. Resume when: the current matching retry succeeds, then launch the identity/native/spectral comparisons against the same artifact.
+- `GRUG-XEM-H6`: Blocker: d512 surgery has not passed and the June checkpoint adapter is not yet validated. Resume when: both gates pass.
 
 ### Falsified / Dead End
 
@@ -47,7 +46,9 @@ author: dlwh
 
 ### Promoted
 
-- None.
+- `GRUG-XEM-H1`: Pairwise d512 tying is stable and within the +0.03 Paloma macro screening gate on a matched full run.
+- `GRUG-XEM-H2`: Middle-four d512 tying is stable and within the +0.06 Paloma macro screening gate on a matched full run.
+- `GRUG-XEM-H3`: The LR ablation did not support `1/sqrt(g)` as best for this d512 MuonH recipe; unscaled tying was slightly better at full schedule for both topologies. Keep LR scaling configurable rather than treating Jaggi's setting as a Grug default.
 
 ## Background Research Brief
 
@@ -266,3 +267,43 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
   - `/Users/dlwh/src/marin/.venv/bin/python -m pytest --session-timeout=3600 -q experiments/grug/moe/test_launch_tied_experts.py`
 - Result: the required training and evaluation cache families resolve under the `us-central1` bucket, while all seven fixed output paths for version `2026.08.06` are unused. The launcher now accepts `GRUG_TIED_VARIANTS`, allowing a four-run baseline/pairwise wave followed by a three-run middle-four wave without changing artifact identities. Two no-launch tests and targeted Pyrefly pass. The isolated worktree's `.venv/bin/python` must be used; the main checkout interpreter imports stale Grug modules. The controller must set `MARIN_PREFIX=gs://marin-us-central1` because a local controller otherwise defaults artifact records to `/tmp/marin`.
 - Next action: after dispatch authorization, run wave 1 from the isolated worktree with the regional prefix and babysit it before starting wave 2.
+
+### 2026-08-06 10:20 - GRUG-XEM-001 d512 architecture gate
+
+- Hypothesis: Pairwise and middle-four expert tying can complete the matched d512 schedule inside the +0.03 and +0.06 Paloma macro screening thresholds without pathological routing or expert updates.
+- Commit Hash: `884b213ff4`.
+- Commands: the exact four Iris resubmit commands are recorded in `scratch/20260806-0903_monitoring_state.json`, `scratch/20260806-0933_monitoring_state.json`, `scratch/20260806-0948_monitoring_state.json`, and `scratch/20260806-1000_monitoring_state.json`. Every controller and child was pinned to `us-central1` with `MARIN_PREFIX=gs://marin-us-central1`.
+- Config: d512, six layers, batch 32, sequence length 4096. Smoke used 500 steps. Full runs used 10,993 steps and 1,440,874,496 tokens. The full matrix retained untied, pairwise unscaled/`1/sqrt(g)`, and middle-four unscaled/`1/sqrt(g)` variants after smoke established that `1/g` was not competitive.
+- Result:
+
+  | Variant | Paloma macro | Delta | Tokens/s |
+  |---|---:|---:|---:|
+  | Untied | 3.586223 | — | 360,969 |
+  | Pairwise unscaled | 3.606721 | +0.020498 | 370,333 |
+  | Pairwise `1/sqrt(g)` | 3.608257 | +0.022033 | 369,366 |
+  | Middle-four unscaled | 3.624390 | +0.038167 | 373,910 |
+  | Middle-four `1/sqrt(g)` | 3.631630 | +0.045407 | 373,994 |
+
+  All 256 experts remained active, routing entropy stayed near 5.53, and capacity overflow remained zero. Pairwise peak HBM was about 18.2%; the middle-four Iris metric was unavailable, but both runs completed without memory failure. Middle-four uses 301,989,888 unique routed-expert parameters, 50% fewer than untied.
+- Interpretation: the architecture claim passes its initial d512 gate. Low cross-loop routing agreement is expected because routers remain layer-specific. Contrary to the prior-work default, unscaled tied-expert LR was slightly better than `1/sqrt(g)` for this shallow MuonH setup, so scale must remain an empirical knob.
+- Next action: use the untied full checkpoint at `gs://marin-us-central1/grug/tied_experts/d512/full/baseline/2026.08.06/checkpoints/step-10993` as the same-region surgery teacher.
+
+### 2026-08-06 12:45 - GRUG-XEM-002 calibration and matching sharding failures
+
+- Hypothesis: The local one-pair pipeline will carry over to a four-device TPU worker if merge-only expert dimensions remain local and dynamic expert gathers specify their output sharding.
+- Commit Hash: initial launch `884b213ff4`; compact merge-mesh fix `5d1513ae1e11eac87eddd98872f8aca0be8f4dce`; explicit spectral-gather fix `1533bac743d8e67adf8ccc98b16b59cde6c97897`.
+- Commands: exact sequential pipeline resubmits are recorded in `scratch/20260806-1123_monitoring_state.json`, `scratch/20260806-1211_monitoring_state.json`, and `scratch/20260806-1305_monitoring_state.json`.
+- Config: layers 2-3, spectral assignment with offline prefit, v5p-8 in `us-central1`, central1 teacher/data/eval/output only.
+- Result: the first calibration attempt failed because the default compact mesh assigned four devices to the `data` axis, leaving a closed-over expert down projection with local output width 128 against a 512-wide residual. The merge mesh now places non-expert devices on the replica axis and keeps merge tensors local; a four-virtual-device CPU regression covers this path. Calibration then completed and committed `gs://marin-us-central1/grug/expert_merge/d512/calibration-layers-2-3/2026.08.06`. Matching subsequently failed because dynamic per-expert gathers lacked explicit output sharding; the gather layouts are now specified and covered through spectral probe construction and expert evaluation. The second retry is running matching after one automatically recovered TPU preemption.
+- Interpretation: both failures were deterministic SPMD boundary bugs rather than evidence against expert matching. No downstream artifacts launched from either failed attempt, and all material paths remained in `us-central1`.
+- Next action: wait for the shared matching manifest to commit, then run identity, native, spectral, and spectral-plus-prefit branches against exactly the same calibration and cost artifacts.
+
+### 2026-08-06 13:30 - GRUG-XEM-003 June 67B regional and topology audit
+
+- Hypothesis: A completed recent June 67B-A2B checkpoint can serve as the first large-model surgery teacher without copying checkpoint or dataset payloads across regions.
+- Commit Hash: `dd7c64baeb552ee8c8f4b6f33f2ae75e338692fd`.
+- Command: local source inspection plus metadata-only GCS/Iris audit; no checkpoint tensor payload was read.
+- Config: June MoE has 26 layers, hidden size 2560, expert intermediate size 1280, 256 routed experts with top-4 routing, one always-on shared dense expert, and array-stacked execution. The recommended one-pair target shares layers 12-13. The tied-from-scratch follow-up uses two input and two output anchors with mostly four-layer middle groups.
+- Result: the recommended completed teacher is `gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step102k-3dac46/checkpoints/step-105149/` with recorded Paloma macro 2.224. Its training cache, Paloma and uncheatable caches, output bucket, and v4-2048 resources are all available in `us-central2`. The main 10T run is still active and is not selected as the first teacher. Explicit expert-bank ownership is now implemented in the vendored June model for both unstacked and array-stacked execution; eight focused tests, the variant-contract suite, lint, and Pyrefly pass.
+- Interpretation: the no-copy large-scale route is central2 compute against the completed step-105149 central2 checkpoint. The refactor changes the native checkpoint paths from per-block experts to `params.expert_banks`, so a tested legacy schema adapter is required before any large worker is launched.
+- Next action: finish the local legacy-checkpoint adapter and tied-bank update scaling, then port the smallest one-pair conversion smoke. Do not dispatch it until the d512 one-pair gate passes.
