@@ -33,22 +33,31 @@ from rigging.tunnel import open_tunnel
 
 from finelog.client.log_client import LogClient
 from finelog.deploy import _gcp, _k8s
+from finelog.deploy.build import DEFAULT_PLATFORM
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
 
+# Sits just past the server's own 10s query deadline so a long query is ended by
+# the server, which reports why, rather than by a client-side timeout that
+# reports only that time ran out.
+DEFAULT_REQUEST_TIMEOUT = 15.0
+
 
 @contextmanager
-def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generator[LogClient, None, None]:
+def _log_client(
+    cfg: FinelogConfig, name: str, tunnel_timeout: float, request_timeout: float = DEFAULT_REQUEST_TIMEOUT
+) -> Generator[LogClient, None, None]:
     """Yield a LogClient: via the controller IAP proxy if cfg.client_url is set, else an SSH/k8s tunnel."""
+    timeout_ms = int(request_timeout * 1000)
     if cfg.client_url:
         provider = iap_edge_provider(name)
         if provider is None:
             raise IapLoginRequired(f"no cached IAP credentials for {name!r}; log in to {name!r} to refresh them")
         client = connect(
             cfg.client_url,
-            lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors),
+            lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors, timeout_ms=timeout_ms),
             auth=IapAuth(provider),
             connect_timeout=tunnel_timeout,
         )
@@ -60,7 +69,7 @@ def _log_client(cfg: FinelogConfig, name: str, tunnel_timeout: float) -> Generat
     else:
         target = tunnel_target_for(cfg)
         with open_tunnel(target, timeout=tunnel_timeout) as url:
-            client = LogClient.connect(url)
+            client = LogClient.connect(url, timeout_ms=timeout_ms)
             try:
                 yield client
             finally:
@@ -105,6 +114,27 @@ def _dispatch_logs(cfg: FinelogConfig, *, tail: int, follow: bool) -> None:
 @click.group()
 def cli() -> None:
     """Manage finelog deployments."""
+
+
+@cli.command("build-image")
+@click.option("--image", "images", multiple=True, required=True, help="Image tag to publish. Repeat for aliases.")
+@click.option("--platform", default=DEFAULT_PLATFORM, show_default=True)
+@click.option("--cargo-profile", type=click.Choice(["release", "fast"]), default="release", show_default=True)
+@click.option("--cache-image", help="Registry image used for BuildKit cache import and export.")
+def build_image_cmd(
+    images: tuple[str, ...],
+    platform: str,
+    cargo_profile: str,
+    cache_image: str | None,
+) -> None:
+    """Build and publish a finelog image."""
+    build_finelog_image(
+        image=images[0],
+        additional_tags=images[1:],
+        platform=platform,
+        cargo_profile=cargo_profile,
+        cache_image=cache_image,
+    )
 
 
 @cli.group("deploy")
@@ -260,7 +290,22 @@ _PRINTERS = {
     show_default=True,
     help="Seconds to wait for the local tunnel to become reachable.",
 )
-def query_cmd(name: str, sql: str, output_format: str, max_rows: int, tunnel_timeout: float) -> None:
+@click.option(
+    "--timeout",
+    "request_timeout",
+    type=float,
+    default=DEFAULT_REQUEST_TIMEOUT,
+    show_default=True,
+    help="Seconds to wait for the query result. The server applies its own 10s deadline.",
+)
+def query_cmd(
+    name: str,
+    sql: str,
+    output_format: str,
+    max_rows: int,
+    tunnel_timeout: float,
+    request_timeout: float,
+) -> None:
     """Run SQL against the deployed finelog `<name>`.
 
     Connects via the controller IAP proxy when ``client_url`` is configured in
@@ -271,7 +316,7 @@ def query_cmd(name: str, sql: str, output_format: str, max_rows: int, tunnel_tim
     configure_logging(level=logging.INFO)
     cfg = load_finelog_config(name)
     try:
-        with _log_client(cfg, name, tunnel_timeout) as client:
+        with _log_client(cfg, name, tunnel_timeout, request_timeout) as client:
             table = client.query(sql, max_rows=max_rows)
     except IapLoginRequired as exc:
         raise click.ClickException(str(exc)) from exc

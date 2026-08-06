@@ -17,10 +17,12 @@ import time
 
 import pytest
 from iris.cluster.config import (
+    AuthConfig,
     ControllerVmConfig,
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
     CoreweaveSliceConfig,
+    EndpointSpec,
     IrisClusterConfig,
     KubernetesProviderConfig,
     KueueConfig,
@@ -39,8 +41,9 @@ from iris.cluster.platforms.k8s.controller import (
     configure_client_s3,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
-from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME
+from iris.cluster.platforms.k8s.kueue_manifests import RESOURCE_FLAVOR_NAME, build_cluster_queue
 from iris.cluster.platforms.k8s.nodepool_manifests import (
+    CPU_TOPOLOGY_NODE_LABELS,
     compute_target_racks,
     nodepool_manifest,
     nodepool_name,
@@ -61,6 +64,7 @@ from iris.cluster.platforms.types import (
     InfraError,
     Labels,
 )
+from iris.cluster.types import AcceleratorType
 
 
 def _make_provider(
@@ -197,7 +201,16 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
             nodepool_manifest(
                 pool_name,
                 cw.instance_type,
-                node_labels=nodepool_node_labels(label_prefix, name, min_nodes=min_nodes),
+                node_labels=nodepool_node_labels(
+                    label_prefix,
+                    name,
+                    min_nodes=min_nodes,
+                    topology_node_labels=(
+                        CPU_TOPOLOGY_NODE_LABELS
+                        if sg.resources is not None and sg.resources.device_type == AcceleratorType.CPU
+                        else ()
+                    ),
+                ),
                 min_nodes=min_nodes,
                 max_nodes=max_nodes,
                 target_nodes=min_nodes,
@@ -207,9 +220,7 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
 
     cluster_queue = cluster_config.kubernetes_provider.kueue.cluster_queue
     if cluster_queue:
-        k8s.apply_json(
-            {"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ClusterQueue", "metadata": {"name": cluster_queue}}
-        )
+        k8s.apply_json(build_cluster_queue(cluster_queue))
     k8s.apply_json(
         {"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ResourceFlavor", "metadata": {"name": RESOURCE_FLAVOR_NAME}}
     )
@@ -219,6 +230,7 @@ def test_start_controller_creates_controller_resources():
     """start_controller creates the runtime resources that remain Iris-owned."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.endpoints["/system/log-server"] = EndpointSpec(uri="http://finelog:10001")
     _seed_prerequisites(k8s, cluster_config)
 
     t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
@@ -229,6 +241,8 @@ def test_start_controller_creates_controller_resources():
     assert address == "iris-controller-svc.iris.svc.cluster.local:10000"
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is not None
     assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is not None
+    node_agent = k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent")
+    assert node_agent is not None
     assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
@@ -238,17 +252,30 @@ def test_start_controller_creates_controller_resources():
     assert "AWS_ACCESS_KEY_ID" in secret["data"]
     assert "AWS_SECRET_ACCESS_KEY" in secret["data"]
 
-    # Verify Deployment nodeSelector targets the configured scale group
+    # Verify the controller targets the configured scale group's amd64 nodes.
     iris_labels = Labels("iris")
     dep = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")
     deploy_spec = dep["spec"]
     node_selector = deploy_spec["template"]["spec"]["nodeSelector"]
-    assert node_selector == {iris_labels.iris_scale_group: "cpu-erapids"}
+    assert node_selector == {
+        "kubernetes.io/arch": "amd64",
+        iris_labels.iris_scale_group: "cpu-erapids",
+    }
 
     # Controller is stamped with the control-plane PriorityClass, and that class
     # is provisioned so the reference resolves at admission.
     assert deploy_spec["template"]["spec"]["priorityClassName"] == "iris-system"
     assert k8s.get_json(K8sResource.PRIORITY_CLASSES, "iris-system") is not None
+
+    agent_spec = node_agent["spec"]["template"]["spec"]
+    assert agent_spec["hostNetwork"] is True
+    assert agent_spec["containers"][0]["command"] == [
+        ".venv/bin/python",
+        "-m",
+        "iris.cluster.node_agent",
+        "k8s",
+        "--config=/etc/iris/config.json",
+    ]
 
     # Controller consumes that env via envFrom (S3 + injected, one flow).
     container = deploy_spec["template"]["spec"]["containers"][0]
@@ -274,6 +301,20 @@ def test_start_controller_creates_controller_resources():
     assert pvc["spec"]["resources"]["requests"]["storage"] == _CONTROLLER_STATE_PVC_SIZE
 
     t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_start_controller_leaves_node_agent_absent_without_external_finelog():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    thread = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    thread.start()
+
+    provider.start_controller(cluster_config)
+
+    assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
+    thread.join(timeout=5)
     provider.shutdown()
 
 
@@ -324,6 +365,32 @@ def test_start_controller_injects_operator_env(monkeypatch):
 
     container = k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller")["spec"]["template"]["spec"]["containers"][0]
     assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+
+    t.join(timeout=5)
+    provider.shutdown()
+
+
+def test_preflight_controller_caches_signing_key_without_mutating_kubernetes(monkeypatch):
+    """The key validated before a rollout is the key projected after the image build."""
+    monkeypatch.delenv("IRIS_SIGNING_KEY", raising=False)
+    monkeypatch.setenv("TEST_OPERATOR_SIGNING_KEY", "key-before-build")
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.auth = AuthConfig(
+        signing_key=["env:IRIS_SIGNING_KEY", "env:TEST_OPERATOR_SIGNING_KEY"],
+    )
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.preflight_controller(cluster_config)
+
+    assert k8s.get_json(K8sResource.SECRETS, "iris-controller-env") is None
+    monkeypatch.setenv("TEST_OPERATOR_SIGNING_KEY", "key-after-build")
+    t = threading.Thread(target=_auto_ready_deployment, args=(k8s, "iris-controller"), daemon=True)
+    t.start()
+    provider.start_controller(cluster_config)
+
+    secret = k8s.get_json(K8sResource.SECRETS, "iris-controller-env")
+    assert base64.b64decode(secret["data"]["IRIS_SIGNING_KEY"]).decode() == "key-before-build"
 
     t.join(timeout=5)
     provider.shutdown()
@@ -511,12 +578,13 @@ def test_start_controller_stops_old_controller_before_reapply():
 
 
 def test_stop_controller_deletes_resources():
-    """stop_controller deletes Deployment, Service, ConfigMap, S3 secret, and PVC."""
+    """stop_controller deletes every Iris-owned runtime resource."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
 
     # Pre-populate resources
     _apply_stub(k8s, "Deployment", "iris-controller")
+    _apply_stub(k8s, "DaemonSet", "iris-node-agent")
     _apply_stub(k8s, "Service", "iris-controller-svc")
     _apply_stub(k8s, "ConfigMap", "iris-cluster-config")
     _apply_stub(k8s, "Secret", "iris-task-env")
@@ -525,6 +593,7 @@ def test_stop_controller_deletes_resources():
     provider.stop_controller(cluster_config)
 
     assert k8s.get_json(K8sResource.DEPLOYMENTS, "iris-controller") is None
+    assert k8s.get_json(K8sResource.DAEMONSETS, "iris-node-agent") is None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-cluster-config") is None
     assert k8s.get_json(K8sResource.SECRETS, "iris-task-env") is None
@@ -612,7 +681,6 @@ def test_verify_prerequisites_raises_when_nothing_provisioned():
     assert "ClusterRoleBinding/iris-controller-iris" in message
     assert "NodePool/iris-cpu-erapids" in message
     assert "ClusterQueue/iris-cq" in message
-    assert "ResourceFlavor/cw-ib" in message
     assert "pulumi up" in message
     provider.shutdown()
 
@@ -629,6 +697,52 @@ def test_verify_prerequisites_passes_once_seeded():
     # Presence-only: verifying must not create, delete, or otherwise touch anything.
     assert {p["metadata"]["name"] for p in k8s.list_json(K8sResource.NODE_POOLS)} == pools_before
     assert k8s.get_json(K8sResource.NAMESPACES, "iris") is not None
+    provider.shutdown()
+
+
+def test_verify_prerequisites_uses_cluster_queue_resource_flavors():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    k8s.delete(K8sResource.RESOURCE_FLAVORS, RESOURCE_FLAVOR_NAME)
+    k8s.apply_json(
+        {
+            "apiVersion": "kueue.x-k8s.io/v1beta1",
+            "kind": "ClusterQueue",
+            "metadata": {"name": "iris-cq"},
+            "spec": {
+                "resourceGroups": [
+                    {
+                        "flavors": [
+                            {"name": "existing-cpu", "resources": []},
+                            {"name": "existing-gpu", "resources": []},
+                        ]
+                    }
+                ]
+            },
+        }
+    )
+    for flavor in ("existing-cpu", "existing-gpu"):
+        k8s.apply_json({"apiVersion": "kueue.x-k8s.io/v1beta1", "kind": "ResourceFlavor", "metadata": {"name": flavor}})
+
+    # Presence validation follows the live ClusterQueue, independent of the
+    # flavor name rendered by the currently checked-out IaC code.
+    provider.verify_prerequisites(cluster_config)
+    provider.shutdown()
+
+
+def test_verify_prerequisites_reports_missing_cluster_queue_flavor():
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    _seed_prerequisites(k8s, cluster_config)
+    k8s.delete(K8sResource.RESOURCE_FLAVORS, RESOURCE_FLAVOR_NAME)
+
+    with pytest.raises(PrerequisitesNotProvisionedError) as exc_info:
+        provider.verify_prerequisites(cluster_config)
+
+    message = str(exc_info.value)
+    assert f"ResourceFlavor/{RESOURCE_FLAVOR_NAME}" in message
+    assert "ClusterQueue/iris-cq" not in message
     provider.shutdown()
 
 

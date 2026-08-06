@@ -28,6 +28,7 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
+use parquet::arrow::ProjectionMask;
 
 use crate::errors::StatsError;
 use crate::store::compaction::config::CompactionJob;
@@ -351,10 +352,36 @@ fn apply_merge(
 /// Wrapped in `spawn_blocking` by the maintenance task; the body is sync so
 /// `run_job` can also be exercised directly in unit tests.
 pub fn read_segment_batches(path: &Path) -> Result<Vec<RecordBatch>, StatsError> {
+    read_segment_projected(path, None)
+}
+
+/// Read `path`, keeping only the columns named in `columns`; `None` reads every
+/// column.
+///
+/// Rows come back in the file's order, both within a batch and across batches,
+/// and every row is returned — projection drops columns, never rows.
+///
+/// A name in `columns` that the file does not have is skipped rather than
+/// erroring; the caller is asking for a subset, not asserting a schema.
+pub fn read_segment_projected(
+    path: &Path,
+    columns: Option<&[&str]>,
+) -> Result<Vec<RecordBatch>, StatsError> {
     let file = std::fs::File::open(path)
         .map_err(|e| StatsError::Internal(format!("open merge input {}: {e}", path.display())))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
         .map_err(|e| StatsError::Internal(format!("parquet reader {}: {e}", path.display())))?;
+    let builder = match columns {
+        None => builder,
+        Some(wanted) => {
+            let descr = builder.parquet_schema();
+            let indices: Vec<usize> = (0..descr.num_columns())
+                .filter(|&i| wanted.contains(&descr.column(i).name()))
+                .collect();
+            let mask = ProjectionMask::leaves(descr, indices);
+            builder.with_projection(mask)
+        }
+    };
     let reader = builder
         .build()
         .map_err(|e| StatsError::Internal(format!("parquet reader build: {e}")))?;
@@ -365,8 +392,8 @@ pub fn read_segment_batches(path: &Path) -> Result<Vec<RecordBatch>, StatsError>
     Ok(out)
 }
 
-/// Write `batches` to `path` via `ArrowWriter` (rg=16384, zstd-1, bloom — the
-/// shared `segment_writer_properties`, identical to the L0 flush writer).
+/// Write `batches` to `path` via `ArrowWriter`, using the shared
+/// `segment_writer_properties` with no bloom column.
 fn write_merged_segment(
     path: &Path,
     schema: &SchemaRef,
@@ -439,6 +466,42 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn projected_read_keeps_row_order_and_drops_other_columns() {
+        // The sidecar backfill indexes a projection of the segment, so the
+        // projected read must preserve row order and count exactly — the index
+        // chunks values by global row position to stay aligned with row groups.
+        let dir = tempdir("projected");
+        let rows = &[(1, 30, "w-c"), (2, 10, "w-a"), (3, 20, "w-b")];
+        let (path, _) = write_segment_to_dir(&dir, 0, 1, &batch(rows)).unwrap();
+
+        let projected = read_segment_projected(&path, Some(&["worker_id"])).unwrap();
+        let names: Vec<String> = projected[0]
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(names, vec!["worker_id"]);
+
+        let ids: Vec<&str> = projected
+            .iter()
+            .flat_map(|b| {
+                let col = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
+                (0..b.num_rows()).map(|i| col.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(ids, vec!["w-c", "w-a", "w-b"]);
+
+        // A requested column the file lacks is skipped, not an error.
+        let partial = read_segment_projected(&path, Some(&["worker_id", "absent"])).unwrap();
+        assert_eq!(partial[0].num_columns(), 1);
+
+        // No projection still reads everything.
+        let full = read_segment_batches(&path).unwrap();
+        assert_eq!(full[0].num_columns(), 3);
     }
 
     /// Unwrap the output segment of a swap that is expected to produce one (every
@@ -782,12 +845,11 @@ mod tests {
     /// row loss and global (key, seq) order across row-group boundaries.
     #[test]
     fn merge_multi_row_group_input_no_concat() {
-        use crate::store::segment::ROW_GROUP_SIZE;
         let dir = tempdir("multirg");
 
         // One large L0 segment: >2 row groups, written UNSORTED (descending key)
         // so the per-batch sort is load-bearing. seq is unique and monotonic.
-        let n = (ROW_GROUP_SIZE as i64) * 2 + 500;
+        let n = 16_384_i64 * 2 + 500;
         let big: Vec<(i64, i64, &str)> = (1..=n).map(|s| (s, n - s + 1, "big")).collect();
         let (p_big, _) = write_segment_to_dir(&dir, 0, 1, &batch(&big)).unwrap();
         let (p_small, _) =
@@ -935,15 +997,14 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_row_groups_match_parquet_across_batch_boundaries() {
-        // The prune contract depends on the index having exactly one Bloom per
-        // parquet row group. The index chunks at ROW_GROUP_SIZE; `ArrowWriter`
-        // (via `segment_writer_properties`) flushes at the same stride REGARDLESS
-        // of how the written batches are split. Lock that with input batches whose
-        // boundaries straddle a row-group boundary (10k|10k|10005 over a 16384
-        // stride), so the writer must re-chunk across `write()` calls.
-        use crate::store::segment::{segment_row_group_count, ROW_GROUP_SIZE};
-        use crate::store::trigram::TrigramIndex;
+    fn sidecar_spans_cover_the_written_rows_across_batch_boundaries() {
+        // The prune contract is that the sidecar's spans account for exactly the
+        // segment's rows: the mask is then mapped onto whatever row groups the
+        // writer chose. Both sides chunk independently of how the written batches
+        // are split, so lock that with input batches whose boundaries straddle a
+        // span boundary (10k|10k|10005 over a 16384 stride).
+        use crate::store::segment::segment_row_group_rows;
+        use crate::store::trigram::{TrigramIndex, SIDECAR_SPAN_ROWS};
 
         let dir = tempdir("tgm_align");
         let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
@@ -967,26 +1028,22 @@ mod tests {
         };
         let batches = vec![mk(1, 10_000), mk(10_001, 10_000), mk(20_001, 10_005)];
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
-        let expected_groups = total.div_ceil(ROW_GROUP_SIZE);
-        assert_eq!(
-            expected_groups, 2,
-            "30005 rows over a 16384 stride is 2 groups"
-        );
 
         let path = dir.join("seg_L1_00000000000000000001.parquet");
         write_merged_segment(&path, &log, &batches).unwrap();
 
-        let parquet_groups =
-            segment_row_group_count(&path).expect("readable footer for the written segment");
+        let row_group_rows =
+            segment_row_group_rows(&path).expect("readable footer for the written segment");
+        assert_eq!(
+            row_group_rows.iter().sum::<usize>(),
+            total,
+            "the row groups must account for every written row"
+        );
         let index = TrigramIndex::build(&batches, "data").unwrap();
         assert_eq!(
-            parquet_groups, expected_groups,
-            "ArrowWriter must flush a row group every ROW_GROUP_SIZE rows"
-        );
-        assert_eq!(
             index.len(),
-            parquet_groups,
-            "sidecar must carry exactly one Bloom per parquet row group"
+            total.div_ceil(SIDECAR_SPAN_ROWS),
+            "the sidecar must carry one Bloom per span of the written rows"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

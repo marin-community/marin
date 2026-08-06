@@ -8,6 +8,7 @@ from dataclasses import replace
 
 import pulumi
 import pytest
+import yaml
 from pulumi.runtime import MockCallArgs, MockResourceArgs, Mocks
 
 from infra.loom.infrastructure import (
@@ -56,15 +57,18 @@ def deployment_config() -> DeploymentConfig:
         domain="loom.example.com",
         operator_cidr="203.0.113.7/32",
         dns_zone_id="cloudflare-zone",
-        source_path="/tmp/loom-source",
+        build_context="/tmp/loom-source",
         network="default",
         instance_name="loom",
         vm_service_account_name="loom-vm",
         machine_type="e2-highmem-4",
         boot_disk_gb=100,
-        data_disk_gb=500,
         dotenv_secret_version=3,
         snapshot_retention_days=14,
+        vm_project_roles=("roles/cloudsql.client", "roles/cloudsql.instanceUser"),
+        vm_pulumi_kms_keys=(
+            "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key",
+        ),
         prune_deployment=True,
         profiles=(
             ProfileConfig.parse(
@@ -117,6 +121,19 @@ def test_domain_is_a_canonical_hostname() -> None:
         replace(deployment_config(), domain="https://loom.example.com/")
 
 
+def test_vm_permissions_require_canonical_unique_resource_names() -> None:
+    with pytest.raises(ValueError, match="vmProjectRoles"):
+        replace(deployment_config(), vm_project_roles=("cloudsql.client",))
+    with pytest.raises(ValueError, match="vmPulumiKmsKeys"):
+        replace(
+            deployment_config(),
+            vm_pulumi_kms_keys=(
+                "projects/example/locations/us-central1/keyRings/key/cryptoKeys/key",
+                "projects/example/locations/us-central1/keyRings/key/cryptoKeys/key",
+            ),
+        )
+
+
 def test_github_federations_require_unique_names_and_known_profiles() -> None:
     base = deployment_config()
     unknown = GitHubFederationConfig.parse(
@@ -145,15 +162,30 @@ def test_profile_manifest_accepts_secret_references_but_rejects_values() -> None
                 "ops",
                 {
                     "agent": "codex",
+                    "mcpAccess": {"mode": "all", "groups": []},
                     "env": {"OPS_TOKEN": {"secretRef": "projects/example/secrets/ops-token/versions/7"}},
                 },
             ),
         )
     )
+    assert profiles[0]["profile"]["mcp_access"] == {"mode": "all", "groups": []}
     assert profiles[0]["env"] == [{"name": "OPS_TOKEN", "secret_ref": "projects/example/secrets/ops-token/versions/7"}]
     assert references == [("example", "ops-token")]
     with pytest.raises(ValueError, match="full secretRef"):
         ProfileConfig.parse("ops", {"agent": "codex", "env": {"OPS_TOKEN": "plaintext"}})
+
+
+@pytest.mark.parametrize(
+    "mcp_access",
+    [
+        {"mode": "groups", "groups": []},
+        {"mode": "all", "groups": ["messaging"]},
+        {"mode": "unknown", "groups": []},
+    ],
+)
+def test_profile_mcp_access_rejects_invalid_selections(mcp_access: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="mcpAccess"):
+        ProfileConfig.parse("ops", {"agent": "codex", "mcpAccess": mcp_access})
 
 
 @pulumi.runtime.test
@@ -168,14 +200,27 @@ def test_deployment_models_durable_resources_without_secret_payloads():
 
         vm = by_name(mocks, "loom")
         attached = field(vm.inputs, "attached_disks", "attachedDisks")
-        assert attached is not None
-        assert len(attached) == 1
-        assert field(attached[0], "device_name", "deviceName") == "loom-data"
-        assert field(attached[0], "auto_delete", "autoDelete") is not True
-        assert vm.inputs["metadata"]["dotenv-secret-version"] == "3"
-        assert "startup-script" in vm.inputs["metadata"]
-        assert "loom-compose" in vm.inputs["metadata"]
-        assert "loom-caddyfile" in vm.inputs["metadata"]
+        assert not attached
+        boot_disk = field(vm.inputs, "boot_disk", "bootDisk")
+        assert boot_disk is not None
+        assert field(boot_disk, "auto_delete", "autoDelete") is False
+        root_disk = by_name(mocks, "loom-root")
+        assert root_disk.typ == "gcp:compute/disk:Disk"
+        assert root_disk.inputs["name"] == "loom"
+        assert boot_disk["source"] == "loom-root_id"
+        snapshot_attachment = by_name(mocks, "loom-snapshot-policy")
+        assert snapshot_attachment.inputs["disk"] == "loom"
+        metadata = vm.inputs["metadata"]
+        assert metadata["dotenv-secret-version"] == "3"
+        assert json.loads(metadata["docker-daemon-config"]) == {
+            "data-root": "/var/lib/docker",
+            "default-ulimits": {"core": {"Name": "core", "Hard": 0, "Soft": 0}},
+        }
+        assert yaml.safe_load(metadata["loom-compose"])["services"]["loom"]["working_dir"] == "/home/app"
+        assert "data-disk-device" not in metadata
+        assert "startup-script" in metadata
+        assert "loom-compose" in metadata
+        assert "loom-caddyfile" in metadata
         assert "metadataStartupScript" not in vm.inputs
         assert "metadata_startup_script" not in vm.inputs
         assert field(vm.inputs, "allow_stopping_for_update", "allowStoppingForUpdate") is False
@@ -185,8 +230,17 @@ def test_deployment_models_durable_resources_without_secret_payloads():
         log_writer = by_name(mocks, "loom-vm-log-writer")
         assert log_writer.inputs["role"] == "roles/logging.logWriter"
         assert log_writer.inputs["member"] == "serviceAccount:loom-vm@example.iam.gserviceaccount.com"
+        project_roles = {
+            resource.inputs["role"] for resource in mocks.resources if resource.name.startswith("loom-vm-project-role-")
+        }
+        assert project_roles == {"roles/cloudsql.client", "roles/cloudsql.instanceUser"}
+        kms_grant = next(resource for resource in mocks.resources if resource.name.startswith("loom-vm-pulumi-kms-"))
+        assert kms_grant.inputs["role"] == "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+        assert field(kms_grant.inputs, "crypto_key_id", "cryptoKeyId") == (
+            "projects/example/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key"
+        )
 
-    return infrastructure.instance.id.apply(check)
+    return infrastructure.activation.id.apply(check)
 
 
 @pulumi.runtime.test

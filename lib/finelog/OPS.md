@@ -38,6 +38,96 @@ sets `client_url`:
 uv run finelog query marin 'SELECT * FROM "iris.profile" LIMIT 10'
 ```
 
+## Diagnosing query latency
+
+Inspect the namespace before changing its policy or resetting it. Record its row
+count, bytes, segment count, key column, and policy from `ListNamespaces`; a
+correct key with many segments points to a different problem than a
+misconfigured key. Do not reset a shared namespace such as `telemetry_v1` without
+checking which producers use it.
+
+Use native timestamp comparisons for timestamp columns. For telemetry's epoch-millisecond column, keep the predicate numeric:
+
+```sql
+WHERE ts >= now() - INTERVAL '5 minutes'
+-- telemetry_v1
+WHERE timestamp_ms >= CAST(EXTRACT(EPOCH FROM now() - INTERVAL '5 minutes') * 1000 AS BIGINT)
+```
+
+DataFusion folds `now()` to a literal and can push the resulting range into
+Parquet pruning. `epoch_ms` is a column in Finelog's `log` namespace, not a
+timestamp conversion function.
+
+For a bounded query that is still slow, run `EXPLAIN ANALYZE` and compare
+`row_groups_pruned_statistics`, `bytes_scanned`, `metadata_load_time`, and
+`time_elapsed_opening`. High metadata/opening time with few scanned bytes means
+row-group pruning worked and file metadata is the remaining cost. The
+`*_eval_time` metrics are accumulated elapsed time across concurrent per-file
+tasks, not CPU time, so they overlap and do not sum to wall clock — treat a large
+one as a place to look, not as a measured cost.
+
+An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
+carries a trigram index; otherwise it decodes the column for every row in the
+namespace. `ListNamespaces` reports which columns are indexed. How much it prunes
+depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
+`ERROR`, so any row group holding both survives, where `%CUDA\_ERROR%` — or
+`contains(data, 'CUDA_ERROR')` — gives the index the whole string. Escape the
+underscores when you mean them literally. Adding one is a
+`RegisterTable` away and does not need a reset, but the sidecar backfill runs a
+few segments per namespace per 30 s tick, so a large namespace speeds up over
+tens of minutes rather than at once.
+
+A release that bumps the sidecar format spends that same window on every existing
+sidecar at once: all of them read as unusable and every substring query scans
+unpruned until the backfill catches up. Before diagnosing a slow substring query
+after a deploy, check whether the rebuild is still in flight — the sidecar header
+carries its version in the fifth byte, so counting versions across a namespace's
+`.tgm` files separates "still rebuilding" from a real pruning failure. A time bound is the faster answer in the moment: `telemetry_v1` is keyed
+on `timestamp_ms` and a 10-minute window answers in about a second where the same
+query unbounded takes 30.
+
+`finelog query` applies a client deadline just past the server's own 10s one.
+Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
+needs longer.
+
+Row groups are sized to hold a fixed number of *encoded* bytes, so a namespace of
+narrow rows gets far fewer of them than one of wide log lines. Encoded rather
+than in-memory bytes is what matters: a telemetry row compresses to ~8 bytes
+against a log line's hundreds, so an in-memory target under-sizes worst exactly
+where the fix is needed.
+
+Each segment's footer carries the layout revision it was written with. Since the
+terminal level is never re-compacted, a maintenance pass re-encodes segments
+still on an older revision, a couple per namespace per 30 s tick — otherwise a
+namespace's bulk would keep its old row groups until eviction aged it out, which
+for `telemetry_v1`'s 15 GiB is about four days and for `log`'s about eight. The
+rewrite keeps the filename and preserves the rows and their order, so it costs no
+remote bandwidth: the archive keys objects by basename and only uploads segments
+still marked `Local`. A rewritten segment's remote copy keeps the old layout
+while holding the same rows.
+
+Watch it with the `rewrote segment layout` events, which report the before and
+after byte size per segment. Confirm the era split before concluding a layout
+change did or did not land — compare footer bytes for segments modified before
+and after the deploy, since a whole-namespace average is dominated by whatever
+has not been rewritten yet.
+
+`EXPLAIN ANALYZE` reports `row_groups_pruned_statistics` as `<total> total`,
+which is the count for the segments a query touched *after* any injected access
+plan, so it doubles as the check on whether trigram pruning fired.
+
+`query_metadata_cache_mb` in a deployment config overrides DataFusion's
+process-wide Parquet metadata cache limit. Leave it unset to retain DataFusion's
+default. Finelog logs the effective limit at query-engine startup; every slow
+query warning also includes `metadata_cache_limit_bytes`,
+`metadata_cache_size_bytes`, `metadata_cache_entries`, and
+`metadata_cache_hits`. Compare warm-query latency and those fields before
+retaining or increasing an override.
+
+`StoragePolicy` controls eviction of eligible uploaded segments from Finelog's
+local cache. It is not a row-age retention guarantee and does not delete objects
+from the remote archive.
+
 ## Onboarding a cluster onto the forwarding hub
 
 `marin` is the hub: every other cluster's finelog forwards its rows there, so a
@@ -84,7 +174,7 @@ runs it needs `roles/secretmanager.secretAccessor` on that secret.
 
 ```bash
 uv run finelog deploy restart marin              # hub: gcp backend, in-place
-export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+export R2_KEY_ID=... R2_KEY_SECRET=...
 uv run finelog deploy up "$CLUSTER" --no-build   # sender: k8s, applies Secret + env
 ```
 
@@ -103,6 +193,55 @@ uv run finelog query marin --format table \
    WHERE epoch_ms > (extract(epoch from now()) * 1000 - 600000)
    GROUP BY cluster'
 ```
+
+### Distinguishing missing regional logs from delayed hub forwarding
+
+The regional Finelog is the record; the `marin` hub is an asynchronous copy. If
+logs for a federated Iris task are absent from the hub, query the exact task key
+on both stores before diagnosing the pod-side shipper. Iris task keys include the
+attempt suffix, such as `:0`:
+
+```bash
+CLUSTER=cw-us-east-08a
+KEY=/user/job/task:0
+
+uv run finelog query marin --format table \
+  "SELECT seq, epoch_ms, source, data, cluster FROM \"log\"
+   WHERE key = '$KEY' AND cluster = '$CLUSTER' ORDER BY seq"
+uv run finelog query "$CLUSTER" --format table \
+  "SELECT seq, epoch_ms, source, data FROM \"log\"
+   WHERE key = '$KEY' ORDER BY seq"
+```
+
+Interpret the pair as follows:
+
+- Regional rows present and hub rows absent or only a prefix: forwarding is
+  delayed. Repeat the exact hub query; do not treat an immediate empty result as
+  loss.
+- Rows absent regionally but present in `kubectl logs <pod> -c task`: inspect
+  `kubectl logs <pod> -c log-shipper` and the regional Finelog ingest path.
+- Rows absent from both Finelog stores and the container runtime: the task did
+  not emit the expected output or its runtime logs are already unavailable.
+
+The forwarder gives every live namespace one batch-sized turn per round and
+starts another round immediately while work remains. A large telemetry backlog
+therefore does not monopolize forwarding ahead of new log rows. Hub or network
+failures can still delay a turn because forwarding is best effort.
+
+Inspect the sender's forwarder messages without changing the deployment. Read
+the deployment name and Kubernetes connection details from
+`lib/finelog/config/$CLUSTER.yaml`:
+
+```bash
+kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
+  logs deployment/<finelog-name> --since=30m --timestamps=true | \
+  rg 'finelog forwarder'
+```
+
+Warnings name the affected namespace. `backlog exceeds the lag cap` or `rows
+evicted before they were forwarded` means that namespace skipped source sequence
+positions; the cumulative `skipped_seqs` progress counter alone does not prove
+that `log` rows were dropped.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the

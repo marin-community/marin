@@ -13,6 +13,8 @@
 //! [strip-forwarded-prefix middleware]  (outermost; normalizes the URI path)
 //! [legacy-path middleware]             (transport layer; rewrites the URI)
 //!   /health
+//!   /v1/telemetry       (authenticated bounded JSON ingestion)
+//!   /api/*              (build + segment introspection)
 //!   /debug/*            (only with --debug-admin)
 //!   /static, /favicon.ico, /, /{*rest}   (SPA, before the fallback)
 //!   .fallback_service(connect)            (RPC POSTs land here)
@@ -35,7 +37,7 @@ use crate::server::interceptors::{
     ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
 };
-use crate::server::{debug, forwarded_prefix, legacy_path, spa};
+use crate::server::{debug, forwarded_prefix, introspection, legacy_path, spa, telemetry};
 use crate::store::Store;
 
 use super::log_service::LogServiceImpl;
@@ -52,6 +54,10 @@ pub struct ServerConfig {
     pub max_concurrent_fetch_logs: usize,
     /// Concurrent Query cap.
     pub max_concurrent_query: usize,
+    /// Concurrent telemetry request cap; excess requests receive HTTP 429.
+    pub max_concurrent_telemetry: usize,
+    /// Accepted batch IDs retained for process-local retry deduplication.
+    pub telemetry_dedupe_capacity: usize,
     /// Default per-method slow-RPC threshold (ms); `<= 0` disables.
     pub slow_rpc_threshold_ms: i64,
     /// The authenticated-ingress policy. Always enforced — the
@@ -68,6 +74,8 @@ impl Default for ServerConfig {
             debug_admin: false,
             max_concurrent_fetch_logs: MAX_CONCURRENT_FETCH_LOGS,
             max_concurrent_query: MAX_CONCURRENT_QUERY,
+            max_concurrent_telemetry: telemetry::DEFAULT_MAX_CONCURRENT_REQUESTS,
+            telemetry_dedupe_capacity: telemetry::DEFAULT_DEDUPE_CAPACITY,
             slow_rpc_threshold_ms: DEFAULT_SLOW_RPC_THRESHOLD_MS,
             auth: Arc::new(AuthPolicy::allow_localhost()),
         }
@@ -130,7 +138,21 @@ fn build_connect_service(
 pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     let connect_service = build_connect_service(Arc::clone(&store), &config);
 
-    let mut app = Router::new().route("/health", get(|| async { "ok" }));
+    let telemetry = telemetry::router(
+        Arc::clone(&store),
+        Arc::clone(&config.auth),
+        config.max_concurrent_telemetry,
+        config.telemetry_dedupe_capacity,
+    );
+    // The introspection routes bypass the Connect interceptor chain, so they
+    // carry the same default-deny auth policy the RPCs do.
+    let introspection = introspection::introspection_router(Arc::clone(&store)).layer(
+        axum::middleware::from_fn_with_state(Arc::clone(&config.auth), auth_gate),
+    );
+    let mut app = Router::new()
+        .route("/health", get(|| async { "ok" }))
+        .merge(telemetry)
+        .merge(introspection);
     if config.debug_admin {
         // Mounted BEFORE the connect fallback so /debug/* is not shadowed. These
         // admin routes bypass the Connect interceptor chain, so they are gated by

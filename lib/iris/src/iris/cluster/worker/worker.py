@@ -58,7 +58,7 @@ from iris.cluster.worker.worker_types import TaskInfo
 from iris.managed_thread import ThreadContainer, get_thread_container
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
-from iris.rpc.controller_connect import ControllerServiceClientSync
+from iris.rpc.controller_connect import ControllerServiceClientSync, EndpointServiceClientSync
 from iris.time_proto import timestamp_to_proto
 
 logger = logging.getLogger(__name__)
@@ -234,6 +234,9 @@ class Worker:
             worker_id = infer_worker_id(hardware)
         self._worker_id: str | None = worker_id
         self._controller_client: ControllerServiceClientSync | None = None
+        # Endpoint registry (register/list) is a separate service; the worker
+        # only reads it (log-server resolution), sharing the controller address.
+        self._endpoint_client: EndpointServiceClientSync | None = None
 
         # Heartbeat tracking for timeout detection
         self._heartbeat_deadline = Deadline.from_seconds(float("inf"))
@@ -246,9 +249,9 @@ class Worker:
         #   2. iris.worker / iris.task tables must be registered before adoption
         #      runs. TaskAttempt.__init__ eagerly calls log_client.get_table,
         #      which goes through the resolver (_resolve_log_service) — and the
-        #      resolver requires self._controller_client to be set. After the
-        #      controller_client is built and the tables are registered once,
-        #      the per-attempt get_table inside adoption is a cache hit.
+        #      resolver requires self._endpoint_client to be set. After the
+        #      clients are built and the tables are registered once, the
+        #      per-attempt get_table inside adoption is a cache hit.
         #   3. The uvicorn server must be up before we register with the
         #      controller, so the controller's first ping lands on a ready
         #      worker. Lifecycle thread is spawned last for that reason.
@@ -263,6 +266,13 @@ class Worker:
                 resolver=self._resolve_log_service,
             )
             self._controller_client = ControllerServiceClientSync(
+                address=self._config.controller_address,
+                timeout_ms=10_000,
+                interceptors=interceptors,
+                accept_compression=IRIS_RPC_COMPRESSIONS,
+                send_compression=None,
+            )
+            self._endpoint_client = EndpointServiceClientSync(
                 address=self._config.controller_address,
                 timeout_ms=10_000,
                 interceptors=interceptors,
@@ -424,6 +434,8 @@ class Worker:
         self._threads.stop()
         if self._controller_client:
             self._controller_client.close()
+        if self._endpoint_client:
+            self._endpoint_client.close()
         self._detach_log_handler()
         if self._log_client is not None:
             self._log_client.close()
@@ -512,9 +524,9 @@ class Worker:
 
     def _resolve_log_service(self, server_url: str) -> str:
         """Look up ``server_url`` on the controller's endpoint registry."""
-        if self._controller_client is None:
-            raise ConnectionError("worker controller client not yet initialized")
-        resp = self._controller_client.list_endpoints(
+        if self._endpoint_client is None:
+            raise ConnectionError("worker endpoint client not yet initialized")
+        resp = self._endpoint_client.list_endpoints(
             controller_pb2.Controller.ListEndpointsRequest(prefix=server_url, exact=True),
         )
         if not resp.endpoints:

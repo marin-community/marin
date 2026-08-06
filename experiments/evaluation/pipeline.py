@@ -7,11 +7,12 @@
 evals compose into ``StepRunner`` pipelines and can be triggered programmatically -- e.g. right
 after a training pipeline exports a checkpoint, or fanned out over a model sweep. The step runs the
 same orchestration as the CLI (serve the model once, run evalchemy against the served URL, write
-``record.json`` + results + per-question parquet), with the records rooted at the step's own
-artifact path: an identical (model, evals, limit, version) config is a cache hit, and downstream
-steps can depend on the records like any other artifact.
+``record.json`` + results + per-question parquet) to the shared eval output root. The step's artifact
+path holds its cache record: an identical (model, evals, limit, version) config is a cache hit.
 
-The step process acts as the orchestrator, so the pipeline must run as an Iris job::
+The step submits an Iris orchestrator job and waits for its records. The launcher chooses the shared
+GCS or CoreWeave ``evals`` output root, while the artifact path stores the pipeline cache record. The
+pipeline itself must run where it can reach Iris::
 
     uv run iris --cluster marin job run -- python -m experiments.evaluation.pipeline
 
@@ -22,24 +23,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from iris.client import iris_ctx
+from iris.rpc import job_pb2
+from marin.evaluation.hardware import default_platform
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.execution.step_runner import StepRunner
 
 from experiments.evaluation.evals import SUITES
-from experiments.evaluation.hardware import default_platform
-from experiments.evaluation.launch import LaunchSpec, run_inline
-from experiments.evaluation.models import MODELS
+from experiments.evaluation.launch import LaunchSpec, launch_group, prepare_evaluation_batch
+from experiments.evaluation.models import models
 
 
 @dataclass(frozen=True)
 class EvalStepConfig:
-    """One eval run's identity (model + eval selection + instance cap) and its output root."""
+    """One pipeline eval's model, eval selection, version, and runtime overrides."""
 
     model: str
     evals: str
     limit: int | None
-    records_prefix: str
     accelerator: str | None
     version: str
 
@@ -49,14 +51,18 @@ def run_eval_pipeline_step(config: EvalStepConfig) -> None:
     spec = LaunchSpec(
         model=config.model,
         evals=keys,
-        platform=default_platform(MODELS[config.model]),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=default_platform(models()[config.model]),
         accelerator=config.accelerator,
         limit=config.limit,
-        records_prefix=config.records_prefix,
-        cluster="ambient",
+        records_prefix=None,
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
     )
-    run_inline(spec)
+    submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)
+    submitted.job.wait(timeout=float("inf"))
 
 
 def eval_step(
@@ -78,7 +84,6 @@ def eval_step(
             model=model,
             evals=evals,
             limit=limit,
-            records_prefix=ctx.output_path,
             accelerator=ctx.runtime_arg("accelerator"),
             version=version,
         )

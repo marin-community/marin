@@ -324,20 +324,13 @@ class DatasetComponentBase(ChoiceRegistry):
 @DatasetComponentBase.register_subclass("cached")
 @dataclass(frozen=True)
 class DatasetComponent(DatasetComponentBase):
-    """A single cache-backed dataset component with optional source.
-
-    Attributes:
-        loss_weight_fn: Optional function ``tokens -> loss_weight`` applied per example. If set,
-            replaces the default uniform loss weight (``jnp.ones_like(tokens)``). Only supported
-            when packing is enabled.
-    """
+    """A single cache-backed dataset component with optional source."""
 
     source: LmDatasetSourceConfigBase | None = None
     cache_dir: str | None = None
     format: LmDatasetFormatBase = field(default_factory=TextLmDatasetFormat)
     pack: bool | int | None = None
     tags: list[str] | None = None
-    loss_weight_fn: Callable[[jax.Array], jax.Array] | None = None
     split: str = "validation"
     flat_cache: bool = False
     """Treat ``cache_dir`` as the cache root directly, without appending ``/<split>``."""
@@ -393,12 +386,7 @@ def _resolve_pack_config(
 
 
 class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
-    """Packed version of token dataset using GreedyPrepackedDataset.
-
-    Args:
-        loss_weight_fn: Optional function ``tokens -> loss_weight`` used to compute per-position
-            loss weights for each packed example. Defaults to uniform weights (``ones_like``).
-    """
+    """Packed version of token dataset using GreedyPrepackedDataset."""
 
     def __init__(
         self,
@@ -408,7 +396,6 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
         slice_strategy: Literal["left", "right", "raise"] = "left",
         loss_weights_key: str | None = None,
         block_cross_document_attention: bool = True,
-        loss_weight_fn: Callable[[jax.Array], jax.Array] | None = None,
     ):
         self.packed: GreedyPrepackedDataset[dict] = GreedyPrepackedDataset(
             cache.jagged_array_tree(),
@@ -422,24 +409,7 @@ class PackedTokenDataset(MappedAsyncDataset[tuple[dict, dict], GrugLmExample]):
 
         sharding = _single_cpu_sharding()
 
-        if loss_weight_fn is not None:
-
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
-                example, seg_ids = e
-                tokens = example["input_ids"]
-                loss_weight = loss_weight_fn(tokens).astype(jnp.float32)
-                seg_ids_raw = seg_ids["input_ids"]
-                out = GrugLmExample.causal(
-                    tokens=tokens,
-                    loss_weight=loss_weight,
-                    segment_ids=seg_ids_raw,
-                    block_cross_document_attention=block_cross_document_attention,
-                )
-                out = jax.lax.with_sharding_constraint(out, sharding)
-                return out
-
-        elif loss_weights_key is None:
+        if loss_weights_key is None:
 
             @functools.partial(eqx.filter_jit)
             def _create_lm_example(e: tuple[dict, dict]) -> GrugLmExample:
@@ -550,17 +520,13 @@ def dataset_for_component(
                 max_segments_per_example=max_segments,
                 slice_strategy=slice_strategy,
                 block_cross_document_attention=block_cross_document_attention,
-                loss_weight_fn=component.loss_weight_fn,
             )
-        else:
-            if component.loss_weight_fn is not None:
-                raise ValueError("DatasetComponent.loss_weight_fn is only supported when packing is enabled.")
-            return CausalLmDataset(
-                TokenSeqDataset(cache, Pos.size),
-                Pos,
-                eos_id=eos_id,
-                block_cross_document_attention=block_cross_document_attention,
-            )
+        return CausalLmDataset(
+            TokenSeqDataset(cache, Pos.size),
+            Pos,
+            eos_id=eos_id,
+            block_cross_document_attention=block_cross_document_attention,
+        )
     elif isinstance(fmt, ChatLmDatasetFormat):
         # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
         max_segments, slice_strategy = _resolve_pack_config(pack)

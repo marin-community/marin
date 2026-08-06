@@ -46,7 +46,7 @@ def _manager(*, keypair: Ed25519Keypair | None = None) -> JwtTokenManager:
 # --- read-only dashboard role: per-method authorization ----------------------
 
 
-@pytest.mark.parametrize("method", ["ListJobs", "GetJobStatus", "ListWorkers", "GetRpcStats", "ListPeers"])
+@pytest.mark.parametrize("method", ["ListJobs", "GetJobStatus", "ListWorkers", "ListPeers"])
 def test_authorize_method_allows_dashboard_reads(method):
     # Does not raise: read methods are the dashboard role's contract.
     authorize_method(VerifiedIdentity("alice@example.com", DASHBOARD_ROLE), method)

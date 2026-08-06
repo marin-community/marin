@@ -26,8 +26,8 @@ from iris.cluster.backends.k8s.tasks import (
     _build_volumes_and_mounts,
     _constraints_to_node_selector,
     _is_coordinator_task,
-    _is_infrastructure_failure,
     _job_id_from_task,
+    _pod_failure_state,
     _pod_group_name,
     _pod_name,
     _sanitize_label_value,
@@ -311,13 +311,12 @@ def test_task_update_error_prefers_termination_message_over_bare_reason():
     assert update.error == "RuntimeError: CUDA error: an illegal memory access was encountered"
 
 
-def test_is_infrastructure_failure_with_pod_level_reason():
-    """Pod-level eviction (no container statuses) is detected as infrastructure failure."""
+def test_pod_level_eviction_reason_is_worker_failed():
     pod: dict = {
         "metadata": {"name": "test"},
         "status": {"phase": "Failed", "reason": "Evicted", "containerStatuses": []},
     }
-    assert _is_infrastructure_failure(pod)
+    assert _pod_failure_state(pod) == job_pb2.TASK_STATE_WORKER_FAILED
 
 
 def _add_condition(pod: dict, type_: str, status: str, reason: str = "") -> dict:
@@ -326,16 +325,34 @@ def _add_condition(pod: dict, type_: str, status: str, reason: str = "") -> dict
 
 
 @pytest.mark.parametrize("reason", ["PreemptionByScheduler", "TerminationByKubelet", "EvictionByEvictionAPI"])
-def test_task_update_disruption_target_is_worker_failed(reason):
+def test_task_update_disruption_target_is_preempted(reason):
     """A preemption SIGKILLed after grace surfaces as reason='Error' exit 137 — not in
     the reason whitelist — but the control plane's DisruptionTarget condition marks it
-    as infrastructure, so it must be WORKER_FAILED (preemption budget), not FAILED."""
+    as a disruption, so it must be PREEMPTED (preemption budget), not FAILED."""
     entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
     pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
     _add_condition(pod, "DisruptionTarget", "True", reason)
     update = _task_update_from_pod(entry, pod)
-    assert update.new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert update.new_state == job_pb2.TASK_STATE_PREEMPTED
     assert update.exit_code == 137
+
+
+def test_task_update_kueue_termination_target_is_preempted():
+    """Kueue preemption uses TerminationTarget rather than Kubernetes'
+    DisruptionTarget; preserve that authoritative cause instead of charging a
+    SIGKILL-shaped exit as an application failure."""
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/job/0"), attempt_id=0)
+    pod = make_pod("iris-job-0-0", "Failed", exit_code=137, reason="Error")
+    message = "Preempted to accommodate an interactive workload due to ClusterQueue prioritization"
+    _add_condition(pod, "TerminationTarget", "True", "WorkloadEvictedDueToPreempted")
+    pod["status"]["conditions"][-1]["message"] = message
+
+    update = _task_update_from_pod(entry, pod)
+
+    assert update.new_state == job_pb2.TASK_STATE_PREEMPTED
+    assert update.exit_code == 137
+    assert update.terminal_reason is not None
+    assert "WorkloadEvictedDueToPreempted" in update.terminal_reason
 
 
 def test_task_update_oom_killed_without_disruption_target_stays_application_failure():
@@ -352,7 +369,7 @@ def test_disruption_target_condition_status_false_is_not_infrastructure():
     """A DisruptionTarget condition with status != 'True' does not mark a disruption."""
     pod = make_pod("iris-job-0-0", "Failed", exit_code=1, reason="Error")
     _add_condition(pod, "DisruptionTarget", "False", "")
-    assert not _is_infrastructure_failure(pod)
+    assert _pod_failure_state(pod) == job_pb2.TASK_STATE_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +842,13 @@ def test_advertise_host_uses_downward_api():
     assert adv["valueFrom"]["fieldRef"]["fieldPath"] == "status.podIP"
 
 
+def test_node_name_uses_downward_api():
+    manifest = _build_pod_manifest(make_run_req("/test-job/0"), pod_config())
+
+    env_by_name = {entry["name"]: entry for entry in manifest["spec"]["containers"][0]["env"]}
+    assert env_by_name["IRIS_NODE_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "spec.nodeName"
+
+
 def test_device_env_vars_tpu():
     """TPU device resources inject JAX_PLATFORMS, PJRT_DEVICE, JAX_FORCE_TPU_INIT."""
     req = make_run_req("/test-job/0")
@@ -925,6 +949,22 @@ def test_init_container_created_when_bundle_id_present():
     assert env_by_name["IRIS_CONTROLLER_URL"] == "http://ctrl:8080"
     assert configmap_name is None
     assert extra_volumes == []
+
+
+def test_init_container_records_its_log_tail_on_failure():
+    """_init_container_failure reports the terminated message, which the default File
+    policy never populates — so a stage-workdir crash surfaced with no cause at all."""
+    req = make_run_req("/my-job/task-0")
+    req.bundle_id = "bundle-abc"
+
+    init_containers, _, _ = _build_init_container_spec(
+        req,
+        "iris-my-job-task-0-abcd1234-0",
+        "myrepo/iris:latest",
+        "http://ctrl:8080",
+    )
+
+    assert init_containers[0]["terminationMessagePolicy"] == "FallbackToLogsOnError"
 
 
 def test_no_init_container_when_no_bundle_or_files():
@@ -1101,7 +1141,7 @@ def test_build_pdb_manifest_selector_and_cleanup_labels():
 
 def _cosched_req(task_id: str, attempt_id: int = 0, num_tasks: int = 64, group_by: str = "leafgroup", priority=None):
     if priority is None:
-        priority = job_pb2.PRIORITY_BAND_UNSPECIFIED
+        priority = job_pb2.PRIORITY_BAND_INHERIT
     return make_run_req(
         task_id,
         attempt_id=attempt_id,
@@ -1330,20 +1370,19 @@ def test_kueue_gang_uses_topology_not_affinity():
 
 def test_non_coscheduled_pod_routed_through_kueue_without_gang_metadata():
     """Every pod routes through Kueue when a LocalQueue is set: a non-coscheduled pod
-    carries the queue-name label but none of the gang-only pod-group labels or topology
-    annotations."""
+    carries the queue-name label but none of the gang-only pod-group metadata."""
     manifest = _build_pod_manifest(make_run_req("/job/task/0", num_tasks=4), pod_config(local_queue="iris-lq"))
     labels = manifest["metadata"]["labels"]
     assert labels[_KUEUE_QUEUE_NAME] == "iris-lq"
     assert _KUEUE_POD_GROUP_NAME not in labels
     assert _KUEUE_POD_GROUP_POD_INDEX not in labels
-    assert "annotations" not in manifest["metadata"]
+    assert _KUEUE_POD_GROUP_TOTAL not in manifest["metadata"]["annotations"]
 
 
 def test_single_pod_gpu_job_routed_through_kueue():
     """A single-pod GPU job (not coscheduled) routes through Kueue so its GPU capacity is
     accounted and preemptible: queue-name label and no gang pod-group metadata, but a soft
-    finest-level topology request so the topology-aware cw-ib flavor will admit it (a GPU
+    finest-level topology request so the topology-aware cw-tas flavor will admit it (a GPU
     workload with no topology request is rejected by TAS)."""
     req = make_run_req("/gpu-job/task/0", num_tasks=1)
     req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
@@ -1356,11 +1395,11 @@ def test_single_pod_gpu_job_routed_through_kueue():
     assert _KUEUE_POD_GROUP_TOTAL not in annotations
 
 
-def test_single_pod_cpu_job_has_no_topology_annotation():
-    """A CPU-only pod routes to the non-TAS cw-cpu flavor, so it must NOT carry a topology
-    annotation (Kueue would reject a topology request against a non-topology flavor)."""
+def test_single_pod_cpu_job_uses_unconstrained_topology():
+    """CPU work uses TAS so Kueue can reclaim its accelerator-node capacity."""
     manifest = _build_pod_manifest(make_run_req("/cpu-job/task/0", num_tasks=1), pod_config(local_queue="iris-lq"))
-    assert "annotations" not in manifest["metadata"]
+    assert manifest["metadata"]["annotations"]["kueue.x-k8s.io/podset-unconstrained-topology"] == "true"
+    assert "nodeSelector" not in manifest["spec"]
 
 
 def test_kueue_topologies_override_config():
@@ -1375,3 +1414,14 @@ def test_kueue_topologies_override_config():
     annotations = manifest["metadata"]["annotations"]
     assert annotations[_KUEUE_REQUIRED_TOPOLOGY] == "rack.example.com/pod"
     assert _KUEUE_PREFERRED_TOPOLOGY not in annotations
+
+
+def test_pod_manifest_floors_an_unset_band_at_interactive():
+    """An unset band takes the interactive class, not the cluster default.
+
+    Dispatch always stamps a real band, so this is the floor for a request built outside
+    that path — without it an unset field would leave the pod unranked against its peers.
+    """
+    req = make_run_req("/test-job/0", priority=job_pb2.PRIORITY_BAND_INHERIT)
+    manifest = _build_pod_manifest(req, pod_config())
+    assert manifest["spec"]["priorityClassName"] == "iris-interactive"

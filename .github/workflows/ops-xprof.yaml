@@ -1,0 +1,47 @@
+name: "Ops - XProf"
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/xprof/**'
+      - 'infra/pulumi/src/iac/iris/**'
+      - 'lib/rigging/src/rigging/filesystem/**'
+      - '.github/workflows/ops-xprof.yaml'
+  workflow_dispatch:
+    inputs:
+      deploy_generation:
+        description: "Override xprof:deploy_generation to force a redeploy"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xprof-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Roll the XProf service
+        uses: ./.github/actions/pulumi-deploy
+        env:
+          CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+          CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+        with:
+          stack: xprof-marin
+          work-dir: infra/xprof
+          service-account: iris-ci-smoke@hai-gcp-models.iam.gserviceaccount.com
+          gcp-project-id: hai-gcp-models
+          config-map: >-
+            ${{ inputs.deploy_generation && format('{{"xprof:deploy_generation": {{"value": "{0}"}}}}', inputs.deploy_generation) || '' }}

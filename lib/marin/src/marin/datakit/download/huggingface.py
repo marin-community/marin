@@ -7,6 +7,7 @@ A script to download a HuggingFace dataset and upload it to a specified fsspec p
 using HfFileSystem for direct streaming of data transfer.
 """
 
+import hashlib
 import logging
 import os
 import random
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 HF_PROTOCOL_PREFIX = "hf://"
 HF_BUCKET_PATH_PREFIX = "buckets/"
+HF_DATASET_REPO_TYPE_PREFIX = "datasets"
 
 # HF returns 401 when no credentials are sent and 403 when the caller's token
 # lacks access (e.g. gated dataset, accept-license required). Neither is fixed
@@ -84,7 +86,7 @@ class DownloadConfig:
 
     # fmt: on
     hf_repo_type_prefix: str = (
-        "datasets"  # The repo_type_prefix is datasets/ for datasets,
+        HF_DATASET_REPO_TYPE_PREFIX  # The repo_type_prefix is datasets/ for datasets,
         # spaces/ for spaces, and models do not need a prefix in the URL.
     )
 
@@ -108,6 +110,10 @@ class DownloadConfig:
     """Per-worker resources for the Zephyr download workers. None falls back to
     ZephyrContext defaults (1 CPU / 1 GB RAM). Bump for large parquet shards or
     when HF streaming buffers spike memory."""
+
+    expected_source_xet_fingerprint: str | None = None
+    """Expected SHA-256 fingerprint of the selected files' paths, sizes, and Xet
+    hashes. Use this to pin mutable Hugging Face bucket contents."""
 
 
 def _strip_hf_protocol(path: str) -> str:
@@ -160,6 +166,19 @@ def _relative_path_in_source(file_path: str, source_path: str) -> str:
     return normalized_file.split("/", 3)[-1]
 
 
+def _source_xet_fingerprint(source_path: str, file_info: dict[str, dict]) -> str:
+    """Fingerprint an HF source tree from relative paths, sizes, and Xet hashes."""
+    entries: list[str] = []
+    for file_path, info in file_info.items():
+        relative_path = _relative_path_in_source(file_path, source_path)
+        size = info.get("size")
+        xet_hash = info.get("xet_hash")
+        if size is None or not xet_hash:
+            raise ValueError(f"Cannot fingerprint {file_path}: Hugging Face did not return size and Xet hash metadata")
+        entries.append(f"{relative_path}\t{size}\t{xet_hash}")
+    return hashlib.sha256("\n".join(sorted(entries)).encode()).hexdigest()
+
+
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
     try:
@@ -171,28 +190,35 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-def stream_file_to_fsspec(
-    gcs_output_path: str,
-    file_path: str,
-    fsspec_file_path: str,
-    expected_size: int | None = None,
-    read_timeout_seconds: float = 120.0,
-    progress_log_interval_seconds: float = 60.0,
-    read_chunk_size_mib: int = 8,
-):
-    """Stream a file from HfFileSystem to another fsspec path using atomic write.
+@dataclass(frozen=True)
+class FileDownloadTask:
+    """One source file to stream into the download output tree."""
+
+    source_url: str
+    """Fully-qualified fsspec URL of the source file (``hf://…`` in production)."""
+
+    destination_path: str
+    """Target path on the destination filesystem."""
+
+    expected_size: int | None = None
+    """Source size in bytes. When set, a size mismatch fails the download."""
+
+    read_timeout_seconds: float = 120.0
+    progress_log_interval_seconds: float = 60.0
+    read_chunk_size_mib: int = 8
+
+
+def stream_file_to_fsspec(task: FileDownloadTask) -> dict:
+    """Stream one file from the source filesystem to its destination using an atomic write.
 
     Uses atomic_rename to write to a temp file first, then rename on success.
     This enables recovery across individual files if the job is interrupted.
-
-    Args:
-        gcs_output_path: Base output path for the download.
-        file_path: Source file path on HuggingFace.
-        fsspec_file_path: Target file path on the destination filesystem.
-        expected_size: Expected file size in bytes for validation. If provided,
-            the download will fail if the downloaded size doesn't match.
     """
-    chunk_size = max(1, int(read_chunk_size_mib)) * 1024 * 1024
+    file_path = task.source_url
+    fsspec_file_path = task.destination_path
+    progress_log_interval_seconds = task.progress_log_interval_seconds
+
+    chunk_size = max(1, int(task.read_chunk_size_mib)) * 1024 * 1024
     max_retries = 20
     # 15 minutes max sleep
     max_sleep = 15 * 60
@@ -207,7 +233,7 @@ def stream_file_to_fsspec(
             bytes_written = 0
             with atomic_rename(fsspec_file_path) as temp_path:
                 previous_socket_timeout = socket.getdefaulttimeout()
-                socket.setdefaulttimeout(read_timeout_seconds)
+                socket.setdefaulttimeout(task.read_timeout_seconds)
                 try:
                     with (
                         open_url(file_path, "rb", block_size=chunk_size) as src_file,
@@ -221,7 +247,7 @@ def stream_file_to_fsspec(
                             except TimeoutError as timeout_error:
                                 raise TimeoutError(
                                     f"Timed out reading from {file_path} after "
-                                    f"{read_timeout_seconds:.1f}s with {bytes_written} bytes written"
+                                    f"{task.read_timeout_seconds:.1f}s with {bytes_written} bytes written"
                                 ) from timeout_error
                             if not chunk:
                                 break
@@ -240,9 +266,10 @@ def stream_file_to_fsspec(
                     socket.setdefaulttimeout(previous_socket_timeout)
 
                 # Validate file size BEFORE atomic_rename commits the file
-                if expected_size is not None and bytes_written != expected_size:
+                if task.expected_size is not None and bytes_written != task.expected_size:
                     raise ValueError(
-                        f"Size mismatch for {file_path}: expected {expected_size} bytes, got {bytes_written} bytes"
+                        f"Size mismatch for {file_path}: expected {task.expected_size} bytes, "
+                        f"got {bytes_written} bytes"
                     )
 
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path} ({bytes_written} bytes)")
@@ -275,6 +302,11 @@ def stream_file_to_fsspec(
                 f"Attempt {attempt + 1}/{max_retries} failed for {file_path}: "
                 f"{error_type} (status={status_code}): {error_msg}"
             )
+
+            # Nothing follows the last attempt, so sleeping there would only stall the
+            # worker for up to `max_sleep` before the failure surfaces.
+            if attempt + 1 == max_retries:
+                break
 
             jitter = random.uniform(0, min(wait_base * 0.25, 30))  # Up to 25% jitter, max 30s
             wait_time = min(wait_base + jitter, max_sleep)
@@ -313,58 +345,57 @@ def download_hf(cfg: DownloadConfig) -> None:
         source_fs, source_root = url_to_fs(source_url)
         list_kwargs = {"revision": cfg.revision}
 
+    # `detail=True` carries the sizes (download validation) and Xet hashes (source
+    # fingerprinting) in the listing itself, avoiding a per-file `info()` round
+    # trip. Overlapping glob patterns collapse into one task per path.
+    file_info: dict[str, dict] = {}
     if not cfg.hf_urls_glob:
-        files = source_fs.find(source_root, **list_kwargs)
+        file_info.update(source_fs.find(source_root, detail=True, **list_kwargs))
     else:
-        files = []
         for url_glob in cfg.hf_urls_glob:
             pattern = os.path.join(source_root, url_glob)
-            files += source_fs.glob(pattern, **list_kwargs)
+            file_info.update(source_fs.glob(pattern, detail=True, **list_kwargs))
+    files = sorted(file_info)
 
     if not files:
         raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
 
-    # Get file sizes for validation
-    logger.info("Getting file sizes for validation...")
-    file_sizes: dict[str, int | None] = {}
-    for file in files:
-        try:
-            info = source_fs.info(file, **list_kwargs)
-            file_sizes[file] = info.get("size") or None
-        except Exception as e:
-            logger.warning(f"Could not get size for {file}: {e}")
-            file_sizes[file] = None  # Will skip validation for this file
+    source_xet_fingerprint = None
+    if cfg.expected_source_xet_fingerprint is not None:
+        source_xet_fingerprint = _source_xet_fingerprint(source_root, file_info)
+        if source_xet_fingerprint != cfg.expected_source_xet_fingerprint:
+            raise ValueError(
+                f"Hugging Face source changed: expected Xet fingerprint "
+                f"{cfg.expected_source_xet_fingerprint}, got {source_xet_fingerprint}"
+            )
 
     download_tasks = []
 
     for file in files:
         relative_file_path = _relative_path_in_source(file, source_root)
         if relative_file_path.startswith(".."):
-            raise ValueError(f"Computed path escapes source root: source={hf_source_path}, file={file}")
-        fsspec_file_path = prefix_join(output_path, relative_file_path)
-        expected_size = file_sizes.get(file)
+            raise ValueError(f"Computed path escapes source root: source={source_root}, file={file}")
         # Fully-qualify the source URL so subprocess workers can open it via fsspec
         # without having to reconstruct HfFileSystem / revision state.
         worker_source_url = file if cfg.source_url_override is not None else f"hf://{file}"
         download_tasks.append(
-            (
-                output_path,
-                worker_source_url,
-                fsspec_file_path,
-                expected_size,
-                cfg.read_timeout_seconds,
-                cfg.progress_log_interval_seconds,
-                cfg.read_chunk_size_mib,
+            FileDownloadTask(
+                source_url=worker_source_url,
+                destination_path=prefix_join(output_path, relative_file_path),
+                expected_size=file_info[file].get("size"),
+                read_timeout_seconds=cfg.read_timeout_seconds,
+                progress_log_interval_seconds=cfg.progress_log_interval_seconds,
+                read_chunk_size_mib=cfg.read_chunk_size_mib,
             )
         )
 
     total_files = len(download_tasks)
-    total_size_gb = sum(s for s in file_sizes.values() if s is not None) / (1024**3)
+    total_size_gb = sum(info["size"] for info in file_info.values() if info.get("size") is not None) / (1024**3)
     logger.info(f"Total number of files to process: {total_files} ({total_size_gb:.2f} GB)")
 
     pipeline = (
         Dataset.from_list(download_tasks)
-        .map(lambda task: stream_file_to_fsspec(*task))
+        .map(stream_file_to_fsspec)
         .write_jsonl(
             prefix_join(cfg.gcs_output_path, ".metrics/success-part-{shard:05d}-of-{total:05d}.jsonl"),
             skip_existing=True,
@@ -379,7 +410,12 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Write Provenance JSON
     write_provenance_json(
         output_path,
-        metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": files},
+        metadata={
+            "dataset": cfg.hf_dataset_id,
+            "version": cfg.revision,
+            "links": files,
+            **({"source_xet_fingerprint": source_xet_fingerprint} if source_xet_fingerprint is not None else {}),
+        },
     )
 
     logger.info(f"Streamed all files and wrote provenance JSON; check {output_path}.")
@@ -396,6 +432,8 @@ def download_hf_step(
     deps: list[StepSpec] | None = None,
     override_output_path: str | None = None,
     worker_resources: ResourceConfig | None = None,
+    hf_repo_type_prefix: str = HF_DATASET_REPO_TYPE_PREFIX,
+    expected_source_xet_fingerprint: str | None = None,
 ) -> StepSpec:
     """Create a StepSpec that downloads a HuggingFace dataset.
 
@@ -410,6 +448,10 @@ def download_hf_step(
         zephyr_max_parallelism: Maximum download parallelism.
         deps: Optional upstream dependencies.
         override_output_path: Override the computed output path entirely.
+        hf_repo_type_prefix: Hugging Face source namespace. Use an empty string
+            when ``hf_dataset_id`` is a ``buckets/...`` path.
+        expected_source_xet_fingerprint: Expected fingerprint of the selected
+            files' relative paths, sizes, and Xet hashes.
 
     Returns:
         A StepSpec whose output_path contains the raw downloaded files.
@@ -426,18 +468,26 @@ def download_hf_step(
                 append_sha_to_path=append_sha_to_path,
                 zephyr_max_parallelism=zephyr_max_parallelism,
                 worker_resources=worker_resources,
+                hf_repo_type_prefix=hf_repo_type_prefix,
+                expected_source_xet_fingerprint=expected_source_xet_fingerprint,
             )
         )
+
+    hash_attrs = {
+        "hf_dataset_id": hf_dataset_id,
+        "revision": revision,
+        "hf_urls_glob": resolved_glob,
+        "append_sha_to_path": append_sha_to_path,
+    }
+    if hf_repo_type_prefix != HF_DATASET_REPO_TYPE_PREFIX:
+        hash_attrs["hf_repo_type_prefix"] = hf_repo_type_prefix
+    if expected_source_xet_fingerprint is not None:
+        hash_attrs["expected_source_xet_fingerprint"] = expected_source_xet_fingerprint
 
     return StepSpec(
         name=name,
         fn=_run,
         deps=deps or [],
-        hash_attrs={
-            "hf_dataset_id": hf_dataset_id,
-            "revision": revision,
-            "hf_urls_glob": resolved_glob,
-            "append_sha_to_path": append_sha_to_path,
-        },
+        hash_attrs=hash_attrs,
         override_output_path=override_output_path,
     )

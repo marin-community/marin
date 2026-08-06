@@ -196,9 +196,9 @@ One-off analysis pages published to durable public hosting (see
     - [WandB Run: deeper_starling_sft_nemotron_and_openthoughts3](https://wandb.ai/marin-community/marin/runs/deeper_starling_sft_nemotron_and_openthoughts3)
 - SFT on further cool-downed tootsie checkpoints [![#897](https://img.shields.io/github/issues/detail/state/marin-community/marin/897)](https://github.com/marin-community/marin/issues/897)
     - [GitHub Issue #897](https://github.com/marin-community/marin/issues/897)
-- SFT Deeper Starling [![#1237](https://img.shields.io/github/issues/detail/state/stanford-crfm/marin/1237)](https://github.com/marin-community/marin/issues/1237)
-  - [GitHub Issue #1237](https://github.com/marin-community/marin/issues/1237)
-  - [WandB Run: deeper_mixture_sft_starling_1e-4-longer-2](https://wandb.ai/marin-community/marin/runs/deeper_mixture_sft_starling_1e-4-longer-2?nw=nwuserheld)
+- SFT Deeper Starling [![#1237](https://img.shields.io/github/issues/detail/state/marin-community/marin/1237)](https://github.com/marin-community/marin/issues/1237)
+    - [GitHub Issue #1237](https://github.com/marin-community/marin/issues/1237)
+    - [WandB Run: deeper_mixture_sft_starling_1e-4-longer-2](https://wandb.ai/marin-community/marin/runs/deeper_mixture_sft_starling_1e-4-longer-2?nw=nwuserheld)
 
 ## Scaling Laws
 

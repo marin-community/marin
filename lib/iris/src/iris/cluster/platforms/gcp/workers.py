@@ -88,11 +88,7 @@ def _spawn_bootstrap_thread(
                     handle.slice_id,
                     cleanup_error,
                 )
-            with handle._bootstrap_lock:
-                handle._bootstrap_state = CloudSliceState.FAILED
-                # Keep the reason (e.g. the create-LRO "no more capacity" stockout)
-                # so describe() can surface it and the autoscaler can classify it.
-                handle._bootstrap_error = str(e)
+            handle.bootstrap.mark_failed(str(e))
 
     threading.Thread(target=_run, name=f"bootstrap-{handle.slice_id}", daemon=True).start()
 
@@ -305,6 +301,95 @@ class GcpWorkerProvider:
             raise ValueError("zone is required to rewrite public images to a registry mirror on GCP")
         return rewrite_image_to_mirror(image, zone, self._registry_mirrors)
 
+    def _tpu_slice_handle(
+        self,
+        *,
+        slice_id: str,
+        zone: str,
+        labels: dict[str, str],
+        created_at: Timestamp,
+        accelerator_variant: str,
+        service_account: str | None = None,
+        bootstrapping: bool = False,
+        is_queued_resource: bool = False,
+        create_operation: str = "",
+    ) -> GcpSliceHandle:
+        """Build a TPU slice handle, filling in the provider-owned fields.
+
+        Every ``GcpSliceHandle`` carries the same project, label prefix, port,
+        service, and ssh wiring; this factory supplies those fields so callers
+        pass only the per-slice values.
+        """
+        return GcpSliceHandle(
+            _slice_id=slice_id,
+            _zone=zone,
+            _project_id=self._project_id,
+            _labels=labels,
+            _created_at=created_at,
+            _label_prefix=self._label_prefix,
+            _worker_port=self._worker_port,
+            _accelerator_variant=accelerator_variant,
+            _gcp_service=self._gcp,
+            _ssh_config=self._ssh_config,
+            _service_account=service_account,
+            _bootstrapping=bootstrapping,
+            _is_queued_resource=is_queued_resource,
+            _create_operation=create_operation,
+        )
+
+    def _vm_slice_handle(
+        self,
+        *,
+        slice_id: str,
+        vm_name: str,
+        zone: str,
+        labels: dict[str, str],
+        created_at: Timestamp,
+        service_account: str | None = None,
+        bootstrapping: bool = False,
+    ) -> GcpVmSliceHandle:
+        """Build a single-VM slice handle, filling in the provider-owned fields."""
+        return GcpVmSliceHandle(
+            _slice_id=slice_id,
+            _vm_name=vm_name,
+            _zone=zone,
+            _project_id=self._project_id,
+            _gcp_service=self._gcp,
+            _labels=labels,
+            _created_at=created_at,
+            _label_prefix=self._label_prefix,
+            _worker_port=self._worker_port,
+            _ssh_config=self._ssh_config,
+            _service_account=service_account,
+            _bootstrapping=bootstrapping,
+        )
+
+    def _standalone_worker_handle(
+        self,
+        *,
+        vm_name: str,
+        zone: str,
+        internal_address: str,
+        service_account: str | None = None,
+    ) -> GcpStandaloneWorkerHandle:
+        """Build a standalone GCE worker handle with SSH wiring resolved from config."""
+        return GcpStandaloneWorkerHandle(
+            _vm_id=construct_worker_id(vm_name, 0),
+            _internal_address=internal_address,
+            _port=self._worker_port,
+            _gce_vm_name=vm_name,
+            _zone=zone,
+            _project_id=self._project_id,
+            _gcp_service=self._gcp,
+            _remote_exec=GceRemoteExec(
+                project_id=self._project_id,
+                zone=zone,
+                vm_name=vm_name,
+                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+            ),
+            _service_account=service_account,
+        )
+
     def _best_effort_delete_vm(self, vm_name: str, zone: str) -> None:
         """Try to delete a GCE VM that may have been partially created."""
         logger.info("Best-effort cleanup of VM %s in %s", vm_name, zone)
@@ -361,23 +446,11 @@ class GcpWorkerProvider:
             self._best_effort_delete_vm(config.name, zone)
             raise
 
-        remote_exec = GceRemoteExec(
-            project_id=self._project_id,
-            zone=zone,
+        return self._standalone_worker_handle(
             vm_name=config.name,
-            impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
-        )
-
-        return GcpStandaloneWorkerHandle(
-            _vm_id=construct_worker_id(config.name, 0),
-            _internal_address=vm_info.internal_ip,
-            _port=self._worker_port,
-            _gce_vm_name=config.name,
-            _zone=zone,
-            _project_id=self._project_id,
-            _gcp_service=self._gcp,
-            _remote_exec=remote_exec,
-            _service_account=request.service_account,
+            zone=zone,
+            internal_address=vm_info.internal_ip,
+            service_account=request.service_account,
         )
 
     def create_slice(
@@ -464,20 +537,15 @@ class GcpWorkerProvider:
         # response can never tear down a slice that has already booted workers.
         tpu_info = self._gcp.tpu_create(request)
 
-        handle = GcpSliceHandle(
-            _slice_id=slice_id,
-            _zone=gcp.zone,
-            _project_id=self._project_id,
-            _labels=dict(config.labels),
-            _created_at=Timestamp.now(),
-            _label_prefix=self._label_prefix,
-            _worker_port=self._worker_port,
-            _accelerator_variant=config.accelerator_variant,
-            _gcp_service=self._gcp,
-            _ssh_config=self._ssh_config,
-            _service_account=request.service_account,
-            _bootstrapping=worker_config is not None,
-            _create_operation=tpu_info.operation_name,
+        handle = self._tpu_slice_handle(
+            slice_id=slice_id,
+            zone=gcp.zone,
+            labels=dict(config.labels),
+            created_at=Timestamp.now(),
+            accelerator_variant=config.accelerator_variant,
+            service_account=request.service_account,
+            bootstrapping=worker_config is not None,
+            create_operation=tpu_info.operation_name,
         )
 
         if worker_config:
@@ -528,20 +596,15 @@ class GcpWorkerProvider:
             self._best_effort_delete_queued_resource(slice_id, gcp.zone)
             raise
 
-        handle = GcpSliceHandle(
-            _slice_id=slice_id,
-            _zone=gcp.zone,
-            _project_id=self._project_id,
-            _labels=labels,
-            _created_at=Timestamp.now(),
-            _label_prefix=self._label_prefix,
-            _worker_port=self._worker_port,
-            _accelerator_variant=config.accelerator_variant,
-            _gcp_service=self._gcp,
-            _ssh_config=self._ssh_config,
-            _service_account=request.service_account,
-            _bootstrapping=worker_config is not None,
-            _is_queued_resource=True,
+        handle = self._tpu_slice_handle(
+            slice_id=slice_id,
+            zone=gcp.zone,
+            labels=labels,
+            created_at=Timestamp.now(),
+            accelerator_variant=config.accelerator_variant,
+            service_account=request.service_account,
+            bootstrapping=worker_config is not None,
+            is_queued_resource=True,
         )
 
         if worker_config:
@@ -606,19 +669,14 @@ class GcpWorkerProvider:
             self._best_effort_delete_vm(vm_name, gcp.zone)
             raise
 
-        handle = GcpVmSliceHandle(
-            _slice_id=slice_id,
-            _vm_name=vm_name,
-            _zone=gcp.zone,
-            _project_id=self._project_id,
-            _gcp_service=self._gcp,
-            _labels=labels,
-            _created_at=Timestamp.now(),
-            _label_prefix=self._label_prefix,
-            _worker_port=self._worker_port,
-            _ssh_config=self._ssh_config,
-            _service_account=request.service_account,
-            _bootstrapping=worker_config is not None,
+        handle = self._vm_slice_handle(
+            slice_id=slice_id,
+            vm_name=vm_name,
+            zone=gcp.zone,
+            labels=labels,
+            created_at=Timestamp.now(),
+            service_account=request.service_account,
+            bootstrapping=worker_config is not None,
         )
 
         if worker_config:
@@ -646,18 +704,14 @@ class GcpWorkerProvider:
                 logger.info("Skipping TPU %s in state %s", tpu.name, tpu.state)
                 continue
             handles.append(
-                GcpSliceHandle(
-                    _slice_id=tpu.name,
-                    _zone=tpu.zone,
-                    _project_id=self._project_id,
-                    _labels=tpu.labels,
-                    _created_at=tpu.created_at,
-                    _label_prefix=self._label_prefix,
-                    _worker_port=self._worker_port,
-                    _accelerator_variant=tpu.accelerator_type,
-                    _gcp_service=self._gcp,
-                    _ssh_config=self._ssh_config,
-                    _service_account=tpu.service_account,
+                self._tpu_slice_handle(
+                    slice_id=tpu.name,
+                    zone=tpu.zone,
+                    labels=tpu.labels,
+                    created_at=tpu.created_at,
+                    accelerator_variant=tpu.accelerator_type,
+                    service_account=tpu.service_account,
+                    is_queued_resource=tpu.labels.get(CAPACITY_TYPE_LABEL) == CAPACITY_TYPE_RESERVED_VALUE,
                 )
             )
 
@@ -670,18 +724,13 @@ class GcpWorkerProvider:
             if not slice_id:
                 continue
             handles.append(
-                GcpVmSliceHandle(
-                    _slice_id=slice_id,
-                    _vm_name=vm.name,
-                    _zone=vm.zone,
-                    _project_id=self._project_id,
-                    _gcp_service=self._gcp,
-                    _labels=vm.labels,
-                    _created_at=vm.created_at,
-                    _label_prefix=self._label_prefix,
-                    _worker_port=self._worker_port,
-                    _ssh_config=self._ssh_config,
-                    _service_account=vm.service_account,
+                self._vm_slice_handle(
+                    slice_id=slice_id,
+                    vm_name=vm.name,
+                    zone=vm.zone,
+                    labels=vm.labels,
+                    created_at=vm.created_at,
+                    service_account=vm.service_account,
                 )
             )
 
@@ -714,19 +763,14 @@ class GcpWorkerProvider:
         for tpu in tpu_infos:
             if tpu.labels.get(manual_label) == "true":
                 continue
-            handle = GcpSliceHandle(
-                _slice_id=tpu.name,
-                _zone=tpu.zone,
-                _project_id=self._project_id,
-                _labels=tpu.labels,
-                _created_at=tpu.created_at,
-                _label_prefix=self._label_prefix,
-                _worker_port=self._worker_port,
-                _accelerator_variant=tpu.accelerator_type,
-                _gcp_service=self._gcp,
-                _ssh_config=self._ssh_config,
-                _service_account=tpu.service_account,
-                _is_queued_resource=tpu.labels.get(CAPACITY_TYPE_LABEL) == CAPACITY_TYPE_RESERVED_VALUE,
+            handle = self._tpu_slice_handle(
+                slice_id=tpu.name,
+                zone=tpu.zone,
+                labels=tpu.labels,
+                created_at=tpu.created_at,
+                accelerator_variant=tpu.accelerator_type,
+                service_account=tpu.service_account,
+                is_queued_resource=tpu.labels.get(CAPACITY_TYPE_LABEL) == CAPACITY_TYPE_RESERVED_VALUE,
             )
             listed.append(ListedSlice(handle=handle, state=_TPU_STATE_MAP.get(tpu.state, CloudSliceState.UNKNOWN)))
 
@@ -741,19 +785,14 @@ class GcpWorkerProvider:
                 continue
             if qr.labels and qr.labels.get(manual_label) == "true":
                 continue
-            handle = GcpSliceHandle(
-                _slice_id=qr.name,
-                _zone=qr.zone,
-                _project_id=self._project_id,
-                _labels=qr.labels
+            handle = self._tpu_slice_handle(
+                slice_id=qr.name,
+                zone=qr.zone,
+                labels=qr.labels
                 or {CAPACITY_TYPE_LABEL: CAPACITY_TYPE_RESERVED_VALUE, self._iris_labels.iris_managed: "true"},
-                _created_at=Timestamp.now(),
-                _label_prefix=self._label_prefix,
-                _worker_port=self._worker_port,
-                _accelerator_variant="",
-                _gcp_service=self._gcp,
-                _ssh_config=self._ssh_config,
-                _is_queued_resource=True,
+                created_at=Timestamp.now(),
+                accelerator_variant="",
+                is_queued_resource=True,
             )
             listed.append(ListedSlice(handle=handle, state=_QR_STATE_MAP.get(qr.state, CloudSliceState.UNKNOWN)))
 
@@ -766,18 +805,13 @@ class GcpWorkerProvider:
                 continue
             if vm.labels.get(manual_label) == "true":
                 continue
-            handle = GcpVmSliceHandle(
-                _slice_id=slice_id,
-                _vm_name=vm.name,
-                _zone=vm.zone,
-                _project_id=self._project_id,
-                _gcp_service=self._gcp,
-                _labels=vm.labels,
-                _created_at=vm.created_at,
-                _label_prefix=self._label_prefix,
-                _worker_port=self._worker_port,
-                _ssh_config=self._ssh_config,
-                _service_account=vm.service_account,
+            handle = self._vm_slice_handle(
+                slice_id=slice_id,
+                vm_name=vm.name,
+                zone=vm.zone,
+                labels=vm.labels,
+                created_at=vm.created_at,
+                service_account=vm.service_account,
             )
             listed.append(ListedSlice(handle=handle, state=_VM_STATE_MAP.get(vm.status, CloudSliceState.UNKNOWN)))
 
@@ -792,28 +826,15 @@ class GcpWorkerProvider:
         """List GCE instances across zones, optionally filtered by labels."""
         vm_infos = self._gcp.vm_list(zones, labels)
 
-        handles: list[GcpStandaloneWorkerHandle] = []
-        for vm in vm_infos:
-            remote_exec = GceRemoteExec(
-                project_id=self._project_id,
-                zone=vm.zone,
+        return [
+            self._standalone_worker_handle(
                 vm_name=vm.name,
-                impersonate_service_account=ssh_impersonate_service_account(self._ssh_config),
+                zone=vm.zone,
+                internal_address=vm.internal_ip,
+                service_account=vm.service_account,
             )
-            handles.append(
-                GcpStandaloneWorkerHandle(
-                    _vm_id=construct_worker_id(vm.name, 0),
-                    _internal_address=vm.internal_ip,
-                    _port=self._worker_port,
-                    _gce_vm_name=vm.name,
-                    _zone=vm.zone,
-                    _project_id=self._project_id,
-                    _gcp_service=self._gcp,
-                    _remote_exec=remote_exec,
-                    _service_account=vm.service_account,
-                )
-            )
-        return handles
+            for vm in vm_infos
+        ]
 
     def shutdown(self) -> None:
         self._gcp.shutdown()
@@ -959,8 +980,7 @@ def _run_tpu_bootstrap(
         )
 
     logger.info("Bootstrap completed for TPU slice %s (%d workers)", handle.slice_id, len(workers))
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.READY
+    handle.bootstrap.mark_ready()
 
 
 def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> None:
@@ -970,7 +990,7 @@ def _fetch_bootstrap_logs(gcp_service: GcpService, handle: GcpSliceHandle) -> No
     log_filter = (
         f'resource.type="gce_instance" '
         f'textPayload:"[iris-init]" '
-        f'labels."compute.googleapis.com/resource_name":"{handle._slice_id}" '
+        f'labels."compute.googleapis.com/resource_name":"{handle.slice_id}" '
         f'timestamp>="{cutoff_str}"'
     )
     texts = gcp_service.logging_read(log_filter, limit=200)
@@ -1059,5 +1079,4 @@ def _run_vm_slice_bootstrap(
         raise InfraError(f"VM slice {handle.slice_id} bootstrap did not complete within {bootstrap_timeout}s")
 
     logger.info("Bootstrap completed for VM slice %s", handle.slice_id)
-    with handle._bootstrap_lock:
-        handle._bootstrap_state = CloudSliceState.READY
+    handle.bootstrap.mark_ready()

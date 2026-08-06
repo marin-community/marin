@@ -10,7 +10,6 @@ via submitted jobs, and deferred actor handle resolution.
 
 import logging
 import os
-import sys
 import threading
 import time
 from concurrent.futures import Future
@@ -18,7 +17,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import cloudpickle
+from connectrpc.errors import ConnectError
 from iris.actor.client import ActorClient
+from iris.actor.resolver import Resolver
 from iris.actor.server import ActorServer
 from iris.client.client import IrisClient as IrisClientLib
 from iris.client.client import Job as IrisJob
@@ -26,13 +27,16 @@ from iris.client.client import JobAlreadyExists as IrisJobAlreadyExists
 from iris.client.client import get_iris_ctx, iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.cluster.constraints import (
+    CLUSTER_CONSTRAINT_KEY,
     Constraint,
+    ConstraintOp,
     any_region_constraint,
     device_variant_constraint,
     preemptible_constraint,
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.platforms.k8s.coreweave_topology import COSCHEDULE_LEAFGROUP, gpu_gang_coscheduling_level
 from iris.cluster.types import (
     CoschedulingConfig,
     EnvironmentSpec,
@@ -43,12 +47,14 @@ from iris.cluster.types import (
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.hooks.multigpu import build_multigpu_hook
 from iris.rpc import actor_pb2, job_pb2
+from iris.rpc.errors import is_retryable_error
 from rigging.timing import ExponentialBackoff
 
 from fray.actor import (
     ActorContext,
     ActorFuture,
     ActorHandle,
+    ActorUnavailableError,
     HostedActor,
     _reset_current_actor,
     _set_current_actor,
@@ -73,18 +79,24 @@ from fray.types import (
 logger = logging.getLogger(__name__)
 
 
-def resolve_coscheduling(device: DeviceConfig, replicas: int) -> CoschedulingConfig | None:
-    """Determine coscheduling config for multi-host jobs."""
+def resolve_coscheduling(resources: ResourceConfig, replicas: int) -> CoschedulingConfig | None:
+    """Determine coscheduling config from resources for multi-host jobs."""
     if replicas <= 1:
         return None
+    device = resources.device
     if isinstance(device, TpuConfig):
         if device.vm_count() <= 1:
             return None
         return CoschedulingConfig(group_by="tpu-name")
     if isinstance(device, GpuConfig):
-        # leafgroup = the H100 InfiniBand multi-node colocation topology level
-        # (the level the K8s provider maps for GPU gangs; "pool" no longer maps).
-        return CoschedulingConfig(group_by="leafgroup")
+        variants = [device.variant, *(resources.device_alternatives or ())]
+        topology_levels = [
+            (variant, gpu_gang_coscheduling_level(variant, device.count, replicas)) for variant in variants
+        ]
+        if len({level for _, level in topology_levels}) != 1:
+            variant_levels = ", ".join(f"{variant}={level}" for variant, level in topology_levels)
+            raise ValueError(f"GPU alternatives must share one coscheduling topology; got {variant_levels}")
+        return CoschedulingConfig(group_by=topology_levels[0][1])
     return None
 
 
@@ -134,6 +146,14 @@ def convert_constraints(resources: ResourceConfig) -> list[Constraint]:
         constraints.append(region_constraint(list(regions)))
     if resources.zone:
         constraints.append(zone_constraint(resources.zone))
+    if resources.target_cluster:
+        constraints.append(
+            Constraint.create(
+                key=CLUSTER_CONSTRAINT_KEY,
+                op=ConstraintOp.EQ,
+                value=resources.target_cluster,
+            )
+        )
     if resources.device_alternatives:
         if isinstance(resources.device, (TpuConfig, GpuConfig)):
             all_variants = [resources.device.variant, *resources.device_alternatives]
@@ -150,6 +170,38 @@ def convert_entrypoint(entrypoint: FrayEntrypoint) -> IrisEntrypoint:
         be = entrypoint.binary_entrypoint
         return IrisEntrypoint.from_command(be.command, *be.args)
     raise ValueError("Entrypoint must have either callable_entrypoint or binary_entrypoint")
+
+
+NSYS_TASKS_ENV = "IRIS_NSYS_TASKS"
+
+
+def wrap_nsys(entrypoint: IrisEntrypoint) -> IrisEntrypoint:
+    """Run the entrypoint under ``nsys profile`` when ``IRIS_NSYS_TASKS`` is set.
+
+    ``iris.hooks.nsys_main`` is a submit-time wrapper: Nsight injects CUDA tracing
+    through ``CUDA_INJECTION64_PATH``, which the driver reads once at ``cuInit``,
+    so nsys has to be the parent process from the start. iris does not inject the
+    wrapper, and a callable entrypoint builds its command inside this backend, so
+    fray composes it here for the same reason it composes the multigpu supervisor.
+
+    The variable holds the ``--tasks`` spec: ``first``, ``all``, or a
+    comma-separated list of task indices. An unselected task execs the command
+    unchanged and pays nothing.
+    """
+    tasks = os.environ.get(NSYS_TASKS_ENV)
+    if not tasks:
+        return entrypoint
+    command = list(entrypoint.command)
+    if command[:2] == ["bash", "-c"] and len(command) == 3:
+        inner = command[2].removeprefix("exec ")
+        wrapped = ["bash", "-c", f"exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks {tasks} -- {inner}"]
+    else:
+        wrapped = ["$IRIS_PYTHON", "-m", "iris.hooks.nsys_main", "--tasks", tasks, "--", *command]
+    return IrisEntrypoint(
+        command=wrapped,
+        workdir_files=entrypoint.workdir_files,
+        workdir_file_refs=entrypoint.workdir_file_refs,
+    )
 
 
 def wrap_multiprocess(entrypoint: IrisEntrypoint, resources: ResourceSpec, processes_per_task: int) -> IrisEntrypoint:
@@ -205,12 +257,6 @@ class IrisJobHandle:
         self._job = job
 
     @property
-    def iris_job(self) -> IrisJob:
-        """Iris-native job handle used for logs and state inspection."""
-
-        return self._job
-
-    @property
     def job_id(self) -> str:
         return str(self._job.job_id)
 
@@ -231,6 +277,10 @@ class IrisJobHandle:
                 raise
             logger.warning("Job %s failed with exception (raise_on_failure=False)", self.job_id, exc_info=True)
         return self.status()
+
+    def logs(self, max_lines: int = 0) -> tuple[str, ...]:
+        """Return the most recent Iris log lines across all tasks."""
+        return tuple(entry.data.rstrip("\n") for entry in self._job.logs(max_lines=max_lines, tail=True))
 
     def terminate(self) -> None:
         self._job.terminate()
@@ -287,36 +337,17 @@ def _host_actor(actor_class: type, args: tuple, kwargs: dict, name_prefix: str) 
     logger.info(f"Actor {actor_name} shutting down")
     server.stop()
 
-    failed = bool(actor_ctx._errors)
-    if failed:
-        logger.error(
-            "Actor %s recorded %d failure(s); first: %r",
-            actor_name,
-            len(actor_ctx._errors),
-            actor_ctx._errors[0],
-            exc_info=actor_ctx._errors[0],
-        )
-
-    # WORKAROUND for the pyqwest interpreter-shutdown crash: CPython
-    # finalization force-unwinds pyqwest's native (tokio) threads and aborts the
-    # process (SIGABRT/SIGSEGV, exit 134/139). Best-effort drain the in-task
-    # finelog client, then hard-exit via os._exit to skip finalization entirely.
-    # Success/failure is encoded in the exit code since this bypasses the raise.
-    if ctx.client is not None:
-        try:
-            ctx.client.shutdown()
-        except Exception:
-            logger.warning("in-task client shutdown failed (ignored before os._exit)", exc_info=True)
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(1 if failed else 0)
+    if actor_ctx._errors:
+        logger.error("Actor %s recorded %d failure(s); raising the first", actor_name, len(actor_ctx._errors))
+        raise actor_ctx._errors[0]
 
 
 class IrisActorHandle:
-    """Handle to an Iris-hosted actor. Resolves via iris_ctx()."""
+    """Handle to an Iris-hosted actor."""
 
-    def __init__(self, endpoint_name: str):
+    def __init__(self, endpoint_name: str, resolver: Resolver | None = None):
         self._endpoint_name = endpoint_name
+        self._resolver = resolver
         self._client: Any = None  # Lazily resolved ActorClient
         self._resolve_lock = threading.Lock()
 
@@ -326,6 +357,7 @@ class IrisActorHandle:
 
     def __setstate__(self, state: dict) -> None:
         self._endpoint_name = state["endpoint_name"]
+        self._resolver = None
         self._client = None
         self._resolve_lock = threading.Lock()
 
@@ -336,13 +368,16 @@ class IrisActorHandle:
         with self._resolve_lock:
             if self._client is not None:
                 return self._client
-            ctx = get_iris_ctx()
-            if ctx is None:
-                raise RuntimeError(
-                    "IrisActorHandle._resolve() requires IrisContext. "
-                    "Call from within an Iris job or set context via iris_ctx_scope()."
-                )
-            self._client = ActorClient(ctx.resolver, self._endpoint_name)
+            resolver = self._resolver
+            if resolver is None:
+                ctx = get_iris_ctx()
+                if ctx is None:
+                    raise RuntimeError(
+                        "IrisActorHandle._resolve() requires IrisContext. "
+                        "Call from within an Iris job or set context via iris_ctx_scope()."
+                    )
+                resolver = ctx.resolver
+            self._client = ActorClient(resolver, self._endpoint_name)
             return self._client
 
     def __getattr__(self, method_name: str) -> "_IrisActorMethod":
@@ -410,6 +445,15 @@ class _ThreadFuture:
         return self._future.result(timeout=timeout)
 
 
+def _call_actor_method(method: Any, args: tuple, kwargs: dict) -> Any:
+    try:
+        return method(*args, **kwargs)
+    except ConnectError as exc:
+        if is_retryable_error(exc):
+            raise ActorUnavailableError(str(exc)) from exc
+        raise
+
+
 class _IrisActorMethod:
     """Wraps a method on an Iris actor.
 
@@ -430,30 +474,32 @@ class _IrisActorMethod:
     def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
         method = getattr(client, self._method)
-        return _ThreadFuture(method, args, kwargs)
+        return _ThreadFuture(_call_actor_method, (method, args, kwargs), {})
 
     def submit(self, *args: Any, **kwargs: Any) -> ActorFuture:
         client = self._handle._resolve()
-        op_id = client.start_operation(self._method, *args, **kwargs)
+        op_id = _call_actor_method(client.start_operation, (self._method, *args), kwargs)
         return OperationFuture(client, op_id)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         client = self._handle._resolve()
-        return getattr(client, self._method)(*args, **kwargs)
+        return _call_actor_method(getattr(client, self._method), args, kwargs)
 
 
 class IrisActorGroup:
     """ActorGroup that polls the Iris resolver to discover actors as they start."""
 
-    def __init__(self, name: str, count: int, job_id: Any):
+    def __init__(self, name: str, count: int, job_id: Any, client: IrisClientLib | None = None):
         """Args:
         name: Actor name prefix
         count: Number of actors to discover
         job_id: JobId/JobName for the actor job
+        client: Client for driver-side discovery. Serialized groups use the Iris job context.
         """
         self._name = name
         self._count = count
         self._job_id = job_id
+        self._client = client
         self._handles: list[ActorHandle] = []
         self._discovered_names: set[str] = set()
 
@@ -469,11 +515,14 @@ class IrisActorGroup:
         self._name = state["name"]
         self._count = state["count"]
         self._job_id = state["job_id"]
+        self._client = None
         self._handles = []
         self._discovered_names = set()
 
     def _get_client(self) -> IrisClientLib:
-        """Get IrisClient from context."""
+        """Get the bound Iris client or the client from the Iris job context."""
+        if self._client is not None:
+            return self._client
         ctx = get_iris_ctx()
         if ctx is None or ctx.client is None:
             raise RuntimeError("IrisActorGroup requires IrisContext with client. Set context via iris_ctx_scope().")
@@ -501,16 +550,19 @@ class IrisActorGroup:
         # Single RPC: prefix match all actors for this group
         # _host_actor registers endpoints as "{job_id}/{name}-{task_index}"
         prefix = f"{self._job_id}/{self._name}-"
-        endpoints = client._cluster_client.list_endpoints(prefix=prefix, exact=False)
+        endpoints = client.list_endpoints(prefix=prefix)
 
         newly_discovered: list[ActorHandle] = []
+        resolver = None
         for ep in endpoints:
             if target is not None and len(self._discovered_names) >= target:
                 break
             if ep.name in self._discovered_names:
                 continue
+            if resolver is None:
+                resolver = client.resolver_for_job(self._job_id)
             self._discovered_names.add(ep.name)
-            handle = IrisActorHandle(ep.name)
+            handle = IrisActorHandle(ep.name, resolver=resolver)
             self._handles.append(handle)
             newly_discovered.append(handle)
             logger.info(
@@ -610,11 +662,12 @@ class FrayIrisClient:
         iris_entrypoint = convert_entrypoint(request.entrypoint)
         if request.processes_per_task > 1:
             iris_entrypoint = wrap_multiprocess(iris_entrypoint, iris_resources, request.processes_per_task)
+        iris_entrypoint = wrap_nsys(iris_entrypoint)
         iris_environment = convert_environment(request.environment, request.resources.device)
         iris_constraints = convert_constraints(request.resources)
 
         replicas = request.replicas or 1
-        coscheduling = resolve_coscheduling(request.resources.device, replicas)
+        coscheduling = resolve_coscheduling(request.resources, replicas)
 
         policy = job_pb2.EXISTING_JOB_POLICY_KEEP if adopt_existing else job_pb2.EXISTING_JOB_POLICY_UNSPECIFIED
         try:
@@ -709,7 +762,11 @@ class FrayIrisClient:
         iris_constraints = convert_constraints(resources)
         iris_environment = convert_environment(None, device=resources.device)
 
-        coscheduling = resolve_coscheduling(resources.device, count)
+        # Actor group replicas are independent workers, not an NVLink collective.
+        if count > 1 and isinstance(resources.device, GpuConfig):
+            coscheduling = CoschedulingConfig(group_by=COSCHEDULE_LEAFGROUP)
+        else:
+            coscheduling = resolve_coscheduling(resources, count)
 
         # Create a single job with N replicas
         # Each replica will run _host_actor with a unique task-based actor name
@@ -742,6 +799,7 @@ class FrayIrisClient:
             name=name,
             count=count,
             job_id=job.job_id,
+            client=self._iris,
         )
 
     def shutdown(self, wait: bool = True) -> None:

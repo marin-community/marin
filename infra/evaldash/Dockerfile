@@ -30,9 +30,11 @@ WORKDIR /app
 # prefix; the rest is the server + CloudSQL stack. rigging's wheel force-includes the repo-root
 # config/ cluster YAMLs at ../../config, so the build keeps the checkout's relative layout.
 COPY lib/rigging /build/lib/rigging
+COPY lib/finestore /build/lib/finestore
 COPY config /build/config
 RUN pip install --no-cache-dir \
     /build/lib/rigging \
+    /build/lib/finestore \
     uvicorn \
     sqlalchemy \
     pg8000 \
@@ -43,6 +45,7 @@ RUN pip install --no-cache-dir \
     protobuf \
     pyarrow \
     pydantic \
+    anthropic \
     && rm -rf /build
 
 # The canonical record and sample contracts are the only Marin modules in the image. The private

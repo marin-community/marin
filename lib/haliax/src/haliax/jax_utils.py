@@ -15,6 +15,7 @@ import opt_einsum
 from jax import Array
 from jax import numpy as jnp
 from jax import random as jrandom
+from jax._src import core as jax_core
 from jax._src.state.indexing import Slice
 from jax.ad_checkpoint import checkpoint_name
 from jax.experimental.multihost_utils import host_local_array_to_global_array
@@ -272,7 +273,7 @@ def _jittable_dg_einsum(
 
     # Allow handling of shape polymorphism
     non_constant_dim_types = {
-        type(d) for op in operands if not isinstance(op, str) for d in np.shape(op) if not jax.core.is_constant_dim(d)
+        type(d) for op in operands if not isinstance(op, str) for d in np.shape(op) if not jax_core.is_constant_dim(d)
     }
     if not non_constant_dim_types:
         contract_path = opt_einsum.contract_path

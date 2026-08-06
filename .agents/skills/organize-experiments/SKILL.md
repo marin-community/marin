@@ -45,4 +45,4 @@ Curate `docs/reports/index.md` after new experiment issues are harvested: fold f
 
 ## See Also
 - `scripts/pm/itemize_experiment_issues.py` for source data generation.
-- `.agents/skills/archive-experiments/` for retiring legacy experiments.
+- `.agents/skills/archive-experiments/SKILL.md` for retiring legacy experiments.

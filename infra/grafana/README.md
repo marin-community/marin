@@ -32,19 +32,25 @@ fetch server-side, so nothing outside the container reaches it.
 GET /finelog/{cluster}/query?sql=&from=&to=      finelog SQL
 GET /finelog/marin/fleet_health                  main query probe + k8s mirror readiness
 GET /finelog/marin/alerts/fleet_health           alert rows: server labels + value(0|1)
+GET /finelog/marin/alerts/training_stalls        active jobs + stalled-progress value(0|1)
+GET /finelog/marin/alerts/zephyr_stalls          active pipelines + stalled-progress value(0|1)
 GET /iris/{cluster}/jobs | workers | health      live controller RPCs
 GET /iris/{cluster}/query?sql=                    ad-hoc SELECT (admin/null-auth)
 GET /github/ferries | builds | nightlies          GitHub REST / GraphQL
 GET /wandb/{train-loss,paloma-macro-loss,mfu}      public report runset and sampled history
+GET /overview/provisioning                         latest fleet and resource-pool cycle
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
+GET /k8s/nodes                                    node readiness, cordons, deadlocks, reboot state
 GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
 GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
+GET /k8s/arch_mismatch                            containers killed by an exec-format failure on a non-amd64 node
 GET /k8s/alerts/{unreachable,crashloops,          alert rows: string labels + one
-     webhook_ready,degraded,stuck_gpu_pods,        numeric; gpu_rack_trays omits rows for
-     gpu_rack_trays}                               a cluster it cannot reach, others zero
+     webhook_ready,degraded,node_deadlocks,       numeric; gpu_rack_trays omits rows for
+     stuck_gpu_pods,gpu_rack_trays,               a cluster it cannot reach, others zero
+     arch_mismatch}
 GET /health                                       bridge liveness
 ```
 
@@ -56,11 +62,19 @@ relative range keeps one cache key as its edges drift. It calls only `Query`, av
 Timestamps come back as epoch milliseconds, so a panel selects a raw or `date_bin`-ned
 time column without casting. finelog has JSON SQL UDFs, so a panel groups by a label in SQL
 — `json_get(labels,'region')`; the bridge also flattens a `labels` column into
-`label_<key>` fields.
+`label_<key>` fields. Jobs uses the hub datasource for a bounded recent view of
+`iris.task_event`, beside Clusters' live API server events.
+
+`v1/vllm/overview` backs the inference dashboard with a bounded, entity-scoped
+Finelog query. Operators select a job, root effort, or execution and a raw time
+window to compare token throughput, request pressure, KV-cache use,
+latency/outcomes, and worst-replica freshness after a serve exits; reset-aware
+deltas preserve replica identity, and an explicit no-data row distinguishes
+missing telemetry from healthy application silence.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
-at or above 5 seconds is slow. The dedicated finelog dashboard adds effective pod
+at or above 5 seconds is slow. Clusters' finelog row adds effective pod
 resources, restart history, probe presence, node placement, PVC class/capacity, and
 recent matching Kubernetes Warning events.
 
@@ -82,7 +96,11 @@ W&B: the bridge reads the public hero-training report anonymously, follows the r
 pinned in its report spec, and samples train cross-entropy, Paloma macro loss, and MFU
 against cumulative training tokens. Grafana receives flat rows and never needs a W&B key.
 
-k8s: the bridge polls the three CoreWeave clusters' public CKS API servers with plain
+`overview/provisioning` reads the latest shared cycle in the prior six hours. It returns
+one fleet row and one row per resource pool. Each row contains outcome counts, success
+ratio, latency, and pool-health fields from the former status page.
+
+k8s: the bridge polls the three production CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
 read-role bearer token from `CW_READ_TOKEN` — genuine read-only kubectl, no Secrets, no
 writes. Each response aggregates every cluster with a `cluster` column: watched
@@ -98,6 +116,12 @@ finalizers. The pod-level scans skip provider-managed namespaces (`cw-*`, `kube-
 CoreWeave's per-node daemons are thousands of pods of someone else's infrastructure,
 while the namespaces we operate hold about a hundred. These are current-state reads —
 the bridge stores no history; trends come from the finelog-backed rows.
+
+`nodes` reports Kubernetes readiness and schedulability together with CoreWeave's
+`node.coreweave.cloud/cordonReason`, `KernelDeadlock`, and `PendingPhaseState`
+signals. `CoreWeaveNodeKernelDeadlock` pages when `KernelDeadlock=True` persists
+for five minutes. The alert labels carry the node and structured condition reason;
+the dashboard retains the condition message and pending lifecycle phase for diagnosis.
 
 `gpu_racks` lists every GB200 NVL72 node (`nvidia.com/gpu` capacity present and
 `node.kubernetes.io/instance-type` containing `gb200`), grouped by its CoreWeave
@@ -133,9 +157,10 @@ is the exception — it returns `reachable=false` so the panel can render the ou
 ```
 src/server.py          the bridge routes (Starlette): finelog SQL, Iris, GitHub, k8s
 src/finelog_source.py  finelog query over its internal IP (LogClient)
-src/iris_source.py     live controller RPCs: jobs, workers, health, ad-hoc query
+src/iris_source.py     live controller RPCs: jobs, workers, health, federation peers, ad-hoc query
 src/github_source.py   ferry runs and CI build rollup, precomputed
 src/wandb_source.py    public W&B report runset and token-axis samples
+src/overview.py        fixed provisioning projection for the status page
 src/k8s_source.py      CW k8s API reads + the per-cluster fan-out and alert rows
 src/discovery.py       GCE label -> internal IP
 src/config.py          cluster targets, watched components, and bridge settings
@@ -145,31 +170,60 @@ src/dashboard_stitch.py  resolves dashboards/*.json panelRef markers into full p
 provisioning/          datasources (finelog, iris, github, k8s), dashboards, alerting
 dashboards/            dashboard JSON source — reviewed like code; see "Adding a dashboard"
 dashboards/panels/     panel bodies shared across dashboards, referenced by panelRef
-marin-infra-panel/     internal React panel for the matrix, CI strip, and W&B charts
+marin-infra-panel/     internal React status page and its reusable dense views
 Dockerfile             Grafana + bridge venv + pinned Infinity and internal panel plugins
 entrypoint.sh          runs both; if either dies the container dies
 __main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.cloud_run)
 Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
-Dashboards: `home.json` (the landing page — see below), `infra.json` (the compact
-cockpit — nightlies, CI and ferries, Iris capacity, provisioning, control-plane
-health, Kubernetes workload state, and hero training), `fleet.json` (canary +
-worker health), `iris.json`
-(per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
-memory), `training.json` (levanter training metrics from the `telltale` namespace,
-grouped by run), `k8s.json` (current CW control-plane state from the k8s source), and
-`finelog.json` (fleet readiness plus mirror pod, probe, resource, and PVC details).
+Each dashboard answers one question, and they link to each other in a fixed nav bar:
+
+| Dashboard | Question | Selectors |
+|---|---|---|
+| `home.json` | Is anything wrong right now? | none (fleet-wide) |
+| `accelerators.json` | Where is the fleet's power going, and is it doing work? | cluster |
+| `jobs.json` | What is running, queued, and stuck — and why? | cluster, job |
+| `runs.json` | How is each Levanter training run doing? | cluster, run |
+| `clusters.json` | Is the infrastructure under the jobs healthy? | cluster |
+| `pipelines.json` | How is one Zephyr execution moving? | cluster, execution |
+| `inference.json` | How did one vLLM serve behave? | identity kind, serve |
+| `infra.json` | The custom React status page: nightly regressions, main CI, worker capacity, provisioning, hero training. | none |
 
 `home.json` is provisioned as the default home dashboard
 (`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,
 the stitcher's output path) — everyone who opens grafana.oa.dev without a
 specific dashboard in mind lands here instead of Grafana's stock welcome page.
 It leads with a native `alertlist` panel (every rule currently Alerting or
-Pending, across every group), then a row of the same GCP/Iris and CoreWeave
-k8s health stats as `infra.json`'s cockpit, the control-plane components
-table, and the GB200 rack tray inventory — all shared `panelRef` fragments, so
-none of it drifts independently of the dashboards those fragments also serve.
+Pending, across every group), then a stat strip led by fleet GPU power, the
+fleet pulse charts, and the control-plane and GB200 rack inventories — the
+stats and inventories are shared `panelRef` fragments, so none of it drifts
+independently of the dashboards those fragments also serve.
+
+`accelerators.json` is the GPU view: total watts per cluster, the same watts
+attributed to the training run occupying each node, utilization against
+tensor-core activity, HBM, temperature, and the hardware-fault counters
+(XID, row remap, PCIe replay). It reads the `iris-node-agent` telemetry stream,
+which each CoreWeave node's agent fills from that cluster's `dcgm-exporter`.
+TPU hosts report no power, so this dashboard covers the GPU clusters only.
+Power is attributed to a run by joining the node agent's `node_name` to the
+`node_name` on Levanter's resource attributes, per time bucket — the residue is
+`(idle / unattributed)`, which is the number worth driving down.
+
+`jobs.json` reads the `iris.task_state` finelog namespace on the marin hub — one
+row per active root job every 30s per cluster-view (CoreWeave) controller,
+carrying waiting/running task counts and the oldest PENDING and stuck-in-BUILDING
+wait ages, plus a `root_job_id=''` per-cluster rollup — grouped by the forwarded
+origin `cluster`. Fleet tasks in flight and the stuck-jobs count are `panelRef`
+fragments shared with `home.json`. The active panels pin a fixed two-minute window
+(`timeFrom: 2m`) so a finished job — which stops emitting with no final zero row —
+ages out rather than lingering as active. GCE controllers (marin, marin-dev) emit
+no `iris.task_state` (their DB is directly `ExecuteRawQuery`-able), so their
+job-state counts come from the live `/iris/{cluster}/jobs` endpoint in its own row,
+and their per-task resource history sits in a collapsed row below. The `$job`
+selector scopes the active-jobs table and the waiting-task series; with every job
+selected the latter is the fleet backlog broken out by job, and narrowed to one
+job it is that job's queue over time.
 
 ## Alerting
 
@@ -179,22 +233,40 @@ File provisioning owns that tree: UI edits to provisioned alerting resources are
 rejected by Grafana and would be overwritten by the files anyway. Change the YAML and
 redeploy.
 
-Rules page only on near-certain incidents: an unreachable cluster, a
-crash-looping watched component, an admission webhook with no ready endpoints, a
-degraded component, a dead Iris controller, an unhealthy finelog hub or mirror, a GPU
+Critical rules notify operators immediately: an unreachable cluster or
+federation peer, a crash-looping watched component, an admission webhook with no ready endpoints, a
+dead production Iris controller, or an unhealthy finelog hub or mirror.
+Warning rules remain in Grafana's home alert list without sending email, Slack,
+or Loom notifications: a degraded component, a failed infra probe, a GPU
 pod that stays node-bound and
 nonterminal without finalizers for five minutes after the bridge's two-minute
 overdue threshold, and a GB200 rack with fewer than 16 trays Ready for five
 minutes (the NVL72 rack spec is 18; a floor rather than an outright outage —
-see `gpu_racks` above). The stuck-pod rule groups by node and links the cordon-first
+see `gpu_racks` above). A warning-only training rule joins fresh running
+`iris.task_state` rows to root jobs with retained `service=levanter` phase telemetry,
+while bounding progress samples to the prior 24 hours: it waits 15 minutes for
+training progress or 45 minutes for initialization, then remains pending for five
+minutes. It does not require task-to-node GPU attribution. A warning-only Zephyr rule reads fresh
+`progress_time_seconds` rows from `service=zephyr` telemetry. It waits 45 minutes after a
+stage start or shard completion, then remains pending for five minutes. The
+execution ID separates concurrent pipelines under one root job. The stuck-pod
+rule groups by node and links the cordon-first
 recovery skill; terminal, unbound, and finalizer-held pods stay dashboard-only.
 Other workload-tier signals (gated pods, Kueue backlog, workload crashloops) are
-dashboard-only because they have expected benign causes. `severity=critical` routes to `ops-critical` (email ops@openathena.ai,
-Slack, and a Loom triage session); `severity=warning` routes to `ops-slack`
-(Slack only). Every rule sets
+dashboard panels rather than alert rules because they have expected benign
+causes. `severity=critical` routes to `ops-critical` (email
+ops@openathena.ai, Slack, and a Loom triage session). `severity=warning`
+matches the always-active `dashboard-only` mute timing: Grafana continues
+evaluating and displaying the alert, but creates no notification. Every rule sets
 `noDataState: Alerting` and `execErrState: Alerting`, and the alert endpoints return
-explicit zeros when healthy, so silence anywhere in the pipeline pages rather than
-resolving.
+explicit zeros when healthy, so monitoring-path failures use the same
+critical or warning handling as the rule.
+
+Federation peer reachability comes from `ListPeers` on the Marin controller.
+The controller heartbeat traverses production DNS, TLS, Traefik, the source-IP
+allowlist, and the Iris RPC path from Marin's static egress address. Grafana
+reads the resulting state over its existing VPC path to Marin, so Grafana's
+Cloud Run egress does not need admission to the CoreWeave federation ingress.
 
 Alert state — pending (`for`) timers, notification dedup, silences — lives in the
 shared `marin-metadata` Postgres with the rest of Grafana's state (see Deploy), so it
@@ -212,18 +284,23 @@ points or their credentials, send a test notification to all receivers (Alerting
 The Loom receiver posts to the bridge on `127.0.0.1`; it is not exposed through
 Grafana or IAP. For each firing group, the bridge asks the Cloud Run metadata
 server for a Google-signed identity token for `https://loom.oa.dev`, exchanges it
-for a short-lived `grafana_alert` Loom token, and creates an idempotent run for
-`marin-community/marin`. Resolved notifications do not create sessions. Repeated
-notifications for the same alert fingerprint and start time reuse the same Loom
-run. The Loom Pulumi stack binds the exact `marin-grafana` service-account email
-and numeric subject to this profile. The Grafana stack reads the Loom URL and
-profile from that stack's `workloadClients` output, so the caller and verifier
-cannot drift through duplicated configuration.
+for a short-lived `ops` Loom token, and creates an idempotent run for
+`marin-community/marin` on the `operator` channel. Distinct firing groups feed
+one live `Grafana operator` session; the operator can delegate independent
+incidents to child Loom sessions. Resolved notifications do not create runs.
+Repeated notifications for the same alert fingerprint and start time reuse the
+same Loom run. The Loom Pulumi stack binds the exact `marin-grafana`
+service-account email and numeric subject to this profile. The Grafana stack
+reads the Loom URL and profile from that stack's `workloadClients` output, so
+the caller and verifier cannot drift through duplicated configuration.
 
 ## Secrets and rotation
 
-All secrets live in Secret Manager and reach the container as env vars via the
-`CloudRunService` `secrets` field; values never enter Pulumi or git.
+All secrets live in Secret Manager, hand-placed, and reach the container as env
+vars via the `CloudRunService` `secrets` field; the values never enter Pulumi or
+git. The deploy account is fail-closed on secret creation, so the program only
+references secrets — each must exist and be listed in the `infra/permissions`
+allowlist for the deploy account to bind IAM on it.
 
 Loom alert delivery does not add a secret. The bridge authenticates with the
 Cloud Run service account and short-lived Google/Loom tokens, while Pulumi owns
@@ -231,22 +308,45 @@ the identity-to-profile binding.
 
 | Env var | Secret | Feeds |
 |---|---|---|
-| `GITHUB_TOKEN` | `marin-status-page-github-token` | ferry/build/nightly panels |
+| `GITHUB_APP_PRIVATE_KEY` | `marin-grafana-github-app-private-key` | ferry/build/nightly panels |
 | `GF_DATABASE_PASSWORD` | `cloudsql-grafana-password` | Grafana's Postgres state (see Deploy) |
 | `CW_READ_TOKEN` | `marin-grafana-cw-read-token` | k8s source (all CW clusters) |
 | `SLACK_ALERTS_WEBHOOK` | `marin-grafana-slack-webhook` | alert contact points |
 | `GF_SMTP_PASSWORD` | `marin-grafana-smtp-credentials` | Grafana SMTP (email alerts, optional) |
 
-All but the last must exist before a deploy — Cloud Run fails to start a revision
-that references a missing secret. `GF_SMTP_PASSWORD` is optional: `__main__.py`
-probes for the secret and only wires it (and enables SMTP) when it exists.
+`GF_DATABASE_PASSWORD`, `CW_READ_TOKEN`, and `SLACK_ALERTS_WEBHOOK` must exist
+before a deploy — Cloud Run fails to start a revision that references a missing
+secret. `GF_SMTP_PASSWORD` and `GITHUB_APP_PRIVATE_KEY` are optional: `__main__.py`
+probes for each and wires it only when the secret exists (the GitHub App also
+needs its `github_app_client_id` config). Unset, the GitHub panels deploy
+unauthenticated and the build panel shows no data.
 
 `CW_READ_TOKEN` is an org-wide CoreWeave API token minted with only the `read` role
 (CKS binds it to the built-in `view` ClusterRole): read-only kubectl across every
-cluster in the org, no Secrets, no writes. Rotation is overlap-safe: mint a second
-read-role token in the CW console, `gcloud secrets versions add` it, redeploy, then
-revoke the old token. The same applies to the Slack webhook and SMTP password — add a
-version, redeploy, retire the old credential.
+cluster in the org, no Secrets, no writes. The built-in role omits Nodes, so the
+CoreWeave Pulumi stacks bind each exact Managed Auth username to the nodes-only
+`marin-grafana-node-reader` role. The usernames live under
+`provisioning.coreweave.grafana_observer_rbac` in each Grafana cluster config so
+both tokens can retain access during a rotation.
+
+Rotation is overlap-safe:
+
+1. Mint a second read-role token in the CoreWeave console. Save it as a single
+   line with no CR/LF; Secret Manager preserves trailing newlines.
+2. Use the token against one cluster's `SelfSubjectReview` to get its
+   `cwtoken-…` username. Append it to `grafana_observer_rbac.usernames` in
+   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, and `cw-rno2a.yaml`, retaining
+   the old username during the handoff.
+3. Preview and update the three CoreWeave Pulumi stacks. Verify both tokens can
+   `list nodes`, while pod creation, Secret reads, and impersonation remain
+   denied.
+4. Add the new token as a `marin-grafana-cw-read-token` version, deploy a fresh
+   Grafana revision, and verify every k8s bridge route.
+5. Remove the old username from the three configs and update the stacks again.
+   Then disable the old secret version and revoke the old CoreWeave token.
+
+The same Secret Manager overlap pattern applies to the Slack webhook and SMTP
+password: add a version, redeploy, then retire the old credential.
 
 Creating the secrets:
 
@@ -268,13 +368,22 @@ cd marin-infra-panel
 npm ci
 npm run typecheck && npm run lint && npm run test:ci && npm run build
 docker build -t marin-grafana .
-docker run --rm -p 3000:8080 -e PORT=8080 marin-grafana
+docker run --rm -p 3000:8080 -e PORT=8080 -e SLACK_ALERTS_WEBHOOK=https://example.invalid marin-grafana
 # → http://localhost:3000 (anonymous Viewer; panels need VPC access to finelog)
 ```
 
+`SLACK_ALERTS_WEBHOOK` has to be set to something: the provisioned contact point
+declares a Slack receiver, and Grafana refuses to start when its URL is empty.
+
 Panels only render against the real VPC: querying needs credentials that list the
 finelog VMs and a network path to them. Locally you get Grafana, the provisioned
-dashboards, and a bridge that 500s on query.
+dashboards, and a bridge that 500s on query — enough to confirm every dashboard
+parses and its variables survive provisioning:
+
+```bash
+curl -s 'http://localhost:3000/api/search?type=dash-db'
+curl -s http://localhost:3000/api/dashboards/uid/marin-accel
+```
 
 ## Deploy
 
@@ -289,15 +398,15 @@ uv sync --all-packages --extra deploy                     # once: iac + Pulumi p
 gcloud auth configure-docker us-central1-docker.pkg.dev   # once: let buildx push to Artifact Registry
 
 cd infra/grafana
-pulumi login gs://marin-iac-state
 # The grafana.oa.dev DNS record lives in the oa.dev Cloudflare zone; the provider
 # reads this token from the environment.
 export CLOUDFLARE_API_TOKEN="$(gcloud secrets versions access latest \
   --secret=cloudflare-oa-dns-token --project=hai-gcp-models)"
 pulumi stack select marin-grafana
 
-# Who gets in — a bare email, a *@domain wildcard, or a qualified IAM member. Editing this
-# and re-running updates only the grant, never the service.
+# Extra viewers beyond the shared Cloud Run IAP baseline — a bare email, a *@domain wildcard,
+# or a qualified IAM member. Editing this and re-running updates only the grant, never the
+# service.
 pulumi config set --path 'viewers[0]' you@example.com
 
 pulumi preview                                            # plan; then, once it looks right:
@@ -330,21 +439,35 @@ create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.m
 `pulumi up` here, or Grafana fails to reach its database.
 
 IAP is the only gate — Grafana runs anonymous Viewer. The OAuth consent screen is
-project-level and shared across the project's IAP services, so nothing per-service needs
-configuring beyond the `viewers` list. The service is created IAP-gated with no viewers,
-i.e. reachable by nobody until the first grant.
+project-level and shared across the project's IAP services. The shared Cloud Run component
+admits the OpenAthena Workspace domain and the Loom VM service account on every internal site,
+and registers the Marin desktop OAuth client as a programmatic audience. The `viewers` list
+contains only additional accounts or groups needed by Grafana.
 
-The ferry and build panels read the GitHub API; `GITHUB_TOKEN` comes from the
-`marin-status-page-github-token` Secret Manager secret, mounted by the CloudRunService
-`secrets` field (the value never enters Pulumi). The name is a holdover from the retired
-`marin-infra-dashboard` status page; Grafana is now its only consumer, so keep it despite
-the name. Create it once if it does not exist — a classic token with no scopes or a
-fine-grained PAT scoped to public-repo read is enough:
+The ferry, build, and nightly panels read the GitHub API, which gates the GraphQL
+build query behind auth even for public repos. The bridge authenticates as the
+"Marin Ops Agent" GitHub App (`src/github_app.py`): it signs a JWT with the app's
+private key, looks up its installation, and mints a read-only token scoped to the
+repos the panels read (the main repo and every nightly lane repo, all under
+`marin-community`), refreshing it before expiry. A static token that expired is
+what blanked the build panel.
+
+The app's client id is committed as `github_app_client_id` (not secret); the
+private key is hand-placed. `__main__.py` wires the app only when both are present,
+so the merge-triggered deploy never blocks. The client id is already set, so
+enabling auth is one step (plus its permissions grant):
 
 ```bash
-echo -n "<paste-github-token>" | gcloud secrets create marin-status-page-github-token \
-  --project=hai-gcp-models --data-file=-
+# Add marin-grafana-github-app-private-key to secret_iam_secrets in
+# infra/permissions/Pulumi.hai-gcp-models.yaml and apply the permissions stack, then:
+gcloud secrets create marin-grafana-github-app-private-key \
+  --project=hai-gcp-models --data-file=key.pem
 ```
+
+Install the app on `marin-community` with access to the main repo and every
+nightly lane repo (`evalchemy`, `harbor`, `MarinSkyRL`, `vllm`, `tpu-inference`),
+read-only on Contents, Metadata, Commit statuses, Checks, and Actions. The minted
+token is attenuated to that subset even if the app holds broader grants.
 
 ## Adding a dashboard
 
@@ -352,8 +475,52 @@ Drop JSON in `dashboards/` and redeploy. Panels use the Infinity datasource with
 `url: /query` and an `sql` param, plus `from`/`to` set to `${__from}`/`${__to}`.
 Write the window into the SQL as `{{from}}` / `{{to}}`, and bin the time axis with
 `date_bin(INTERVAL '${__interval_ms} milliseconds', ts)` so Grafana sizes the
-buckets to the panel — see `dashboards/iris.json`. All dashboards use the
-`${cluster}` datasource variable so one serves marin and marin-dev.
+buckets to the panel — see `dashboards/jobs.json`.
+
+Dashboards address the `finelog-marin` hub directly rather than through a
+datasource variable. The hub is the fleet view: the CoreWeave clusters forward
+into it and their rows carry an origin `cluster` column, while `finelog-marin-dev`
+forwards nowhere and sees only itself. A hub selector on a fleet dashboard empties
+every panel and silently changes what `cluster=''` means, so `finelog-marin-dev`
+stays available in Explore instead.
+
+`$cluster` selects clusters, not datasources: a multi-select custom variable
+listing the clusters in `src/config.py`, filtered in SQL with
+`COALESCE(NULLIF("cluster", ''), 'marin') IN (${cluster:sqlstring})`. It is
+custom rather than a query so a cluster that has gone silent — exactly when you
+want to select it — is still in the dropdown; a test asserts the list matches the
+config. `$run`, `$job`, `$execution` and `$identity` are Infinity query variables
+(`queryType: "infinity"` wrapping a normal `infinityQuery`; the first returned
+field becomes both text and value). The first three filter on `${cluster:sqlstring}`
+themselves, so narrowing the cluster narrows the list below it.
+
+Four things about the data will bite you:
+
+- **Quote `cluster`.** finelog's SQL parser rejects a bare `cluster` identifier
+  anywhere but the first select-list position — `SELECT ts AS t, cluster FROM …`
+  fails to parse. Qualifying or wrapping it is enough for the parser, but panels
+  always write `"cluster"`, and a test rejects every other spelling so nobody has
+  to remember which positions are safe.
+- **Bound every `telemetry_v1` query, and fold the boundary.** The namespace is
+  sorted on `timestamp_ms` alone, so write
+  `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`, never
+  `timestamp_ms >= {{from}}`. An unbounded query exceeds the bridge's 20s deadline.
+- **Cost tracks the window, not the rows.** A `telemetry_v1` panel costs roughly
+  3s over 3h and 10s over 24h no matter how selective its `name` filter is, so a
+  second scan of the same window nearly doubles a panel. Prefer one scan with
+  `CASE WHEN name = …` over joining two scans, and keep the accelerator and run
+  dashboards on a short default range. Per-row `json_get` is the other cost: the
+  host memory and disk ratios ran 8.6s grouped per node and 3.4s summed straight
+  to the cluster, for the same numbers to three decimal places.
+- **Clusters forward in bursts.** A cluster minutes behind makes the right edge of
+  a fleet chart dip. That is why `accelerators.json` carries a freshness panel, and
+  why the power stat reduces to the latest sample per GPU rather than a bucketed sum.
+
+A cluster keeps one colour on every panel of every dashboard — the categorical
+palette's first six slots, in the cluster order in `src/config.py`. Colour follows
+the entity, not its rank, so filtering `$cluster` down to two clusters does not
+repaint the survivors; a test enforces it. Grafana's semantic green/yellow/orange/red
+stay reserved for thresholds and outcome states and are never an entity's colour.
 
 ## Sharing a panel across dashboards
 

@@ -1,0 +1,8 @@
+name: xprof
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: XProf as an always-on Iris service for Marin profiling artifacts.

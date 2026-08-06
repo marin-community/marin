@@ -10,9 +10,11 @@
 //!
 //! - **Caching**: a parsed sidecar is read once and reused across queries. The
 //!   steady state for a repeating query is pure cache hits — zero I/O.
-//! - **Bounded memory**: parsed blooms live in a byte-budgeted LRU
-//!   ([`FINELOG_SIDECAR_CACHE_MB`], default [`DEFAULT_BUDGET_MB`]), so the resident
-//!   set never exceeds the budget no matter how many segments a query spans.
+//! - **Bounded memory**: parsed blooms live in a byte-budgeted LRU sized by
+//!   [`configure_sidecar_cache`] (default [`DEFAULT_BUDGET_MB`]), so the resident
+//!   set never exceeds the budget no matter how many segments a query spans. The
+//!   budget must cover the deployment's sidecars; below that, the LRU evicts what
+//!   the next query needs and the cache stops paying for itself.
 //! - **Partial reads**: the [`SidecarHeader`] is read with a single bounded
 //!   `pread`, so a key-scoped query can check a segment's key band and skip
 //!   reading its (large) bloom payload entirely when it is out of band.
@@ -32,15 +34,16 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::store::trigram::{self, ColumnIndex, SidecarHeader};
 
-/// Default sidecar cache budget when [`BUDGET_ENV`] is unset (MiB). The full
-/// 54-segment sample index measured at ~79 MiB, so 256 MiB holds a working set
-/// of several namespaces with headroom while staying well clear of the query
-/// memory pool (which it is deliberately separate from — this is index metadata,
-/// not query working set).
+/// Default sidecar cache budget (MiB) when the server is given none.
+///
+/// Sized to hold a working set, not a fixed number of segments: a namespace's
+/// sidecars run to ~1.7% of its indexed bytes, so 15 GiB of dense log text costs
+/// ~260 MiB on its own. A budget below the working set does not degrade
+/// gracefully — every query re-reads and re-parses the blooms the last one
+/// evicted — so a deployment holding more than a few GiB of indexed text should
+/// raise it. Deliberately separate from the query memory pool: this is index
+/// metadata, not query working set.
 const DEFAULT_BUDGET_MB: usize = 256;
-
-/// Override for the cache budget, in MiB.
-const BUDGET_ENV: &str = "FINELOG_SIDECAR_CACHE_MB";
 
 /// One bounded read that covers the header for any realistic column count
 /// (`name + 16` bytes per column). A pathological larger directory triggers an
@@ -52,11 +55,28 @@ pub struct SidecarManager {
     cache: Mutex<Lru>,
 }
 
+/// The budget [`SidecarManager::global`] is built with, set once at startup.
+static CONFIGURED_BUDGET_MB: OnceLock<usize> = OnceLock::new();
+
+/// Set the process-global sidecar cache budget, in MiB.
+///
+/// Call before the first query; the manager is built on first use and keeps
+/// whatever budget was in force then. Errors if the budget was already set.
+pub fn configure_sidecar_cache(budget_mb: usize) -> Result<(), &'static str> {
+    CONFIGURED_BUDGET_MB
+        .set(budget_mb)
+        .map_err(|_| "sidecar cache is already configured")
+}
+
 impl SidecarManager {
-    /// The process-global manager, sized from [`BUDGET_ENV`] on first use.
+    /// The process-global manager, sized by [`configure_sidecar_cache`] or
+    /// [`DEFAULT_BUDGET_MB`].
     pub fn global() -> &'static SidecarManager {
         static MANAGER: OnceLock<SidecarManager> = OnceLock::new();
-        MANAGER.get_or_init(|| SidecarManager::with_budget_bytes(budget_from_env()))
+        MANAGER.get_or_init(|| {
+            let mb = *CONFIGURED_BUDGET_MB.get_or_init(|| DEFAULT_BUDGET_MB);
+            SidecarManager::with_budget_bytes(mb.saturating_mul(1024 * 1024))
+        })
     }
 
     fn with_budget_bytes(budget_bytes: usize) -> SidecarManager {
@@ -94,6 +114,19 @@ impl SidecarManager {
         let index = Arc::new(read_column(path, header, column)?);
         let bytes = index.heap_bytes();
         Some(self.insert_column(key, index, bytes))
+    }
+
+    /// Drop every cached parse of the sidecar at `path`.
+    ///
+    /// Entries are keyed by path alone, so a sidecar rewritten in place would
+    /// otherwise keep serving the header it replaced. That is not merely a lost
+    /// speedup: adding a column shifts every payload offset, so a stale header's
+    /// directory addresses the wrong bytes of the new file, and those bytes can
+    /// still parse as a structurally valid — but wrong — Bloom filter, which
+    /// prunes row groups that do match. The one in-place rewriter is the sidecar
+    /// backfill; compaction writes to a path no query has seen.
+    pub fn invalidate(&self, path: &Path) {
+        self.cache.lock().unwrap().remove_path(path);
     }
 
     /// Cache hit lookup: returns the entry and refreshes its recency.
@@ -151,6 +184,14 @@ enum Key {
     Column(PathBuf, String),
 }
 
+impl Key {
+    fn path(&self) -> &Path {
+        match self {
+            Key::Header(path) | Key::Column(path, _) => path,
+        }
+    }
+}
+
 struct Entry {
     value: Cached,
     bytes: usize,
@@ -184,6 +225,19 @@ impl Lru {
         let entry = self.map.get_mut(key)?;
         entry.last_used = tick;
         Some(entry.value.clone())
+    }
+
+    /// Drop the header and every column entry belonging to `path`.
+    fn remove_path(&mut self, path: &Path) {
+        let mut freed = 0usize;
+        self.map.retain(|key, entry| {
+            let keep = key.path() != path;
+            if !keep {
+                freed += entry.bytes;
+            }
+            keep
+        });
+        self.used_bytes -= freed;
     }
 
     /// Insert `value` (charging `bytes`), evicting least-recently-used entries
@@ -221,28 +275,22 @@ impl Lru {
     }
 }
 
-fn budget_from_env() -> usize {
-    let mb = std::env::var(BUDGET_ENV)
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_BUDGET_MB);
-    mb.saturating_mul(1024 * 1024)
-}
-
 /// Approximate heap footprint of a parsed header (its key band + column
 /// directory), charged to the cache budget. Small relative to bloom payloads.
 fn header_heap_bytes(header: &SidecarHeader) -> usize {
     let key_bytes = header.key_min.as_ref().map_or(0, Vec::len)
         + header.key_max.as_ref().map_or(0, Vec::len)
         + header.key_column.len();
-    // The directory is private to trigram.rs; approximate it from rg_count-free
+    // The directory is private to trigram.rs; approximate it from span-count-free
     // fixed overhead. A handful of columns at most, so a constant suffices.
     std::mem::size_of::<SidecarHeader>() + key_bytes + 128
 }
 
 /// Read and parse a sidecar header with a single bounded `pread`, re-reading
 /// only if a (pathological) directory exceeds [`HEADER_PREFIX_BYTES`].
-fn read_header(path: &Path) -> Option<SidecarHeader> {
+///
+/// `None` when the file is missing, unreadable, or not a parseable sidecar.
+pub(crate) fn read_header(path: &Path) -> Option<SidecarHeader> {
     let file = std::fs::File::open(path).ok()?;
     let file_len = file.metadata().ok()?.len() as usize;
     let prefix_len = file_len.min(HEADER_PREFIX_BYTES);
@@ -268,7 +316,7 @@ fn read_column(path: &Path, header: &SidecarHeader, column: &str) -> Option<Colu
     let file = std::fs::File::open(path).ok()?;
     let mut buf = vec![0u8; dir.len as usize];
     file.read_exact_at(&mut buf, dir.offset).ok()?;
-    trigram::parse_column(&buf, header.rg_count)
+    trigram::parse_column(&buf, header.span_count)
 }
 
 #[cfg(test)]
@@ -280,9 +328,10 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     use super::*;
-    use crate::store::trigram::{
-        serialize_sidecar, sidecar_path, write_sidecar, TrigramIndex, INDEXED_COLUMN,
-    };
+    use crate::store::trigram::{serialize_sidecar, sidecar_path, write_sidecar, TrigramIndex};
+
+    /// The trigram-indexed column every fixture in this module writes.
+    const FIXTURE_COLUMN: &str = "data";
 
     fn tempdir(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -333,12 +382,12 @@ mod tests {
         let mgr = SidecarManager::with_budget_bytes(64 * 1024 * 1024);
 
         let header = mgr.get_header(&sc).expect("header");
-        assert_eq!(header.rg_count, 1);
+        assert_eq!(header.span_count, 1);
         assert_eq!(header.key_min.as_deref(), Some(b"/m/a".as_slice()));
-        assert!(header.column(INDEXED_COLUMN).is_some());
+        assert!(header.column(FIXTURE_COLUMN).is_some());
 
         let col = mgr
-            .get_column(&sc, &header, INDEXED_COLUMN)
+            .get_column(&sc, &header, FIXTURE_COLUMN)
             .expect("column");
         assert_eq!(col.len(), 1);
         assert_eq!(
@@ -346,6 +395,67 @@ mod tests {
             vec![true]
         );
         assert_eq!(col.keep_mask("absent zzz string").unwrap(), vec![false]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Write a sidecar over `columns` for a two-column batch, at the same
+    /// segment path each time, so a later call rewrites an earlier one in place.
+    fn rewrite_sidecar(parquet: &Path, columns: &[&str]) {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("data", DataType::Utf8, false),
+            Field::new("note", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["/m/a"])),
+                Arc::new(StringArray::from(vec!["Bootstrap completed for TPU"])),
+                Arc::new(StringArray::from(vec!["nccl ring initialized"])),
+            ],
+        )
+        .unwrap();
+        write_sidecar(parquet, std::slice::from_ref(&batch), columns, Some("key")).unwrap();
+    }
+
+    /// Enabling a second index rewrites existing sidecars in place. The cache
+    /// keys on path alone, so without invalidation a reader keeps the header it
+    /// replaced — which does not know the new column, and whose directory
+    /// addresses the *old* payload offsets in the new file's bytes.
+    #[test]
+    fn a_rewritten_sidecar_is_dropped_from_the_cache() {
+        let dir = tempdir("rewrite");
+        let parquet = dir.join("seg_L1_0000000000000000001.parquet");
+        rewrite_sidecar(&parquet, &["data"]);
+        let sc = sidecar_path(&parquet);
+        let mgr = SidecarManager::with_budget_bytes(64 * 1024 * 1024);
+
+        let stale = mgr.get_header(&sc).expect("header");
+        assert!(mgr.get_column(&sc, &stale, "data").is_some());
+
+        // `note` gains an index: a directory entry and a payload ahead of `data`.
+        rewrite_sidecar(&parquet, &["note", "data"]);
+
+        assert!(
+            mgr.get_header(&sc).unwrap().column("note").is_none(),
+            "the cache still serves the replaced header",
+        );
+        mgr.invalidate(&sc);
+        let fresh = mgr.get_header(&sc).expect("header after invalidation");
+        assert!(fresh.column("note").is_some(), "the new column is visible");
+        assert_ne!(
+            stale.column("data").unwrap().offset,
+            fresh.column("data").unwrap().offset,
+            "the replaced header addresses the wrong bytes of the new file",
+        );
+        assert_eq!(
+            mgr.get_column(&sc, &fresh, "note")
+                .unwrap()
+                .keep_mask("nccl ring initialized")
+                .unwrap(),
+            vec![true],
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -358,11 +468,11 @@ mod tests {
         let mgr = SidecarManager::with_budget_bytes(64 * 1024 * 1024);
 
         let h1 = mgr.get_header(&sc).unwrap();
-        let c1 = mgr.get_column(&sc, &h1, INDEXED_COLUMN).unwrap();
+        let c1 = mgr.get_column(&sc, &h1, FIXTURE_COLUMN).unwrap();
         // Deleting the file proves the second round is served from cache (no I/O).
         std::fs::remove_file(&sc).unwrap();
         let h2 = mgr.get_header(&sc).unwrap();
-        let c2 = mgr.get_column(&sc, &h2, INDEXED_COLUMN).unwrap();
+        let c2 = mgr.get_column(&sc, &h2, FIXTURE_COLUMN).unwrap();
         assert!(Arc::ptr_eq(&h1, &h2), "header must be the same cached Arc");
         assert!(Arc::ptr_eq(&c1, &c2), "column must be the same cached Arc");
 
@@ -425,7 +535,7 @@ mod tests {
         let probe = SidecarManager::with_budget_bytes(usize::MAX);
         let h0 = probe.get_header(&sidecars[0]).unwrap();
         let one = probe
-            .get_column(&sidecars[0], &h0, INDEXED_COLUMN)
+            .get_column(&sidecars[0], &h0, FIXTURE_COLUMN)
             .unwrap()
             .heap_bytes();
 
@@ -433,7 +543,7 @@ mod tests {
         let mut headers = Vec::new();
         for sc in &sidecars {
             let h = mgr.get_header(sc).unwrap();
-            mgr.get_column(sc, &h, INDEXED_COLUMN).unwrap();
+            mgr.get_column(sc, &h, FIXTURE_COLUMN).unwrap();
             headers.push(h);
         }
         // The budget cannot hold all three column payloads at once.
@@ -479,7 +589,7 @@ mod tests {
         let mgr = SidecarManager::with_budget_bytes(256 * 1024 * 1024);
         let header = mgr.get_header(&sc).expect("header from exact re-read");
         assert_eq!(header.key_min.as_deref(), Some(big_key.as_bytes()));
-        assert!(mgr.get_column(&sc, &header, INDEXED_COLUMN).is_some());
+        assert!(mgr.get_column(&sc, &header, FIXTURE_COLUMN).is_some());
         assert!(mgr.entry_count() >= 1);
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -17,14 +17,16 @@ dependencies = [
     "draccus>=0.11.6",
     "fasttext-wheel>=0.9.2",
     "marin-fray",
+    "marin-finestore",
     "marin-iris",
-    "marin-rigging",
+    "marin-rigging[prometheus]",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
+    "huggingface-hub",
     "marin-haliax",
-    "jax>=0.9.2,<0.11",
+    "jax>=0.9.2,<0.12",
     "jaxopt>=0.8.3",
     "marin-levanter[serve]",
     "transformers>=5.5.3,<6.0",
@@ -113,13 +115,13 @@ conflicts = [
 [project.optional-dependencies]
 
 gpu = [
-  "jax[cuda13]==0.10.1",
+  "jax[cuda13]==0.11.0",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
   "nvidia-nccl-cu13>=2.28.3; sys_platform == 'linux'",
   # FA4 CuTe/THD attention backends.
-  "nvidia-cutlass-dsl[cu13]>=4.5.2,<4.6; sys_platform == 'linux'",
+  "nvidia-cutlass-dsl[cu13]==4.6.0; sys_platform == 'linux'",
   "flash-attn-4[cu13]>=4.0.0b16,<4.1; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.
@@ -162,9 +164,8 @@ rl = [
     "verifiers==0.1.5",
 ]
 
-# No lm-eval / evalchemy extra: the pinned lm-eval-harness fork breaks on transformers>=5. Downstream
-# evals run the evalchemy fork inside its own `:evalchemy-tpu` container against a served OpenAI URL,
-# so no lm-eval lives in the marin repo venv. See experiments/evals/evals.py.
+# Evalchemy runs from a commit-pinned uvx environment against a served OpenAI URL, so lm-eval does
+# not share Marin's project environment. See marin.evaluation.evalchemy.runtime.
 
 vizier = [
     "google-vizier[jax]",
@@ -182,10 +183,6 @@ vllm = [
     "torchvision==0.26.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchvision==0.26.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
     "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
-]
-
-harbor = [
-    "harbor>=0.1.42",
 ]
 
 dedup = [

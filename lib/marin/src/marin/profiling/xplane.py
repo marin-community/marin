@@ -297,7 +297,7 @@ def summarize_xplane_tables(
         trace_event_count=trace_event_count,
     )
 
-    summary = ProfileSummary.create(
+    summary = ProfileSummary(
         source_format="xplane_pb_xprof_tables",
         source_path=str(xplane_path),
         run_metadata=run_metadata or RunMetadata(),
@@ -393,7 +393,7 @@ def _merge_timeline_and_xprof_summaries(
         limit=max(hot_op_limit, 50),
     )
 
-    summary = ProfileSummary.create(
+    summary = ProfileSummary(
         source_format="xplane_pb",
         source_path=timeline_summary.source_path,
         run_metadata=timeline_summary.run_metadata,

@@ -16,6 +16,8 @@ import httpx
 import marin.inference.iris as iris_module
 import pytest
 from fray.types import JobStatus, ResourceConfig, create_environment
+from iris.cluster.types import EndpointAccess
+from iris.rpc import job_pb2
 from marin.execution.lazy import lower
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
@@ -23,10 +25,16 @@ from marin.inference.config import (
     InferenceProxyConfig,
     InferenceWorkerConfig,
     IrisConfig,
+    RemoteInferenceConfig,
     ServedModelConfig,
     VllmEngineConfig,
 )
-from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError, remote_inference
+from marin.inference.iris import (
+    InferenceBackendState,
+    RemoteInferenceSession,
+    RemoteInferenceStartupError,
+    remote_inference,
+)
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
     InferenceRequest,
@@ -40,6 +48,7 @@ from marin.inference.types import (
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
 
+from experiments.evals.federated_inference_proxy_demo import _redacted_url
 from experiments.evals.served_qwen3 import QWEN3_GPU_EVAL_RESULTS
 from tests.evals.openai_stub import (
     DeterministicOpenAIStub,
@@ -48,6 +57,23 @@ from tests.evals.openai_stub import (
 )
 
 BROKER_LEASE_TIMEOUT_SECONDS = 300.0
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        (
+            "https://iris.example/proxy/t/secret-token/serve.inference/v1",
+            "https://iris.example/proxy/t/<redacted>/serve.inference/v1",
+        ),
+        (
+            "https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference/v1",
+            "https://iris.example/proxy/t/cluster=cw-us-west-04a/<redacted>/serve.inference/v1",
+        ),
+    ],
+)
+def test_capability_url_redaction(url: str, expected: str) -> None:
+    assert _redacted_url(url) == expected
 
 
 def _json_bytes(payload: object) -> bytes:
@@ -79,24 +105,72 @@ def test_remote_topology_selection() -> None:
         iris_module._broker_config(0, None)
 
 
-def test_remote_session_resolves_current_direct_endpoint(monkeypatch) -> None:
-    endpoint = SimpleNamespace(address="http://10.0.0.2:9000")
-    cluster_client = SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: [endpoint])
+def test_remote_inference_uses_controller_minted_federated_capability_url(monkeypatch) -> None:
+    class _Job:
+        job_id = "serve-job"
+        iris_job = None
+        terminated = False
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    minted: list[tuple[str, object]] = []
+    submitted = []
+    job = _Job()
+    iris_client = SimpleNamespace(
+        mint_endpoint_token=lambda name, ttl: minted.append((name, ttl))
+        or SimpleNamespace(
+            token="secret-token",
+            capability_url="https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference",
+        ),
+    )
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
     monkeypatch.setattr(
         iris_module,
-        "iris_ctx",
-        lambda: SimpleNamespace(client=SimpleNamespace(_cluster_client=cluster_client)),
+        "current_client",
+        lambda: SimpleNamespace(submit=lambda request: submitted.append(request) or job),
     )
-    session = RemoteInferenceSession(
-        model=RunningModel(endpoint=OpenAIEndpoint(base_url="http://10.0.0.1:8000/v1", model="gpt2")),
-        jobs=(),
-        endpoint_name="/serve/gpt2",
-        streaming=True,
-        tensor_parallel_size=1,
-        backend_name="vllm",
+    monkeypatch.setattr(iris_module, "iris_ctx", lambda: SimpleNamespace(client=iris_client))
+    monkeypatch.setattr(
+        iris_module,
+        "_wait_for_endpoint",
+        lambda *_args, **_kwargs: (
+            "http://10.0.0.1:8000",
+            {"tensor_parallel_size": "1", "backend": "vllm"},
+        ),
+    )
+    iris = IrisConfig(
+        worker_resources=ResourceConfig.with_tpu("v6e-4"),
+        worker_environment=create_environment(extras=["tpu", "vllm"]),
     )
 
-    assert session.resolve_model().endpoint.base_url == "http://10.0.0.2:9000/v1"
+    with remote_inference(
+        RemoteInferenceConfig(
+            model=ServedModelConfig(
+                weights="physical-model",
+                api_model="public-model",
+                tokenizer="Qwen/Qwen3-0.6B",
+            ),
+            engine=VllmEngineConfig(),
+            iris=iris,
+            capability_origin="https://iris.example",
+        ),
+    ) as session:
+        model = session.model
+
+    (request,) = submitted
+    (service,) = request.entrypoint.callable_entrypoint.args
+    assert service.controller_proxy_timeout_seconds > 1800
+    assert service.endpoint_name == minted[0][0]
+    assert "physical-model" not in service.endpoint_name
+    assert model.endpoint.base_url == (
+        "https://iris.example/proxy/t/cluster=cw-us-west-04a/secret-token/serve.inference/v1"
+    )
+    assert "10.0.0.1" not in model.endpoint.base_url
+    assert model.endpoint.model == "public-model"
+    assert model.tokenizer == "Qwen/Qwen3-0.6B"
+    assert "secret-token" not in repr(model.endpoint)
+    assert job.terminated
 
 
 def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
@@ -111,14 +185,17 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
             self.terminated = True
 
     job = _FailedJob()
+    requests = []
     monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
-    monkeypatch.setattr(iris_module, "current_client", lambda: SimpleNamespace(submit=lambda _request: job))
+    monkeypatch.setattr(
+        iris_module,
+        "current_client",
+        lambda: SimpleNamespace(submit=lambda request: requests.append(request) or job),
+    )
     monkeypatch.setattr(
         iris_module,
         "iris_ctx",
-        lambda: SimpleNamespace(
-            client=SimpleNamespace(_cluster_client=SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: []))
-        ),
+        lambda: SimpleNamespace(client=SimpleNamespace(list_endpoints=lambda *_args, **_kwargs: [])),
     )
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4"),
@@ -126,11 +203,163 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     )
 
     with pytest.raises(RemoteInferenceStartupError) as exc_info:
-        with remote_inference(ServedModelConfig(model="gpt2"), VllmEngineConfig(), iris):
+        with remote_inference(
+            RemoteInferenceConfig(
+                model=ServedModelConfig(weights="gpt2"),
+                engine=VllmEngineConfig(),
+                iris=iris,
+            )
+        ):
             pass
 
     assert exc_info.value.jobs == (job,)
     assert job.terminated
+    assert len(requests) == 1
+
+
+@dataclass
+class _SessionJob:
+    job_status: JobStatus
+    job_id: str = "/tester/inference"
+
+    def status(self) -> JobStatus:
+        return self.job_status
+
+
+def _remote_session(job_status: JobStatus = JobStatus.RUNNING) -> RemoteInferenceSession:
+    return RemoteInferenceSession(
+        model=RunningModel(endpoint=OpenAIEndpoint(base_url="https://iris.example/capability/v1", model="model")),
+        jobs=(_SessionJob(job_status),),
+        endpoint_name="/serve/inference",
+        endpoint_health_timeout_seconds=1800.0,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+
+
+@pytest.mark.parametrize(
+    ("task_state", "endpoint_count", "expected"),
+    [
+        (job_pb2.TASK_STATE_PENDING, 1, InferenceBackendState.RECOVERING),
+        (job_pb2.TASK_STATE_RUNNING, 0, InferenceBackendState.RECOVERING),
+        (job_pb2.TASK_STATE_RUNNING, 1, InferenceBackendState.READY),
+    ],
+)
+def test_direct_inference_session_reports_backend_state(
+    task_state: int,
+    endpoint_count: int,
+    expected: InferenceBackendState,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                status=lambda _job_id: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                list_tasks=lambda job_id: [SimpleNamespace(task_id=f"{job_id}/0", state=task_state)],
+                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()] * endpoint_count,
+            )
+        ),
+    )
+    session = _remote_session()
+
+    assert session.backend_state() is expected
+
+
+def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:
+    session = _remote_session(JobStatus.FAILED)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                status=lambda *_args, **_kwargs: SimpleNamespace(state=job_pb2.JOB_STATE_FAILED, tasks=[])
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError):
+        session.wait_until_ready()
+
+
+def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> None:
+    task_pending = True
+    probe_statuses: list[int] = []
+
+    def list_tasks(_job_id):
+        nonlocal task_pending
+        state = job_pb2.TASK_STATE_PENDING if task_pending else job_pb2.TASK_STATE_RUNNING
+        task_pending = False
+        return [SimpleNamespace(state=state)]
+
+    def probe_endpoint(_url, timeout):
+        del timeout
+        status_code = 502 if not probe_statuses else 200
+        probe_statuses.append(status_code)
+        return SimpleNamespace(status_code=status_code)
+
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                list_tasks=list_tasks,
+                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
+            )
+        ),
+    )
+    monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(iris_module.requests, "get", probe_endpoint)
+
+    session = _remote_session()
+    session.wait_until_ready()
+
+    assert probe_statuses == [502, 200]
+
+
+def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monkeypatch) -> None:
+    class ExpiredDeadline:
+        def __init__(self) -> None:
+            self.checks = 0
+
+        def remaining_seconds(self) -> float:
+            return 5.0
+
+        def raise_if_expired(self, message: str) -> None:
+            self.checks += 1
+            if self.checks > 1:
+                raise TimeoutError(message)
+
+    probes: list[str] = []
+
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                status=lambda *_args: SimpleNamespace(state=job_pb2.JOB_STATE_RUNNING),
+                list_tasks=lambda _job_id: [SimpleNamespace(state=job_pb2.TASK_STATE_RUNNING)],
+                list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        iris_module.Deadline,
+        "from_seconds",
+        lambda _timeout: ExpiredDeadline(),
+    )
+    monkeypatch.setattr(
+        iris_module.requests,
+        "get",
+        lambda url, **_kwargs: probes.append(url) or SimpleNamespace(status_code=502),
+    )
+
+    with pytest.raises(TimeoutError, match=r"did not become healthy within 1800\.0s"):
+        _remote_session().wait_until_ready()
+    assert probes == ["https://iris.example/capability/v1/models"]
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:
@@ -275,6 +504,9 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
 def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) -> None:
     broker_actor = InferenceBroker(request_lease_timeout_seconds=240)
     broker_actor.register_worker("worker-0", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="vllm"))
+    proxy_models: list[str] = []
+    events = []
+    minted = []
 
     class _FakeJob:
         job_id = "worker-0"
@@ -306,11 +538,31 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
             return _FakeJob()
 
     @contextmanager
-    def _fake_start_proxy(**_kwargs):
-        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1/v1", model="gpt2"))
+    def _fake_start_proxy(**kwargs):
+        proxy_models.append(kwargs["model"])
+        yield RunningModel(endpoint=OpenAIEndpoint(base_url="http://127.0.0.1:1/v1", model=kwargs["model"]))
 
     client = _FakeClient()
+
+    @contextmanager
+    def registered(*args, **kwargs):
+        events.append(("register", args, kwargs))
+        try:
+            yield "endpoint-id"
+        finally:
+            events.append(("unregister", "endpoint-id"))
+
+    registry = SimpleNamespace(registered=registered)
+    iris_client = SimpleNamespace(
+        mint_endpoint_token=lambda name, ttl: minted.append(name)
+        or SimpleNamespace(token="broker-token", capability_url=""),
+    )
     monkeypatch.setattr(iris_module, "current_client", lambda: client)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(registry=registry, client=iris_client),
+    )
     monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace(advertise_host="127.0.0.1"))
     monkeypatch.setattr(iris_module, "serve_inference_proxy", _fake_start_proxy)
     monkeypatch.setattr(
@@ -326,13 +578,25 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     )
 
     with remote_inference(
-        ServedModelConfig(model="gpt2"),
-        VllmEngineConfig(),
-        iris,
-        instances=2,
-    ):
-        pass
+        RemoteInferenceConfig(
+            model=ServedModelConfig(weights="physical-model", api_model="public-model"),
+            engine=VllmEngineConfig(),
+            iris=iris,
+            instances=2,
+            capability_origin="https://iris.example",
+        )
+    ) as session:
+        assert session.model.endpoint.model == "public-model"
+        assert session.model.endpoint.base_url.startswith("https://iris.example/proxy/t/broker-token/")
 
+    assert proxy_models == ["public-model"]
+    _, register_args, register_kwargs = events[0]
+    endpoint_name, address, metadata = register_args
+    assert endpoint_name == minted[0]
+    assert address == "http://127.0.0.1:1"
+    assert metadata["model"] == "public-model"
+    assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
+    assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
     for worker_request in client.submissions:
         assert worker_request.environment.extras == ["tpu", "vllm"]

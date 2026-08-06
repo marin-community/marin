@@ -7,8 +7,10 @@ Tests verify dashboard functionality through the Connect RPC endpoints.
 The dashboard serves a web UI that fetches data via RPC calls.
 """
 
+import asyncio
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from iris.cluster.backends.k8s.tasks import (
     _KUEUE_POD_GROUP_NAME,
@@ -17,6 +19,7 @@ from iris.cluster.backends.k8s.tasks import (
     _LABEL_RUNTIME,
     _RUNTIME_LABEL_VALUE,
     K8sTaskProvider,
+    PodConfig,
 )
 from iris.cluster.backends.rpc.backend import RpcTaskBackend
 from iris.cluster.bundle import BundleStore
@@ -25,7 +28,7 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
 from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.dashboard import ControllerDashboard
+from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard, _CredentialAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
@@ -46,13 +49,15 @@ from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
+from rigging.auth import StaticTokenProvider
+from rigging.credentials import ClientCredentials
 from rigging.server_auth import RequestAuthPolicy
 from rigging.testing import MockVerifier
 from rigging.timing import Timestamp
 from sqlalchemy import func, insert, select
 from sqlalchemy import update as sa_update
 from starlette.testclient import TestClient
-from tests.cluster.controller._test_support import ControllerTestState
+from tests.cluster.controller._test_support import ControllerTestState, submit_job_in_tx
 from tests.cluster.controller.transition_driver import WorkerTaskUpdates, apply_task_observations
 
 from .conftest import (
@@ -69,6 +74,8 @@ from .conftest import (
 # Test Helpers
 # =============================================================================
 
+ENDPOINT_SERVICE = "EndpointService"
+
 
 def submit_job(
     state: ControllerTestState,
@@ -79,7 +86,7 @@ def submit_job(
     jid = JobName.from_string(job_id) if job_id.startswith("/") else JobName.root("test-user", job_id)
     request.name = jid.to_wire()
     with state._db.transaction() as cur:
-        ops.job.submit(cur, job_id=jid, request=request, ts=Timestamp.now())
+        submit_job_in_tx(cur, job_id=jid, request=request, ts=Timestamp.now())
     return jid
 
 
@@ -300,10 +307,14 @@ def service_with_autoscaler(state, scheduler, mock_autoscaler, tmp_path, log_cli
     )
 
 
-def rpc_post(client: TestClient, method: str, body: dict | None = None):
-    """Helper to call RPC endpoint and return JSON response."""
+def rpc_post(client: TestClient, method: str, body: dict | None = None, *, service: str = "ControllerService"):
+    """Helper to call an RPC method and return the JSON response.
+
+    Endpoint-registry methods (register/list/unregister) live on EndpointService;
+    pass ``service="EndpointService"`` for those.
+    """
     resp = client.post(
-        f"/iris.cluster.ControllerService/{method}",
+        f"/iris.cluster.{service}/{method}",
         json=body or {},
         headers={"Content-Type": "application/json"},
     )
@@ -429,7 +440,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
 
     assert len(endpoints) == 2
@@ -456,7 +467,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request):
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""})
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
     assert len(endpoints) == 1
     # The response must carry the full task_id (including task index) so the
@@ -495,37 +506,10 @@ def test_list_endpoints_filters_by_task_ids(client, state):
                 ),
             )
 
-    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]})
+    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
     assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
     assert endpoints[0]["name"] == "/svc/ep-0"
-
-
-def test_proxy_refuses_ambiguous_endpoint_name(client, state, job_request):
-    """A /proxy name that resolves to disagreeing rows — a local and a remote one —
-    is refused with 404 rather than forwarded to an arbitrarily-picked row. Guards
-    against falling back to EndpointProxy's single-row re-resolution when
-    resolve_proxy_target fails closed on the ambiguity.
-    """
-    job_id = submit_job(state, "amb", job_request)
-    task = job_id.task(0)
-    with state._db.transaction() as cur:
-        for endpoint_id, peer in (("local-row", None), ("remote-row", "cw")):
-            state._endpoints.add(
-                cur,
-                EndpointRow(
-                    endpoint_id=endpoint_id,
-                    name="/serve/amb",
-                    address="10.0.0.9:8000",
-                    task_id=task,
-                    metadata={},
-                    registered_at=Timestamp.now(),
-                    peer_id=peer,
-                ),
-            )
-
-    resp = client.get("/proxy/serve.amb/")
-    assert resp.status_code == 404
 
 
 def test_list_jobs_includes_retry_counts(client, state, job_request):
@@ -1278,30 +1262,30 @@ def test_get_worker_status_unknown_id_returns_error(client):
     assert resp.status_code != 200
 
 
-def test_health_endpoint_returns_ok(client):
-    """Health endpoint returns a trivial ok response without querying state."""
+def test_health_endpoint_probes_database(client):
     resp = client.get("/health")
 
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json() == {
+        "status": "ok",
+        "database": "ok",
+        "checkpoint_epoch_ms": None,
+    }
+
+
+def test_health_endpoint_returns_unhealthy_when_database_is_unreadable(client, state):
+    state._db.close()
+    state._db.db_path.unlink()
+
+    resp = client.get("/health")
+
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "unhealthy", "database": "error"}
 
 
 # =============================================================================
 # Task Logs Proxy Tests
 # =============================================================================
-
-
-def test_fetch_logs_for_missing_task_returns_empty_entries(client):
-    """The endpoint proxy forwards FetchLogs to the registered log server."""
-    task_id = JobName.root("test-user", "nonexistent").task(0).to_wire()
-    resp = client.post(
-        "/proxy/system.log-server/finelog.logging.LogService/FetchLogs",
-        json={"source": f"{task_id}:", "match_scope": "MATCH_SCOPE_PREFIX"},
-        headers={"Content-Type": "application/json"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data.get("entries", []) == []
 
 
 @pytest.mark.parametrize(
@@ -1522,7 +1506,9 @@ def test_auth_config_kubernetes_capabilities(state, scheduler, tmp_path, log_cli
 def _make_k8s_dashboard_client(state, scheduler, tmp_path, log_client):
     """Build a TestClient wired to a real K8sTaskProvider backed by InMemoryK8sService."""
     k8s = InMemoryK8sService(namespace="iris")
-    provider = K8sTaskProvider(kubectl=k8s, namespace="iris", default_image="img:latest", cluster_scan_interval=0.0)
+    provider = K8sTaskProvider(
+        kubectl=k8s, pods=PodConfig(namespace="iris", default_image="img:latest"), cluster_scan_interval=0.0
+    )
     controller_mock = _make_controller_mock(state, scheduler)
     controller_mock.capabilities = frozenset({BackendCapability.CLUSTER_VIEW})
     controller_mock.provider = provider
@@ -1955,7 +1941,9 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
         frozenset({BackendCapability.WORKER_DAEMON, BackendCapability.IRIS_AUTOSCALER}),
         advertised={"device-variant": {"v6e-16", "v5e-4"}},
     )
-    gcp_backend.resource_capacity.return_value = {"v6e-16": DeviceCapacity(free=32, total=64)}
+    gcp_backend.resource_capacity.return_value = {
+        "v6e-16": DeviceCapacity(free=32, total=64, held_by_band={job_pb2.PRIORITY_BAND_BATCH: 32})
+    }
     k8s_backend = _backend_mock("eu-k8s", frozenset({BackendCapability.CLUSTER_VIEW}))  # supplies none (UNSET)
     controller_mock.backends = {"gcp": gcp_backend, "eu-k8s": k8s_backend}
     controller_mock.scale_group_to_backend = {"tpu-v5e": "gcp"}
@@ -1988,7 +1976,12 @@ def test_list_backends_returns_per_backend_summary(state, scheduler, tmp_path, l
     # UNSET (absent) for one that returns None.
     assert summaries["gcp"]["availability"]["amounts"] == {"v6e-16": "32"}  # int64 JSON-encodes as a string
     assert summaries["gcp"]["availability"]["totalAmounts"] == {"v6e-16": "64"}
-    assert summaries["gcp"]["availability"]["version"] == 1
+    assert summaries["gcp"]["availability"]["version"] == 2  # wire contract; not the constant
+    # Held capacity is reported per priority band so a parent can see what a
+    # higher-priority job would reclaim there.
+    assert summaries["gcp"]["availability"]["heldByBand"] == [
+        {"band": "PRIORITY_BAND_BATCH", "amounts": {"v6e-16": "32"}}
+    ]
     assert "availability" not in summaries["eu-k8s"]
     # Unroutable jobs surface as a structured count + sample, not parsed reason strings.
     assert resp["unroutableJobCount"] == 1
@@ -2132,3 +2125,88 @@ def test_get_kubernetes_cluster_status_ambiguous_raises(state, scheduler, tmp_pa
     assert data_eu["namespace"] == "eu"
     data_us = rpc_post(client, "GetKubernetesClusterStatus", {"backendId": "us-k8s"})
     assert data_us["namespace"] == "us"
+
+
+async def _headers_seen_upstream(auth, headers=None) -> httpx.Headers:
+    """Send one request through a client using ``auth`` and return what upstream saw."""
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers)
+        return httpx.Response(200, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
+        await client.post("https://iris.example/rpc", headers=headers or {})
+    return seen[0]
+
+
+def test_proxy_dashboard_forwards_endpoint_service_rpc():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"endpoints": []})
+
+    dashboard = ProxyControllerDashboard("https://iris.example")
+    upstream_client = httpx.AsyncClient(
+        base_url="https://iris.example",
+        transport=httpx.MockTransport(handler),
+    )
+    dashboard._client = upstream_client
+    try:
+        with TestClient(dashboard.app) as client:
+            response = client.post(
+                "/iris.cluster.EndpointService/ListEndpoints",
+                json={"prefix": "/jobs/"},
+            )
+    finally:
+        asyncio.run(upstream_client.aclose())
+
+    assert response.status_code == 200
+    assert response.json() == {"endpoints": []}
+    assert [request.url.path for request in requests] == ["/iris.cluster.EndpointService/ListEndpoints"]
+
+
+def _send_through(auth, headers=None) -> httpx.Headers:
+    return asyncio.run(_headers_seen_upstream(auth, headers))
+
+
+def _static_credentials() -> ClientCredentials:
+    return ClientCredentials(
+        token_provider=StaticTokenProvider("app-token"),
+        iap_provider=StaticTokenProvider("iap-token"),
+    )
+
+
+def test_credential_auth_both_providers_attaches_both_bearers():
+    headers = _send_through(_CredentialAuth(_static_credentials()))
+    assert headers["authorization"] == "Bearer app-token"
+    assert headers["proxy-authorization"] == "Bearer iap-token"
+
+
+def test_credential_auth_caller_supplied_bearer_is_overwritten():
+    headers = _send_through(
+        _CredentialAuth(_static_credentials()),
+        headers={"proxy-authorization": "Bearer forged"},
+    )
+    assert headers["proxy-authorization"] == "Bearer iap-token"
+
+
+def test_credential_auth_expired_token_mints_a_fresh_one_per_request():
+    class Rotating:
+        def __init__(self):
+            self.calls = 0
+
+        def get_token(self) -> str | None:
+            self.calls += 1
+            return f"t{self.calls}"
+
+    auth = _CredentialAuth(ClientCredentials(iap_provider=Rotating()))
+    assert _send_through(auth)["proxy-authorization"] == "Bearer t1"
+    assert _send_through(auth)["proxy-authorization"] == "Bearer t2"
+
+
+def test_credential_auth_no_providers_sends_no_bearers():
+    headers = _send_through(_CredentialAuth(ClientCredentials()))
+    assert "authorization" not in headers
+    assert "proxy-authorization" not in headers

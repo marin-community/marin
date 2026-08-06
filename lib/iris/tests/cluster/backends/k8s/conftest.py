@@ -33,11 +33,7 @@ def task_stats_table() -> FakeStatsTable:
 def provider(k8s, task_stats_table):
     p = K8sTaskProvider(
         kubectl=k8s,
-        namespace="iris",
-        default_image="myrepo/iris:latest",
-        cache_dir="/cache",
-        # Kueue is mandatory on the K8s backend, so every provider carries a LocalQueue.
-        local_queue="iris-lq",
+        pods=pod_config(),
         task_stats_table=task_stats_table,
         resource_poll_interval=0.05,
         cluster_scan_interval=0.0,
@@ -70,7 +66,7 @@ def make_run_req(
     cpu_mc: int = 1000,
     num_tasks: int = 0,
     coscheduling_group_by: str = "",
-    priority: int = job_pb2.PRIORITY_BAND_UNSPECIFIED,
+    priority: int = job_pb2.PRIORITY_BAND_INHERIT,
     attempt_uid: str = "",
 ) -> job_pb2.RunTaskRequest:
     req = job_pb2.RunTaskRequest()
@@ -91,14 +87,7 @@ def make_run_req(
 def make_kueue_provider(k8s, *, local_queue: str = "iris-lq", **kwargs) -> K8sTaskProvider:
     """K8sTaskProvider with Kueue gang admission enabled (a configured LocalQueue)."""
     kwargs.setdefault("cluster_scan_interval", 0.0)
-    return K8sTaskProvider(
-        kubectl=k8s,
-        namespace="iris",
-        default_image="myrepo/iris:latest",
-        cache_dir="/cache",
-        local_queue=local_queue,
-        **kwargs,
-    )
+    return K8sTaskProvider(kubectl=k8s, pods=pod_config(local_queue=local_queue), **kwargs)
 
 
 def make_batch(
@@ -122,6 +111,7 @@ KUEUE_UNADMITTED_MSG = (
     "couldn't assign flavors to pod set main: topology \"infiniband\" doesn't allow to "
     'fit any of 1 pod(s). Total nodes: 32; excluded: resource "cpu": 32'
 )
+SINGLETON_POD_UID = "pod-uid"
 
 
 def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
@@ -143,6 +133,17 @@ def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
     }
 
 
+def singleton_gated_pod(name: str = "iris-job-0-0", uid: str = SINGLETON_POD_UID) -> dict:
+    """A Kueue-managed singleton Pod, which has no pod-group label."""
+    pod = gated_pod(name=name)
+    pod["metadata"] = {
+        "name": name,
+        "uid": uid,
+        "labels": {"kueue.x-k8s.io/queue-name": "cw-use02a-lq"},
+    }
+    return pod
+
+
 def unadmitted_workload(name: str = "wl-abc", msg: str = KUEUE_UNADMITTED_MSG) -> dict:
     """A Workload Kueue has evaluated and declined: QuotaReserved=False with a reason."""
     return {
@@ -150,6 +151,22 @@ def unadmitted_workload(name: str = "wl-abc", msg: str = KUEUE_UNADMITTED_MSG) -
         "spec": {"queueName": "cw-use02a-lq"},
         "status": {"conditions": [{"type": "QuotaReserved", "status": "False", "reason": "Pending", "message": msg}]},
     }
+
+
+def singleton_unadmitted_workload(
+    pod_name: str = "iris-job-0-0",
+    pod_uid: str = SINGLETON_POD_UID,
+    msg: str = KUEUE_UNADMITTED_MSG,
+) -> dict:
+    """The auto-generated Workload owned by one Kueue-managed Pod."""
+    workload = unadmitted_workload(name=f"pod-{pod_name}-abcde", msg=msg)
+    workload["metadata"].update(
+        {
+            "labels": {"kueue.x-k8s.io/job-uid": pod_uid},
+            "ownerReferences": [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod_uid}],
+        }
+    )
+    return workload
 
 
 def unevaluated_workload(name: str = "wl-abc") -> dict:

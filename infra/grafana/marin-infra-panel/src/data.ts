@@ -1,5 +1,13 @@
 import { DataFrame, Field } from '@grafana/data';
-import { CommitRow, NightlyCell, WandbPoint } from './types';
+import {
+  CommitRow,
+  NightlyCell,
+  ProvisioningRegion,
+  ProvisioningRow,
+  SeriesPoint,
+  WandbPoint,
+  WorkerRegion,
+} from './types';
 
 type Row = Record<string, unknown>;
 
@@ -89,7 +97,6 @@ export function wandbPoints(frame: DataFrame): WandbPoint[] {
   return rows(frame).map((row) => ({
     chart: requiredString(row, 'chart'),
     run: requiredString(row, 'run'),
-    runState: requiredString(row, 'run_state'),
     tokens: requiredNumber(row, 'tokens'),
     value: requiredNumber(row, 'value'),
     reportTitle: requiredString(row, 'report_title'),
@@ -97,9 +104,89 @@ export function wandbPoints(frame: DataFrame): WandbPoint[] {
   }));
 }
 
-export function frameWithField(frames: DataFrame[], fieldName: string): DataFrame {
+export function workerRegions(frame: DataFrame): WorkerRegion[] {
+  return rows(frame).map((row) => ({
+    region: requiredString(row, 'region'),
+    healthy: requiredNumber(row, 'healthy'),
+    cpuMillicores: requiredNumber(row, 'cpu_millicores'),
+    memoryBytes: requiredNumber(row, 'memory_bytes'),
+    tpuChips: requiredNumber(row, 'tpu_chips'),
+  }));
+}
+
+export function provisioningStatus(frame: DataFrame): ProvisioningRow[] {
+  return rows(frame).map((row) => ({
+    scope: requiredString(row, 'scope'),
+    collectedAt: requiredNumber(row, 'collected_at'),
+    zone: optionalString(row, 'zone') ?? '',
+    ready: requiredNumber(row, 'ready'),
+    stockout: requiredNumber(row, 'stockout'),
+    error: requiredNumber(row, 'error'),
+    preempted: requiredNumber(row, 'preempted'),
+    outcomes: requiredNumber(row, 'outcomes'),
+    successRatio: optionalNumber(row, 'success_ratio'),
+    poolsPlacing: requiredNumber(row, 'pools_placing'),
+    poolsNoReadyOutcome: requiredNumber(row, 'pools_no_ready_outcome'),
+    latencyP50Seconds: optionalNumber(row, 'latency_p50_seconds'),
+    latencyP95Seconds: optionalNumber(row, 'latency_p95_seconds'),
+    windowHours: optionalNumber(row, 'window_hours'),
+  }));
+}
+
+type ProvisioningRegionSource = Pick<ProvisioningRow, 'scope' | 'zone' | 'ready' | 'outcomes'>;
+
+function regionFromProvisioningZone(zone: string): string {
+  return /^[a-z]+-[a-z]+\d+-[a-z]$/.test(zone) ? zone.replace(/-[a-z]$/, '') : zone;
+}
+
+export function provisioningRegions(provisioning: ProvisioningRegionSource[]): ProvisioningRegion[] {
+  const totals = new Map<string, { ready: number; outcomes: number }>();
+  for (const pool of provisioning) {
+    if (pool.scope !== 'pool' || !pool.zone || pool.outcomes <= 0) {
+      continue;
+    }
+    const region = regionFromProvisioningZone(pool.zone);
+    const counts = totals.get(region);
+    if (counts) {
+      counts.ready += pool.ready;
+      counts.outcomes += pool.outcomes;
+    } else {
+      totals.set(region, { ready: pool.ready, outcomes: pool.outcomes });
+    }
+  }
+  return [...totals.entries()].map(([region, counts]) => ({
+    region,
+    ready: counts.ready,
+    outcomes: counts.outcomes,
+    successRatio: counts.ready / counts.outcomes,
+  }));
+}
+
+export function seriesPoints(frame: DataFrame, seriesField: string, valueField: string): SeriesPoint[] {
+  return rows(frame).map((row) => ({
+    time: requiredNumber(row, 'time'),
+    series: requiredString(row, seriesField),
+    value: requiredNumber(row, valueField),
+  }));
+}
+
+export function frameByRefId(frames: DataFrame[], refId: string): DataFrame | undefined {
+  const matching = frames.filter((frame) => frame.refId === refId);
+  if (matching.length > 1) {
+    throw new Error(`Expected one data frame for ${refId}; received ${matching.length}`);
+  }
+  return matching[0];
+}
+
+/**
+ * The single query frame carrying `fieldName`, or `undefined` when the query
+ * returned nothing yet (empty, still loading, or upstream error). Callers render
+ * an empty state for `undefined`; only a genuinely ambiguous result — more than
+ * one frame with the field — is a misconfiguration worth failing loudly on.
+ */
+export function frameWithField(frames: DataFrame[], fieldName: string): DataFrame | undefined {
   const matching = frames.filter((frame) => frame.fields.some((field: Field) => field.name === fieldName));
-  if (matching.length !== 1) {
+  if (matching.length > 1) {
     throw new Error(`Expected one data frame containing ${fieldName}; received ${matching.length}`);
   }
   return matching[0];

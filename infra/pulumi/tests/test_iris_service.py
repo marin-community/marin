@@ -54,7 +54,13 @@ def _spec(**overrides) -> ServiceSpec:
 
 class TestSpec:
     def test_json_round_trip(self):
-        spec = _spec(env={"A": "1"}, secret_env={"B": "env:B_SRC"}, deploy_generation=3)
+        spec = _spec(
+            env={"A": "1"},
+            secret_env={"B": "env:B_SRC"},
+            pip_packages=("xprof==2.22.3",),
+            sync_packages=("marin-levanter",),
+            deploy_generation=3,
+        )
         assert ServiceSpec.from_json(spec.to_json()) == spec
 
     def test_to_json_ignores_dict_insertion_order(self):
@@ -122,7 +128,11 @@ class _CapturingClient:
 class TestSubmit:
     def test_always_on_budgets_and_policy(self):
         client = _CapturingClient()
-        submit_service(client, _spec(), {"K": "v"})  # pyrefly: ignore
+        submit_service(
+            client,
+            _spec(pip_packages=("xprof==2.22.3",), sync_packages=("marin-iris", "marin-rigging")),
+            {"K": "v"},
+        )  # pyrefly: ignore
         kwargs = client.kwargs
         assert kwargs["max_retries_preemption"] == ALWAYS_ON_RETRIES
         assert kwargs["max_retries_failure"] == ALWAYS_ON_RETRIES
@@ -134,6 +144,8 @@ class TestSubmit:
         assert kwargs["user"] == "ops"
         assert kwargs["ports"] == ["svc"]
         assert kwargs["environment"].env_vars == {"K": "v"}
+        assert kwargs["environment"].pip_packages == ("xprof==2.22.3",)
+        assert kwargs["environment"].sync_packages == ("marin-iris", "marin-rigging")
 
     def test_region_pin(self):
         client = _CapturingClient()

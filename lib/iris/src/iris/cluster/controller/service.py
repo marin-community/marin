@@ -21,6 +21,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
+from rigging.connect import capability_path, federated_capability_path
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity, require_identity
 from rigging.timing import Duration, ExponentialBackoff, Timer, Timestamp
 from sqlalchemy import bindparam, case, func, select, text, tuple_
@@ -47,6 +48,7 @@ from iris.cluster.controller.budget import (
     compute_effective_band,
     compute_user_spend,
 )
+from iris.cluster.controller.checkpoint import CHECKPOINT_EPOCH_META_KEY
 from iris.cluster.controller.codec import (
     decode_attribute_value,
     reconstruct_launch_job_request,
@@ -62,9 +64,12 @@ from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.reconcile.task import TerminalKind
 from iris.cluster.controller.scheduling.scheduler import SchedulingContext
 from iris.cluster.controller.schema import (
+    federation_changelog_table,
+    federation_sync_state_table,
     job_config_table,
     jobs_table,
     local_tasks,
+    meta_table,
     task_attempts_table,
     tasks_table,
     user_budgets_table,
@@ -73,6 +78,7 @@ from iris.cluster.controller.schema import (
 )
 from iris.cluster.controller.task_state import ACTIVE_TASK_STATES, task_row_can_be_scheduled
 from iris.cluster.controller.worker_health import WorkerLiveness
+from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
@@ -85,7 +91,13 @@ from iris.cluster.runtime.profile import (
     build_profile_row,
     profile_local_process,
 )
-from iris.cluster.stats.tables import PROFILE_NAMESPACE, IrisProfile
+from iris.cluster.stats.tables import (
+    PROFILE_NAMESPACE,
+    TASK_EVENT_NAMESPACE,
+    TASK_EVENT_STORAGE_POLICY,
+    IrisProfile,
+    TaskEventRow,
+)
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -162,17 +174,23 @@ _MERGED_AUTOSCALER_ACTIONS = 100
 # Max unroutable job sample entries returned by ListBackends.
 _UNROUTABLE_SAMPLE_SIZE = 10
 
-# Semantics version of BackendSummary.availability (free-capacity metric). A peer
-# reading an unrecognized version treats the amounts as unknown. Bump when the
-# meaning of the amounts (units, tokens, aggregation) changes.
-AVAILABILITY_METRIC_VERSION = 1
-
 # Shown when a local_admin (CIDR/loopback) caller tries to federate a job — a federated
 # job must carry an accountable authenticated user.
 _LOCAL_ADMIN_FEDERATION_DENIED = (
     "A local_admin (CIDR/loopback) identity cannot submit a federated job. "
     "Federating to a remote cluster requires an authenticated user — log in via "
     "IAP or present a user token so the submission carries your identity."
+)
+
+# What LaunchJob accepts in priority_band: the three real bands, plus INHERIT for a
+# client that wants the parent's band (or the INTERACTIVE default at a root).
+_SUBMITTABLE_PRIORITY_BANDS = frozenset(
+    {
+        job_pb2.PRIORITY_BAND_INHERIT,
+        job_pb2.PRIORITY_BAND_PRODUCTION,
+        job_pb2.PRIORITY_BAND_INTERACTIVE,
+        job_pb2.PRIORITY_BAND_BATCH,
+    }
 )
 
 
@@ -384,6 +402,10 @@ def task_to_proto(task: TaskWithAttempts, worker_address: str = "") -> job_pb2.T
             error=attempt.error or "",
             is_worker_failure=attempt_is_worker_failure(attempt.state),
             attempt_uid=attempt.attempt_uid,
+            pod_name=attempt.pod_name or "",
+            pod_uid=attempt.pod_uid or "",
+            node_name=attempt.node_name or "",
+            terminal_reason=attempt.terminal_reason or "",
         )
         if attempt.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(attempt.started_at_ms))
@@ -988,6 +1010,10 @@ def _attempts_for_worker(
             error=row.error or "",
             is_worker_failure=attempt_is_worker_failure(row.state),
             attempt_uid=row.attempt_uid,
+            pod_name=row.pod_name or "",
+            pod_uid=row.pod_uid or "",
+            node_name=row.node_name or "",
+            terminal_reason=row.terminal_reason or "",
         )
         if row.started_at_ms is not None:
             proto_attempt.started_at.CopyFrom(timestamp_to_proto(row.started_at_ms))
@@ -1015,6 +1041,28 @@ class PendingKick:
     attempt_id: int | None
     kind: TerminalKind
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityUrlConfig:
+    """Origins for fully-qualifying a minted endpoint's capability URL.
+
+    With ``parent_origin`` and ``cluster_name`` set (a child fronted by a public
+    parent), a minted URL is the cluster-tagged parent form the parent relays; with
+    only ``local_origin`` set, the plain local form; with neither, the response
+    carries no URL and the caller prints just the path.
+    """
+
+    cluster_name: str = ""
+    local_origin: str = ""
+    parent_origin: str = ""
+
+    def build(self, name: str, token: str) -> str:
+        if self.parent_origin and self.cluster_name:
+            return f"{self.parent_origin.rstrip('/')}{federated_capability_path(self.cluster_name, name, token)}"
+        if self.local_origin:
+            return f"{self.local_origin.rstrip('/')}{capability_path(name, token)}"
+        return ""
 
 
 class ControllerProtocol(Protocol):
@@ -1112,6 +1160,7 @@ class ControllerServiceImpl:
         endpoint_service: EndpointServiceImpl,
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
+        capability_url_config: CapabilityUrlConfig | None = None,
     ):
         # Every cursor this DB mints carries the per-controller cache registry as
         # ``tx.caches``, so cache-touching reads/writes reach the derived-count memo
@@ -1126,13 +1175,32 @@ class ControllerServiceImpl:
         self._timer = Timer()
         self._auth = auth or ControllerAuth()
         self._user_budget_defaults = user_budget_defaults or UserBudgetDefaults()
+        self._capability_url_config = capability_url_config or CapabilityUrlConfig()
         self._profile_table = self._log_client.get_table(PROFILE_NAMESPACE, IrisProfile)
+        self._db.attach_task_event_table(
+            self._log_client.get_table(
+                TASK_EVENT_NAMESPACE,
+                TaskEventRow,
+                storage_policy=TASK_EVENT_STORAGE_POLICY,
+            )
+        )
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get(blob_id)
+
+    def probe_database(self) -> int | None:
+        """Return checkpoint ancestry after verifying controller state is readable."""
+        with self._db.read_snapshot() as tx:
+            checkpoint_epoch_ms = tx.execute(
+                select(meta_table.c.value).where(meta_table.c.key == CHECKPOINT_EPOCH_META_KEY)
+            ).scalar()
+            tx.execute(select(task_attempts_table.c.attempt_uid).limit(1)).first()
+            tx.execute(select(federation_changelog_table.c.seq).limit(1)).first()
+            tx.execute(select(federation_sync_state_table.c.peer_id).limit(1)).first()
+        return int(checkpoint_epoch_ms) if checkpoint_epoch_ms is not None else None
 
     def _get_autoscaler_pending_hints(self) -> dict[str, PendingHint]:
         """Build autoscaler-based pending hints keyed by job id, merged across
@@ -1424,31 +1492,55 @@ class ControllerServiceImpl:
         #   configured tiers and UserBudgetDefaults still bite — an unlisted
         #   submitter hits the INTERACTIVE default cap and can't punch up to
         #   PRODUCTION just by skipping auth.
-        # UNSPECIFIED (0) defaults to INTERACTIVE. A received handoff's band was
-        # authorized by the parent against the original submitter and their budget
-        # tier; the receiving cluster does not manage that user, so it trusts the
-        # parent rather than re-gating on its own tiers (the submitter allowlist
-        # bounds who may federate here).
-        band = request.priority_band or job_pb2.PRIORITY_BAND_INTERACTIVE
-        if is_received_handoff:
-            pass
-        elif band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
-            authorize(AuthzAction.MANAGE_BUDGETS)
-        else:
+        # A received handoff's band was authorized by the parent against the original
+        # submitter and their budget tier; the receiving cluster does not manage that
+        # user, so it trusts the parent rather than re-gating on its own tiers (the
+        # submitter allowlist bounds who may federate here).
+        #
+        # This is the one place INHERIT becomes a real band: resolve it here, gate that
+        # result, and store it. Everything behind this point — the scheduler, spend, the
+        # k8s mapping, a federated handoff — only ever sees PRODUCTION, INTERACTIVE, or
+        # BATCH, so none of them re-derive a band of their own.
+        #
+        # Gating the resolved band rather than the request matters because the client
+        # chooses whether to send the field; gating the request would let it pick whether
+        # the cap applies at all. Inheriting a band at or below the cap still passes, so a
+        # capped user's children launch normally.
+        # proto3 enums are open, so a newer or buggy client can put an integer here that
+        # names no band. Reject it at the boundary rather than storing it as a "real" one.
+        if request.priority_band not in _SUBMITTABLE_PRIORITY_BANDS:
+            raise ConnectError(
+                Code.INVALID_ARGUMENT,
+                f"Unknown priority_band {int(request.priority_band)}; "
+                f"expected one of {sorted(_SUBMITTABLE_PRIORITY_BANDS)}",
+            )
+        inherited_band: int | None = None
+        if request.priority_band == job_pb2.PRIORITY_BAND_INHERIT and job_id.parent is not None:
             with self._db.read_snapshot() as _snap:
-                user_budget = reads.get_user_budget(_snap, job_id.user)
-            max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
-            if band < max_band:
-                raise ConnectError(
-                    Code.PERMISSION_DENIED,
-                    f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
-                    f"(max band: {priority_band_name(max_band)}). "
-                    f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
-                    f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
-                    f"if you believe your username ({job_id.user}) should have a higher band — "
-                    f"either to be added to the researcher list or to confirm your username is "
-                    f"registered correctly.",
-                )
+                inherited_band = reads.get_priority_bands(_snap, [job_id.parent])[job_id.parent]
+        band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
+        # Normalize the request itself, so every downstream consumer of it — the local
+        # insert, a queued handoff's stored config, the request the peer finally runs —
+        # reads the same real band without re-deriving one.
+        request.priority_band = band
+        if not is_received_handoff:
+            if band == job_pb2.PRIORITY_BAND_PRODUCTION and self._auth.provider:
+                authorize(AuthzAction.MANAGE_BUDGETS)
+            else:
+                with self._db.read_snapshot() as _snap:
+                    user_budget = reads.get_user_budget(_snap, job_id.user)
+                max_band = user_budget.max_band if user_budget is not None else self._user_budget_defaults.max_band
+                if band < max_band:
+                    raise ConnectError(
+                        Code.PERMISSION_DENIED,
+                        f"User {job_id.user} cannot submit {priority_band_name(band)} jobs "
+                        f"(max band: {priority_band_name(max_band)}). "
+                        f"Resubmit with `--priority {priority_band_name(max_band).lower()}` "
+                        f"(e.g. `--priority batch`) to launch opportunistically, or ping @Helw150 "
+                        f"if you believe your username ({job_id.user}) should have a higher band — "
+                        f"either to be added to the researcher list or to confirm your username is "
+                        f"registered correctly.",
+                    )
 
         # Elevated profiles (DOCKER_ACCESS, PRIVILEGED) are host-root-equivalent
         # and require the admin role. The check only runs when an auth provider is
@@ -1795,6 +1887,7 @@ class ControllerServiceImpl:
                 job_id=job_id,
                 request=request,
                 ts=Timestamp.now(),
+                priority_band=band,
                 submitting_user=submitting_user,
             )
         self._controller.wake()
@@ -2399,41 +2492,6 @@ class ControllerServiceImpl:
             has_more=has_more,
         )
 
-    # --- Endpoint Management (compatibility surface) ---
-    #
-    # These RPCs forward to the leased EndpointService backend so clients that
-    # call the old surface keep working; clients that want to renew call
-    # EndpointService directly to learn their lease.
-
-    def register_endpoint(
-        self,
-        request: controller_pb2.Controller.RegisterEndpointRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.RegisterEndpointResponse:
-        """Register a service endpoint (forwards to EndpointService).
-
-        The lease is dropped from the response so this surface stays
-        wire-identical to its lease-less callers, which do not renew.
-        """
-        response = self._endpoint_service.register_endpoint(request, ctx)
-        return controller_pb2.Controller.RegisterEndpointResponse(endpoint_id=response.endpoint_id)
-
-    def unregister_endpoint(
-        self,
-        request: controller_pb2.Controller.UnregisterEndpointRequest,
-        ctx: Any,
-    ) -> job_pb2.Empty:
-        """Unregister a service endpoint (forwards to EndpointService). Idempotent."""
-        return self._endpoint_service.unregister_endpoint(request, ctx)
-
-    def list_endpoints(
-        self,
-        request: controller_pb2.Controller.ListEndpointsRequest,
-        ctx: Any,
-    ) -> controller_pb2.Controller.ListEndpointsResponse:
-        """List endpoints by name prefix (forwards to EndpointService)."""
-        return self._endpoint_service.list_endpoints(request, ctx)
-
     @property
     def provider(self) -> TaskBackend:
         """The live execution backend (read-only handle for dashboard descriptors)."""
@@ -2924,6 +2982,7 @@ class ControllerServiceImpl:
         return controller_pb2.Controller.MintEndpointTokenResponse(
             token=token,
             expires_at=timestamp_to_proto(expires_at),
+            capability_url=self._capability_url_config.build(row.name, token),
         )
 
     def get_current_user(
@@ -3318,9 +3377,14 @@ class ControllerServiceImpl:
             if capacity is not None:
                 summary.availability.version = AVAILABILITY_METRIC_VERSION
                 summary.availability.observation_epoch_ms = Timestamp.now().epoch_ms()
+                held_by_band: dict[int, dict[str, int]] = {}
                 for token, device_capacity in capacity.items():
                     summary.availability.amounts[token] = device_capacity.free
                     summary.availability.total_amounts[token] = device_capacity.total
+                    for band, amount in device_capacity.held_by_band.items():
+                        held_by_band.setdefault(band, {})[token] = amount
+                for band, amounts in sorted(held_by_band.items()):
+                    summary.availability.held_by_band.add(band=band, amounts=amounts)
 
             if variant == "kubernetes":
                 summary.detail.kubernetes.CopyFrom(backend_status.kubernetes)

@@ -39,10 +39,10 @@ import sys
 logger = logging.getLogger(__name__)
 
 # `iris job run --no-wait` prints the new job id to stdout. The id is a
-# slash-delimited path of segments, each `[a-z0-9-]+` (e.g.
-# `marin-prod/zephyr-perf-pr5348-...`); reject anything else so we fail
+# slash-delimited path of segments, optionally rooted (e.g.
+# `/loom/iris-run-job-20260802-145512`); reject anything else so we fail
 # loudly if iris ever starts emitting warnings or ANSI on stdout.
-_JOB_ID_RE = re.compile(r"^[a-z0-9][a-z0-9./_-]*$")
+_JOB_ID_RE = re.compile(r"^/?[a-z0-9][a-z0-9./_-]*$")
 
 
 @dataclasses.dataclass(frozen=True)

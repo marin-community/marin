@@ -14,7 +14,7 @@ import json
 
 import fsspec
 import pytest
-from marin.evaluation.eval_result import (
+from marin.evaluation.evalchemy.result import (
     EvalchemyResult,
     ReportEntry,
     compile_eval_report,

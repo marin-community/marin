@@ -1,9 +1,9 @@
 # Finelog Agent Notes
 
 Standalone log store + log service. Originally lifted out of `lib/iris`
-(`iris/cluster/log_store/` and `iris/log_server/`); see the design plan at
-`.agents/projects/2026-04-27_finelog_lift.md` (if present) or the original
-extraction PR for context.
+(`iris/cluster/log_store/` and `iris/log_server/`); see the
+[worked Finelog proposal](../../.agents/projects/design-template.md#worked-example)
+or the original extraction PR for context.
 
 Start with the shared instructions in `/AGENTS.md`. Finelog-specific notes:
 
@@ -52,13 +52,14 @@ one `jwt` key entry per sender. Each server therefore owns a keypair, distinct
 from the iris controller's signing key.
 
 The forwarder (`rust/src/server/forwarding.rs`) forwards **every table**, not just
-logs. Each poll it lists the live namespaces and, per namespace, reads the rows past
-a durable per-`(target, namespace)` cursor (`forward_state` in the catalog) and ships
-them through the generic `RegisterTable` + `WriteRows` (Arrow IPC) path — a namespace
-the hub lacks is created there first. Rows of a table with a `cluster` column are
-stamped with the origin and skipped if they already carry a foreign one, so a hub's
-own relayed rows never loop. The cursor is durable, so a restart resumes rather than
-replays.
+logs. Each round it lists the live namespaces and gives each one a batch-sized turn,
+then immediately starts another round while any namespace remains backlogged. Per
+namespace, it reads the rows past a durable per-`(target, namespace)` cursor
+(`forward_state` in the catalog) and ships them through the generic `RegisterTable` +
+`WriteRows` (Arrow IPC) path — a namespace the hub lacks is created there first. Rows
+of a table with a `cluster` column are stamped with the origin and skipped if they
+already carry a foreign one, so a hub's own relayed rows never loop. The cursor is
+durable, so a restart resumes rather than replays.
 
 Forwarding is **best-effort by construction**: the sending store holds the record,
 the hub a convenience copy. A namespace that falls more than `MAX_FORWARD_LAG_SEQS`
@@ -73,7 +74,7 @@ startup-script metadata.
 ## Packaging
 
 Finelog ships as two PyPI dists, released in lockstep by
-`finelog-release-wheels.yaml`:
+`marin-release-libs-wheels.yaml`:
 
 - `marin-finelog` — pure Python (this directory; hatchling).
 - `marin-finelog-server` — the native in-process server ext, importable as
@@ -105,3 +106,86 @@ Regenerate protos after editing `proto/logging.proto`:
 ```bash
 cd lib/finelog && buf generate
 ```
+
+### Dashboard
+
+`npm run dev` serves the SPA with HMR and proxies RPC to a finelog on port
+10001 (`FINELOG_DEV_SERVER` to point elsewhere), so frontend work does not need
+a `npm run build` round trip into the `dist/` the Rust server reads from disk.
+
+Two surfaces are plain axum JSON rather than proto, because they describe this
+process and its files rather than the wire contract: `GET /api/server` (build
+revision, uptime, store paths, metadata-cache occupancy, the writer's format
+policy) and `GET /api/segments?namespace=NS` (catalog rows, plus footer and
+sidecar detail under `physical=true`). Both sit behind the same default-deny
+auth gate as the RPCs. `build.rs` stamps the git commit, its tree hash, and a
+dirty flag into the binary; all three are empty when the build had no checkout
+to read, as in a wheel built from an sdist.
+
+The SQL editor completes identifiers from `ListNamespaces`, so the vocabulary is
+this store's namespaces and columns rather than a general SQL dictionary.
+`utils/sqlComplete.ts` holds the ranking and `utils/chart.ts` the axis, EMA, and
+decimation maths; both are pure and tested under `npm test` without mounting a
+component.
+
+`npm run test:e2e` drives the **built** dashboard with Playwright against an
+already-running server; it does not start one. `scripts/demo.py --keep` serves a
+seeded store on the default port. Point it at a store with real segments via
+`FINELOG_BASE_URL` and `FINELOG_TEST_NAMESPACE`.
+
+## Secondary indexes
+
+A column declared with `ColumnIndex.trigram` gets a substring index in each
+segment's `.tgm` sidecar, covering a fixed span of rows at a time. That index is
+what makes `contains(col, …)`/`col LIKE '%…%'` prune instead of full-scan. Today
+it is on `log.data` and `telemetry_v1.name`.
+
+A `LIKE` pattern contributes every literal run between its wildcards, all
+required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the
+escaped `%CUDA\_ERROR%` prunes on the single run `CUDA_ERROR`. Runs under three
+bytes carry no trigram and drop out. `NOT LIKE`, `ILIKE`, and an explicit
+`ESCAPE` never prune.
+
+Enabling one is additive and can be done on a live namespace: `RegisterTable`
+turns an index on and never turns one off, and the maintenance backfill rebuilds
+any L≥1 sidecar that is missing or predates the column. Until a sidecar exists
+the query is unpruned, never wrong. Indexing a large namespace takes a while —
+the backfill is a few segments per namespace per 30 s tick — so the speedup
+arrives gradually.
+
+A sidecar Bloom covers a fixed 16,384-row *span*, which is deliberately not the
+parquet row-group size — row groups are sized to a byte target so a namespace's
+footer stays proportional to its data rather than to its row width. The prune
+maps the span mask onto row groups, emitting a row selection where a row group is
+only partly covered. Sidecars carry a format version; bumping it makes every
+existing sidecar unreadable (queries scan unpruned) until the maintenance
+backfill rebuilds them, a few segments per namespace per 30 s tick.
+
+Every segment's parquet footer carries the physical layout revision it was
+written with, and maintenance re-encodes stale ones in place a couple per
+namespace per tick. This exists because the terminal level never re-compacts, so
+without it a writer-policy change would only reach a namespace's bulk as eviction
+aged it out. The rewrite preserves the rows, their order, and the filename, which
+is what makes it free: the archive keys objects by basename and the sync step
+only uploads segments the catalog still marks `Local`, so nothing is re-uploaded.
+Staging and committing are separate, with the rename taken under the insertion
+lock, because eviction may drop a segment during the seconds a rewrite runs and
+renaming over a dropped path would resurrect an untracked file. The trigram
+sidecar is deliberately left alone — spans are a fixed row count and the prune
+reads each segment's actual layout — so it stays valid across a rewrite.
+
+No segment carries a parquet bloom filter. Writing them for every column cost 15%
+of each segment and pruned nothing measurable; the key-column bloom that outlived
+that only served exact-key lookups against unsorted L0, which is a few hundred
+KiB that compaction consumes within a tick or two, against a write cost on every
+flush. L1+ is sorted by `(key, seq)` and prunes the key band from min/max
+statistics; substring queries prune from the trigram sidecar.
+
+A starts-with predicate — `prefix(col, P)`, `col LIKE 'P%'`, or
+`regexp_matches(col, '^P…')` — prunes only because `PrefixRangeRewrite` ANDs the
+implied `[P, succ(P))` range onto it, since min/max statistics key on whole
+values. That rule is an `AnalyzerRule`, so it runs *before* the optimizer folds
+constants: a column and literal of different string types leave the literal
+wrapped in a coercion `Cast`, which the rule has to see through. It does not
+share this hazard with the trigram needles, which are extracted from the
+optimized plan where such casts are already folded away.

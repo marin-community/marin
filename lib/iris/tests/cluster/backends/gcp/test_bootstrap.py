@@ -39,6 +39,16 @@ def test_build_worker_bootstrap_script_requires_controller_address() -> None:
         build_worker_bootstrap_script(cfg)
 
 
+def test_bootstrap_runs_node_agent_beside_worker() -> None:
+    script = build_worker_bootstrap_script(_worker_config())
+
+    assert "--name iris-node-agent" in script
+    assert "--network=host" in script
+    assert "--pid=host" in script
+    assert ".venv/bin/python -m iris.cluster.node_agent gcp" in script
+    assert "--worker-config /etc/iris/worker_config.json" in script
+
+
 def test_bootstrap_renders_versioned_runsc_url() -> None:
     """Every gVisor URL in the bootstrap must use the numeric release path:
     the GCS layout is releases/release/<YYYYMMDD.P>/, and a URL built from the

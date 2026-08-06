@@ -184,8 +184,21 @@ fn utf8_literal(expr: &Expr) -> Option<String> {
         Expr::Literal(ScalarValue::Utf8(Some(s)), _)
         | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _)
         | Expr::Literal(ScalarValue::Utf8View(Some(s)), _) => Some(s.clone()),
+        // Type coercion wraps the literal argument in a cast whenever the column
+        // is a different string type — which every scanned namespace is, since
+        // they present string columns as `Utf8View`. This rule runs in the
+        // analyzer, before the optimizer folds that cast into a typed literal, so
+        // it has to see through it or synthesize no range at all.
+        Expr::Cast(cast) if is_string_type(&cast.data_type) => utf8_literal(&cast.expr),
         _ => None,
     }
+}
+
+fn is_string_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
 }
 
 fn non_empty(s: String) -> Option<String> {
@@ -310,10 +323,7 @@ mod tests {
             return false;
         };
         let lhs_is_key = matches!(b.left.as_ref(), Expr::Column(c) if c.name == "key");
-        let rhs = matches!(
-            b.right.as_ref(),
-            Expr::Literal(ScalarValue::Utf8(Some(v)), _) if v == value
-        );
+        let rhs = utf8_literal(b.right.as_ref()).is_some_and(|v| v == value);
         lhs_is_key && b.op == op && rhs
     }
 
@@ -392,30 +402,32 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn rule_is_registered_in_make_ctx() {
-        // End-to-end: a generic query through make_ctx must gain the synthesized
-        // upper bound in its optimized plan — proof the rule is wired into the
-        // real pipeline, not just unit-tested in isolation. `/a0` (succ of `/a/`)
-        // appears nowhere in the input SQL, so finding it is unambiguous.
-        use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray};
+    /// Plan `SELECT key FROM t WHERE prefix(key, '/a/')` over a `key` column of
+    /// `key_type`, and report whether the synthesized `key < '/a0'` upper bound
+    /// survived into the optimized plan. `/a0` (succ of `/a/`) appears nowhere in
+    /// the input SQL, so finding it is unambiguous.
+    async fn plans_with_synthesized_upper_bound(key_type: DataType) -> bool {
+        use datafusion::arrow::array::{
+            ArrayRef, Int64Array, RecordBatch, StringArray, StringViewArray,
+        };
         use datafusion::arrow::datatypes::Schema as ArrowSchema;
 
-        let ctx = crate::query::make_ctx();
+        let keys: ArrayRef = match key_type {
+            DataType::Utf8View => Arc::new(StringViewArray::from(vec!["/a/1", "/b/1"])),
+            _ => Arc::new(StringArray::from(vec!["/a/1", "/b/1"])),
+        };
         let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("key", DataType::Utf8, false),
+            Field::new("key", key_type, false),
             Field::new("seq", DataType::Int64, false),
         ]));
         let batch = RecordBatch::try_new(
             schema,
-            vec![
-                Arc::new(StringArray::from(vec!["/a/1", "/b/1"])),
-                Arc::new(Int64Array::from(vec![1_i64, 2])),
-            ],
+            vec![keys, Arc::new(Int64Array::from(vec![1_i64, 2]))],
         )
         .unwrap();
-        ctx.register_batch("t", batch).unwrap();
 
+        let ctx = crate::query::make_ctx();
+        ctx.register_batch("t", batch).unwrap();
         let plan = ctx
             .sql("SELECT key FROM t WHERE prefix(key, '/a/')")
             .await
@@ -436,9 +448,29 @@ mod tests {
             Ok(TreeNodeRecursion::Continue)
         })
         .unwrap();
+        found_upper
+    }
+
+    #[tokio::test]
+    async fn rule_is_registered_in_make_ctx() {
+        // End-to-end: a generic query through make_ctx must gain the synthesized
+        // upper bound in its optimized plan — proof the rule is wired into the
+        // real pipeline, not just unit-tested in isolation.
         assert!(
-            found_upper,
+            plans_with_synthesized_upper_bound(DataType::Utf8).await,
             "make_ctx must register PrefixRangeRewrite so the key range reaches the optimized plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn rule_fires_on_view_typed_key_columns() {
+        // Every scanned namespace presents string columns as `Utf8View`, which
+        // makes type coercion wrap `prefix`'s literal argument. The rule must see
+        // through that: without the range, a key-prefix scan reads every row of
+        // the namespace instead of one key band's row groups.
+        assert!(
+            plans_with_synthesized_upper_bound(DataType::Utf8View).await,
+            "PrefixRangeRewrite must synthesize the key range for a Utf8View key column"
         );
     }
 }

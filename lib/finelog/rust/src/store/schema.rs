@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, ArrayData, ArrayRef, RecordBatch};
+use arrow::array::{new_null_array, ArrayData, ArrayRef, RecordBatch, StringArray};
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Fields, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use buffa::MessageField;
@@ -440,6 +440,13 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
 ///   columns to nullable, and re-registration with the original schema must be
 ///   accepted, not rejected).
 /// - a differing `key_column` is a *hint*: warn and keep the registered value.
+/// - a secondary index is *monotonically enabled*: a request that asks for one
+///   on an existing column turns it on, and one that omits it leaves the
+///   registered value alone. Enabling is additive — the sidecar is a derived
+///   artifact the backfill sweep builds, and until it exists the query merely
+///   scans unpruned — so a newer client can add an index to a live namespace
+///   without a reset. An older client that does not know about the field can
+///   never clear one, mirroring the storage-policy rule.
 pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
     if registered.key_column != requested.key_column {
         tracing::warn!(
@@ -450,6 +457,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     }
 
     let mut extras: Vec<Column> = Vec::new();
+    let mut enable_trigram: Vec<&str> = Vec::new();
     for rc in &requested.columns {
         match registered.column(&rc.name) {
             None => {
@@ -470,7 +478,8 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                         column_type_name(rc.r#type),
                     )));
                 }
-                // A nullability difference on an existing column is NOT a conflict.
+                // A nullability difference on an existing column is NOT a conflict,
+                // and is routine rather than notable — hence debug, not warn.
                 // Adopt-from-disk widens every compacted column to nullable
                 // (DuckDB's COPY drops Arrow non-nullability), and the adopt
                 // design relies on a later RegisterTable with the original
@@ -480,21 +489,33 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 // permanently wedge every namespace with non-nullable columns
                 // once a compacted segment is adopted.
                 if existing.nullable != rc.nullable {
-                    tracing::warn!(
+                    tracing::debug!(
                         column = %rc.name,
                         registered = existing.nullable,
                         requested = rc.nullable,
                         "register: nullability differs — keeping registered",
                     );
                 }
+                if rc.index.trigram && !existing.index.trigram {
+                    enable_trigram.push(rc.name.as_str());
+                }
             }
         }
     }
 
-    if extras.is_empty() {
+    if extras.is_empty() && enable_trigram.is_empty() {
         return Ok(registered.clone());
     }
     let mut merged = registered.columns.clone();
+    for column in &mut merged {
+        if enable_trigram.contains(&column.name.as_str()) {
+            tracing::info!(
+                column = %column.name,
+                "register: enabling trigram index on an existing column",
+            );
+            column.index.trigram = true;
+        }
+    }
     merged.extend(extras);
     Ok(Schema::new(merged, registered.key_column.clone()))
 }
@@ -722,6 +743,34 @@ pub fn validate_and_align_batch(
         num_rows: n_rows,
         byte_size,
     })
+}
+
+/// Overwrite the aligned batch's implicit origin `cluster` column with `origin`
+/// for every row. No-op when the namespace's schema has no cluster column.
+///
+/// This is the stats-plane analogue of the log plane's `authorized_cluster`
+/// (`server/log_service.rs`): a WriteRows admitted under a forwarding JWT names
+/// exactly one origin cluster, so the hub binds the rows to it here rather than
+/// trusting the sender to have stamped the column. That closes the finelog
+/// federation gap where a namespace whose schema on the sending finelog predates
+/// the implicit `cluster` column forwards its rows unstamped (the forwarder only
+/// stamps when its local schema carries the column). Overwriting — rather than
+/// filling blanks or rejecting a mismatch — is both simpler and safer: the
+/// forwarder only ever ships local (null/empty-cluster) rows, so the batch's
+/// cluster carries nothing to preserve, and a JWT writer can then only ever
+/// attribute rows to its own cluster.
+pub fn stamp_cluster_column(aligned: &mut AlignedBatch, origin: &str) {
+    let Some(i) = aligned
+        .fields
+        .iter()
+        .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+    else {
+        return;
+    };
+    let old_size = array_buffer_size(&aligned.arrays[i]);
+    let stamped: ArrayRef = Arc::new(StringArray::from(vec![origin; aligned.num_rows]));
+    aligned.byte_size += array_buffer_size(&stamped) - old_size;
+    aligned.arrays[i] = stamped;
 }
 
 #[cfg(test)]
@@ -1030,6 +1079,65 @@ mod tests {
     }
 
     #[test]
+    fn merge_enables_trigram_index_on_an_existing_column() {
+        let reg = with_implicit_seq(worker_schema());
+        assert!(!reg.column("worker_id").unwrap().index.trigram);
+
+        let req_cols = reg
+            .columns
+            .iter()
+            .map(|c| {
+                if c.name == "worker_id" {
+                    c.clone().with_trigram_index()
+                } else {
+                    c.clone()
+                }
+            })
+            .collect();
+        let merged = merge_schemas(&reg, &Schema::new(req_cols, "")).unwrap();
+
+        assert!(merged.column("worker_id").unwrap().index.trigram);
+        // Enabling an index must not disturb the column set or their order.
+        assert_eq!(merged.column_names(), reg.column_names());
+    }
+
+    #[test]
+    fn merge_never_disables_a_registered_trigram_index() {
+        let mut reg = with_implicit_seq(worker_schema());
+        reg.columns
+            .iter_mut()
+            .find(|c| c.name == "worker_id")
+            .unwrap()
+            .index
+            .trigram = true;
+
+        // A client that predates the field sends the column with no index set.
+        let merged = merge_schemas(&reg, &with_implicit_seq(worker_schema())).unwrap();
+        assert!(merged.column("worker_id").unwrap().index.trigram);
+    }
+
+    #[test]
+    fn merge_enables_a_trigram_index_alongside_a_new_column() {
+        let reg = with_implicit_seq(worker_schema());
+        let mut req_cols: Vec<Column> = reg
+            .columns
+            .iter()
+            .map(|c| {
+                if c.name == "worker_id" {
+                    c.clone().with_trigram_index()
+                } else {
+                    c.clone()
+                }
+            })
+            .collect();
+        req_cols.push(col("note", ColumnType::COLUMN_TYPE_STRING, true));
+        let merged = merge_schemas(&reg, &Schema::new(req_cols, "")).unwrap();
+
+        assert!(merged.column("worker_id").unwrap().index.trigram);
+        assert!(merged.column("note").is_some());
+    }
+
+    #[test]
     fn merge_key_column_hint_coerced_to_registered() {
         let reg = Schema::new(
             vec![
@@ -1061,6 +1169,109 @@ mod tests {
 
     fn batch(fields: Vec<Field>, arrays: Vec<ArrayRef>) -> RecordBatch {
         RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), arrays).unwrap()
+    }
+
+    #[test]
+    fn stamp_cluster_column_fills_a_forwarded_batch_missing_the_origin_column() {
+        // A hub namespace carries the implicit `cluster` column, but a forwarder
+        // whose local schema predates that column ships a batch without it
+        // (has_origin=false). Alignment NULL-fills the column; the hub then
+        // stamps it from the forwarding credential so the rows are attributable.
+        let registered = with_implicit_seq(with_implicit_cluster(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        )));
+        let inbound = batch(
+            vec![Field::new("id", DataType::Utf8, false)],
+            vec![Arc::new(StringArray::from(vec!["e1", "e2"]))],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        let ci = aligned
+            .fields
+            .iter()
+            .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+            .expect("registered schema has the cluster column");
+        assert_eq!(
+            aligned.arrays[ci].null_count(),
+            2,
+            "before stamping the aligned cluster column is all-null"
+        );
+
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+
+        let stamped = aligned.arrays[ci]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cluster is a string column");
+        assert_eq!(
+            stamped.iter().collect::<Vec<_>>(),
+            vec![Some("cw-rno2a"), Some("cw-rno2a")],
+            "every row is bound to the forwarding cluster"
+        );
+    }
+
+    #[test]
+    fn stamp_cluster_column_overwrites_a_caller_supplied_origin() {
+        // Caller-provided provenance is ignored, not trusted or merged. `cluster` is a
+        // real registered column, so a WriteRows batch may declare it with a spoofed
+        // value; alignment accepts that value, but the credential-bound stamp overwrites
+        // every row with the authenticated origin. This is the data-level guarantee
+        // behind the stats path reading no caller-supplied cluster.
+        let registered = with_implicit_seq(with_implicit_cluster(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        )));
+        let inbound = batch(
+            vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("cluster", DataType::Utf8, true),
+            ],
+            vec![
+                Arc::new(StringArray::from(vec!["e1", "e2"])),
+                Arc::new(StringArray::from(vec!["attacker", "attacker"])),
+            ],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+        let ci = aligned
+            .fields
+            .iter()
+            .position(|f| f.name() == IMPLICIT_CLUSTER_COLUMN)
+            .expect("registered schema has the cluster column");
+        let stamped = aligned.arrays[ci]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("cluster is a string column");
+        assert_eq!(
+            stamped.iter().collect::<Vec<_>>(),
+            vec![Some("cw-rno2a"), Some("cw-rno2a")],
+            "the credential's cluster overrides the caller-supplied value"
+        );
+    }
+
+    #[test]
+    fn stamp_cluster_column_is_a_noop_without_a_cluster_column() {
+        // A namespace whose schema has no cluster column must not gain one from
+        // stamping — an extra array would not match the engine's schema on append.
+        let registered = with_implicit_seq(Schema::new(
+            vec![col("id", ColumnType::COLUMN_TYPE_STRING, false)],
+            "id",
+        ));
+        let inbound = batch(
+            vec![Field::new("id", DataType::Utf8, false)],
+            vec![Arc::new(StringArray::from(vec!["e1"]))],
+        );
+        let mut aligned = validate_and_align_batch(&inbound, &registered).unwrap();
+        let before = aligned.fields.len();
+        stamp_cluster_column(&mut aligned, "cw-rno2a");
+        assert_eq!(aligned.fields.len(), before);
+        assert!(
+            aligned
+                .fields
+                .iter()
+                .all(|f| f.name() != IMPLICIT_CLUSTER_COLUMN),
+            "no cluster column is invented"
+        );
     }
 
     #[test]

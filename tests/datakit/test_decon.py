@@ -50,17 +50,11 @@ def _write_eval_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def _read_attributes(output_dir: Path) -> dict[str, dict]:
-    """Concatenate every output parquet under *output_dir* and key by id.
-
-    Flattens the on-disk ``attributes`` struct (datakit convention) back into
-    top-level keys so test assertions stay terse:
-    ``rows[doc_id]["contaminated"]`` instead of ``rows[doc_id]["attributes"]["contaminated"]``.
-    """
+    """Concatenate every flat attribute Parquet file under *output_dir* and key by ID."""
     rows: dict[str, dict] = {}
     for pf in sorted(output_dir.glob("outputs/main/part-*.parquet")):
         for row in pq.read_table(str(pf)).to_pylist():
-            attrs = row.pop("attributes", {}) or {}
-            rows[row["id"]] = {**row, **attrs}
+            rows[row["id"]] = row
     return rows
 
 
@@ -192,12 +186,7 @@ def test_decon_preserves_partition_filenames(fox_corpus):
 
 
 def test_decon_output_schema(fox_corpus):
-    """Output Parquet has exactly ``{id, partition_id, attributes: struct<contaminated, max_overlap, matched_hashes>}``.
-
-    This is the datakit attribute convention consumed by
-    :func:`marin.processing.classification.consolidate.consolidate` --
-    ``id`` joinable on top, decon facts grouped under ``attributes``.
-    """
+    """Output Parquet has flat ID, partition, and decontamination fields."""
     decon_to_parquet(
         normalized_data=_as_source(Path(fox_corpus["input_dir"])),
         eval_data_sources=fox_corpus["eval_dir"],
@@ -209,18 +198,13 @@ def test_decon_output_schema(fox_corpus):
     output_files = sorted(Path(fox_corpus["output_dir"]).glob("outputs/main/part-*.parquet"))
     assert output_files, "expected at least one output partition"
     schema = pq.read_schema(str(output_files[0]))
-    assert set(schema.names) == {"id", "partition_id", "attributes"}
+    assert set(schema.names) == {"id", "partition_id", "contaminated", "max_overlap", "matched_hashes"}
     assert pa.types.is_string(schema.field("id").type)
     assert pa.types.is_integer(schema.field("partition_id").type)
-
-    attrs_field = schema.field("attributes")
-    assert pa.types.is_struct(attrs_field.type)
-    attrs_fields = {f.name: f for f in attrs_field.type}
-    assert set(attrs_fields) == {"contaminated", "max_overlap", "matched_hashes"}
-    assert pa.types.is_boolean(attrs_fields["contaminated"].type)
-    assert pa.types.is_floating(attrs_fields["max_overlap"].type)
-    assert pa.types.is_list(attrs_fields["matched_hashes"].type)
-    assert attrs_fields["matched_hashes"].type.value_type == pa.uint64()
+    assert pa.types.is_boolean(schema.field("contaminated").type)
+    assert pa.types.is_floating(schema.field("max_overlap").type)
+    assert pa.types.is_list(schema.field("matched_hashes").type)
+    assert schema.field("matched_hashes").type.value_type == pa.uint64()
 
 
 def test_decon_emits_eval_hash_index_sidecar(fox_corpus):
@@ -1131,7 +1115,7 @@ def test_source_drop_set_filters_source_ubiquitous_ngram(tmp_path: Path):
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out_dir),
         ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
-        drop_set_dir=str(drop_dir),
+        drop_set_dirs=[str(drop_dir)],
     )
     rows = _read_attributes(out_dir)
     assert rows["d0"]["contaminated"] is False  # boilerplate-only no longer flags
@@ -1174,14 +1158,29 @@ def test_source_drop_set_empty_leaves_marks_unchanged(tmp_path: Path):
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out_dir),
         ngram=NGramConfig(ngram_length=4, overlap_threshold=0.5, paragraph_delimiter="\n"),
-        drop_set_dir=str(drop_dir),
+        drop_set_dirs=[str(drop_dir)],
     )
     assert _read_attributes(out_dir)["leak"]["contaminated"] is True
 
 
+def test_build_all_source_drop_sets_rejects_reserved_global_source_name(tmp_path: Path):
+    with pytest.raises(ValueError):
+        build_all_source_drop_sets(
+            sources=[("_global", str(tmp_path / "input"))],
+            prebuilt_bloom_dir=str(tmp_path / "bloom"),
+            output_path=str(tmp_path / "drops"),
+            ngram=NGramConfig(ngram_length=4),
+            sample_docs=100,
+            common_frac=0.5,
+            common_min_abs=3,
+            global_sample_docs=100,
+            global_common_min_abs=6,
+            global_common_min_sources=3,
+        )
+
+
 def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
-    """The distributed (zephyr) builder writes one drop.parquet per source: a
-    source's ubiquitous ngram is dropped, another source's distinctive one kept."""
+    """Nested source names load only their exact local drop set."""
     eval_dir = tmp_path / "eval"
     _write_eval_jsonl(
         eval_dir / "eval.jsonl.gz",
@@ -1211,17 +1210,88 @@ def test_build_all_source_drop_sets_distributes_per_source(tmp_path: Path):
 
     out = tmp_path / "drops"
     res = build_all_source_drop_sets(
-        sources=[("srcA", str(a_dir)), ("srcB", str(b_dir))],
+        sources=[("finepdfs/fra_Latn", str(a_dir)), ("finepdfs", str(b_dir))],
         prebuilt_bloom_dir=str(bloom_dir),
         output_path=str(out),
         ngram=NGramConfig(ngram_length=4, paragraph_delimiter="\n"),
         sample_docs=1000,
         common_frac=0.5,
         common_min_abs=2,
+        global_sample_docs=1000,
+        global_common_min_abs=100,
+        global_common_min_sources=2,
     )
     assert res.num_sources == 2
-    assert len(_load_drop_set(str(out / "srcA"))) > 0  # boilerplate (df=20) dropped
-    assert len(_load_drop_set(str(out / "srcB"))) == 0  # distinctive (df=1) kept
+    assert len(_load_drop_set(str(out / "finepdfs/fra_Latn"))) > 0  # boilerplate (df=20) dropped
+    assert len(_load_drop_set(str(out / "finepdfs"))) == 0  # does not recursively load the language child
+    assert res.n_global_dropped == 0  # high DF in only one source is not global boilerplate
+
+
+def test_all_source_drop_sets_filters_diffuse_global_boilerplate(tmp_path: Path):
+    """Global DF removes text spread across sources without erasing a source-local leak."""
+    common = "four score and seven years ago our fathers brought forth on this continent a new nation"
+    leak = "the platypus juggled seventeen luminous kumquats beside a silent observatory at midnight"
+    filler = "ordinary source material whose wording shares no evaluation sequence at all today"
+    eval_dir = tmp_path / "eval"
+    _write_eval_jsonl(
+        eval_dir / "eval.jsonl.gz",
+        [
+            {"id": "public_quote", "text": common},
+            {"id": "genuine_leak", "text": leak},
+        ],
+    )
+    ngram = NGramConfig(ngram_length=4, overlap_threshold=0.5)
+    bloom_dir = tmp_path / "bloom"
+    build_eval_bloom(
+        eval_data_sources=str(eval_dir),
+        output_path=str(bloom_dir),
+        ngram=ngram,
+        estimated_doc_count=10_000,
+        false_positive_rate=1e-9,
+    )
+
+    sources = []
+    for source_idx in range(4):
+        source_dir = tmp_path / f"source_{source_idx}"
+        rows = [{"id": f"common_{source_idx}_{i}", "text": common, "partition_id": 0} for i in range(2)]
+        rows.extend(
+            {"id": f"filler_{source_idx}_{i}", "text": f"{filler} {source_idx} {i}", "partition_id": 0} for i in range(8)
+        )
+        if source_idx == 0:
+            rows.append({"id": "leak", "text": leak, "partition_id": 0})
+        _write_input_parquet(source_dir / "part-00000-of-00001.parquet", rows)
+        sources.append((f"source_{source_idx}", str(source_dir)))
+
+    out = tmp_path / "drops"
+    result = build_all_source_drop_sets(
+        sources=sources,
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(out),
+        ngram=ngram,
+        sample_docs=100,
+        common_frac=0.5,
+        common_min_abs=3,
+        global_sample_docs=100,
+        global_common_min_abs=6,
+        global_common_min_sources=3,
+    )
+    assert all(not _load_drop_set(str(out / source_name)) for source_name, _ in sources)
+    assert _load_drop_set(result.global_output_dir)
+    global_rows = pq.read_table(Path(result.global_output_dir) / "drop.parquet").to_pylist()
+    assert {row["document_frequency"] for row in global_rows} == {8}
+    assert {row["source_frequency"] for row in global_rows} == {4}
+
+    marked = tmp_path / "marked"
+    decon_to_parquet(
+        normalized_data=_as_source(Path(sources[0][1])),
+        prebuilt_bloom_dir=str(bloom_dir),
+        output_path=str(marked),
+        ngram=ngram,
+        drop_set_dirs=[str(out / "source_0"), result.global_output_dir],
+    )
+    rows = _read_attributes(marked)
+    assert rows["common_0_0"]["contaminated"] is False
+    assert rows["leak"]["contaminated"] is True
 
 
 def test_decon_flagged_sample_sidecar(fox_corpus):

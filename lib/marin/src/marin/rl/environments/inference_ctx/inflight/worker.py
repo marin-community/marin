@@ -7,7 +7,7 @@ import logging
 import numpy as np
 from marin.rl.environments.inference_ctx.inflight.async_bridge import AsyncBridge
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
-from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
+from marin.rl.environments.inference_ctx.vllm_weights import levanter_state_dict_to_vllm_weights_on_cpu
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +162,7 @@ class WorkerExtension:
 
         # Deserialize from (bytes, dtype, shape) tuples back to numpy arrays
         deserialized_state_dict = deserialize_state_dict_from_rpc(new_state_dict)
-        new_state = levanter_state_dict_to_nnx_state_on_cpu(deserialized_state_dict)
+        new_state = levanter_state_dict_to_vllm_weights_on_cpu(deserialized_state_dict)
         self.sync_weights(
             new_state,
             mappings=MODEL_MAPPINGS[model_name],

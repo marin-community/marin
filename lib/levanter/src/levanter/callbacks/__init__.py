@@ -7,7 +7,7 @@ import pstats
 import threading
 import time
 from contextlib import contextmanager
-from typing import Optional
+from typing import Callable, Optional
 
 import wandb
 
@@ -16,7 +16,15 @@ from rigging.filesystem import StoragePath
 from tqdm_loggable.auto import tqdm
 
 import levanter.tracker
-from levanter.callbacks._core import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
+from levanter.callbacks._core import (
+    Callback,
+    CBInfo,
+    JitCallback,
+    LambdaCallback,
+    ProgressEvent,
+    StepInfo,
+    progress_event_scope,
+)
 from levanter.callbacks._metrics import (
     _tqdm_logging_one_time_setup,
     log_performance_stats,
@@ -26,8 +34,18 @@ from levanter.callbacks._metrics import (
 )
 from levanter.callbacks._iris_status import iris_status_reporter
 from levanter.callbacks.state_adapter import CallbackStateView, StateCallbackRunner
-from levanter.callbacks.profiler import _flush_while_waiting, profile
+from levanter.callbacks.profiler import (
+    ProfileOptionsConfig as ProfileOptionsConfig,
+    ProfilerConfig as ProfilerConfig,
+    XprofUploadConfig as XprofUploadConfig,
+    _flush_while_waiting,
+    profile,
+    xprof_viewer_url as xprof_viewer_url,
+)
+from levanter.callbacks.progress_watchdog import ProgressWatchdog, ProgressWatchdogConfig
 from levanter.data.loader import DataLoader
+from levanter.data.mixture import MixtureDataset
+from levanter.schedule import BatchSchedule
 from levanter.metrics import LossFunctionWithMetrics, unwrap_metrics
 from levanter.metrics import fold as fold_metric
 from levanter.tracker.wandb import WandbConfig
@@ -97,25 +115,29 @@ def compute_validation_loss(
     name: Optional[str] = None,
 ):
     def compute_loss(info: StepInfo):
-        loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
+        with progress_event_scope(
+            info.emit_event,
+            ProgressEvent.EVALUATION_STARTED,
+            ProgressEvent.EVALUATION_FINISHED,
+        ):
+            loss, metrics = eval_loss_loop(loss_fn, info.eval_model, dataset, max_batches=max_batches, name=name)
 
-        prefix = "eval"
-        if name:
-            prefix += "/" + name
+            prefix = "eval"
+            if name:
+                prefix += "/" + name
 
-        # Log loss and metrics. eval_loss_loop already namespaces its loop-timing
-        # keys under "eval/"; strip it so this prefix (e.g. "eval/<name>") is applied
-        # once, yielding "eval/<name>/timing/..." instead of "eval/eval/timing/...".
-        to_log = {f"{prefix}/loss": loss}
-        to_log.update({f"{prefix}/{k.removeprefix('eval/')}": v for k, v in metrics.items()})
-        levanter.tracker.log(to_log, step=info.step)
+            # Log loss and metrics. eval_loss_loop already namespaces its loop-timing
+            # keys under "eval/"; strip it so this prefix (e.g. "eval/<name>") is applied
+            # once, yielding "eval/<name>/timing/..." instead of "eval/eval/timing/...".
+            to_log = {f"{prefix}/loss": loss}
+            to_log.update({f"{prefix}/{k.removeprefix('eval/')}": v for k, v in metrics.items()})
+            levanter.tracker.log(to_log, step=info.step)
 
-        if name:
-            logger.info(f"{name} validation loss: {loss:.3f}")
-        else:
-            logger.info(f"validation loss: {loss:.3f}")
-
-        return loss
+            if name:
+                logger.info(f"{name} validation loss: {loss:.3f}")
+            else:
+                logger.info(f"validation loss: {loss:.3f}")
+            return loss
 
     return compute_loss
 
@@ -133,6 +155,31 @@ def wandb_xla_logger(config: WandbConfig):
         return log_xla_to_wandb
     else:
         return lambda x: None
+
+
+def mixture_weight_logging_hook(
+    batch_schedule: BatchSchedule, train_dataset: MixtureDataset
+) -> Callable[[StepInfo], None]:
+    """Build a hook that logs mixture component weights whenever the mixture stage advances.
+
+    A stage-scheduled ``MixtureDataset`` changes its component weights at block boundaries.
+    This hook maps the current step to a block, and logs the active weights (and stage index)
+    the first time each stage is seen.
+    """
+    last_stage = -1
+
+    def log_mixture_weights(step_info: StepInfo):
+        nonlocal last_stage
+        seq_index = batch_schedule.global_data_offset_by_step(step_info.step)
+        stage = train_dataset._get_stage_for_block(seq_index // train_dataset.block_size)
+        if stage != last_stage:
+            weights = train_dataset.weight_stages[stage][1]
+            metrics = {f"mixture/weight/{name}": weight for name, weight in weights.items()}
+            metrics["mixture/stage"] = stage
+            levanter.tracker.log(metrics, step=step_info.step)
+            last_stage = stage
+
+    return log_mixture_weights
 
 
 @contextmanager
@@ -242,7 +289,11 @@ __all__ = [
     "CBInfo",
     "JitCallback",
     "LambdaCallback",
+    "ProgressEvent",
+    "ProgressWatchdog",
+    "ProgressWatchdogConfig",
     "StepInfo",
+    "progress_event_scope",
     "log_performance_stats",
     "iris_status_reporter",
     "log_step_info",

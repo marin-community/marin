@@ -4,7 +4,7 @@
 """JAX distributed initialization via Iris endpoint registry.
 
 Task 0 registers its coordinator address; tasks 1..N-1 poll for it.
-Single-task jobs skip distributed init entirely — JAX defaults suffice.
+Single-task jobs initialize an explicit one-process distributed world.
 
 JAX is imported at call time — iris does not depend on jax.
 """
@@ -28,7 +28,6 @@ from iris.hooks.multigpu import (
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
     IRIS_MULTIGPU_PROCESS_INDEX_ENV,
 )
-from iris.runtime import telltale
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +38,10 @@ _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 # whole gang. Give cold gang-init more slack; a longer timeout only affects how long a
 # genuinely-stuck init waits.
 _JAX_DIST_INIT_TIMEOUT = 1800
+# Pin the coordination heartbeat timeout instead of inheriting JAX's default.
+# This bounds how long healthy ranks wait after a peer process disappears before
+# JAX fate sharing tears the distributed world down and Iris can retry the gang.
+_JAX_DIST_HEARTBEAT_TIMEOUT = 100
 
 _JAX_ENV_KEYS = (
     "IRIS_TASK_ID",
@@ -185,7 +188,14 @@ def _supervised_coordinator_role(proc_index: int, task_index: int, num_tasks: in
 
 
 def _initialize_supervised_jax(
-    jax, job_info, *, port: int, endpoint_name: str, poll_timeout: float, poll_interval: float
+    jax,
+    job_info,
+    *,
+    port: int,
+    endpoint_name: str,
+    poll_timeout: float,
+    poll_interval: float,
+    heartbeat_timeout: int,
 ) -> None:
     """Join the JAX mesh for a process launched by ``iris.hooks.multigpu_main``.
 
@@ -201,7 +211,11 @@ def _initialize_supervised_jax(
     device_ids = _parse_local_device_ids(os.environ.get(IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV))
 
     if proc_count <= 1:
-        jax.distributed.initialize(num_processes=1, process_id=0, local_device_ids=device_ids)
+        jax.distributed.initialize(
+            num_processes=1,
+            process_id=0,
+            local_device_ids=device_ids,
+        )
         return
 
     num_tasks = job_info.num_tasks if job_info else 1
@@ -232,6 +246,7 @@ def _initialize_supervised_jax(
         proc_index,
         local_device_ids=device_ids,
         initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+        heartbeat_timeout_seconds=heartbeat_timeout,
     )
 
 
@@ -240,6 +255,7 @@ def initialize_jax(
     endpoint_name: str = "jax_coordinator",
     poll_timeout: float = _JAX_DIST_INIT_TIMEOUT,
     poll_interval: float = 2.0,
+    heartbeat_timeout: int = _JAX_DIST_HEARTBEAT_TIMEOUT,
 ) -> None:
     """Initialize JAX distributed runtime using Iris endpoint discovery.
 
@@ -247,9 +263,8 @@ def initialize_jax(
     Iris endpoint registry, and tasks 1..N-1 poll until they discover it. All
     tasks then call jax.distributed.initialize with the coordinator address.
 
-    For single-task jobs (or when not running inside an Iris job),
-    initialization is skipped — JAX works correctly without distributed
-    init when there is only one process.
+    Single-task Iris jobs initialize an explicit one-process distributed world.
+    Processes outside an Iris job leave JAX distributed initialization unchanged.
 
     Iris TPU jobs use the same endpoint-registry coordinator path as other Iris
     multi-task jobs.
@@ -264,15 +279,14 @@ def initialize_jax(
             so a slow coordinator host on a large-gang cold restart does not abort
             the pollers before the JAX barrier itself gets its longer timeout.
         poll_interval: Initial backoff delay for polling (seconds).
+        heartbeat_timeout: Maximum seconds without a peer heartbeat before JAX
+            declares the distributed world unhealthy and terminates it.
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
     # Configure the compilation cache before any compile happens, on every
     # distributed-init path below (TPU, single-task, or the endpoint dance).
     configure_jax_compilation_cache()
-
-    # Start the telltale server to report stats for training jobs.
-    telltale.start()
 
     # Idempotent: skip if jax.distributed has already been initialized. This
     # lets a caller that must touch JAX before levanter.initialize (e.g. via
@@ -303,6 +317,7 @@ def initialize_jax(
             endpoint_name=endpoint_name,
             poll_timeout=poll_timeout,
             poll_interval=poll_interval,
+            heartbeat_timeout=heartbeat_timeout,
         )
         return
 
@@ -312,7 +327,11 @@ def initialize_jax(
     if job_info.num_tasks <= 1:
         bound_port = job_info.ports.get("jax", port)
         coordinator = f"{job_info.advertise_host}:{bound_port}"
-        jax.distributed.initialize(coordinator, num_processes=1, process_id=0)
+        jax.distributed.initialize(
+            coordinator,
+            num_processes=1,
+            process_id=0,
+        )
         return
 
     ctx = iris_ctx()
@@ -331,10 +350,18 @@ def initialize_jax(
         # cascade delete on task cleanup handles endpoint removal.
         atexit.register(ctx.registry.unregister, endpoint_id)
         jax.distributed.initialize(
-            coordinator, job_info.num_tasks, task_index, initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+            coordinator,
+            job_info.num_tasks,
+            task_index,
+            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+            heartbeat_timeout_seconds=heartbeat_timeout,
         )
     else:
         coordinator = _poll_for_coordinator(ctx.resolver, endpoint_name, poll_timeout, poll_interval)
         jax.distributed.initialize(
-            coordinator, job_info.num_tasks, task_index, initialization_timeout=_JAX_DIST_INIT_TIMEOUT
+            coordinator,
+            job_info.num_tasks,
+            task_index,
+            initialization_timeout=_JAX_DIST_INIT_TIMEOUT,
+            heartbeat_timeout_seconds=heartbeat_timeout,
         )

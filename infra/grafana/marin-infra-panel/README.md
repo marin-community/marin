@@ -1,14 +1,16 @@
 # Marin infra panel
 
-This internal Grafana panel provides the three dense views that built-in panels
-cannot preserve from Marin's retired infra status page:
+This internal Grafana panel restores the retired infrastructure status page inside
+Grafana. The `status` view combines these sections:
 
-- seven UTC days of linked nightly status and durations;
-- an equal-width main-branch CI history strip;
+- Seven UTC days of linked nightly status and durations.
+- An equal-width main-branch CI history strip.
+- Current worker capacity and a 24-hour region history.
+- Fleet and resource-pool provisioning status and history.
 - W&B hero-training series against cumulative tokens.
 
-The panel receives ordinary Grafana data frames. Upstream credentials and query
-logic remain in the Python bridge one directory above.
+The separate `nightlies`, `commits`, and `wandb` views remain available. The panel
+receives Grafana data frames. The Python bridge owns credentials, queries, and caches.
 
 ```bash
 npm ci

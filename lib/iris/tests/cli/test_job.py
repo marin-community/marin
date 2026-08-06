@@ -25,6 +25,7 @@ from iris.cli.job import (
     stop,
     validate_extra_resources,
     validate_region_zone,
+    wait,
 )
 from iris.client import IrisClient
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
@@ -257,6 +258,35 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
     assert captured["entrypoint"].command == ["python", "train.py"]
 
 
+@pytest.mark.parametrize(
+    ("state", "expected_state", "expected_exit_code"),
+    [
+        (_job_pb2.JOB_STATE_SUCCEEDED, "succeeded", 0),
+        (_job_pb2.JOB_STATE_FAILED, "failed", 1),
+    ],
+)
+def test_job_wait_reports_terminal_state_and_exit_status(
+    monkeypatch,
+    state: _job_pb2.JobState,
+    expected_state: str,
+    expected_exit_code: int,
+) -> None:
+    class WaitClusterClient:
+        def wait_for_job(self, job_id, _timeout, _poll_interval):
+            return _job_pb2.JobStatus(job_id=job_id.to_wire(), state=state)
+
+    monkeypatch.setattr("iris.cli.job._remote_client", lambda _ctx: IrisClient(WaitClusterClient()))
+
+    result = CliRunner().invoke(
+        wait,
+        ["/alice/training-run"],
+        obj={"controller_url": "http://controller.test", "config": None, "credentials": None},
+    )
+
+    assert result.exit_code == expected_exit_code
+    assert result.output == f"{expected_state}\n"
+
+
 # --tpu multi-variant parsing
 # ---------------------------------------------------------------------------
 
@@ -387,6 +417,19 @@ def test_render_job_summary_text_shows_peak_memory():
     assert "10 GB" in text
     assert "137" in text
     assert "OOM" in text
+
+
+def test_render_job_summary_text_shows_active_backend_status():
+    job = _job_pb2.JobStatus(job_id="/u/j", state=_job_pb2.JOB_STATE_RUNNING, task_count=1)
+    task = _job_pb2.TaskStatus(
+        task_id="/u/j/0",
+        state=_job_pb2.TASK_STATE_BUILDING,
+        status_message='Kueue: excluded: resource "memory": 32',
+    )
+
+    text = _render_job_summary_text(build_job_summary(job, [task]))
+
+    assert 'Kueue: excluded: resource "memory": 32' in text
 
 
 # Bulk-action target collection (query→act bridge for kick/stop/kill)

@@ -95,8 +95,8 @@ def score_levanter_against_goldens(goldens: tuple[RepresentativeGolden, ...]) ->
     assert tensor_parallel_size == 1, (num_heads, num_kv_heads, num_chips)
 
     spec = ModelSpec(
-        model=SNOWBALL.model_name,
-        model_path=SNOWBALL.export_uri,
+        weights=SNOWBALL.export_uri,
+        api_model=SNOWBALL.model_name,
         num_chips=num_chips,
         tensor_parallel_size=tensor_parallel_size,
         dtype="bfloat16",
@@ -178,8 +178,8 @@ def score_vllm_against_goldens(
     prompt_fixture = read_prompt_fixture(goldens)
 
     spec = ModelSpec(
-        model=SNOWBALL.model_name,
-        model_path=SNOWBALL.export_uri,
+        weights=SNOWBALL.export_uri,
+        api_model=SNOWBALL.model_name,
         num_chips=GPU_COUNT,
         tensor_parallel_size=1,
         dtype="bfloat16",

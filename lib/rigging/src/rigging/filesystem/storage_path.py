@@ -77,7 +77,8 @@ class StoragePath:
     resolves through the guarded :func:`url_to_fs`/:func:`open_url` factory (cross-region
     budget, ``mirror://``, finite S3 timeouts) rather than memoizing a filesystem handle
     on the frozen instance. The listing verbs (:meth:`ls`, :meth:`walk`, :meth:`glob`)
-    return reopenable :class:`StoragePath` values.
+    return reopenable :class:`StoragePath` values and do not reuse stale GCS/S3
+    directory listings unless the process explicitly configures a cache.
     """
 
     scheme: str | None

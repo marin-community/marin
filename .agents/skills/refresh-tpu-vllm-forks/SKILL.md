@@ -36,7 +36,8 @@ smoke tests.
 - If no newer upstream pair is selected and no pin metadata needs repair, exit
   successfully with a no-op summary.
 - If the refresh succeeds, open exactly one draft PR in `marin-community/marin`
-  after required smoke tests pass, and request `@yonromai` as reviewer.
+  after required smoke tests pass, request `@yonromai` as reviewer, and monitor
+  it per `.agents/skills/commit/SKILL.md`.
 - The PR updates Marin's fork tip SHAs, refreshes `uv.lock`, and reports bases,
   branches/tips, carried/dropped/fixed overlays, validation, and residual risk.
 - Do not open fork PRs. Do not move either fork `main`; fork review happens via
@@ -50,9 +51,9 @@ failure, artifacts, and the logs Gist.
 
 ## Post-Merge Follow-Up
 
-This skill does not run post-merge fork-main promotion. A successful refresh run
-stops after opening the Marin PR; if blocked, it stops after filing or updating
-the blocker issue.
+This skill does not run post-merge fork-main promotion. After opening the Marin
+PR, follow the `commit` skill's monitoring loop through an exit condition. If
+blocked before PR creation, stop after filing or updating the blocker issue.
 
 After the Marin PR has merged and Marin `main` contains the new exact fork SHA
 pins, a separate operator may run the post-merge protocol in
@@ -241,7 +242,7 @@ workload or smoke test as part of this refresh.
 ### 6. Review Before PR
 
 Do a PR-review-style pass over the fork commits and Marin diff. Use
-`.agents/skills/review-pr/` as a checklist, then run
+`.agents/skills/review-pr/SKILL.md` as a checklist, then run
 `./infra/pre-commit.py --review` before opening the PR and fix or respond to
 every finding.
 
@@ -256,7 +257,8 @@ Check that:
 ### 7. Open the Marin PR
 
 After required smoke tests pass, publish the logs Gist, push the Marin branch,
-and open one draft `marin-community/marin` PR. Request `@yonromai` as reviewer.
+and open one draft `marin-community/marin` PR. Request `@yonromai` as reviewer,
+then follow step 9 of `.agents/skills/commit/SKILL.md`.
 
 PR body:
 
@@ -279,3 +281,4 @@ PR body:
 - Required smoke tests pass before PR creation, or the unresolved blocker is in
   a Marin issue assigned to `@yonromai`.
 - The two curated logs are published as one Gist and linked from the PR/issue.
+- An opened Marin PR reaches a `commit` skill monitoring exit condition.

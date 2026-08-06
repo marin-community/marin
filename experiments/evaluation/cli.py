@@ -5,22 +5,33 @@
 
 ``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Two commands:
 ``launch`` submits runs and optionally waits for their object-store records; ``backfill-samples``
-rewrites every run's per-sample parquet exports from its kept ``samples_*.jsonl`` sources.
+rebuilds every run's finestore sample archive from its kept ``samples_*.jsonl`` sources.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 from iris.cli.connect import open_iris_client
-from marin.evaluation.records import CW_RECORDS_PREFIX, DEFAULT_RECORDS_PREFIX, list_records
+from iris.rpc import job_pb2
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
+from marin.evaluation.harbor.runner import canonical_served_name
+from marin.evaluation.hardware import Platform, default_platform
+from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
+from marin.evaluation.runner import EvaluationBatch, wait_and_report
 from marin.evaluation.samples import export_lm_eval_samples
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.evaluation.evals import EVALS, SUITES
-from experiments.evaluation.hardware import Platform, default_platform
-from experiments.evaluation.launch import LaunchSpec, launch_group, plan_runs, records_prefix_for, wait_and_report
-from experiments.evaluation.models import MODELS
+from experiments.evaluation.evals import EVALS, SUITES, EvalchemyDefinition, HarborDefinition
+from experiments.evaluation.launch import (
+    EVALUATION_CONTROLLER_CLUSTER,
+    LaunchSpec,
+    launch_group,
+    prepare_evaluation_batch,
+)
+from experiments.evaluation.models import models
 
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
@@ -33,15 +44,21 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
     return keys
 
 
-def _print_plan(spec: LaunchSpec) -> None:
-    click.echo(f"model: {spec.model}  platform: {spec.platform.value}  cluster: {spec.cluster}")
-    for plan in plan_runs(spec):
-        target = plan.accel.target_cluster or plan.accel.region or spec.cluster
+def _print_plan(spec: LaunchSpec, batch: EvaluationBatch) -> None:
+    click.echo(
+        f"model: {spec.model}  platform: {spec.platform.value}  "
+        f"controller_cluster={EVALUATION_CONTROLLER_CLUSTER}  "
+        f"target_cluster={batch.accelerator.target_cluster or 'none'}  "
+        f"priority={priority_band_name(batch.priority_band)}"
+    )
+    for evaluation in batch.evaluations:
+        tasks = [task.name for task in evaluation.identity.eval_ref.tasks]
         click.echo(
-            f"  eval={plan.eval_key}  location={plan.model.location}  backend={plan.model.backend.value}  "
-            f"accel={plan.accel.label}  region_or_cluster={target}  limit={plan.limit}  "
-            f"chat_template={plan.model.apply_chat_template}  tasks={[t.name for t in plan.suite.tasks]}  "
-            f"records={records_prefix_for(plan.accel, spec)}"
+            f"  eval={evaluation.identity.eval_ref.name}  location={batch.model.location}  "
+            f"backend={batch.model.serve.backend.value}  accel={batch.accelerator.label}  "
+            f"region_or_cluster={batch.accelerator.target_cluster or batch.accelerator.region}  "
+            f"tasks={tasks}  "
+            f"records={batch.records_prefix}"
         )
 
 
@@ -51,8 +68,25 @@ def cli() -> None:
 
 
 @cli.command()
-@click.option("--model", required=True, help="Model registry key (see experiments.evaluation.models.MODELS).")
-@click.option("--evals", "evals_arg", default="smoke", help="Suite name (e.g. 'smoke') or comma-separated eval keys.")
+@click.option("--model", required=True, help="Model registry key.")
+@click.option(
+    "--evals",
+    "evals_arg",
+    default=None,
+    help="Suite name (e.g. 'smoke') or comma-separated eval keys; defaults to smoke.",
+)
+@click.option(
+    "--evalchemy-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    multiple=True,
+    help="Portable Evalchemy YAML or JSON. Repeatable and additive with --evals and --harbor-config.",
+)
+@click.option(
+    "--harbor-config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    multiple=True,
+    help="Harbor JobConfig YAML or JSON. Repeatable and additive with --evals.",
+)
 @click.option(
     "--platform",
     type=click.Choice([p.value for p in Platform]),
@@ -75,10 +109,22 @@ def cli() -> None:
     default=None,
     help="Object-store prefix for run records; defaults to GCS, or CW S3 for CoreWeave-routed runs.",
 )
-@click.option("--cluster", default="marin", envvar="IRIS_CLUSTER", help="Named iris cluster to submit to.")
+@click.option(
+    "--federated_cluster",
+    default=None,
+    help="Override the federated cluster for GPU serving; defaults to the fleet profile.",
+)
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES, case_sensitive=False),
+    default=None,
+    help="Iris priority band for the orchestrator and serve jobs; defaults to inherit.",
+)
 def launch(
     model: str,
-    evals_arg: str,
+    evals_arg: str | None,
+    evalchemy_config: tuple[Path, ...],
+    harbor_config: tuple[Path, ...],
     platform: str | None,
     accelerator: str | None,
     limit: int | None,
@@ -87,32 +133,64 @@ def launch(
     no_wait: bool,
     dry_run: bool,
     records_prefix: str | None,
-    cluster: str,
+    federated_cluster: str | None,
+    priority: str | None,
 ) -> None:
     """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
-    if model not in MODELS:
-        raise click.BadParameter(f"unknown model {model!r}; known: {sorted(MODELS)}")
-    model_config = MODELS[model]
+    catalog = models()
+    if model not in catalog:
+        raise click.BadParameter(f"unknown model {model!r}; known: {sorted(catalog)}")
+    model_config = catalog[model]
     resolved_platform = Platform(platform) if platform else default_platform(model_config)
+    evalchemy_definitions = [
+        EvalchemyDefinition(
+            name=canonical_served_name(path.stem),
+            config_path=path,
+        )
+        for path in evalchemy_config
+    ]
+    harbor_definitions = [
+        HarborDefinition(
+            name=canonical_served_name(path.stem),
+            config_path=path,
+        )
+        for path in harbor_config
+    ]
+    evals = (
+        _resolve_eval_keys(evals_arg)
+        if evals_arg is not None
+        else (() if evalchemy_definitions or harbor_definitions else _resolve_eval_keys("smoke"))
+    )
     spec = LaunchSpec(
         model=model,
-        evals=_resolve_eval_keys(evals_arg),
+        evals=evals,
+        evalchemy_definitions=tuple(evalchemy_definitions),
+        harbor_definitions=tuple(harbor_definitions),
         platform=resolved_platform,
         accelerator=accelerator,
         limit=limit,
         records_prefix=records_prefix,
-        cluster=cluster,
+        federated_cluster=federated_cluster,
+        priority_band=(job_pb2.PRIORITY_BAND_INHERIT if priority is None else priority_band_value(priority)),
         version=version,
         description=description,
     )
+    try:
+        batch = prepare_evaluation_batch(spec)
+    except ValueError as exc:
+        param_hint = "--evalchemy-config/--harbor-config" if evalchemy_config or harbor_config else "--evals"
+        raise click.BadParameter(str(exc), param_hint=param_hint) from exc
     if dry_run:
-        _print_plan(spec)
+        _print_plan(spec, batch)
         return
-    with open_iris_client(cluster_name=cluster, workspace=find_project_root()) as client:
-        group = launch_group(spec, client)
-        click.echo(f"submitted group {group.group_id} ({len(group.runs)} evals, one serve) to cluster {cluster!r}")
-        for ref in group.runs:
-            click.echo(f"  {ref.run_id}  ({group.model_key} / {ref.eval_key})")
+    with open_iris_client(cluster_name=EVALUATION_CONTROLLER_CLUSTER, workspace=find_project_root()) as client:
+        group = launch_group(batch, client)
+        click.echo(
+            f"submitted group {group.group_id} ({len(group.evaluations)} evals, one serve) "
+            f"through cluster {EVALUATION_CONTROLLER_CLUSTER!r}"
+        )
+        for evaluation in group.evaluations:
+            click.echo(f"  {evaluation.run_id}  ({group.model_name} / {evaluation.eval_name})")
         if no_wait:
             return
         wait_and_report([group])
@@ -123,17 +201,17 @@ def launch(
     "--prefix",
     "prefixes",
     multiple=True,
-    default=(DEFAULT_RECORDS_PREFIX, CW_RECORDS_PREFIX),
+    default=DEFAULT_SCAN_PREFIXES,
     show_default=True,
     help="Object-store prefix(es) to scan for records; repeatable.",
 )
 def backfill_samples(prefixes: tuple[str, ...]) -> None:
-    """Rewrite every run's per-sample parquets from its kept ``samples_*.jsonl`` sources."""
+    """Rebuild every run's finestore sample archive from its kept ``samples_*.jsonl`` sources."""
     configure_coreweave_s3()
     for prefix in prefixes:
         for record in list_records(prefix):
             written = export_lm_eval_samples(record.results_path)
-            click.echo(f"{record.run_id}  {len(written)} parquet(s)  {record.results_path}")
+            click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
 
 
 def main() -> None:

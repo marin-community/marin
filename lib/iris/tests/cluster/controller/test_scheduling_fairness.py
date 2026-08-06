@@ -5,8 +5,14 @@
 
 from collections import defaultdict
 
+import pytest
 from iris.cluster.controller import ops, reads
-from iris.cluster.controller.budget import UserTask, compute_effective_band, interleave_by_user
+from iris.cluster.controller.budget import (
+    UserTask,
+    compute_effective_band,
+    compute_user_spend,
+    interleave_by_user,
+)
 from iris.cluster.controller.controller import (
     SchedulingOutcome,
 )
@@ -19,6 +25,7 @@ from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 from sqlalchemy import select
 
+from ._test_support import set_task_state_for_test, submit_job_in_tx
 from .conftest import (
     inject_device_constraints,
     make_controller_state,
@@ -152,7 +159,7 @@ def test_depth_boost_within_band():
             replicas=1,
         )
         with state._db.transaction() as cur:
-            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+            submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
         child_tasks = query_tasks_for_job(state, child_id)
 
         schedulable = _pending(state)
@@ -173,38 +180,95 @@ def test_depth_boost_within_band():
         )
 
 
-def test_child_resolves_parent_band_from_job_config():
-    """Child job resolves its parent's priority band from job_config."""
+def _submit_child(
+    state, parent_id: JobName, parent_req, name: str = "child", band: int = job_pb2.PRIORITY_BAND_INHERIT
+) -> JobName:
+    """Submit a child reusing the parent's shape; INHERIT is what an inheriting child sends."""
+    child_id = parent_id.child(name)
+    child_req = controller_pb2.Controller.LaunchJobRequest(
+        name=child_id.to_wire(),
+        entrypoint=parent_req.entrypoint,
+        resources=parent_req.resources,
+        environment=parent_req.environment,
+        replicas=1,
+        priority_band=band,
+    )
+    with state._db.transaction() as cur:
+        submit_job_in_tx(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
+    return child_id
+
+
+def test_child_stores_the_inherited_band_on_both_rows():
+    """A band-less child persists its parent's band in job_config and on its tasks."""
     with make_controller_state() as state:
-        # Submit parent as PRODUCTION
         parent_id = JobName.root("alice", "parent-prod")
         parent_req = make_job_request(
             name="/alice/parent-prod", cpu=1, replicas=1, priority_band=job_pb2.PRIORITY_BAND_PRODUCTION
         )
         submit_job(state, "/alice/parent-prod", parent_req)
 
-        # Submit child job
-        child_id = parent_id.child("child")
-        child_req = controller_pb2.Controller.LaunchJobRequest(
-            name=child_id.to_wire(),
-            entrypoint=parent_req.entrypoint,
-            resources=parent_req.resources,
-            environment=parent_req.environment,
-            replicas=1,
-        )
-        with state._db.transaction() as cur:
-            ops.job.submit(cur, job_id=child_id, request=child_req, ts=Timestamp.now())
-        child_tasks = query_tasks_for_job(state, child_id)
+        child_id = _submit_child(state, parent_id, parent_req)
+        grandchild_id = _submit_child(state, child_id, parent_req, name="grand")
 
-        # Pending rows no longer inherit by reading parent task rows; the
-        # scheduler resolves inheritance from immutable job_config.
-        for ct in child_tasks:
-            task = query_task(state, ct.task_id)
-            assert task.priority_band == job_pb2.PRIORITY_BAND_INTERACTIVE
+        for job_id in (child_id, grandchild_id):
+            for row in query_tasks_for_job(state, job_id):
+                task = query_task(state, row.task_id)
+                assert task.priority_band == job_pb2.PRIORITY_BAND_PRODUCTION
 
         with state._db.read_snapshot() as snap:
-            requested = reads.get_priority_bands(snap, [child_id])
-        assert requested == {child_id: job_pb2.PRIORITY_BAND_PRODUCTION}
+            requested = reads.get_priority_bands(snap, [child_id, grandchild_id])
+        assert requested == {
+            child_id: job_pb2.PRIORITY_BAND_PRODUCTION,
+            grandchild_id: job_pb2.PRIORITY_BAND_PRODUCTION,
+        }
+
+
+def test_submit_refuses_an_unresolved_band():
+    """``ops.job.submit`` rejects INHERIT instead of storing it.
+
+    INHERIT is resolved at ingestion; the guard keeps a future writer that skips that
+    step from putting a 0 back into ``job_config``, where it would sort ahead of
+    PRODUCTION and drop out of the BATCH spend exclusion.
+    """
+    with make_controller_state() as state:
+        job_id = JobName.root("alice", "unresolved")
+        request = make_job_request(name="/alice/unresolved", cpu=1, replicas=1)
+        with pytest.raises(AssertionError, match="unresolved priority band"):
+            with state._db.transaction() as cur:
+                ops.job.submit(
+                    cur,
+                    job_id=job_id,
+                    request=request,
+                    ts=Timestamp.now(),
+                    priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+                )
+
+
+def _activate_job(state, job_id: JobName) -> None:
+    """Move a job's tasks to RUNNING; ``compute_user_spend`` only reads active rows."""
+    for row in query_tasks_for_job(state, job_id):
+        set_task_state_for_test(state, row.task_id, job_pb2.TASK_STATE_RUNNING)
+
+
+def test_batch_childs_spend_does_not_count_against_the_budget():
+    """A child of a BATCH job is excluded from user spend, like its parent."""
+    with make_controller_state() as state:
+        parent_id = JobName.root("alice", "parent-batch")
+        parent_req = make_job_request(
+            name="/alice/parent-batch", cpu=1, replicas=1, priority_band=job_pb2.PRIORITY_BAND_BATCH
+        )
+        submit_job(state, "/alice/parent-batch", parent_req)
+        child_id = _submit_child(state, parent_id, parent_req)
+        _activate_job(state, parent_id)
+        _activate_job(state, child_id)
+
+        # Bob's INTERACTIVE job is the control: it proves the spend query sees
+        # active tasks at all, so alice's absence is exclusion and not an empty read.
+        _submit_user_job(state, "bob", "interactive-job", band=job_pb2.PRIORITY_BAND_INTERACTIVE)
+        _activate_job(state, JobName.root("bob", "interactive-job"))
+
+        with state._db.read_snapshot() as snap:
+            assert compute_user_spend(snap).keys() == {"bob"}
 
 
 def test_submit_does_not_create_user_budgets_row():
@@ -296,16 +360,13 @@ def test_production_never_downgraded_by_budget():
             assert band == job_pb2.PRIORITY_BAND_PRODUCTION
 
 
-def test_get_priority_bands_resolves_via_parent_chain():
-    """``JobStore.get_priority_bands`` mirrors ``submit_job``'s resolution at read time.
+def test_get_priority_bands_returns_a_real_band_for_every_job():
+    """``get_priority_bands`` never returns INHERIT (0).
 
-    ``job_config.priority_band`` is the raw user request and can be
-    UNSPECIFIED (0) for jobs that didn't pass ``--priority``. The scheduler
-    feeds the result of this lookup into ``compute_effective_band``, so a
-    raw 0 here would let the task sort ahead of PRODUCTION. The lookup
-    must instead walk the parent chain (matching ``submit_job``'s
-    submit-time resolution) and fall back to INTERACTIVE only if the entire
-    chain is UNSPECIFIED.
+    The scheduler feeds this lookup into ``compute_effective_band`` and sorts on the
+    result, so a 0 would place the task ahead of PRODUCTION (1). Submit resolves the
+    band before it is stored, so this reads it back for a root that asked for none, an
+    explicit band, an inheriting child, and a child that overrides its parent.
     """
     with make_controller_state() as state:
         # Top-level with no band → INTERACTIVE default.
@@ -320,34 +381,9 @@ def test_get_priority_bands_resolves_via_parent_chain():
         prod_job_id = JobName.from_string("/alice/prod-job")
 
         # Sub-job of PRODUCTION parent, no band of its own → must inherit PRODUCTION.
-        sub_id = prod_job_id.child("subtask")
-        sub_req = controller_pb2.Controller.LaunchJobRequest(
-            name=sub_id.to_wire(),
-            entrypoint=prod_req.entrypoint,
-            resources=prod_req.resources,
-            environment=prod_req.environment,
-            replicas=1,
-        )
-        with state._db.transaction() as cur:
-            ops.job.submit(cur, job_id=sub_id, request=sub_req, ts=Timestamp.now())
-
-        # Sub-job with its own explicit BATCH → BATCH (own band wins, no walk).
-        batch_sub_id = prod_job_id.child("batch-sub")
-        batch_sub_req = controller_pb2.Controller.LaunchJobRequest(
-            name=batch_sub_id.to_wire(),
-            entrypoint=prod_req.entrypoint,
-            resources=prod_req.resources,
-            environment=prod_req.environment,
-            replicas=1,
-            priority_band=job_pb2.PRIORITY_BAND_BATCH,
-        )
-        with state._db.transaction() as cur:
-            ops.job.submit(
-                cur,
-                job_id=batch_sub_id,
-                request=batch_sub_req,
-                ts=Timestamp.now(),
-            )
+        sub_id = _submit_child(state, prod_job_id, prod_req, name="subtask")
+        # Sub-job with its own explicit BATCH → BATCH (own band wins over the parent's).
+        batch_sub_id = _submit_child(state, prod_job_id, prod_req, name="batch-sub", band=job_pb2.PRIORITY_BAND_BATCH)
 
         with state._db.read_snapshot() as snap:
             bands = reads.get_priority_bands(snap, [plain_job_id, prod_job_id, sub_id, batch_sub_id])
@@ -356,23 +392,6 @@ def test_get_priority_bands_resolves_via_parent_chain():
         assert bands[prod_job_id] == job_pb2.PRIORITY_BAND_PRODUCTION
         assert bands[sub_id] == job_pb2.PRIORITY_BAND_PRODUCTION
         assert bands[batch_sub_id] == job_pb2.PRIORITY_BAND_BATCH
-
-
-def test_compute_effective_band_normalizes_unspecified():
-    """Defense-in-depth: UNSPECIFIED (0) must never leak through as a real band.
-
-    Returning 0 would sort the task ahead of PRODUCTION (1) under the
-    scheduler's ``ORDER BY priority_band ASC``. The proper resolution
-    (parent inheritance, then INTERACTIVE) lives in
-    ``JobStore.get_priority_bands``; this is a last-resort guard.
-    """
-    defaults = UserBudgetDefaults()
-    band = compute_effective_band(job_pb2.PRIORITY_BAND_UNSPECIFIED, "alice", {"alice": 0}, {"alice": 5000}, defaults)
-    assert band == job_pb2.PRIORITY_BAND_INTERACTIVE
-    band = compute_effective_band(
-        job_pb2.PRIORITY_BAND_UNSPECIFIED, "alice", {"alice": 10000}, {"alice": 5000}, defaults
-    )
-    assert band == job_pb2.PRIORITY_BAND_BATCH
 
 
 def test_zero_budget_means_unlimited():
@@ -415,7 +434,7 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
         inject_device_constraints(tpu_req)
         jid = JobName.from_string(f"/alice/tpu-job-{i}")
         with ctrl._db.transaction() as cur:
-            ops.job.submit(
+            submit_job_in_tx(
                 cur,
                 job_id=jid,
                 request=tpu_req,
@@ -427,7 +446,7 @@ def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_pa
     cpu_req = make_job_request(name="/alice/cpu-job", cpu=1, replicas=1)
     inject_device_constraints(cpu_req)
     with ctrl._db.transaction() as cur:
-        ops.job.submit(
+        submit_job_in_tx(
             cur,
             job_id=cpu_jid,
             request=cpu_req,

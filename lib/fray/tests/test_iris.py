@@ -8,19 +8,21 @@ Integration tests that need a running cluster are marked with @pytest.mark.iris.
 """
 
 import pickle
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import fray.iris_backend as iris_backend
 import pytest
 from fray.iris_backend import (
     FrayIrisClient,
     IrisActorHandle,
+    IrisJobHandle,
     convert_constraints,
     resolve_coscheduling,
     wrap_multiprocess,
 )
 from fray.types import (
     ANY_REGION,
-    CpuConfig,
     Entrypoint,
     GpuConfig,
     JobRequest,
@@ -98,6 +100,13 @@ class TestConvertConstraints:
         assert c.op == ConstraintOp.EQ
         assert c.values[0].value == "us-east1-d"
 
+    def test_target_cluster_produces_eq_constraint(self):
+        constraints = convert_constraints(ResourceConfig(target_cluster="cw-us-east-02a"))
+        cluster_constraints = [constraint for constraint in constraints if constraint.key == "cluster"]
+        assert len(cluster_constraints) == 1
+        assert cluster_constraints[0].op == ConstraintOp.EQ
+        assert cluster_constraints[0].values[0].value == "cw-us-east-02a"
+
 
 class TestConvertConstraintsDeviceAlternatives:
     def test_no_alternatives_produces_no_device_constraint(self):
@@ -127,12 +136,53 @@ class TestIrisActorHandlePickle:
 
     def test_pickle_drops_client(self):
         """Client is transient state — pickle should not carry it."""
-        handle = IrisActorHandle("my-actor")
+        handle = IrisActorHandle("my-actor", resolver=MagicMock())
         # Manually set client to simulate resolved state
         handle._client = "fake-client"
         data = pickle.dumps(handle)
         restored = pickle.loads(data)
         assert restored._client is None
+        assert restored._resolver is None
+
+
+def test_actor_group_created_by_driver_uses_creating_client(monkeypatch):
+    fake_iris = MagicMock()
+    fake_iris.submit.return_value = MagicMock(job_id="/user/job")
+    fake_iris.list_endpoints.return_value = [SimpleNamespace(name="/user/job/dummy-0")]
+    resolver = MagicMock()
+    fake_iris.resolver_for_job.return_value = resolver
+    fake_actor = MagicMock()
+    fake_actor.ping.return_value = "pong"
+    actor_clients = []
+
+    def actor_client(actor_resolver, endpoint_name):
+        actor_clients.append((actor_resolver, endpoint_name))
+        return fake_actor
+
+    monkeypatch.setattr(iris_backend, "ActorClient", actor_client)
+
+    client = FrayIrisClient.from_iris_client(fake_iris)
+    group = client.create_actor_group(object, name="dummy", count=1)
+    handle = group.wait_ready(count=1, timeout=0)[0]
+
+    assert handle.ping() == "pong"
+    assert actor_clients == [(resolver, "/user/job/dummy-0")]
+    group.discover_new()
+    fake_iris.resolver_for_job.assert_called_once_with("/user/job")
+
+
+def test_iris_job_handle_returns_a_globally_bounded_tail():
+    job = MagicMock()
+    job.job_id = "/user/job"
+    job.logs.return_value = [
+        MagicMock(data="task-0 earlier\n"),
+        MagicMock(data="task-1 latest\n"),
+    ]
+
+    lines = IrisJobHandle(job).logs(max_lines=2)
+
+    assert lines == ("task-0 earlier", "task-1 latest")
+    job.logs.assert_called_once_with(max_lines=2, tail=True)
 
 
 class TestResourceConfigScale:
@@ -291,6 +341,21 @@ class TestActorGroupEnvironment:
         assert env.env_vars["JAX_PLATFORMS"] == ""
 
 
+def test_create_gpu_actor_group_uses_leafgroup_topology():
+    fake_iris = MagicMock()
+    fake_iris.submit.return_value = MagicMock(job_id="job-gpu")
+    client = FrayIrisClient.from_iris_client(fake_iris)
+
+    class _DummyActor:
+        pass
+
+    resources = ResourceConfig.with_gpu("GB200", count=4)
+    client.create_actor_group(_DummyActor, name="gpu-actors", count=32, resources=resources)
+
+    coscheduling = fake_iris.submit.call_args.kwargs["coscheduling"]
+    assert coscheduling.group_by == "leafgroup"
+
+
 class TestWithTpuFlexible:
     def test_single_type_returns_standard_config(self):
         rc = ResourceConfig.with_tpu(["v5p-8"])
@@ -330,26 +395,67 @@ class TestWithTpuFlexible:
         assert rc.replicas == 4
 
 
-# resolve_coscheduling: multi-host gangs pick the topology level the Iris provider maps.
-# group_by is now a literal topology level (B4 rename); an unmapped value raises at K8s
-# pod-manifest build, so the fray defaults must stay in sync with the provider's map.
-
-
-def test_resolve_coscheduling_gpu_multinode_uses_leafgroup():
-    cosched = resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=2)
+@pytest.mark.parametrize(
+    ("variant", "count", "replicas", "group_by"),
+    [
+        ("H100", 8, 2, "leafgroup"),
+        ("GB200", 4, 16, "nvlink.domain"),
+        ("GB200", 4, 32, "nvlink.domain.sliced"),
+        ("GB200", 4, 64, "nvlink.domain.sliced"),
+    ],
+)
+def test_resolve_coscheduling_gpu_multinode_uses_variant_topology(variant, count, replicas, group_by):
+    resources = ResourceConfig(device=GpuConfig(variant=variant, count=count))
+    cosched = resolve_coscheduling(resources, replicas=replicas)
     assert cosched is not None
-    assert cosched.group_by == "leafgroup"
+    assert cosched.group_by == group_by
+
+
+@pytest.mark.parametrize(
+    ("count", "replicas"),
+    [
+        (1, 32),
+        (4, 17),
+    ],
+)
+def test_resolve_coscheduling_gpu_multirack_rejects_unplaceable_gang(count, replicas):
+    resources = ResourceConfig(device=GpuConfig(variant="GB200", count=count))
+    with pytest.raises(ValueError):
+        resolve_coscheduling(resources, replicas=replicas)
+
+
+def test_resolve_coscheduling_gpu_allows_compatible_alternative_topologies():
+    resources = ResourceConfig(
+        device=GpuConfig(variant="GB200", count=4),
+        device_alternatives=["GB300"],
+    )
+
+    cosched = resolve_coscheduling(resources, replicas=32)
+
+    assert cosched is not None
+    assert cosched.group_by == "nvlink.domain.sliced"
+
+
+def test_resolve_coscheduling_gpu_rejects_incompatible_alternative_topologies():
+    resources = ResourceConfig(
+        device=GpuConfig(variant="GB200", count=4),
+        device_alternatives=["H100"],
+    )
+
+    with pytest.raises(ValueError, match=r"GB200=nvlink\.domain\.sliced, H100=leafgroup"):
+        resolve_coscheduling(resources, replicas=32)
 
 
 def test_resolve_coscheduling_tpu_multinode_uses_tpu_name():
-    cosched = resolve_coscheduling(TpuConfig(variant="v5litepod-16"), replicas=4)
+    resources = ResourceConfig(device=TpuConfig(variant="v5litepod-16"))
+    cosched = resolve_coscheduling(resources, replicas=4)
     assert cosched is not None
     assert cosched.group_by == "tpu-name"
 
 
 def test_resolve_coscheduling_single_replica_is_none():
-    assert resolve_coscheduling(GpuConfig(variant="H100", count=8), replicas=1) is None
-    assert resolve_coscheduling(CpuConfig(), replicas=4) is None
+    assert resolve_coscheduling(ResourceConfig(device=GpuConfig(variant="H100", count=8)), replicas=1) is None
+    assert resolve_coscheduling(ResourceConfig(), replicas=4) is None
 
 
 def _gpu_resources(count: int) -> ResourceSpec:
@@ -402,3 +508,47 @@ def test_wrap_multiprocess_requires_gpu() -> None:
 def test_wrap_multiprocess_requires_divisible_gpu_count() -> None:
     with pytest.raises(ValueError, match="must divide the GPU count"):
         wrap_multiprocess(IrisEntrypoint.from_command("python", "x.py"), _gpu_resources(8), processes_per_task=3)
+
+
+def test_wrap_nsys_is_a_noop_without_the_environment_variable(monkeypatch):
+    monkeypatch.delenv(iris_backend.NSYS_TASKS_ENV, raising=False)
+    entrypoint = IrisEntrypoint(command=["bash", "-c", "exec $IRIS_PYTHON -u run.py"])
+
+    assert iris_backend.wrap_nsys(entrypoint).command == entrypoint.command
+
+
+def test_wrap_nsys_composes_the_hook_into_a_shell_entrypoint(monkeypatch):
+    monkeypatch.setenv(iris_backend.NSYS_TASKS_ENV, "first")
+    entrypoint = IrisEntrypoint(
+        command=["bash", "-c", "exec $IRIS_PYTHON -u run.py"],
+        workdir_files={"run.py": b"print(1)"},
+    )
+
+    wrapped = iris_backend.wrap_nsys(entrypoint)
+
+    assert wrapped.command == [
+        "bash",
+        "-c",
+        "exec $IRIS_PYTHON -m iris.hooks.nsys_main --tasks first -- $IRIS_PYTHON -u run.py",
+    ]
+    assert wrapped.workdir_files == entrypoint.workdir_files
+
+
+def test_wrap_nsys_composes_the_hook_into_a_binary_entrypoint(monkeypatch):
+    monkeypatch.setenv(iris_backend.NSYS_TASKS_ENV, "0,3")
+    entrypoint = IrisEntrypoint(command=["python", "train.py", "--steps", "5"])
+
+    wrapped = iris_backend.wrap_nsys(entrypoint)
+
+    assert wrapped.command == [
+        "$IRIS_PYTHON",
+        "-m",
+        "iris.hooks.nsys_main",
+        "--tasks",
+        "0,3",
+        "--",
+        "python",
+        "train.py",
+        "--steps",
+        "5",
+    ]

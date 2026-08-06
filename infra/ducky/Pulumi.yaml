@@ -1,4 +1,6 @@
 name: ducky
+backend:
+  url: gs://marin-iac-state/
 runtime:
   name: python
   # Pin the shared repo venv (which has iac, iris, ducky, and pulumi-command via
@@ -8,7 +10,4 @@ runtime:
   options:
     virtualenv: ../../.venv
 description: ducky (ad-hoc DuckDB SQL service) as an always-on Iris job.
-# The state backend is selected by the operator/CI environment and shared with infra/pulumi
-# (see infra/pulumi/README.md):
-#   pulumi login gs://marin-iac-state
 # Pulumi.ducky-marin.yaml records the production stack's shared GCP KMS provider.

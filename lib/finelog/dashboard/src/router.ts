@@ -9,7 +9,9 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   { path: '/query', name: 'query', component: () => import('@/pages/QueryPage.vue') },
+  { path: '/dashboards', name: 'dashboards', component: () => import('@/pages/DashboardsPage.vue') },
   { path: '/logs', name: 'logs', component: () => import('@/pages/LogsPage.vue') },
+  { path: '/system', name: 'system', component: () => import('@/pages/SystemPage.vue') },
 ]
 
 export const router = createRouter({

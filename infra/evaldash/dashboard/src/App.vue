@@ -2,6 +2,7 @@
 import { RouterView } from 'vue-router'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import TabNav from '@/components/layout/TabNav.vue'
+import TooltipHost from '@/components/shared/TooltipHost.vue'
 import { useAutoRefresh } from '@/composables/useRefresh'
 
 useAutoRefresh()
@@ -14,5 +15,6 @@ useAutoRefresh()
     <main class="flex-1 px-6 py-4 max-w-[1600px] w-full mx-auto">
       <RouterView />
     </main>
+    <TooltipHost />
   </div>
 </template>

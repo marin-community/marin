@@ -4,7 +4,10 @@
   "version": "0.0.0",
   "scripts": {
     "build": "rsbuild build",
-    "build:check": "vue-tsc --noEmit && rsbuild build"
+    "build:check": "vue-tsc --noEmit && rsbuild build",
+    "test": "node --test 'src/utils/*.test.ts'",
+    "dev": "rsbuild dev",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource-variable/noto-sans": "^5.2.10",
@@ -15,6 +18,7 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@rsbuild/core": "^1.2.0",
     "@rsbuild/plugin-vue": "^1.2.9",
     "autoprefixer": "^10.4.0",

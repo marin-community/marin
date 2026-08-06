@@ -41,6 +41,7 @@ SCOPES: tuple[str, ...] = (
     "marin",
     "dupekit",
     "finelog",
+    "finestore",
 )
 
 
@@ -83,6 +84,7 @@ UV_PACKAGE: dict[str, str] = {
     "marin": "marin-core",
     "dupekit": "marin-dupekit",
     "finelog": "marin-finelog",
+    "finestore": "marin-finestore",
 }
 
 UV_EXTRAS: dict[str, list[str]] = {
@@ -111,6 +113,7 @@ MIN_FILES_PER_SHARD = 15
 NATIVE_CRATE_DIR: dict[str, str] = {
     "dupekit": "lib/dupekit/rust",
     "finelog": "lib/finelog/rust",
+    "iris": "lib/iris/rust",
 }
 
 # The matrix `setup` tag that unified-unit.yaml maps to the Rust source-build

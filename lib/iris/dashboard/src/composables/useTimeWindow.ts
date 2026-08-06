@@ -32,6 +32,8 @@ export interface TimeWindow {
   absolute: ComputedRef<boolean>
   /** The bound as epoch ms, or undefined when unbounded. */
   sinceMs: () => number | undefined
+  /** Set an absolute lower bound from an epoch-ms timestamp. */
+  setSinceMs: (ms: number) => void
   selectPreset: (ms: number) => void
 }
 
@@ -42,12 +44,28 @@ export interface TimeWindow {
  * rather than the browser's. Returns NaN when the value does not parse.
  */
 function parseDateTimeLocal(value: string, zone: TimeZoneName): number {
-  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/)
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/)
   if (!m) return NaN
-  const [year, month, day, hour, minute, second] = m.slice(1).map((p) => Number(p ?? 0))
+  const [year, month, day, hour, minute, second] = m.slice(1, 7).map((p) => Number(p ?? 0))
+  const millisecond = Number((m[7] ?? '').padEnd(3, '0'))
   return zone === 'utc'
-    ? Date.UTC(year, month - 1, day, hour, minute, second)
-    : new Date(year, month - 1, day, hour, minute, second).getTime()
+    ? Date.UTC(year, month - 1, day, hour, minute, second, millisecond)
+    : new Date(year, month - 1, day, hour, minute, second, millisecond).getTime()
+}
+
+/** Format an epoch-ms timestamp for a `datetime-local` input in `zone`. */
+function formatDateTimeLocal(ms: number, zone: TimeZoneName): string {
+  const date = new Date(ms)
+  const part = (local: () => number, utc: () => number, width = 2) =>
+    String(zone === 'utc' ? utc() : local()).padStart(width, '0')
+  const year = part(() => date.getFullYear(), () => date.getUTCFullYear(), 4)
+  const month = part(() => date.getMonth() + 1, () => date.getUTCMonth() + 1)
+  const day = part(() => date.getDate(), () => date.getUTCDate())
+  const hour = part(() => date.getHours(), () => date.getUTCHours())
+  const minute = part(() => date.getMinutes(), () => date.getUTCMinutes())
+  const second = part(() => date.getSeconds(), () => date.getUTCSeconds())
+  const millisecond = part(() => date.getMilliseconds(), () => date.getUTCMilliseconds(), 3)
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}.${millisecond}`
 }
 
 export function useTimeWindow(timeZone: Ref<TimeZoneName>): TimeWindow {
@@ -69,6 +87,10 @@ export function useTimeWindow(timeZone: Ref<TimeZoneName>): TimeWindow {
     return presetMs.value > 0 ? Date.now() - presetMs.value : undefined
   }
 
+  function setSinceMs(ms: number) {
+    customSince.value = formatDateTimeLocal(ms, timeZone.value)
+  }
+
   function selectPreset(ms: number) {
     // Re-selecting the synthetic "Custom" option leaves the instant in effect.
     if (ms === CUSTOM_PRESET) return
@@ -76,5 +98,5 @@ export function useTimeWindow(timeZone: Ref<TimeZoneName>): TimeWindow {
     presetMs.value = ms
   }
 
-  return { presetMs, customSince, absolute, sinceMs, selectPreset }
+  return { presetMs, customSince, absolute, sinceMs, setSinceMs, selectPreset }
 }
