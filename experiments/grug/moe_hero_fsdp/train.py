@@ -61,7 +61,13 @@ XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
-    os.environ.update(HERO_FSDP_RUNTIME_ENV)
+    # These are DEFAULTS, not overrides: an explicit value in the launch environment must win.
+    # This was `os.environ.update(...)`, which silently clobbered anything passed via
+    # `iris job run -e ...`. Consequence: XLA_PYTHON_CLIENT_ALLOCATOR and JAX_ENABLE_PGLE were
+    # not actually ablatable, so any experiment that thought it had turned one of them off was
+    # a null by construction.
+    for key, value in HERO_FSDP_RUNTIME_ENV.items():
+        os.environ.setdefault(key, value)
     xla_flags = os.environ.get("XLA_FLAGS", "")
     command_buffer_flag_name = XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG.partition("=")[0]
     if any(flag.partition("=")[0] == command_buffer_flag_name for flag in xla_flags.split()):
@@ -674,6 +680,8 @@ def run_grug(config: GrugRunConfig) -> None:
         config=config,
         local_entrypoint=_run_grug_local,
         resources=config.resources,
+        max_retries_failure=0,
+        max_task_failures=0,
         processes_per_task=config.processes_per_task,
     )
 
