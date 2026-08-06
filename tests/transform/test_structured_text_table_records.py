@@ -419,7 +419,8 @@ def test_stage_table_record_source_respects_byte_cap(tmp_path):
     # We must have written at least one record (the stop condition doesn't
     # trigger on the very first one) but fewer than the full 500.
     assert 0 < result["record_count"] < 500
-    assert result["bytes_written"] >= 0
+    assert 0 < result["text_bytes_written"] <= 1000
+    assert result["bytes_written"] == Path(result["output_file"]).stat().st_size
 
 
 def test_stage_table_record_source_rejects_unknown_serializer(tmp_path):
