@@ -26,8 +26,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, FileScanConfigBuilder};
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{BinaryExpr, Expr, Like, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
@@ -474,38 +472,17 @@ fn rewrite_file_groups(
     plan: Arc<dyn ExecutionPlan>,
     access_plans: &HashMap<String, ParquetAccessPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-        return plan;
-    };
-    let Some(cfg) = exec.data_source().as_any().downcast_ref::<FileScanConfig>() else {
-        return plan;
-    };
-    let new_groups: Vec<FileGroup> = cfg
-        .file_groups
-        .iter()
-        .map(|group| {
-            let files = group
-                .files()
-                .iter()
-                .map(|pf| {
-                    match pf
-                        .object_meta
-                        .location
-                        .filename()
-                        .and_then(|b| access_plans.get(b))
-                    {
-                        Some(access) => pf.clone().with_extensions(Arc::new(access.clone())),
-                        None => pf.clone(),
-                    }
-                })
-                .collect::<Vec<_>>();
-            FileGroup::new(files)
-        })
-        .collect();
-    let new_cfg = FileScanConfigBuilder::from(cfg.clone())
-        .with_file_groups(new_groups)
-        .build();
-    DataSourceExec::from_data_source(new_cfg)
+    crate::query::file_scan::rewrite_parquet_files(plan, |file| {
+        match file
+            .object_meta
+            .location
+            .filename()
+            .and_then(|basename| access_plans.get(basename))
+        {
+            Some(access) => file.clone().with_extensions(Arc::new(access.clone())),
+            None => file.clone(),
+        }
+    })
 }
 
 #[cfg(test)]

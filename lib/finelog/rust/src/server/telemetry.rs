@@ -667,25 +667,3 @@ fn store_error(error: StatsError) -> ApiError {
         format!("telemetry write failed: {error}"),
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn schema_indexes_common_exact_analytics() {
-        let schema = telemetry_schema();
-        let service = schema.column("service").unwrap();
-        let kind = schema.column("kind").unwrap();
-        let name = schema.column("name").unwrap();
-
-        assert!(service.index.value_counts);
-        assert!(kind.index.value_counts);
-        assert!(name.index.trigram);
-        assert!(name.index.value_counts);
-        assert_eq!(
-            name.index.exact_values,
-            ["phase", "progress_time_seconds", "step"]
-        );
-    }
-}

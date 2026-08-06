@@ -209,6 +209,8 @@ mod tests {
     use crate::store::trigram::SIDECAR_SPAN_ROWS;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
+    use datafusion::datasource::physical_plan::FileScanConfig;
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
 
@@ -322,9 +324,6 @@ mod tests {
 
     #[tokio::test]
     async fn exact_predicate_uses_complete_filtered_projections() {
-        use datafusion::datasource::physical_plan::FileScanConfig;
-        use datafusion::datasource::source::DataSourceExec;
-
         let dir = tempdir("exact_projection");
         let batch = worker_batch(1, vec!["w-1", "w-2", "w-3"], vec![100, 200, 300]);
         let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
@@ -376,9 +375,6 @@ mod tests {
 
     #[tokio::test]
     async fn missing_projection_falls_back_for_the_entire_snapshot() {
-        use datafusion::datasource::physical_plan::FileScanConfig;
-        use datafusion::datasource::source::DataSourceExec;
-
         let dir = tempdir("exact_projection_fallback");
         let first = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
         let second = worker_batch(3, vec!["w-2", "w-3"], vec![300, 400]);

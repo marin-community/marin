@@ -41,7 +41,7 @@ pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
 
 /// Secondary indexes a column carries. Each index type is its own field so
-/// adding one is additive; `ColumnIndex::default()` (all-false) is unindexed.
+/// adding one is additive; `ColumnIndex::default()` is unindexed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColumnIndex {
     /// Per-row-group trigram substring index in each segment's `.tgm` sidecar.
@@ -257,7 +257,9 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
             .unwrap_or(false);
         cols.push(column);
     }
-    Ok(Schema::new(cols, view.key_column.unwrap_or("")))
+    let schema = Schema::new(cols, view.key_column.unwrap_or(""));
+    validate_index_policies(&schema)?;
+    Ok(schema)
 }
 
 /// Encode a schema for the wire, stripping the implicit `seq` column.
@@ -474,6 +476,20 @@ pub fn resolve_key_column(schema: &Schema) -> Result<String, StatsError> {
         )));
     }
     Ok(resolved)
+}
+
+/// Reject index policies whose implementation cannot consume the column type.
+pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
+    for column in &schema.columns {
+        let has_exact_index = column.index.value_counts || !column.index.exact_values.is_empty();
+        if has_exact_index && column.r#type != ColumnType::COLUMN_TYPE_STRING {
+            return Err(StatsError::SchemaValidation(format!(
+                "column {:?}: exact_values and value_counts require a STRING column",
+                column.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1095,6 +1111,20 @@ mod tests {
             "",
         );
         assert_eq!(merge_schemas(&reg, &subset).unwrap(), reg);
+    }
+
+    #[test]
+    fn exact_index_policies_require_string_columns() {
+        for column in [
+            col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false).with_value_counts(),
+            col("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false).with_exact_values(["phase"]),
+        ] {
+            let schema = Schema::new(vec![column], "timestamp_ms");
+            assert!(matches!(
+                validate_index_policies(&schema),
+                Err(StatsError::SchemaValidation(_))
+            ));
+        }
     }
 
     #[test]

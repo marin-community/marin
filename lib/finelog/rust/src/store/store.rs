@@ -26,8 +26,8 @@ use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, with_implicit_cluster, with_implicit_seq, AlignedBatch,
-    Column, Schema,
+    merge_schemas, resolve_key_column, validate_index_policies, with_implicit_cluster,
+    with_implicit_seq, AlignedBatch, Column, Schema,
 };
 use crate::store::types::NamespaceStats;
 
@@ -352,6 +352,7 @@ impl Store {
     ) -> Result<Schema, StatsError> {
         // Validate the name (and fence the `log` dir special-case) first.
         self.namespace_dir(name)?;
+        validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
         let stored = with_implicit_seq(with_implicit_cluster(schema));
 

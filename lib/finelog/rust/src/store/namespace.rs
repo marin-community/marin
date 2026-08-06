@@ -41,7 +41,7 @@ use crate::store::compaction::executor::{
 use crate::store::compaction::planner::plan;
 use crate::store::exact::{
     projection_path as exact_projection_path, read_sidecar as read_exact_sidecar,
-    sidecar_path as exact_sidecar_path, ExactIndexConfig,
+    sidecar_path as exact_sidecar_path, ExactIndexConfig, ExactIndexWrite,
 };
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
@@ -70,6 +70,20 @@ fn remove_sidecars(parquet_path: &str) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 tracing::warn!(path = %path.display(), error = %e, sidecar = kind, "failed to remove segment sidecar");
             }
+        }
+    }
+}
+
+fn remove_orphaned_sidecar(namespace: &str, path: &Path, kind: &str) {
+    if let Err(error) = std::fs::remove_file(path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                namespace,
+                path = %path.display(),
+                sidecar = kind,
+                %error,
+                "failed to remove orphaned segment sidecar"
+            );
         }
     }
 }
@@ -278,6 +292,23 @@ impl SidecarBackfillSkips {
         }
         self.paths.retain(|p| live.contains(p.as_str()));
     }
+}
+
+struct BackfillCandidate {
+    path: String,
+    expected_rows: i64,
+}
+
+#[derive(Clone, Copy)]
+enum BackfillWrite {
+    Written,
+    NotApplicable,
+}
+
+struct BackfillRun<'a> {
+    projection: &'a [&'a str],
+    skips: &'a Mutex<SidecarBackfillSkips>,
+    kind: &'static str,
 }
 
 /// A namespace's sealed local segments as one consistent observation: the files a
@@ -995,14 +1026,14 @@ impl Namespace {
                     // unlink or eviction will ever reach this sidecar — it would
                     // linger as a stale orphan forever. Drop it; the bumped segment
                     // then scans unpruned, which is correct.
-                    let _ = std::fs::remove_file(&sidecar_from);
+                    remove_orphaned_sidecar(&self.name, &sidecar_from, "trigram");
                 }
             }
             let (exact_from, exact_to) = (exact_sidecar_path(from), exact_sidecar_path(to));
             if exact_from.exists() {
                 if let Err(e) = std::fs::rename(&exact_from, &exact_to) {
                     tracing::warn!(namespace = %self.name, from = %exact_from.display(), error = %e, "failed to carry exact sidecar on level bump");
-                    let _ = std::fs::remove_file(&exact_from);
+                    remove_orphaned_sidecar(&self.name, &exact_from, "exact");
                 }
             }
             let (projection_from, projection_to) =
@@ -1010,7 +1041,7 @@ impl Namespace {
             if projection_from.exists() {
                 if let Err(e) = std::fs::rename(&projection_from, &projection_to) {
                     tracing::warn!(namespace = %self.name, from = %projection_from.display(), error = %e, "failed to carry exact projection on level bump");
-                    let _ = std::fs::remove_file(&projection_from);
+                    remove_orphaned_sidecar(&self.name, &projection_from, "exact projection");
                 }
             }
         }
@@ -1260,6 +1291,90 @@ impl Namespace {
 
     // ----- trigram sidecar backfill -------------------------------------
 
+    fn sidecar_backfill_candidates(
+        &self,
+        skips: &Mutex<SidecarBackfillSkips>,
+        fingerprint: &[&str],
+        max: usize,
+        select: impl Fn(&LocalSegment) -> Option<BackfillCandidate>,
+    ) -> Vec<BackfillCandidate> {
+        let inner = self.inner.lock().unwrap();
+        let mut skips = skips.lock().unwrap();
+        let live: HashSet<&str> = inner
+            .local_segments
+            .iter()
+            .map(|segment| segment.path.as_str())
+            .collect();
+        skips.reconcile(fingerprint, &live);
+        inner
+            .local_segments
+            .iter()
+            .filter(|segment| !skips.paths.contains(&segment.path))
+            .filter_map(select)
+            .take(max)
+            .collect()
+    }
+
+    fn run_sidecar_backfill(
+        &self,
+        candidates: Vec<BackfillCandidate>,
+        run: BackfillRun<'_>,
+        write: impl Fn(&Path, &[RecordBatch]) -> std::io::Result<BackfillWrite>,
+        still_missing: impl Fn(&BackfillCandidate) -> bool,
+        on_written: impl Fn(&Path),
+    ) -> usize {
+        let mut built = 0;
+        for candidate in candidates {
+            let path = Path::new(&candidate.path);
+            let batches = match read_segment_projected(path, Some(run.projection)) {
+                Ok(batches) => batches,
+                Err(error) => {
+                    tracing::warn!(
+                        namespace = %self.name,
+                        path = %candidate.path,
+                        sidecar = run.kind,
+                        %error,
+                        "sidecar backfill read failed"
+                    );
+                    continue;
+                }
+            };
+            match write(path, &batches) {
+                Ok(BackfillWrite::Written) => {
+                    on_written(path);
+                    built += 1;
+                    tracing::debug!(
+                        namespace = %self.name,
+                        path = %candidate.path,
+                        sidecar = run.kind,
+                        "backfilled segment sidecar"
+                    );
+                }
+                Ok(BackfillWrite::NotApplicable) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        namespace = %self.name,
+                        path = %candidate.path,
+                        sidecar = run.kind,
+                        %error,
+                        "sidecar backfill write failed"
+                    );
+                    continue;
+                }
+            }
+            if still_missing(&candidate) {
+                tracing::debug!(
+                    namespace = %self.name,
+                    path = %candidate.path,
+                    sidecar = run.kind,
+                    "segment cannot satisfy the current sidecar policy; not retrying"
+                );
+                run.skips.lock().unwrap().paths.insert(candidate.path);
+            }
+        }
+        built
+    }
+
     /// Rebuild trigram sidecars for up to `max` local L>=1 segments missing one.
     ///
     /// Compaction only builds a sidecar for the segments it merges (see
@@ -1277,7 +1392,7 @@ impl Namespace {
     /// Writes are atomic (`write_sidecar` renames into place), so a query that
     /// races the backfill sees either the old (absent) or the complete sidecar,
     /// never a partial one.
-    fn backfill_missing_sidecars(&self, max: usize) -> usize {
+    fn backfill_missing_trigram_sidecars(&self, max: usize) -> usize {
         if self.data_dir.is_none() || max == 0 {
             return 0;
         }
@@ -1291,25 +1406,18 @@ impl Namespace {
         // predates a column gaining its index — enabling an index on a live
         // namespace is otherwise silently ineffective for existing segments,
         // since file existence alone cannot tell the two cases apart.
-        let candidates: Vec<String> = {
-            let inner = self.inner.lock().unwrap();
-            let mut skips = self.sidecar_backfill_skips.lock().unwrap();
-            let live: HashSet<&str> = inner
-                .local_segments
-                .iter()
-                .map(|s| s.path.as_str())
-                .collect();
-            skips.reconcile(&indexed, &live);
-            inner
-                .local_segments
-                .iter()
-                .filter(|s| s.level >= 1)
-                .map(|s| s.path.clone())
-                .filter(|p| !skips.paths.contains(p))
-                .filter(|p| sidecar_needs_rebuild(Path::new(p), &indexed))
-                .take(max)
-                .collect()
-        };
+        let candidates = self.sidecar_backfill_candidates(
+            &self.sidecar_backfill_skips,
+            &indexed,
+            max,
+            |segment| {
+                (segment.level >= 1 && sidecar_needs_rebuild(Path::new(&segment.path), &indexed))
+                    .then(|| BackfillCandidate {
+                        path: segment.path.clone(),
+                        expected_rows: segment.row_count,
+                    })
+            },
+        );
         // The index only reads the indexed columns and the key, so project to
         // those: a full read materializes every column as uncompressed Arrow,
         // which is what makes this the heaviest maintenance step.
@@ -1319,50 +1427,33 @@ impl Namespace {
                 projection.push(key);
             }
         }
-        let mut built = 0;
-        for path in candidates {
-            let p = Path::new(&path);
-            let batches = match read_segment_projected(p, Some(&projection)) {
-                Ok(batches) => batches,
-                Err(e) => {
-                    tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: read failed");
-                    continue;
-                }
-            };
-            match write_sidecar(p, &batches, &indexed, self.key_column.as_deref()) {
-                Ok(true) => {
-                    // The rewrite reuses the path, and the query cache keys on
-                    // path alone, so a reader holding the replaced header would
-                    // address the new file at the old offsets.
-                    SidecarManager::global().invalidate(&sidecar_path(p));
-                    built += 1;
-                    tracing::debug!(namespace = %self.name, path = %path, "backfilled trigram sidecar");
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: write failed")
-                }
-            }
-            // A rebuild that left the segment still qualifying is a rebuild that
-            // can never stop qualifying: the columns it is short of are not in
-            // the segment to index.
-            if sidecar_needs_rebuild(p, &indexed) {
-                tracing::debug!(
-                    namespace = %self.name,
-                    path = %path,
-                    "sidecar backfill: segment predates an indexed column; not retrying"
-                );
-                self.sidecar_backfill_skips
-                    .lock()
-                    .unwrap()
-                    .paths
-                    .insert(path);
-            }
-        }
-        built
+        self.run_sidecar_backfill(
+            candidates,
+            BackfillRun {
+                projection: &projection,
+                skips: &self.sidecar_backfill_skips,
+                kind: "trigram",
+            },
+            |path, batches| {
+                write_sidecar(path, batches, &indexed, self.key_column.as_deref()).map(|written| {
+                    if written {
+                        BackfillWrite::Written
+                    } else {
+                        BackfillWrite::NotApplicable
+                    }
+                })
+            },
+            |candidate| sidecar_needs_rebuild(Path::new(&candidate.path), &indexed),
+            |path| {
+                // The rewrite reuses the path, and the query cache keys on path
+                // alone, so a reader holding the replaced header would address
+                // the new file at the old offsets.
+                SidecarManager::global().invalidate(&sidecar_path(path));
+            },
+        )
     }
 
-    /// Rebuild one missing exact-value sidecar per maintenance tick.
+    /// Rebuild up to `max` missing exact-value sidecars.
     fn backfill_missing_exact_sidecars(&self, max: usize) -> usize {
         if self.data_dir.is_none() || max == 0 {
             return 0;
@@ -1382,62 +1473,47 @@ impl Namespace {
                 )
             })
             .collect();
-        let candidates: Vec<(String, i64)> = {
-            let inner = self.inner.lock().unwrap();
-            let mut skips = self.exact_backfill_skips.lock().unwrap();
-            let live: HashSet<&str> = inner
-                .local_segments
-                .iter()
-                .map(|segment| segment.path.as_str())
-                .collect();
-            let fingerprint_refs: Vec<&str> = fingerprint.iter().map(String::as_str).collect();
-            skips.reconcile(&fingerprint_refs, &live);
-            inner
-                .local_segments
-                .iter()
-                .filter(|segment| !skips.paths.contains(&segment.path))
-                .filter(|segment| {
-                    exact_sidecar_needs_rebuild(
-                        Path::new(&segment.path),
-                        segment.row_count,
-                        &indexed,
-                    )
-                })
-                .map(|segment| (segment.path.clone(), segment.row_count))
-                .take(max)
-                .collect()
-        };
+        let fingerprint_refs: Vec<&str> = fingerprint.iter().map(String::as_str).collect();
+        let candidates = self.sidecar_backfill_candidates(
+            &self.exact_backfill_skips,
+            &fingerprint_refs,
+            max,
+            |segment| {
+                exact_sidecar_needs_rebuild(Path::new(&segment.path), segment.row_count, &indexed)
+                    .then(|| BackfillCandidate {
+                        path: segment.path.clone(),
+                        expected_rows: segment.row_count,
+                    })
+            },
+        );
         let projection: Vec<&str> = indexed
             .iter()
             .map(|config| config.column.as_str())
             .collect();
-        let mut built = 0;
-        for (path, expected_rows) in candidates {
-            let parquet = Path::new(&path);
-            let batches = match read_segment_projected(parquet, Some(&projection)) {
-                Ok(batches) => batches,
-                Err(error) => {
-                    tracing::warn!(namespace = %self.name, path, %error, "exact sidecar backfill: read failed");
-                    continue;
-                }
-            };
-            let completed = match crate::store::exact::write_sidecar(parquet, &batches, &indexed) {
-                Ok(true) => {
-                    built += 1;
-                    tracing::debug!(namespace = %self.name, path, "backfilled exact sidecar");
-                    true
-                }
-                Ok(false) => true,
-                Err(error) => {
-                    tracing::warn!(namespace = %self.name, path, %error, "exact sidecar backfill: write failed");
-                    false
-                }
-            };
-            if completed && exact_sidecar_needs_rebuild(parquet, expected_rows, &indexed) {
-                self.exact_backfill_skips.lock().unwrap().paths.insert(path);
-            }
-        }
-        built
+        self.run_sidecar_backfill(
+            candidates,
+            BackfillRun {
+                projection: &projection,
+                skips: &self.exact_backfill_skips,
+                kind: "exact",
+            },
+            |path, batches| {
+                crate::store::exact::write_sidecar(path, batches, &indexed).map(|written| {
+                    match written {
+                        ExactIndexWrite::Written => BackfillWrite::Written,
+                        ExactIndexWrite::NotApplicable => BackfillWrite::NotApplicable,
+                    }
+                })
+            },
+            |candidate| {
+                exact_sidecar_needs_rebuild(
+                    Path::new(&candidate.path),
+                    candidate.expected_rows,
+                    &indexed,
+                )
+            },
+            |_| {},
+        )
     }
 
     // ----- maintenance orchestration ------------------------------------
@@ -1502,7 +1578,7 @@ impl Namespace {
         // indexed get their trigram sidecars rebuilt a few per tick.
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
-            ns.backfill_missing_sidecars(BACKFILL_SIDECARS_PER_TICK)
+            ns.backfill_missing_trigram_sidecars(BACKFILL_SIDECARS_PER_TICK)
         })
         .await
         .map_err(|e| StatsError::Internal(format!("maintenance backfill task panicked: {e}")))?;
@@ -2522,9 +2598,13 @@ mod tests {
         assert!(!sidecar.exists());
 
         // The backfill rebuilds exactly the one missing sidecar, then idles.
-        assert_eq!(ns.backfill_missing_sidecars(10), 1);
+        assert_eq!(ns.backfill_missing_trigram_sidecars(10), 1);
         assert!(sidecar.exists(), "backfill rebuilt the sidecar");
-        assert_eq!(ns.backfill_missing_sidecars(10), 0, "nothing left to do");
+        assert_eq!(
+            ns.backfill_missing_trigram_sidecars(10),
+            0,
+            "nothing left to do"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2589,7 +2669,7 @@ mod tests {
             .unwrap();
         ns.run_maintenance(true).await.unwrap();
 
-        assert_eq!(ns.backfill_missing_sidecars(10), 0);
+        assert_eq!(ns.backfill_missing_trigram_sidecars(10), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2635,7 +2715,11 @@ mod tests {
             catalog,
         );
 
-        assert_eq!(after.backfill_missing_sidecars(10), 0, "nothing to index");
+        assert_eq!(
+            after.backfill_missing_trigram_sidecars(10),
+            0,
+            "nothing to index"
+        );
         let path = segs[0].to_string_lossy().to_string();
         assert!(
             after

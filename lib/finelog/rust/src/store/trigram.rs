@@ -786,40 +786,44 @@ fn opt_bytes_len(bytes: Option<&[u8]>) -> usize {
 }
 
 /// Minimal little-endian byte reader for sidecar parsing.
-struct ByteReader<'a> {
+pub(crate) struct ByteReader<'a> {
     bytes: &'a [u8],
     pos: usize,
 }
 
 impl<'a> ByteReader<'a> {
-    fn new(bytes: &'a [u8]) -> ByteReader<'a> {
+    pub(crate) fn new(bytes: &'a [u8]) -> ByteReader<'a> {
         ByteReader { bytes, pos: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub(crate) fn remaining(&self) -> usize {
         self.bytes.len().saturating_sub(self.pos)
     }
 
-    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.remaining() == 0
+    }
+
+    pub(crate) fn take(&mut self, n: usize) -> Option<&'a [u8]> {
         let end = self.pos.checked_add(n)?;
         let slice = self.bytes.get(self.pos..end)?;
         self.pos = end;
         Some(slice)
     }
 
-    fn u8(&mut self) -> Option<u8> {
+    pub(crate) fn u8(&mut self) -> Option<u8> {
         Some(self.take(1)?[0])
     }
 
-    fn u16(&mut self) -> Option<u16> {
+    pub(crate) fn u16(&mut self) -> Option<u16> {
         Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
     }
 
-    fn u32(&mut self) -> Option<u32> {
+    pub(crate) fn u32(&mut self) -> Option<u32> {
         Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
     }
 
-    fn u64(&mut self) -> Option<u64> {
+    pub(crate) fn u64(&mut self) -> Option<u64> {
         Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?))
     }
 

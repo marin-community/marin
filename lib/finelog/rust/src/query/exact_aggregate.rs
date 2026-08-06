@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
+use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::logical_expr::{Expr, LogicalPlan};
 
 use crate::query::QueryResult;
@@ -129,34 +130,52 @@ fn output_column(expr: &Expr, group_name: &str, count_name: &str) -> Option<Outp
 
 /// Load and combine complete segment summaries, then form the query result.
 ///
-/// `None` means at least one segment is absent, stale, malformed, or lacks the
-/// requested column summary; the caller must execute the original query.
-pub fn execute(request: &CountRequest, segment_paths: &[String]) -> Option<QueryResult> {
+/// `Ok(None)` means at least one segment is absent, stale, malformed, or lacks
+/// the requested column summary; the caller must execute the original query.
+pub fn execute(request: &CountRequest, segment_paths: &[String]) -> DFResult<Option<QueryResult>> {
     let mut combined: BTreeMap<Option<String>, u64> = BTreeMap::new();
     for path in segment_paths {
         let parquet = Path::new(path);
-        let sidecar = read_sidecar(&sidecar_path(parquet))?;
-        let parquet_rows = segment_row_group_rows(parquet)?.iter().sum::<usize>() as u64;
+        let Some(sidecar) = read_sidecar(&sidecar_path(parquet)) else {
+            return Ok(None);
+        };
+        let Some(row_groups) = segment_row_group_rows(parquet) else {
+            return Ok(None);
+        };
+        let parquet_rows = row_groups.iter().sum::<usize>() as u64;
         if sidecar.total_rows != parquet_rows {
-            return None;
+            return Ok(None);
         }
-        let counts = sidecar.columns.get(&request.column)?.counts.as_ref()?;
+        let Some(counts) = sidecar
+            .columns
+            .get(&request.column)
+            .and_then(|column| column.counts.as_ref())
+        else {
+            return Ok(None);
+        };
         for (value, count) in counts {
-            *combined.entry(value.clone()).or_default() = combined
+            let Some(total) = combined
                 .get(value)
                 .copied()
                 .unwrap_or_default()
-                .checked_add(*count)?;
+                .checked_add(*count)
+            else {
+                return Ok(None);
+            };
+            *combined.entry(value.clone()).or_default() = total;
         }
     }
     let groups: Vec<Option<String>> = combined.keys().cloned().collect();
-    let counts: Vec<i64> = combined
+    let Some(counts): Option<Vec<i64>> = combined
         .iter()
         .map(|(value, count)| match (request.mode, value) {
             (CountMode::GroupingColumn, None) => Some(0),
             _ => i64::try_from(*count).ok(),
         })
-        .collect::<Option<_>>()?;
+        .collect()
+    else {
+        return Ok(None);
+    };
     let group: ArrayRef = Arc::new(StringArray::from_iter(
         groups.iter().map(|value| value.as_deref()),
     ));
@@ -184,7 +203,8 @@ pub fn execute(request: &CountRequest, segment_paths: &[String]) -> Option<Query
         fields,
         request.schema.metadata().clone(),
     ));
-    let batch = RecordBatch::try_new(Arc::clone(&schema), arrays).ok()?;
+    let batch = RecordBatch::try_new(Arc::clone(&schema), arrays)
+        .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
     tracing::debug!(
         table = request.table,
         column = request.column,
@@ -192,10 +212,10 @@ pub fn execute(request: &CountRequest, segment_paths: &[String]) -> Option<Query
         segments = segment_paths.len(),
         "answered value-count aggregate from exact sidecars"
     );
-    Some(QueryResult {
+    Ok(Some(QueryResult {
         schema,
         batches: vec![batch],
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -289,7 +309,7 @@ mod tests {
             ])),
         };
         let paths = vec![parquet.to_string_lossy().into_owned()];
-        let result = execute(&request, &paths).unwrap();
+        let result = execute(&request, &paths).unwrap().unwrap();
         let values = result.batches[0]
             .column(0)
             .as_any()
@@ -311,7 +331,7 @@ mod tests {
         assert_eq!(rows, vec![(None, 0), (Some("api"), 1), (Some("worker"), 2)]);
 
         std::fs::remove_file(sidecar_path(&parquet)).unwrap();
-        assert!(execute(&request, &paths).is_none());
+        assert!(execute(&request, &paths).unwrap().is_none());
         std::fs::remove_dir_all(dir).ok();
     }
 }

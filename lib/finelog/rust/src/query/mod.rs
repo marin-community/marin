@@ -12,6 +12,7 @@
 
 pub mod exact_aggregate;
 pub mod exact_prune;
+pub(crate) mod file_scan;
 pub mod optimizer;
 pub mod provider;
 pub mod sidecar;
@@ -454,7 +455,7 @@ pub async fn run_query_over(
                             datafusion::error::DataFusionError::Execution(format!(
                                 "exact aggregate task join: {error}"
                             ))
-                        })?
+                        })??
                 {
                     return Ok(result);
                 }

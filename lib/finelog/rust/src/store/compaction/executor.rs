@@ -326,8 +326,7 @@ fn apply_merge(
     // same correct-but-unpruned state as any missing sidecar; a later compaction
     // consuming this segment rebuilds it. A terminal-level segment that is never
     // re-merged (or one written before sidecars existed) stays unindexed until
-    // the maintenance backfill (`Namespace::backfill_missing_sidecars`) rebuilds
-    // it a few segments per tick.
+    // the maintenance trigram backfill rebuilds it a few segments per tick.
     if let Err(e) = crate::store::trigram::write_sidecar(
         &merged_path,
         &merged,

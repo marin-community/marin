@@ -4,15 +4,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfig, FileScanConfigBuilder};
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 
-use crate::store::exact::{projection_path, read_sidecar, sidecar_path, RowRun};
+use crate::store::exact::{coalesce_runs, projection_path, read_sidecar, sidecar_path, RowRun};
 use crate::store::segment::segment_row_group_rows;
 
 /// Exact string values implied for each column by top-level `=` and `IN`
@@ -216,7 +214,7 @@ fn build_access_plans(
             if !values.iter().all(|value| column.rows.contains_key(value)) {
                 continue;
             }
-            let union = merge_runs(
+            let union = coalesce_runs(
                 values
                     .iter()
                     .flat_map(|value| column.rows[value].iter().copied())
@@ -246,21 +244,6 @@ fn build_access_plans(
         );
     }
     plans
-}
-
-fn merge_runs(mut runs: Vec<RowRun>) -> Vec<RowRun> {
-    runs.sort_by_key(|run| run.start);
-    let mut merged: Vec<RowRun> = Vec::with_capacity(runs.len());
-    for run in runs {
-        match merged.last_mut() {
-            Some(previous) if run.start <= previous.start + previous.len => {
-                let end = (run.start + run.len).max(previous.start + previous.len);
-                previous.len = end - previous.start;
-            }
-            _ => merged.push(run),
-        }
-    }
-    merged
 }
 
 fn intersect_runs(left: &[RowRun], right: &[RowRun]) -> Vec<RowRun> {
@@ -347,93 +330,51 @@ fn rewrite_file_groups(
     plan: Arc<dyn ExecutionPlan>,
     access_plans: &HashMap<String, ParquetAccessPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-        return plan;
-    };
-    let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>() else {
-        return plan;
-    };
-    let groups = config
-        .file_groups
-        .iter()
-        .map(|group| {
-            let files = group
-                .files()
-                .iter()
-                .map(|file| {
-                    let Some(additional) = file
-                        .object_meta
-                        .location
-                        .filename()
-                        .and_then(|name| access_plans.get(name))
-                    else {
-                        return file.clone();
-                    };
-                    let access = file
-                        .extensions
-                        .as_ref()
-                        .and_then(|extension| extension.downcast_ref::<ParquetAccessPlan>())
-                        .and_then(|existing| intersect_access_plans(existing, additional))
-                        .unwrap_or_else(|| additional.clone());
-                    file.clone().with_extensions(Arc::new(access))
-                })
-                .collect();
-            FileGroup::new(files)
-        })
-        .collect();
-    let config = FileScanConfigBuilder::from(config.clone())
-        .with_file_groups(groups)
-        .build();
-    DataSourceExec::from_data_source(config)
+    crate::query::file_scan::rewrite_parquet_files(plan, |file| {
+        let Some(additional) = file
+            .object_meta
+            .location
+            .filename()
+            .and_then(|name| access_plans.get(name))
+        else {
+            return file.clone();
+        };
+        let access = file
+            .extensions
+            .as_ref()
+            .and_then(|extension| extension.downcast_ref::<ParquetAccessPlan>())
+            .and_then(|existing| intersect_access_plans(existing, additional))
+            .unwrap_or_else(|| additional.clone());
+        file.clone().with_extensions(Arc::new(access))
+    })
 }
 
 fn rewrite_projection_files(
     plan: Arc<dyn ExecutionPlan>,
     projections: &HashMap<String, ProjectionFile>,
 ) -> Arc<dyn ExecutionPlan> {
-    let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-        return plan;
-    };
-    let Some(config) = exec.data_source().as_any().downcast_ref::<FileScanConfig>() else {
-        return plan;
-    };
-    let groups = config
-        .file_groups
-        .iter()
-        .map(|group| {
-            let files = group
-                .files()
-                .iter()
-                .map(|file| {
-                    let Some(projection) = file
-                        .object_meta
-                        .location
-                        .filename()
-                        .and_then(|name| projections.get(name))
-                    else {
-                        return file.clone();
-                    };
-                    let mut projected = file.clone();
-                    projected.object_meta.location = projection.location.clone();
-                    projected.object_meta.size = projection.size;
-                    projected.object_meta.last_modified = projection.modified.into();
-                    projected.object_meta.e_tag = None;
-                    projected.object_meta.version = None;
-                    projected.range = None;
-                    projected.statistics = None;
-                    projected.ordering = None;
-                    projected.extensions = None;
-                    projected.metadata_size_hint = None;
-                    projected
-                })
-                .collect();
-            FileGroup::new(files)
-        })
-        .collect();
-    let config = FileScanConfigBuilder::from(config.clone())
-        .with_file_groups(groups)
-        .build();
-    DataSourceExec::from_data_source(config)
+    crate::query::file_scan::rewrite_parquet_files(plan, |file| {
+        let Some(projection) = file
+            .object_meta
+            .location
+            .filename()
+            .and_then(|name| projections.get(name))
+        else {
+            return file.clone();
+        };
+        let mut projected = file.clone();
+        projected.object_meta.location = projection.location.clone();
+        projected.object_meta.size = projection.size;
+        projected.object_meta.last_modified = projection.modified.into();
+        projected.object_meta.e_tag = None;
+        projected.object_meta.version = None;
+        projected.range = None;
+        projected.statistics = None;
+        projected.ordering = None;
+        projected.extensions = None;
+        projected.metadata_size_hint = None;
+        projected
+    })
 }
 
 #[cfg(test)]

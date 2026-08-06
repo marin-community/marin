@@ -27,12 +27,14 @@ use parquet::arrow::arrow_reader::{ParquetRecordBatchReaderBuilder, RowSelection
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 
 use crate::store::segment::parquet_writer_properties;
+use crate::store::trigram::ByteReader;
 
 const MAGIC: &[u8; 4] = b"FLEQ";
 const VERSION: u8 = 2;
 const MAX_COUNT_VALUES: usize = 4_096;
 const PROJECTION_ROW_GROUP_BYTES: usize = 1024 * 1024;
 const PROJECTION_ROW_GROUP_ROWS: usize = 16_384;
+const TEMP_SUFFIX: &str = ".tmp";
 
 /// One string column's exact indexing policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +67,13 @@ pub struct ExactSidecar {
     /// Rows in the complete filtered Parquet projection, when present.
     pub projection_rows: Option<u64>,
     pub columns: BTreeMap<String, ExactColumn>,
+}
+
+/// Result of building an exact sidecar from supplied batches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExactIndexWrite {
+    Written,
+    NotApplicable,
 }
 
 impl ExactSidecar {
@@ -179,12 +188,13 @@ fn build_column(batches: &[RecordBatch], config: &ExactIndexConfig) -> Option<(E
 
 /// Build and atomically publish the exact sidecar for `parquet_path`.
 ///
-/// Returns `Ok(false)` when no configured column exists in the batches.
+/// Returns [`ExactIndexWrite::NotApplicable`] when no configured column exists
+/// in the batches.
 pub fn write_sidecar(
     parquet_path: &Path,
     batches: &[RecordBatch],
     configs: &[ExactIndexConfig],
-) -> std::io::Result<bool> {
+) -> std::io::Result<ExactIndexWrite> {
     let mut columns = BTreeMap::new();
     let mut total_rows = None;
     for config in configs {
@@ -199,7 +209,7 @@ pub fn write_sidecar(
         columns.insert(config.column.clone(), column);
     }
     if columns.is_empty() {
-        return Ok(false);
+        return Ok(ExactIndexWrite::NotApplicable);
     }
     let mut sidecar = ExactSidecar {
         total_rows: total_rows.unwrap_or(0),
@@ -214,12 +224,10 @@ pub fn write_sidecar(
         sidecar.projection_rows = Some(write_projection(parquet_path, batches, &sidecar)?);
     }
     let final_path = sidecar_path(parquet_path);
-    let mut tmp = final_path.as_os_str().to_os_string();
-    tmp.push(".tmp");
-    let tmp_path = PathBuf::from(tmp);
+    let tmp_path = temporary_path(&final_path);
     std::fs::write(&tmp_path, serialize(&sidecar))?;
     std::fs::rename(&tmp_path, &final_path)?;
-    Ok(true)
+    Ok(ExactIndexWrite::Written)
 }
 
 /// The exact sidecar path for a parquet segment.
@@ -300,9 +308,7 @@ fn write_projection(
         .is_some_and(|batch| batch.schema().fields() == parquet_schema.fields());
 
     let final_path = projection_path(parquet_path);
-    let mut tmp = final_path.as_os_str().to_os_string();
-    tmp.push(".tmp");
-    let tmp_path = PathBuf::from(tmp);
+    let tmp_path = temporary_path(&final_path);
     let output = File::create(&tmp_path)?;
     let options = ArrowWriterOptions::new().with_properties(
         parquet_writer_properties(PROJECTION_ROW_GROUP_BYTES, PROJECTION_ROW_GROUP_ROWS)
@@ -337,7 +343,16 @@ fn write_projection(
     }
     writer.close().map_err(io_other)?;
     if written != expected_rows {
-        let _ = std::fs::remove_file(&tmp_path);
+        if let Err(cleanup) = std::fs::remove_file(&tmp_path) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "exact projection wrote {written} rows; expected {expected_rows}; \
+                     could not remove {}: {cleanup}",
+                    tmp_path.display()
+                ),
+            ));
+        }
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("exact projection wrote {written} rows; expected {expected_rows}"),
@@ -347,14 +362,26 @@ fn write_projection(
     Ok(written)
 }
 
+fn temporary_path(final_path: &Path) -> PathBuf {
+    let mut path = final_path.as_os_str().to_os_string();
+    path.push(TEMP_SUFFIX);
+    PathBuf::from(path)
+}
+
 fn projection_runs(sidecar: &ExactSidecar) -> Vec<RowRun> {
-    let mut runs: Vec<RowRun> = sidecar
-        .columns
-        .values()
-        .flat_map(|column| column.rows.values())
-        .flatten()
-        .copied()
-        .collect();
+    coalesce_runs(
+        sidecar
+            .columns
+            .values()
+            .flat_map(|column| column.rows.values())
+            .flatten()
+            .copied()
+            .collect(),
+    )
+}
+
+/// Sort and coalesce overlapping or adjacent row runs.
+pub(crate) fn coalesce_runs(mut runs: Vec<RowRun>) -> Vec<RowRun> {
     runs.sort_by_key(|run| run.start);
     let mut merged: Vec<RowRun> = Vec::with_capacity(runs.len());
     for run in runs {
@@ -407,51 +434,51 @@ fn io_other(error: impl std::fmt::Display) -> std::io::Error {
 }
 
 fn parse(bytes: &[u8]) -> Option<ExactSidecar> {
-    let mut input = bytes;
-    if take(&mut input, 4)? != MAGIC || take_u8(&mut input)? != VERSION {
+    let mut input = ByteReader::new(bytes);
+    if input.take(4)? != MAGIC || input.u8()? != VERSION {
         return None;
     }
-    let total_rows = take_u64(&mut input)?;
-    let projection_rows = match take_u8(&mut input)? {
+    let total_rows = input.u64()?;
+    let projection_rows = match input.u8()? {
         0 => None,
         1 => {
-            let rows = take_u64(&mut input)?;
+            let rows = input.u64()?;
             Some((rows <= total_rows).then_some(rows)?)
         }
         _ => return None,
     };
-    let column_count = take_u16(&mut input)? as usize;
+    let column_count = input.u16()? as usize;
     let mut columns = BTreeMap::new();
     for _ in 0..column_count {
         let name = take_string_u16(&mut input)?;
-        let counts = match take_u8(&mut input)? {
+        let counts = match input.u8()? {
             0 => None,
             1 => {
-                let count = take_u32(&mut input)? as usize;
+                let count = input.u32()? as usize;
                 if count > MAX_COUNT_VALUES + 1 {
                     return None;
                 }
                 let mut values = BTreeMap::new();
                 for _ in 0..count {
-                    let value = match take_u8(&mut input)? {
+                    let value = match input.u8()? {
                         0 => None,
                         1 => Some(take_string_u32(&mut input)?),
                         _ => return None,
                     };
-                    values.insert(value, take_u64(&mut input)?);
+                    values.insert(value, input.u64()?);
                 }
                 Some(values)
             }
             _ => return None,
         };
-        let value_count = take_u32(&mut input)? as usize;
-        if value_count > input.len() / 4 + 1 {
+        let value_count = input.u32()? as usize;
+        if value_count > input.remaining() / 4 + 1 {
             return None;
         }
         let mut rows = BTreeMap::new();
         for _ in 0..value_count {
             let value = take_string_u32(&mut input)?;
-            let run_count = take_u32(&mut input)? as usize;
+            let run_count = input.u32()? as usize;
             if run_count as u64 > total_rows {
                 return None;
             }
@@ -504,42 +531,20 @@ fn put_varint(out: &mut Vec<u8>, mut value: u64) {
     out.push(value as u8);
 }
 
-fn take<'a>(input: &mut &'a [u8], len: usize) -> Option<&'a [u8]> {
-    let (head, tail) = input.split_at_checked(len)?;
-    *input = tail;
-    Some(head)
+fn take_string_u16(input: &mut ByteReader<'_>) -> Option<String> {
+    let len = input.u16()? as usize;
+    String::from_utf8(input.take(len)?.to_vec()).ok()
 }
 
-fn take_u8(input: &mut &[u8]) -> Option<u8> {
-    Some(take(input, 1)?[0])
+fn take_string_u32(input: &mut ByteReader<'_>) -> Option<String> {
+    let len = input.u32()? as usize;
+    String::from_utf8(input.take(len)?.to_vec()).ok()
 }
 
-fn take_u16(input: &mut &[u8]) -> Option<u16> {
-    Some(u16::from_le_bytes(take(input, 2)?.try_into().ok()?))
-}
-
-fn take_u32(input: &mut &[u8]) -> Option<u32> {
-    Some(u32::from_le_bytes(take(input, 4)?.try_into().ok()?))
-}
-
-fn take_u64(input: &mut &[u8]) -> Option<u64> {
-    Some(u64::from_le_bytes(take(input, 8)?.try_into().ok()?))
-}
-
-fn take_string_u16(input: &mut &[u8]) -> Option<String> {
-    let len = take_u16(input)? as usize;
-    String::from_utf8(take(input, len)?.to_vec()).ok()
-}
-
-fn take_string_u32(input: &mut &[u8]) -> Option<String> {
-    let len = take_u32(input)? as usize;
-    String::from_utf8(take(input, len)?.to_vec()).ok()
-}
-
-fn take_varint(input: &mut &[u8]) -> Option<u64> {
+fn take_varint(input: &mut ByteReader<'_>) -> Option<u64> {
     let mut value = 0_u64;
     for shift in (0..64).step_by(7) {
-        let byte = take_u8(input)?;
+        let byte = input.u8()?;
         value |= u64::from(byte & 0x7f) << shift;
         if byte & 0x80 == 0 {
             return Some(value);
@@ -700,7 +705,10 @@ mod tests {
         let batch = full_batch();
         let (parquet, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
 
-        assert!(write_sidecar(&parquet, &[batch], &[config()]).unwrap());
+        assert_eq!(
+            write_sidecar(&parquet, &[batch], &[config()]).unwrap(),
+            ExactIndexWrite::Written
+        );
 
         let projected = read_segment_projected(&projection_path(&parquet), None).unwrap();
         assert_eq!(
@@ -734,7 +742,10 @@ mod tests {
         let (parquet, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
         let indexed_only = read_segment_projected(&parquet, Some(&["service"])).unwrap();
 
-        assert!(write_sidecar(&parquet, &indexed_only, &[config()]).unwrap());
+        assert_eq!(
+            write_sidecar(&parquet, &indexed_only, &[config()]).unwrap(),
+            ExactIndexWrite::Written
+        );
 
         let projected = read_segment_projected(&projection_path(&parquet), None).unwrap();
         assert!(projected[0].column_by_name("payload").is_some());
