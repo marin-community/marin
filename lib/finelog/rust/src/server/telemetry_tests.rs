@@ -152,6 +152,49 @@ async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
 }
 
 #[tokio::test]
+async fn router_registers_index_policy_before_first_telemetry_request() {
+    let store = disk_store("telemetry-startup-registration");
+    let _router = super::telemetry::router(
+        Arc::clone(&store),
+        Arc::new(AuthPolicy::allow_localhost()),
+        1,
+        1,
+    );
+
+    let schema = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(schema) = store.get_table_schema("telemetry_v1") {
+                break schema;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("startup registration did not complete");
+
+    for name in ["service", "kind", "name"] {
+        let column = schema
+            .columns
+            .iter()
+            .find(|column| column.name == name)
+            .unwrap();
+        assert!(column.index.value_counts);
+    }
+    let name = schema
+        .columns
+        .iter()
+        .find(|column| column.name == "name")
+        .unwrap();
+    assert!(name.index.trigram);
+    assert_eq!(
+        name.index.exact_values,
+        ["phase", "progress_time_seconds", "step"]
+    );
+    assert_eq!(schema.projections.len(), 1);
+    assert_eq!(schema.projections[0].name, "training-status");
+}
+
+#[tokio::test]
 async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let remote_dir = unique_dir("telemetry-query-remote");
     let store = Arc::new(

@@ -216,7 +216,7 @@ struct TelemetryState {
     store: Arc<Store>,
     admission: Arc<Semaphore>,
     dedupe: Mutex<DedupeCache>,
-    namespace_registration: OnceCell<Result<(), String>>,
+    namespace_registration: OnceCell<()>,
 }
 
 struct PreparedBatch {
@@ -231,7 +231,7 @@ impl TelemetryState {
     async fn ensure_namespace_registered(&self) -> Result<(), ApiError> {
         let result = self
             .namespace_registration
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 let store = Arc::clone(&self.store);
                 match tokio::task::spawn_blocking(move || {
                     store.register_table(
@@ -248,7 +248,7 @@ impl TelemetryState {
                 }
             })
             .await;
-        result.as_ref().map_err(|error| {
+        result.map_err(|error| {
             ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "storage_unavailable",
@@ -272,6 +272,16 @@ pub fn router(
         admission: Arc::new(Semaphore::new(max_concurrent)),
         dedupe: Mutex::new(DedupeCache::new(dedupe_capacity)),
         namespace_registration: OnceCell::new(),
+    });
+    // The schema is server-owned, so apply additive index-policy evolution at
+    // startup even when telemetry reaches this store through StatsService or a
+    // forwarder instead of the HTTP endpoint below. Requests share the OnceCell
+    // and wait for this same registration if they arrive while it is running.
+    let startup_registration = Arc::clone(&state);
+    tokio::spawn(async move {
+        if let Err(error) = startup_registration.ensure_namespace_registered().await {
+            tracing::warn!(error = %error.message, "telemetry namespace startup registration failed");
+        }
     });
     Router::new()
         .route("/v1/telemetry", post(post_telemetry))
