@@ -4,45 +4,84 @@
 //! scan, one string grouping column, and one ordinary `COUNT(*)` or
 //! `COUNT(grouping_column)`. Because the optimizer rewrites bottom-up, outer
 //! projections, sorts, and limits continue to compose around the indexed
-//! aggregate. Every visible segment must have a complete count summary;
-//! partial backfill never contributes a partial answer.
+//! aggregate. Stable segments with count summaries are merged with an ordinary
+//! aggregate over uncovered segments, so fresh L0 data remains exact without
+//! putting derived-index work on the write acknowledgement path.
 
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-use arrow::compute::cast;
-use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
+use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::common::tree_node::Transformed;
 use datafusion::common::DFSchemaRef;
+use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::error::{DataFusionError, Result as DFResult};
 use datafusion::execution::context::QueryPlanner;
-use datafusion::execution::SessionState;
+use datafusion::execution::{SessionState, TaskContext};
+use datafusion::functions_aggregate::expr_fn::{count, sum};
 use datafusion::logical_expr::{
-    Expr, Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+    col, lit, Cast, Expr, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+    UserDefinedLogicalNodeCore,
 };
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
+};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
-use datafusion_datasource::memory::MemorySourceConfig;
+use futures::TryStreamExt;
 
 use crate::query::index_cache::IndexCache;
-use crate::query::QueryResult;
+use crate::query::provider::NamespaceProvider;
 use crate::store::index_bundle::SectionKind;
 
 const MAX_COMBINED_COUNT_VALUES: usize = 16_384;
+const INDEX_GROUP_COLUMN: &str = "__finelog_index_group";
+const INDEX_COUNT_COLUMN: &str = "__finelog_index_count";
+const INDEX_TOTAL_COLUMN: &str = "__finelog_index_total";
 
+static FULL_INDEX_AGGREGATES: AtomicU64 = AtomicU64::new(0);
+static PARTIAL_INDEX_AGGREGATES: AtomicU64 = AtomicU64::new(0);
+static DECLINED_INDEX_AGGREGATES: AtomicU64 = AtomicU64::new(0);
+static FALLBACK_INDEX_AGGREGATES: AtomicU64 = AtomicU64::new(0);
+
+/// Process-lifetime decisions made by the exact aggregate execution path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExactAggregateStats {
+    pub full: u64,
+    pub partial: u64,
+    pub declined: u64,
+    pub fallbacks: u64,
+}
+
+/// Snapshot the exact aggregate execution counters.
+pub fn stats() -> ExactAggregateStats {
+    ExactAggregateStats {
+        full: FULL_INDEX_AGGREGATES.load(Ordering::Relaxed),
+        partial: PARTIAL_INDEX_AGGREGATES.load(Ordering::Relaxed),
+        declined: DECLINED_INDEX_AGGREGATES.load(Ordering::Relaxed),
+        fallbacks: FALLBACK_INDEX_AGGREGATES.load(Ordering::Relaxed),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum CountMode {
     AllRows,
     GroupingColumn,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum OutputColumn {
     Group,
     Count,
@@ -57,29 +96,34 @@ pub struct CountRequest {
     schema: SchemaRef,
 }
 
-/// Logical node emitted when every visible segment has an exact count section.
+/// Logical node emitted for a grouped count that can use segment summaries.
 #[derive(Clone)]
 struct ExactAggregateNode {
-    result: Arc<QueryResult>,
+    request: CountRequest,
+    source: AggregateSource,
+    fallback: LogicalPlan,
     schema: DFSchemaRef,
-    table: String,
-    column: String,
-    segments: usize,
 }
 
 impl fmt::Debug for ExactAggregateNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExactAggregateNode")
-            .field("table", &self.table)
-            .field("column", &self.column)
-            .field("segments", &self.segments)
+            .field("table", &self.request.table)
+            .field("column", &self.request.column)
+            .field("segments", &self.source.segment_paths.len())
             .finish()
     }
 }
 
 impl PartialEq for ExactAggregateNode {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.result, &other.result)
+        self.request.table == other.request.table
+            && self.request.column == other.request.column
+            && self.request.mode == other.request.mode
+            && self.request.output == other.request.output
+            && self.source.segment_paths == other.source.segment_paths
+            && Arc::ptr_eq(&self.source.index_cache, &other.source.index_cache)
+            && self.fallback == other.fallback
     }
 }
 
@@ -87,13 +131,36 @@ impl Eq for ExactAggregateNode {}
 
 impl PartialOrd for ExactAggregateNode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        (Arc::as_ptr(&self.result) as usize).partial_cmp(&(Arc::as_ptr(&other.result) as usize))
+        (
+            &self.request.table,
+            &self.request.column,
+            self.request.mode,
+            self.request.output,
+            &self.source.segment_paths,
+            Arc::as_ptr(&self.source.index_cache) as usize,
+            &self.fallback,
+        )
+            .partial_cmp(&(
+                &other.request.table,
+                &other.request.column,
+                other.request.mode,
+                other.request.output,
+                &other.source.segment_paths,
+                Arc::as_ptr(&other.source.index_cache) as usize,
+                &other.fallback,
+            ))
     }
 }
 
 impl Hash for ExactAggregateNode {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (Arc::as_ptr(&self.result) as usize).hash(state);
+        self.request.table.hash(state);
+        self.request.column.hash(state);
+        self.request.mode.hash(state);
+        self.request.output.hash(state);
+        self.source.segment_paths.hash(state);
+        (Arc::as_ptr(&self.source.index_cache) as usize).hash(state);
+        self.fallback.hash(state);
     }
 }
 
@@ -117,8 +184,10 @@ impl UserDefinedLogicalNodeCore for ExactAggregateNode {
     fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "FinelogIndexAggregate: table={}, column={}, segments={}, method=value_counts",
-            self.table, self.column, self.segments
+            "FinelogIndexAggregate: table={}, column={}, segments={}, method=value_counts, coverage=runtime",
+            self.request.table,
+            self.request.column,
+            self.source.segment_paths.len()
         )
     }
 
@@ -129,7 +198,7 @@ impl UserDefinedLogicalNodeCore for ExactAggregateNode {
     ) -> DFResult<Self> {
         if !expressions.is_empty() || !inputs.is_empty() {
             return Err(DataFusionError::Plan(
-                "FinelogIndexAggregate has no expressions or inputs".to_string(),
+                "FinelogIndexAggregate has no optimizer-visible inputs".to_string(),
             ));
         }
         Ok(self.clone())
@@ -146,6 +215,7 @@ pub struct ExactAggregateRewrite {
 pub struct AggregateSource {
     pub segment_paths: Vec<String>,
     pub index_cache: Arc<IndexCache>,
+    pub schema: SchemaRef,
 }
 
 impl ExactAggregateRewrite {
@@ -175,15 +245,11 @@ impl OptimizerRule for ExactAggregateRewrite {
             return Ok(Transformed::no(plan));
         };
         let schema = Arc::clone(plan.schema());
-        let Some(result) = execute(&request, &source.segment_paths, &source.index_cache)? else {
-            return Ok(Transformed::no(plan));
-        };
         let node = ExactAggregateNode {
-            result: Arc::new(result),
+            request,
+            source: source.clone(),
+            fallback: plan,
             schema,
-            table: request.table,
-            column: request.column,
-            segments: source.segment_paths.len(),
         };
         Ok(Transformed::yes(LogicalPlan::Extension(Extension {
             node: Arc::new(node),
@@ -202,17 +268,186 @@ impl ExtensionPlanner for ExactAggregatePlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        session_state: &SessionState,
     ) -> DFResult<Option<Arc<dyn ExecutionPlan>>> {
         let Some(node) = node.as_any().downcast_ref::<ExactAggregateNode>() else {
             return Ok(None);
         };
-        let plan = MemorySourceConfig::try_new_exec(
-            std::slice::from_ref(&node.result.batches),
-            Arc::clone(&node.result.schema),
-            None,
-        )?;
-        Ok(Some(plan))
+        Ok(Some(Arc::new(AdaptiveAggregateExec::new(
+            node.request.clone(),
+            node.source.clone(),
+            node.fallback.clone(),
+            session_state.clone(),
+        ))))
+    }
+}
+
+#[derive(Debug)]
+struct AdaptiveAggregateExec {
+    request: CountRequest,
+    source: AggregateSource,
+    fallback: LogicalPlan,
+    session_state: SessionState,
+    properties: Arc<PlanProperties>,
+}
+
+impl AdaptiveAggregateExec {
+    fn new(
+        request: CountRequest,
+        source: AggregateSource,
+        fallback: LogicalPlan,
+        session_state: SessionState,
+    ) -> Self {
+        let properties = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::clone(&request.schema)),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        Self {
+            request,
+            source,
+            fallback,
+            session_state,
+            properties,
+        }
+    }
+}
+
+impl DisplayAs for AdaptiveAggregateExec {
+    fn fmt_as(&self, _: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "AdaptiveAggregateExec: table={}, column={}, segments={}, method=value_counts",
+            self.request.table,
+            self.request.column,
+            self.source.segment_paths.len()
+        )
+    }
+}
+
+impl ExecutionPlan for AdaptiveAggregateExec {
+    fn name(&self) -> &str {
+        "AdaptiveAggregateExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        Vec::new()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        if !children.is_empty() {
+            return Err(DataFusionError::Plan(
+                "AdaptiveAggregateExec has no physical children".to_string(),
+            ));
+        }
+        Ok(Arc::new(Self::new(
+            self.request.clone(),
+            self.source.clone(),
+            self.fallback.clone(),
+            self.session_state.clone(),
+        )))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> DFResult<SendableRecordBatchStream> {
+        if partition != 0 {
+            return Err(DataFusionError::Execution(format!(
+                "AdaptiveAggregateExec has no partition {partition}"
+            )));
+        }
+        let request = self.request.clone();
+        let source = self.source.clone();
+        let fallback = self.fallback.clone();
+        let session_state = self.session_state.clone();
+        let future = async move {
+            let plan = adaptive_physical_plan(request, source, fallback, &session_state).await?;
+            let plan = if plan.output_partitioning().partition_count() == 1 {
+                plan
+            } else {
+                Arc::new(CoalescePartitionsExec::new(plan))
+            };
+            plan.execute(0, context)
+        };
+        let stream = futures::stream::once(future).try_flatten();
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
+    }
+}
+
+async fn adaptive_physical_plan(
+    request: CountRequest,
+    source: AggregateSource,
+    fallback: LogicalPlan,
+    session_state: &SessionState,
+) -> DFResult<Arc<dyn ExecutionPlan>> {
+    let classify_request = request.clone();
+    let classify_source = source.clone();
+    let coverage =
+        tokio::task::spawn_blocking(move || classify_coverage(&classify_request, &classify_source))
+            .await;
+    let coverage = match coverage {
+        Ok(Some(coverage)) if coverage.covered_segments > 0 => coverage,
+        Ok(_) => {
+            DECLINED_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+            return DefaultPhysicalPlanner::default()
+                .create_physical_plan(&fallback, session_state)
+                .await;
+        }
+        Err(error) => {
+            FALLBACK_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(%error, "value-count coverage task failed; using source aggregate");
+            return DefaultPhysicalPlanner::default()
+                .create_physical_plan(&fallback, session_state)
+                .await;
+        }
+    };
+    let partial_coverage = !coverage.uncovered_paths.is_empty();
+    let logical_plan = match indexed_aggregate_plan(&request, &source, coverage) {
+        Ok(plan) => plan,
+        Err(error) => {
+            FALLBACK_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(%error, "could not plan value-count aggregate; using source aggregate");
+            return DefaultPhysicalPlanner::default()
+                .create_physical_plan(&fallback, session_state)
+                .await;
+        }
+    };
+    match DefaultPhysicalPlanner::default()
+        .create_physical_plan(&logical_plan, session_state)
+        .await
+    {
+        Ok(plan) => {
+            if partial_coverage {
+                PARTIAL_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+            } else {
+                FULL_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(plan)
+        }
+        Err(error) => {
+            FALLBACK_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(%error, "could not build value-count aggregate; using source aggregate");
+            DefaultPhysicalPlanner::default()
+                .create_physical_plan(&fallback, session_state)
+                .await
+        }
     }
 }
 
@@ -324,32 +559,48 @@ fn output_column(expr: &Expr, group_name: &str, count_name: &str) -> Option<Outp
     }
 }
 
-/// Load and combine complete segment summaries, then form the query result.
+#[derive(Debug)]
+struct AggregateCoverage {
+    counts: BTreeMap<Option<String>, u64>,
+    uncovered_paths: Vec<String>,
+    covered_segments: usize,
+}
+
+/// Partition the snapshot into summarized and source-scanned segments.
 ///
-/// `Ok(None)` means at least one segment is absent, stale, malformed, or lacks
-/// the requested column summary; the caller must execute the original query.
-pub fn execute(
+/// Missing, stale, or malformed derived data is an uncovered segment, never a
+/// query error. `None` declines the optimization when the combined summary is
+/// too large or a count cannot be represented safely.
+fn classify_coverage(
     request: &CountRequest,
-    segment_paths: &[String],
-    index_cache: &IndexCache,
-) -> DFResult<Option<QueryResult>> {
+    source: &AggregateSource,
+) -> Option<AggregateCoverage> {
     let mut combined: BTreeMap<Option<String>, u64> = BTreeMap::new();
-    for path in segment_paths {
+    let mut uncovered_paths = Vec::new();
+    let mut covered_segments = 0;
+    for path in &source.segment_paths {
         let parquet = Path::new(path);
-        let Some(segment) = index_cache.indexed_segment(parquet) else {
-            return Ok(None);
+        let Some(segment) = source.index_cache.indexed_segment(parquet) else {
+            uncovered_paths.push(path.clone());
+            continue;
         };
-        let Some(index) = index_cache.get_exact(parquet, &segment.header, SectionKind::ValueCounts)
+        let Some(index) =
+            source
+                .index_cache
+                .get_exact(parquet, &segment.header, SectionKind::ValueCounts)
         else {
-            return Ok(None);
+            uncovered_paths.push(path.clone());
+            continue;
         };
         let Some(counts) = index
             .columns
             .get(&request.column)
             .and_then(|column| column.counts.as_ref())
         else {
-            return Ok(None);
+            uncovered_paths.push(path.clone());
+            continue;
         };
+        covered_segments += 1;
         for (value, count) in counts {
             let Some(total) = combined
                 .get(value)
@@ -357,15 +608,26 @@ pub fn execute(
                 .unwrap_or_default()
                 .checked_add(*count)
             else {
-                return Ok(None);
+                return None;
             };
             *combined.entry(value.clone()).or_default() = total;
             if combined.len() > MAX_COMBINED_COUNT_VALUES {
-                return Ok(None);
+                return None;
             }
         }
     }
-    let groups: Vec<Option<String>> = combined.keys().cloned().collect();
+    Some(AggregateCoverage {
+        counts: combined,
+        uncovered_paths,
+        covered_segments,
+    })
+}
+
+fn indexed_count_batch(
+    request: &CountRequest,
+    combined: &BTreeMap<Option<String>, u64>,
+) -> DFResult<RecordBatch> {
+    let groups: Vec<Option<&str>> = combined.keys().map(|value| value.as_deref()).collect();
     let Some(counts): Option<Vec<i64>> = combined
         .iter()
         .map(|(value, count)| match (request.mode, value) {
@@ -374,57 +636,103 @@ pub fn execute(
         })
         .collect()
     else {
-        return Ok(None);
+        return Err(DataFusionError::Execution(
+            "value-count summary exceeds SQL BIGINT".to_string(),
+        ));
     };
-    let group: ArrayRef = Arc::new(StringArray::from_iter(
-        groups.iter().map(|value| value.as_deref()),
-    ));
-    let count: ArrayRef = Arc::new(Int64Array::from(counts));
-    let arrays = request
-        .output
-        .map(|column| match column {
-            OutputColumn::Group => Arc::clone(&group),
-            OutputColumn::Count => Arc::clone(&count),
-        })
-        .into_iter()
-        .zip(request.schema.fields())
-        .map(|(array, field)| {
-            if array.data_type() == field.data_type() {
-                Ok(array)
-            } else {
-                cast(&array, field.data_type())
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
-    let fields: Vec<Field> = request
-        .schema
-        .fields()
-        .iter()
-        .map(|field| field.as_ref().clone())
-        .collect();
-    let schema = Arc::new(ArrowSchema::new_with_metadata(
-        fields,
-        request.schema.metadata().clone(),
-    ));
-    let batch = RecordBatch::try_new(Arc::clone(&schema), arrays)
-        .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
+    let schema = Arc::new(ArrowSchema::new(vec![
+        arrow::datatypes::Field::new(INDEX_GROUP_COLUMN, DataType::Utf8, true),
+        arrow::datatypes::Field::new(INDEX_COUNT_COLUMN, DataType::Int64, false),
+    ]));
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(groups)) as ArrayRef,
+            Arc::new(Int64Array::from(counts)) as ArrayRef,
+        ],
+    )
+    .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))
+}
+
+/// Build a standard DataFusion plan that merges indexed counts with an
+/// aggregate over uncovered segments. The final aggregate also restores exact
+/// SQL semantics when the same group appears in both inputs.
+fn indexed_aggregate_plan(
+    request: &CountRequest,
+    source: &AggregateSource,
+    coverage: AggregateCoverage,
+) -> DFResult<LogicalPlan> {
+    let covered_segments = coverage.covered_segments;
+    let uncovered_segments = coverage.uncovered_paths.len();
+    let batch = indexed_count_batch(request, &coverage.counts)?;
+    let summary = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let summary_plan = LogicalPlanBuilder::scan(
+        "__finelog_index_summary",
+        provider_as_source(Arc::new(summary)),
+        None,
+    )?
+    .build()?;
+
+    let union = if coverage.uncovered_paths.is_empty() {
+        LogicalPlanBuilder::from(summary_plan)
+    } else {
+        let provider = NamespaceProvider::build(
+            Arc::clone(&source.schema),
+            &coverage.uncovered_paths,
+            Arc::clone(&source.index_cache),
+        )?;
+        let count_expr = match request.mode {
+            CountMode::AllRows => count(lit(1_i64)),
+            CountMode::GroupingColumn => count(col(&request.column)),
+        }
+        .alias(INDEX_COUNT_COLUMN);
+        let uncovered = LogicalPlanBuilder::scan(
+            "__finelog_uncovered_segments",
+            provider_as_source(Arc::new(provider)),
+            None,
+        )?
+        .aggregate([col(&request.column)], [count_expr])?
+        .project([
+            Expr::Cast(Cast::new(Box::new(col(&request.column)), DataType::Utf8))
+                .alias(INDEX_GROUP_COLUMN),
+            col(INDEX_COUNT_COLUMN),
+        ])?
+        .build()?;
+        LogicalPlanBuilder::from(summary_plan).union(uncovered)?
+    };
+
+    let merged = union
+        .aggregate(
+            [col(INDEX_GROUP_COLUMN)],
+            [sum(col(INDEX_COUNT_COLUMN)).alias(INDEX_TOTAL_COLUMN)],
+        )?
+        .build()?;
+    let output = request.output.iter().enumerate().map(|(position, column)| {
+        let source_column = match column {
+            OutputColumn::Group => INDEX_GROUP_COLUMN,
+            OutputColumn::Count => INDEX_TOTAL_COLUMN,
+        };
+        Expr::Cast(Cast::new(
+            Box::new(col(source_column)),
+            request.schema.field(position).data_type().clone(),
+        ))
+        .alias(request.schema.field(position).name())
+    });
+    let plan = LogicalPlanBuilder::from(merged).project(output)?.build()?;
     tracing::debug!(
         table = request.table,
         column = request.column,
-        groups = batch.num_rows(),
-        segments = segment_paths.len(),
-        "answered value-count aggregate from index sections"
+        covered_segments,
+        uncovered_segments,
+        "planned value-count aggregate"
     );
-    Ok(Some(QueryResult {
-        schema,
-        batches: vec![batch],
-    }))
+    Ok(plan)
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::Field;
     use datafusion::datasource::MemTable;
     use datafusion::prelude::SessionContext;
 
@@ -490,8 +798,8 @@ mod tests {
         .is_none());
     }
 
-    #[test]
-    fn executes_only_when_every_segment_has_a_complete_summary() {
+    #[tokio::test]
+    async fn merges_indexed_counts_with_uncovered_segments() {
         let dir = crate::test_support::unique_dir("exact_aggregate");
         let source_schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "service",
@@ -499,7 +807,7 @@ mod tests {
             true,
         )]));
         let batch = RecordBatch::try_new(
-            source_schema,
+            Arc::clone(&source_schema),
             vec![Arc::new(StringArray::from(vec![
                 Some("worker"),
                 Some("worker"),
@@ -508,37 +816,56 @@ mod tests {
             ]))],
         )
         .unwrap();
-        let (parquet, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
-        let config = ExactIndexConfig {
-            column: "service".to_string(),
-            exact_values: Vec::new(),
-            value_counts: true,
-        };
+        let (indexed, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
         write_segment_index(
-            &parquet,
-            &[batch],
-            &SegmentIndexConfig::from_policies(Vec::<String>::new(), &[config], &[], None),
+            &indexed,
+            std::slice::from_ref(&batch),
+            &SegmentIndexConfig::from_policies(Vec::<String>::new(), &[], &[], None)
+                .with_adaptive_value_counts(["service"]),
         )
         .unwrap();
-        let request = CountRequest {
-            table: "telemetry_v1".to_string(),
-            column: "service".to_string(),
-            mode: CountMode::GroupingColumn,
-            output: [OutputColumn::Group, OutputColumn::Count],
-            schema: Arc::new(ArrowSchema::new(vec![
-                Field::new("service", DataType::Utf8, true),
-                Field::new("count(service)", DataType::Int64, true),
-            ])),
-        };
-        let paths = vec![parquet.to_string_lossy().into_owned()];
-        let index_cache = IndexCache::new(16);
-        let result = execute(&request, &paths, &index_cache).unwrap().unwrap();
-        let values = result.batches[0]
+        let fresh_batch = RecordBatch::try_new(
+            Arc::clone(&source_schema),
+            vec![Arc::new(StringArray::from(vec![
+                Some("api"),
+                Some("fresh"),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let (fresh, _) = write_segment_to_dir(&dir, 0, 10, &fresh_batch).unwrap();
+        let paths = vec![
+            indexed.to_string_lossy().into_owned(),
+            fresh.to_string_lossy().into_owned(),
+        ];
+        let index_cache = Arc::new(IndexCache::new(16));
+        let provider =
+            NamespaceProvider::build(Arc::clone(&source_schema), &paths, Arc::clone(&index_cache))
+                .unwrap();
+        let ctx = crate::query::make_ctx();
+        ctx.register_table("telemetry_v1", Arc::new(provider))
+            .unwrap();
+        ctx.add_optimizer_rule(Arc::new(ExactAggregateRewrite::new(HashMap::from([(
+            "telemetry_v1".to_string(),
+            AggregateSource {
+                segment_paths: paths,
+                index_cache,
+                schema: source_schema,
+            },
+        )]))));
+        let batches = ctx
+            .sql("SELECT service, count(service) FROM telemetry_v1 GROUP BY service ORDER BY service NULLS FIRST")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let values = batches[0]
             .column(0)
             .as_any()
-            .downcast_ref::<StringArray>()
+            .downcast_ref::<StringViewArray>()
             .unwrap();
-        let counts = result.batches[0]
+        let counts = batches[0]
             .column(1)
             .as_any()
             .downcast_ref::<Int64Array>()
@@ -551,11 +878,15 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(rows, vec![(None, 0), (Some("api"), 1), (Some("worker"), 2)]);
-
-        std::fs::remove_file(crate::store::index_bundle::bundle_path(&parquet)).unwrap();
-        index_cache.invalidate(&crate::store::index_bundle::bundle_path(&parquet));
-        assert!(execute(&request, &paths, &index_cache).unwrap().is_none());
+        assert_eq!(
+            rows,
+            vec![
+                (None, 0),
+                (Some("api"), 2),
+                (Some("fresh"), 1),
+                (Some("worker"), 2),
+            ]
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -590,7 +921,7 @@ mod tests {
         .unwrap();
         let path = parquet.to_string_lossy().into_owned();
         let provider = crate::query::provider::NamespaceProvider::build(
-            source_schema,
+            Arc::clone(&source_schema),
             std::slice::from_ref(&path),
             crate::query::index_cache::test_index_cache(),
         )
@@ -603,6 +934,7 @@ mod tests {
             AggregateSource {
                 segment_paths: vec![path],
                 index_cache: crate::query::index_cache::test_index_cache(),
+                schema: source_schema,
             },
         )]))));
         let batches = ctx
@@ -620,6 +952,11 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(explain.contains("FinelogIndexAggregate"), "{explain}");
+        assert_eq!(
+            explain.matches("FinelogIndexAggregate").count(),
+            1,
+            "the optimizer must not wrap its hidden fallback repeatedly: {explain}"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 }

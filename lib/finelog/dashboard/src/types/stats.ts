@@ -18,11 +18,26 @@ export interface ProtoColumn {
   name: string
   type?: ColumnType
   nullable?: boolean
+  index?: ProtoColumnIndex
+}
+
+export interface ProtoColumnIndex {
+  trigram?: boolean
+  exactValues?: string[]
+  valueCounts?: boolean
+}
+
+export interface ProtoCoveringProjection {
+  name: string
+  predicateColumn: string
+  predicateValues?: string[]
+  columns?: string[]
 }
 
 export interface ProtoSchema {
   columns?: ProtoColumn[]
   keyColumn?: string
+  projections?: ProtoCoveringProjection[]
 }
 
 export function shortColumnType(t: ColumnType | undefined): string {

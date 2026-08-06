@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
+use datafusion::catalog::TableProvider;
 use datafusion::common::config::Dialect;
 use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
@@ -447,6 +448,7 @@ pub async fn run_query_over(
                 exact_aggregate::AggregateSource {
                     segment_paths: provider.provider.segment_paths().to_vec(),
                     index_cache: Arc::clone(provider.provider.index_cache()),
+                    schema: provider.provider.schema(),
                 },
             )
         })

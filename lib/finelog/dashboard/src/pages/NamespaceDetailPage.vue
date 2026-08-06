@@ -7,6 +7,7 @@ import { decodeArrowIpc, type ArrowResult } from '@/utils/arrow'
 import { shortColumnType, type ProtoSchema } from '@/types/stats'
 import type { SegmentInfo, SegmentsResponse } from '@/types/introspection'
 import { formatBytes, formatNumber, formatTimestampMs } from '@/utils/formatting'
+import { segmentIndexSummary } from '@/utils/segmentIndexes'
 import InfoCard from '@/components/shared/InfoCard.vue'
 import DataTable, { type Column } from '@/components/shared/DataTable.vue'
 
@@ -132,7 +133,8 @@ const segmentColumns: Column[] = [
   { key: 'row_groups', label: 'Row groups', numeric: true },
   { key: 'footer', label: 'Footer', numeric: true },
   { key: 'layout', label: 'Layout', align: 'center' },
-  { key: 'sidecar', label: 'Sidecar' },
+  { key: 'indexes', label: 'Indexes' },
+  { key: 'index_size', label: 'Index size', numeric: true },
   { key: 'location', label: 'Location', align: 'center' },
   { key: 'created', label: 'Created' },
 ]
@@ -146,7 +148,16 @@ const segmentRows = computed(() =>
     row_groups: s.physical ? formatNumber(s.physical.rowGroups) : '—',
     footer: s.physical ? formatBytes(s.physical.footerBytes) : '—',
     layout: layoutLabel(s),
-    sidecar: s.physical?.sidecar?.columns.join(', ') || '—',
+    indexes:
+      s.physical?.indexBundle?.sections
+        .map((section) => {
+          const columns = section.columns.length ? ` [${section.columns.join(', ')}]` : ''
+          return section.id + columns + (section.available ? '' : ' (missing)')
+        })
+        .join(', ') || '—',
+    index_size: s.physical?.indexBundle
+      ? formatBytes(s.physical.indexBundle.bytes + s.physical.indexBundle.externalBytes)
+      : '—',
     location: s.location.toLowerCase(),
     created: formatTimestampMs(s.createdAtMs, timeZoneMode.value),
   })),
@@ -178,21 +189,17 @@ const levelSummary = computed(() => {
     }))
 })
 
-/**
- * Segments carrying the current physical layout, and those carrying a trigram
- * sidecar. Both are backfilled a few segments per maintenance tick, so the
- * gap is how far a format change still has to travel.
- */
+/** Physical-layout and planner-facing index backfill progress. */
 const backfillSummary = computed(() => {
   const inspected = segments.value.filter((s) => s.physical)
   if (!inspected.length) return null
   const current = inspected.filter((s) => s.physical?.layoutCurrent).length
-  const indexed = inspected.filter((s) => s.physical?.sidecar).length
+  const indexes = segmentIndexSummary(segments.value, schema.value)
   const footerBytes = inspected.reduce((total, s) => total + (s.physical?.footerBytes ?? 0), 0)
   const bytes = inspected.reduce((total, s) => total + s.byteSize, 0)
   return {
     layout: `${formatNumber(current)} of ${formatNumber(inspected.length)}`,
-    sidecar: `${formatNumber(indexed)} of ${formatNumber(inspected.length)}`,
+    indexes,
     footer: `${formatBytes(footerBytes)} of ${formatBytes(bytes)}`,
   }
 })
@@ -256,8 +263,40 @@ watch(() => props.name, loadAll)
       </div>
       <div v-if="backfillSummary" class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-text-muted pb-2">
         <span>current layout <span class="text-text">{{ backfillSummary.layout }}</span></span>
-        <span>trigram sidecar <span class="text-text">{{ backfillSummary.sidecar }}</span></span>
+        <span v-if="backfillSummary.indexes?.methods.length">
+          local L1+ full index policy
+          <span class="text-text">
+            {{ formatNumber(backfillSummary.indexes.stableIndexed) }} of
+            {{ formatNumber(backfillSummary.indexes.stableEligible) }}
+          </span>
+        </span>
+        <span v-if="backfillSummary.indexes?.l0Unindexed">
+          L0 unindexed by design
+          <span class="text-text">{{ formatNumber(backfillSummary.indexes.l0Unindexed) }}</span>
+        </span>
+        <span v-if="backfillSummary.indexes">
+          index storage <span class="text-text">{{ formatBytes(backfillSummary.indexes.bytes) }}</span>
+        </span>
         <span>footer <span class="text-text">{{ backfillSummary.footer }}</span></span>
+      </div>
+      <div
+        v-if="backfillSummary?.indexes"
+        class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-text-muted pb-2"
+      >
+        <span v-for="method in backfillSummary.indexes.methods" :key="method.id">
+          <span class="font-mono text-text">{{ method.id }}</span>
+          {{ formatNumber(method.indexed) }} of {{ formatNumber(method.eligible) }}
+        </span>
+      </div>
+      <div
+        v-if="backfillSummary?.indexes?.countColumns.length"
+        class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-text-muted pb-2"
+      >
+        <span>count summary columns</span>
+        <span v-for="column in backfillSummary.indexes.countColumns" :key="column.id">
+          <span class="font-mono text-text">{{ column.id }}</span>
+          {{ formatNumber(column.indexed) }} of {{ formatNumber(column.eligible) }}
+        </span>
       </div>
 
       <DataTable

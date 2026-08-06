@@ -357,14 +357,22 @@ pub fn write_bundle(
         )
     })?;
     let final_path = bundle_path(parquet_path);
-    let mut staging = final_path.as_os_str().to_os_string();
-    staging.push(TEMP_SUFFIX);
-    let staging = PathBuf::from(staging);
+    let staging = staging_path(parquet_path);
     let mut file = File::create(&staging)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     std::fs::rename(&staging, &final_path)?;
+    if let Some(parent) = final_path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
     Ok(final_path)
+}
+
+pub fn staging_path(parquet_path: &Path) -> PathBuf {
+    let final_path = bundle_path(parquet_path);
+    let mut staging = final_path.as_os_str().to_os_string();
+    staging.push(TEMP_SUFFIX);
+    PathBuf::from(staging)
 }
 
 fn put_bytes_u16(out: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {

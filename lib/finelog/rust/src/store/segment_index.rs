@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,7 @@ pub enum IndexSpec {
     TrigramBloom { column: String },
     ExactPostings { column: String, values: Vec<String> },
     ValueCounts { column: String },
+    AdaptiveValueCounts { column: String },
     CoveringProjection { projection: CoveringProjection },
 }
 
@@ -82,9 +84,25 @@ impl SegmentIndexConfig {
         self.indexes.is_empty()
     }
 
-    pub fn without_trigram_blooms(mut self) -> Self {
-        self.indexes
-            .retain(|index| !matches!(index, IndexSpec::TrigramBloom { .. }));
+    pub fn with_adaptive_value_counts(
+        mut self,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        let required: BTreeSet<String> = self
+            .indexes
+            .iter()
+            .filter_map(|index| match index {
+                IndexSpec::ValueCounts { column } => Some(column.clone()),
+                _ => None,
+            })
+            .collect();
+        self.indexes.extend(
+            columns
+                .into_iter()
+                .map(Into::into)
+                .filter(|column| !required.contains(column))
+                .map(|column| IndexSpec::AdaptiveValueCounts { column }),
+        );
         self
     }
 
@@ -95,7 +113,8 @@ impl SegmentIndexConfig {
             match index {
                 IndexSpec::TrigramBloom { column }
                 | IndexSpec::ExactPostings { column, .. }
-                | IndexSpec::ValueCounts { column } => {
+                | IndexSpec::ValueCounts { column }
+                | IndexSpec::AdaptiveValueCounts { column } => {
                     columns.insert(column.as_str());
                 }
                 IndexSpec::CoveringProjection { projection } => {
@@ -122,7 +141,9 @@ impl SegmentIndexConfig {
                 IndexSpec::ExactPostings { column, values } => {
                     (column.as_str(), values.as_slice(), false)
                 }
-                IndexSpec::ValueCounts { column } => (column.as_str(), &[], true),
+                IndexSpec::ValueCounts { column } | IndexSpec::AdaptiveValueCounts { column } => {
+                    (column.as_str(), &[], true)
+                }
                 IndexSpec::CoveringProjection { projection } => (
                     projection.predicate_column.as_str(),
                     projection.predicate_values.as_slice(),
@@ -236,6 +257,17 @@ pub fn read_exact_section(
     )?)
 }
 
+fn section_covers_column(
+    header: &index_bundle::BundleHeader,
+    section_id: &str,
+    column: &str,
+) -> bool {
+    header
+        .section(section_id)
+        .and_then(|section| std::str::from_utf8(&section.coverage).ok())
+        .is_some_and(|columns| columns.split('\0').any(|covered| covered == column))
+}
+
 /// Whether a segment lacks a complete bundle for the current policy.
 pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIndexConfig) -> bool {
     if config.is_empty() {
@@ -254,6 +286,23 @@ pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIn
         || header.binding.policy_fingerprint != config.policy_fingerprint()
     {
         return true;
+    }
+    for index in &config.indexes {
+        let covered = match index {
+            IndexSpec::TrigramBloom { column } => {
+                header.section(&trigram_section_id(column)).is_some()
+            }
+            IndexSpec::ExactPostings { column, .. } => {
+                section_covers_column(&header, "exact-postings", column)
+            }
+            IndexSpec::ValueCounts { column } => {
+                section_covers_column(&header, "value-counts", column)
+            }
+            IndexSpec::AdaptiveValueCounts { .. } | IndexSpec::CoveringProjection { .. } => true,
+        };
+        if !covered {
+            return true;
+        }
     }
     for projection in config.projections() {
         let Some(section) = header.section(&projection_section_id(&projection.name)) else {
@@ -285,6 +334,7 @@ pub fn write_segment_index(
     if config.is_empty() {
         return Ok(SegmentIndexWrite::NotApplicable);
     }
+    let started = Instant::now();
     let Some(first) = batches.first() else {
         return Ok(SegmentIndexWrite::NotApplicable);
     };
@@ -354,6 +404,16 @@ pub fn write_segment_index(
         }
     }
     if sections.is_empty() {
+        remove_if_exists(&index_bundle::bundle_path(parquet_path))?;
+        remove_if_exists(&index_bundle::staging_path(parquet_path))?;
+        remove_unreferenced_projections(parquet_path, &referenced_projection_paths);
+        remove_legacy_artifacts(parquet_path);
+        tracing::info!(
+            path = %parquet_path.display(),
+            rows = total_rows,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "segment index produced no applicable sections"
+        );
         return Ok(SegmentIndexWrite::NotApplicable);
     }
     sections.sort_by(|left, right| left.id.cmp(&right.id));
@@ -365,8 +425,24 @@ pub fn write_segment_index(
         policy_fingerprint: config.policy_fingerprint(),
     };
     index_bundle::write_bundle(parquet_path, &binding, &sections)?;
+    let bundle_bytes = std::fs::metadata(index_bundle::bundle_path(parquet_path))?.len();
+    let external_bytes = referenced_projection_paths.iter().try_fold(
+        0_u64,
+        |total, path| -> std::io::Result<u64> {
+            Ok(total.saturating_add(std::fs::metadata(path)?.len()))
+        },
+    )?;
     remove_unreferenced_projections(parquet_path, &referenced_projection_paths);
     remove_legacy_artifacts(parquet_path);
+    tracing::info!(
+        path = %parquet_path.display(),
+        rows = total_rows,
+        sections = sections.len(),
+        bundle_bytes,
+        external_bytes,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "segment index built"
+    );
     Ok(SegmentIndexWrite::Written)
 }
 
@@ -491,7 +567,10 @@ pub fn legacy_artifact_paths(parquet_path: &Path) -> [PathBuf; 3] {
     ]
 }
 
-pub fn covering_projection_paths(parquet_path: &Path) -> std::io::Result<Vec<PathBuf>> {
+fn covering_projection_paths_with_suffix(
+    parquet_path: &Path,
+    suffix: &str,
+) -> std::io::Result<Vec<PathBuf>> {
     let (Some(directory), Some(file_name)) = (parquet_path.parent(), parquet_path.file_name())
     else {
         return Ok(Vec::new());
@@ -507,11 +586,19 @@ pub fn covering_projection_paths(parquet_path: &Path) -> std::io::Result<Vec<Pat
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if name.starts_with(&prefix) && name.ends_with(".parquet") {
+        if name.starts_with(&prefix) && name.ends_with(suffix) {
             paths.push(path);
         }
     }
     Ok(paths)
+}
+
+pub fn covering_projection_paths(parquet_path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    covering_projection_paths_with_suffix(parquet_path, ".parquet")
+}
+
+pub fn covering_projection_staging_paths(parquet_path: &Path) -> std::io::Result<Vec<PathBuf>> {
+    covering_projection_paths_with_suffix(parquet_path, ".parquet.tmp")
 }
 
 pub fn remove_if_exists(path: &Path) -> std::io::Result<()> {

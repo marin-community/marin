@@ -24,10 +24,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::query::metadata_cache_stats;
 use crate::server::diagnostics::read_proc_self_status_kb;
+use crate::store::index_bundle::SectionKind;
 use crate::store::segment::{
     segment_id_and_row_group_rows, segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS,
     TARGET_ROW_GROUP_BYTES,
 };
+use crate::store::segment_index::parse_trigram_coverage;
+use crate::store::segment_index::{parse_projection_reference, projection_path};
 use crate::store::trigram::SIDECAR_SPAN_ROWS;
 use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
@@ -117,6 +120,10 @@ struct MetadataCacheInfo {
 struct IndexCacheInfo {
     corrupt_bundles: i64,
     corrupt_sections: i64,
+    exact_aggregate_full: i64,
+    exact_aggregate_partial: i64,
+    exact_aggregate_declined: i64,
+    exact_aggregate_fallbacks: i64,
 }
 
 /// The on-disk format policy this binary writes. A segment whose
@@ -196,7 +203,10 @@ struct PhysicalInfo {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IndexBundleInfo {
+    /// Bytes in the checksummed `.fidx` bundle itself.
     bytes: i64,
+    /// Bytes in covering-projection Parquets referenced by the bundle.
+    external_bytes: i64,
     checksum: &'static str,
     sections: Vec<IndexSectionInfo>,
 }
@@ -210,6 +220,14 @@ struct IndexSectionInfo {
     method_version: u8,
     checksum: &'static str,
     payload_bytes: i64,
+    external_bytes: i64,
+    /// Source or projected columns described by the section's typed coverage.
+    columns: Vec<String>,
+    /// False when a covering projection reference no longer resolves to the
+    /// bound Parquet artifact. In-bundle sections are available with the
+    /// readable directory; payload corruption is reported by `indexCache` once
+    /// a query verifies its checksum.
+    available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,6 +255,7 @@ async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
     let corruption = store.index_cache().corruption_counts();
+    let aggregate = crate::query::exact_aggregate::stats();
     Json(ServerInfoResponse {
         build: build_info(),
         process: ProcessInfo {
@@ -266,6 +285,10 @@ async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
         index_cache: IndexCacheInfo {
             corrupt_bundles: corruption.bundles as i64,
             corrupt_sections: corruption.sections as i64,
+            exact_aggregate_full: aggregate.full as i64,
+            exact_aggregate_partial: aggregate.partial as i64,
+            exact_aggregate_declined: aggregate.declined as i64,
+            exact_aggregate_fallbacks: aggregate.fallbacks as i64,
         },
         format: FormatInfo {
             layout_version: LAYOUT_VERSION,
@@ -287,21 +310,68 @@ fn physical_info(
     let (source_id, rows) = segment_id_and_row_group_rows(path)?;
     let index_bundle = index_cache
         .get_header(path, source_id, rows.iter().sum::<usize>() as u64)
-        .map(|header| IndexBundleInfo {
-            bytes: header.bundle_len as i64,
-            checksum: header.checksum_algorithm.as_str(),
-            sections: header
+        .map(|header| {
+            let sections = header
                 .sections
                 .iter()
-                .map(|section| IndexSectionInfo {
-                    id: section.id.clone(),
-                    kind: section.kind.as_str(),
-                    exactness: section.exactness.as_str(),
-                    method_version: section.method_version,
-                    checksum: section.checksum_algorithm.as_str(),
-                    payload_bytes: section.len as i64,
+                .map(|section| {
+                    let reference = (section.kind == SectionKind::CoveringProjection)
+                        .then(|| parse_projection_reference(&section.coverage))
+                        .flatten();
+                    let columns = match section.kind {
+                        SectionKind::TrigramBloom => parse_trigram_coverage(&section.coverage)
+                            .map(|coverage| vec![coverage.column])
+                            .unwrap_or_default(),
+                        SectionKind::ExactPostings | SectionKind::ValueCounts => {
+                            std::str::from_utf8(&section.coverage)
+                                .ok()
+                                .map(|columns| {
+                                    columns
+                                        .split('\0')
+                                        .filter(|column| !column.is_empty())
+                                        .map(str::to_string)
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        }
+                        SectionKind::CoveringProjection => reference
+                            .as_ref()
+                            .map(|reference| reference.descriptor.columns.clone())
+                            .unwrap_or_default(),
+                    };
+                    let available = if section.kind == SectionKind::CoveringProjection {
+                        reference.as_ref().is_some_and(|reference| {
+                            let projection = projection_path(path, reference);
+                            std::fs::metadata(&projection)
+                                .ok()
+                                .is_some_and(|metadata| metadata.len() == reference.file_bytes)
+                        })
+                    } else {
+                        true
+                    };
+                    let external_bytes = reference
+                        .filter(|_| available)
+                        .map(|reference| reference.file_bytes as i64)
+                        .unwrap_or(0);
+                    IndexSectionInfo {
+                        id: section.id.clone(),
+                        kind: section.kind.as_str(),
+                        exactness: section.exactness.as_str(),
+                        method_version: section.method_version,
+                        checksum: section.checksum_algorithm.as_str(),
+                        payload_bytes: section.len as i64,
+                        external_bytes,
+                        columns,
+                        available,
+                    }
                 })
-                .collect(),
+                .collect::<Vec<_>>();
+            IndexBundleInfo {
+                bytes: header.bundle_len as i64,
+                external_bytes: sections.iter().map(|section| section.external_bytes).sum(),
+                checksum: header.checksum_algorithm.as_str(),
+                sections,
+            }
         });
     Some(PhysicalInfo {
         segment_identity: source_id.to_string(),

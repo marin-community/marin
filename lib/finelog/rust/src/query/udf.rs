@@ -371,11 +371,26 @@ fn json_get_column(
         }
         _ => {
             let text = string_values(doc, kind.udf_name())?;
+            let mut previous_text: Option<&str> = None;
+            let mut previous_key: Option<&str> = None;
+            let mut previous_value: Option<Option<JsonValue>> = None;
             build_json_output(kind, n, |i| {
                 if text.is_null(i) || key.is_null(i) {
                     Resolved::InputNull
                 } else {
-                    Resolved::from_object_value(json_object_value(text.value(i), key.value(i)))
+                    let row_text = text.value(i);
+                    let row_key = key.value(i);
+                    let value = if previous_text == Some(row_text) && previous_key == Some(row_key)
+                    {
+                        previous_value.clone().expect("matching lookup is cached")
+                    } else {
+                        let value = json_object_value(row_text, row_key);
+                        previous_text = Some(row_text);
+                        previous_key = Some(row_key);
+                        previous_value = Some(value.clone());
+                        value
+                    };
+                    Resolved::from_object_value(value)
                 }
             })
         }
@@ -384,7 +399,11 @@ fn json_get_column(
 }
 
 /// Build the output array for a 2-arg `json_*` kind from a per-row [`Resolved`].
-fn build_json_output(kind: JsonKind, n: usize, resolve: impl Fn(usize) -> Resolved) -> ArrayRef {
+fn build_json_output(
+    kind: JsonKind,
+    n: usize,
+    mut resolve: impl FnMut(usize) -> Resolved,
+) -> ArrayRef {
     match kind {
         JsonKind::Get => {
             let mut b = StringBuilder::new();

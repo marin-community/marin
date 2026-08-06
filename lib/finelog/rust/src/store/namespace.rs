@@ -48,8 +48,9 @@ use crate::store::segment::{
     write_segment_to_dir,
 };
 use crate::store::segment_index::{
-    covering_projection_paths, legacy_artifact_paths, needs_rebuild as segment_index_needs_rebuild,
-    remove_if_exists, write_segment_index, SegmentIndexConfig, SegmentIndexWrite,
+    covering_projection_paths, covering_projection_staging_paths, legacy_artifact_paths,
+    needs_rebuild as segment_index_needs_rebuild, remove_if_exists, write_segment_index,
+    SegmentIndexConfig, SegmentIndexWrite,
 };
 use crate::store::types::{basename, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
@@ -57,10 +58,16 @@ use crate::store::types::{basename, LocalSegment, NamespaceStats, SegmentLocatio
 /// parquet unlink. Missing artifacts are not errors.
 fn remove_index_artifacts(parquet_path: &str) {
     let parquet = Path::new(parquet_path);
-    let mut artifacts = vec![(
-        crate::store::index_bundle::bundle_path(parquet),
-        "index bundle",
-    )];
+    let mut artifacts = vec![
+        (
+            crate::store::index_bundle::bundle_path(parquet),
+            "index bundle",
+        ),
+        (
+            crate::store::index_bundle::staging_path(parquet),
+            "staged index bundle",
+        ),
+    ];
     artifacts.extend(
         legacy_artifact_paths(parquet)
             .into_iter()
@@ -70,6 +77,16 @@ fn remove_index_artifacts(parquet_path: &str) {
         Ok(paths) => artifacts.extend(paths.into_iter().map(|path| (path, "covering projection"))),
         Err(error) => {
             tracing::warn!(path = %parquet.display(), %error, "failed to enumerate segment index artifacts");
+        }
+    }
+    match covering_projection_staging_paths(parquet) {
+        Ok(paths) => artifacts.extend(
+            paths
+                .into_iter()
+                .map(|path| (path, "staged covering projection")),
+        ),
+        Err(error) => {
+            tracing::warn!(path = %parquet.display(), %error, "failed to enumerate staged segment index artifacts");
         }
     }
     for (path, kind) in artifacts {
@@ -717,12 +734,9 @@ impl Namespace {
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
     fn write_sealed(&self, dir: &std::path::Path, sealed: &SealedBuffer) -> Result<(), StatsError> {
         let (path, size) = write_segment_to_dir(dir, 0, sealed.min_seq, &sealed.batch)?;
-        let index_config = self.segment_index_config().without_trigram_blooms();
-        if let Err(error) =
-            write_segment_index(&path, std::slice::from_ref(&sealed.batch), &index_config)
-        {
-            tracing::warn!(namespace = %self.name, path = %path.display(), %error, "segment index bundle write failed for L0");
-        }
+        // L0 files are small and short-lived. Derived indexes are built after
+        // compaction promotes them to L1+, keeping flush acknowledgement fast
+        // while query plans merge indexed counts with uncovered L0 data.
         let (min_key, max_key) = self.key_bounds(&sealed.batch);
         let seg = LocalSegment {
             path: path.to_string_lossy().into_owned(),
@@ -843,14 +857,7 @@ impl Namespace {
     /// `max_merge_arrow_bytes` admits — so the committed span comes from the
     /// swap, not the job, and both counts are logged.
     fn run_one_job(&self, dir: &std::path::Path, job: &CompactionJob) -> Result<(), StatsError> {
-        let indexed = self.indexed_columns();
-        let exact_indexes = self.exact_indexes();
-        let index_config = SegmentIndexConfig::from_policies(
-            indexed.iter().copied(),
-            &exact_indexes,
-            &self.schema.projections,
-            self.key_column.clone(),
-        );
+        let index_config = self.segment_index_config();
         let started = Instant::now();
         tracing::info!(
             namespace = %self.name,
@@ -929,7 +936,7 @@ impl Namespace {
             .collect()
     }
 
-    /// Exact row-index and value-count policies for string columns.
+    /// Explicit exact row-index and value-count policies for string columns.
     fn exact_indexes(&self) -> Vec<ExactIndexConfig> {
         self.schema
             .columns
@@ -946,6 +953,14 @@ impl Namespace {
             .collect()
     }
 
+    fn adaptive_count_columns(&self) -> impl Iterator<Item = &str> {
+        self.schema
+            .columns
+            .iter()
+            .filter(|column| column.r#type == ColumnType::COLUMN_TYPE_STRING)
+            .map(|column| column.name.as_str())
+    }
+
     fn segment_index_config(&self) -> SegmentIndexConfig {
         SegmentIndexConfig::from_policies(
             self.indexed_columns(),
@@ -953,6 +968,7 @@ impl Namespace {
             &self.schema.projections,
             self.key_column.clone(),
         )
+        .with_adaptive_value_counts(self.adaptive_count_columns())
     }
 
     /// Recover the typed Int64 key bounds for an input segment from the in-memory
@@ -2422,6 +2438,26 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn low_cardinality_counts_are_automatic_for_string_columns() {
+        let dir = tempdir();
+        let ns = open_ns(
+            "logs",
+            data_schema(),
+            Some(dir.join("logs")),
+            Arc::new(Catalog::open(Some(&dir)).unwrap()),
+        );
+
+        assert!(ns.segment_index_config().indexes.iter().any(|index| {
+            matches!(
+                index,
+                crate::store::segment_index::IndexSpec::AdaptiveValueCounts { column }
+                    if column == "data"
+            )
+        }));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     /// `n` rows of searchable `data` + monotonic `timestamp_ms` (non-seq columns
     /// in registered order, as `append_aligned_batch` expects).
     fn data_aligned(n: i64, first: i64) -> AlignedBatch {
@@ -2521,6 +2557,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn l0_does_not_write_derived_index_artifacts() {
+        let dir = tempdir();
+        let ns_dir = dir.join("telemetry.test");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "telemetry.test",
+            exact_data_schema(),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+        ns.append_aligned_batch(&data_aligned(5, 0));
+        ns.flush_once().unwrap();
+
+        let segments = discover_segments(&ns_dir);
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("seg_L0_"));
+        assert!(!crate::store::index_bundle::bundle_path(&segments[0]).exists());
+        assert!(
+            !crate::store::exact::named_projection_path(&segments[0], "matching-lines").exists()
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn backfill_is_a_noop_without_the_indexed_column() {
         let dir = tempdir();
         let ns_dir = dir.join("iris.worker");
@@ -2574,8 +2638,8 @@ mod tests {
         let segs = discover_segments(&ns_dir);
         assert_eq!(segs.len(), 1, "two L0 merged into one L1");
         assert!(
-            !crate::store::index_bundle::bundle_path(&segs[0]).exists(),
-            "nothing was indexed yet"
+            crate::store::index_bundle::bundle_path(&segs[0]).exists(),
+            "the original string columns receive adaptive counts"
         );
         before.shutdown(Duration::from_secs(10)).await;
 
@@ -2592,8 +2656,8 @@ mod tests {
 
         assert_eq!(
             after.backfill_missing_index_bundles(10),
-            0,
-            "nothing to index"
+            1,
+            "available adaptive sections are rebuilt once"
         );
         let path = segs[0].to_string_lossy().to_string();
         assert!(
@@ -2816,11 +2880,14 @@ mod tests {
 
         write_one(&ns).await;
         ns.run_maintenance(true).await.unwrap(); // L1 #1, uploaded, BOTH
-        let first_l1: Vec<_> = std::fs::read_dir(&ns_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("seg_L1_"))
-            .map(|e| e.path())
+        let first_l1: Vec<_> = discover_segments(&ns_dir)
+            .into_iter()
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("seg_L1_")
+            })
             .collect();
         assert_eq!(first_l1.len(), 1);
 
@@ -2828,11 +2895,14 @@ mod tests {
         ns.run_maintenance(true).await.unwrap(); // L1 #2; cap=1 evicts oldest
 
         // Local L1 files: exactly one remains, and it is NOT the first one.
-        let local_l1: Vec<_> = std::fs::read_dir(&ns_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("seg_L1_"))
-            .map(|e| e.path())
+        let local_l1: Vec<_> = discover_segments(&ns_dir)
+            .into_iter()
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("seg_L1_")
+            })
             .collect();
         assert_eq!(local_l1.len(), 1, "evicted oldest local L1");
         assert!(!first_l1[0].exists(), "oldest local file unlinked");
@@ -2875,10 +2945,14 @@ mod tests {
         ns.run_maintenance(true).await.unwrap();
         write_one(&ns).await;
         ns.run_maintenance(true).await.unwrap();
-        let local_l1 = std::fs::read_dir(&ns_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("seg_L1_"))
+        let local_l1 = discover_segments(&ns_dir)
+            .into_iter()
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("seg_L1_")
+            })
             .count();
         assert_eq!(local_l1, 2, "LOCAL-only segments are never evicted");
         std::fs::remove_dir_all(&dir).ok();

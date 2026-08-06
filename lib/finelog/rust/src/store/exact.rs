@@ -33,6 +33,7 @@ use crate::store::trigram::ByteReader;
 const MAGIC: &[u8; 4] = b"FLEQ";
 const VERSION: u8 = 2;
 const MAX_COUNT_VALUES: usize = 4_096;
+const MAX_COUNT_KEY_BYTES: usize = 1024 * 1024;
 const PROJECTION_ROW_GROUP_BYTES: usize = 1024 * 1024;
 const PROJECTION_ROW_GROUP_ROWS: usize = 16_384;
 const TEMP_SUFFIX: &str = ".tmp";
@@ -152,6 +153,7 @@ fn build_column(batches: &[RecordBatch], config: &ExactIndexConfig) -> Option<(E
         .map(|value| (value, Vec::new()))
         .collect();
     let mut string_counts: Option<BTreeMap<String, u64>> = config.value_counts.then(BTreeMap::new);
+    let mut count_key_bytes = 0_usize;
     let mut null_count = 0_u64;
     let mut offset = 0_u64;
     for batch in batches {
@@ -164,7 +166,10 @@ fn build_column(batches: &[RecordBatch], config: &ExactIndexConfig) -> Option<(E
                     Some(value) => {
                         if let Some(count) = counts.get_mut(value) {
                             *count += 1;
-                        } else if counts.len() + usize::from(null_count > 0) < MAX_COUNT_VALUES {
+                        } else if counts.len() + usize::from(null_count > 0) < MAX_COUNT_VALUES
+                            && count_key_bytes.saturating_add(value.len()) <= MAX_COUNT_KEY_BYTES
+                        {
+                            count_key_bytes += value.len();
                             counts.insert(value.to_string(), 1);
                         } else {
                             // High-cardinality columns retain configured row
@@ -680,5 +685,24 @@ mod tests {
                 len: 1,
             }]
         );
+    }
+
+    #[test]
+    fn large_distinct_values_decline_before_the_count_index_grows_unbounded() {
+        let value = "x".repeat(MAX_COUNT_KEY_BYTES / 2 + 1);
+        let values = vec![Some(value.clone()), Some(format!("y{value}"))];
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "service",
+                DataType::Utf8,
+                true,
+            )])),
+            vec![Arc::new(StringArray::from(values))],
+        )
+        .unwrap();
+
+        let (column, _) = build_column(&[batch], &config()).unwrap();
+
+        assert!(column.counts.is_none());
     }
 }
