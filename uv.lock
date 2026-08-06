@@ -5331,7 +5331,6 @@ name = "marin-finestore"
 version = "0.1.0"
 source = { editable = "lib/finestore" }
 dependencies = [
-    { name = "fsspec" },
     { name = "marin-rigging" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -5351,7 +5350,6 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fsspec", specifier = ">=2024.0.0" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "pyarrow", specifier = ">=23.0.0" },
     { name = "pydantic", specifier = ">=2.0" },
