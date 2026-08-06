@@ -28,6 +28,16 @@ goes stale on the next commit.
 
 ## Experiments
 
+### grug-ve-value-embeddings
+- Path: `experiments/grug/ve/`
+- Origin: `experiments/grug/base/`
+- Introduced: TBD
+- Last known-good: TBD
+- Status: active
+- Purpose: value embeddings — a layer-shared, token-indexed table blended into the attention
+  value path under a learnable per-layer gate, buying parameters at zero added matmul FLOPs.
+  Paired A/B (`--arm ve` vs `--arm base`) at 130M, confirming at 1.3B, on a single H200.
+
 ### grug-base-template
 - Path: `experiments/grug/base/`
 - Origin: base
