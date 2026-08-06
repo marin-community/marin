@@ -1,0 +1,47 @@
+# Local smoke: a Ballista scheduler + 2 executors over a baked-in Parquet fixture.
+# Proves the patched binaries run distributed queries with a real shuffle, without a
+# cluster or GCS. Driven by ./smoke.sh, which builds the base image, generates the
+# fixture, bakes it plus the queries into an overlay image (smallquery-ballista-smoke),
+# brings this up, runs the queries via `docker compose run`, and checks results. The
+# fixture and queries are baked into the image (see smoke/Dockerfile) rather than
+# bind-mounted, so every container sees /data and /queries.sql at the same path. gs://
+# itself is proven on-cluster, since it needs the GCP service account.
+name: smallquery-ballista-smoke
+
+x-common: &common
+  image: smallquery-ballista-smoke:local
+  environment:
+    RUST_LOG: info
+
+services:
+  scheduler:
+    <<: *common
+    command:
+      - ballista-scheduler
+      - --bind-host=0.0.0.0
+      - --bind-port=50050
+      - --external-host=scheduler
+
+  executor1:
+    <<: *common
+    depends_on: [scheduler]
+    command:
+      - ballista-executor
+      - --bind-host=0.0.0.0
+      - --bind-port=50051
+      - --bind-grpc-port=50052
+      - --external-host=executor1
+      - --scheduler-host=scheduler
+      - --scheduler-port=50050
+
+  executor2:
+    <<: *common
+    depends_on: [scheduler]
+    command:
+      - ballista-executor
+      - --bind-host=0.0.0.0
+      - --bind-port=50051
+      - --bind-grpc-port=50052
+      - --external-host=executor2
+      - --scheduler-host=scheduler
+      - --scheduler-port=50050
