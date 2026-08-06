@@ -441,10 +441,21 @@ create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.m
 IAP is the outer gate. Its `X-Goog-Authenticated-User-Email` header becomes a Grafana
 auth-proxy account. The container's nginx listener adds a fixed `Editor` role for those
 accounts, which lets every admitted person create and expire alert silences. Grafana syncs
-the role on authenticated requests. Before Grafana starts, an idempotent database migration
-also changes memberships created as `Viewer` by older revisions to `Editor`; this is required
-because a Grafana organization with no `Admin` rejects role changes through the normal sync
-path. Requests without IAP's identity header remain anonymous `Viewer`.
+the role on authenticated requests. Before Grafana starts, `python -m grafana_migrations`
+applies pending `src/grafana_migrations/migrations/mNNNN_*.py` files and records each version
+in `marin_schema_migrations`. Migration `m0001` changes memberships created as `Viewer` by
+older revisions to `Editor`; Grafana's normal role synchronization rejects that change when
+the organization has no `Admin`. Requests without IAP's identity header remain anonymous
+`Viewer`.
+
+That anonymous fallback is not a public access path. Cloud Run grants `run.invoker` only to
+the IAP service agent, and [IAP authenticates ordinary application requests before they reach
+the container](https://cloud.google.com/run/docs/securing/identity-aware-proxy-cloud-run). If
+Grafana later admits direct public traffic, the backend must distinguish it by validating the
+signed [`X-Goog-IAP-JWT-Assertion`](https://cloud.google.com/iap/docs/identity-howto) or by
+using separate backends that prevent public traffic from supplying auth-proxy headers. The
+unsigned `X-Goog-Authenticated-User-Email` header is not a safe discriminator once a caller
+can bypass IAP and reach the container directly.
 
 The OAuth consent screen is project-level and shared across the project's IAP services. The
 shared Cloud Run component admits the OpenAthena Workspace domain and the Loom VM service

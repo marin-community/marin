@@ -40,11 +40,9 @@ if [ -n "${DATABASE_SOCKET_DIR:-}" ]; then
   export GF_DATABASE_URL="postgres://${GF_DATABASE_USER}:${GF_DATABASE_PASSWORD}@/${GF_DATABASE_NAME}?host=${DATABASE_SOCKET_DIR}"
 fi
 
-# Older revisions created every IAP account as Viewer. Grafana refuses to change
-# those memberships through role synchronization when the organization has no
-# Admin, which is the expected state with initial admin creation disabled. Upgrade
-# the persisted roles before Grafana or its permission cache starts.
-/opt/bridge/venv/bin/python -m grafana_role_migration
+# Apply Marin-owned database migrations before Grafana or its permission cache starts.
+# The first migration upgrades IAP accounts created as Viewer by older revisions.
+/opt/bridge/venv/bin/python -m grafana_migrations
 
 /opt/bridge/venv/bin/grafana-bridge &
 bridge_pid=$!
