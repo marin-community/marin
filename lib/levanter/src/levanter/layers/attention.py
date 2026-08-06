@@ -8,7 +8,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Optional, Union
+from typing import Literal, NamedTuple, Optional, Union
 
 import equinox as eqx
 import jax
@@ -1255,6 +1255,64 @@ class AttentionConfig:
             return Axis("gate_size", self.head_size)
 
 
+class _AttentionParams(NamedTuple):
+    """The weights every attention variant shares, ordered to match `Attention`'s fields."""
+
+    q_proj: hnn.Linear
+    k_proj: hnn.Linear
+    v_proj: hnn.Linear
+    o_proj: hnn.Linear
+    q_norm: Optional[LayerNormBase]
+    k_norm: Optional[LayerNormBase]
+    rot_embs: Optional[RotaryEmbeddings]
+
+
+def _init_attention_params(config: AttentionConfig, *, k_q, k_k, k_v, k_o) -> _AttentionParams:
+    """Build the q/k/v/o projections, optional QK norms, and rotary embeddings for an attention layer."""
+    use_bias = config.use_bias
+    use_output_bias = config.use_output_bias if config.use_output_bias is not None else use_bias
+
+    q_proj = hnn.Linear.init(
+        In=config.Embed,
+        Out=(config.KVHeads, config.QHeadsPerGroup, config.HeadSize),
+        key=k_q,
+        use_bias=use_bias,
+        out_first=True,
+    )
+    k_proj = hnn.Linear.init(
+        In=config.Embed,
+        Out=(config.KVHeads, config.HeadSize),
+        key=k_k,
+        use_bias=use_bias,
+        out_first=True,
+    )
+    v_proj = hnn.Linear.init(
+        In=config.Embed,
+        Out=(config.KVHeads, config.HeadSize),
+        key=k_v,
+        use_bias=use_bias,
+        out_first=True,
+    )
+    o_proj = hnn.Linear.init(
+        In=(config.Heads, config.HeadSize),
+        Out=config.Embed,
+        key=k_o,
+        use_bias=use_output_bias,
+        out_first=True,
+    )
+
+    q_norm = None
+    k_norm = None
+    if config.qk_norm is not None:
+        q_norm = config.qk_norm.build(config.HeadSize)
+        k_norm = config.qk_norm.build(config.HeadSize)
+
+    # Build rotary embeddings once during initialization if configured
+    rot_embs = config.rope.build(config.HeadSize) if config.rope is not None else None
+
+    return _AttentionParams(q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
+
+
 class Attention(eqx.Module):
     """A multi-head attention layer that uses dot product attention.
 
@@ -1278,52 +1336,24 @@ class Attention(eqx.Module):
         if config.gated != "none":
             return GatedAttention.init(config, key=key)
 
-        use_bias = config.use_bias
-        use_output_bias = config.use_output_bias if config.use_output_bias is not None else use_bias
         k_q, k_k, k_v, k_o = jrandom.split(key, 4)
-
-        q_proj = hnn.Linear.init(
-            In=config.Embed,
-            Out=(config.KVHeads, config.QHeadsPerGroup, config.HeadSize),
-            key=k_q,
-            use_bias=use_bias,
-            out_first=True,
-        )
-        k_proj = hnn.Linear.init(
-            In=config.Embed,
-            Out=(config.KVHeads, config.HeadSize),
-            key=k_k,
-            use_bias=use_bias,
-            out_first=True,
-        )
-        v_proj = hnn.Linear.init(
-            In=(config.Embed),
-            Out=(config.KVHeads, config.HeadSize),
-            key=k_v,
-            use_bias=use_bias,
-            out_first=True,
-        )
-        o_proj = hnn.Linear.init(
-            In=(config.Heads, config.HeadSize),
-            Out=config.Embed,
-            key=k_o,
-            use_bias=use_output_bias,
-            out_first=True,
-        )
-
-        q_norm = None
-        k_norm = None
-        if config.qk_norm is not None:
-            q_norm = config.qk_norm.build(config.HeadSize)
-            k_norm = config.qk_norm.build(config.HeadSize)
-
-        # Build rotary embeddings once during initialization if configured
-        rot_embs = config.rope.build(config.HeadSize) if config.rope is not None else None
-
-        return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
+        return Attention(config, *_init_attention_params(config, k_q=k_q, k_k=k_k, k_v=k_v, k_o=k_o))
 
     def empty_page_cache(self, spec: PageTableSpec, *, dtype) -> "KvPageCache":
         return KvPageCache.init(spec, self.config.KVHeads, self.config.HeadSize, dtype=dtype)
+
+    def _attn_sink(self) -> Optional[NamedArray]:
+        """Per-head sink logits to add to the softmax denominator. `None` for plain attention."""
+        return None
+
+    def _project_out(self, x: NamedArray, attn_tokens: NamedArray, key_o) -> NamedArray:
+        """Flatten the per-head attention output and apply the output projection.
+
+        Variants that post-process the attention output (e.g. gating) override this.
+        `x` is the layer input, and is used for its dtype.
+        """
+        attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
+        return self.o_proj(attn_output.astype(x.dtype), key=key_o)
 
     @named_call
     def __call__(
@@ -1365,14 +1395,10 @@ class Attention(eqx.Module):
             logits_soft_cap=self.config.logits_soft_cap,
             inference=True,
             prng=key,
+            attn_sink=self._attn_sink(),
         )
 
-        # Flatten heads and apply output projection
-        attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        attn_output = attn_output.astype(x.dtype)
-        attn_output = self.o_proj(attn_output, key=key_o)
-
-        return attn_output
+        return self._project_out(x, attn_output, key_o)
 
     # Note: the non-paged decode path has been removed. Use paged_decode.
 
@@ -1416,11 +1442,7 @@ class Attention(eqx.Module):
             soft_cap=self.config.logits_soft_cap,
         )
 
-        attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        attn_output = attn_output.astype(x.dtype)
-        attn_output = self.o_proj(attn_output, key=key_o)
-
-        return attn_output, kv_cache
+        return self._project_out(x, attn_tokens, key_o), kv_cache
 
     @named_call
     def _compute_qkv(
@@ -1463,144 +1485,23 @@ class GatedAttention(Attention):
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "GatedAttention":
         k_q, k_k, k_v, k_o, k_g = jrandom.split(key, 5)
-        use_bias = config.use_bias
-        use_output_bias = config.use_output_bias if config.use_output_bias is not None else use_bias
-
-        q_proj = hnn.Linear.init(
-            In=config.Embed,
-            Out=(config.KVHeads, config.QHeadsPerGroup, config.HeadSize),
-            key=k_q,
-            use_bias=use_bias,
-            out_first=True,
-        )
-        k_proj = hnn.Linear.init(
-            In=config.Embed,
-            Out=(config.KVHeads, config.HeadSize),
-            key=k_k,
-            use_bias=use_bias,
-            out_first=True,
-        )
-        v_proj = hnn.Linear.init(
-            In=(config.Embed),
-            Out=(config.KVHeads, config.HeadSize),
-            key=k_v,
-            use_bias=use_bias,
-            out_first=True,
-        )
-        o_proj = hnn.Linear.init(
-            In=(config.Heads, config.HeadSize),
-            Out=config.Embed,
-            key=k_o,
-            use_bias=use_output_bias,
-            out_first=True,
-        )
 
         gate_proj = hnn.Linear.init(
             In=config.Embed,
             Out=(config.KVHeads, config.QHeadsPerGroup, config.GateSize),
             key=k_g,
-            use_bias=use_bias,
+            use_bias=config.use_bias,
             out_first=True,
         )
 
-        q_norm = None
-        k_norm = None
-        if config.qk_norm is not None:
-            q_norm = config.qk_norm.build(config.HeadSize)
-            k_norm = config.qk_norm.build(config.HeadSize)
+        params = _init_attention_params(config, k_q=k_q, k_k=k_k, k_v=k_v, k_o=k_o)
+        return GatedAttention(config, *params, gate_proj)
 
-        rot_embs = config.rope.build(config.HeadSize) if config.rope is not None else None
-
-        return GatedAttention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs, gate_proj)
-
-    @named_call
-    def __call__(
-        self,
-        x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
-        *,
-        key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
-        key_proj, key_o = maybe_rng_split(key, 2)
-        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
-
-        q = q.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
-        k = k.rearrange((..., "kv_head", "position", "head_size"))
-        v = v.rearrange((..., "kv_head", "position", "head_size"))
-        k = k.rename({"position": "key_position"})
-        v = v.rename({"position": "key_position"})
-
-        if self.config.sliding_window is not None and isinstance(mask, AttentionMask):
-            mask = mask.with_sliding_window(self.config.sliding_window)
-
-        attn_output = dot_product_attention(
-            "position",
-            "key_position",
-            "head_size",
-            q,
-            k,
-            v,
-            mask,
-            attention_dtype=jnp.float32 if self.config.upcast_attn else x.dtype,
-            attn_backend=self.config.attn_backend,
-            flash_block_size=self.config.flash_attention_block_size,
-            scaling_factor=self.config.scaling_factor,
-            logits_soft_cap=self.config.logits_soft_cap,
-            inference=True,
-            prng=key,
-        )
-
+    def _project_out(self, x: NamedArray, attn_tokens: NamedArray, key_o) -> NamedArray:
         assert self.gate_proj is not None
         gate = hax.nn.sigmoid(self.gate_proj(x))
         gate = gate.rename({"gate_size": "head_size"})
-        attn_output = attn_output * gate
-
-        attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        attn_output = attn_output.astype(x.dtype)
-        return self.o_proj(attn_output, key=key_o)
-
-    @named_call
-    @jax.profiler.annotate_function
-    def paged_decode(
-        self,
-        x: NamedArray,
-        kv_cache: "KvPageCache",
-        batch_info: PageBatchInfo,
-        *,
-        pos_ids: NamedArray,
-        key=None,
-    ) -> tuple[NamedArray, "KvPageCache"]:
-        key_proj, key_o = maybe_rng_split(key, 2)
-        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
-
-        kv_cache = kv_cache.update(batch_info, k, v)
-
-        sm_scale = (
-            self.config.scaling_factor
-            if self.config.scaling_factor is not None
-            else 1.0 / math.sqrt(self.config.HeadSize.size)
-        )
-
-        attn_tokens = ragged_paged_attention(
-            q,
-            kv_cache.kv_pages,
-            batch_info.seq_lens,
-            batch_info.page_indices,
-            batch_info.cu_q_lens,
-            batch_info.num_seqs,
-            sm_scale=sm_scale,
-            soft_cap=self.config.logits_soft_cap,
-        )
-
-        assert self.gate_proj is not None
-        gate = hax.nn.sigmoid(self.gate_proj(x))
-        gate = gate.rename({"gate_size": "head_size"})
-        attn_tokens = attn_tokens * gate
-
-        attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        attn_output = attn_output.astype(x.dtype)
-        return self.o_proj(attn_output, key=key_o), kv_cache
+        return super()._project_out(x, attn_tokens * gate, key_o)
 
 
 @named_call
@@ -2155,64 +2056,10 @@ class AttentionWithSink(Attention):
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "AttentionWithSink":
-        base = Attention.init(config, key=key)
+        k_q, k_k, k_v, k_o = jrandom.split(key, 4)
+        params = _init_attention_params(config, k_q=k_q, k_k=k_k, k_v=k_v, k_o=k_o)
         sinks = hax.zeros((config.KVHeads, config.QHeadsPerGroup), dtype=jnp.float32)
-        return AttentionWithSink(
-            base.config,
-            base.q_proj,
-            base.k_proj,
-            base.v_proj,
-            base.o_proj,
-            base.q_norm,
-            base.k_norm,
-            base.rot_embs,
-            sinks,
-        )
+        return AttentionWithSink(config, *params, sinks)
 
-    @named_call
-    def __call__(
-        self,
-        x: NamedArray,
-        mask: Optional[NamedArray | AttentionMask],
-        *,
-        key=None,
-        pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
-        key_proj, key_o = maybe_rng_split(key, 2)
-
-        q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
-
-        q = q.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
-        k = k.rearrange((..., "kv_head", "position", "head_size"))
-        v = v.rearrange((..., "kv_head", "position", "head_size"))
-
-        k = k.rename({"position": "key_position"})
-        v = v.rename({"position": "key_position"})
-
-        if self.config.sliding_window is not None and isinstance(mask, AttentionMask):
-            mask = mask.with_sliding_window(self.config.sliding_window)
-
-        attn_output = dot_product_attention(
-            "position",
-            "key_position",
-            "head_size",
-            q,
-            k,
-            v,
-            mask,
-            attention_dtype=jnp.float32 if self.config.upcast_attn else x.dtype,
-            attn_backend=self.config.attn_backend,
-            flash_block_size=self.config.flash_attention_block_size,
-            scaling_factor=self.config.scaling_factor,
-            logits_soft_cap=self.config.logits_soft_cap,
-            dropout=0.0,
-            inference=True,
-            prng=key,
-            attn_sink=self.sinks,
-        )
-
-        attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
-        attn_output = attn_output.astype(x.dtype)
-        attn_output = self.o_proj(attn_output, key=key_o)
-
-        return attn_output
+    def _attn_sink(self) -> Optional[NamedArray]:
+        return self.sinks

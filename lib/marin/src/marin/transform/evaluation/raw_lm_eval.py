@@ -14,11 +14,12 @@ from typing import Any
 import yaml
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
-    MaterializedOutputMetadata,
-    write_ingestion_metadata_json,
+    check_content_fingerprint,
+    open_staged_jsonl,
+    staged_source_summary,
 )
 from marin.transform.hf_parquet_splits import load_hf_split_iterable
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem import StoragePath
 
 
 class LmEvalRawRenderer(StrEnum):
@@ -225,19 +226,13 @@ def _validate_mmlu_fewshot_config(cfg: LmEvalRawStagingConfig) -> None:
 
 def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
     """Stage one LM-eval-style dataset split into raw-text JSONL."""
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    check_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     if cfg.renderer_name is LmEvalRawRenderer.MMLU:
         _validate_mmlu_fewshot_config(cfg)
 
     StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
-    compression = "gzip" if out_file.endswith(".gz") else None
 
     mmlu_fewshot_index: dict[str, list[str]] = {}
     if cfg.renderer_name is LmEvalRawRenderer.MMLU and cfg.num_fewshot > 0:
@@ -251,65 +246,50 @@ def stage_lm_eval_source(cfg: LmEvalRawStagingConfig) -> dict[str, int | str]:
         )
 
     record_count = 0
-    with atomic_rename(out_file) as temp_path:
-        with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
-            for index, example in enumerate(load_hf_split_iterable(cfg.input_path, cfg.split, cfg.subset)):
-                if cfg.renderer_name is LmEvalRawRenderer.MMLU:
-                    text = _render_mmlu_example(
-                        example,
-                        fewshot_index=mmlu_fewshot_index,
-                        num_fewshot=cfg.num_fewshot,
-                    )
-                elif cfg.renderer_name is LmEvalRawRenderer.GSM8K:
-                    text = _render_gsm8k_example(example, num_fewshot=cfg.num_fewshot)
-                else:
-                    raise ValueError(f"Unsupported LM-eval raw renderer: {cfg.renderer_name}")
-                if not text:
-                    continue
-                record = {
-                    "id": f"{cfg.source_label}:{cfg.split}:{index:08d}",
-                    "text": text,
-                    "source": cfg.source_label,
-                    "provenance": {
-                        "dataset": cfg.input_path,
-                        "split": cfg.split,
-                        "subset": cfg.subset,
-                        "renderer": cfg.renderer_name.value,
-                        "num_fewshot": cfg.num_fewshot,
-                        "fewshot_split": cfg.fewshot_split,
-                        "index": index,
-                        **cfg.extra_metadata,
-                    },
-                }
-                json.dump(record, outfile, ensure_ascii=False)
-                outfile.write("\n")
-                record_count += 1
-                if cfg.max_examples is not None and record_count >= cfg.max_examples:
-                    break
-
-    output_size = StoragePath(out_file).size()
-    result: dict[str, int | str] = {
-        "record_count": record_count,
-        "bytes_written": output_size,
-        "output_file": out_file,
-    }
-
-    if cfg.source_manifest is not None:
-        metadata_path = write_ingestion_metadata_json(
-            manifest=cfg.source_manifest,
-            materialized_output=MaterializedOutputMetadata(
-                input_path=cfg.input_path,
-                output_path=cfg.output_path,
-                output_file=out_file,
-                record_count=record_count,
-                bytes_written=output_size,
-                metadata={
+    with open_staged_jsonl(out_file) as outfile:
+        for index, example in enumerate(load_hf_split_iterable(cfg.input_path, cfg.split, cfg.subset)):
+            if cfg.renderer_name is LmEvalRawRenderer.MMLU:
+                text = _render_mmlu_example(
+                    example,
+                    fewshot_index=mmlu_fewshot_index,
+                    num_fewshot=cfg.num_fewshot,
+                )
+            elif cfg.renderer_name is LmEvalRawRenderer.GSM8K:
+                text = _render_gsm8k_example(example, num_fewshot=cfg.num_fewshot)
+            else:
+                raise ValueError(f"Unsupported LM-eval raw renderer: {cfg.renderer_name}")
+            if not text:
+                continue
+            record = {
+                "id": f"{cfg.source_label}:{cfg.split}:{index:08d}",
+                "text": text,
+                "source": cfg.source_label,
+                "provenance": {
+                    "dataset": cfg.input_path,
+                    "split": cfg.split,
+                    "subset": cfg.subset,
                     "renderer": cfg.renderer_name.value,
                     "num_fewshot": cfg.num_fewshot,
                     "fewshot_split": cfg.fewshot_split,
+                    "index": index,
+                    **cfg.extra_metadata,
                 },
-            ),
-        )
-        result["metadata_file"] = metadata_path
+            }
+            json.dump(record, outfile, ensure_ascii=False)
+            outfile.write("\n")
+            record_count += 1
+            if cfg.max_examples is not None and record_count >= cfg.max_examples:
+                break
 
-    return result
+    return staged_source_summary(
+        manifest=cfg.source_manifest,
+        input_path=cfg.input_path,
+        output_path=cfg.output_path,
+        output_file=out_file,
+        record_count=record_count,
+        metadata={
+            "renderer": cfg.renderer_name.value,
+            "num_fewshot": cfg.num_fewshot,
+            "fewshot_split": cfg.fewshot_split,
+        },
+    )

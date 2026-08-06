@@ -302,20 +302,23 @@ _KICK_KIND_BY_STATE: dict[int, TerminalKind] = {
 
 @dataclass(frozen=True, slots=True)
 class TaskWithAttempts:
-    """Task detail columns with attempt rows attached."""
+    """The columns ``task_to_proto`` renders, plus attempt rows.
+
+    Deliberately narrower than ``task_state.TaskDetailRow``, the reconcile/retry
+    projection over the same ``task_detail_query``: the RPC path reads neither the
+    retry budgets nor the priority band, takes start/finish stamps from the current
+    attempt rather than the task row, and lets clients derive failure/preemption
+    counts from ``attempts`` — so it skips the counts aggregate
+    ``reads.get_task_detail`` runs.
+    """
 
     task_id: JobName
     job_id: JobName
     state: int
     current_attempt_id: int
-    max_retries_failure: int
-    max_retries_preemption: int
     submitted_at_ms: Timestamp
-    priority_band: int
     error: str | None
     exit_code: int | None
-    started_at_ms: Timestamp | None
-    finished_at_ms: Timestamp | None
     current_worker_id: WorkerId | None
     current_worker_address: str | None
     container_id: str | None
@@ -331,24 +334,15 @@ class TaskWithAttempts:
 
     @classmethod
     def from_row(cls, row, attempts: tuple[Any, ...]) -> "TaskWithAttempts":
-        """Build from an SA Row (matching TASK_DETAIL_COLS + peer_worker_label) plus attempt rows.
-
-        Per-task failure/preemption counts are not carried: clients derive them
-        from ``attempts``.
-        """
+        """Build from a ``reads.task_detail_query`` row plus its attempt rows."""
         return cls(
             task_id=row.task_id,
             job_id=row.job_id,
             state=row.state,
             current_attempt_id=row.current_attempt_id,
-            max_retries_failure=row.max_retries_failure,
-            max_retries_preemption=row.max_retries_preemption,
             submitted_at_ms=row.submitted_at_ms,
-            priority_band=row.priority_band,
             error=row.error,
             exit_code=row.exit_code,
-            started_at_ms=row.started_at_ms,
-            finished_at_ms=row.finished_at_ms,
             current_worker_id=row.current_worker_id,
             current_worker_address=row.current_worker_address,
             container_id=row.container_id,
@@ -506,17 +500,13 @@ def _job_state_counts_for_summary(job_state_counts: dict[int, int]) -> dict[str,
 
 
 def _read_task_with_attempts(db: ControllerDB, task_id: JobName) -> TaskWithAttempts | None:
-    """Return a TaskWithAttempts for ``task_id``, or None if absent."""
+    """Return a TaskWithAttempts for ``task_id`` with its full attempt history, or None if absent."""
     with db.read_snapshot() as tx:
-        task_row = reads.get_task_detail(tx, task_id)
+        task_row = tx.execute(reads.task_detail_query().where(tasks_table.c.task_id == task_id)).first()
         if task_row is None:
             return None
-        attempt_rows = tx.execute(
-            select(*reads.ATTEMPT_COLS)
-            .where(task_attempts_table.c.task_id == task_id)
-            .order_by(task_attempts_table.c.attempt_id.asc())
-        ).all()
-    return TaskWithAttempts.from_row(task_row, tuple(attempt_rows))
+        attempts = reads.all_attempts_for_tasks(tx, [task_id])
+    return TaskWithAttempts.from_row(task_row, attempts.get(task_id, ()))
 
 
 def _job_state(db: ControllerDB, job_id: JobName) -> int | None:

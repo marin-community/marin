@@ -22,6 +22,7 @@ Lazy dataset processing library. Start with the shared instructions in `/AGENTS.
 - `src/zephyr/shuffle.py` — scatter pipeline internals (`ScatterFileIterator`, `ScatterReader`, hash-routing, combiner, zstd-chunk file format with byte-range sidecar)
 - `src/zephyr/expr.py` — `Expr`, `col`, `lit` for filter expressions
 - `src/zephyr/external_sort.py` — `external_sort_merge` k-way merge of sorted runs
+- `src/zephyr/polars_io.py` — `scan_parquet`, the addressing-aware Polars reader used for every intermediate Parquet Zephyr writes and reads back
 - `src/zephyr/counters.py` — `ScopedCounters`, `pipeline`, `stage()`, `current_stage()` scoped counter API (`CounterSnapshot` lives in `worker_context.py`)
 
 ## Execution Model

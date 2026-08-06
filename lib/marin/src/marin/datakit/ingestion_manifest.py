@@ -6,8 +6,10 @@
 import hashlib
 import json
 import posixpath
+from collections.abc import Iterator
+from contextlib import contextmanager
 from enum import StrEnum, auto
-from typing import Any
+from typing import Any, TextIO
 
 from pydantic import BaseModel, ConfigDict, Field
 from rigging.filesystem import StoragePath, atomic_rename, open_url
@@ -201,3 +203,67 @@ def write_ingestion_metadata_json(
             handle.write("\n")
 
     return metadata_path
+
+
+def check_content_fingerprint(manifest: IngestionSourceManifest | None, content_fingerprint: str) -> None:
+    """Fail when a staging config pins a fingerprint that no longer matches its manifest.
+
+    Staging configs copy :meth:`IngestionSourceManifest.fingerprint` so that editing a
+    manifest field which changes staged bytes fails loudly instead of silently serving a
+    stale output. A missing manifest or an empty fingerprint means the caller opted out.
+    """
+    if manifest is None or not content_fingerprint:
+        return
+    expected = manifest.fingerprint()
+    if content_fingerprint != expected:
+        raise ValueError(
+            f"content_fingerprint mismatch: config has {content_fingerprint}, source manifest has {expected}"
+        )
+
+
+@contextmanager
+def open_staged_jsonl(output_file: str) -> Iterator[TextIO]:
+    """Open ``output_file`` for atomic JSONL writes, inferring gzip from its suffix.
+
+    The file only appears at ``output_file`` once the block exits cleanly, so a crashed
+    staging run leaves no partial shard for a later run to mistake for a complete one.
+    """
+    compression = "gzip" if output_file.endswith(".gz") else None
+    with atomic_rename(output_file) as temp_path:
+        with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as handle:
+            yield handle
+
+
+def staged_source_summary(
+    *,
+    manifest: IngestionSourceManifest | None,
+    input_path: str,
+    output_path: str,
+    output_file: str,
+    record_count: int,
+    metadata: dict[str, JsonValue] | None = None,
+) -> dict[str, Any]:
+    """Summarize a staged JSONL shard, writing its metadata sidecar when a manifest is set.
+
+    ``bytes_written`` is the on-disk size of ``output_file``, so it is comparable across
+    sources regardless of how much text each one serialized.
+    """
+    bytes_written = StoragePath(output_file).size()
+    summary: dict[str, Any] = {
+        "record_count": record_count,
+        "bytes_written": bytes_written,
+        "output_file": output_file,
+    }
+    if manifest is not None:
+        summary["metadata_file"] = write_ingestion_metadata_json(
+            manifest=manifest,
+            materialized_output=MaterializedOutputMetadata(
+                input_path=input_path,
+                output_path=output_path,
+                output_file=output_file,
+                record_count=record_count,
+                bytes_written=bytes_written,
+                metadata=metadata or {},
+            ),
+        )
+    return summary

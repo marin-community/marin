@@ -20,11 +20,12 @@ from typing import Any
 
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
-    MaterializedOutputMetadata,
-    write_ingestion_metadata_json,
+    check_content_fingerprint,
+    open_staged_jsonl,
+    staged_source_summary,
 )
 from marin.transform.hf_parquet_splits import load_hf_split_iterable
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -334,22 +335,17 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
     Iterates in dataset order (deterministic) and stops once the kept text
     exceeds :attr:`TableRecordStagingConfig.max_bytes_per_source`.
 
-    Returns a dict with ``record_count``, ``bytes_written``, and
-    ``output_file`` for logging and downstream provenance.
+    Returns a dict with ``record_count``, ``bytes_written`` (on-disk size),
+    ``text_bytes_written``, and ``output_file`` for logging and downstream
+    provenance.
     """
     if cfg.serializer_name not in SERIALIZERS:
         raise ValueError(f"Unknown serializer {cfg.serializer_name!r}; known: {sorted(SERIALIZERS)}")
     serializer = SERIALIZERS[cfg.serializer_name]
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    check_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
-    compression = "gzip" if out_file.endswith(".gz") else None
 
     total_text_bytes = 0
     record_count = 0
@@ -359,46 +355,45 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
         and cfg.source_manifest.dataset_key == GITTABLES_TARGET_BENCHMARK_DATASET
     )
 
-    with atomic_rename(out_file) as temp_path:
-        with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
-            for index, example in enumerate(load_hf_split_iterable(cfg.input_path, cfg.split, cfg.subset)):
-                text = serializer(example)
-                if not text.strip():
-                    continue
-                text_bytes = len(text.encode("utf-8"))
-                if total_text_bytes + text_bytes > cfg.max_bytes_per_source and record_count > 0:
-                    logger.info(
-                        "Reached per-source cap after %d records (%d bytes); stopping.",
-                        record_count,
-                        total_text_bytes,
-                    )
-                    break
+    with open_staged_jsonl(out_file) as outfile:
+        for index, example in enumerate(load_hf_split_iterable(cfg.input_path, cfg.split, cfg.subset)):
+            text = serializer(example)
+            if not text.strip():
+                continue
+            text_bytes = len(text.encode("utf-8"))
+            if total_text_bytes + text_bytes > cfg.max_bytes_per_source and record_count > 0:
+                logger.info(
+                    "Reached per-source cap after %d records (%d bytes); stopping.",
+                    record_count,
+                    total_text_bytes,
+                )
+                break
 
-                provenance: dict[str, Any] = {
-                    "dataset": cfg.input_path,
-                    "split": cfg.split,
-                    "subset": cfg.subset,
-                    "serializer": cfg.serializer_name,
-                    "index": index,
-                    **cfg.extra_metadata,
-                }
-                if cfg.serializer_name == "gittables":
-                    provenance["gittables_decontam"] = gittables_decontamination_metadata(
-                        example,
-                        text,
-                        target_benchmark_holdout=target_benchmark_gittables,
-                    )
+            provenance: dict[str, Any] = {
+                "dataset": cfg.input_path,
+                "split": cfg.split,
+                "subset": cfg.subset,
+                "serializer": cfg.serializer_name,
+                "index": index,
+                **cfg.extra_metadata,
+            }
+            if cfg.serializer_name == "gittables":
+                provenance["gittables_decontam"] = gittables_decontamination_metadata(
+                    example,
+                    text,
+                    target_benchmark_holdout=target_benchmark_gittables,
+                )
 
-                record = {
-                    "id": f"{cfg.source_label}:{cfg.split}:{index:08d}",
-                    "text": text,
-                    "source": cfg.source_label,
-                    "provenance": provenance,
-                }
-                json.dump(record, outfile, ensure_ascii=False)
-                outfile.write("\n")
-                total_text_bytes += text_bytes
-                record_count += 1
+            record = {
+                "id": f"{cfg.source_label}:{cfg.split}:{index:08d}",
+                "text": text,
+                "source": cfg.source_label,
+                "provenance": provenance,
+            }
+            json.dump(record, outfile, ensure_ascii=False)
+            outfile.write("\n")
+            total_text_bytes += text_bytes
+            record_count += 1
 
     logger.info(
         "Staged %d records (%d bytes of text) to %s",
@@ -406,20 +401,11 @@ def stage_table_record_source(cfg: TableRecordStagingConfig) -> dict[str, int | 
         total_text_bytes,
         out_file,
     )
-    result: dict[str, int | str] = {
-        "record_count": record_count,
-        "bytes_written": total_text_bytes,
-        "output_file": out_file,
-    }
-    if cfg.source_manifest is not None:
-        result["metadata_file"] = write_ingestion_metadata_json(
-            manifest=cfg.source_manifest,
-            materialized_output=MaterializedOutputMetadata(
-                input_path=cfg.input_path,
-                output_path=cfg.output_path,
-                output_file=out_file,
-                record_count=record_count,
-                bytes_written=total_text_bytes,
-            ),
-        )
-    return result
+    summary = staged_source_summary(
+        manifest=cfg.source_manifest,
+        input_path=cfg.input_path,
+        output_path=cfg.output_path,
+        output_file=out_file,
+        record_count=record_count,
+    )
+    return {**summary, "text_bytes_written": total_text_bytes}

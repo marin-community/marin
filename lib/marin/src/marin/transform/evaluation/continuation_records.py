@@ -24,10 +24,11 @@ from typing import Any, Protocol, TypeVar
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
     JsonValue,
-    MaterializedOutputMetadata,
-    write_ingestion_metadata_json,
+    check_content_fingerprint,
+    open_staged_jsonl,
+    staged_source_summary,
 )
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem import StoragePath
 
 E = TypeVar("E")
 
@@ -107,39 +108,21 @@ def stage_continuation_slice(
     Returns the staged slice summary: record count, bytes written, output file,
     and the metadata file path when a source manifest is configured.
     """
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    check_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
-    compression = "gzip" if out_file.endswith(".gz") else None
 
-    with atomic_rename(out_file) as temp_path:
-        with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
-            for record in records:
-                json.dump(record, outfile)
-                outfile.write("\n")
+    with open_staged_jsonl(out_file) as outfile:
+        for record in records:
+            json.dump(record, outfile)
+            outfile.write("\n")
 
-    bytes_written = StoragePath(out_file).size()
-    result: dict[str, Any] = {
-        "record_count": len(records),
-        "bytes_written": bytes_written,
-        "output_file": out_file,
-    }
-    if cfg.source_manifest is not None:
-        result["metadata_file"] = write_ingestion_metadata_json(
-            manifest=cfg.source_manifest,
-            materialized_output=MaterializedOutputMetadata(
-                input_path=source_id,
-                output_path=cfg.output_path,
-                output_file=out_file,
-                record_count=len(records),
-                bytes_written=bytes_written,
-                metadata=metadata,
-            ),
-        )
-    return result
+    return staged_source_summary(
+        manifest=cfg.source_manifest,
+        input_path=source_id,
+        output_path=cfg.output_path,
+        output_file=out_file,
+        record_count=len(records),
+        metadata=metadata,
+    )

@@ -28,10 +28,11 @@ from urllib.parse import urlparse
 import requests
 from marin.datakit.ingestion_manifest import (
     IngestionSourceManifest,
-    MaterializedOutputMetadata,
-    write_ingestion_metadata_json,
+    check_content_fingerprint,
+    open_staged_jsonl,
+    staged_source_summary,
 )
-from rigging.filesystem import StoragePath, atomic_rename, open_url
+from rigging.filesystem import StoragePath, open_url
 
 logger = logging.getLogger(__name__)
 
@@ -273,97 +274,72 @@ def stage_web_data_commons_source(cfg: WebDataCommonsStagingConfig) -> dict[str,
     """Stage a WebDataCommons WebTables sample archive into JSONL."""
     if cfg.max_bytes_per_source <= 0:
         raise ValueError(f"max_bytes_per_source must be positive, got {cfg.max_bytes_per_source}")
-    if cfg.source_manifest is not None and cfg.content_fingerprint:
-        expected = cfg.source_manifest.fingerprint()
-        if cfg.content_fingerprint != expected:
-            raise ValueError(
-                f"content_fingerprint mismatch: config has {cfg.content_fingerprint}, source manifest has {expected}"
-            )
+    check_content_fingerprint(cfg.source_manifest, cfg.content_fingerprint)
 
     StoragePath(cfg.output_path).mkdirs(exist_ok=True)
     out_file = posixpath.join(cfg.output_path, cfg.output_filename)
-    compression = "gzip" if out_file.endswith(".gz") else None
 
     total_text_bytes = 0
     record_count = 0
     table_count = 0
     zip_bytes = _read_zip_bytes(cfg)
 
-    with atomic_rename(out_file) as temp_path:
-        with open_url(temp_path, "wt", encoding="utf-8", compression=compression) as outfile:
-            stop = False
-            for entry in _iter_csv_entries(zip_bytes):
-                table_count += 1
-                if total_text_bytes >= cfg.max_bytes_per_source:
-                    break
+    with open_staged_jsonl(out_file) as outfile:
+        stop = False
+        for entry in _iter_csv_entries(zip_bytes):
+            table_count += 1
+            if total_text_bytes >= cfg.max_bytes_per_source:
+                break
 
-                lines = _csv_lines(entry.csv_bytes, entry.table_member)
-                if not lines:
-                    continue
-                header, body_lines = _header_and_body(lines, cfg.preserve_header)
+            lines = _csv_lines(entry.csv_bytes, entry.table_member)
+            if not lines:
+                continue
+            header, body_lines = _header_and_body(lines, cfg.preserve_header)
 
-                for chunk_index, chunk in enumerate(
-                    chunk_lines_by_bytes(
-                        body_lines,
-                        max_bytes_per_chunk=cfg.max_bytes_per_document,
-                        header_line=header if cfg.preserve_header else None,
+            for chunk_index, chunk in enumerate(
+                chunk_lines_by_bytes(
+                    body_lines,
+                    max_bytes_per_chunk=cfg.max_bytes_per_document,
+                    header_line=header if cfg.preserve_header else None,
+                )
+            ):
+                text = serialize_csv_document(header if cfg.preserve_header else None, chunk)
+                text_bytes = len(text.encode("utf-8"))
+                if total_text_bytes + text_bytes > cfg.max_bytes_per_source and record_count > 0:
+                    logger.info(
+                        "Would exceed per-source cap with next WDC chunk (%d + %d > %d); stopping.",
+                        total_text_bytes,
+                        text_bytes,
+                        cfg.max_bytes_per_source,
                     )
-                ):
-                    text = serialize_csv_document(header if cfg.preserve_header else None, chunk)
-                    text_bytes = len(text.encode("utf-8"))
-                    if total_text_bytes + text_bytes > cfg.max_bytes_per_source and record_count > 0:
-                        logger.info(
-                            "Would exceed per-source cap with next WDC chunk (%d + %d > %d); stopping.",
-                            total_text_bytes,
-                            text_bytes,
-                            cfg.max_bytes_per_source,
-                        )
-                        stop = True
-                        break
-
-                    record = {
-                        "id": _record_id(cfg.source_label, entry.table_member, chunk_index),
-                        "text": text,
-                        "source": cfg.source_label,
-                        "provenance": _provenance(
-                            cfg=cfg,
-                            entry=entry,
-                            chunk_index=chunk_index,
-                            header_preserved=cfg.preserve_header and header is not None,
-                        ),
-                    }
-                    json.dump(record, outfile, ensure_ascii=False)
-                    outfile.write("\n")
-                    total_text_bytes += text_bytes
-                    record_count += 1
-
-                if stop:
+                    stop = True
                     break
 
-    output_size = StoragePath(out_file).size()
-    result: dict[str, int | str] = {
-        "record_count": record_count,
-        "bytes_written": output_size,
-        "text_bytes_written": total_text_bytes,
-        "output_file": out_file,
-        "table_count": table_count,
-    }
+                record = {
+                    "id": _record_id(cfg.source_label, entry.table_member, chunk_index),
+                    "text": text,
+                    "source": cfg.source_label,
+                    "provenance": _provenance(
+                        cfg=cfg,
+                        entry=entry,
+                        chunk_index=chunk_index,
+                        header_preserved=cfg.preserve_header and header is not None,
+                    ),
+                }
+                json.dump(record, outfile, ensure_ascii=False)
+                outfile.write("\n")
+                total_text_bytes += text_bytes
+                record_count += 1
 
-    if cfg.source_manifest is not None:
-        metadata_path = write_ingestion_metadata_json(
-            manifest=cfg.source_manifest,
-            materialized_output=MaterializedOutputMetadata(
-                input_path=cfg.sample_url,
-                output_path=cfg.output_path,
-                output_file=out_file,
-                record_count=record_count,
-                bytes_written=output_size,
-                metadata={
-                    "sample_name": cfg.sample_name,
-                    "table_count": table_count,
-                },
-            ),
-        )
-        result["metadata_file"] = metadata_path
+            if stop:
+                break
 
-    return result
+    summary = staged_source_summary(
+        manifest=cfg.source_manifest,
+        input_path=cfg.sample_url,
+        output_path=cfg.output_path,
+        output_file=out_file,
+        record_count=record_count,
+        metadata={"sample_name": cfg.sample_name, "table_count": table_count},
+    )
+    return {**summary, "text_bytes_written": total_text_bytes, "table_count": table_count}
