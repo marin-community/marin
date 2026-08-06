@@ -1,6 +1,6 @@
 ---
 name: write-design-doc
-description: Produce a 1-page design doc, open a PR, and ping Discord for review.
+description: Produce a 1-page design doc, spec, PR, and Discord review ping when the user explicitly asks to design a planned repository change. Do not use to answer or evaluate an idea inline.
 ---
 
 # Skill: Design Doc Workflow
@@ -21,11 +21,20 @@ The template lives at `.agents/projects/design-template.md`. New docs go to a sl
 
 ## When to use this skill
 
+This is a change-mode publishing workflow. Use it only when the user explicitly
+asks for a design doc/one-pager/proposal, or asks to design an intended
+implementation whose review artifact should be committed. Do **not** use it for
+questions, walkthroughs, informal architecture reviews, or requests to assess
+whether an idea is reasonable. Investigate those requests and answer inline;
+start this workflow only after an explicit follow-up asks to publish a design.
+
 - A task will likely take more than a day, or is load-bearing for other work.
 - A change crosses subproject boundaries (e.g. iris ↔ levanter, marin ↔ zephyr).
 - A change introduces a new service, package, or persistent data shape.
 
-If none apply, just open the PR — don't manufacture a design doc for a 50-line bug fix.
+If the explicit design request meets none of these criteria, confirm that a
+design artifact is actually wanted. For an ordinary small change, use the
+normal implementation workflow instead of manufacturing a design doc.
 
 ---
 
@@ -35,7 +44,11 @@ Seven phases. Confirm with the user at natural decision points (after Research, 
 
 ## 1. Frame
 
-The user starts the skill with a framing paragraph stating what they want and why. If they didn't, query them — or infer it from rich prior conversation context. A one-sentence "fix the foo thing" is *not* enough; push back and ask for the why.
+The user starts the skill with a framing paragraph stating what they want and
+why. If they did not, infer it from rich conversation, repository, or prior-work
+context when safe. Ask only when the missing rationale would materially change
+the design; a question is not a reason to turn an answer-mode request into this
+workflow.
 
 **You infer the slug.** Short, lowercase, underscores (`finelog_lift`, `iris_autoscaler_refactor`). State it in one line ("I'll save this as `.agents/projects/<slug>/`") and proceed — only stop if it collides with an existing directory, then propose a disambiguator.
 

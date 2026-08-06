@@ -32,6 +32,27 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
+## Choose the Request Mode
+
+Choose the mode from what the user asked before selecting a skill or changing
+the repository:
+
+- **Answer mode** covers questions, explanations, walkthroughs, evaluations,
+  and review requests such as "is this reasonable?" Investigate as needed and
+  return a concise, self-contained answer in the originating conversation. Do
+  not edit files, create design/research documents, commit, open a PR, or invoke
+  a change workflow unless the user explicitly asks for a repository change.
+  Repository access provides evidence; it does not imply authorization to
+  publish work.
+- **Change mode** covers explicit requests to implement, fix, write, update, or
+  open a PR. Make the change and follow the applicable development and landing
+  workflow.
+
+If either interpretation could satisfy the wording, answer first and leave the
+change for an explicit follow-up. Do not require a follow-up when a useful,
+well-supported answer can stand on its own. Select skills only after choosing
+the mode; a change-only skill is not a match for an answer-mode request.
+
 ## Search Prior Work
 
 Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
@@ -194,8 +215,14 @@ Watch for and eliminate these patterns in generated code:
 
 ## Planning
 
-- Produce detailed plans with code snippets. Ask questions up front instead of guessing.
-- When a request is too large for one pass, capture a plan in `.agents/projects/` before pausing.
+- Planning applies to change-mode work. Produce a detailed plan, with code
+  snippets when they clarify a concrete implementation, for non-trivial
+  changes. Resolve context from the repository and prior work first; ask only
+  when a missing decision would materially change the implementation.
+- In answer mode, investigate and reply directly. Do not manufacture a plan or
+  `.agents/projects/` artifact.
+- When a change request is too large for one pass, capture a plan in
+  `.agents/projects/` before pausing.
 
 ## Code Reuse
 
