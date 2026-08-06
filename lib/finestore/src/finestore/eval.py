@@ -34,10 +34,11 @@ from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from finestore.schema import arrow_schema
-from finestore.store import DataStore
 from fsspec.core import url_to_fs
 from pydantic import BaseModel
+
+from finestore.schema import arrow_schema
+from finestore.store import DataStore
 
 logger = logging.getLogger(__name__)
 

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "finestore — an append-only columnar archive of Parquet shards on object storage."
 requires-python = ">=3.12"
 dependencies = [
+    "fsspec>=2024.0.0",
     "marin-rigging",
     "pyarrow>=23.0.0",
     "pydantic>=2.0",
