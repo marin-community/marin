@@ -16,8 +16,9 @@ author: dlwh
 
 ## Current TL;DR
 
-- `GRUG-XEM-001` is active: implement explicit expert-bank ownership, preserve untied numerics, and add the d512 architecture smoke matrix.
-- The checkout started on unrelated dirty branch `prototype/tile-lifetime-compiler`; do not switch branches, commit, or publish an issue until the research changes can be isolated safely.
+- `GRUG-XEM-001` has local snapshots for explicit expert-bank ownership, tied-bank LR ablations, and the seven-run d512 architecture smoke matrix. No accelerator run has launched.
+- The one-pair layers 2-3 conversion prototype now covers calibration reservoirs, native/spectral assignment, balanced bank prefit, topology-native checkpoint conversion, and constrained recovery. It has local numerical tests but remains gated on the architecture smoke and a contemporaneous untied checkpoint.
+- The isolated branch is `research/grug-cross-layer-expert-merging` in `/tmp/marin-grug-xem`. It has not been pushed, and no issue or PR exists.
 
 ## Baseline
 
@@ -32,13 +33,13 @@ author: dlwh
 - `GRUG-XEM-H1`: Pairwise middle-layer routed-expert tying `(0,1,1,2,2,3)` is stable and finishes within 0.03 Paloma macro loss of a matched untied control. Next test: 500-step d512 smoke after topology and optimizer tests pass.
 - `GRUG-XEM-H2`: Four middle layers sharing one routed-expert bank `(0,1,1,1,1,2)` remain within 0.06 Paloma macro loss of the matched control without routing or update concentration. Next test: add after pairwise smoke is healthy.
 - `GRUG-XEM-H3`: Scaling a bank's expert LR by `1/sqrt(g)` avoids update-scale artifacts and outperforms an unscaled LR; `1/g` is the conservative control. Next test: matched d512 smoke ablation.
-- `GRUG-XEM-H4`: After architecture validation, functional matching plus shared-bank prefit can merge one adjacent middle-layer pair more efficiently than identity-ID conversion. Next test: blocked on a contemporaneous trained untied checkpoint and tied architecture gate.
-- `GRUG-XEM-H5`: Covariance-aware finite-difference spectral matching materially improves immediate MoE error, validation-loss spike, or recovery tokens over native-state-only matching. Next test: blocked on one-pair conversion harness; drop if it misses the stated 15%/20% gates.
+- `GRUG-XEM-H4`: After architecture validation, functional matching plus shared-bank prefit can merge one adjacent middle-layer pair more efficiently than identity-ID conversion. Next test: collect layers 2-3 calibration states from the matched untied checkpoint after the architecture gate.
+- `GRUG-XEM-H5`: Covariance-aware finite-difference spectral matching materially improves immediate MoE error, validation-loss spike, or recovery tokens over native-state-only matching. Next test: compare saved identity, native-only, and spectral cost matrices on the same calibration artifact; drop spectral probes if they miss the stated 15%/20% gates.
 
 ### Blocked
 
 - `GRUG-XEM-H4`: Blocker: architecture gate and source checkpoint. Resume when: d512 baseline and tied-from-scratch runs finish.
-- `GRUG-XEM-H5`: Blocker: calibration and one-pair conversion harness. Resume when: `GRUG-XEM-H4` enters implementation.
+- `GRUG-XEM-H5`: Blocker: no trained untied checkpoint or calibration artifact. Resume when: the d512 architecture gate finishes and calibration runs in the checkpoint region.
 
 ### Falsified / Dead End
 
@@ -204,3 +205,17 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Result: 23 focused tests passed in 41.48 seconds; changed-file lint and targeted production type checking passed. The legacy real-checkpoint backend now loads the historical split-expert tree without assuming current blocks own experts, then constructs an explicit-bank Transformer for execution. End-to-end Snowball logit parity replaces a test helper that duplicated production layer dispatch.
 - Interpretation: all second-pass findings were fixed or narrowed. The undefined cross-loop baseline metric is explicitly documented as NaN, and reused-bank optimizer groups are documented separately from the three base groups.
 - Next action: commit and push the compatibility fixes, file the tracking issue, then launch the seven-run smoke matrix.
+
+### 2026-08-06 02:05 - GRUG-XEM-002 one-pair conversion prototype
+
+- Hypothesis: A bijective expert assignment plus local bank distillation can initialize topology `(0,1,2,2,3,4)` without changing the source layer's router function, and constrained recovery can isolate bank error from whole-model adaptation.
+- Commit Hash: `20dfc92e4fc6b88694bf6151e03eaa240bf3a13d`.
+- Commands:
+  - `./infra/pre-commit.py --changed-files --fix`
+  - `/Users/dlwh/src/marin/.venv/bin/python -m pytest -q experiments/grug/moe/test_expert_tying.py experiments/grug/moe/test_optimizer.py experiments/grug/moe/test_expert_merge.py experiments/grug/moe/test_expert_prefit.py experiments/grug/moe/test_merge_checkpoint.py experiments/grug/moe/test_merge_recovery.py experiments/grug/moe/test_merge_storage.py tests/test_snowball_grug_parity.py tests/test_grug_checkpointing.py`
+  - `/Users/dlwh/src/marin/.venv/bin/pyrefly check experiments/grug/moe/expert_merge.py experiments/grug/moe/expert_prefit.py experiments/grug/moe/merge_checkpoint.py experiments/grug/moe/merge_recovery.py experiments/grug/moe/merge_storage.py`
+  - `GRUG_TIED_PHASE=smoke /Users/dlwh/src/marin/.venv/bin/python -c 'from experiments.grug.moe.launch_tied_experts import tied_expert_runs; print([step.name for step in tied_expert_runs(version="dev")])'`
+- Config: one-pair layers 2-3 merge; source-to-shared permutations are explicit bijections; covariance rank 32, 16 centers, eight sensitive directions, four directions per center, radii 0.15/0.35, and native-plus-tangent cost weight 0.5. Prefit defaults to AdamW at `1e-4` for 2,000 steps with held-out early stopping. Stage A trains only the merged bank; Stage B adds the affected routers and affected-only QB updates.
+- Result: 52 focused tests passed in 109.05 seconds. The Part II production files reported zero Pyrefly errors. The native checkpoint round trip reconstructed the five-bank topology and manifest, reset optimizer state, and preserved the pending QB permutation. The no-launch architecture graph still contains seven d512 smoke artifacts. No accelerator job, GCS copy, issue, push, or PR was created.
+- Interpretation: the local prototype now tests assignment direction, routed-function preservation, spectral-probe bounds, weighted reservoirs, balanced prefit, checkpoint topology, teacher-on-student-state targets, and Stage A/B freezing. A positive logit-KL weight fails unless the caller supplies a fused or streaming implementation; this avoids materializing two full-vocabulary logit tensors. Merge artifact paths are checked without source-path skips, and the d512 TPU matrix is pinned to `us-central1`.
+- Next action: publish the isolated branch when authorized, launch and babysit the d512 smoke in `us-central1`, then use its untied checkpoint for calibration only if the architecture gates pass.
