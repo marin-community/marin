@@ -5,13 +5,19 @@ import DashboardEditor from '@/components/dashboard/DashboardEditor.vue'
 import DashboardPanelView from '@/components/dashboard/DashboardPanelView.vue'
 import { statsRpcCall } from '@/composables/useRpc'
 import { BUILT_IN_DASHBOARDS } from '@/dashboards/examples'
-import type { DashboardDefinition } from '@/types/dashboard'
+import type { DashboardDefinition, DashboardVariable } from '@/types/dashboard'
 import { decodeArrowIpc, type ArrowResult } from '@/utils/arrow'
 import { dashboardIntervalMs, expandDashboardSql } from '@/utils/dashboardSql'
 
 interface QueryResponse {
   arrowIpc?: string
   rowCount?: string | number
+}
+
+interface VariableOptions {
+  values: string[]
+  loading: boolean
+  error: string | null
 }
 
 interface PanelExecution {
@@ -40,6 +46,7 @@ const selectedKey = ref(`builtin:${BUILT_IN_DASHBOARDS[0].id}`)
 const sourceKind = ref<SourceKind>('builtin')
 const current = ref<DashboardDefinition>(cloneDefinition(BUILT_IN_DASHBOARDS[0]))
 const variableValues = ref<Record<string, string>>({})
+const variableOptions = ref<Record<string, VariableOptions>>({})
 const executions = ref<Record<string, PanelExecution>>({})
 const fromInput = ref(inputDateTime(now - 30 * MINUTE_MS))
 const toInput = ref(inputDateTime(now))
@@ -55,6 +62,61 @@ function resetRuntimeState() {
     current.value.variables.map((variable) => [variable.name, variable.default]),
   )
   executions.value = {}
+  variableOptions.value = {}
+  void loadVariableOptions()
+}
+
+/**
+ * Load each variable's option list.
+ *
+ * The list follows the selected time range, so it reloads with the range rather
+ * than once at startup. A variable that is still unset adopts the first value —
+ * the queries order freshest first — so opening a dashboard shows a run instead
+ * of empty panels waiting for an ID the reader has to know already.
+ */
+async function loadVariableOptions() {
+  await Promise.all(current.value.variables.filter((v) => v.optionsSql).map(async (variable) => {
+    variableOptions.value[variable.name] = { values: [], loading: true, error: null }
+    try {
+      const { fromMs, toMs } = timeRange()
+      const sql = expandDashboardSql(variable.optionsSql!, {
+        fromMs,
+        toMs,
+        intervalMs: dashboardIntervalMs(fromMs, toMs),
+        variables: {},
+      })
+      const response = await statsRpcCall<QueryResponse>('Query', { sql })
+      const result = decodeArrowIpc(response.arrowIpc)
+      const column = result.columns[0]
+      const values = result.rows
+        .map((row) => row[column])
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+      variableOptions.value[variable.name] = { values, loading: false, error: null }
+      if (!variableValues.value[variable.name] && values.length > 0) {
+        variableValues.value[variable.name] = values[0]
+      }
+    } catch (error) {
+      variableOptions.value[variable.name] = {
+        values: [],
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }))
+}
+
+/** The listed values, plus the current one when it is not among them. */
+function optionValues(variable: DashboardVariable): string[] {
+  const values = variableOptions.value[variable.name]?.values ?? []
+  const selected = variableValues.value[variable.name]
+  return selected && !values.includes(selected) ? [selected, ...values] : values
+}
+
+function optionsPlaceholder(variable: DashboardVariable): string {
+  const state = variableOptions.value[variable.name]
+  if (!state || state.loading) return 'Loading…'
+  if (state.error) return 'Could not load'
+  return state.values.length ? '—' : 'None in this range'
 }
 
 function selectBuiltIn(definition: DashboardDefinition) {
@@ -155,6 +217,7 @@ async function runPanel(panelId: string) {
 }
 
 async function runAll() {
+  await loadVariableOptions()
   await Promise.all(current.value.panels.map((panel) => runPanel(panel.id)))
 }
 
@@ -162,6 +225,7 @@ function setRange(durationMs: number) {
   const end = Date.now()
   fromInput.value = inputDateTime(end - durationMs)
   toInput.value = inputDateTime(end)
+  void loadVariableOptions()
 }
 
 resetRuntimeState()
@@ -225,11 +289,24 @@ resetRuntimeState()
           </div>
           <label v-for="variable in current.variables" :key="variable.name" class="text-xs text-text-secondary min-w-[220px] flex-1">
             {{ variable.label }}
+            <select
+              v-if="variable.optionsSql"
+              v-model="variableValues[variable.name]"
+              class="block mt-1 w-full text-xs font-mono bg-surface-sunken border border-surface-border rounded px-2 py-1.5"
+            >
+              <option value="">{{ optionsPlaceholder(variable) }}</option>
+              <option v-for="value in optionValues(variable)" :key="value" :value="value">{{ value }}</option>
+            </select>
             <input
+              v-else
               v-model="variableValues[variable.name]"
               :placeholder="variable.default || variable.name"
               class="block mt-1 w-full text-xs font-mono bg-surface-sunken border border-surface-border rounded px-2 py-1.5"
             >
+            <span
+              v-if="variableOptions[variable.name]?.error"
+              class="block mt-1 text-[11px] text-status-danger"
+            >{{ variableOptions[variable.name]?.error }}</span>
           </label>
           <button
             class="ml-auto px-3 py-1.5 text-sm rounded bg-accent text-white hover:bg-accent-hover disabled:opacity-50"

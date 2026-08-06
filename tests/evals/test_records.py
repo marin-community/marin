@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from marin.evaluation.records import (
+    EvalchemyRef,
     EvalRef,
     EvalRunRecord,
     EvalTaskRef,
@@ -92,7 +93,17 @@ def test_record_json_uses_eval_alias_and_plain_string_enum(tmp_path):
     assert raw["eval"] == {
         "name": "gsm8k",
         "mechanism": "evalchemy",
-        "tasks": [{"name": "gsm8k", "num_fewshot": 8}],
+        "tasks": [
+            {
+                "name": "gsm8k",
+                "num_fewshot": 8,
+                "task_alias": None,
+                "generation": False,
+                "unsafe_code": False,
+                "completion_only": False,
+            }
+        ],
+        "evalchemy": None,
         "harbor": None,
     }
     assert raw["status"] == "succeeded"
@@ -229,6 +240,52 @@ def test_record_json_includes_harbor_policy_identity_and_effective_limit(tmp_pat
         "env": "daytona",
         "task_limit": 2,
         "config_digest": "sha256:" + "a" * 64,
+    }
+
+
+def test_record_json_includes_normalized_evalchemy_configuration(tmp_path):
+    record = _RECORD.model_copy(
+        update={
+            "evaluation": EvalRef(
+                name="ifeval",
+                mechanism="evalchemy",
+                tasks=(
+                    EvalTaskRef(
+                        name="ifeval",
+                        num_fewshot=0,
+                        task_alias="ifeval_0shot",
+                        generation=True,
+                    ),
+                ),
+                evalchemy=EvalchemyRef(
+                    apply_chat_template=True,
+                    max_gen_toks=2048,
+                    max_eval_instances=64,
+                    num_concurrent=16,
+                    batch_size="1",
+                    seed=1234,
+                    extra_gen_kwargs={"temperature": "0"},
+                    extra_model_args={"timeout": 900},
+                    max_length=32768,
+                ),
+            )
+        }
+    )
+
+    path = write_record(record, str(tmp_path))
+    with open(path) as f:
+        raw = json.load(f)
+
+    assert raw["eval"]["evalchemy"] == {
+        "apply_chat_template": True,
+        "max_gen_toks": 2048,
+        "max_eval_instances": 64,
+        "num_concurrent": 16,
+        "batch_size": "1",
+        "seed": 1234,
+        "extra_gen_kwargs": {"temperature": "0"},
+        "extra_model_args": {"timeout": 900},
+        "max_length": 32768,
     }
 
 

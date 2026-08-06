@@ -62,8 +62,8 @@ relative range keeps one cache key as its edges drift. It calls only `Query`, av
 Timestamps come back as epoch milliseconds, so a panel selects a raw or `date_bin`-ned
 time column without casting. finelog has JSON SQL UDFs, so a panel groups by a label in SQL
 — `json_get(labels,'region')`; the bridge also flattens a `labels` column into
-`label_<key>` fields. The Kubernetes dashboard uses the hub datasource for a
-bounded recent view of `iris.task_event`, beside the live API server events.
+`label_<key>` fields. Jobs uses the hub datasource for a bounded recent view of
+`iris.task_event`, beside Clusters' live API server events.
 
 `v1/vllm/overview` backs the inference dashboard with a bounded, entity-scoped
 Finelog query. Operators select a job, root effort, or execution and a raw time
@@ -74,7 +74,7 @@ missing telemetry from healthy application silence.
 
 `fleet_health` reads one row from `finelog-marin`'s `log` namespace and combines that
 result with the three CoreWeave mirror Deployments' HTTP-readiness state. A hub query
-at or above 5 seconds is slow. The dedicated finelog dashboard adds effective pod
+at or above 5 seconds is slow. Clusters' finelog row adds effective pod
 resources, restart history, probe presence, node placement, PVC class/capacity, and
 recent matching Kubernetes Warning events.
 
@@ -100,7 +100,7 @@ against cumulative training tokens. Grafana receives flat rows and never needs a
 one fleet row and one row per resource pool. Each row contains outcome counts, success
 ratio, latency, and pool-health fields from the former status page.
 
-k8s: the bridge polls the four CoreWeave clusters' public CKS API servers with plain
+k8s: the bridge polls the three production CoreWeave clusters' public CKS API servers with plain
 httpx GETs (paginated LISTs, bounded timeouts, one 429 retry) and a single org-wide CW
 read-role bearer token from `CW_READ_TOKEN` — genuine read-only kubectl, no Secrets, no
 writes. Each response aggregates every cluster with a `cluster` column: watched
@@ -177,41 +177,53 @@ __main__.py            Pulumi entry point — the Cloud Run service (iac.gcp.clo
 Pulumi.yaml            Pulumi project, run on the shared repo venv
 ```
 
-Dashboards: `home.json` (the landing page — see below), `infra.json` (a custom
-React status page for nightly regressions, main CI, worker capacity, provisioning,
-and hero training), `jobs.json` (fleet job
-state — see below), `fleet.json` (canary +
-worker health), `iris.json`
-(per-task and per-worker resource usage), `pipelines.json` (Zephyr throughput and shard
-memory), `training.json` (Levanter training metrics from `telemetry_v1`,
-grouped by run), `k8s.json` (current CW control-plane state plus recent durable
-Iris task actions), and `finelog.json` (fleet readiness plus mirror pod, probe,
-resource, and PVC details).
+Each dashboard answers one question, and they link to each other in a fixed nav bar:
 
-`jobs.json` is the at-a-glance job view. Its fleet panels read the `iris.task_state`
-finelog namespace on the marin hub — one row per active root job every 30s per
-cluster-view (CoreWeave) controller, carrying waiting/running task counts and the
-oldest PENDING and stuck-in-BUILDING wait ages, plus a `root_job_id=''` per-cluster
-rollup — grouped by the forwarded origin `cluster`. It leads with fleet tasks in
-flight and a stuck-jobs count (both shared as `panelRef` fragments with `home.json`),
-then a worst-first active-jobs table and a per-cluster queue-depth trend. The active
-panels pin a fixed two-minute window (`timeFrom: 2m`) so a finished job — which stops
-emitting with no final zero row — ages out rather than lingering as active. GCE
-controllers (marin, marin-dev) emit no `iris.task_state` (their DB is directly
-`ExecuteRawQuery`-able), so their job-state counts come from the live `/iris/{cluster}/jobs`
-endpoint in a separate row. Grouping by CoreWeave cluster depends on the forwarder
-stamping the origin `cluster` column; until that fix reaches the CoreWeave finelog
-servers those rows read as `cluster=unknown`.
+| Dashboard | Question | Selectors |
+|---|---|---|
+| `home.json` | Is anything wrong right now? | none (fleet-wide) |
+| `accelerators.json` | Where is the fleet's power going, and is it doing work? | cluster |
+| `jobs.json` | What is running, queued, and stuck — and why? | cluster, job |
+| `runs.json` | How is each Levanter training run doing? | cluster, run |
+| `clusters.json` | Is the infrastructure under the jobs healthy? | cluster |
+| `pipelines.json` | How is one Zephyr execution moving? | cluster, execution |
+| `inference.json` | How did one vLLM serve behave? | identity kind, serve |
+| `infra.json` | The custom React status page: nightly regressions, main CI, worker capacity, provisioning, hero training. | none |
 
 `home.json` is provisioned as the default home dashboard
 (`GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/home.json`,
 the stitcher's output path) — everyone who opens grafana.oa.dev without a
 specific dashboard in mind lands here instead of Grafana's stock welcome page.
 It leads with a native `alertlist` panel (every rule currently Alerting or
-Pending, across every group), then a row of the same GCP/Iris and CoreWeave
-k8s health stats as `infra.json`'s cockpit, the control-plane components
-table, and the GB200 rack tray inventory — all shared `panelRef` fragments, so
-none of it drifts independently of the dashboards those fragments also serve.
+Pending, across every group), then a stat strip led by fleet GPU power, the
+fleet pulse charts, and the control-plane and GB200 rack inventories — the
+stats and inventories are shared `panelRef` fragments, so none of it drifts
+independently of the dashboards those fragments also serve.
+
+`accelerators.json` is the GPU view: total watts per cluster, the same watts
+attributed to the training run occupying each node, utilization against
+tensor-core activity, HBM, temperature, and the hardware-fault counters
+(XID, row remap, PCIe replay). It reads the `iris-node-agent` telemetry stream,
+which each CoreWeave node's agent fills from that cluster's `dcgm-exporter`.
+TPU hosts report no power, so this dashboard covers the GPU clusters only.
+Power is attributed to a run by joining the node agent's `node_name` to the
+`node_name` on Levanter's resource attributes, per time bucket — the residue is
+`(idle / unattributed)`, which is the number worth driving down.
+
+`jobs.json` reads the `iris.task_state` finelog namespace on the marin hub — one
+row per active root job every 30s per cluster-view (CoreWeave) controller,
+carrying waiting/running task counts and the oldest PENDING and stuck-in-BUILDING
+wait ages, plus a `root_job_id=''` per-cluster rollup — grouped by the forwarded
+origin `cluster`. Fleet tasks in flight and the stuck-jobs count are `panelRef`
+fragments shared with `home.json`. The active panels pin a fixed two-minute window
+(`timeFrom: 2m`) so a finished job — which stops emitting with no final zero row —
+ages out rather than lingering as active. GCE controllers (marin, marin-dev) emit
+no `iris.task_state` (their DB is directly `ExecuteRawQuery`-able), so their
+job-state counts come from the live `/iris/{cluster}/jobs` endpoint in its own row,
+and their per-task resource history sits in a collapsed row below. The `$job`
+selector scopes the active-jobs table and the waiting-task series; with every job
+selected the latter is the fleet backlog broken out by job, and narrowed to one
+job it is that job's queue over time.
 
 ## Alerting
 
@@ -323,15 +335,14 @@ Rotation is overlap-safe:
    line with no CR/LF; Secret Manager preserves trailing newlines.
 2. Use the token against one cluster's `SelfSubjectReview` to get its
    `cwtoken-…` username. Append it to `grafana_observer_rbac.usernames` in
-   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, `cw-rno2a.yaml`, and
-   `cw-us-west-04a.yaml`, retaining
+   `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, and `cw-rno2a.yaml`, retaining
    the old username during the handoff.
-3. Preview and update the four CoreWeave Pulumi stacks. Verify both tokens can
+3. Preview and update the three CoreWeave Pulumi stacks. Verify both tokens can
    `list nodes`, while pod creation, Secret reads, and impersonation remain
    denied.
 4. Add the new token as a `marin-grafana-cw-read-token` version, deploy a fresh
    Grafana revision, and verify every k8s bridge route.
-5. Remove the old username from the four configs and update the stacks again.
+5. Remove the old username from the three configs and update the stacks again.
    Then disable the old secret version and revoke the old CoreWeave token.
 
 The same Secret Manager overlap pattern applies to the Slack webhook and SMTP
@@ -357,13 +368,22 @@ cd marin-infra-panel
 npm ci
 npm run typecheck && npm run lint && npm run test:ci && npm run build
 docker build -t marin-grafana .
-docker run --rm -p 3000:8080 -e PORT=8080 marin-grafana
-# → http://localhost:3000 (anonymous Viewer; panels need VPC access to finelog)
+docker run --rm -p 3000:8080 -e PORT=8080 -e SLACK_ALERTS_WEBHOOK=https://example.invalid marin-grafana
+# → http://localhost:3000 (without an IAP identity header, anonymous Viewer; panels need VPC access to finelog)
 ```
+
+`SLACK_ALERTS_WEBHOOK` has to be set to something: the provisioned contact point
+declares a Slack receiver, and Grafana refuses to start when its URL is empty.
 
 Panels only render against the real VPC: querying needs credentials that list the
 finelog VMs and a network path to them. Locally you get Grafana, the provisioned
-dashboards, and a bridge that 500s on query.
+dashboards, and a bridge that 500s on query — enough to confirm every dashboard
+parses and its variables survive provisioning:
+
+```bash
+curl -s 'http://localhost:3000/api/search?type=dash-db'
+curl -s http://localhost:3000/api/dashboards/uid/marin-accel
+```
 
 ## Deploy
 
@@ -418,11 +438,32 @@ settings reject the colons in a connection name). `GF_DATABASE_PASSWORD` comes f
 create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.md`) before
 `pulumi up` here, or Grafana fails to reach its database.
 
-IAP is the only gate — Grafana runs anonymous Viewer. The OAuth consent screen is
-project-level and shared across the project's IAP services. The shared Cloud Run component
-admits the OpenAthena Workspace domain and the Loom VM service account on every internal site,
-and registers the Marin desktop OAuth client as a programmatic audience. The `viewers` list
-contains only additional accounts or groups needed by Grafana.
+IAP is the outer gate. Its `X-Goog-Authenticated-User-Email` header becomes a Grafana
+auth-proxy account. The container's nginx listener adds a fixed `Editor` role for those
+accounts, which lets every admitted person create and expire alert silences. Grafana syncs
+the role on authenticated requests. Before Grafana starts, `python -m grafana_migrations`
+applies pending `src/grafana_migrations/migrations/mNNNN_*.py` files and records each version
+in `marin_schema_migrations`. Migration `m0001` changes memberships created as `Viewer` by
+older revisions to `Editor`; Grafana's normal role synchronization rejects that change when
+the organization has no `Admin`. Requests without IAP's identity header remain anonymous
+`Viewer`.
+
+Cloud Run grants `run.invoker` only to the IAP service agent, and direct Cloud Run IAP
+[routes every ingress path through IAP](https://cloud.google.com/run/docs/securing/identity-aware-proxy-cloud-run).
+IAP [strips client-provided `X-Goog-*` headers](https://cloud.google.com/iap/docs/signed-headers-howto)
+before forwarding a request, so the presence of `X-Goog-Authenticated-User-Email` safely
+distinguishes authenticated users in this deployment. To allow anonymous viewing later, grant
+IAP's `roles/iap.httpsResourceAccessor` role to `allUsers`. IAP then admits ordinary requests
+[without checking authentication credentials](https://cloud.google.com/iap/docs/force-login),
+so they have no identity claim and remain Grafana `Viewer`. A sign-in link to
+`?gcp-iap-mode=FORCE_LOGIN` lets a visitor authenticate through IAP; subsequent requests carry
+the email header and become `Editor`.
+
+The OAuth consent screen is project-level and shared across the project's IAP services. The
+shared Cloud Run component admits the OpenAthena Workspace domain and the Loom VM service
+account on every internal site, and registers the Marin desktop OAuth client as a programmatic
+audience. The `viewers` stack config contains additional IAP accounts or groups; the name refers
+to IAP admission, not their Grafana organization role.
 
 The ferry, build, and nightly panels read the GitHub API, which gates the GraphQL
 build query behind auth even for public repos. The bridge authenticates as the
@@ -455,8 +496,52 @@ Drop JSON in `dashboards/` and redeploy. Panels use the Infinity datasource with
 `url: /query` and an `sql` param, plus `from`/`to` set to `${__from}`/`${__to}`.
 Write the window into the SQL as `{{from}}` / `{{to}}`, and bin the time axis with
 `date_bin(INTERVAL '${__interval_ms} milliseconds', ts)` so Grafana sizes the
-buckets to the panel — see `dashboards/iris.json`. All dashboards use the
-`${cluster}` datasource variable so one serves marin and marin-dev.
+buckets to the panel — see `dashboards/jobs.json`.
+
+Dashboards address the `finelog-marin` hub directly rather than through a
+datasource variable. The hub is the fleet view: the CoreWeave clusters forward
+into it and their rows carry an origin `cluster` column, while `finelog-marin-dev`
+forwards nowhere and sees only itself. A hub selector on a fleet dashboard empties
+every panel and silently changes what `cluster=''` means, so `finelog-marin-dev`
+stays available in Explore instead.
+
+`$cluster` selects clusters, not datasources: a multi-select custom variable
+listing the clusters in `src/config.py`, filtered in SQL with
+`COALESCE(NULLIF("cluster", ''), 'marin') IN (${cluster:sqlstring})`. It is
+custom rather than a query so a cluster that has gone silent — exactly when you
+want to select it — is still in the dropdown; a test asserts the list matches the
+config. `$run`, `$job`, `$execution` and `$identity` are Infinity query variables
+(`queryType: "infinity"` wrapping a normal `infinityQuery`; the first returned
+field becomes both text and value). The first three filter on `${cluster:sqlstring}`
+themselves, so narrowing the cluster narrows the list below it.
+
+Four things about the data will bite you:
+
+- **Quote `cluster`.** finelog's SQL parser rejects a bare `cluster` identifier
+  anywhere but the first select-list position — `SELECT ts AS t, cluster FROM …`
+  fails to parse. Qualifying or wrapping it is enough for the parser, but panels
+  always write `"cluster"`, and a test rejects every other spelling so nobody has
+  to remember which positions are safe.
+- **Bound every `telemetry_v1` query, and fold the boundary.** The namespace is
+  sorted on `timestamp_ms` alone, so write
+  `timestamp_ms >= CAST(EXTRACT(EPOCH FROM {{from}}) * 1000 AS BIGINT)`, never
+  `timestamp_ms >= {{from}}`. An unbounded query exceeds the bridge's 20s deadline.
+- **Cost tracks the window, not the rows.** A `telemetry_v1` panel costs roughly
+  3s over 3h and 10s over 24h no matter how selective its `name` filter is, so a
+  second scan of the same window nearly doubles a panel. Prefer one scan with
+  `CASE WHEN name = …` over joining two scans, and keep the accelerator and run
+  dashboards on a short default range. Per-row `json_get` is the other cost: the
+  host memory and disk ratios ran 8.6s grouped per node and 3.4s summed straight
+  to the cluster, for the same numbers to three decimal places.
+- **Clusters forward in bursts.** A cluster minutes behind makes the right edge of
+  a fleet chart dip. That is why `accelerators.json` carries a freshness panel, and
+  why the power stat reduces to the latest sample per GPU rather than a bucketed sum.
+
+A cluster keeps one colour on every panel of every dashboard — the categorical
+palette's first six slots, in the cluster order in `src/config.py`. Colour follows
+the entity, not its rank, so filtering `$cluster` down to two clusters does not
+repaint the survivors; a test enforces it. Grafana's semantic green/yellow/orange/red
+stay reserved for thresholds and outcome states and are never an entity's colour.
 
 ## Sharing a panel across dashboards
 

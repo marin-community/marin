@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from iris.client import iris_ctx
+from iris.rpc import job_pb2
 from marin.evaluation.hardware import default_platform
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -47,15 +48,18 @@ class EvalStepConfig:
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> None:
     keys = SUITES.get(config.evals) or (config.evals,)
+    model = models()[config.model]
     spec = LaunchSpec(
-        model=config.model,
+        model=model,
         evals=keys,
-        harbor_configs=(),
-        platform=default_platform(models()[config.model]),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=default_platform(model),
         accelerator=config.accelerator,
         limit=config.limit,
         records_prefix=None,
-        cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
         version=config.version,
     )
     submitted = launch_group(prepare_evaluation_batch(spec), iris_ctx().client)

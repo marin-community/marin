@@ -1,0 +1,328 @@
+//! Build + storage introspection routes (`/api/server`, `/api/segments`).
+//!
+//! These answer the two questions an operator asks of a running finelog that
+//! neither the RPC contract nor a SQL query can: *which source revision is this
+//! binary*, and *what does this namespace's storage physically look like right
+//! now*. The dashboard's System page and per-namespace Segments panel read them.
+//!
+//! Plain axum JSON rather than proto: the payloads describe this process and its
+//! files, so they track the implementation rather than the wire contract, and
+//! adding a field should not move a versioned RPC. They sit behind the same
+//! default-deny [`auth_gate`](super::auth) as the `/debug/*` routes, so the
+//! surface is never more open than the RPCs.
+
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+
+use crate::query::metadata_cache_stats;
+use crate::query::sidecar::SidecarManager;
+use crate::server::diagnostics::read_proc_self_status_kb;
+use crate::store::segment::{
+    segment_physical, LAYOUT_VERSION, MAX_ROW_GROUP_ROWS, TARGET_ROW_GROUP_BYTES,
+};
+use crate::store::trigram::{sidecar_path, SIDECAR_SPAN_ROWS};
+use crate::store::types::{basename, SegmentRow};
+use crate::store::Store;
+
+/// When this process started, stamped at router-build time so uptime counts
+/// from the server coming up rather than from the first request.
+static PROCESS_STARTED: OnceLock<SystemTime> = OnceLock::new();
+
+fn process_started() -> SystemTime {
+    *PROCESS_STARTED.get_or_init(SystemTime::now)
+}
+
+/// The source revision this binary was compiled from, baked in by `build.rs`.
+///
+/// Every field is empty when the build had no git checkout to read — a wheel
+/// built from an sdist, for instance.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildInfo {
+    pub version: &'static str,
+    pub commit: &'static str,
+    /// Tree hash of `commit`. Names the source content, so a rebased or
+    /// cherry-picked rebuild of the same sources is visibly identical.
+    pub tree: &'static str,
+    /// Whether the checkout had uncommitted changes when it was built.
+    pub dirty: bool,
+    pub built_at_unix: i64,
+    pub rustc: &'static str,
+    pub profile: &'static str,
+}
+
+pub fn build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        commit: env!("FINELOG_BUILD_COMMIT"),
+        tree: env!("FINELOG_BUILD_TREE"),
+        dirty: matches!(env!("FINELOG_BUILD_DIRTY"), "true"),
+        built_at_unix: env!("FINELOG_BUILD_AT_UNIX").parse().unwrap_or(0),
+        rustc: env!("FINELOG_BUILD_RUSTC"),
+        profile: if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
+    }
+}
+
+/// This process: how long it has been up, where it is, and what it is holding.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcessInfo {
+    pid: u32,
+    hostname: String,
+    started_at_unix: i64,
+    uptime_seconds: i64,
+    rss_bytes: i64,
+    vm_size_bytes: i64,
+}
+
+/// Where the store keeps its data, and how much of it is resident.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreInfo {
+    data_dir: String,
+    remote_log_dir: String,
+    namespaces: usize,
+    ram_buffer_bytes: i64,
+    ram_chunks: usize,
+}
+
+/// The parquet metadata cache, which is what stands between a query and
+/// re-parsing every segment footer it touches.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MetadataCacheInfo {
+    limit_bytes: i64,
+    size_bytes: i64,
+    entries: i64,
+    hits: i64,
+}
+
+/// The on-disk format policy this binary writes. A segment whose
+/// `layoutVersion` differs was written by an older policy and is queued for an
+/// in-place re-encode by maintenance.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FormatInfo {
+    layout_version: u32,
+    target_row_group_bytes: i64,
+    max_row_group_rows: i64,
+    sidecar_span_rows: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerInfoResponse {
+    build: BuildInfo,
+    process: ProcessInfo,
+    store: StoreInfo,
+    metadata_cache: MetadataCacheInfo,
+    format: FormatInfo,
+}
+
+/// `GET /api/segments?namespace=NS` query. `physical=true` additionally reads
+/// each local segment's parquet footer and trigram sidecar, which costs a tail
+/// read per segment — cheap for one page load, not for a refresh loop.
+#[derive(Debug, Deserialize)]
+struct SegmentsQuery {
+    namespace: String,
+    #[serde(default)]
+    physical: bool,
+}
+
+/// One segment: its catalog row, plus its physical shape when the caller asked
+/// for it and the file is local.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SegmentInfo {
+    /// Basename. The directory is the store's, and repeating it per row buys
+    /// nothing.
+    path: String,
+    level: i32,
+    min_seq: i64,
+    max_seq: i64,
+    row_count: i64,
+    byte_size: i64,
+    created_at_ms: i64,
+    /// `LOCAL`, `REMOTE`, or `BOTH`.
+    location: String,
+    min_key_value: Option<String>,
+    max_key_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    physical: Option<PhysicalInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhysicalInfo {
+    /// `None` for a segment written before the layout stamp existed.
+    layout_version: Option<u32>,
+    /// Whether that stamp matches what this binary writes today.
+    layout_current: bool,
+    row_groups: i64,
+    /// Footer bytes on disk — the per-segment cost paid before any column is
+    /// read.
+    footer_bytes: i64,
+    uncompressed_bytes: i64,
+    created_by: Option<String>,
+    /// Trigram sidecar, when one exists and this binary can still read it. A
+    /// sidecar written at an older format version reads as absent, which is
+    /// also how the query path treats it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sidecar: Option<SidecarInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SidecarInfo {
+    columns: Vec<String>,
+    spans: i64,
+    span_rows: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SegmentsResponse {
+    namespace: String,
+    segments: Vec<SegmentInfo>,
+}
+
+/// Host name from `/proc`, or an empty string off Linux.
+fn hostname() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn unix_seconds(t: SystemTime) -> i64 {
+    t.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
+    let started = process_started();
+    let memory = store.memory_summary();
+    let cache = metadata_cache_stats();
+    Json(ServerInfoResponse {
+        build: build_info(),
+        process: ProcessInfo {
+            pid: std::process::id(),
+            hostname: hostname(),
+            started_at_unix: unix_seconds(started),
+            uptime_seconds: started.elapsed().map(|d| d.as_secs() as i64).unwrap_or(0),
+            rss_bytes: read_proc_self_status_kb("VmRSS") as i64 * 1024,
+            vm_size_bytes: read_proc_self_status_kb("VmSize") as i64 * 1024,
+        },
+        store: StoreInfo {
+            data_dir: store
+                .data_dir()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default(),
+            remote_log_dir: store.remote_log_dir().to_string(),
+            namespaces: memory.namespaces,
+            ram_buffer_bytes: memory.ram_bytes,
+            ram_chunks: memory.chunks,
+        },
+        metadata_cache: MetadataCacheInfo {
+            limit_bytes: cache.limit_bytes as i64,
+            size_bytes: cache.size_bytes as i64,
+            entries: cache.entries as i64,
+            hits: cache.hits as i64,
+        },
+        format: FormatInfo {
+            layout_version: LAYOUT_VERSION,
+            target_row_group_bytes: TARGET_ROW_GROUP_BYTES as i64,
+            max_row_group_rows: MAX_ROW_GROUP_ROWS as i64,
+            sidecar_span_rows: SIDECAR_SPAN_ROWS as i64,
+        },
+    })
+}
+
+/// Read `path`'s footer and sidecar. `None` when the file is not readable here,
+/// which is the normal state of a `REMOTE` segment after eviction.
+fn physical_info(path: &str) -> Option<PhysicalInfo> {
+    let physical = segment_physical(Path::new(path)).ok()?;
+    let sidecar = SidecarManager::global()
+        .get_header(&sidecar_path(Path::new(path)))
+        .map(|header| SidecarInfo {
+            columns: header.column_names().map(str::to_string).collect(),
+            spans: header.span_count as i64,
+            span_rows: header.span_rows as i64,
+        });
+    Some(PhysicalInfo {
+        layout_version: physical.layout_version,
+        layout_current: physical.layout_version == Some(LAYOUT_VERSION),
+        row_groups: physical.row_groups as i64,
+        footer_bytes: physical.footer_bytes,
+        uncompressed_bytes: physical.uncompressed_bytes,
+        created_by: physical.created_by,
+        sidecar,
+    })
+}
+
+fn to_segment_info(row: SegmentRow, physical: bool) -> SegmentInfo {
+    SegmentInfo {
+        physical: physical.then(|| physical_info(&row.path)).flatten(),
+        path: basename(&row.path),
+        level: row.level,
+        min_seq: row.min_seq,
+        max_seq: row.max_seq,
+        row_count: row.row_count,
+        byte_size: row.byte_size,
+        created_at_ms: row.created_at_ms,
+        location: row.location.as_str().to_string(),
+        min_key_value: row.min_key_value,
+        max_key_value: row.max_key_value,
+    }
+}
+
+async fn get_segments(
+    State(store): State<Arc<Store>>,
+    Query(q): Query<SegmentsQuery>,
+) -> impl IntoResponse {
+    let namespace = q.namespace.clone();
+    // Footer reads are blocking file I/O, and a large namespace has hundreds of
+    // them, so the whole listing runs off the async runtime.
+    let listed = tokio::task::spawn_blocking(move || {
+        store.list_segments(&q.namespace).map(|rows| {
+            rows.into_iter()
+                .map(|row| to_segment_info(row, q.physical))
+                .collect::<Vec<_>>()
+        })
+    })
+    .await;
+    match listed {
+        Ok(Ok(segments)) => Json(SegmentsResponse {
+            namespace,
+            segments,
+        })
+        .into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(join) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("segments task panicked: {join}"),
+        )
+            .into_response(),
+    }
+}
+
+/// The `/api/*` introspection routes, for merging into the app router.
+pub fn introspection_router(store: Arc<Store>) -> Router {
+    process_started();
+    Router::new()
+        .route("/api/server", get(get_server))
+        .route("/api/segments", get(get_segments))
+        .with_state(store)
+}

@@ -19,7 +19,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result as DFResult;
@@ -52,6 +52,43 @@ enum Inner {
     Empty(Arc<MemTable>),
 }
 
+/// Retype `schema`'s top-level `Utf8` columns as `Utf8View`.
+///
+/// Parquet stores strings the same way either way, so this only chooses the
+/// in-memory layout the scan produces. `Utf8View` lets the reader emit 16-byte
+/// views over the decompressed pages rather than copying every value into one
+/// contiguous buffer, and lets grouping and comparison settle most rows on the
+/// inline 4-byte prefix. On a `GROUP BY name` over a low-cardinality column that
+/// is worth roughly 1.8x.
+///
+/// Nested string types (a `Map`'s keys and values) are left alone: the win comes
+/// from the wide top-level columns, and retyping map children would churn the
+/// duck-typed `json_*` path for no measured gain.
+///
+/// [`crate::query::normalize_result`] converts back at the response boundary, so
+/// the layout never reaches a client.
+fn view_typed_schema(schema: &SchemaRef) -> SchemaRef {
+    if !schema
+        .fields()
+        .iter()
+        .any(|f| f.data_type() == &DataType::Utf8)
+    {
+        return Arc::clone(schema);
+    }
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| match f.data_type() {
+            DataType::Utf8 => f.as_ref().clone().with_data_type(DataType::Utf8View),
+            _ => f.as_ref().clone(),
+        })
+        .collect();
+    Arc::new(ArrowSchema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    ))
+}
+
 impl NamespaceProvider {
     /// Build a provider from the registered arrow `schema` and a snapshot of
     /// sealed segment file paths.
@@ -61,6 +98,7 @@ impl NamespaceProvider {
     /// than listing a directory) so the scan sees exactly the snapshotted set —
     /// no re-listing, and compaction can't slip a new file in.
     pub fn build(schema: SchemaRef, segment_paths: &[String]) -> DFResult<NamespaceProvider> {
+        let schema = view_typed_schema(&schema);
         if segment_paths.is_empty() {
             let mem = MemTable::try_new(Arc::clone(&schema), vec![vec![]])?;
             return Ok(NamespaceProvider {
@@ -121,8 +159,8 @@ impl TableProvider for NamespaceProvider {
         match &self.inner {
             Inner::Listing(t) => {
                 // Delegate to DataFusion's parquet scan (which keeps the existing
-                // range / min-max / bloom row-group pruning), then layer the
-                // trigram prune on top by injecting per-file access plans.
+                // range / min-max row-group pruning), then layer the trigram
+                // prune on top by injecting per-file access plans.
                 let plan = t.scan(state, projection, filters, limit).await?;
                 // Hot path: a query with no `contains(col, …)`/`LIKE` filter on any
                 // column does only this cheap expr inspection (no I/O) and returns
@@ -163,6 +201,9 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{Array, Int64Array, StringArray};
+
+    use crate::query::string_values::StringValues;
+    use crate::store::trigram::SIDECAR_SPAN_ROWS;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
     use datafusion::prelude::SessionContext;
@@ -270,15 +311,7 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let ids: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let ids = first_column_strings(&batches);
         assert_eq!(ids, vec!["w-1", "w-2", "w-3"]);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -419,6 +452,21 @@ mod tests {
         std::fs::remove_dir_all(&tdir).ok();
     }
 
+    /// The first column of `batches` as strings, in row order — what a
+    /// single-column projection assertion compares against.
+    fn first_column_strings(batches: &[RecordBatch]) -> Vec<String> {
+        batches
+            .iter()
+            .flat_map(|b| {
+                let column = b.column(0);
+                let c = StringValues::new(column).expect("string column");
+                (0..column.len())
+                    .map(|i| c.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     /// Log-form schema: seq, key, data (the columns the trigram prune touches).
     fn log_arrow() -> SchemaRef {
         Arc::new(ArrowSchema::new(vec![
@@ -428,12 +476,11 @@ mod tests {
         ]))
     }
 
-    /// Write one segment whose `data` column is `rg0` rows of `filler` followed
-    /// by `rg1`, then build its trigram sidecar — so row group 0 lacks the needle
-    /// and row group 1 carries it. Returns the segment path.
-    fn write_two_rg_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
-        use crate::store::segment::ROW_GROUP_SIZE;
-        let n0 = ROW_GROUP_SIZE;
+    /// Write one segment whose `data` column is a full span of `filler` followed
+    /// by `rg1`, then build its trigram sidecar — so sidecar span 0 lacks the
+    /// needle and span 1 carries it. Returns the segment path.
+    fn write_two_span_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
+        let n0 = SIDECAR_SPAN_ROWS;
         let mut data: Vec<String> = (0..n0).map(|_| filler.to_string()).collect();
         data.extend(rg1.iter().map(|s| s.to_string()));
         let n = data.len() as i64;
@@ -455,13 +502,94 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    /// Whether any expression in `plan` casts the `data` column. Walks the tree
+    /// rather than the rendered text, which qualifies column names inconsistently
+    /// across plan stages and would make a substring check pass vacuously.
+    fn casts_the_data_column(plan: &datafusion::logical_expr::LogicalPlan) -> bool {
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        use datafusion::logical_expr::Expr;
+
+        let mut found = false;
+        plan.apply(|node| {
+            for e in node.expressions() {
+                e.apply(|sub| {
+                    if let Expr::Cast(cast) = sub {
+                        if matches!(cast.expr.as_ref(), Expr::Column(c) if c.name == "data") {
+                            found = true;
+                        }
+                    }
+                    Ok(TreeNodeRecursion::Continue)
+                })
+                .unwrap();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+        found
+    }
+
+    #[tokio::test]
+    async fn string_predicates_read_the_scan_layout_without_casting() {
+        // The scan reads strings as Utf8View, and the finelog UDFs accept that
+        // layout. A UDF with an exact-Utf8 signature would instead make the
+        // planner cast the whole column ahead of the predicate — materializing
+        // every value precisely to throw most of them away.
+        let dir = tempdir("no_cast");
+        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &["needle here"; 4]);
+        let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
+        assert_eq!(
+            provider
+                .schema()
+                .field_with_name("data")
+                .unwrap()
+                .data_type(),
+            &DataType::Utf8View,
+        );
+
+        let ctx = crate::query::make_ctx();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(provider),
+        )
+        .unwrap();
+        for predicate in [
+            "contains(data, 'needle')",
+            "prefix(data, 'needle')",
+            "regexp_matches(data, 'needle')",
+            "json_get(data, 'k') IS NOT NULL",
+        ] {
+            let plan = ctx
+                .sql(&format!("SELECT seq FROM \"log\" WHERE {predicate}"))
+                .await
+                .unwrap()
+                .into_optimized_plan()
+                .unwrap();
+            assert!(
+                !casts_the_data_column(&plan),
+                "{predicate} planned a whole-column cast:\n{}",
+                plan.display_indent()
+            );
+        }
+
+        // The detector must actually fire on a cast, or the assertions above pass
+        // for the wrong reason.
+        let cast_plan = ctx
+            .sql("SELECT seq FROM \"log\" WHERE CAST(data AS int) = 1")
+            .await
+            .unwrap()
+            .into_optimized_plan()
+            .unwrap();
+        assert!(casts_the_data_column(&cast_plan));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn contains_query_returns_matches_and_prunes_row_groups() {
         use datafusion::datasource::physical_plan::FileScanConfig;
         use datafusion::datasource::source::DataSourceExec;
         use datafusion::logical_expr::{col, lit};
         use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-        use datafusion_datasource_parquet::ParquetAccessPlan;
+        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 
         let dir = tempdir("contains_prune");
         // The needle lives only in row group 1 (rows 2 and 4 of the tail).
@@ -472,7 +600,8 @@ mod tests {
             "idle heartbeat ok",
             "another Bootstrap completed for TPU-xyz here",
         ];
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let rg1_rows = rg1.len();
+        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &rg1);
 
         // 1) End-to-end correctness: the contains() query returns exactly the two
         //    matching rows (and prunes row group 0 along the way).
@@ -492,15 +621,7 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let got: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let got = first_column_strings(&batches);
         assert_eq!(
             got,
             vec![
@@ -538,13 +659,16 @@ mod tests {
                     .as_ref()
                     .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
                     .expect("trigram access plan attached to the partitioned file");
-                assert!(
-                    !ap.should_scan(0),
-                    "row group 0 (no needle) must be skipped"
-                );
-                assert!(
-                    ap.should_scan(1),
-                    "row group 1 (has needle) must be scanned"
+                // The needle is confined to the second span. These narrow rows
+                // fit one byte-sized row group, so the prune expresses that as a
+                // row selection inside it rather than a skipped row group.
+                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
+                    panic!("expected one row group carrying a row selection: {ap:?}");
+                };
+                assert_eq!(
+                    selection.row_count(),
+                    rg1_rows,
+                    "only the needle's span may be selected"
                 );
                 checked += 1;
             }
@@ -564,7 +688,7 @@ mod tests {
         // injected skip of the needle-free row group 0.
         use datafusion::datasource::physical_plan::FileScanConfig;
         use datafusion::datasource::source::DataSourceExec;
-        use datafusion_datasource_parquet::ParquetAccessPlan;
+        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 
         let dir = tempdir("like_prune");
         let needle = "Bootstrap completed for TPU-xyz";
@@ -573,7 +697,8 @@ mod tests {
             "E0601 Bootstrap completed for TPU-xyz started",
             "idle heartbeat ok",
         ];
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let rg1_rows = rg1.len();
+        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &rg1);
 
         let ctx = crate::query::make_ctx();
         let provider = NamespaceProvider::build(log_arrow(), std::slice::from_ref(&path)).unwrap();
@@ -591,15 +716,7 @@ mod tests {
             .collect()
             .await
             .unwrap();
-        let got: Vec<String> = batches
-            .iter()
-            .flat_map(|b| {
-                let c = b.column(0).as_any().downcast_ref::<StringArray>().unwrap();
-                (0..c.len())
-                    .map(|i| c.value(i).to_string())
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+        let got = first_column_strings(&batches);
         assert_eq!(
             got,
             vec!["E0601 Bootstrap completed for TPU-xyz started".to_string()],
@@ -636,13 +753,16 @@ mod tests {
                     .as_ref()
                     .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
                     .expect("trigram access plan attached for the LIKE query");
-                assert!(
-                    !ap.should_scan(0),
-                    "row group 0 (no needle) must be skipped"
-                );
-                assert!(
-                    ap.should_scan(1),
-                    "row group 1 (has needle) must be scanned"
+                // The needle is confined to the second span. These narrow rows
+                // fit one byte-sized row group, so the prune expresses that as a
+                // row selection inside it rather than a skipped row group.
+                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
+                    panic!("expected one row group carrying a row selection: {ap:?}");
+                };
+                assert_eq!(
+                    selection.row_count(),
+                    rg1_rows,
+                    "only the needle's span may be selected"
                 );
                 checked += 1;
             }
@@ -659,7 +779,7 @@ mod tests {
         use datafusion::logical_expr::{col, lit};
 
         let dir = tempdir("no_contains");
-        let path = write_two_rg_log_segment(&dir, "idle heartbeat ok", &["one match here"]);
+        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &["one match here"]);
         let ctx = crate::query::make_ctx();
         let provider = NamespaceProvider::build(log_arrow(), &[path]).unwrap();
         let state = ctx.state();

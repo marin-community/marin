@@ -413,6 +413,7 @@ members = [
     "marin-ducky",
     "marin-dupekit",
     "marin-finelog",
+    "marin-finestore",
     "marin-fray",
     "marin-haliax",
     "marin-iac",
@@ -1863,7 +1864,7 @@ wheels = [
 
 [[package]]
 name = "docling-core"
-version = "2.90.0"
+version = "2.91.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "defusedxml" },
@@ -1880,9 +1881,9 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a0/83/4e7169415904494d0bca8d10bbfbe7e626ff53834c7db86b06b32cfe7ce8/docling_core-2.90.0.tar.gz", hash = "sha256:55eda84a4a1822cca4c9259e0b7682477b56bd7db02763e4bccb9fafffe4e10b", size = 344122, upload-time = "2026-08-03T12:22:11.558Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e5/f5/5aaf6f1221242a4dd598b515786ffca796352a8d960a9c6a0deb614301f4/docling_core-2.91.0.tar.gz", hash = "sha256:dc40fe76524a2700f869265015a9ef86027888e73b5652f324b3b5c52a2df240", size = 344852, upload-time = "2026-08-06T14:23:07.919Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6b/9c/a2d9c4d733f16c93158c5c5bee134da10727a444dc7a5fe640bd13976c7c/docling_core-2.90.0-py3-none-any.whl", hash = "sha256:e8d739c51db4ea29d25217de1b1c3854dba9dd2483cd2f95aaafb09e4e52d3c5", size = 286436, upload-time = "2026-08-03T12:22:09.971Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/68/de7c0ba404d035afe78ae4e602290bb6c330b34cc53fd5f92c9950be4ac0/docling_core-2.91.0-py3-none-any.whl", hash = "sha256:4949a5dd77ae1daf4153c095897d3bdde1c870f2bbe401bf94d8834bef867998", size = 286832, upload-time = "2026-08-06T14:23:05.908Z" },
 ]
 
 [package.optional-dependencies]
@@ -1932,7 +1933,7 @@ wheels = [
 
 [[package]]
 name = "docling-parse"
-version = "7.9.0"
+version = "7.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docling-core" },
@@ -1940,18 +1941,18 @@ dependencies = [
     { name = "pydantic" },
     { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-10-marin-core-gpu') or (extra == 'extra-10-marin-core-cpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-10-marin-core-vllm') or (extra == 'extra-10-marin-core-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-10-marin-core-gpu' and extra == 'group-10-marin-fray-fray-tpu-test') or (extra == 'extra-10-marin-core-tpu' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-10-marin-core-vllm' and extra == 'extra-14-marin-levanter-gpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'extra-14-marin-levanter-tpu') or (extra == 'extra-14-marin-levanter-gpu' and extra == 'group-10-marin-fray-fray-tpu-test')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/76/d0/3d900a10b6a25ba2ca850cc1953d1b0e5fa45dfaa9ef026d0cb4ae432057/docling_parse-7.9.0.tar.gz", hash = "sha256:8982bf907b0be11cd49ac4809f6eabd6df37fb1414d3134c075f80c05440e898", size = 6764068, upload-time = "2026-08-04T17:11:57.871Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/35/f4a325e29bcd2f4dce9e4b389be92a9a417b662eb3b47ec5642354a60119/docling_parse-7.10.0.tar.gz", hash = "sha256:14cc71e031fa7c5f3ad360eb1d605dca359e754ae0c8558efb7e4626e8adc4ed", size = 6771754, upload-time = "2026-08-05T12:10:47.575Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/94/d9179e97c3637ae15bbb736f00e9a81a095b639f1c5b9dc552f24c32c1b2/docling_parse-7.9.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:c76c53bc6113c7f671f105602173b44be878413f7e9bb46470e4add8d265408a", size = 9586239, upload-time = "2026-08-04T17:11:30.834Z" },
-    { url = "https://files.pythonhosted.org/packages/8b/9b/5d5bc9de836f5e8cb0c6e9d1029729cf4a9a77ecc6d03fe5c8881c0080dd/docling_parse-7.9.0-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:df4a88ae5527b58fde141d42366b2423e01ec09cc68f292ef3df3f9bf3ece1d2", size = 10315071, upload-time = "2026-08-04T17:11:32.656Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/45/17162c76b74c56b94c705815ca0f10433ea06781fa7a0f8b7e9d5086bb51/docling_parse-7.9.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1705be71c79c4188b1e3644255516f6cdced79844f2e5ed00a0b2042c1330a54", size = 10726171, upload-time = "2026-08-04T17:11:34.397Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/8e/89ceb426791d00fc75970525d364a5b6a0408b3e76524ceca37cda5cef81/docling_parse-7.9.0-cp312-cp312-win_amd64.whl", hash = "sha256:4854a279fb40f8005da05cd138e899ccf31b60cee30fb619cc896ccaab05ae14", size = 11474566, upload-time = "2026-08-04T17:11:36.124Z" },
-    { url = "https://files.pythonhosted.org/packages/49/b3/4a9e1b20d81e5e1970e1995b1bc8dee90536c2862cb836bbf544d5e9ae0d/docling_parse-7.9.0-cp312-cp312-win_arm64.whl", hash = "sha256:8702423b8d68aae5bf548b7db894e87c15ef6789bc1237fac825d37e38d44340", size = 8879913, upload-time = "2026-08-04T17:11:37.98Z" },
-    { url = "https://files.pythonhosted.org/packages/1b/a2/7b5a15a31ccbc7c5ce106933fb54205bf3e65db1726d51132f2b26423521/docling_parse-7.9.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:27989b56249ba6a15587a8be553e469041bd097d5406c4c2b44353355aff3451", size = 9586175, upload-time = "2026-08-04T17:11:39.786Z" },
-    { url = "https://files.pythonhosted.org/packages/e7/54/aaad8ffbb6ebd81f1a6ddb42e3acca868f183d60678b0e5fd0c21a85ff9c/docling_parse-7.9.0-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:8633255d6a9e4f197d3e1d471120e14465a073cd0c3e9f3608748df124ae7d65", size = 10315694, upload-time = "2026-08-04T17:11:41.655Z" },
-    { url = "https://files.pythonhosted.org/packages/76/b9/0be19a39ba92d737b28d58d81656fa0365d92e8fa14a68b924c7f6520099/docling_parse-7.9.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4c4cb0c6dd92cdf8cd7f180de5c88a4e3e71668699e5d891138bb53de45de44e", size = 10727162, upload-time = "2026-08-04T17:11:43.29Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/55/2c6aa0aab77f34643b16553fe3ad83e47e8f6d68ac96aa67d41fff0ff009/docling_parse-7.9.0-cp313-cp313-win_amd64.whl", hash = "sha256:40b01615b353bd7cf6079d7cc76d43c0c61e397b98d8c23c469cc86f4460ba73", size = 11474637, upload-time = "2026-08-04T17:11:44.987Z" },
-    { url = "https://files.pythonhosted.org/packages/42/6b/cd7807d4be326f96392a1c406aa7ce22a12d8ce9aac4e1be747bbb8c5e3d/docling_parse-7.9.0-cp313-cp313-win_arm64.whl", hash = "sha256:45d220c7e306677d95460ed25986f636db5e93a8595c19447c7231a2d43d4fd2", size = 8880020, upload-time = "2026-08-04T17:11:46.906Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/6a/fcb0ea02496863c0f5026de3e343227490462a4907646a4df1539145260d/docling_parse-7.10.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:8dabfd7318d92bbf3b45e7df77674af3ed1c68e1354ad4c1631873cffccc96c4", size = 9586783, upload-time = "2026-08-05T12:10:12.723Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/d6/eb397c79055f52311a307b9644f034b8196997f9156a0cce6b927a18d4df/docling_parse-7.10.0-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:81a449e7cf5e45ec04cebc8242afd496c8c8553f2c22a867a005c74c0d2ae3ef", size = 10316493, upload-time = "2026-08-05T12:10:15.478Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/66/1c2e80128de27f05dc3830ae9d5f81373cb4a451f46733c9eae4e95aaa57/docling_parse-7.10.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e32ff2dd716d0ae968505886c51f6e32a844afadff3e4430eb84a5bc5792673a", size = 10727197, upload-time = "2026-08-05T12:10:17.537Z" },
+    { url = "https://files.pythonhosted.org/packages/31/cd/7eea386519824d431c5d9e52b39dca982934eb16c377512fdeb204af1f87/docling_parse-7.10.0-cp312-cp312-win_amd64.whl", hash = "sha256:adf6649781ebffbb3265db8043f991e21f058c92fc618431a26ad60941dda74d", size = 11476550, upload-time = "2026-08-05T12:10:19.738Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/a2/6fc3f264cd038ddc2acde7f97964e051eb8549abbec4c7639a3fd5678a8d/docling_parse-7.10.0-cp312-cp312-win_arm64.whl", hash = "sha256:96747ab91ce9c513993910267d2ea902b29f87d57a73d19822fe2934cc73fe19", size = 8880694, upload-time = "2026-08-05T12:10:21.964Z" },
+    { url = "https://files.pythonhosted.org/packages/85/0a/0b02f0f88ae597a878f6b807efcba1b0e1a770584761fd78b297bacef972/docling_parse-7.10.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:bfdb500a8a1e0406b99e0f22efcced2915a20cf768260cbb58a245b45dc9c155", size = 9586862, upload-time = "2026-08-05T12:10:24.249Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/c5/3877055220a4304e29a5561786a9f180e72b28c44cca0d226a21a2067944/docling_parse-7.10.0-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:36904d7e726e654f38bbe24e665dd97ca542be2d3db2d159966b1818a43667a8", size = 10317436, upload-time = "2026-08-05T12:10:26.936Z" },
+    { url = "https://files.pythonhosted.org/packages/27/d1/7d1052f05e8401f96ed5af88a09dd7d843cd04a5c00e2393693b1bbb5531/docling_parse-7.10.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e0c6b9550f37cc65a4a8c964d8f0d30f91f47467db4f6869d7350c3fcdd2b448", size = 10728631, upload-time = "2026-08-05T12:10:29.183Z" },
+    { url = "https://files.pythonhosted.org/packages/90/d4/9e13b5f6378683ad5eba7e1eb1e893e3695aede374f7c5528c56394fe110/docling_parse-7.10.0-cp313-cp313-win_amd64.whl", hash = "sha256:54817b7bfb40f319816381308d3953b1846ac99e573e8e2f1607132c99b779fb", size = 11476463, upload-time = "2026-08-05T12:10:31.606Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/f7/441a9e257cbd89e1de5077878b15749ef7d839c74524239c44856adfd848/docling_parse-7.10.0-cp313-cp313-win_arm64.whl", hash = "sha256:cf14b7aa72d5702762f9d58a5a14aa6325084334cbefd8804a4a1bc6f1161f1b", size = 8880715, upload-time = "2026-08-05T12:10:33.771Z" },
 ]
 
 [[package]]
@@ -5353,6 +5354,7 @@ dependencies = [
     { name = "jax", version = "0.10.1", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-cpu' or extra == 'extra-10-marin-core-tpu' or extra == 'extra-10-marin-core-vllm' or extra == 'extra-14-marin-levanter-tpu' or extra == 'group-10-marin-fray-fray-tpu-test'" },
     { name = "jax", version = "0.11.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-10-marin-core-gpu' or extra == 'extra-14-marin-levanter-gpu' or (extra != 'extra-10-marin-core-cpu' and extra != 'extra-10-marin-core-tpu' and extra != 'extra-10-marin-core-vllm' and extra != 'extra-14-marin-levanter-tpu' and extra != 'group-10-marin-fray-fray-tpu-test')" },
     { name = "jaxopt" },
+    { name = "marin-finestore" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
     { name = "marin-iris" },
@@ -5537,6 +5539,7 @@ requires-dist = [
     { name = "libtpu", marker = "extra == 'vllm'", specifier = "==0.0.41" },
     { name = "luxical", marker = "extra == 'datakit'" },
     { name = "marin-dupekit", marker = "extra == 'dedup'", editable = "lib/dupekit" },
+    { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
     { name = "marin-iris", editable = "lib/iris" },
@@ -5722,7 +5725,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "marin-dupekit-native", specifier = ">=0.1.4.dev30223685542" },
+    { name = "marin-dupekit-native", specifier = ">=0.1.5.dev30957455498" },
     { name = "pytest-benchmark", marker = "extra == 'benchmark'", specifier = ">=5.2.3" },
     { name = "pytest-memray", marker = "extra == 'benchmark'", specifier = ">=1.8.0" },
 ]
@@ -5746,17 +5749,17 @@ test = [
 
 [[package]]
 name = "marin-dupekit-native"
-version = "0.1.4.dev30223685542"
+version = "0.1.5.dev30957455498"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f0/9f/a600c79a10c3fe5e0c7ffdfb3f24ce44c8278d1c8920ab562877cf172088/marin_dupekit_native-0.1.4.dev30223685542.tar.gz", hash = "sha256:c5ec1d753b2077bdded6cca403ac96ed822e4268062be26e8cbaa04e33fef9aa", size = 22174, upload-time = "2026-07-26T23:25:30.878Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/0c/d18c67033acc09b3e46a04ed8f834c45681e2eb92d2009e6fbe06b1539d1/marin_dupekit_native-0.1.5.dev30957455498.tar.gz", hash = "sha256:769f855af0ad92d5712afd48086641e47a6eca0cfefcbb745902d89532ecc4fd", size = 22359, upload-time = "2026-08-04T22:49:25.439Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/72/89906afb7a8ce3841255125eacce2896eb60815e1bcb0b20c933fe1d4df7/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:45253c786e4eac29b9c93d05e71f49b2df672625af85a014bdb10c7f8ec2608c", size = 4526972, upload-time = "2026-07-26T23:25:22.588Z" },
-    { url = "https://files.pythonhosted.org/packages/4b/d9/74b84bf3f1d9edf18f1960037b874e43909dd91db73883d9b6f27316812b/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:499d4ad1524f2df5afa29633cbaa27c72e172cd78eddef42455dcc1919d76dc6", size = 4181542, upload-time = "2026-07-26T23:25:24.495Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/e3/8e1ac37084980a912420d6168445baa407862771a806439dbc788bbbc4fa/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:942b9b6e46ca0966ae8e0b584e6195baf2a35c135e35d71158b33060351142c8", size = 4392908, upload-time = "2026-07-26T23:25:26.404Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/92/209e2a5e15a90b17ae71bf601a2d137d96656e7144552681b212c1ef5b75/marin_dupekit_native-0.1.4.dev30223685542-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:b15cf50e1ae166f1912fd8c1ffc7fae7a2a834d7a445db9be0ef38087db79fa1", size = 4723800, upload-time = "2026-07-26T23:25:28.134Z" },
+    { url = "https://files.pythonhosted.org/packages/23/a9/02b6a12c66f4365eab7d10e6daa68f2593465793a609922a0871db5df286/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:34e0e4892d95cb9c576838f7a92fe02315f793d8ef8bbe09b1d69be424d1f14c", size = 3964882, upload-time = "2026-08-04T22:49:17.823Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/fe/0414b2d4994887c0f46cbf5933d9b48cdec447d3f8a2b667e7ea597a9a9b/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:bfc43e9decaaa7635740ef018c04802921178941f2aff8ddc105542ea3f4f3cb", size = 3654072, upload-time = "2026-08-04T22:49:19.992Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/89/070afd632907acf0d1416f6dcb36f86a847c42e57a4094714c598d76db6e/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:cb49390e74a5bca1e843b5d05213b7e31891dc2d6657884de225b23773d5cd92", size = 3833758, upload-time = "2026-08-04T22:49:21.569Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/99/43cf7ab011f22d047c0bd9978984dc3530ac92a29aa6f53fccbbf7632213/marin_dupekit_native-0.1.5.dev30957455498-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:e466e25c33cb2618b4d168ac4c9e77aab32e5406e8f845dca94e4cf55e91952d", size = 4116806, upload-time = "2026-08-04T22:49:23.013Z" },
 ]
 
 [[package]]
@@ -5832,6 +5835,47 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/24/be/e1db089f9de44bf9add131d5cf88b120ab75007c290d06d277837ededcac/marin_finelog_server-0.2.17.dev30664483151-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:0c91877a4333783af58499b440a199db2954e43e57a1fed3bc58729d98004014", size = 37679620, upload-time = "2026-07-31T21:25:58.549Z" },
     { url = "https://files.pythonhosted.org/packages/05/7d/486ce032917c28e17665724ed196a642212753d6d195c0f45ab4a24b3a31/marin_finelog_server-0.2.17.dev30664483151-cp312-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e9c9ca5d94fedbd1aedee97af33d3d6d322ec9391495a45e863e8376f205cd9c", size = 39219562, upload-time = "2026-07-31T21:26:02.503Z" },
     { url = "https://files.pythonhosted.org/packages/1c/b4/78fabed88472dc340b212f67f93adcb519597aa60991231f6713db20d75b/marin_finelog_server-0.2.17.dev30664483151-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1ebc3b332749f51b59581a8687089af43a078815f6f5e7c72c4435cf38adebcf", size = 41641507, upload-time = "2026-07-31T21:26:06.235Z" },
+]
+
+[[package]]
+name = "marin-finestore"
+version = "0.1.0"
+source = { editable = "lib/finestore" }
+dependencies = [
+    { name = "marin-rigging" },
+    { name = "pyarrow" },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marin-rigging", editable = "lib/rigging" },
+    { name = "pyarrow", specifier = ">=23.0.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -6402,6 +6446,7 @@ dependencies = [
     { name = "requests" },
     { name = "s3fs" },
     { name = "starlette" },
+    { name = "zstandard" },
 ]
 
 [package.optional-dependencies]
@@ -6452,6 +6497,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.0.0" },
     { name = "s3fs", specifier = ">=2024.0.0" },
     { name = "starlette", specifier = ">=0.40" },
+    { name = "zstandard", specifier = ">=0.22" },
 ]
 provides-extras = ["iap", "prometheus", "secrets"]
 
@@ -7358,11 +7404,11 @@ wheels = [
 
 [[package]]
 name = "networkx"
-version = "3.4.2"
+version = "3.6.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fd/1d/06475e1cd5264c0b870ea2cc6fdb3e37177c1e565c43f56ff17a10e3937f/networkx-3.4.2.tar.gz", hash = "sha256:307c3669428c5362aab27c8a1260aa8f47c4e91d3891f48be0141738d8d053e1", size = 2151368, upload-time = "2024-10-21T12:39:38.695Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b9/54/dd730b32ea14ea797530a4479b2ed46a6fb250f682a9cfb997e968bf0261/networkx-3.4.2-py3-none-any.whl", hash = "sha256:df5d4365b724cf81b8c6a7312509d0c22386097011ad1abe274afd5e9d3bbc5f", size = 1723263, upload-time = "2024-10-21T12:39:36.247Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
 ]
 
 [[package]]
@@ -7422,7 +7468,7 @@ wheels = [
 
 [[package]]
 name = "nncf"
-version = "3.2.0"
+version = "3.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "networkx" },
@@ -7438,9 +7484,9 @@ dependencies = [
     { name = "scipy" },
     { name = "tabulate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/8a/17121c8cfa07afb56461556501919d69bf4bf76ed1c34c4f90663414a923/nncf-3.2.0.tar.gz", hash = "sha256:5dd42d80d0dd8faa316cfb7773defc70f76d9be6e9829005904580391660f4db", size = 558933, upload-time = "2026-06-01T09:20:30.91Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/7d/3749a03e3efd2dd355be985b634a3163f9a9b9e2c0495160b6362cb4be97/nncf-3.3.0.tar.gz", hash = "sha256:3dbcbc1ad4f399deed139041fae1fedd4b8aa5749e30af522fcc5a6c2af73e42", size = 556438, upload-time = "2026-08-05T13:49:34.999Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/ff/7dc1fa2695317bc084886d166e4e5865537dc7fa5891cf069d0ace8e6a80/nncf-3.2.0-py3-none-any.whl", hash = "sha256:53a52cb2621ed1f786848046a1d9b7fe7ebc31bc927eeeb0ef599ab5fcc98632", size = 801078, upload-time = "2026-06-01T09:20:28.871Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/b3/fe048343262827570d9e4383c90a9eb5d4b71e3378947d3f64c53d7df4f5/nncf-3.3.0-py3-none-any.whl", hash = "sha256:855f1e7099f01ff3a9868cf6d56850e1149691ab0db5ac76ab812ae8b0fba338", size = 794974, upload-time = "2026-08-05T13:49:33.587Z" },
 ]
 
 [[package]]

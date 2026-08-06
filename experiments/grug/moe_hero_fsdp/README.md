@@ -105,8 +105,9 @@ by the one-day lifecycle policy.
 - Mixed precision: params fp32, compute/output bf16.
 - Eval is off. Training writes a resumable checkpoint every 30 minutes and at clean completion;
   a restarted gang resumes from the latest fully committed checkpoint.
-- After the first completed step, a process-local watchdog terminates training with exit code 124
-  if no subsequent loss is logged for 15 minutes. This is a fallback for collectives that fail to
+- The process-local watchdog is disabled until one training hour has elapsed and the first step has
+  completed. It then exits with code 124 when a later training step runs for 15 minutes or another
+  lifecycle phase makes no progress for 60 minutes. This is a fallback for collectives that fail to
   honor XLA's 10-minute NCCL termination timeout; Iris treats it as a failure and retries the gang.
 - FA4 metadata constants are explicitly replicated before batch sharding. This prevents the
   compiler from routing each attention metadata transfer through device 0 on a multi-rack run.

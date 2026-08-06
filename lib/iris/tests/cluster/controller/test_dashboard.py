@@ -28,7 +28,7 @@ from iris.cluster.controller import ops, reads
 from iris.cluster.controller.autoscaler.status import PendingHint, overlay_worker_usability
 from iris.cluster.controller.backend import BackendCapability, BackendRuntime, DeviceCapacity
 from iris.cluster.controller.codec import constraints_from_json, device_counts_from_json, device_variant_from_json
-from iris.cluster.controller.dashboard import ControllerDashboard, _CredentialAuth
+from iris.cluster.controller.dashboard import ControllerDashboard, ProxyControllerDashboard, _CredentialAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.ops.task import Assignment
 from iris.cluster.controller.projections.endpoints import EndpointRow
@@ -73,6 +73,8 @@ from .conftest import (
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+ENDPOINT_SERVICE = "EndpointService"
 
 
 def submit_job(
@@ -396,11 +398,7 @@ def test_list_workers_returns_healthy_status(client, state):
     assert healthy_count == 2
 
 
-# Exercise both the canonical EndpointService route and the deprecated
-# ControllerService forwarding shim, so the shim keeps serving pre-migration
-# callers until it is removed.
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_endpoints_only_returned_for_running_jobs(client, state, job_request, service_name):
+def test_endpoints_only_returned_for_running_jobs(client, state, job_request):
     """ListEndpoints returns endpoints for non-terminal jobs.
 
     Endpoints are associated with tasks and deleted when tasks reach terminal states,
@@ -442,7 +440,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request, se
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
 
     assert len(endpoints) == 2
@@ -450,8 +448,7 @@ def test_endpoints_only_returned_for_running_jobs(client, state, job_request, se
     assert endpoint_names == {"pending-svc", "running-svc"}
 
 
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_list_endpoints_returns_task_id(client, state, job_request, service_name):
+def test_list_endpoints_returns_task_id(client, state, job_request):
     """ListEndpoints returns the task_id so the dashboard can derive the owning job."""
     job_id = submit_job(state, "ep-job", job_request)
     set_job_state(state, job_id, job_pb2.JOB_STATE_RUNNING)
@@ -470,7 +467,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request, service_name
             ),
         )
 
-    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"prefix": ""}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
     assert len(endpoints) == 1
     # The response must carry the full task_id (including task index) so the
@@ -478,8 +475,7 @@ def test_list_endpoints_returns_task_id(client, state, job_request, service_name
     assert endpoints[0]["taskId"] == task_id.to_wire()
 
 
-@pytest.mark.parametrize("service_name", ["EndpointService", "ControllerService"])
-def test_list_endpoints_filters_by_task_ids(client, state, service_name):
+def test_list_endpoints_filters_by_task_ids(client, state):
     """ListEndpoints(task_ids=[...]) returns only endpoints owned by those tasks.
 
     The dashboard's task list and detail pages use this to render a proxy link
@@ -510,7 +506,7 @@ def test_list_endpoints_filters_by_task_ids(client, state, service_name):
                 ),
             )
 
-    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service=service_name)
+    resp = rpc_post(client, "ListEndpoints", {"taskIds": [task0.to_wire()]}, service=ENDPOINT_SERVICE)
     endpoints = resp.get("endpoints", [])
     assert [e["taskId"] for e in endpoints] == [task0.to_wire()]
     assert endpoints[0]["name"] == "/svc/ep-0"
@@ -2142,6 +2138,33 @@ async def _headers_seen_upstream(auth, headers=None) -> httpx.Headers:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
         await client.post("https://iris.example/rpc", headers=headers or {})
     return seen[0]
+
+
+def test_proxy_dashboard_forwards_endpoint_service_rpc():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"endpoints": []})
+
+    dashboard = ProxyControllerDashboard("https://iris.example")
+    upstream_client = httpx.AsyncClient(
+        base_url="https://iris.example",
+        transport=httpx.MockTransport(handler),
+    )
+    dashboard._client = upstream_client
+    try:
+        with TestClient(dashboard.app) as client:
+            response = client.post(
+                "/iris.cluster.EndpointService/ListEndpoints",
+                json={"prefix": "/jobs/"},
+            )
+    finally:
+        asyncio.run(upstream_client.aclose())
+
+    assert response.status_code == 200
+    assert response.json() == {"endpoints": []}
+    assert [request.url.path for request in requests] == ["/iris.cluster.EndpointService/ListEndpoints"]
 
 
 def _send_through(auth, headers=None) -> httpx.Headers:

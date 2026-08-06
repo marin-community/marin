@@ -47,6 +47,26 @@ def find_marin_root() -> Path:
     )
 
 
+def _source_revision(marin_root: Path) -> dict[str, str]:
+    """The checkout's commit, tree hash, and dirty flag, for the image's build stamp.
+
+    The Dockerfile's Rust stage receives only ``lib/finelog/rust``, so the
+    revision cannot be read there. Values are empty when ``marin_root`` is not a
+    git checkout, which leaves the deployed server reporting an unknown revision
+    rather than failing the build.
+    """
+
+    def git(*args: str) -> str:
+        result = subprocess.run(["git", *args], cwd=marin_root, capture_output=True, text=True, check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    return {
+        "SOURCE_COMMIT": git("rev-parse", "HEAD"),
+        "SOURCE_TREE": git("rev-parse", "HEAD^{tree}"),
+        "SOURCE_DIRTY": "true" if git("status", "--porcelain") else "false",
+    }
+
+
 def build_image(
     *,
     image: str = DEFAULT_IMAGE,
@@ -89,6 +109,8 @@ def build_image(
         image,
         "--provenance=false",
     ]
+    for name, value in _source_revision(marin_root).items():
+        cmd.extend(["--build-arg", f"{name}={value}"])
     for tag in additional_tags:
         cmd.extend(["--tag", tag])
     if push:

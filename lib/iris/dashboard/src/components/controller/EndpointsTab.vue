@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { useControllerRpc } from '@/composables/useRpc'
+import { useEndpointRpc } from '@/composables/useRpc'
 import { useAutoRefresh, DEFAULT_REFRESH_MS } from '@/composables/useAutoRefresh'
 import type { EndpointInfo, ListEndpointsResponse } from '@/types/rpc'
 import EmptyState from '@/components/shared/EmptyState.vue'
@@ -19,7 +19,7 @@ const {
   loading,
   error,
   refresh: fetchEndpoints,
-} = useControllerRpc<ListEndpointsResponse>('ListEndpoints', () => ({
+} = useEndpointRpc<ListEndpointsResponse>('ListEndpoints', () => ({
   prefix: prefix.value || undefined,
 }))
 

@@ -16,6 +16,7 @@ pub mod diagnostics;
 pub mod forwarded_prefix;
 pub mod forwarding;
 pub mod interceptors;
+pub mod introspection;
 pub mod legacy_path;
 pub mod log_service;
 pub mod spa;

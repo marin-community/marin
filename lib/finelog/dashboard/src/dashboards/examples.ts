@@ -1,5 +1,23 @@
 import type { DashboardDefinition, DashboardPanel, DashboardPanelWidth } from '@/types/dashboard'
 
+/**
+ * Jobs of `service` that reported in the selected window, freshest first.
+ *
+ * Grouping by job and ordering by last report means the list is the jobs a
+ * reader is plausibly looking at, not every job the retention window holds.
+ */
+function jobIdOptions(service: string): string {
+  return `SELECT json_get(resource_attributes_json, 'job_id') AS job_id
+FROM telemetry_v1
+WHERE service = '${service}'
+  AND timestamp_ms >= {{from_ms}}
+  AND timestamp_ms < {{to_ms}}
+  AND json_get(resource_attributes_json, 'job_id') IS NOT NULL
+GROUP BY 1
+ORDER BY max(timestamp_ms) DESC
+LIMIT 50`
+}
+
 const COUNTER_LOOKBACK_MS = 300_000
 
 function trainingMetricPanel(
@@ -35,7 +53,7 @@ const HARDWARE_AND_COMMUNICATIONS: DashboardDefinition = {
   id: 'hardware-communications',
   title: 'Hardware and communications',
   description: 'GPU/DCGM faults, counter deltas, and a job-node network proxy for NCCL traffic.',
-  variables: [{ name: 'job_id', label: 'Iris job ID', default: '' }],
+  variables: [{ name: 'job_id', label: 'Iris job ID', default: '', optionsSql: jobIdOptions('levanter') }],
   panels: [
     {
       id: 'ras-state',
@@ -175,7 +193,7 @@ const TRAINING_RUN: DashboardDefinition = {
   id: 'training-run',
   title: 'Training run',
   description: 'A deliberately small view of Levanter progress, throughput, and utilization.',
-  variables: [{ name: 'job_id', label: 'Iris job ID', default: '' }],
+  variables: [{ name: 'job_id', label: 'Iris job ID', default: '', optionsSql: jobIdOptions('levanter') }],
   panels: [
     trainingMetricPanel(
       'throughput',
@@ -209,7 +227,7 @@ const INFERENCE_SERVE: DashboardDefinition = {
   id: 'inference-serve',
   title: 'Inference serve',
   description: 'Queue pressure, KV-cache use, and mean TTFT for one vLLM Iris job.',
-  variables: [{ name: 'job_id', label: 'Iris serving job ID', default: '' }],
+  variables: [{ name: 'job_id', label: 'Iris serving job ID', default: '', optionsSql: jobIdOptions('vllm') }],
   panels: [
     {
       id: 'saturation',
