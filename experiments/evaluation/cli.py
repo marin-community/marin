@@ -45,7 +45,8 @@ def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
     return keys
 
 
-def _resolve_model(model_key: str | None, config_path: Path | None) -> ModelConfig:
+def resolve_model_config(model_key: str | None, config_path: Path | None) -> ModelConfig:
+    """Resolve exactly one model registry key or catalog-schema file."""
     if (model_key is None) == (config_path is None):
         raise click.BadParameter(
             "specify exactly one of --model or --model-config",
@@ -164,7 +165,7 @@ def launch(
     priority: str | None,
 ) -> None:
     """Submit one serve group for MODEL: serve once, run every selected eval, record each one."""
-    selected_model = _resolve_model(model, model_config)
+    selected_model = resolve_model_config(model, model_config)
     resolved_platform = Platform(platform) if platform else default_platform(selected_model)
     evalchemy_definitions = [
         EvalchemyDefinition(

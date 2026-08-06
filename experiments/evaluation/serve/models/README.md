@@ -15,13 +15,13 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
-Exactly one of `--model <registry-key>` or `--model-config <path>` is required. Each new
-`record.json` stores the normalized schema under `model.config`.
+Exactly one of `--model <registry-key>` or `--model-config <path>` is required. `record.json` stores
+the normalized schema under `model.config`.
 
 ## Schema
 
 ```yaml
-name: qwen3-32b                 # registry key (must be unique across catalog + factories)
+name: qwen3-32b                 # launch identity; catalog entries must be unique
 location: Qwen/Qwen3-32B        # HF repo id, or gs://|s3:// HF-format export dir
 revision: null                  # pin an immutable checkpoint (base models); optional
 tokenizer: null                 # required only when location is an object-store path

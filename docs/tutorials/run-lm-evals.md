@@ -54,9 +54,9 @@ uv run python -m experiments.evaluation.cli launch \
   --dry-run
 ```
 
-Exactly one of `--model <registry-key>` or `--model-config <path>` is required. Every new
-`record.json` stores the normalized model schema under `model.config`, including registry-backed
-launches, so the durable record is self-contained.
+Exactly one of `--model <registry-key>` or `--model-config <path>` is required. `record.json` stores
+the normalized model schema under `model.config`, including registry-backed launches, so the durable
+record is self-contained.
 
 Use `--evalchemy-config` for an Evalchemy or lm-eval definition that does not belong in the central
 registry. This dry run resolves the checked-in IFEval definition without opening Iris:

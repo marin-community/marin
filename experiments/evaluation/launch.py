@@ -88,14 +88,14 @@ def _launch_user() -> str:
     return os.environ.get("MARIN_EVAL_USER") or getpass.getuser()
 
 
-def _run_id(model_key: str, eval_key: str) -> str:
+def _run_id(model_name: str, eval_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{eval_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_name}-{eval_key}-{uuid.uuid4().hex[:4]}"
 
 
-def _group_id(model_key: str) -> str:
+def _group_id(model_name: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_name}-{uuid.uuid4().hex[:4]}"
 
 
 def _capability_origin(cluster: str) -> str:

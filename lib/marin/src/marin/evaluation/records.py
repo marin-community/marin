@@ -55,12 +55,76 @@ class RunStatus(StrEnum):
     INFRA_FAILED = "infra_failed"
 
 
+class ModelResourceConfig(BaseModel):
+    """Normalized placement and inference-worker resources for an evaluated model."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hbm_gb: int | None
+    gpu: dict[str, int]
+    cpu: float | None
+    memory: str | None
+    disk: str | None
+
+
+class ModelServeConfig(BaseModel):
+    """Normalized model-server configuration preserved in an evaluation record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: str
+    tensor_parallel_size: int | None
+    data_parallel_size: int | None
+    max_model_len: int | None
+    max_num_batched_tokens: int | None
+    max_num_seqs: int | None
+    hf_overrides: str | None
+    limit_mm_per_prompt: str | None
+    tool_call_parser: str | None
+    reasoning_parser: str | None
+    vllm_extra_args: tuple[str, ...]
+    chat_template: str | None
+    auto_overrides: bool
+
+
+class ModelGenerationConfig(BaseModel):
+    """Normalized generation overrides preserved in an evaluation record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_gen_toks: int | None
+    extra_gen_kwargs: dict[str, str]
+
+
+class ModelAgentConfig(BaseModel):
+    """Normalized agent request arguments preserved in an evaluation record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent_kwargs: dict[str, str]
+
+
+class ModelConfigRef(BaseModel):
+    """The complete normalized model catalog schema used by one launch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    location: str
+    revision: str | None
+    tokenizer: str | None
+    apply_chat_template: bool
+    resource_hint: ModelResourceConfig
+    serve: ModelServeConfig
+    generation: ModelGenerationConfig
+    agent: ModelAgentConfig
+
+
 class ModelRef(BaseModel):
     """The evaluated model's identity and normalized launch-time model configuration.
 
-    ``config`` is optional so records written before model configuration capture remain readable.
-    New launcher records include the complete catalog-schema configuration for both registry and
-    file-backed models.
+    ``config`` is optional in the wire schema. The shared launcher populates it with the complete
+    catalog-schema configuration for both registry and file-backed models.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -68,7 +132,7 @@ class ModelRef(BaseModel):
     name: str
     location: str
     backend: str
-    config: dict[str, object] | None = None
+    config: ModelConfigRef | None = None
 
 
 class EvalTaskRef(BaseModel):

@@ -22,6 +22,7 @@ from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
     HardwareRef,
+    ModelConfigRef,
     ModelRef,
     Provenance,
     RunStatus,
@@ -148,7 +149,7 @@ def _record(
             name=batch.model.name,
             location=batch.model.location,
             backend=batch.model.serve.backend.value,
-            config=asdict(batch.model),
+            config=ModelConfigRef.model_validate(asdict(batch.model)),
         ),
         eval=identity.eval_ref,
         hardware=HardwareRef(

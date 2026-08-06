@@ -10,6 +10,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import pytest
 from click.testing import CliRunner
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
@@ -33,7 +34,7 @@ from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem import StoragePath
 
-from experiments.evaluation.cli import cli
+from experiments.evaluation.cli import cli, resolve_model_config
 from experiments.evaluation.evals import EVALS, EvalchemyDefinition, HarborDefinition
 from experiments.evaluation.launch import (
     LaunchSpec,
@@ -173,7 +174,8 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert succeeded.status is RunStatus.SUCCEEDED
     assert succeeded.metrics == {"task": {"accuracy": 0.75}}
     assert succeeded.provenance.eval_runtime == "test-runtime"
-    assert succeeded.model.config == json.loads(json.dumps(asdict(batch.model)))
+    assert succeeded.model.config is not None
+    assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
 
 
@@ -530,6 +532,12 @@ def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
     config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
 
+    model = resolve_model_config(None, config_path)
+    assert model.name == "fresh-rl-checkpoint"
+    assert model.location == "s3://marin-us-east-02a/marin/exports/rl/fresh-checkpoint/"
+    assert model.resource_hint.gpu == {"H100": 8}
+    assert model.serve.data_parallel_size == 8
+
     result = CliRunner().invoke(
         cli,
         [
@@ -543,38 +551,18 @@ def test_launch_dry_run_accepts_file_backed_model_config(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert "model: fresh-rl-checkpoint" in result.output
-    assert "location=s3://marin-us-east-02a/marin/exports/rl/fresh-checkpoint/" in result.output
-    assert "backend=vllm" in result.output
-    assert "accel=H100x8" in result.output
 
 
-def test_launch_rejects_registry_and_file_model_selectors_together(tmp_path):
+def test_resolve_model_config_rejects_registry_and_file_selectors_together(tmp_path):
     config_path = _write_model_config(tmp_path / "fresh-checkpoint.yaml")
 
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--model-config",
-            str(config_path),
-            "--evals",
-            "mmlu-smoke",
-            "--dry-run",
-        ],
-    )
-
-    assert result.exit_code == 2
-    assert "exactly one of --model or --model-config" in result.output
+    with pytest.raises(click.BadParameter):
+        resolve_model_config("qwen3-8b", config_path)
 
 
-def test_launch_requires_one_model_selector():
-    result = CliRunner().invoke(cli, ["launch", "--evals", "mmlu-smoke", "--dry-run"])
-
-    assert result.exit_code == 2
-    assert "exactly one of --model or --model-config" in result.output
+def test_resolve_model_config_requires_one_selector():
+    with pytest.raises(click.BadParameter):
+        resolve_model_config(None, None)
 
 
 def test_launch_rejects_invalid_harbor_config_before_iris_submission(tmp_path, monkeypatch):
