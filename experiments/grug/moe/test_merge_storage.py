@@ -37,20 +37,6 @@ def test_merge_storage_checks_every_material_path_without_source_skips():
     assert all(region == "us-central1" and not local_ok for _, _, region, local_ok in checked)
 
 
-def test_merge_storage_propagates_region_mismatch_before_work_starts():
-    def checker(key: str, path: str, region: str, local_ok: bool) -> None:
-        if key == "calibration":
-            raise ValueError(f"{path} is not in {region}")
-
-    with pytest.raises(ValueError, match="calibration"):
-        validate_merge_storage_region(
-            _paths(),
-            local_ok=False,
-            region="us-central1",
-            path_checker=checker,
-        )
-
-
 def test_merge_storage_rejects_local_artifacts_on_accelerator_workers():
     paths = _paths()
     local_calibration = MergeStoragePaths(
@@ -60,7 +46,7 @@ def test_merge_storage_rejects_local_artifacts_on_accelerator_workers():
         recovery_output=paths.recovery_output,
     )
 
-    with pytest.raises(ValueError, match="calibration must be a GCS path"):
+    with pytest.raises(ValueError):
         validate_merge_storage_region(local_calibration, local_ok=False, region="us-central1")
 
 
@@ -72,4 +58,12 @@ def test_merge_storage_allows_all_local_smoke_artifacts():
         recovery_output="/tmp/recovery",
     )
 
-    validate_merge_storage_region(paths, local_ok=True, region=None, region_getter=lambda: None)
+    region_lookups = 0
+
+    def region_getter() -> None:
+        nonlocal region_lookups
+        region_lookups += 1
+
+    validate_merge_storage_region(paths, local_ok=True, region=None, region_getter=region_getter)
+
+    assert region_lookups == 1

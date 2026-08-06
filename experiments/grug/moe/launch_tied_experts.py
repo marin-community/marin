@@ -37,6 +37,7 @@ from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 _EXPERIMENT_PREFIX = "GRUG-XEM"
 _BUDGET = 3.82e17
 _HIDDEN_DIM = 512
+_MODEL_LABEL = f"d{_HIDDEN_DIM}"
 _SEQUENCE_LENGTH = 4096
 _TARGET_STEPS = 2**14
 _SMOKE_STEPS = 500
@@ -61,11 +62,15 @@ class TiedExpertVariant:
     lr_scale: TiedExpertLrScale
 
 
-def _run_id(phase: TiedExpertPhase, variant: str) -> str:
-    default = f"grug_xem_d512_{phase.value}_{variant}"
-    prefix = os.environ.get("GRUG_RUN_ID")
-    run_id = default if prefix is None else f"{prefix}_{variant}"
-    ferry_date = os.environ.get("FERRY_DATE")
+def _run_id(
+    phase: TiedExpertPhase,
+    variant: str,
+    *,
+    run_id_prefix: str | None,
+    ferry_date: str | None,
+) -> str:
+    default = f"grug_xem_{_MODEL_LABEL}_{phase.value}_{variant}"
+    run_id = default if run_id_prefix is None else f"{run_id_prefix}_{variant}"
     return run_id if ferry_date is None else f"{run_id}-{ferry_date}"
 
 
@@ -93,9 +98,15 @@ def tied_expert_runs(
     *,
     version: str | None = None,
     phase: TiedExpertPhase | None = None,
+    run_id_prefix: str | None = None,
+    ferry_date: str | None = None,
 ) -> list[ArtifactStep[LevanterCheckpoint]]:
     if phase is None:
         phase = TiedExpertPhase(os.environ.get("GRUG_TIED_PHASE", TiedExpertPhase.SMOKE).lower())
+    if run_id_prefix is None:
+        run_id_prefix = os.environ.get("GRUG_RUN_ID")
+    if ferry_date is None:
+        ferry_date = os.environ.get("FERRY_DATE")
     base_model, base_optimizer, batch_size, full_steps = build_from_heuristic(
         budget=_BUDGET,
         hidden_dim=_HIDDEN_DIM,
@@ -103,7 +114,9 @@ def tied_expert_runs(
         seq_len=_SEQUENCE_LENGTH,
     )
     if base_model.num_layers != 6:
-        raise ValueError(f"d512 tied-expert matrix requires 6 layers, heuristic produced {base_model.num_layers}")
+        raise ValueError(
+            f"{_MODEL_LABEL} tied-expert matrix requires 6 layers, heuristic produced {base_model.num_layers}"
+        )
     steps = _SMOKE_STEPS if phase is TiedExpertPhase.SMOKE else full_steps
 
     train = grug_moe_training_datasets()
@@ -111,7 +124,7 @@ def tied_expert_runs(
 
     runs: list[ArtifactStep[LevanterCheckpoint]] = []
     for variant in _matrix(phase):
-        name = f"grug/tied_experts/d512/{phase.value}/{variant.name}"
+        name = f"grug/tied_experts/{_MODEL_LABEL}/{phase.value}/{variant.name}"
         resolved_version = resolve_version(name, version)
         model = dataclasses.replace(base_model, expert_bank_for_layer=variant.topology)
         optimizer = dataclasses.replace(
@@ -120,7 +133,12 @@ def tied_expert_runs(
             tied_expert_lr_scale=variant.lr_scale,
             schedule_horizon_steps=full_steps,
         )
-        run_id = _run_id(phase, variant.name)
+        run_id = _run_id(
+            phase,
+            variant.name,
+            run_id_prefix=run_id_prefix,
+            ferry_date=ferry_date,
+        )
 
         def build_config(
             ctx: StepContext,
@@ -141,7 +159,7 @@ def tied_expert_runs(
                 mp="params=float32,compute=bfloat16,output=bfloat16",
                 tracker=WandbConfig(
                     project="marin_moe",
-                    tags=[_EXPERIMENT_PREFIX, "tied-experts", "d512", phase.value],
+                    tags=[_EXPERIMENT_PREFIX, "tied-experts", _MODEL_LABEL, phase.value],
                     group="grug-xem-architecture",
                     name=None,
                 ),

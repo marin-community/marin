@@ -5,12 +5,8 @@
 
 Snowball is a pinned snapshot of ``experiments/grug/moe/model.py``. This scaffold seeds the
 experiment model, exports its HF canonical weights, loads them into Snowball via
-``from_state_dict``, and asserts:
-
-- per-layer activation parity (embedding, every block output, and the final norm) so any future
-  divergence is localized to a specific sublayer -- the "capture all activations" debugging
-  microscope requested for bootstrapping this work;
-- final-logit parity and identical greedy token IDs.
+``from_state_dict``, and asserts final-logit parity and identical greedy token IDs
+across representative sequence lengths.
 
 Lives on the marin side (not ``lib/levanter/tests``) because it imports ``experiments/``; the
 levanter -> experiments dependency direction forbids the reverse.
@@ -26,8 +22,6 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 import experiments.grug.moe.model as gm
-
-# Batch sharding for the embedding gather (matches both models' `.at[...].get(out_sharding=...)`).
 
 _COMMON = dict(
     vocab_size=48,

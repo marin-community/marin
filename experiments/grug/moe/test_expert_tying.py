@@ -13,7 +13,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.model import GrugModelConfig, GrugMoeHfConfig, Transformer, _cross_loop_agreement
-from experiments.grug.moe.train import _apply_qb_betas
+from experiments.grug.moe.train import apply_qb_betas
 
 
 def _tiny_config(*, mapping: tuple[int, ...], shared_intermediate_dim: int = 16) -> GrugModelConfig:
@@ -128,7 +128,7 @@ def test_qb_updates_and_router_statistics_remain_layer_specific():
             ],
             dtype=jnp.float32,
         )
-        updated = _apply_qb_betas(model, qb_betas)
+        updated = apply_qb_betas(model, qb_betas)
         x = jnp.ones((1, 4, 16), dtype=jnp.float32)
         _, first_stats = updated.blocks[0].mlp(x, updated.expert_banks[0])
         _, second_stats = updated.blocks[1].mlp(x, updated.expert_banks[0])

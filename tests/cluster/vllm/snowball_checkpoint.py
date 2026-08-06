@@ -46,7 +46,7 @@ def load_checkpoint(
 
 def apply_pending_qb_betas(model: VendoredTransformer, pending_qb_betas: jax.Array) -> VendoredTransformer:
     assert model.stacked_blocks is not None
-    # Mirrors train._apply_qb_betas without importing the training entrypoint.
+    # Mirrors train.apply_qb_betas without importing the training entrypoint.
     router_bias = -pending_qb_betas
     router_bias -= jnp.mean(router_bias, axis=-1, keepdims=True)
     return eqx.tree_at(lambda tree: tree.stacked_blocks.stacked.mlp.router_bias, model, router_bias)

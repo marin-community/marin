@@ -359,7 +359,7 @@ def test_one_pair_conversion_preserves_full_model_for_permutation_equivalent_ban
             representative_layer=1,
             source_layer=2,
             source_to_shared=permutation,
-        ).model
+        )
         tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
         teacher_logits = model.logits(tokens)
         student_logits = converted.logits(tokens)
@@ -407,10 +407,8 @@ def test_forward_with_moe_traces_matches_normal_forward_and_excludes_shared_dens
         shared_output = block.shared(mlp_input, activation=ActivationFunctionEnum.silu)
         block_trace = block.forward_with_moe_trace(
             initial_hidden,
-            options.mask,
             model.expert_banks[block.expert_bank_index],
-            options.use_pko,
-            options.disable_rope,
+            options,
         )
 
     np.testing.assert_allclose(actual_hidden, expected_hidden, rtol=1e-6, atol=1e-6)
@@ -422,7 +420,6 @@ def test_forward_with_moe_traces_matches_normal_forward_and_excludes_shared_dens
     np.testing.assert_allclose(traces[0].mlp_input, mlp_input, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(traces[0].routed_output, routed_output, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(block_trace.hidden - post_attention, routed_output + shared_output, rtol=1e-6, atol=1e-6)
-    assert options.mask.sliding_window == config.sliding_window
 
 
 @pytest.mark.parametrize("bad_permutation", [[0, 0, 2, 3], [0, 1, 2], [0, 1, 2, 4]])

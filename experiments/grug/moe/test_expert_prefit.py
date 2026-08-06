@@ -11,6 +11,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 from experiments.grug.moe.expert_prefit import (
     PrefitConfig,
     PrefitDataset,
+    PrefitSplit,
     make_prefit_dataset,
     prefit_loss,
     prefit_shared_bank,
@@ -60,7 +61,7 @@ def test_prefit_batch_balances_source_experts_and_layers():
     batch = sample_prefit_batch(
         datasets,
         examples_per_source=3,
-        heldout=False,
+        split=PrefitSplit.TRAIN,
         rng=np.random.default_rng(2),
     )
 
@@ -74,7 +75,7 @@ def test_prefit_reduces_balanced_heldout_functional_error():
     heldout = sample_prefit_batch(
         datasets,
         examples_per_source=12,
-        heldout=True,
+        split=PrefitSplit.HELDOUT,
         rng=np.random.default_rng(3),
     )
     initial_loss, _ = prefit_loss(initial_bank, heldout)

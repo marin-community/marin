@@ -708,11 +708,11 @@ class MoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def forward_with_trace(
         self,
         x: Float[Array, "B S D"],
         expert_bank: MoEExpertMlp,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> "MoEForwardTrace":
         b, s, _ = x.shape
         routing = self.route(x)
 
@@ -728,7 +728,16 @@ class MoEMLP(eqx.Module):
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
-        return routed, router_stats
+        return MoEForwardTrace(routed_output=routed, routing=routing, router_stats=router_stats)
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        expert_bank: MoEExpertMlp,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        trace = self.forward_with_trace(x, expert_bank)
+        return trace.routed_output, trace.router_stats
 
 
 class MoERouting(NamedTuple):
@@ -738,8 +747,13 @@ class MoERouting(NamedTuple):
     router_stats: dict[str, jax.Array]
 
 
+class MoEForwardTrace(NamedTuple):
+    routed_output: jax.Array
+    routing: MoERouting
+    router_stats: dict[str, jax.Array]
+
+
 def _init_expert_bank(cfg: GrugModelConfig, *, block_key: PRNGKeyArray) -> MoEExpertMlp:
-    """Initialize the routed expert bank associated with a block key."""
     return MoEExpertMlp.init(
         num_experts=cfg.num_experts,
         hidden_dim=cfg.hidden_dim,
@@ -785,49 +799,39 @@ class Block(eqx.Module):
     def forward_with_moe_trace(
         self,
         x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
         expert_bank: MoEExpertMlp,
-        use_pko: bool = False,
-        disable_rope: bool = False,
+        options: "BlockCallOptions",
     ) -> "MoeBlockTrace":
         """Run a block and expose the exact routed-MoE calibration boundary."""
         attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
-        mlp_input = self.mlp_gated_norm(self.rms_mlp(x))
-        routing = self.mlp.route(mlp_input)
-        routed_flat, dropped_assignments = expert_bank(
-            routing.x_flat,
-            routing.selected_experts.astype(jnp.int32),
-            routing.combine_weights,
-            mesh=get_abstract_mesh(),
-            report_capacity_overflow=True,
+        x = x + self.attn(
+            attn_in,
+            options.mask,
+            use_pko=options.use_pko,
+            disable_rope=options.disable_rope,
         )
-        routed_output = rearrange(routed_flat, "(b s) d -> b s d", b=x.shape[0], s=x.shape[1])
-        routed_output = reshard(routed_output, _batch_spec())
-        router_stats = routing.router_stats
-        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
-        mlp_output = routed_output
+        mlp_input = self.mlp_gated_norm(self.rms_mlp(x))
+        moe_trace = self.mlp.forward_with_trace(mlp_input, expert_bank)
+        mlp_output = moe_trace.routed_output
         if self.shared is not None:
             mlp_output = mlp_output + self.shared(mlp_input, activation=ActivationFunctionEnum.silu)
         return MoeBlockTrace(
             hidden=x + mlp_output,
             mlp_input=mlp_input,
-            selected_experts=routing.selected_experts,
-            combine_weights=routing.combine_weights,
-            routed_output=routed_output,
-            router_stats=router_stats,
+            selected_experts=moe_trace.routing.selected_experts,
+            combine_weights=moe_trace.routing.combine_weights,
+            routed_output=moe_trace.routed_output,
+            router_stats=moe_trace.router_stats,
         )
 
     @named_call
     def __call__(
         self,
         x: Float[Array, "B S D"],
-        mask: AttentionMask | jax.Array,
         expert_bank: MoEExpertMlp,
-        use_pko: bool = False,
-        disable_rope: bool = False,
+        options: "BlockCallOptions",
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        trace = self.forward_with_moe_trace(x, mask, expert_bank, use_pko, disable_rope)
+        trace = self.forward_with_moe_trace(x, expert_bank, options)
         return trace.hidden, trace.router_stats
 
 
@@ -954,10 +958,8 @@ class Transformer(eqx.Module):
             expert_bank = self.expert_banks[block.expert_bank_index]
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
                 hidden,
-                options.mask,
                 expert_bank,
-                options.use_pko,
-                options.disable_rope,
+                options,
             )
             moe_router_stats.append(router_stats)
             activation_norms.append(jnp.sqrt(jnp.mean(jnp.square(hidden.astype(jnp.float32)))))

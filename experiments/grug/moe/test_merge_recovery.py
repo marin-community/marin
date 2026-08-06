@@ -46,7 +46,7 @@ def _teacher_and_student() -> tuple[Transformer, Transformer]:
         representative_layer=_AFFECTED_LAYERS[0],
         source_layer=_AFFECTED_LAYERS[1],
         source_to_shared=np.arange(teacher.config.num_experts),
-    ).model
+    )
     return teacher, student
 
 

@@ -123,15 +123,13 @@ def convert_grug_state_for_one_pair_merge(
         raise ValueError("prefit_applied must be true exactly when a prefitted shared bank is supplied")
 
     source_topology = state.params.config.resolved_expert_bank_for_layer
-    params_conversion = convert_one_expert_pair(
+    converted_params = convert_one_expert_pair(
         state.params,
         representative_layer=spec.representative_layer,
         source_layer=spec.source_layer,
         source_to_shared=np.asarray(spec.source_to_shared, dtype=np.int32),
         shared_bank=shared_bank,
     )
-    converted_params = params_conversion.model
-
     if state.ema_params is None:
         converted_ema_params = None
     elif shared_bank is None:
@@ -140,7 +138,7 @@ def convert_grug_state_for_one_pair_merge(
             representative_layer=spec.representative_layer,
             source_layer=spec.source_layer,
             source_to_shared=np.asarray(spec.source_to_shared, dtype=np.int32),
-        ).model
+        )
     else:
         # A prefitted bank has no historical EMA. Start recovery EMA from the
         # complete converted parameter tree instead of mixing stale and fresh leaves.

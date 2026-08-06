@@ -271,14 +271,26 @@ class GrugTrainState:
     pending_qb_betas: jax.Array
 
 
-def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
-    """Set router biases from QB betas (computed on previous step)."""
+def apply_qb_betas(
+    model: Transformer,
+    qb_betas: jax.Array,
+    layers: tuple[int, ...] | None = None,
+) -> Transformer:
+    """Set selected router biases from QB betas computed on the previous step."""
+    expected_shape = (len(model.blocks), model.config.num_experts)
+    if qb_betas.shape != expected_shape:
+        raise ValueError(f"qb_betas must have shape {expected_shape}, got {qb_betas.shape}")
+    if layers is None:
+        layers = tuple(range(len(model.blocks)))
+    if len(set(layers)) != len(layers) or any(layer < 0 or layer >= len(model.blocks) for layer in layers):
+        raise ValueError(f"layers must be distinct indices in [0, {len(model.blocks)}), got {layers}")
     new_blocks = list(model.blocks)
-    for i, block in enumerate(model.blocks):
-        new_bias = -qb_betas[i]
+    for layer in layers:
+        block = model.blocks[layer]
+        new_bias = -qb_betas[layer]
         new_bias = new_bias - jnp.mean(new_bias)
         new_mlp = eqx.tree_at(lambda mlp: mlp.router_bias, block.mlp, new_bias)
-        new_blocks[i] = eqx.tree_at(lambda current_block: current_block.mlp, block, new_mlp)
+        new_blocks[layer] = eqx.tree_at(lambda current_block: current_block.mlp, block, new_mlp)
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
@@ -322,9 +334,9 @@ def _make_train_step(
     def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
-        qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        qb_params = apply_qb_betas(state.params, state.pending_qb_betas)
         if ema_beta is not None:
-            qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
+            qb_ema_params = apply_qb_betas(state.ema_params, state.pending_qb_betas)
         else:
             qb_ema_params = None
 
@@ -608,6 +620,7 @@ __all__ = [
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
+    "apply_qb_betas",
     "initial_state",
     "run_grug",
 ]

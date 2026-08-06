@@ -18,6 +18,11 @@ from scipy.optimize import linear_sum_assignment
 
 from experiments.grug.moe.model import MoEMLP, Transformer
 
+_DEFAULT_MAHALANOBIS_QUANTILE = 0.995
+_DEFAULT_COVARIANCE_EPSILON = 1e-6
+_DEFAULT_COST_ETA = 0.5
+_DEFAULT_NORMALIZATION_EPSILON = 1e-8
+
 
 @dataclass(frozen=True)
 class ReservoirSample:
@@ -228,8 +233,8 @@ class SpectralProbeConfig:
     directions_per_center: int = 4
     radii: tuple[float, ...] = (0.15, 0.35)
     ordinary_samples: int = 128
-    mahalanobis_quantile: float = 0.995
-    covariance_epsilon: float = 1e-6
+    mahalanobis_quantile: float = _DEFAULT_MAHALANOBIS_QUANTILE
+    covariance_epsilon: float = _DEFAULT_COVARIANCE_EPSILON
 
 
 @dataclass(frozen=True)
@@ -262,18 +267,17 @@ class ExpertCostMatrix:
     total: np.ndarray
 
 
+@dataclass(frozen=True)
+class ExpertCostRow:
+    native: np.ndarray
+    tangent: np.ndarray
+    total: np.ndarray
+
+
 class AssignmentMode(StrEnum):
     IDENTITY = "identity"
     NATIVE = "native"
     SPECTRAL = "spectral"
-
-
-@dataclass(frozen=True)
-class MergeConversion:
-    model: Transformer
-    representative_layer: int
-    source_layer: int
-    source_to_shared: np.ndarray
 
 
 def forward_with_moe_traces(
@@ -300,10 +304,8 @@ def forward_with_moe_traces(
         if layer_index in target_layer_set:
             block_trace = block.forward_with_moe_trace(
                 hidden,
-                options.mask,
                 expert_bank,
-                options.use_pko,
-                options.disable_rope,
+                options,
             )
             hidden = block_trace.hidden
             traces[layer_index] = MoeLayerTrace(
@@ -315,10 +317,8 @@ def forward_with_moe_traces(
         else:
             hidden, _ = block(
                 hidden,
-                options.mask,
                 expert_bank,
-                options.use_pko,
-                options.disable_rope,
+                options,
             )
     return model.final_gated_norm(model.final_norm(hidden)), traces
 
@@ -328,8 +328,8 @@ def estimate_input_manifold(
     weights: np.ndarray,
     *,
     rank: int,
-    mahalanobis_quantile: float = 0.995,
-    epsilon: float = 1e-6,
+    mahalanobis_quantile: float = _DEFAULT_MAHALANOBIS_QUANTILE,
+    epsilon: float = _DEFAULT_COVARIANCE_EPSILON,
 ) -> InputManifold:
     states = np.asarray(states, dtype=np.float64)
     weights = np.asarray(weights, dtype=np.float64)
@@ -626,10 +626,10 @@ def expert_costs(
     candidate_bank: MoEExpertMlp,
     probes: ExpertProbeSet,
     *,
-    eta: float = 0.5,
-    epsilon: float = 1e-8,
+    eta: float = _DEFAULT_COST_ETA,
+    epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
     expert_chunk_size: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> ExpertCostRow:
     native_inputs = jnp.asarray(probes.ordinary_inputs)
     native_weights = jnp.asarray(probes.ordinary_weights, dtype=jnp.float32)
     source_native = eval_expert(source_bank, source_expert, native_inputs).astype(jnp.float32)
@@ -669,10 +669,10 @@ def expert_costs(
         tangent_cost = tangent_numerator / tangent_denominator
 
     total_cost = native_cost + eta * tangent_cost
-    return (
-        np.asarray(jax.device_get(native_cost), dtype=np.float64),
-        np.asarray(jax.device_get(tangent_cost), dtype=np.float64),
-        np.asarray(jax.device_get(total_cost), dtype=np.float64),
+    return ExpertCostRow(
+        native=np.asarray(jax.device_get(native_cost), dtype=np.float64),
+        tangent=np.asarray(jax.device_get(tangent_cost), dtype=np.float64),
+        total=np.asarray(jax.device_get(total_cost), dtype=np.float64),
     )
 
 
@@ -681,8 +681,8 @@ def functional_cost_matrix(
     candidate_bank: MoEExpertMlp,
     probes_by_source_expert: tuple[ExpertProbeSet, ...],
     *,
-    eta: float = 0.5,
-    epsilon: float = 1e-8,
+    eta: float = _DEFAULT_COST_ETA,
+    epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
     expert_chunk_size: int | None = None,
 ) -> ExpertCostMatrix:
     num_source_experts = int(source_bank.w_gate.shape[0])
@@ -705,13 +705,14 @@ def functional_cost_matrix(
         for source_expert in range(num_source_experts)
     ]
     return ExpertCostMatrix(
-        native=np.stack([row[0] for row in rows]),
-        tangent=np.stack([row[1] for row in rows]),
-        total=np.stack([row[2] for row in rows]),
+        native=np.stack([row.native for row in rows]),
+        tangent=np.stack([row.tangent for row in rows]),
+        total=np.stack([row.total for row in rows]),
     )
 
 
 def solve_expert_assignment(costs: ExpertCostMatrix, mode: AssignmentMode) -> np.ndarray:
+    """Return a source-expert to shared-slot bijection."""
     num_experts = costs.native.shape[0]
     expected_shape = (num_experts, num_experts)
     if (
@@ -739,7 +740,6 @@ def validate_bijection(source_to_shared: np.ndarray | jax.Array, num_experts: in
 
 
 def _host_permute_with_sharding(value: jax.Array, indices: np.ndarray, *, axis: int) -> jax.Array:
-    """Apply an offline permutation and restore the input array's sharding."""
     permuted = np.take(np.asarray(jax.device_get(value)), indices, axis=axis)
     return jax.device_put(permuted, value.sharding)
 
@@ -773,7 +773,7 @@ def convert_one_expert_pair(
     source_layer: int,
     source_to_shared: np.ndarray | jax.Array,
     shared_bank: MoEExpertMlp | None = None,
-) -> MergeConversion:
+) -> Transformer:
     """Merge one source layer into a representative bank and preserve source routing by ID renaming."""
     if representative_layer == source_layer:
         raise ValueError("representative_layer and source_layer must be different")
@@ -831,22 +831,17 @@ def convert_one_expert_pair(
         ),
         config=converted_config,
     )
-    return MergeConversion(
-        model=converted_model,
-        representative_layer=representative_layer,
-        source_layer=source_layer,
-        source_to_shared=permutation,
-    )
+    return converted_model
 
 
 __all__ = [
     "AssignmentMode",
     "ExpertCalibration",
     "ExpertCostMatrix",
+    "ExpertCostRow",
     "ExpertProbeSet",
     "ExpertReservoirCollection",
     "InputManifold",
-    "MergeConversion",
     "MoeLayerTrace",
     "ReservoirSample",
     "SpectralProbeConfig",

@@ -4,6 +4,7 @@
 """Balanced offline distillation for a functionally matched shared expert bank."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -13,6 +14,13 @@ from jax.tree_util import register_dataclass
 from levanter.grug.grug_moe import MoEExpertMlp
 
 from experiments.grug.moe.expert_merge import eval_expert
+
+_DEFAULT_NORMALIZATION_EPSILON = 1e-8
+
+
+class PrefitSplit(StrEnum):
+    TRAIN = "train"
+    HELDOUT = "heldout"
 
 
 @dataclass(frozen=True)
@@ -68,7 +76,7 @@ class PrefitConfig:
     heldout_examples_per_source: int = 8
     eval_every: int = 100
     early_stopping_patience: int = 5
-    epsilon: float = 1e-8
+    epsilon: float = _DEFAULT_NORMALIZATION_EPSILON
 
 
 @dataclass(frozen=True)
@@ -85,15 +93,6 @@ class PrefitResult:
     stopped_early: bool
 
 
-def evaluate_assigned_expert(
-    bank: MoEExpertMlp,
-    expert_index: int,
-    inputs: np.ndarray | jax.Array,
-) -> jax.Array:
-    """Evaluate one expert through the normal routed implementation."""
-    return eval_expert(bank, expert_index, inputs)
-
-
 def make_prefit_dataset(
     source_bank: MoEExpertMlp,
     *,
@@ -104,8 +103,8 @@ def make_prefit_dataset(
     heldout_inputs: np.ndarray,
 ) -> PrefitDataset:
     """Materialize black-box source targets once for balanced prefit."""
-    train_targets = np.asarray(jax.device_get(evaluate_assigned_expert(source_bank, source_expert, train_inputs)))
-    heldout_targets = np.asarray(jax.device_get(evaluate_assigned_expert(source_bank, source_expert, heldout_inputs)))
+    train_targets = np.asarray(jax.device_get(eval_expert(source_bank, source_expert, train_inputs)))
+    heldout_targets = np.asarray(jax.device_get(eval_expert(source_bank, source_expert, heldout_inputs)))
     return PrefitDataset(
         source_layer=source_layer,
         source_expert=source_expert,
@@ -132,7 +131,7 @@ def sample_prefit_batch(
     datasets: tuple[PrefitDataset, ...],
     *,
     examples_per_source: int,
-    heldout: bool,
+    split: PrefitSplit,
     rng: np.random.Generator,
 ) -> PrefitBatch:
     """Sample the same number of examples from every source expert and layer."""
@@ -146,8 +145,8 @@ def sample_prefit_batch(
     source_indices = []
     target_power = []
     for source_index, dataset in enumerate(datasets):
-        inputs = dataset.heldout_inputs if heldout else dataset.train_inputs
-        targets = dataset.heldout_targets if heldout else dataset.train_targets
+        inputs = dataset.heldout_inputs if split is PrefitSplit.HELDOUT else dataset.train_inputs
+        targets = dataset.heldout_targets if split is PrefitSplit.HELDOUT else dataset.train_targets
         indices = rng.choice(inputs.shape[0], size=examples_per_source, replace=inputs.shape[0] < examples_per_source)
         input_rows.append(inputs[indices])
         target_rows.append(targets[indices])
@@ -168,7 +167,7 @@ def prefit_loss(
     bank: MoEExpertMlp,
     batch: PrefitBatch,
     *,
-    epsilon: float = 1e-8,
+    epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
 ) -> tuple[jax.Array, jax.Array]:
     """Return the balanced normalized loss and per-source NRMSE."""
     predictions = bank(
@@ -238,7 +237,7 @@ def prefit_shared_bank(
     heldout_batch = sample_prefit_batch(
         datasets,
         examples_per_source=config.heldout_examples_per_source,
-        heldout=True,
+        split=PrefitSplit.HELDOUT,
         rng=rng,
     )
     best_bank = initial_bank
@@ -271,7 +270,7 @@ def prefit_shared_bank(
         batch = sample_prefit_batch(
             datasets,
             examples_per_source=config.examples_per_source,
-            heldout=False,
+            split=PrefitSplit.TRAIN,
             rng=rng,
         )
         state, _ = step_fn(state, batch, optimizer, config.epsilon)
@@ -291,7 +290,7 @@ __all__ = [
     "PrefitDataset",
     "PrefitEvaluation",
     "PrefitResult",
-    "evaluate_assigned_expert",
+    "PrefitSplit",
     "make_prefit_dataset",
     "prefit_loss",
     "prefit_shared_bank",

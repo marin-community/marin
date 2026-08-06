@@ -19,6 +19,9 @@ from levanter.grug.grug_moe import MOE_REMAT_SAVE_NAMES
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 
 from experiments.grug.moe.model import Transformer
+from experiments.grug.moe.train import apply_qb_betas
+
+_DEFAULT_NORMALIZATION_EPSILON = 1e-8
 
 
 class RecoveryStage(StrEnum):
@@ -36,7 +39,7 @@ class MergeRecoveryConfig:
     stage: RecoveryStage
     moe_loss_weight: float = 1.0
     logit_kl_weight: float = 0.0
-    normalization_epsilon: float = 1e-8
+    normalization_epsilon: float = _DEFAULT_NORMALIZATION_EPSILON
 
     def __post_init__(self) -> None:
         if not isinstance(self.stage, RecoveryStage):
@@ -137,26 +140,6 @@ def recovery_trainable_filter(model: Transformer, config: MergeRecoveryConfig) -
     return filter_spec
 
 
-def apply_affected_qb_betas(
-    model: Transformer,
-    qb_betas: jax.Array,
-    affected_layers: tuple[int, int],
-) -> Transformer:
-    """Apply pending QB statistics only to the routers unfrozen for recovery."""
-    expected_shape = (len(model.blocks), model.config.num_experts)
-    if qb_betas.shape != expected_shape:
-        raise ValueError(f"qb_betas must have shape {expected_shape}, got {qb_betas.shape}")
-
-    blocks = list(model.blocks)
-    for layer in affected_layers:
-        block = blocks[layer]
-        bias = -qb_betas[layer]
-        bias = bias - jnp.mean(bias)
-        mlp = eqx.tree_at(lambda current: current.router_bias, block.mlp, bias)
-        blocks[layer] = eqx.tree_at(lambda current: current.mlp, block, mlp)
-    return eqx.tree_at(lambda current: current.blocks, model, tuple(blocks))
-
-
 def update_affected_qb_betas(
     pending_qb_betas: jax.Array,
     measured_qb_betas: jax.Array,
@@ -181,7 +164,7 @@ def recovery_forward(
     *,
     affected_layers: tuple[int, int],
     mask: AttentionMask | jax.Array | None = None,
-    normalization_epsilon: float = 1e-8,
+    normalization_epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
 ) -> RecoveryForward:
     """Roll out the student and match teacher MoEs on each current student state."""
     _validate_affected_layers(student, affected_layers)
@@ -205,10 +188,8 @@ def recovery_forward(
         student_bank = student.expert_banks[student_block.expert_bank_index]
         trace = eqx.filter_checkpoint(student_block.forward_with_moe_trace, policy=remat_policy)(
             hidden,
-            options.mask,
             student_bank,
-            options.use_pko,
-            options.disable_rope,
+            options,
         )
         hidden = trace.hidden
         qb_betas.append(trace.router_stats["qb_beta"])
@@ -328,7 +309,7 @@ def make_recovery_train_step(
     ) -> tuple[MergeRecoveryState, RecoveryLosses]:
         params = state.params
         if config.stage is RecoveryStage.PRESERVATION:
-            params = apply_affected_qb_betas(params, state.pending_qb_betas, config.affected_layers)
+            params = apply_qb_betas(params, state.pending_qb_betas, config.affected_layers)
 
         filter_spec = recovery_trainable_filter(params, config)
         trainable, frozen = eqx.partition(params, filter_spec)

@@ -17,7 +17,7 @@ the dense base template.
   the end). Top-k, softmax, and QB statistics all run in fp32.
 - A `stop_gradient` bias term gets added to the router logits before top-k;
   the bias is updated each step from the previous step's QB-β statistics
-  (see `train.py::_apply_qb_betas`).
+  (see `train.py::apply_qb_betas`).
 - **QB load balancing**: per-expert β is the top-k logit threshold averaged
   across the batch. On the next step, `router_bias := -β`, pushing
   rarely-selected experts up and over-selected experts down. Replaces an aux
@@ -274,7 +274,7 @@ inference latency / KV-cache size, serving compatibility, or interaction effects
 - [`model.py`](./model.py) — `GrugModelConfig` + transformer implementation.
 - [`optimizer.py`](./optimizer.py) — `GrugMoeAdamHConfig` and
   `GrugMoeMuonHConfig` wrappers with expert-param-group awareness.
-- [`train.py`](./train.py) — `GrugTrainState`, `train_step`, `_apply_qb_betas`,
+- [`train.py`](./train.py) — `GrugTrainState`, `train_step`, `apply_qb_betas`,
   `run_grug` (dispatches a Fray job).
 - [`heuristic.py`](./heuristic.py) — `MoeHeuristic` (MuonH, May Recipe
   refit) and `build_from_heuristic` entry point. Current default.
