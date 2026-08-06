@@ -85,12 +85,30 @@ BUDGETS: dict[str, float] = {"1e18": 1e18, "3e18": 3e18, "1e19": 1e19, "3e19": 3
 # node count. Only the ~24 sensible cells are defined; degenerate under/over-trained corners are omitted.
 NODES_BY_BUDGET: dict[str, int] = {"1e18": 1, "3e18": 1, "1e19": 1, "3e19": 2, "1e20": 4, "3e20": 8}
 GRID_BATCH: dict[tuple[str, str], int] = {
-    ("1e18", "d512"): 32, ("1e18", "d768"): 32, ("1e18", "d1024"): 32,
-    ("3e18", "d512"): 64, ("3e18", "d768"): 32, ("3e18", "d1024"): 32, ("3e18", "d1280"): 32,
-    ("1e19", "d512"): 64, ("1e19", "d768"): 128, ("1e19", "d1024"): 128, ("1e19", "d1280"): 64, ("1e19", "d1536"): 128,
-    ("3e19", "d768"): 128, ("3e19", "d1024"): 128, ("3e19", "d1280"): 128, ("3e19", "d1536"): 128,
-    ("1e20", "d1024"): 128, ("1e20", "d1280"): 128, ("1e20", "d1536"): 256, ("1e20", "d2048"): 256,
-    ("3e20", "d1024"): 256, ("3e20", "d1280"): 128, ("3e20", "d1536"): 256, ("3e20", "d2048"): 512,
+    ("1e18", "d512"): 32,
+    ("1e18", "d768"): 32,
+    ("1e18", "d1024"): 32,
+    ("3e18", "d512"): 64,
+    ("3e18", "d768"): 32,
+    ("3e18", "d1024"): 32,
+    ("3e18", "d1280"): 32,
+    ("1e19", "d512"): 64,
+    ("1e19", "d768"): 128,
+    ("1e19", "d1024"): 128,
+    ("1e19", "d1280"): 64,
+    ("1e19", "d1536"): 128,
+    ("3e19", "d768"): 128,
+    ("3e19", "d1024"): 128,
+    ("3e19", "d1280"): 128,
+    ("3e19", "d1536"): 128,
+    ("1e20", "d1024"): 128,
+    ("1e20", "d1280"): 128,
+    ("1e20", "d1536"): 256,
+    ("1e20", "d2048"): 256,
+    ("3e20", "d1024"): 256,
+    ("3e20", "d1280"): 128,
+    ("3e20", "d1536"): 256,
+    ("3e20", "d2048"): 512,
 }
 
 
@@ -107,7 +125,11 @@ def flops_per_token_excl(size: IsoflopSize) -> float:
     num_local = ell - num_global
 
     def keys(window: int) -> float:  # avg causal keys attended with a sliding window over the sequence
-        return (window * (window + 1) / 2 + (SEQ_LEN - window) * window) / SEQ_LEN if window < SEQ_LEN else (SEQ_LEN + 1) / 2
+        return (
+            (window * (window + 1) / 2 + (SEQ_LEN - window) * window) / SEQ_LEN
+            if window < SEQ_LEN
+            else (SEQ_LEN + 1) / 2
+        )
 
     mlp = 2 * 3 * h * inter * NUM_EXPERTS_PER_TOKEN + 2 * 3 * h * inter * NUM_SHARED_EXPERTS + 2 * h * NUM_EXPERTS
     qkv = 2 * h * (size.num_heads * HEAD_DIM + 2 * stored_kv * HEAD_DIM)
@@ -163,7 +185,9 @@ def num_steps_for(budget_label: str, size_name: str) -> int:
     return max(1, round(tokens / (batch * SEQ_LEN)))
 
 
-def build_isoflop_run(*, run_id: str, budget: str, size: str, version: str | None = None) -> ArtifactStep[HeroThroughputResult]:
+def build_isoflop_run(
+    *, run_id: str, budget: str, size: str, lr_factor: float = 1.0, version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
     if (budget, size) not in GRID_BATCH:
         raise ValueError(f"cell (budget={budget}, size={size}) is not in the iso-FLOP band; valid: {sorted(GRID_BATCH)}")
     shape = ISOFLOP_SIZES[size]
@@ -176,6 +200,13 @@ def build_isoflop_run(*, run_id: str, budget: str, size: str, version: str | Non
         num_train_steps=steps, batch_size=batch, hidden_dim=shape.hidden_dim, seq_len=SEQ_LEN
     )
     optimizer = dataclasses.replace(optimizer, use_syrk=False)  # H100: portable Newton-Schulz (no SM100 syrk)
+    if lr_factor != 1.0:
+        # Uniformly scale muonh + adam LR (preserves the muonh:adam ratio) for the LR-sensitivity sweep.
+        optimizer = dataclasses.replace(
+            optimizer,
+            learning_rate=optimizer.learning_rate * lr_factor,
+            adam_lr=optimizer.adam_lr * lr_factor,
+        )
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
         log_every=1,
@@ -206,7 +237,14 @@ def build_isoflop_run(*, run_id: str, budget: str, size: str, version: str | Non
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=20),
+            watch=WatchConfig(
+                watch_targets=["grads", "params", "opt_state", "updates"],
+                include_norms=True,
+                include_per_parameter_norms=True,
+                include_histograms=True,
+                split_scan_layers=False,  # stacked-layer unstack OOMs at step ~10
+                interval=1,
+            ),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
@@ -231,9 +269,7 @@ def build_isoflop_run(*, run_id: str, budget: str, size: str, version: str | Non
             enable_simulated_epoching=False,
             val_components=val_components,
         )
-        data = dataclasses.replace(
-            data, components={n: _root_component(c) for n, c in data.components.items()}
-        )
+        data = dataclasses.replace(data, components={n: _root_component(c) for n, c in data.components.items()})
         return GrugRunConfig(
             model=model,
             data=data,
@@ -263,11 +299,14 @@ def build_isoflop_run(*, run_id: str, budget: str, size: str, version: str | Non
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
-@click.option("--budget", type=click.Choice(list(BUDGETS)), required=True, help="Compute budget (FLOPs excl embed/lm_head).")
+@click.option(
+    "--budget", type=click.Choice(list(BUDGETS)), required=True, help="Compute budget (FLOPs excl embed/lm_head)."
+)
 @click.option("--size", type=click.Choice(list(ISOFLOP_SIZES)), required=True, help="Model width.")
+@click.option("--lr-factor", type=float, default=1.0, show_default=True, help="Uniformly scale muonh+adam LR.")
 @build_options
-def main(run_id: str, budget: str, size: str) -> ArtifactStep[HeroThroughputResult]:
-    return build_isoflop_run(run_id=run_id, budget=budget, size=size)
+def main(run_id: str, budget: str, size: str, lr_factor: float) -> ArtifactStep[HeroThroughputResult]:
+    return build_isoflop_run(run_id=run_id, budget=budget, size=size, lr_factor=lr_factor)
 
 
 if __name__ == "__main__":
