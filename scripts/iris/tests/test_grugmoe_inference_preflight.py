@@ -2228,6 +2228,13 @@ def test_matrix_calibration_uses_frozen_95_percent_lowest_concurrency_rule() -> 
     assert followups[2]["r3_enabled"] is True
 
 
+def test_matrix_model_configs_use_the_artifact_json_domain() -> None:
+    configs = grug_preflight._matrix_model_configs(["exact-reference-ep16"])
+
+    assert configs == json.loads(json.dumps({"exact-reference-ep16": dataclasses.asdict(CASES["exact-reference-ep16"])}))
+    assert configs["exact-reference-ep16"]["sconv_sites"] == ["k", "v", "attn", "mlp"]
+
+
 def test_topology_calibration_sources_require_independent_frozen_selections() -> None:
     class MemoryFilesystem:
         def __init__(self) -> None:

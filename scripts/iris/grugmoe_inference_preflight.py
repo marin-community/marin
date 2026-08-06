@@ -153,6 +153,14 @@ UNATTENDED_COSCHEDULING = "nvlink.domain"
 DEFAULT_CLUSTER_CONFIG = "lib/iris/config/cw-us-east-08a.yaml"
 FIXTURE_DIR = Path(FROZEN_FIXTURE_PATH)
 AWS_CONFIG_CONTENT = "[default]\ns3 =\n    addressing_style = virtual\n"
+
+
+def _matrix_model_configs(case_names: Any) -> dict[str, Any]:
+    """Return the frozen cases in the same JSON domain used by artifacts."""
+    configs = {name: dataclasses.asdict(CASES[name]) for name in sorted(case_names)}
+    return json.loads(json.dumps(configs))
+
+
 REMOTE_UPLOAD_PROGRAM = """
 import json
 import pathlib
@@ -6451,7 +6459,7 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
         },
         "phase_plan": executed_phases,
         "calibration_sources": calibration_sources,
-        "model_configs": {name: dataclasses.asdict(CASES[name]) for name in workload_cases},
+        "model_configs": _matrix_model_configs(workload_cases),
         "workloads": {
             f"{name}:{request_transport}": _health_workload_manifest(
                 deterministic_workload(seed=DUMMY_SEED),
@@ -9215,9 +9223,7 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         "trajectory_cases": sorted(regenerated_trajectory),
         "capacity_cases": sorted(regenerated_capacity),
     }
-    expected_model_configs = {
-        name: dataclasses.asdict(CASES[name]) for name in sorted(manifest.get("model_configs", {}))
-    }
+    expected_model_configs = _matrix_model_configs(manifest.get("model_configs", {}))
     checks["frozen_model_configs"] = {
         "passed": bool(expected_model_configs) and manifest.get("model_configs") == expected_model_configs,
         "cases": sorted(expected_model_configs),
