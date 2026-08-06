@@ -111,6 +111,11 @@ def blocks_to_cells(blocks: list[dict], page_height: float) -> list[TextCell]:
                         info={
                             "flags": span["flags"],
                             "line_angle": line_angle,
+                            # Deliberately the span's box, not line["bbox"], despite the name: the
+                            # FinePDFs fork stores exactly this (custom_code/backend/
+                            # pymupdf_backend.py), and the ported merge thresholds in postprocess
+                            # were tuned against span-box geometry. Rebasing onto the true line box
+                            # would shift same-line and continuation decisions corpus-wide.
                             "line_bbox": (
                                 BoundingBox(
                                     l=x0, t=y0, r=x1, b=y1, coord_origin=CoordOrigin.TOPLEFT
