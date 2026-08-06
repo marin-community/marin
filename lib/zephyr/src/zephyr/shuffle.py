@@ -11,7 +11,7 @@ shards' data sorted by ``(_SHARD_COL, _SORT_KEY_COL)``.  A msgpack sidecar
 (``shard_bytes``) used by reducers to size the external-sort decision.
 
 On the read side, each reducer scans only its target shard via
-``pl.scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
+``scan_parquet(path).filter(pl.col(_SHARD_COL) == target).drop(_SHARD_COL)``.
 Polars predicate pushdown with row-group statistics skips non-matching row
 groups via byte-range GETs, so each reducer reads roughly 1/N of each file.
 The resulting LazyFrames are merged via ``external_sort_merge``: a fully
@@ -34,12 +34,10 @@ import gc
 import io
 import logging
 import math
-import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
 
 import cloudpickle
 import humanfriendly
@@ -47,10 +45,10 @@ import msgspec
 import polars as pl
 from iris.env_resources import TaskResources
 from rigging.filesystem import StoragePath, open_url, url_to_fs
-from rigging.filesystem.s3_compat import needs_virtual_host_addressing
 from rigging.timing import RateLimiter, log_time
 
 from zephyr.external_sort import external_sort_merge
+from zephyr.polars_io import scan_parquet
 from zephyr.shard_keys import deterministic_hash
 from zephyr.worker_context import _worker_ctx_var
 from zephyr.writers import ensure_parent_dir
@@ -330,31 +328,6 @@ def _unify_frame_schemas(frames: list[pl.LazyFrame]) -> list[pl.LazyFrame]:
     return [f.cast(dict(unified)) for f in frames]
 
 
-def _scan_scatter_parquet(path: str) -> pl.LazyFrame:
-    """Scan a scatter chunk with the addressing required by CoreWeave object storage."""
-    endpoint = os.environ.get("AWS_ENDPOINT_URL_S3") or os.environ.get("AWS_ENDPOINT_URL")
-    if not path.startswith("s3://") or not endpoint or not needs_virtual_host_addressing(endpoint):
-        return pl.scan_parquet(path)
-
-    bucket = urlparse(path).netloc
-    parsed_endpoint = urlparse(endpoint)
-    hostname = parsed_endpoint.hostname or ""
-    if not hostname.startswith(f"{bucket}."):
-        endpoint = parsed_endpoint._replace(netloc=f"{bucket}.{parsed_endpoint.netloc}").geturl()
-
-    # Polars' Rust object_store client reads credentials and region from the
-    # environment, but unlike fsspec it cannot infer CoreWeave's virtual-host
-    # requirement. In virtual-host mode object_store uses the endpoint verbatim,
-    # so the bucket must be part of the endpoint host.
-    return pl.scan_parquet(
-        path,
-        storage_options={
-            "aws_endpoint_url": endpoint,
-            "aws_virtual_hosted_style_request": "true",
-        },
-    )
-
-
 # ---------------------------------------------------------------------------
 # ScatterReader: built from manifest, fed to Reduce
 # ---------------------------------------------------------------------------
@@ -427,7 +400,7 @@ class ScatterReader:
 
     def get_frames(self) -> list[pl.LazyFrame]:
         frames = [
-            _scan_scatter_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
+            scan_parquet(path).filter(pl.col(_SHARD_COL) == self._target_shard).drop(_SHARD_COL)
             for _, chunk_paths in self._files
             for path in chunk_paths
         ]
