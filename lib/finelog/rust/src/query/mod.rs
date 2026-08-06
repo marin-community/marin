@@ -16,6 +16,7 @@ pub(crate) mod file_scan;
 pub mod group_extrema;
 pub mod index_cache;
 pub mod optimizer;
+pub(crate) mod predicate;
 pub mod provider;
 pub mod string_values;
 pub mod trigram_prune;

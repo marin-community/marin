@@ -188,10 +188,32 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     assert!(name.index.trigram);
     assert_eq!(
         name.index.exact_values,
-        ["phase", "progress_time_seconds", "step"]
+        [
+            "global_step",
+            "gpu_memory_used_bytes",
+            "gpu_pcie_replay_errors",
+            "gpu_power_watts",
+            "gpu_row_remap_failures",
+            "gpu_temperature_celsius",
+            "gpu_tensor_active_ratio",
+            "gpu_utilization_percent",
+            "gpu_xid_error_code",
+            "hardware_inventory",
+            "phase",
+            "progress_time_seconds",
+            "step",
+        ]
     );
-    assert_eq!(schema.projections.len(), 1);
+    assert_eq!(schema.projections.len(), 9);
     assert_eq!(schema.projections[0].name, "training-status");
+    assert_eq!(schema.projections[1].name, "training-run-attribution");
+    assert_eq!(schema.projections[2].name, "accelerator-power");
+    assert_eq!(schema.projections[3].name, "accelerator-memory");
+    assert_eq!(schema.projections[4].name, "accelerator-faults");
+    assert_eq!(schema.projections[5].name, "accelerator-inventory");
+    assert_eq!(schema.projections[6].name, "accelerator-temperature");
+    assert_eq!(schema.projections[7].name, "accelerator-tensor-activity");
+    assert_eq!(schema.projections[8].name, "accelerator-utilization");
     assert_eq!(schema.grouped_extrema.len(), 1);
     let grouped = &schema.grouped_extrema[0];
     assert_eq!(grouped.filter_column, "service");

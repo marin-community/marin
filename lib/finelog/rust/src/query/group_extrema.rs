@@ -44,6 +44,7 @@ use futures::TryStreamExt;
 use crate::query::exact_aggregate::{
     record_declined, record_fallback, record_full, record_partial, AggregateSource,
 };
+use crate::query::predicate::{conjuncts, int_comparison};
 use crate::query::provider::NamespaceProvider;
 use crate::store::group_extrema::GroupExtremaConfig;
 
@@ -756,16 +757,6 @@ pub fn group_extrema_request(plan: &LogicalPlan) -> Option<GroupExtremaRequest> 
     })
 }
 
-fn conjuncts<'a>(expr: &'a Expr, output: &mut Vec<&'a Expr>) {
-    match expr {
-        Expr::BinaryExpr(binary) if binary.op == Operator::And => {
-            conjuncts(&binary.left, output);
-            conjuncts(&binary.right, output);
-        }
-        expr => output.push(expr),
-    }
-}
-
 fn json_get(expr: &Expr) -> Option<(String, String)> {
     let Expr::ScalarFunction(function) = expr else {
         return None;
@@ -793,14 +784,6 @@ fn string_literal(expr: &Expr) -> Option<String> {
     }
 }
 
-fn int_literal(expr: &Expr) -> Option<i64> {
-    match expr {
-        Expr::Literal(ScalarValue::Int64(Some(value)), _) => Some(*value),
-        Expr::Cast(cast) => int_literal(&cast.expr),
-        _ => None,
-    }
-}
-
 fn string_equality(expr: &Expr) -> Option<(String, String)> {
     let Expr::BinaryExpr(binary) = expr else {
         return None;
@@ -811,28 +794,6 @@ fn string_equality(expr: &Expr) -> Option<(String, String)> {
     match (binary.left.as_ref(), binary.right.as_ref()) {
         (Expr::Column(column), literal) => Some((column.name.clone(), string_literal(literal)?)),
         (literal, Expr::Column(column)) => Some((column.name.clone(), string_literal(literal)?)),
-        _ => None,
-    }
-}
-
-fn int_comparison(expr: &Expr) -> Option<(String, Operator, i64)> {
-    let Expr::BinaryExpr(binary) = expr else {
-        return None;
-    };
-    match (binary.left.as_ref(), binary.right.as_ref()) {
-        (Expr::Column(column), literal) => {
-            Some((column.name.clone(), binary.op, int_literal(literal)?))
-        }
-        (literal, Expr::Column(column)) => {
-            let operator = match binary.op {
-                Operator::Lt => Operator::Gt,
-                Operator::LtEq => Operator::GtEq,
-                Operator::Gt => Operator::Lt,
-                Operator::GtEq => Operator::LtEq,
-                _ => return None,
-            };
-            Some((column.name.clone(), operator, int_literal(literal)?))
-        }
         _ => None,
     }
 }

@@ -41,6 +41,19 @@ const MAX_JSON_DEPTH: usize = 32;
 const NORMALIZED_ROW_OVERHEAD: usize = 128;
 const TELEMETRY_VERSION: u32 = 1;
 const ERROR_CODE_INTERNAL: &str = "internal";
+const TRAINING_STATUS_NAMES: [&str; 3] = ["phase", "progress_time_seconds", "step"];
+const TRAINING_RUN_NAMES: [&str; 1] = ["global_step"];
+const ACCELERATOR_METRIC_NAMES: [&str; 9] = [
+    "gpu_memory_used_bytes",
+    "gpu_pcie_replay_errors",
+    "gpu_power_watts",
+    "gpu_row_remap_failures",
+    "gpu_temperature_celsius",
+    "gpu_tensor_active_ratio",
+    "gpu_utilization_percent",
+    "gpu_xid_error_code",
+    "hardware_inventory",
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -655,7 +668,12 @@ fn telemetry_schema() -> Schema {
             // (`name LIKE '%nccl%'`), so this column carries the trigram index.
             Column::new("name", ColumnType::COLUMN_TYPE_STRING, false)
                 .with_trigram_index()
-                .with_exact_values(["phase", "step", "progress_time_seconds"])
+                .with_exact_values(
+                    TRAINING_STATUS_NAMES
+                        .into_iter()
+                        .chain(TRAINING_RUN_NAMES)
+                        .chain(ACCELERATOR_METRIC_NAMES),
+                )
                 .with_value_counts(),
             Column::new("value", ColumnType::COLUMN_TYPE_FLOAT64, true),
             Column::new("body_json", ColumnType::COLUMN_TYPE_STRING, true),
@@ -672,7 +690,7 @@ fn telemetry_schema() -> Schema {
     .with_covering_projection(CoveringProjection::new(
         "training-status",
         "name",
-        ["phase", "step", "progress_time_seconds"],
+        TRAINING_STATUS_NAMES,
         [
             "seq",
             "timestamp_ms",
@@ -682,6 +700,92 @@ fn telemetry_schema() -> Schema {
             "resource_attributes_json",
             "cluster",
         ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "training-run-attribution",
+        "name",
+        TRAINING_RUN_NAMES,
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "resource_attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-power",
+        "name",
+        ["gpu_power_watts"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "resource_attributes_json",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-memory",
+        "name",
+        ["gpu_memory_used_bytes"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-faults",
+        "name",
+        [
+            "gpu_pcie_replay_errors",
+            "gpu_row_remap_failures",
+            "gpu_xid_error_code",
+        ],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-inventory",
+        "name",
+        ["hardware_inventory"],
+        [
+            "timestamp_ms",
+            "service",
+            "name",
+            "attributes_json",
+            "cluster",
+        ],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-temperature",
+        "name",
+        ["gpu_temperature_celsius"],
+        ["timestamp_ms", "service", "name", "value", "cluster"],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-tensor-activity",
+        "name",
+        ["gpu_tensor_active_ratio"],
+        ["timestamp_ms", "service", "name", "value", "cluster"],
+    ))
+    .with_covering_projection(CoveringProjection::new(
+        "accelerator-utilization",
+        "name",
+        ["gpu_utilization_percent"],
+        ["timestamp_ms", "service", "name", "value", "cluster"],
     ))
     .with_grouped_extrema(GroupExtremaConfig::new(
         "service",

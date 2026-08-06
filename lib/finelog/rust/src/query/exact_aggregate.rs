@@ -1,12 +1,13 @@
 //! Exact `GROUP BY string_column, COUNT(...)` from segment value-count sections.
 //!
-//! The fast path is deliberately narrow. It recognizes one unfiltered table
-//! scan, one string grouping column, and one ordinary `COUNT(*)` or
-//! `COUNT(grouping_column)`. Because the optimizer rewrites bottom-up, outer
-//! projections, sorts, and limits continue to compose around the indexed
-//! aggregate. Stable segments with count summaries are merged with an ordinary
-//! aggregate over uncovered segments, so fresh L0 data remains exact without
-//! putting derived-index work on the write acknowledgement path.
+//! The fast path is deliberately narrow. It recognizes one table scan, an
+//! optional half-open range on a non-null Int64 column, one string grouping
+//! column, and one ordinary `COUNT(*)` or `COUNT(grouping_column)`. Because the
+//! optimizer rewrites bottom-up, outer projections, sorts, and limits continue
+//! to compose around the indexed aggregate. Stable segments wholly contained
+//! by the range use count summaries; boundary and fresh L0 segments use an
+//! ordinary aggregate, preserving exact results without derived-index work on
+//! the write acknowledgement path.
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -43,8 +44,10 @@ use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, Phy
 use futures::TryStreamExt;
 
 use crate::query::index_cache::IndexCache;
+use crate::query::predicate::{half_open_int_range, HalfOpenIntRange};
 use crate::query::provider::NamespaceProvider;
 use crate::store::index_bundle::SectionKind;
+use crate::store::segment::segment_bounds;
 
 const MAX_COMBINED_COUNT_VALUES: usize = 16_384;
 const INDEX_GROUP_COLUMN: &str = "__finelog_index_group";
@@ -108,8 +111,25 @@ pub struct CountRequest {
     pub table: String,
     column: String,
     mode: CountMode,
+    range: Option<CountRange>,
     output: [OutputColumn; 2],
     schema: SchemaRef,
+}
+
+#[derive(Debug, Clone)]
+struct CountRange {
+    bounds: HalfOpenIntRange,
+    filter_expr: Expr,
+}
+
+fn range_signature(request: &CountRequest) -> Option<(&str, i64, i64)> {
+    request.range.as_ref().map(|range| {
+        (
+            range.bounds.column.as_str(),
+            range.bounds.lower,
+            range.bounds.upper,
+        )
+    })
 }
 
 /// Logical node emitted for a grouped count that can use segment summaries.
@@ -136,6 +156,7 @@ impl PartialEq for ExactAggregateNode {
         self.request.table == other.request.table
             && self.request.column == other.request.column
             && self.request.mode == other.request.mode
+            && range_signature(&self.request) == range_signature(&other.request)
             && self.request.output == other.request.output
             && self.source.segment_paths == other.source.segment_paths
             && Arc::ptr_eq(&self.source.index_cache, &other.source.index_cache)
@@ -151,6 +172,7 @@ impl PartialOrd for ExactAggregateNode {
             &self.request.table,
             &self.request.column,
             self.request.mode,
+            range_signature(&self.request),
             self.request.output,
             &self.source.segment_paths,
             Arc::as_ptr(&self.source.index_cache) as usize,
@@ -160,6 +182,7 @@ impl PartialOrd for ExactAggregateNode {
                 &other.request.table,
                 &other.request.column,
                 other.request.mode,
+                range_signature(&other.request),
                 other.request.output,
                 &other.source.segment_paths,
                 Arc::as_ptr(&other.source.index_cache) as usize,
@@ -173,6 +196,7 @@ impl Hash for ExactAggregateNode {
         self.request.table.hash(state);
         self.request.column.hash(state);
         self.request.mode.hash(state);
+        range_signature(&self.request).hash(state);
         self.request.output.hash(state);
         self.source.segment_paths.hash(state);
         (Arc::as_ptr(&self.source.index_cache) as usize).hash(state);
@@ -260,6 +284,16 @@ impl OptimizerRule for ExactAggregateRewrite {
         let Some(source) = self.sources.get(&request.table) else {
             return Ok(Transformed::no(plan));
         };
+        if request.range.as_ref().is_some_and(|range| {
+            source
+                .schema
+                .field_with_name(&range.bounds.column)
+                .map_or(true, |field| {
+                    field.is_nullable() || field.data_type() != &DataType::Int64
+                })
+        }) {
+            return Ok(Transformed::no(plan));
+        }
         let schema = Arc::clone(plan.schema());
         let node = ExactAggregateNode {
             request,
@@ -487,8 +521,9 @@ impl QueryPlanner for FinelogQueryPlanner {
     }
 }
 
-/// Recognize the exact aggregate shape without accepting filters, distinct
-/// aggregates, joins, or other operations below the grouped count.
+/// Recognize the exact aggregate shape with either no predicate or one half-open
+/// range on a non-null Int64 column. Other filters, distinct aggregates, joins,
+/// and additional operations stay on the ordinary DataFusion path.
 pub fn count_request(plan: &LogicalPlan) -> Option<CountRequest> {
     let (aggregate, output) = match plan {
         LogicalPlan::Projection(projection) => {
@@ -537,10 +572,32 @@ pub fn count_request(plan: &LogicalPlan) -> Option<CountRequest> {
         Expr::Literal(value, _) if !value.is_null() => CountMode::AllRows,
         _ => return None,
     };
-    let LogicalPlan::TableScan(scan) = aggregate.input.as_ref() else {
-        return None;
+    let mut input = aggregate.input.as_ref();
+    while let LogicalPlan::Projection(projection) = input {
+        input = projection.input.as_ref();
+    }
+    let (scan, range) = match input {
+        LogicalPlan::TableScan(scan) => (scan, None),
+        LogicalPlan::Filter(filter) => {
+            let mut scan_input = filter.input.as_ref();
+            while let LogicalPlan::Projection(projection) = scan_input {
+                scan_input = projection.input.as_ref();
+            }
+            let LogicalPlan::TableScan(scan) = scan_input else {
+                return None;
+            };
+            let bounds = half_open_int_range(&filter.predicate)?;
+            (
+                scan,
+                Some(CountRange {
+                    bounds,
+                    filter_expr: filter.predicate.clone(),
+                }),
+            )
+        }
+        _ => return None,
     };
-    if !scan.filters.is_empty() || scan.fetch.is_some() {
+    if scan.fetch.is_some() {
         return None;
     }
     let schema = Arc::new(plan.schema().as_arrow().clone());
@@ -556,6 +613,7 @@ pub fn count_request(plan: &LogicalPlan) -> Option<CountRequest> {
         table: scan.table_name.table().to_string(),
         column: group.name.clone(),
         mode,
+        range,
         output,
         schema,
     })
@@ -599,6 +657,24 @@ fn classify_coverage(
     let mut covered_segments = 0;
     for path in &source.segment_paths {
         let parquet = Path::new(path);
+        if let Some(range) = &request.range {
+            let Some((_, Some(min), Some(max))) =
+                segment_bounds(parquet, Some(&range.bounds.column))
+            else {
+                uncovered_paths.push(path.clone());
+                continue;
+            };
+            let disjoint = max < range.bounds.lower || min >= range.bounds.upper;
+            if disjoint {
+                covered_segments += 1;
+                continue;
+            }
+            let contained = min >= range.bounds.lower && max < range.bounds.upper;
+            if !contained {
+                uncovered_paths.push(path.clone());
+                continue;
+            }
+        }
         let Some(segment) = source.index_cache.indexed_segment(parquet) else {
             uncovered_paths.push(path.clone());
             continue;
@@ -705,18 +781,23 @@ fn indexed_aggregate_plan(
             CountMode::GroupingColumn => count(col(&request.column)),
         }
         .alias(INDEX_COUNT_COLUMN);
-        let uncovered = LogicalPlanBuilder::scan(
+        let projection = fallback_projection(request, source)?;
+        let mut uncovered = LogicalPlanBuilder::scan(
             "__finelog_uncovered_segments",
             provider_as_source(Arc::new(provider)),
-            None,
-        )?
-        .aggregate([col(&request.column)], [count_expr])?
-        .project([
-            Expr::Cast(Cast::new(Box::new(col(&request.column)), DataType::Utf8))
-                .alias(INDEX_GROUP_COLUMN),
-            col(INDEX_COUNT_COLUMN),
-        ])?
-        .build()?;
+            Some(projection),
+        )?;
+        if let Some(range) = &request.range {
+            uncovered = uncovered.filter(range.filter_expr.clone())?;
+        }
+        let uncovered = uncovered
+            .aggregate([col(&request.column)], [count_expr])?
+            .project([
+                Expr::Cast(Cast::new(Box::new(col(&request.column)), DataType::Utf8))
+                    .alias(INDEX_GROUP_COLUMN),
+                col(INDEX_COUNT_COLUMN),
+            ])?
+            .build()?;
         LogicalPlanBuilder::from(summary_plan).union(uncovered)?
     };
 
@@ -746,6 +827,31 @@ fn indexed_aggregate_plan(
         "planned value-count aggregate"
     );
     Ok(plan)
+}
+
+fn fallback_projection(request: &CountRequest, source: &AggregateSource) -> DFResult<Vec<usize>> {
+    let mut projection = vec![source.schema.index_of(&request.column).map_err(|error| {
+        DataFusionError::Plan(format!(
+            "value-count fallback column {:?} is unavailable: {error}",
+            request.column
+        ))
+    })?];
+    if let Some(range) = &request.range {
+        projection.push(
+            source
+                .schema
+                .index_of(&range.bounds.column)
+                .map_err(|error| {
+                    DataFusionError::Plan(format!(
+                        "value-count range column {:?} is unavailable: {error}",
+                        range.bounds.column
+                    ))
+                })?,
+        );
+    }
+    projection.sort_unstable();
+    projection.dedup();
+    Ok(projection)
 }
 
 #[cfg(test)]
@@ -910,16 +1016,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn time_bounded_counts_scan_only_segments_that_cannot_use_whole_segment_counts() {
+        let dir = crate::test_support::unique_dir("exact_aggregate_range");
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("timestamp_ms", DataType::Int64, false),
+            Field::new("service", DataType::Utf8, false),
+        ]));
+        let make_batch = |timestamps: Vec<i64>, services: Vec<&str>| {
+            RecordBatch::try_new(
+                Arc::clone(&source_schema),
+                vec![
+                    Arc::new(Int64Array::from(timestamps)),
+                    Arc::new(StringArray::from(services)),
+                ],
+            )
+            .unwrap()
+        };
+        let index_config = SegmentIndexConfig::from_policies(Vec::<String>::new(), &[], &[], None)
+            .with_adaptive_value_counts(["service"]);
+
+        let contained_batch = make_batch(vec![10, 20, 25], vec!["worker", "worker", "api"]);
+        let (contained, _) = write_segment_to_dir(&dir, 1, 1, &contained_batch).unwrap();
+        write_segment_index(
+            &contained,
+            std::slice::from_ref(&contained_batch),
+            &index_config,
+        )
+        .unwrap();
+
+        let disjoint_batch = make_batch(vec![100], vec!["outside"]);
+        let (disjoint, _) = write_segment_to_dir(&dir, 1, 10, &disjoint_batch).unwrap();
+
+        let boundary_batch = make_batch(vec![5, 15], vec!["boundary-outside", "boundary-inside"]);
+        let (boundary, _) = write_segment_to_dir(&dir, 1, 20, &boundary_batch).unwrap();
+        write_segment_index(
+            &boundary,
+            std::slice::from_ref(&boundary_batch),
+            &index_config,
+        )
+        .unwrap();
+
+        let fresh_batch = make_batch(vec![18], vec!["fresh"]);
+        let (fresh, _) = write_segment_to_dir(&dir, 0, 30, &fresh_batch).unwrap();
+
+        let paths = [contained, disjoint, boundary, fresh]
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let index_cache = Arc::new(IndexCache::new(16));
+        let provider =
+            NamespaceProvider::build(Arc::clone(&source_schema), &paths, Arc::clone(&index_cache))
+                .unwrap();
+        let context = crate::query::make_ctx();
+        context
+            .register_table("telemetry_v1", Arc::new(provider))
+            .unwrap();
+        context.add_optimizer_rule(Arc::new(ExactAggregateRewrite::new(HashMap::from([(
+            "telemetry_v1".to_string(),
+            AggregateSource {
+                segment_paths: paths,
+                index_cache,
+                schema: source_schema,
+            },
+        )]))));
+        let batches = context
+            .sql(
+                "SELECT service, count(service) FROM telemetry_v1 \
+                 WHERE timestamp_ms >= 10 AND timestamp_ms < 30 \
+                 GROUP BY service ORDER BY service",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let services = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        let counts = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let rows = (0..services.len())
+            .map(|row| (services.value(row), counts.value(row)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                ("api", 1),
+                ("boundary-inside", 1),
+                ("fresh", 1),
+                ("worker", 2),
+            ]
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
     async fn exact_aggregate_is_visible_in_explain() {
         let dir = crate::test_support::unique_dir("exact_aggregate_explain");
-        let source_schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "service",
-            DataType::Utf8,
-            true,
-        )]));
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("timestamp_ms", DataType::Int64, false),
+            Field::new("service", DataType::Utf8, true),
+        ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&source_schema),
-            vec![Arc::new(StringArray::from(vec!["worker", "api"]))],
+            vec![
+                Arc::new(Int64Array::from(vec![10, 20])),
+                Arc::new(StringArray::from(vec!["worker", "api"])),
+            ],
         )
         .unwrap();
         let (parquet, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
@@ -957,7 +1165,10 @@ mod tests {
             },
         )]))));
         let batches = ctx
-            .sql("EXPLAIN SELECT service, count(service) FROM telemetry_v1 GROUP BY service")
+            .sql(
+                "EXPLAIN SELECT service, count(service) FROM telemetry_v1 \
+                 WHERE timestamp_ms >= 10 AND timestamp_ms < 30 GROUP BY service",
+            )
             .await
             .unwrap()
             .collect()
