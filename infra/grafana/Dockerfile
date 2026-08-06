@@ -27,7 +27,7 @@ FROM grafana/grafana:13.1.1-ubuntu
 USER root
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-venv \
+    && apt-get install -y --no-install-recommends nginx python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 RUN grafana cli --pluginsDir /var/lib/grafana/plugins plugins install yesoreyeram-infinity-datasource 3.10.1
@@ -55,24 +55,26 @@ COPY dashboards /tmp/dashboards-src
 RUN /opt/bridge/venv/bin/python -m dashboard_stitch \
     --src-dir /tmp/dashboards-src --panels-dir /tmp/dashboards-src/panels --out-dir /etc/grafana/dashboards \
     && rm -rf /tmp/dashboards-src
+COPY nginx.conf /etc/nginx/marin.conf
 COPY entrypoint.sh /opt/entrypoint.sh
-RUN chmod +x /opt/entrypoint.sh && chown -R grafana:root /opt/bridge /etc/grafana/dashboards
+RUN mkdir -p /tmp/nginx/client-body /tmp/nginx/fastcgi /tmp/nginx/proxy /tmp/nginx/scgi /tmp/nginx/uwsgi \
+    && chmod +x /opt/entrypoint.sh \
+    && chown -R grafana:root /opt/bridge /etc/grafana/dashboards /tmp/nginx
 
 USER grafana
 
-# Cloud Run injects PORT and routes to it; Grafana serves the UI, the bridge sits
-# on loopback beside it (Grafana's backend datasources fetch server-side, so
-# nothing outside the container needs to reach it).
+# Cloud Run injects PORT and routes to nginx. Nginx serves Grafana from loopback;
+# the bridge also sits on loopback because Grafana fetches its backend datasources
+# server-side.
 #
 # Auth: IAP is the gate, and it stamps the caller's identity into
 # X-Goog-Authenticated-User-Email (value "accounts.google.com:<email>", so the
-# Grafana username carries that prefix). auth.proxy turns that into a real Grafana
-# user — the dashboard browse, stars, and preferences endpoints all reject the
-# anonymous user (userId 0), so a real user is what makes the list page work.
-# Trusting the header is safe because the service is invokable only by the IAP
-# service agent, so every request has already passed through IAP, which sets the
-# header itself. Anonymous stays enabled as a fallback: a request without the
-# header (a health check, a misconfig) degrades to read-only rather than 401.
+# Grafana username carries that prefix). Nginx overwrites X-Grafana-Org-Role with
+# Editor, and auth.proxy synchronizes both headers onto a real Grafana user. Editor
+# includes alert-silence writes; entrypoint.sh upgrades accounts created as Viewer
+# by older revisions before Grafana starts. Trusting these headers is safe because
+# only the IAP service agent can invoke the Cloud Run service. Anonymous stays
+# enabled as a fallback: a request without IAP's identity header degrades to read-only.
 #
 # SMTP: plain Gmail submission (smtp.gmail.com:587, STARTTLS), authenticated as
 # grafana@openathena.ai with an app password (GF_SMTP_PASSWORD from Secret Manager).
@@ -96,9 +98,10 @@ ENV GF_PATHS_PROVISIONING=/etc/grafana/provisioning \
     GF_AUTH_PROXY_HEADER_PROPERTY=username \
     GF_AUTH_PROXY_AUTO_SIGN_UP=true \
     GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN=false \
+    GF_AUTH_PROXY_HEADERS=Role:X-Grafana-Org-Role \
     GF_AUTH_PROXY_SYNC_TTL=60 \
     GF_USERS_AUTO_ASSIGN_ORG=true \
-    GF_USERS_AUTO_ASSIGN_ORG_ROLE=Viewer \
+    GF_USERS_AUTO_ASSIGN_ORG_ROLE=Editor \
     GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=true \
     GF_ANALYTICS_REPORTING_ENABLED=false \
     GF_ANALYTICS_CHECK_FOR_UPDATES=false \

@@ -369,7 +369,7 @@ npm ci
 npm run typecheck && npm run lint && npm run test:ci && npm run build
 docker build -t marin-grafana .
 docker run --rm -p 3000:8080 -e PORT=8080 -e SLACK_ALERTS_WEBHOOK=https://example.invalid marin-grafana
-# → http://localhost:3000 (anonymous Viewer; panels need VPC access to finelog)
+# → http://localhost:3000 (without an IAP identity header, anonymous Viewer; panels need VPC access to finelog)
 ```
 
 `SLACK_ALERTS_WEBHOOK` has to be set to something: the provisioned contact point
@@ -438,11 +438,32 @@ settings reject the colons in a connection name). `GF_DATABASE_PASSWORD` comes f
 create the `grafana` SQL user + its secret version (see `infra/cloudsql/README.md`) before
 `pulumi up` here, or Grafana fails to reach its database.
 
-IAP is the only gate — Grafana runs anonymous Viewer. The OAuth consent screen is
-project-level and shared across the project's IAP services. The shared Cloud Run component
-admits the OpenAthena Workspace domain and the Loom VM service account on every internal site,
-and registers the Marin desktop OAuth client as a programmatic audience. The `viewers` list
-contains only additional accounts or groups needed by Grafana.
+IAP is the outer gate. Its `X-Goog-Authenticated-User-Email` header becomes a Grafana
+auth-proxy account. The container's nginx listener adds a fixed `Editor` role for those
+accounts, which lets every admitted person create and expire alert silences. Grafana syncs
+the role on authenticated requests. Before Grafana starts, `python -m grafana_migrations`
+applies pending `src/grafana_migrations/migrations/mNNNN_*.py` files and records each version
+in `marin_schema_migrations`. Migration `m0001` changes memberships created as `Viewer` by
+older revisions to `Editor`; Grafana's normal role synchronization rejects that change when
+the organization has no `Admin`. Requests without IAP's identity header remain anonymous
+`Viewer`.
+
+Cloud Run grants `run.invoker` only to the IAP service agent, and direct Cloud Run IAP
+[routes every ingress path through IAP](https://cloud.google.com/run/docs/securing/identity-aware-proxy-cloud-run).
+IAP [strips client-provided `X-Goog-*` headers](https://cloud.google.com/iap/docs/signed-headers-howto)
+before forwarding a request, so the presence of `X-Goog-Authenticated-User-Email` safely
+distinguishes authenticated users in this deployment. To allow anonymous viewing later, grant
+IAP's `roles/iap.httpsResourceAccessor` role to `allUsers`. IAP then admits ordinary requests
+[without checking authentication credentials](https://cloud.google.com/iap/docs/force-login),
+so they have no identity claim and remain Grafana `Viewer`. A sign-in link to
+`?gcp-iap-mode=FORCE_LOGIN` lets a visitor authenticate through IAP; subsequent requests carry
+the email header and become `Editor`.
+
+The OAuth consent screen is project-level and shared across the project's IAP services. The
+shared Cloud Run component admits the OpenAthena Workspace domain and the Loom VM service
+account on every internal site, and registers the Marin desktop OAuth client as a programmatic
+audience. The `viewers` stack config contains additional IAP accounts or groups; the name refers
+to IAP admission, not their Grafana organization role.
 
 The ferry, build, and nightly panels read the GitHub API, which gates the GraphQL
 build query behind auth even for public repos. The bridge authenticates as the
