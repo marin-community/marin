@@ -65,13 +65,15 @@ A missing or drifted configured class is a deployment error. Iris does not omit 
 
 ## Activation Gate
 
-Whenever `protected_priority_classes` is non-empty, controller preflight lists unfinished Kueue Workloads in the Iris namespace. If a Workload requests `nvidia.com/gpu` and its `spec.priorityClassRef.name` is not the configured protected class for its Iris band, preflight fails and identifies the Workload. This includes pending, admitted, and evicted-but-requeued Workloads; finished Workloads do not block activation.
+Whenever `protected_priority_classes` is non-empty, controller preflight lists unfinished Kueue Workloads in the Iris namespace. It treats a Workload as a protected shape when any PodSet requests `nvidia.com/gpu`, or when its PodSets contain one accelerator-free Pod in total, matching `_is_coordinator_task` after lowering.
 
-The operator must let legacy GPU Workloads finish or use a separately reviewed migration before enabling the mapping. This prevents a new `band+1` GPU Workload from selecting an old same-band GPU Workload as a lower-priority victim. A first rollout therefore has these phases:
+For each protected shape in a band where the protected mapping is effective, preflight requires `spec.priorityClassName` to equal the configured class and `spec.priorityClassSource` to equal `kueue.x-k8s.io/workloadpriorityclass`. These are the Kueue v1beta1 Workload fields; there is no `priorityClassRef`. A mismatch fails preflight and identifies the Workload. This includes pending, admitted, and evicted-but-requeued Workloads; finished Workloads do not block activation.
+
+The operator must let legacy GPU and coordinator Workloads finish or use a separately reviewed migration before enabling the mapping. This prevents a new `band+1` Workload from selecting an old same-band protected shape as a lower-priority victim. A first rollout therefore has these phases:
 
 1. Provision the canonical WorkloadPriorityClass objects with no config mapping.
 2. Pass the isolated CoreWeave behavior test.
-3. Confirm the target namespace has no unfinished legacy GPU Workloads.
+3. Confirm the target namespace has no unfinished legacy GPU or coordinator Workloads.
 4. Add the protected mapping to that cluster and restart its controller.
 
 Removing the mapping prevents new Workloads from receiving the protected class. Existing admitted Workloads keep their Kueue priority until they finish; rollback does not mutate them.
@@ -98,4 +100,4 @@ Controller prerequisite validation adds the missing WorkloadPriorityClass names 
 - Hard isolation of GPU NodePools with a taint.
 - Custom scheduler plugins, Dynamic Resource Allocation drivers, or synthetic extended resources.
 - Changes to user-facing Iris priority names, budget demotion, or federation priority accounting.
-- In-place migration or relabeling of legacy GPU Workloads.
+- In-place migration or relabeling of legacy protected Workloads.

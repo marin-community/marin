@@ -42,7 +42,9 @@ Kubernetes also documents low-priority placeholder Pods for reserving a numeric 
 
 Kueue's plain-Pod integration implements preemption with `DELETE` calls ([Troubleshooting Pods](https://kueue.sigs.k8s.io/v0.18/docs/tasks/troubleshooting/troubleshooting_pods/#why-did-my-pod-disappear)). A PodDisruptionBudget constrains the eviction API, not direct deletion, so Iris's coordinator PDB cannot exclude a coordinator from Kueue victim selection. A safe priority offset must give the existing coordinator shape the same Workload priority as the accelerator.
 
-Priority offsets also create an upgrade boundary. Iris does not rewrite running Pods during normal reconciliation, so a new `band+1` GPU Workload could see an existing same-band GPU Workload at the legacy band value as a victim. The classes must be opt-in per cluster, and first activation must reject unfinished legacy GPU Workloads unless a separate migration updates them safely.
+Priority offsets also create an upgrade boundary. Iris does not rewrite running Pods during normal reconciliation, so a new `band+1` protected Workload could see an existing same-band GPU or coordinator Workload at the legacy band value as a victim. The classes must be opt-in per cluster, and first activation must reject both unfinished legacy shapes unless a separate migration updates them safely.
+
+Kueue v1beta1 records the selected class in `Workload.spec.priorityClassName` and distinguishes a WorkloadPriorityClass through `spec.priorityClassSource` ([Kueue v1beta1 WorkloadSpec](https://kueue.sigs.k8s.io/v0.18/docs/reference/kueue.v1beta1/#workloadspec)). The activation audit must inspect both fields; the v1beta1 API does not expose `priorityClassRef`.
 
 CoreWeave NodePools support `spec.nodeTaints`, so hard isolation is implementable without a custom admission webhook ([CoreWeave Node Pool reference](https://docs.coreweave.com/products/cks/reference/node-pool)). Iris GPU Pods already tolerate `nvidia.com/gpu`; CPU-only Pods do not ([`tasks.py`](https://github.com/marin-community/marin/blob/f8a0c7cba0c5e29efafe2f0b215eadf1d3d11c5a/lib/iris/src/iris/cluster/backends/k8s/tasks.py#L976-L988)).
 
@@ -79,7 +81,7 @@ CoreWeave NodePools support `spec.nodeTaints`, so hard isolation is implementabl
   - Kueue preempts a whole Workload. A CPU gang may lose more work than the single blocking Pod suggests.
   - The same offset must cover coordinator-shaped Workloads because their PDB does not constrain Kueue deletion. This also lets a pending coordinator reclaim ordinary same-band CPU work.
   - Workload priority affects queue order as well as preemption, so protected Workloads overtake older ordinary same-band CPU Workloads.
-  - Activating the offset beside legacy GPU Workloads could make those GPU Workloads victims.
+  - Activating the offset beside legacy GPU or coordinator Workloads could make them victims.
 - Directness to Marin: reuses the exact ClusterQueue, TAS flavor, and priority gaps already deployed.
 - Confidence: medium-high pending a CoreWeave CI reproduction.
 - Action: canary a one-point Workload priority offset before live rollout.
@@ -104,12 +106,12 @@ CoreWeave NodePools support `spec.nodeTaints`, so hard isolation is implementabl
 - Cost/risk: synthetic workloads only in CI.
 - Sources: Echo wiki 80 and the unified TAS implementation.
 
-### 3. Reject unsafe activation beside legacy GPU Workloads
+### 3. Reject unsafe activation beside legacy protected Workloads
 
-- Minimum experiment: leave a same-band GPU Workload running without a protected class, enable the protected mapping, and restart preflight.
+- Minimum experiment: leave same-band GPU and coordinator Workloads running without a protected class, enable the protected mapping, and restart preflight.
 - Baseline/control: restart with the mapping still empty.
 - Expected signal: baseline starts normally; treatment fails before dispatch and identifies the legacy Workload.
-- Falsifier: treatment dispatches a new protected GPU Workload or selects the legacy GPU Workload as a victim.
+- Falsifier: treatment dispatches a new protected Workload or selects either legacy Workload as a victim.
 - Cost/risk: synthetic CI Workloads only; do not run this against production.
 - Sources: the current `sync()` path applies manifests only for new task attempts.
 
