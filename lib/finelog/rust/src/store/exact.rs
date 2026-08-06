@@ -479,10 +479,11 @@ fn parse(bytes: &[u8]) -> Option<ExactSidecar> {
         for _ in 0..value_count {
             let value = take_string_u32(&mut input)?;
             let run_count = input.u32()? as usize;
-            if run_count as u64 > total_rows {
+            if run_count as u64 > total_rows || run_count > input.remaining() / 2 {
                 return None;
             }
-            let mut runs = Vec::with_capacity(run_count);
+            let mut runs = Vec::new();
+            runs.try_reserve(run_count).ok()?;
             let mut previous_end = 0_u64;
             for _ in 0..run_count {
                 let start = previous_end.checked_add(take_varint(&mut input)?)?;
@@ -646,6 +647,19 @@ mod tests {
         let mut bytes = serialize(&sidecar);
         bytes.push(0);
         assert!(parse(&bytes).is_none());
+
+        let mut oversized = Vec::new();
+        oversized.extend_from_slice(MAGIC);
+        oversized.push(VERSION);
+        oversized.extend_from_slice(&u64::MAX.to_le_bytes());
+        oversized.push(0);
+        put_u16(&mut oversized, 1);
+        put_string_u16(&mut oversized, "service");
+        oversized.push(0);
+        put_u32(&mut oversized, 1);
+        put_string_u32(&mut oversized, "api");
+        put_u32(&mut oversized, u32::MAX as usize);
+        assert!(parse(&oversized).is_none());
     }
 
     #[test]

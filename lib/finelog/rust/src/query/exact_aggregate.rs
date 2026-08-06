@@ -48,7 +48,10 @@ pub fn count_request(plan: &LogicalPlan) -> Option<CountRequest> {
             let LogicalPlan::Aggregate(aggregate) = projection.input.as_ref() else {
                 return None;
             };
-            if projection.expr.len() != 2 {
+            if projection.expr.len() != 2
+                || aggregate.group_expr.len() != 1
+                || aggregate.aggr_expr.len() != 1
+            {
                 return None;
             }
             let group_name = aggregate.schema.field(0).name();
@@ -273,6 +276,14 @@ mod tests {
         .is_none());
         assert!(count_request(
             &plan("SELECT service, count(NULL) FROM telemetry_v1 GROUP BY service").await
+        )
+        .is_none());
+        assert!(count_request(
+            &plan(
+                "SELECT service, service AS service_again \
+                 FROM telemetry_v1 GROUP BY service"
+            )
+            .await
         )
         .is_none());
     }
