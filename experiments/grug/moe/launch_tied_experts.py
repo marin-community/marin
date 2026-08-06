@@ -88,7 +88,9 @@ def _matrix(phase: TiedExpertPhase) -> Sequence[TiedExpertVariant]:
     if phase is TiedExpertPhase.FULL:
         return [
             TiedExpertVariant("baseline", _BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
+            TiedExpertVariant("pairwise_unscaled", _PAIRWISE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
             TiedExpertVariant("pairwise_sqrt", _PAIRWISE_TOPOLOGY, TiedExpertLrScale.SQRT),
+            TiedExpertVariant("middle4_unscaled", _MIDDLE_FOUR_TOPOLOGY, TiedExpertLrScale.UNSCALED),
             TiedExpertVariant("middle4_sqrt", _MIDDLE_FOUR_TOPOLOGY, TiedExpertLrScale.SQRT),
         ]
     raise ValueError(f"unknown tied-expert phase: {phase}")

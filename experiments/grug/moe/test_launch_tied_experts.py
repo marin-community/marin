@@ -37,3 +37,15 @@ def test_variant_filter_rejects_unknown_or_duplicate_runs() -> None:
         tied_expert_runs(version="dev", phase=TiedExpertPhase.SMOKE, variant_names=("unknown",))
     with pytest.raises(ValueError, match="contains duplicates"):
         tied_expert_runs(version="dev", phase=TiedExpertPhase.SMOKE, variant_names=("baseline", "baseline"))
+
+
+def test_full_matrix_keeps_unscaled_and_sqrt_treatments() -> None:
+    runs = tied_expert_runs(version="dev", phase=TiedExpertPhase.FULL)
+
+    assert [run.name.rsplit("/", 1)[-1] for run in runs] == [
+        "baseline",
+        "pairwise_unscaled",
+        "pairwise_sqrt",
+        "middle4_unscaled",
+        "middle4_sqrt",
+    ]
