@@ -27,6 +27,7 @@ def _write_fake_vllm(
     include_extension: bool = True,
     wheel_sha256: str = WHEEL.sha256,
     compute_capability: tuple[int, int] = (9, 0),
+    hash_in_url_fragment: bool = False,
 ) -> None:
     package = tmp_path / "vllm"
     cli = package / "entrypoints" / "cli"
@@ -47,14 +48,11 @@ def _write_fake_vllm(
     metadata = tmp_path / f"vllm-{version}.dist-info"
     metadata.mkdir()
     (metadata / "METADATA").write_text(f"Metadata-Version: 2.4\nName: vllm\nVersion: {version}\n")
-    (metadata / "direct_url.json").write_text(
-        json.dumps(
-            {
-                "archive_info": {"hashes": {"sha256": wheel_sha256}},
-                "url": WHEEL.url,
-            }
-        )
-    )
+    direct_url = {
+        "archive_info": {} if hash_in_url_fragment else {"hashes": {"sha256": wheel_sha256}},
+        "url": f"{WHEEL.url}#sha256={wheel_sha256}" if hash_in_url_fragment else WHEEL.url,
+    }
+    (metadata / "direct_url.json").write_text(json.dumps(direct_url))
     (tmp_path / "torch.py").write_text(
         "class cuda:\n" "    @staticmethod\n" f"    def get_device_capability(): return {compute_capability!r}\n"
     )
@@ -67,6 +65,7 @@ def _run_entrypoint(
     include_extension: bool = True,
     wheel_sha256: str = WHEEL.sha256,
     compute_capability: tuple[int, int] = (9, 0),
+    hash_in_url_fragment: bool = False,
 ):
     _write_fake_vllm(
         tmp_path,
@@ -74,6 +73,7 @@ def _run_entrypoint(
         include_extension=include_extension,
         wheel_sha256=wheel_sha256,
         compute_capability=compute_capability,
+        hash_in_url_fragment=hash_in_url_fragment,
     )
     entrypoint = Path(vllm_server.__file__).with_name("vllm_wheel_entrypoint.py")
     marker = tmp_path / "cli.json"
@@ -112,6 +112,13 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path):
         "extension_path": str(tmp_path / "vllm" / "_C.py"),
     }
     assert json.loads(marker.read_text()) == ["serve", "test/model"]
+
+
+def test_wheel_entrypoint_accepts_uv_hash_fragment_provenance(tmp_path):
+    result, marker = _run_entrypoint(tmp_path, hash_in_url_fragment=True)
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
 
 
 @pytest.mark.parametrize(

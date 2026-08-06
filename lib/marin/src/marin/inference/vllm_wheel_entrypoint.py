@@ -10,7 +10,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit, urlunsplit
 
 _SELECTED_SENTINEL = "MARIN_VLLM_WHEEL_SELECTED="
 _VERIFIED_SENTINEL = "MARIN_VLLM_WHEEL_VERIFIED="
@@ -56,11 +56,19 @@ def main() -> None:
     if direct_url_text is None:
         raise RuntimeError("Installed vLLM does not record direct wheel provenance")
     direct_url = json.loads(direct_url_text)
-    if unquote(direct_url["url"]) != unquote(expected.wheel_url):
+    installed_url = urlsplit(direct_url["url"])
+    installed_url_without_fragment = urlunsplit(installed_url._replace(fragment=""))
+    if unquote(installed_url_without_fragment) != unquote(expected.wheel_url):
         raise RuntimeError(f"Installed vLLM URL {direct_url['url']} does not match {expected.wheel_url}")
-    installed_sha256 = direct_url["archive_info"]["hashes"]["sha256"]
-    if installed_sha256 != expected.wheel_sha256:
-        raise RuntimeError(f"Installed vLLM SHA-256 {installed_sha256} does not match {expected.wheel_sha256}")
+
+    installed_sha256 = set(parse_qs(installed_url.fragment).get("sha256", []))
+    archive_sha256 = direct_url.get("archive_info", {}).get("hashes", {}).get("sha256")
+    if archive_sha256 is not None:
+        installed_sha256.add(archive_sha256)
+    if installed_sha256 != {expected.wheel_sha256}:
+        raise RuntimeError(
+            f"Installed vLLM SHA-256 values {sorted(installed_sha256)} do not match {expected.wheel_sha256}"
+        )
 
     torch = importlib.import_module("torch")
     major, minor = torch.cuda.get_device_capability()
