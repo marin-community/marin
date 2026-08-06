@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from dataclasses import dataclass
+from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +14,47 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.june_tpu_67b_a2b.moe.adamh import scale_by_adamh
+from experiments.june_tpu_67b_a2b.moe.model import Transformer
+
+
+class TiedExpertLrScale(StrEnum):
+    """Learning-rate divisor applied to expert banks reused across layers."""
+
+    UNSCALED = "unscaled"
+    SQRT = "sqrt"
+    LINEAR = "linear"
+
+
+def _tied_expert_lr_divisor(group_size: int, scale: TiedExpertLrScale) -> float:
+    if group_size <= 0:
+        raise ValueError(f"expert bank group size must be positive, got {group_size}")
+    if scale is TiedExpertLrScale.UNSCALED:
+        return 1.0
+    if scale is TiedExpertLrScale.SQRT:
+        return math.sqrt(group_size)
+    if scale is TiedExpertLrScale.LINEAR:
+        return float(group_size)
+    raise ValueError(f"unknown tied expert LR scale: {scale}")
+
+
+def _expert_bank_index(path: object) -> int | None:
+    path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+    parts = path_str.lower().split(".")
+    if len(parts) < 3 or parts[0] != "expert_banks" or not parts[1].isdigit():
+        return None
+    return int(parts[1])
+
+
+def _is_stacked_expert_bank_path(path: object) -> bool:
+    path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+    return path_str.lower().startswith("expert_banks.stacked.")
+
+
+def _tied_expert_group_name(group_size: int) -> str:
+    return f"muonh_expert_g{group_size}"
+
+
+_STACKED_EXPERT_GROUP = "muonh_expert_stacked"
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -63,7 +106,12 @@ def _match_named_sharding_to_params(updates, params):
     return jax.tree.map(match_sharding, updates, params, is_leaf=lambda x: x is None)
 
 
-def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
+def _scale_invariant_hyperball_updates(
+    params,
+    direction_updates,
+    learning_rate: float,
+    leading_axis_lr_divisors: tuple[float, ...] | None = None,
+):
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
     def scale_invariant_update(param, update):
@@ -71,17 +119,27 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             return None
         if not hasattr(param, "ndim"):
             return update
+        parameter_learning_rate = learning_rate
+        if leading_axis_lr_divisors is not None:
+            if param.ndim < 2 or param.shape[0] != len(leading_axis_lr_divisors):
+                raise ValueError(
+                    "stacked expert parameter leading axis must match the number of expert banks; "
+                    f"got shape {param.shape} for divisors {leading_axis_lr_divisors}"
+                )
+            parameter_learning_rate = learning_rate / jnp.asarray(leading_axis_lr_divisors).reshape(
+                (-1,) + (1,) * (param.ndim - 1)
+            )
         if param.ndim == 2:
             param_norm = jnp.linalg.norm(param)
             update_norm = jnp.linalg.norm(update)
-            new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+            new_param = param - parameter_learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
             new_param_norm = jnp.linalg.norm(new_param)
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
         axes = tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
-        new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
+        new_param = param - parameter_learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
         new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
         return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
@@ -100,6 +158,7 @@ def scale_with_grug_muonh(
     muon_eps: float = 1e-8,
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
+    leading_axis_lr_divisors: tuple[float, ...] | None = None,
 ) -> optax.GradientTransformation:
     """MuonH transform for raw Grug arrays with matrix-shaped trailing dims."""
     muon_transform = _grug_scale_with_muon(
@@ -119,7 +178,12 @@ def scale_with_grug_muonh(
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
 
         muon_updates, next_state = muon_transform.update(updates, state, params)
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        muonh_updates = _scale_invariant_hyperball_updates(
+            params,
+            muon_updates,
+            learning_rate,
+            leading_axis_lr_divisors,
+        )
         return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
@@ -209,7 +273,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
 @OptimizerConfig.register_subclass("grug_moe_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
-    """May Recipe MuonH optimizer: 3 LR groups (muonh / adamh / adam).
+    """May Recipe MuonH optimizer with bank-aware tied-expert learning rates.
 
     Three LR groups:
     - ``muonh``: matrices (attn, MoE MLP, shared) **and** all GatedNorms.
@@ -246,6 +310,31 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     (trainer's num_train_steps) while still following the original full
     schedule's LR trajectory up to the stop step. ``None`` preserves the
     default behavior (schedule tracks trainer)."""
+    expert_bank_for_layer: tuple[int, ...] | None = None
+    """Expert-bank topology used to derive each bank's layer reuse count."""
+    tied_expert_lr_scale: TiedExpertLrScale = TiedExpertLrScale.SQRT
+
+    @property
+    def expert_bank_group_sizes(self) -> tuple[int, ...]:
+        if self.expert_bank_for_layer is None:
+            return ()
+        if not self.expert_bank_for_layer:
+            raise ValueError("expert_bank_for_layer must not be empty")
+        if any(bank_id < 0 for bank_id in self.expert_bank_for_layer):
+            raise ValueError("expert_bank_for_layer bank IDs must be non-negative")
+        bank_ids = set(self.expert_bank_for_layer)
+        if bank_ids != set(range(len(bank_ids))):
+            raise ValueError(
+                "expert_bank_for_layer must use contiguous bank IDs starting at zero; "
+                f"got {self.expert_bank_for_layer}"
+            )
+        return tuple(self.expert_bank_for_layer.count(bank_id) for bank_id in range(max(self.expert_bank_for_layer) + 1))
+
+    @property
+    def expert_bank_lr_divisors(self) -> tuple[float, ...]:
+        return tuple(
+            _tied_expert_lr_divisor(group_size, self.tied_expert_lr_scale) for group_size in self.expert_bank_group_sizes
+        )
 
     def build(self, num_train_steps):
         n = self.schedule_num_train_steps_override or num_train_steps
@@ -253,7 +342,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         adam_lr_schedule = self.lr_scheduler(n, override_lr=self.adam_lr)
 
         def optimizer(learning_rate, adam_lr):
-            def muonh_transform():
+            def muonh_transform_at(lr, *, leading_axis_lr_divisors: tuple[float, ...] | None = None):
                 components = []
                 if self.max_grad_norm:
                     components.append(optax.clip_by_global_norm(self.max_grad_norm))
@@ -263,8 +352,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         nesterov=self.nesterov,
                         steps=self.backend_steps,
                         muon_eps=self.muon_epsilon,
-                        learning_rate=learning_rate,
+                        learning_rate=lr,
                         coefficient_type=self.coefficient_type,
+                        leading_axis_lr_divisors=leading_axis_lr_divisors,
                     )
                 )
                 components.append(_match_named_update_sharding())
@@ -286,10 +376,21 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return optax.chain(*components)
 
             transforms = {
-                "muonh": muonh_transform(),
+                "muonh": muonh_transform_at(learning_rate),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
             }
+            group_sizes = self.expert_bank_group_sizes
+            if group_sizes:
+                transforms[_STACKED_EXPERT_GROUP] = muonh_transform_at(
+                    learning_rate,
+                    leading_axis_lr_divisors=self.expert_bank_lr_divisors,
+                )
+                for group_size in set(group_sizes):
+                    if group_size <= 1:
+                        continue
+                    divisor = _tied_expert_lr_divisor(group_size, self.tied_expert_lr_scale)
+                    transforms[_tied_expert_group_name(group_size)] = muonh_transform_at(learning_rate / divisor)
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
@@ -298,6 +399,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
         )
 
     def create_mask(self, params):
+        group_sizes = self.expert_bank_group_sizes
+        if group_sizes and isinstance(params, Transformer):
+            model_mapping = params.config.resolved_expert_bank_for_layer
+            if self.expert_bank_for_layer != model_mapping:
+                raise ValueError(
+                    "optimizer expert_bank_for_layer must match the model topology; "
+                    f"got {self.expert_bank_for_layer}, expected {model_mapping}"
+                )
         paths = leaf_key_paths(params)
 
         def mask_fn(param, path):
@@ -312,6 +421,18 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
+            if group_sizes and _is_stacked_expert_bank_path(path):
+                return _STACKED_EXPERT_GROUP
+            bank_index = _expert_bank_index(path)
+            if bank_index is not None and group_sizes:
+                if bank_index >= len(group_sizes):
+                    raise ValueError(
+                        "expert_bank_for_layer does not cover expert bank path "
+                        f"{path_str}: {self.expert_bank_for_layer}"
+                    )
+                group_size = group_sizes[bank_index]
+                if group_size > 1:
+                    return _tied_expert_group_name(group_size)
             # Optionally route stacked RMSNorm scales to adam instead of letting
             # them fall into the matrix bucket below.
             if self.rmsnorm_to_adam and ("rms_attn" in path_lower or "rms_mlp" in path_lower):
@@ -335,5 +456,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 __all__ = [
     "GrugMoeAdamHConfig",
     "GrugMoeMuonHConfig",
+    "TiedExpertLrScale",
     "scale_with_grug_muonh",
 ]

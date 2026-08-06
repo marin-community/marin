@@ -9,7 +9,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import equinox as eqx
 import jax
@@ -553,12 +553,8 @@ class MoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-        expert_bank: MoEExpertMlp,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        b, s, _ = x.shape
+    def route(self, x: Float[Array, "B S D"]) -> "MoERouting":
+        """Compute routed expert IDs, combine weights, and QB statistics."""
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
@@ -602,19 +598,57 @@ class MoEMLP(eqx.Module):
             in_specs=(P(_BATCH_AXES, None),),
             out_specs=P(),
         )(s_minus_alpha)
+        return MoERouting(
+            x_flat=x_flat,
+            selected_experts=selected_experts,
+            combine_weights=combine_weights,
+            router_stats=router_stats,
+        )
+
+    @named_call
+    def forward_with_trace(
+        self,
+        x: Float[Array, "B S D"],
+        expert_bank: MoEExpertMlp,
+    ) -> "MoEForwardTrace":
+        b, s, _ = x.shape
+        routing = self.route(x)
 
         routed_flat, dropped_assignments = expert_bank(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
+            routing.x_flat,
+            routing.selected_experts.astype(jnp.int32),
+            routing.combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=True,
         )
+        router_stats = routing.router_stats
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
-        return routed, router_stats
+        return MoEForwardTrace(routed_output=routed, routing=routing, router_stats=router_stats)
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        expert_bank: MoEExpertMlp,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        trace = self.forward_with_trace(x, expert_bank)
+        return trace.routed_output, trace.router_stats
+
+
+class MoERouting(NamedTuple):
+    x_flat: jax.Array
+    selected_experts: jax.Array
+    combine_weights: jax.Array
+    router_stats: dict[str, jax.Array]
+
+
+class MoEForwardTrace(NamedTuple):
+    routed_output: jax.Array
+    routing: MoERouting
+    router_stats: dict[str, jax.Array]
 
 
 def _expert_key_from_block_key(block_key: PRNGKeyArray) -> PRNGKeyArray:
@@ -689,7 +723,7 @@ class Block(eqx.Module):
         )
 
     @named_call
-    def __call__(
+    def forward_with_moe_trace(
         self,
         x: Float[Array, "B S D"],
         short_mask: AttentionMask | jax.Array,
@@ -698,7 +732,7 @@ class Block(eqx.Module):
         expert_bank: MoEExpertMlp,
         use_pko: bool = False,
         disable_long_rope: bool = False,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+    ) -> "MoeBlockTrace":
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # lax.cond so the body has a uniform shape across scan iterations:
         # long layers use the full causal mask (and may PKO / drop RoPE); short
@@ -717,11 +751,50 @@ class Block(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in, expert_bank)
+        moe_trace = self.mlp.forward_with_trace(mlp_in, expert_bank)
+        mlp_out = moe_trace.routed_output
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
-        return x, router_stats
+        return MoeBlockTrace(
+            hidden=x,
+            mlp_input=mlp_in,
+            selected_experts=moe_trace.routing.selected_experts,
+            combine_weights=moe_trace.routing.combine_weights,
+            routed_output=moe_trace.routed_output,
+            router_stats=moe_trace.router_stats,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask | jax.Array,
+        long_mask: AttentionMask | jax.Array,
+        use_long_mask: Bool[Array, ""] | bool,
+        expert_bank: MoEExpertMlp,
+        use_pko: bool = False,
+        disable_long_rope: bool = False,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        trace = self.forward_with_moe_trace(
+            x,
+            short_mask,
+            long_mask,
+            use_long_mask,
+            expert_bank,
+            use_pko,
+            disable_long_rope,
+        )
+        return trace.hidden, trace.router_stats
+
+
+class MoeBlockTrace(NamedTuple):
+    hidden: jax.Array
+    mlp_input: jax.Array
+    selected_experts: jax.Array
+    combine_weights: jax.Array
+    routed_output: jax.Array
+    router_stats: dict[str, jax.Array]
 
 
 def _long_layer_schedule(num_layers: int) -> jax.Array:

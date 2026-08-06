@@ -114,6 +114,27 @@ def test_shared_bank_gradient_equals_sum_of_layer_use_site_gradients():
         np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
 
 
+def test_moe_trace_exposes_routed_inputs_without_changing_dispatch():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = Transformer.init(_tiny_config(mapping=(0,)), key=jax.random.key(7))
+        assert model.blocks is not None
+        assert isinstance(model.expert_banks, tuple)
+        mlp = model.blocks[0].mlp
+        bank = model.expert_banks[0]
+        inputs = jnp.linspace(-1.0, 1.0, 48, dtype=jnp.float32).reshape(1, 3, 16)
+
+        trace = mlp.forward_with_trace(inputs, bank)
+        routed, router_stats = mlp(inputs, bank)
+
+    np.testing.assert_array_equal(trace.routed_output, routed)
+    assert trace.routing.x_flat.shape == (3, 16)
+    assert trace.routing.selected_experts.shape == (3, 2)
+    np.testing.assert_allclose(jnp.sum(trace.routing.combine_weights, axis=-1), 2.5, rtol=1e-6, atol=1e-6)
+    assert router_stats.keys() == trace.router_stats.keys()
+    for key in router_stats:
+        np.testing.assert_array_equal(router_stats[key], trace.router_stats[key])
+
+
 def test_tied_mapping_matches_under_array_stacked_execution():
     mapping = (0, 1, 1, 2)
     unstacked_config = _tiny_config(mapping=mapping)
