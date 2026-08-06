@@ -111,6 +111,7 @@ def build_hero_run(
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
     capacity_factor: float | None = None,
+    latent_dim: int | None = None,
     flavor: str = "ep",
     eval_every: int = 0,
     profile_steps: int = 0,
@@ -143,6 +144,7 @@ def build_hero_run(
             ("num_experts_per_token", num_experts_per_token),
             ("intermediate_dim", intermediate_dim),
             ("capacity_factor", capacity_factor),
+            ("latent_dim", latent_dim),
         )
         if value is not None
     }
@@ -286,6 +288,12 @@ def build_hero_run(
     help="Sequences per step. Scales the compute-scaled optimizer, so hold it fixed across a sweep.",
 )
 @click.option(
+    "--latent-dim",
+    type=click.IntRange(min=1),
+    default=None,
+    help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
+)
+@click.option(
     "--flavor",
     type=click.Choice(sorted(FLAVORS)),
     default="ep",
@@ -328,6 +336,7 @@ def main(
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
+    latent_dim: int | None,
     flavor: str,
     eval_every: int,
     profile_steps: int,
@@ -341,6 +350,7 @@ def main(
         num_experts_per_token=num_experts_per_token,
         intermediate_dim=intermediate_dim,
         capacity_factor=capacity_factor,
+        latent_dim=latent_dim,
         flavor=flavor,
         eval_every=eval_every,
         profile_steps=profile_steps,
