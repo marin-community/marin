@@ -132,6 +132,7 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
             path,
             {
                 "aws_endpoint_url": "http://marin-us-east-02a.cwlota.com",
+                "aws_allow_http": "true",
                 "aws_virtual_hosted_style_request": "true",
             },
         )

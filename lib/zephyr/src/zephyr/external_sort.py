@@ -19,6 +19,8 @@ from typing import NamedTuple
 import polars as pl
 from rigging.filesystem import open_url, url_to_fs
 
+from zephyr.polars_io import scan_parquet_chunk
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,7 +117,7 @@ def external_sort_merge(
                     continue
                 next_runs.append(
                     write_run(
-                        [pl.scan_parquet(run.url) for run in run_batch],
+                        [scan_parquet_chunk(run.url) for run in run_batch],
                         pass_index=pass_index,
                         run_index=run_index,
                     )
@@ -126,7 +128,7 @@ def external_sort_merge(
             pass_index += 1
 
         logger.info("[shard %d] External sort: final merge of %d run files", shard, len(runs))
-        merged = pl.merge_sorted([pl.scan_parquet(run.url) for run in runs], key=sort_key)
+        merged = pl.merge_sorted([scan_parquet_chunk(run.url) for run in runs], key=sort_key)
         yield from merged.collect_batches()
     finally:
         if spill_files:
