@@ -361,6 +361,19 @@ async fn malformed_headers_and_records_have_stable_json_errors() {
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert_eq!(response.payload["error"]["code"], "invalid_request");
 
+    let response = post_encoded(
+        &client,
+        addr,
+        b"not a zstd frame".to_vec(),
+        Some(batch_id),
+        Some("application/json"),
+        None,
+        Some("zstd"),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
+    assert_eq!(response.payload["error"]["code"], "invalid_request");
+
     let mut unknown: Value = serde_json::from_slice(&batch(batch_id)).unwrap();
     unknown["records"][0]["unexpected"] = json!(true);
     let response = post(

@@ -1,24 +1,25 @@
 //! Bounded JSON telemetry ingestion backed by the ordinary `Store::write_rows` path.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::error::Error;
 use std::future::Future;
 use std::sync::Arc;
 
 use arrow::array::{Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use axum::body::{to_bytes, Body};
 use axum::extract::{Request, State};
-use axum::http::header::{CONTENT_ENCODING, CONTENT_TYPE, RETRY_AFTER};
+use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
-use connectrpc::compression::{CompressionProvider, ZstdProvider};
-use connectrpc::ErrorCode;
+use http_body_util::LengthLimitError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, OnceCell, OwnedSemaphorePermit, Semaphore};
+use tower_http::decompression::RequestDecompressionLayer;
 use uuid::Uuid;
 
 use crate::errors::StatsError;
@@ -67,12 +68,6 @@ enum RecordKind {
     Gauge,
     Histogram,
     Event,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum RequestEncoding {
-    Identity,
-    Zstd,
 }
 
 impl RecordKind {
@@ -151,50 +146,15 @@ impl ApiError {
     }
 }
 
-fn request_encoding(headers: &HeaderMap) -> Result<RequestEncoding, ApiError> {
-    let mut values = headers.get_all(CONTENT_ENCODING).iter();
-    let Some(value) = values.next() else {
-        return Ok(RequestEncoding::Identity);
-    };
-    if values.next().is_some() {
-        return Err(ApiError::bad_request(
-            "at most one Content-Encoding header is allowed",
-        ));
+fn request_body_error(error: axum::Error) -> ApiError {
+    let mut cause = error.source();
+    while let Some(current) = cause {
+        if current.is::<LengthLimitError>() {
+            return ApiError::too_large(format!("request body exceeds {MAX_BODY_BYTES} bytes"));
+        }
+        cause = current.source();
     }
-    let value = value
-        .to_str()
-        .map_err(|_| ApiError::bad_request("Content-Encoding must contain ASCII text"))?;
-    if value.eq_ignore_ascii_case("identity") {
-        return Ok(RequestEncoding::Identity);
-    }
-    if value.eq_ignore_ascii_case("zstd") {
-        return Ok(RequestEncoding::Zstd);
-    }
-    Err(ApiError::new(
-        StatusCode::UNSUPPORTED_MEDIA_TYPE,
-        "unsupported_encoding",
-        "Content-Encoding must be identity or zstd",
-    ))
-}
-
-fn decode_request_body(
-    encoding: RequestEncoding,
-    body: bytes::Bytes,
-) -> Result<bytes::Bytes, ApiError> {
-    match encoding {
-        RequestEncoding::Identity => Ok(body),
-        RequestEncoding::Zstd => ZstdProvider::default()
-            .decompress_with_limit(&body, MAX_BODY_BYTES)
-            .map_err(|error| {
-                if error.code == ErrorCode::ResourceExhausted {
-                    ApiError::too_large(format!(
-                        "request body exceeds {MAX_BODY_BYTES} bytes after decompression"
-                    ))
-                } else {
-                    ApiError::bad_request("request body is not valid zstd")
-                }
-            }),
-    }
+    ApiError::bad_request("request body could not be decoded")
 }
 
 impl IntoResponse for ApiError {
@@ -330,6 +290,7 @@ pub fn router(
     Router::new()
         .route("/v1/telemetry", post(post_telemetry))
         .with_state(state)
+        .layer(RequestDecompressionLayer::new())
         .layer(from_fn_with_state(auth, auth_gate))
 }
 
@@ -347,7 +308,6 @@ async fn post_telemetry(
             )
         })?;
     state.ensure_namespace_registered().await?;
-    let encoding = request_encoding(request.headers())?;
     let batch_id_header = required_header(request.headers(), "idempotency-key", 64)?;
     let content_type = required_header(request.headers(), CONTENT_TYPE.as_str(), 128)?;
     if content_type
@@ -374,8 +334,7 @@ async fn post_telemetry(
     };
     let body = to_bytes(request.into_body(), MAX_BODY_BYTES)
         .await
-        .map_err(|_| ApiError::too_large(format!("request body exceeds {MAX_BODY_BYTES} bytes")))?;
-    let body = decode_request_body(encoding, body)?;
+        .map_err(request_body_error)?;
     let work = complete_request(
         Arc::clone(&state),
         permit,
