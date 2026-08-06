@@ -5,9 +5,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from click.testing import CliRunner
 from iris.cli import build as image_build
 from iris.cli import cluster as cluster_cli
-from iris.cli.cluster import _pin_latest_images
 from iris.cluster.config import (
     ControllerVmConfig,
     DefaultsConfig,
@@ -28,15 +28,8 @@ def _provenance(dirty: bool) -> Provenance:
     )
 
 
-@pytest.mark.parametrize(
-    ("dirty", "dirty_suffix"),
-    [
-        (False, ""),
-        (True, "-dirty"),
-    ],
-)
-def test_pin_latest_images_marks_only_dirty_worktrees(dirty: bool, dirty_suffix: str):
-    config = IrisClusterConfig(
+def _kubernetes_config() -> IrisClusterConfig:
+    return IrisClusterConfig(
         controller=ControllerVmConfig(image="ghcr.io/marin-community/iris-controller:latest"),
         defaults=DefaultsConfig(
             worker=WorkerConfig(
@@ -48,11 +41,53 @@ def test_pin_latest_images_marks_only_dirty_worktrees(dirty: bool, dirty_suffix:
         kubernetes_provider=KubernetesProviderConfig(),
     )
 
-    _pin_latest_images(config, _provenance(dirty))
 
-    assert config.controller.image == f"ghcr.io/marin-community/iris-controller:abc1234{dirty_suffix}"
-    assert config.defaults.worker.docker_image == f"ghcr.io/marin-community/iris-worker:abc1234-amd64{dirty_suffix}"
-    assert config.defaults.worker.default_task_image == f"ghcr.io/marin-community/iris-task:abc1234{dirty_suffix}"
+@pytest.mark.parametrize(
+    ("dirty", "dirty_suffix"),
+    [
+        (False, ""),
+        (True, "-dirty"),
+    ],
+)
+def test_cluster_start_pins_latest_images_seen_by_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    dirty: bool,
+    dirty_suffix: str,
+) -> None:
+    config = _kubernetes_config()
+    observed_images: list[tuple[str, str, str]] = []
+    docker_commands: list[list[str]] = []
+
+    class ControllerProvider:
+        def start_controller(self, started_config, *, fresh=False):
+            observed_images.append(
+                (
+                    started_config.controller.image,
+                    started_config.defaults.worker.docker_image,
+                    started_config.defaults.worker.default_task_image,
+                )
+            )
+            return "https://controller.example"
+
+    def run(command, **_kwargs):
+        docker_commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cluster_cli, "get_git_provenance", lambda: _provenance(dirty))
+    monkeypatch.setattr(cluster_cli, "provider_bundle", lambda _config: SimpleNamespace(controller=ControllerProvider()))
+    monkeypatch.setattr(image_build.subprocess, "run", run)
+
+    result = CliRunner().invoke(cluster_cli.cluster_start, obj={"config": config, "verbose": False})
+
+    assert result.exit_code == 0, result.output
+    assert observed_images == [
+        (
+            f"ghcr.io/marin-community/iris-controller:abc1234{dirty_suffix}",
+            f"ghcr.io/marin-community/iris-worker:abc1234-amd64{dirty_suffix}",
+            f"ghcr.io/marin-community/iris-task:abc1234{dirty_suffix}",
+        )
+    ]
+    assert docker_commands
 
 
 def test_build_image_push_does_not_publish_latest(monkeypatch):
@@ -121,25 +156,35 @@ def test_push_to_ghcr_does_not_publish_latest(monkeypatch):
     assert commands == []
 
 
-def test_pin_latest_images_single_platform_task_uses_architecture_suffix():
-    config = IrisClusterConfig(
-        controller=ControllerVmConfig(image="ghcr.io/marin-community/iris-controller:latest"),
-        defaults=DefaultsConfig(
-            worker=WorkerConfig(
-                default_task_image="ghcr.io/marin-community/iris-task:latest",
-                runtime="kubernetes",
-            )
-        ),
-        kubernetes_provider=KubernetesProviderConfig(),
+def test_cluster_start_single_platform_task_uses_architecture_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _kubernetes_config()
+    observed_task_images: list[str] = []
+
+    class ControllerProvider:
+        def start_controller(self, started_config, *, fresh=False):
+            observed_task_images.append(started_config.defaults.worker.default_task_image)
+            return "https://controller.example"
+
+    monkeypatch.setattr(cluster_cli, "get_git_provenance", lambda: _provenance(False))
+    monkeypatch.setattr(cluster_cli, "provider_bundle", lambda _config: SimpleNamespace(controller=ControllerProvider()))
+    monkeypatch.setattr(
+        image_build.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
     )
 
-    _pin_latest_images(config, _provenance(False), "linux/amd64")
+    result = CliRunner().invoke(
+        cluster_cli.cluster_start,
+        ["--image-platform", "linux/amd64"],
+        obj={"config": config, "verbose": False},
+    )
 
-    assert config.controller.image == "ghcr.io/marin-community/iris-controller:abc1234"
-    assert config.defaults.worker.default_task_image == "ghcr.io/marin-community/iris-task:abc1234-amd64"
+    assert result.exit_code == 0, result.output
+    assert observed_task_images == ["ghcr.io/marin-community/iris-task:abc1234-amd64"]
 
 
-def test_resolve_prebuilt_image_rejects_missing_platform(monkeypatch):
+def test_controller_restart_rejects_prebuilt_image_missing_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _kubernetes_config()
     manifest = {
         "digest": f"sha256:{'b' * 64}",
         "manifests": [{"platform": {"os": "linux", "architecture": "amd64"}}],
@@ -149,6 +194,17 @@ def test_resolve_prebuilt_image_rejects_missing_platform(monkeypatch):
         "run",
         lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(manifest), stderr=""),
     )
+    monkeypatch.setattr(
+        cluster_cli,
+        "provider_bundle",
+        lambda _config: SimpleNamespace(controller=SimpleNamespace(preflight_controller=lambda _config: None)),
+    )
 
-    with pytest.raises(cluster_cli.click.ClickException):
-        cluster_cli._resolve_prebuilt_image("ghcr.io/marin-community/iris-controller:abc1234")
+    result = CliRunner().invoke(
+        cluster_cli.controller_restart,
+        ["--skip-checkpoint", "--prebuilt-tag", "abc1234"],
+        obj={"config": config, "controller_url": "http://127.0.0.1:1", "verbose": False},
+    )
+
+    assert result.exit_code == 1
+    assert "missing platforms: linux/arm64" in result.output

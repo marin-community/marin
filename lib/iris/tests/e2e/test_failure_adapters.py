@@ -74,6 +74,30 @@ def test_checkpoint_rpc_publishes_filesystem_snapshot_and_metadata(cluster):
     assert (checkpoint_path / "controller.sqlite3.zst").isfile()
 
 
+def test_profile_adapter_returns_cpu_flamegraph_for_running_process(cluster):
+    job = cluster.submit(TestJobs.busy_loop, name="profile-adapter")
+
+    ExponentialBackoff(initial=0.1, maximum=1.0).wait_until_or_raise(
+        lambda: cluster.task_status(job).state == job_pb2.TASK_STATE_RUNNING,
+        timeout=Duration.from_seconds(30),
+        error_message="profile target did not reach RUNNING",
+    )
+    task_id = cluster.task_status(job).task_id
+
+    response = cluster.controller_client.profile_task(
+        job_pb2.ProfileTaskRequest(
+            target=task_id,
+            duration_seconds=1,
+            profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH)),
+        ),
+        timeout_ms=3000,
+    )
+
+    assert response.profile_data
+    assert not response.error
+    assert cluster.wait(job, timeout=30).state == job_pb2.JOB_STATE_SUCCEEDED
+
+
 @pytest.mark.slow
 def test_threaded_scheduler_completes_128_live_tasks(multi_worker_cluster, sentinel):
     enable_chaos("controller.reconcile", delay_seconds=0.01)

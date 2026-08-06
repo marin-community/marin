@@ -4,15 +4,7 @@
 from copy import deepcopy
 
 import pytest
-from iris.cluster.backends.k8s.tasks import (
-    _KUEUE_POD_GROUP_NAME,
-    _LABEL_MANAGED,
-    _LABEL_RUNTIME,
-    _RUNTIME_LABEL_VALUE,
-    _TASK_CONTAINER_NAME,
-    K8sTaskProvider,
-    PodConfig,
-)
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider, PodConfig
 from iris.cluster.controller.reads import ControlSnapshot
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
@@ -22,6 +14,12 @@ from iris.cluster.runtime.env import build_common_iris_env
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2
 from iris.test_util import FakeStatsTable
+
+KUEUE_POD_GROUP_NAME = "kueue.x-k8s.io/pod-group-name"
+LABEL_MANAGED = "iris.managed"
+LABEL_RUNTIME = "iris.runtime"
+RUNTIME_LABEL_VALUE = "iris-kubernetes"
+TASK_CONTAINER_NAME = "task"
 
 
 @pytest.fixture
@@ -149,7 +147,7 @@ SINGLETON_POD_UID = "pod-uid"
 def gated_pod(name: str = "iris-job-0-0", pod_group: str = "wl-abc") -> dict:
     """A Pending pod blocked on a Kueue scheduling gate (no container has started)."""
     return {
-        "metadata": {"name": name, "labels": {_KUEUE_POD_GROUP_NAME: pod_group}},
+        "metadata": {"name": name, "labels": {KUEUE_POD_GROUP_NAME: pod_group}},
         "status": {
             "phase": "Pending",
             "containerStatuses": [],
@@ -214,7 +212,7 @@ def imagepull_pod(name: str = "iris-job-0-0") -> dict:
             "phase": "Pending",
             "containerStatuses": [
                 {
-                    "name": _TASK_CONTAINER_NAME,
+                    "name": TASK_CONTAINER_NAME,
                     "state": {
                         "waiting": {"reason": "ImagePullBackOff", "message": 'Back-off pulling image "ghcr.io/nope"'}
                     },
@@ -247,8 +245,8 @@ def populate_pod(
 ) -> None:
     """Insert a pod manifest into InMemoryK8sService with correct Iris labels."""
     base_labels = {
-        _LABEL_MANAGED: "true",
-        _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
+        LABEL_MANAGED: "true",
+        LABEL_RUNTIME: RUNTIME_LABEL_VALUE,
     }
     if labels:
         base_labels.update(labels)

@@ -2126,8 +2126,6 @@ class TestBackendsConfig:
         }
         for rel, region in expected_region.items():
             config_path = iris_root / rel
-            if not config_path.exists():
-                pytest.skip(f"Config not found: {rel}")
             config = load_config(config_path)
             resolved = resolve_backends(config)
             assert list(resolved) == [DEFAULT_BACKEND_ID]

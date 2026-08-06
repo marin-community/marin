@@ -678,6 +678,41 @@ def test_reconcile_rpc_forwards_observations(state):
     assert result.effects.tasks[task.task_id].state == job_pb2.TASK_STATE_RUNNING
 
 
+def test_reconcile_rpc_keeps_inline_workdir_files_scoped_to_their_job(state):
+    """Worker-bound requests with a shared command retain their own inline files."""
+    worker_id = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
+    request_a = make_job_request("workdir-a")
+    request_a.entrypoint.workdir_files["a.txt"] = b"A"
+    request_b = make_job_request("workdir-b")
+    request_b.entrypoint.workdir_files["b.txt"] = b"B"
+    [task_a] = submit_job(state, "workdir-a", request_a)
+    [task_b] = submit_job(state, "workdir-b", request_b)
+    assign_task(state, task_a, worker_id)
+    assign_task(state, task_b, worker_id)
+    provider, stub = _provider_with_stub(
+        _FakeWorkerStub(
+            address=_W1_ADDR,
+            reconcile_response=worker_pb2.Worker.ReconcileResponse(
+                worker_id=_W1,
+                health=worker_pb2.Worker.WorkerHealth(healthy=True),
+            ),
+        )
+    )
+    _bind_provider(provider, state)
+
+    provider.reconcile(ReconcileRequest())
+
+    (wire_request,) = stub.reconcile_calls
+    workdir_files_by_task = {
+        desired.run.request.task_id: dict(desired.run.request.entrypoint.workdir_files)
+        for desired in wire_request.desired
+    }
+    assert workdir_files_by_task == {
+        task_a.task_id.to_wire(): {"a.txt": b"A"},
+        task_b.task_id.to_wire(): {"b.txt": b"B"},
+    }
+
+
 def test_reconcile_rpc_failure_marks_worker_unreachable_without_task_effects(state):
     register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
     stub = _FakeWorkerStub(address=_W1_ADDR, reconcile_exc=RuntimeError("boom"))
@@ -1323,98 +1358,6 @@ class _ScriptedProvider:
         pass
 
 
-def _observation_for_all_run(plan: WorkerReconcilePlan, state: int, **kwargs):
-    """Build one observation per run-intent in the plan, echoing the controller-minted UID."""
-    return [
-        worker_pb2.Worker.AttemptObservation(
-            attempt_uid=d.attempt_uid,
-            state=state,
-            **kwargs,
-        )
-        for d in plan.request.desired
-        if d.HasField("run")
-    ]
-
-
-def test_e2e_converges_to_succeeded(make_controller):
-    """Full ASSIGNED → RUNNING → SUCCEEDED convergence over the Reconcile RPC."""
-    script = [
-        lambda _plan: [],  # tick 1: ASSIGNED dispatch, worker hasn't started
-        lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_RUNNING),
-        lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_SUCCEEDED, exit_code=0),
-    ]
-    provider = _ScriptedProvider(script=script)
-    ctrl = make_controller(provider=provider)
-    state = ControllerTestState(
-        ctrl._db,
-        health=ctrl.provider.health,
-    )
-
-    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
-    tasks = submit_job(state, "e2e-job", make_job_request(name="e2e-job"))
-    task_id = tasks[0].task_id
-
-    with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-
-    # Tick 1: ASSIGNED — controller dispatches the inline spec.
-    reconcile_once(ctrl)
-    tick1_desired = list(provider.calls[0][0][0].request.desired)
-    assert len(tick1_desired) == 1
-    assert tick1_desired[0].HasField("run") and tick1_desired[0].run.HasField(
-        "request"
-    ), "first tick should carry inline spec"
-    assert tick1_desired[0].attempt_uid, "controller must emit a non-empty attempt_uid"
-
-    # Tick 2: worker reports RUNNING.
-    reconcile_once(ctrl)
-    assert query_task(state, task_id).state == job_pb2.TASK_STATE_RUNNING
-
-    # Tick 3: subsequent run intents must not carry inline spec (cache-hit invariant).
-    reconcile_once(ctrl)
-    tick3_desired = list(provider.calls[2][0][0].request.desired)
-    assert tick3_desired and tick3_desired[0].HasField("run")
-    assert not tick3_desired[0].run.HasField("request"), "subsequent ticks must not carry inline spec"
-
-    task_final = query_task(state, task_id)
-    assert task_final.state == job_pb2.TASK_STATE_SUCCEEDED
-    assert query_job(state, task_final.job_id).state == job_pb2.JOB_STATE_SUCCEEDED
-
-
-def test_e2e_missing_observation_on_assigned_task_retries_to_pending(make_controller):
-    """End-to-end MISSING cascade on an ASSIGNED task: dispatch → MISSING → PENDING retry.
-
-    A worker that accepted the assignment but lost the spec reports MISSING. The
-    task is still ASSIGNED (worker loss before the process ran), so it retries to
-    PENDING without charging any budget rather than going terminal FAILED.
-    """
-    script = [
-        lambda _plan: [],  # tick 1: ASSIGNED dispatch
-        lambda plan: _observation_for_all_run(plan, job_pb2.TASK_STATE_MISSING),
-    ]
-    provider = _ScriptedProvider(script=script)
-    ctrl = make_controller(provider=provider)
-    state = ControllerTestState(
-        ctrl._db,
-        health=ctrl.provider.health,
-    )
-
-    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
-    tasks = submit_job(state, "missing-job", make_job_request(name="missing-job"))
-    task_id = tasks[0].task_id
-
-    with state._db.transaction() as cur:
-        ops.task.assign(cur, [Assignment(task_id=task_id, worker_id=wid)], health=state._health)
-
-    reconcile_once(ctrl)
-    reconcile_once(ctrl)
-
-    task = query_task(state, task_id)
-    assert task.state == job_pb2.TASK_STATE_PENDING
-    assert task.preemption_count == 0
-    assert task.failure_count == 0
-
-
 @dataclass
 class _UnreachableProvider:
     """Worker-daemon backend that reports ``unreachable`` workers UNREACHABLE each tick.
@@ -1536,26 +1479,9 @@ def _expire_grace(ctrl, wid: WorkerId) -> None:
     ctrl.provider.health.set_last_heartbeat_for_test(wid, aged)
 
 
-@pytest.mark.parametrize(
-    "provider_kwargs",
-    [
-        pytest.param({"unreachable": {_W1}}, id="rpc_unreachable"),
-        pytest.param({"unhealthy": {_W1}}, id="responded_but_unhealthy"),
-    ],
-)
-def test_reconcile_failure_tears_down_worker_without_ping_loop(make_controller, provider_kwargs):
-    """A worker the backend can't keep alive is torn down by the reconcile pass
-    alone — no ping loop, no separate liveness channel.
-
-    Two failure modes fold to the same UNREACHABLE signal: the reconcile RPC
-    fails outright (``rpc_unreachable``), or it succeeds but the worker
-    self-reports unhealthy — e.g. failed disk (``responded_but_unhealthy``,
-    ``error=None`` + ``self_healthy=False``). In both, once the worker has been
-    continuously unreachable for the grace, the controller fails the worker,
-    drives ``backend.autoscale(dead_workers=...)`` to reap the slice, and forgets
-    it.
-    """
-    provider = _UnreachableProvider(**provider_kwargs)
+def test_reconcile_self_unhealthy_worker_is_torn_down_without_ping_loop(make_controller):
+    """A reached worker reporting unhealthy is reaped through reconciliation."""
+    provider = _UnreachableProvider(unhealthy={_W1})
     ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
     state = ControllerTestState(
         ctrl._db,
@@ -1607,32 +1533,6 @@ def test_reconcile_failure_reaps_slice_siblings(make_controller):
     assert query_worker(state, dead) is None
     assert query_worker(state, sibling) is None, "reachable slice sibling should be reaped too"
     assert ctrl.provider.health.all() == {}, "whole slice should be forgotten from the tracker"
-
-
-def test_request_worker_eviction_tears_down_on_next_tick(make_controller):
-    """A queued eviction fails the worker and reaps its slice on the next tick.
-
-    The Register RPC queues a recycled-IP prior owner off the control-loop thread,
-    where reaping a slice via the autoscaler is unsafe. The tick drains it through
-    the same fail-and-teardown path as a reconcile failure --
-    ``backend.autoscale(dead_workers=...)`` -- even though the worker answers every
-    reconcile: eviction is driven by the queue, not by liveness.
-    """
-    provider = _UnreachableProvider()  # the worker stays reachable every tick
-    ctrl = make_controller(provider=provider, worker_unreachable_grace=_GRACE)
-    state = ControllerTestState(
-        ctrl._db,
-        health=ctrl.provider.health,
-    )
-
-    wid = register_worker(state, _W1, _W1_ADDR, make_worker_metadata())
-
-    ctrl.request_worker_eviction([wid])
-    reconcile_once(ctrl)
-
-    assert provider.autoscale_calls == [[wid]], "drain must drive teardown via backend.autoscale"
-    assert query_worker(state, wid) is None, "evicted worker row should be removed"
-    assert wid not in ctrl.provider.health.all(), "evicted worker should be forgotten from the tracker"
 
 
 def _fail_first_held(plan: WorkerReconcilePlan) -> list[worker_pb2.Worker.AttemptObservation]:

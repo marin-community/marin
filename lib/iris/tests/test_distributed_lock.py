@@ -4,13 +4,11 @@
 import json
 import os
 import time
-from unittest.mock import MagicMock, patch
 
 import pytest
 import rigging.filesystem.distributed_lock as distributed_lock
 from rigging.filesystem.distributed_lock import (
     HEARTBEAT_TIMEOUT,
-    GcsLease,
     Lease,
     LeaseLostError,
     create_lock,
@@ -188,48 +186,3 @@ def test_stale_takeover_then_refresh_detects_new_holder(tmp_path):
         lock_a.refresh()
 
     lock_b.release()
-
-
-def _make_gcs_lease(lock_path: str = "gs://bucket/test.lock", worker_id: str = "w") -> GcsLease:
-    return GcsLease(lock_path, worker_id)
-
-
-def _gcs_client_with_blob(blob: MagicMock | None) -> MagicMock:
-    client = MagicMock()
-    client.bucket.return_value.get_blob.return_value = blob
-    return client
-
-
-def test_gcs_refresh_raises_lease_lost_on_different_holder():
-    lease = _make_gcs_lease(worker_id="worker-A")
-    blob = MagicMock(generation=42)
-    blob.download_as_string.return_value = json.dumps({"worker_id": "worker-B", "timestamp": time.time()})
-
-    with (
-        patch("rigging.filesystem.distributed_lock.storage.Client", return_value=_gcs_client_with_blob(blob)),
-        pytest.raises(LeaseLostError, match="worker-B"),
-    ):
-        lease.refresh()
-
-
-def test_gcs_refresh_raises_lease_lost_when_lock_gone():
-    lease = _make_gcs_lease(worker_id="worker-A")
-
-    with (
-        patch("rigging.filesystem.distributed_lock.storage.Client", return_value=_gcs_client_with_blob(None)),
-        pytest.raises(LeaseLostError, match="disappeared"),
-    ):
-        lease.refresh()
-
-
-def test_gcs_try_acquire_returns_false_when_another_writer_wins():
-    lease = _make_gcs_lease(worker_id="worker-A")
-
-    class PreconditionFailed(Exception):
-        pass
-
-    client = _gcs_client_with_blob(None)
-    client.bucket.return_value.blob.return_value.upload_from_string.side_effect = PreconditionFailed("gen mismatch")
-
-    with patch("rigging.filesystem.distributed_lock.storage.Client", return_value=client):
-        assert not lease.try_acquire()

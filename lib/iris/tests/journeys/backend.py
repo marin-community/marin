@@ -46,6 +46,7 @@ class BackendEvent:
     task_id: str
     attempt_id: int
     state: int | None = None
+    backend_id: str = "default"
 
 
 class ScriptedTaskBackend:
@@ -62,11 +63,13 @@ class ScriptedTaskBackend:
     autoscaler = None
     health: WorkerHealthTracker | None = None
 
-    def __init__(self, transition_reader: TransitionReader) -> None:
+    def __init__(self, transition_reader: TransitionReader, *, backend_id: str = "default") -> None:
         self._transition_reader = transition_reader
+        self.backend_id = backend_id
         self._queued: dict[str, deque[ScriptedObservation]] = defaultdict(deque)
         self._desired: set[tuple[str, int]] = set()
         self.events: list[BackendEvent] = []
+        self.calls: list[str] = []
         self._reconcile_failures = 0
         self.closed = False
         self.advertised: dict[str, set[str]] = {"region": {"us-central1"}}
@@ -82,6 +85,10 @@ class ScriptedTaskBackend:
     def observe(self, task_id: str, observation: ScriptedObservation) -> None:
         """Queue one observation for the Task's current desired Attempt."""
         self._queued[task_id].append(observation)
+
+    def owns_task(self, task_id: str) -> bool:
+        """Whether the controller currently asks this backend to run ``task_id``."""
+        return any(desired_task_id == task_id for desired_task_id, _ in self._desired)
 
     def fail_reconcile(self, *, times: int) -> None:
         self._reconcile_failures += times
@@ -102,9 +109,11 @@ class ScriptedTaskBackend:
         return vm_pb2.AutoscalerStatus()
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        self.calls.append("schedule")
         return ScheduleResult()
 
     def reconcile(self, request: ReconcileRequest) -> ReconcileResult:
+        self.calls.append("reconcile")
         if self._reconcile_failures:
             self._reconcile_failures -= 1
             raise ConnectionError("scripted backend is unavailable")
@@ -112,12 +121,12 @@ class ScriptedTaskBackend:
             (entry.task_id.to_wire(), entry.attempt_id) for entry in request.running_tasks
         }
         for task_id, attempt_id in sorted(self._desired - desired):
-            self.events.append(BackendEvent("stopped", task_id, attempt_id))
+            self.events.append(BackendEvent("stopped", task_id, attempt_id, backend_id=self.backend_id))
 
         updates: list[TaskUpdate] = []
         newly_launched = {(run.task_id, run.attempt_id) for run in request.tasks_to_run}
         for task_id, attempt_id in sorted(newly_launched - self._desired):
-            self.events.append(BackendEvent("launched", task_id, attempt_id))
+            self.events.append(BackendEvent("launched", task_id, attempt_id, backend_id=self.backend_id))
             queued = self._pop_observation(task_id)
             if queued is None:
                 queued = ScriptedObservation(job_pb2.TASK_STATE_RUNNING)
@@ -146,7 +155,7 @@ class ScriptedTaskBackend:
         return observation
 
     def _task_update(self, task_id: str, attempt_id: int, observation: ScriptedObservation) -> TaskUpdate:
-        self.events.append(BackendEvent("observed", task_id, attempt_id, observation.state))
+        self.events.append(BackendEvent("observed", task_id, attempt_id, observation.state, self.backend_id))
         return TaskUpdate(
             task_id=JobName.from_wire(task_id),
             attempt_id=attempt_id,
@@ -165,6 +174,7 @@ class ScriptedTaskBackend:
         return 0
 
     def autoscale(self, request: AutoscaleRequest) -> AutoscaleResult:
+        self.calls.append("autoscale")
         return AutoscaleResult()
 
     def bind_runtime(self, runtime: BackendRuntime) -> None:
@@ -215,6 +225,7 @@ class UnavailableTaskBackend(ScriptedTaskBackend):
     capabilities: ClassVar[frozenset[BackendCapability]] = frozenset({BackendCapability.WORKER_DAEMON})
 
     def schedule(self, request: ScheduleRequest) -> ScheduleResult:
+        self.calls.append("schedule")
         expired = []
         for task in request.pending_task_rows:
             deadline = job_scheduling_deadline(task.scheduling_deadline_epoch_ms)

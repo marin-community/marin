@@ -121,8 +121,7 @@ def test_write_checkpoint_roundtrip(tmp_path):
 
     local_db_dir = tmp_path / "restored"
     download_checkpoint_to_local(remote_dir, local_db_dir)
-    restored_db = ControllerDB(db_dir=local_db_dir)
-    restored_db.close()
+    assert probe_database_dir(local_db_dir).healthy
 
 
 def test_write_checkpoint_cleans_up_temp_file(tmp_path):

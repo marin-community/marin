@@ -1803,6 +1803,13 @@ class Controller:
         request = controller_pb2.Controller.GetJobStatusRequest(job_id=job_id)
         return self._service.get_job_status(request, None)
 
+    def list_jobs(
+        self,
+        request: controller_pb2.Controller.ListJobsRequest | None = None,
+    ) -> controller_pb2.Controller.ListJobsResponse:
+        """List Jobs through the public service boundary."""
+        return self._service.list_jobs(request or controller_pb2.Controller.ListJobsRequest(), None)
+
     def list_tasks(self, job_id: str) -> controller_pb2.Controller.ListTasksResponse:
         """List the public Task status rows for a Job."""
         request = controller_pb2.Controller.ListTasksRequest(job_id=job_id)
@@ -1820,6 +1827,66 @@ class Controller:
         """Terminate a running job."""
         request = controller_pb2.Controller.TerminateJobRequest(job_id=job_id)
         return self._service.terminate_job(request, None)
+
+    def kick_tasks(
+        self,
+        request: controller_pb2.Controller.KickTasksRequest,
+    ) -> controller_pb2.Controller.KickTasksResponse:
+        """Queue administrative Task state overrides through the public service."""
+        return self._service.kick_tasks(request, None)
+
+    def register_endpoint(
+        self,
+        request: controller_pb2.Controller.RegisterEndpointRequest,
+    ) -> controller_pb2.Controller.RegisterEndpointResponse:
+        """Register or renew a Task endpoint through the public endpoint service."""
+        return self._service.endpoint_service.register_endpoint(request, None)
+
+    def list_endpoints(
+        self,
+        request: controller_pb2.Controller.ListEndpointsRequest | None = None,
+    ) -> controller_pb2.Controller.ListEndpointsResponse:
+        """List Task endpoints through the public endpoint service."""
+        return self._service.endpoint_service.list_endpoints(
+            request or controller_pb2.Controller.ListEndpointsRequest(),
+            None,
+        )
+
+    def unregister_endpoint(self, endpoint_id: str) -> job_pb2.Empty:
+        """Unregister a Task endpoint through the public endpoint service."""
+        request = controller_pb2.Controller.UnregisterEndpointRequest(endpoint_id=endpoint_id)
+        return self._service.endpoint_service.unregister_endpoint(request, None)
+
+    def set_user_budget(
+        self,
+        request: controller_pb2.Controller.SetUserBudgetRequest,
+    ) -> controller_pb2.Controller.SetUserBudgetResponse:
+        """Set one user's budget through the public service boundary."""
+        return self._service.set_user_budget(request, None)
+
+    def get_user_budget(self, user_id: str) -> controller_pb2.Controller.GetUserBudgetResponse:
+        """Read one user's configured budget and current spend."""
+        request = controller_pb2.Controller.GetUserBudgetRequest(user_id=user_id)
+        return self._service.get_user_budget(request, None)
+
+    def register_worker(
+        self,
+        request: controller_pb2.Controller.RegisterRequest,
+    ) -> controller_pb2.Controller.RegisterResponse:
+        """Register a worker through the public service boundary."""
+        return self._service.register(request, None)
+
+    def list_workers(
+        self,
+        request: controller_pb2.Controller.ListWorkersRequest | None = None,
+    ) -> controller_pb2.Controller.ListWorkersResponse:
+        """List workers through the public service boundary."""
+        return self._service.list_workers(request or controller_pb2.Controller.ListWorkersRequest(), None)
+
+    def get_worker_status(self, worker_id: str) -> controller_pb2.Controller.GetWorkerStatusResponse:
+        """Read one worker through the public service boundary."""
+        request = controller_pb2.Controller.GetWorkerStatusRequest(id=worker_id)
+        return self._service.get_worker_status(request, None)
 
     def federation_sync(
         self,

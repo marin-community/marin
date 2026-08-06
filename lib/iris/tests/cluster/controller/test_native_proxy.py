@@ -260,11 +260,13 @@ def test_native_metrics_polling_recovers_after_initial_snapshot_failure(telemetr
     publisher = NativeProxyTelemetry(interval=0.01)
     publisher.attach(proxy)
     try:
+        labels = {"service": "iris.test.Service", "method": "Poll", "upstream": "controller"}
         telemetry_transport.wait_for_value(
             "rpc_requests_total",
-            {"service": "iris.test.Service", "method": "Poll", "upstream": "controller"},
+            labels,
             7,
         )
+        assert telemetry_transport.record("rpc_requests_total", labels)["value"] == 7
     finally:
         publisher.detach(proxy)
 

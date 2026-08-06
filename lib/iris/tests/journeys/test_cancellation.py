@@ -18,3 +18,13 @@ def test_job_when_cancelled_stops_every_attempt_and_is_idempotent(journey):
     assert {(event.task_id, event.attempt_id) for event in journey.backend_events(kind="stopped")} == {
         (job[index].wire_id, 0) for index in range(4)
     }
+
+
+def test_pending_job_when_cancelled_never_reaches_the_backend(journey):
+    job = journey.submit("cancel-pending")
+
+    journey.cancel(job)
+    journey.settle()
+
+    assert journey.job(job).state == job_pb2.JOB_STATE_KILLED
+    assert journey.backend_events(kind="launched") == []

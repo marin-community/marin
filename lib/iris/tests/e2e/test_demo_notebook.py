@@ -15,6 +15,7 @@ from iris.cluster.config import (
 )
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, ResourceSpec
+from iris.rpc import job_pb2
 
 pytestmark = pytest.mark.requires_cluster
 
@@ -68,7 +69,7 @@ def test_demo_notebook_job_round_trip_normalizes_id_and_lists_task(demo_client: 
     # Regression coverage: ensure names without leading "/" are normalized
     # to absolute job IDs before reaching the controller.
     status = job.wait(timeout=30.0, raise_on_failure=False)
-    assert status is not None
+    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
     assert job.job_id.to_wire().endswith("/notebook-hello")
     tasks = job.tasks()
     assert len(tasks) == 1

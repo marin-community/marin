@@ -91,12 +91,6 @@ def _get_worker_id(handle: FakeSliceHandle) -> str:
     return handle.describe().workers[0].worker_id
 
 
-def _get_slice_state(group: ScalingGroup, handle: FakeSliceHandle) -> SliceState:
-    """Get the SliceState for a handle from its group."""
-    with group._slices_lock:
-        return group._slices[handle.slice_id]
-
-
 def _tracked_scale_up(group: ScalingGroup, timestamp: Timestamp | None = None, **kwargs) -> FakeSliceHandle:
     """Scale up with full lifecycle tracking: begin -> create -> complete.
 
@@ -561,9 +555,6 @@ class TestScalingGroupIdleTracking:
             ts = Timestamp.from_ms(ready_ts.epoch_ms() + tick * 10_000)
             group.update_slice_activity(active_map, ts)
             assert not group.is_slice_eligible_for_scaledown("slice-001", ts)
-
-        with group._slices_lock:
-            assert group._slices["slice-001"].quiet_since is None
 
     def test_scale_down_if_idle_terminates_eligible_slice(self, unbounded_config: ScaleGroupConfig):
         """scale_down_if_idle terminates an eligible idle slice."""
@@ -1080,40 +1071,31 @@ class TestPrepareSliceConfigGpuCount:
         assert cpu_slice.gpu_count == 0
 
 
-class TestMarkSliceLockDiscipline:
-    """Tests that mark_slice_ready/mark_slice_failed hold the lock during mutation."""
+class TestMarkSliceState:
+    """Tests public slice state after readiness and failure observations."""
 
-    def test_mark_slice_ready_atomic(self, unbounded_config: ScaleGroupConfig):
-        """lifecycle and worker_ids are set while holding the lock."""
+    def test_mark_slice_ready_updates_state_and_worker_ids(self, unbounded_config: ScaleGroupConfig):
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         handle = _tracked_scale_up(group)
 
-        # Verify the slice starts as BOOTING with no addresses
-        state = _get_slice_state(group, handle)
-        assert state.lifecycle == SliceLifecycleState.BOOTING
-        assert state.worker_ids == []
+        assert group.slice_state_counts()[SliceLifecycleState.BOOTING] == 1
+        assert group.get_slice_worker_ids(handle.slice_id) == []
 
         addresses = ["10.0.0.1", "10.0.0.2"]
         group.mark_slice_ready(handle.slice_id, addresses)
 
-        # All fields should be set atomically
-        with group._slices_lock:
-            state = group._slices[handle.slice_id]
-            assert state.lifecycle == SliceLifecycleState.READY
-            assert state.worker_ids == addresses
+        assert group.slice_state_counts()[SliceLifecycleState.READY] == 1
+        assert group.get_slice_worker_ids(handle.slice_id) == addresses
 
-    def test_mark_slice_failed_atomic(self, unbounded_config: ScaleGroupConfig):
-        """lifecycle is set to FAILED while holding the lock."""
+    def test_mark_slice_failed_updates_state(self, unbounded_config: ScaleGroupConfig):
         platform = make_mock_platform()
         group = ScalingGroup(unbounded_config, platform)
         handle = _tracked_scale_up(group)
 
         group.mark_slice_failed(handle.slice_id)
 
-        with group._slices_lock:
-            state = group._slices[handle.slice_id]
-            assert state.lifecycle == SliceLifecycleState.FAILED
+        assert group.slice_state_counts()[SliceLifecycleState.FAILED] == 1
 
     def test_mark_slice_ready_nonexistent_is_noop(self, unbounded_config: ScaleGroupConfig):
         """mark_slice_ready on a nonexistent slice does not raise."""

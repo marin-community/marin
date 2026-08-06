@@ -289,40 +289,6 @@ def test_reregister_renews_expired_endpoint(state):
     assert [endpoint.endpoint_id for endpoint in listed.endpoints] == [endpoint_id]
 
 
-def test_new_attempt_atomically_replaces_same_name_endpoint(state):
-    task, attempt = _live_task(state)
-    service = _service(state)
-    updates = []
-    service.subscribe_proxy_updates(updates.append)
-    service.register_endpoint(
-        _register_request("svc", task, attempt_id=attempt, endpoint_id="old", address="old:1"),
-        None,
-    )
-    updates.clear()
-
-    with state._db.transaction() as tx:
-        tx.execute(sa_update(tasks_table).where(tasks_table.c.task_id == task).values(current_attempt_id=attempt + 1))
-    service.register_endpoint(
-        _register_request("svc", task, attempt_id=attempt + 1, endpoint_id="new", address="new:1"),
-        None,
-    )
-
-    listed = service.list_endpoints(controller_pb2.Controller.ListEndpointsRequest(prefix="svc", exact=True), None)
-    assert [(endpoint.endpoint_id, endpoint.address) for endpoint in listed.endpoints] == [("new", "new:1")]
-    [delta] = updates
-    assert [mapping.endpoint_id for mapping in delta.upserts] == ["new"]
-    assert delta.deletes == ("old",)
-
-    with pytest.raises(ConnectError) as excinfo:
-        service.register_endpoint(
-            _register_request("svc", task, attempt_id=attempt, endpoint_id="old", address="old:1"),
-            None,
-        )
-    assert excinfo.value.code is Code.FAILED_PRECONDITION
-    listed = service.list_endpoints(controller_pb2.Controller.ListEndpointsRequest(prefix="svc", exact=True), None)
-    assert [endpoint.endpoint_id for endpoint in listed.endpoints] == ["new"]
-
-
 def test_register_terminal_task_raises(state):
     task = submit_job(state, "j", make_job_request("j"))[0].task_id
     with state._db.transaction() as tx:

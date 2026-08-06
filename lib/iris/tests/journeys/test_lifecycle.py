@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 from iris.rpc import job_pb2
 
 
@@ -86,6 +87,22 @@ def test_task_when_preempted_retries_under_separate_budget(journey):
     assert journey.job(job).state == job_pb2.JOB_STATE_SUCCEEDED
 
 
+def test_task_when_preemption_budget_is_exhausted_ends_job_as_worker_failed(journey):
+    job = journey.submit("preemption-exhausted", preemption_retries=1)
+    journey.settle()
+
+    journey.preempt(job[0])
+    journey.settle()
+    journey.preempt(job[0])
+    journey.settle()
+
+    assert [attempt.state for attempt in journey.task(job[0]).attempts] == [
+        job_pb2.TASK_STATE_PREEMPTED,
+        job_pb2.TASK_STATE_PREEMPTED,
+    ]
+    assert journey.job(job).state == job_pb2.JOB_STATE_WORKER_FAILED
+
+
 def test_job_when_cumulative_failure_budget_is_crossed_stops_live_siblings(journey):
     job = journey.submit("cumulative-budget", tasks=3, failure_retries=1, max_task_failures=1)
     journey.settle()
@@ -99,6 +116,7 @@ def test_job_when_cumulative_failure_budget_is_crossed_stops_live_siblings(journ
     assert journey.task(job[2]).state == job_pb2.TASK_STATE_KILLED
 
 
+@pytest.mark.timeout(30)
 def test_job_with_128_tasks_converges_without_duplicate_launches(journey):
     job = journey.submit("wide", tasks=128)
     journey.settle()

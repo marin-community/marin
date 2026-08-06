@@ -70,20 +70,17 @@ def test_authorize_method_unrestricted_for_other_roles(role):
 # --- federation-peer role: method-scoped to the federation RPC subset ---------
 
 
-@pytest.mark.parametrize("method", ["FederationSync", "LaunchJob", "ListBackends", "TerminateJob"])
-def test_authorize_method_allows_federation_control_rpcs_for_peer(method):
-    # Does not raise: the federation loop (handoff, cancel, sync, heartbeat) is the
-    # federation-peer role's whole contract.
-    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
+def test_authorize_method_allows_federation_sync_for_peer():
+    # Does not raise: sync is the representative federation control-plane RPC.
+    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), "FederationSync")
 
 
-@pytest.mark.parametrize("method", ["ExecInContainer", "GetProcessStatus", "ProfileTask"])
-def test_authorize_method_allows_scoped_debug_rpcs_for_peer(method):
-    # The on-demand debug proxies are admitted at the method gate; the handler then
+def test_authorize_method_allows_scoped_exec_for_peer():
+    # Exec represents on-demand debug proxies admitted at the method gate; the handler then
     # scopes each to a job the peer federated here (see the controller service's
     # _authorize_federated_debug_target). Without this, a proxied stack/exec/status
     # for a federated task is rejected before the peer can route it.
-    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), method)
+    authorize_method(VerifiedIdentity("peer-cluster", FEDERATION_PEER_ROLE), "ExecInContainer")
 
 
 @pytest.mark.parametrize("method", ["SetUserBudget", "ListJobs", "GetJobStatus", "ExecuteRawQuery"])

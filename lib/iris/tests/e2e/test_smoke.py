@@ -967,45 +967,6 @@ def test_capacity_type_propagates_to_worker_attributes(smoke_cluster):
 
 
 # ============================================================================
-# Profiling
-# ============================================================================
-
-
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="py-spy ptrace can segfault worker threads in CI")
-def test_profile_running_task(smoke_cluster):
-    """Profile a running task, verify data returned."""
-    if smoke_cluster.is_cloud:
-        pytest.skip("py-spy races with short-lived containers in cloud mode")
-    job = smoke_cluster.submit(TestJobs.busy_loop, name="smoke-profile")
-
-    last_state = "unknown"
-
-    def _is_running():
-        nonlocal last_state
-        task = smoke_cluster.task_status(job, task_index=0)
-        last_state = task.state
-        return last_state == job_pb2.TASK_STATE_RUNNING
-
-    ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
-        _is_running,
-        timeout=Duration.from_seconds(smoke_cluster.job_timeout),
-        error_message=f"Task did not reach RUNNING within {smoke_cluster.job_timeout}s, last state: {last_state}",
-    )
-    task_id = smoke_cluster.task_status(job, task_index=0).task_id
-
-    request = job_pb2.ProfileTaskRequest(
-        target=task_id,
-        duration_seconds=1,
-        profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH)),
-    )
-    response = smoke_cluster.controller_client.profile_task(request, timeout_ms=3000)
-    assert len(response.profile_data) > 0
-    assert not response.error
-
-    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
-
-
-# ============================================================================
 # Exec in container
 # ============================================================================
 

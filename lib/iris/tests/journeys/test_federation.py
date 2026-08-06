@@ -91,3 +91,18 @@ def test_parent_cancel_terminates_job_on_peer(federation: FederationJourney) -> 
 
     assert federation.peer_job(job).state == job_pb2.JOB_STATE_KILLED
     assert federation.parent_job(job).state == job_pb2.JOB_STATE_KILLED
+
+
+def test_execution_peer_submits_a_child_and_syncs_the_subtree_to_authority_once(federation: FederationJourney) -> None:
+    root = federation.submit("tree")
+    federation.promote()
+    federation.sync()
+    child = federation.submit_child_on_peer(root, "child", tasks=2)
+    federation.sync()
+
+    assert {task.task_id for task in federation.parent_tasks(child)} == {child[0].wire_id, child[1].wire_id}
+
+    federation.sync()
+
+    assert [task.task_id for task in federation.peer_tasks(root)] == [root[0].wire_id]
+    assert {task.task_id for task in federation.parent_tasks(child)} == {child[0].wire_id, child[1].wire_id}

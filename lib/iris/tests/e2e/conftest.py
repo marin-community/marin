@@ -17,7 +17,6 @@ import logging
 import os
 import shutil
 import subprocess
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,9 +51,7 @@ from iris.cluster.types import (
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
 from rigging.connect import proxy_path
-from rigging.timing import Duration
-
-from .chronos import VirtualClock
+from rigging.timing import Duration, ExponentialBackoff
 
 MARIN_ROOT = Path(__file__).resolve().parents[4]  # repo root
 IRIS_ROOT = MARIN_ROOT / "lib" / "iris"
@@ -202,30 +199,22 @@ class IrisTestCluster:
         self,
         job: Job,
         timeout: float = 60.0,
-        chronos: VirtualClock | None = None,
         poll_interval: float = 0.5,
     ) -> job_pb2.JobStatus:
-        """Poll until a job reaches a terminal state. Returns the final JobStatus.
+        """Poll until a job reaches a terminal state. Returns the final JobStatus."""
+        status = job_pb2.JobStatus()
 
-        If chronos is provided, uses virtual time for deterministic tests.
-        Raises TimeoutError if the job doesn't finish within the deadline.
-        """
-        if chronos is not None:
-            start_time = chronos.time()
-            while chronos.time() - start_time < timeout:
-                status = self.status(job)
-                if is_job_finished(status.state):
-                    return status
-                chronos.tick(poll_interval)
-            raise TimeoutError(f"Job {job.job_id} did not complete in {timeout}s (virtual time)")
-
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        def job_is_finished() -> bool:
+            nonlocal status
             status = self.status(job)
-            if is_job_finished(status.state):
-                return status
-            time.sleep(poll_interval)
-        raise TimeoutError(f"Job {job.job_id} did not complete in {timeout}s")
+            return is_job_finished(status.state)
+
+        ExponentialBackoff(initial=poll_interval, maximum=poll_interval, factor=1, jitter=0).wait_until_or_raise(
+            job_is_finished,
+            timeout=Duration.from_seconds(timeout),
+            error_message=f"Job {job.job_id} did not complete in {timeout}s",
+        )
+        return status
 
     def wait_for_state(
         self,
@@ -235,13 +224,19 @@ class IrisTestCluster:
         poll_interval: float = 0.1,
     ) -> job_pb2.JobStatus:
         """Poll until a job reaches a specific state (e.g. JOB_STATE_RUNNING)."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        status = job_pb2.JobStatus()
+
+        def job_reached_state() -> bool:
+            nonlocal status
             status = self.status(job)
-            if status.state == state:
-                return status
-            time.sleep(poll_interval)
-        raise TimeoutError(f"Job {job.job_id} did not reach state {state} in {timeout}s " f"(current: {status.state})")
+            return status.state == state
+
+        ExponentialBackoff(initial=poll_interval, maximum=poll_interval, factor=1, jitter=0).wait_until_or_raise(
+            job_reached_state,
+            timeout=Duration.from_seconds(timeout),
+            error_message=f"Job {job.job_id} did not reach state {state} in {timeout}s (current: {status.state})",
+        )
+        return status
 
     @contextmanager
     def launched_job(self, fn, name: str, *args, **kwargs):
@@ -264,15 +259,20 @@ class IrisTestCluster:
 
     def wait_for_workers(self, min_workers: int, timeout: float = 30.0) -> None:
         """Wait until at least min_workers healthy workers are registered."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        healthy = []
+
+        def enough_workers_are_healthy() -> bool:
+            nonlocal healthy
             request = controller_pb2.Controller.ListWorkersRequest()
             response = self.controller_client.list_workers(request)
             healthy = [w for w in response.workers if w.healthy]
-            if len(healthy) >= min_workers:
-                return
-            time.sleep(0.5)
-        raise TimeoutError(f"Only {len(healthy)} of {min_workers} workers registered in {timeout}s")
+            return len(healthy) >= min_workers
+
+        ExponentialBackoff(initial=0.1, maximum=0.5).wait_until_or_raise(
+            enough_workers_are_healthy,
+            timeout=Duration.from_seconds(timeout),
+            error_message=f"Only {len(healthy)} of {min_workers} workers registered in {timeout}s",
+        )
 
     def get_task_logs(self, job: Job, task_index: int = 0) -> list[str]:
         """Fetch log lines for a task."""
@@ -487,97 +487,11 @@ def _detect_fd_leaks(request):
         )
 
 
-@pytest.fixture
-def chronos(monkeypatch):
-    """Virtual time fixture - makes time.sleep() controllable for fast tests."""
-    clock = VirtualClock()
-    monkeypatch.setattr(time, "time", clock.time)
-    monkeypatch.setattr(time, "monotonic", clock.time)
-    monkeypatch.setattr(time, "sleep", clock.sleep)
-    return clock
-
-
-class _NoOpPage:
-    """Stub page that provides no-op methods for all Playwright page operations."""
-
-    def goto(self, url, **kwargs):
-        pass
-
-    def wait_for_load_state(self, state=None, **kwargs):
-        pass
-
-    def wait_for_function(self, expression, **kwargs):
-        pass
-
-    def evaluate(self, expression, *args, **kwargs):
-        pass
-
-    def click(self, selector, **kwargs):
-        pass
-
-    def fill(self, selector, value, **kwargs):
-        pass
-
-    def wait_for_selector(self, selector, **kwargs):
-        pass
-
-    def wait_for_timeout(self, timeout):
-        pass
-
-    def locator(self, selector, **kwargs):
-        return _NoOpLocator()
-
-    def screenshot(self, **kwargs):
-        pass
-
-    def close(self):
-        pass
-
-
-class _NoOpLocator:
-    """Stub locator that provides no-op methods."""
-
-    @property
-    def first(self):
-        return self
-
-    def is_visible(self, **kwargs):
-        return False
-
-    def text_content(self, **kwargs):
-        return ""
-
-    def count(self):
-        return 0
-
-    def get_by_role(self, role, **kwargs):
-        return self
-
-    def click(self, **kwargs):
-        pass
-
-    def wait_for(self, **kwargs):
-        pass
-
-
-def _is_noop_page(page) -> bool:
-    return isinstance(page, _NoOpPage)
-
-
 def assert_visible(page, selector: str, *, timeout: int = 10_000) -> None:
-    """Assert a selector is visible. No-op when Playwright is unavailable."""
-    if _is_noop_page(page):
-        return
+    """Assert a selector is visible."""
     from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
 
     expect(page.locator(selector).first).to_be_visible(timeout=timeout)
-
-
-def dashboard_click(page, selector: str) -> None:
-    """Click a selector. No-op when Playwright is unavailable."""
-    if _is_noop_page(page):
-        return
-    page.click(selector)
 
 
 def dashboard_goto(page, url: str) -> None:
@@ -585,9 +499,6 @@ def dashboard_goto(page, url: str) -> None:
 
     Vue Router uses createWebHashHistory, so /job/X must become /#/job/X.
     """
-    if _is_noop_page(page):
-        return
-
     parsed = urlparse(url)
     path = parsed.path
     if path and path != "/":
@@ -598,8 +509,6 @@ def dashboard_goto(page, url: str) -> None:
 
 def wait_for_dashboard_ready(page) -> None:
     """Wait for the Vue 3 dashboard to mount and render children into #app."""
-    if _is_noop_page(page):
-        return
     page.wait_for_function(
         "() => {"
         "  const app = document.getElementById('app');"

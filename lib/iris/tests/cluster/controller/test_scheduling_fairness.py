@@ -3,26 +3,21 @@
 
 """Integration tests for priority bands, per-user fairness, and scheduling caps."""
 
-from iris.cluster.controller import ops, reads
+from iris.cluster.controller import reads
 from iris.cluster.controller.budget import (
     compute_user_spend,
-)
-from iris.cluster.controller.controller import (
-    SchedulingOutcome,
 )
 from iris.cluster.controller.scheduling.policy import (
     _sort_pending_tasks_by_resolved_band,
 )
-from iris.cluster.types import JobName, WorkerId
+from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from rigging.timing import Timestamp
 
 from ._test_support import set_task_state_for_test, submit_job_in_tx
 from .conftest import (
-    inject_device_constraints,
     make_controller_state,
     make_job_request,
-    make_worker_metadata,
     query_tasks_for_job,
     submit_job,
 )
@@ -178,68 +173,3 @@ def test_batch_childs_spend_does_not_count_against_the_budget():
 
         with state._db.read_snapshot() as snap:
             assert compute_user_spend(snap).keys() == {"bob"}
-
-
-def test_unplaceable_tasks_do_not_starve_placeable_tasks(make_controller, tmp_path):
-    """A user's CPU task is scheduled even when they have many unplaceable TPU tasks.
-
-    Regression test: a per-user input cap (max_tasks_per_user_per_cycle) applied before
-    scheduling let unplaceable TPU tasks consume all per-user slots, permanently blocking
-    CPU tasks for the same user that had available workers.  The cap must only apply to
-    actual assignments, not scheduling candidates.
-    """
-    OLD_CAP = 8  # historical default — must exceed this many TPU tasks
-    ctrl = make_controller(local_state_dir=tmp_path / "local")
-
-    # Submit OLD_CAP+2 unplaceable TPU tasks for alice (no TPU workers will be registered)
-    for i in range(OLD_CAP + 2):
-        tpu_req = controller_pb2.Controller.LaunchJobRequest(
-            name=f"/alice/tpu-job-{i}",
-            entrypoint=make_job_request().entrypoint,
-            resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
-            environment=job_pb2.EnvironmentConfig(),
-            replicas=1,
-        )
-        tpu_req.resources.device.tpu.variant = "v5p-8"
-        inject_device_constraints(tpu_req)
-        jid = JobName.from_string(f"/alice/tpu-job-{i}")
-        with ctrl._db.transaction() as cur:
-            submit_job_in_tx(
-                cur,
-                job_id=jid,
-                request=tpu_req,
-                ts=Timestamp.now(),
-            )
-
-    # Submit 1 CPU task for alice — this should be placeable on the CPU worker
-    cpu_jid = JobName.from_string("/alice/cpu-job")
-    cpu_req = make_job_request(name="/alice/cpu-job", cpu=1, replicas=1)
-    inject_device_constraints(cpu_req)
-    with ctrl._db.transaction() as cur:
-        submit_job_in_tx(
-            cur,
-            job_id=cpu_jid,
-            request=cpu_req,
-            ts=Timestamp.now(),
-        )
-
-    # Register exactly 1 CPU worker — no TPU workers
-    with ctrl._db.transaction() as cur:
-        ops.worker.register(
-            cur,
-            worker_id=WorkerId("cpu-worker"),
-            address="cpu-worker:8080",
-            metadata=make_worker_metadata(cpu=4, memory_bytes=8 * 1024**3),
-            ts=Timestamp.now(),
-            health=ctrl.provider.health,
-        )
-
-    outcome = ctrl._run_scheduling()
-
-    assert outcome == SchedulingOutcome.ASSIGNMENTS_MADE, f"Expected ASSIGNMENTS_MADE, got {outcome}"
-
-    cpu_tasks = query_tasks_for_job(ctrl, cpu_jid)
-    assert len(cpu_tasks) == 1
-    assert (
-        cpu_tasks[0].state == job_pb2.TASK_STATE_ASSIGNED
-    ), f"CPU task state={cpu_tasks[0].state}; unplaceable TPU tasks may be blocking it"

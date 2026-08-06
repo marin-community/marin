@@ -101,6 +101,10 @@ class FederationJourney:
     def submit(self, name: str, *, tasks: int = 1) -> JobRef:
         return self.parent.submit(name, tasks=tasks, required_attributes={CLUSTER_CONSTRAINT_KEY: PEER_ID})
 
+    def submit_child_on_peer(self, parent: JobRef, name: str, *, tasks: int = 1) -> JobRef:
+        """Submit one descendant from the execution cluster."""
+        return self.peer.submit_child(parent, name, tasks=tasks)
+
     def promote(self) -> None:
         """Run the parent tick that assigns a queued Job to peer B."""
         self.parent.step()

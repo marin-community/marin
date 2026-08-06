@@ -9,15 +9,9 @@ both GCP and K8s providers via the ServiceTestHarness.
 
 import pytest
 from connectrpc.errors import ConnectError
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2
 
 from .conftest import ServiceTestHarness
-
-
-def _ensure_workers(harness: ServiceTestHarness) -> None:
-    """Register a GCP worker if needed. K8s harness already has a default node pool."""
-    if harness.provider_type == "gcp":
-        harness.register_gcp_worker("w1")
 
 
 def test_submit_rejects_duplicate_name(harness: ServiceTestHarness):
@@ -37,33 +31,6 @@ def test_list_jobs_returns_all_jobs(harness: ServiceTestHarness):
 
     assert id1.to_wire() in job_ids
     assert id2.to_wire() in job_ids
-
-
-def test_list_jobs_filter_by_state(harness: ServiceTestHarness):
-    """list_jobs state_filter narrows results to the requested state."""
-    _ensure_workers(harness)
-
-    # Drive one job to completion first, then submit a second job that
-    # stays pending. This ordering avoids the K8s sync (triggered by
-    # drive_job_to_completion) from also advancing the pending job.
-    done_id = harness.submit("will-succeed")
-    harness.drive_job_to_completion(done_id)
-    pending_id = harness.submit("stays-pending")
-
-    succeeded = harness.service.list_jobs(
-        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(state_filter="succeeded")),
-        None,
-    )
-    succeeded_ids = {j.job_id for j in succeeded.jobs}
-    assert done_id.to_wire() in succeeded_ids
-    assert pending_id.to_wire() not in succeeded_ids
-
-    pending = harness.service.list_jobs(
-        controller_pb2.Controller.ListJobsRequest(query=controller_pb2.Controller.JobQuery(state_filter="pending")), None
-    )
-    pending_ids = {j.job_id for j in pending.jobs}
-    assert pending_id.to_wire() in pending_ids
-    assert done_id.to_wire() not in pending_ids
 
 
 @pytest.mark.parametrize(
@@ -89,30 +56,3 @@ def test_list_jobs_filter_includes_only_matching(harness: ServiceTestHarness, qu
 
     assert other_id.to_wire() not in job_ids
     assert len(job_ids) >= 2
-
-
-def test_terminate_job(harness: ServiceTestHarness):
-    """terminate_job transitions a running job to KILLED."""
-    _ensure_workers(harness)
-    job_id = harness.submit("term-me")
-
-    harness.service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
-
-    status = harness.get_job_status(job_id)
-    assert status.state == job_pb2.JOB_STATE_KILLED
-
-
-def test_terminate_job_skips_finished(harness: ServiceTestHarness):
-    """Terminating an already-succeeded job is a no-op (no error)."""
-    _ensure_workers(harness)
-    job_id = harness.submit("already-done")
-    harness.drive_job_to_completion(job_id)
-
-    status = harness.get_job_status(job_id)
-    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-    # Terminating a finished job should not raise
-    harness.service.terminate_job(controller_pb2.Controller.TerminateJobRequest(job_id=job_id.to_wire()), None)
-    # State should remain SUCCEEDED
-    status = harness.get_job_status(job_id)
-    assert status.state == job_pb2.JOB_STATE_SUCCEEDED

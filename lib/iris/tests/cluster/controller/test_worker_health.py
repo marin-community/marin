@@ -10,7 +10,6 @@ Exercises the two independent termination paths:
 """
 
 import pytest
-from iris.cluster.controller.reads import healthy_active_workers_with_attributes, list_active_healthy_workers
 from iris.cluster.controller.worker_health import (
     MIN_UNREACHABLE_FAILURES,
     WorkerHealthEvent,
@@ -20,9 +19,6 @@ from iris.cluster.controller.worker_health import (
 )
 from iris.cluster.types import WorkerId, WorkerUsability
 from rigging.timing import Duration
-from tests.cluster.controller._test_support import set_worker_consecutive_failures_for_test
-
-from .conftest import make_worker_metadata, register_worker
 
 # Grace used by the fixture tracker. Workers register at now_ms=0, so a failure
 # at now_ms >= GRACE_MS (past the floor) is over the unreachable threshold.
@@ -151,32 +147,6 @@ def test_snapshot_reports_both_counters(tracker: WorkerHealthTracker) -> None:
     for _ in range(2):
         _build_failed(tracker, wid)
     assert tracker.snapshot() == {wid: (3, 2)}
-
-
-def test_failing_worker_excluded_from_scheduling_but_still_reconciled(state):
-    """A worker accruing reconcile failures stops getting new placements but is
-    still reconciled, so it can recover or cross the teardown threshold.
-
-    Pins the two-filter split: scheduling placement
-    (``healthy_active_workers_with_attributes``) drops a worker with
-    ``consecutive_failures > 0``, while the reconcile target set
-    (``list_active_healthy_workers``) keeps probing every active worker.
-    """
-    ok = register_worker(state, "w-ok", "w-ok:8080", make_worker_metadata())
-    failing = register_worker(state, "w-failing", "w-failing:8080", make_worker_metadata())
-
-    # Mid-failure: unreachable for one reconcile pass but not yet over threshold.
-    set_worker_consecutive_failures_for_test(state, failing, 1)
-
-    with state._db.read_snapshot() as tx:
-        schedulable = {
-            w.worker_id for w in healthy_active_workers_with_attributes(tx, state._health, state._worker_attrs)
-        }
-        reconcile_targets = set(list_active_healthy_workers(tx, state._health))
-
-    assert ok in schedulable
-    assert failing not in schedulable, "a failing worker must not receive new placements"
-    assert {ok, failing} <= reconcile_targets, "a failing worker must still be reconciled/probed"
 
 
 @pytest.mark.parametrize(

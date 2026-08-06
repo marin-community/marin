@@ -4,10 +4,9 @@
 """Tests for actor client and pool retry on transient errors."""
 
 import threading
-from unittest.mock import MagicMock
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import iris.actor.client as actor_client_module
-import iris.actor.pool as actor_pool_module
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -15,7 +14,6 @@ from iris.actor.client import ActorClient
 from iris.actor.pool import ActorPool
 from iris.actor.resolver import FixedResolver, ResolveResult
 from iris.actor.server import ActorServer
-from iris.rpc.compression import IRIS_RPC_COMPRESSIONS, IRIS_RPC_ZSTD
 from rigging.timing import ExponentialBackoff
 
 
@@ -53,33 +51,49 @@ class SwitchingResolver:
         return resolver.resolve(name)
 
 
-def test_actor_client_offers_and_sends_zstd(monkeypatch):
-    constructor = MagicMock()
-    monkeypatch.setattr(actor_client_module, "ActorServiceClientSync", constructor)
+@pytest.fixture
+def actor_wire_receiver() -> Iterator[tuple[str, dict[str, str]]]:
+    received_headers: dict[str, str] = {}
 
-    ActorClient(FixedResolver({"counter": "http://counter"}), "counter").rpc_client()
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received_headers.update({key.lower(): value for key, value in self.headers.items()})
+            self.send_response(404)
+            self.end_headers()
 
-    constructor.assert_called_once_with(
-        address="http://counter",
-        timeout_ms=None,
-        accept_compression=IRIS_RPC_COMPRESSIONS,
-        send_compression=IRIS_RPC_ZSTD,
-    )
+        def log_message(self, _format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", received_headers
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
-def test_actor_pool_offers_and_sends_zstd(monkeypatch):
-    constructor = MagicMock()
-    monkeypatch.setattr(actor_pool_module, "ActorServiceClientSync", constructor)
-    pool = ActorPool(FixedResolver({"counter": "http://counter"}), "counter")
+def test_actor_client_sends_zstd_over_http(actor_wire_receiver):
+    address, headers = actor_wire_receiver
+    client = ActorClient(FixedResolver({"counter": address}), "counter", max_call_attempts=1)
 
-    pool._get_client(FixedResolver({"counter": "http://counter"}).resolve("counter").first())
+    with pytest.raises(ConnectError):
+        client.increment("payload" * 100)
 
-    constructor.assert_called_once_with(
-        address="http://counter",
-        timeout_ms=30_000,
-        accept_compression=IRIS_RPC_COMPRESSIONS,
-        send_compression=IRIS_RPC_ZSTD,
-    )
+    assert headers["content-encoding"] == "zstd"
+    assert "zstd" in headers["accept-encoding"].split(",")
+
+
+def test_actor_pool_sends_zstd_over_http(actor_wire_receiver):
+    address, headers = actor_wire_receiver
+    with ActorPool(FixedResolver({"counter": address}), "counter", max_call_attempts=1) as pool:
+        with pytest.raises(ConnectError):
+            pool.call().increment("payload" * 100)
+
+    assert headers["content-encoding"] == "zstd"
+    assert "zstd" in headers["accept-encoding"].split(",")
 
 
 def test_actor_client_retries_on_transient_rpc_error():
