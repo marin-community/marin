@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 from iris.cluster.bundle import BundleStore
 from iris.cluster.runtime.docker import DockerRuntime, _security_flags
-from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.runtime.types import ContainerConfig, MountKind, MountSpec
 from iris.rpc import job_pb2
 
 
@@ -82,6 +82,40 @@ def test_prepare_workdir_is_noop(tmp_path, runtime):
     workdir = tmp_path / "task-workdir"
     workdir.mkdir()
     runtime.prepare_workdir(workdir, disk_bytes=1024 * 1024 * 512)
+
+
+@pytest.mark.parametrize("device", [None, "tpu"])
+def test_run_container_shm_limit_matches_memory_request(monkeypatch, tmp_path, runtime, device):
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        stdout = "container-id\n" if cmd[:2] == ["docker", "create"] else ""
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("iris.cluster.runtime.docker.subprocess.run", fake_run)
+
+    workdir = tmp_path / "task-workdir"
+    workdir.mkdir()
+    resources = job_pb2.ResourceSpecProto(memory_bytes=12 * 1024**3)
+    if device == "tpu":
+        resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v5p", count=4))
+    config = ContainerConfig(
+        image="iris-task:latest",
+        entrypoint=job_pb2.RuntimeEntrypoint(
+            run_command=job_pb2.CommandEntrypoint(argv=["echo", "hello"]),
+        ),
+        env={},
+        resources=resources,
+        mounts=[MountSpec("app", "/app", kind=MountKind.WORKDIR)],
+        workdir_host_path=workdir,
+    )
+
+    runtime.create_container(config).run()
+
+    create_command = next(command for command in commands if command[:2] == ["docker", "create"])
+    assert create_command[create_command.index("--memory") + 1] == "12288m"
+    assert create_command[create_command.index("--shm-size") + 1] == "12288m"
 
 
 def test_stage_bundle(monkeypatch, tmp_path, runtime, mock_bundle_store):

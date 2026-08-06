@@ -219,10 +219,10 @@ def _has_tpu_device(config: ContainerConfig) -> bool:
 def _build_device_flags(config: ContainerConfig) -> list[str]:
     """Build Docker device flags based on resource configuration.
 
-    Detects TPU resources and returns the Docker flags for TPU passthrough: large
-    shared memory, the locked-memory ulimit, and the SYS_RESOURCE capability for
-    memlock. Privilege (``--privileged``) is handled by the security-profile flags,
-    not here. Returns an empty list when no special device configuration is needed.
+    Detects TPU resources and returns the locked-memory ulimit and SYS_RESOURCE
+    capability for memlock. Privilege (``--privileged``) is handled by the
+    security-profile flags, not here. Returns an empty list when no special
+    device configuration is needed.
     """
     flags: list[str] = []
 
@@ -237,7 +237,6 @@ def _build_device_flags(config: ContainerConfig) -> list[str]:
     if has_tpu:
         flags.extend(
             [
-                "--shm-size=100g",
                 "--cap-add=SYS_RESOURCE",
                 "--ulimit",
                 "memlock=68719476736:68719476736",
@@ -739,6 +738,10 @@ exec {quoted_cmd}
         effective_memory_mb = memory_limit_mb or config.get_memory_mb()
         if effective_memory_mb:
             cmd.extend(["--memory", f"{effective_memory_mb}m"])
+            # Docker charges tmpfs pages to this same cgroup. Matching the
+            # filesystem ceiling lets tasks spend their requested memory on
+            # any mix of anonymous memory and /dev/shm.
+            cmd.extend(["--shm-size", f"{effective_memory_mb}m"])
 
         # Device env vars (TPU/GPU) are now included in config.env by
         # build_common_iris_env(), so no separate device_env merge needed.

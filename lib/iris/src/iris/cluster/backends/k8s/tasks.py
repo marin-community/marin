@@ -427,13 +427,13 @@ def _lookup_pod(
 
 def _build_volumes_and_mounts(
     cache_dir: str,
-    has_accelerator: bool,
+    memory_limit_bytes: int,
 ) -> tuple[list[dict], list[dict]]:
     """Build standard pod volumes and container volume mounts.
 
     Workdir and tmpfs use emptyDir; cache mounts use hostPath under cache_dir so
-    they persist across pods on the same node. /dev/shm is memory-backed with a
-    generous limit for GPU/TPU multi-process communication.
+    they persist across pods on the same node. /dev/shm is memory-backed and
+    shares the task container's memory limit.
 
     NOTE: On CoreWeave bare-metal GPU nodes the root filesystem is a 15GB
     ramdisk. Set cache_dir to a path on the NVMe (e.g. /mnt/local/iris-cache)
@@ -458,8 +458,8 @@ def _build_volumes_and_mounts(
         mounts.append({"name": spec.name, "mountPath": spec.container_path})
 
     shm_spec: dict = {"medium": "Memory"}
-    if has_accelerator:
-        shm_spec["sizeLimit"] = "100Gi"
+    if memory_limit_bytes:
+        shm_spec["sizeLimit"] = str(memory_limit_bytes)
     volumes.append({"name": "dshm", "emptyDir": shm_spec})
     mounts.append({"name": "dshm", "mountPath": "/dev/shm"})
 
@@ -815,6 +815,7 @@ def _build_pod_manifest(
     resources: dict = {}
     gpu_count = 0
     has_tpu = False
+    memory_limit_bytes = 0
     if run_req.HasField("resources"):
         res = run_req.resources
         limits: dict[str, str] = {}
@@ -828,6 +829,8 @@ def _build_pod_manifest(
             requests["cpu"] = f"{res.cpu_millicores}m"
         if res.memory_bytes:
             # Memory stays a hard cap — overshoot is fatal, not just slow.
+            # Memory-backed emptyDir usage is charged to this same cgroup.
+            memory_limit_bytes = res.memory_bytes
             limits["memory"] = str(res.memory_bytes)
             requests["memory"] = str(res.memory_bytes)
         if res.HasField("device"):
@@ -848,9 +851,8 @@ def _build_pod_manifest(
             resources.setdefault("requests", {})["ephemeral-storage"] = f"{disk_gi}Gi"
             resources.setdefault("limits", {})["ephemeral-storage"] = f"{disk_gi}Gi"
 
-    has_accelerator = gpu_count > 0 or has_tpu
     is_gang = bool(run_req.coscheduling.group_by)
-    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, has_accelerator=has_accelerator)
+    volumes, vol_mounts = _build_volumes_and_mounts(cache_dir, memory_limit_bytes=memory_limit_bytes)
 
     container: dict = {
         "name": "task",

@@ -234,7 +234,7 @@ When a job requests TPU resources (`device=tpu_device("v5litepod-16")`), workers
 
 **Docker flags:**
 - `--device /dev/vfio:/dev/vfio` - VFIO device for TPU passthrough
-- `--shm-size=100g` - Large shared memory for TPU operations
+- `--shm-size=<task memory>` - Shared-memory capacity; `/dev/shm` usage and direct memory share the task memory limit
 - `--cap-add=SYS_RESOURCE` - Resource management capabilities
 - `--ulimit memlock=68719476736:68719476736` - Unlocked memory limits
 
