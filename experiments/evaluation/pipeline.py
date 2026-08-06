@@ -48,12 +48,13 @@ class EvalStepConfig:
 
 def run_eval_pipeline_step(config: EvalStepConfig) -> None:
     keys = SUITES.get(config.evals) or (config.evals,)
+    model = models()[config.model]
     spec = LaunchSpec(
-        model=config.model,
+        model=model,
         evals=keys,
         evalchemy_definitions=(),
         harbor_definitions=(),
-        platform=default_platform(models()[config.model]),
+        platform=default_platform(model),
         accelerator=config.accelerator,
         limit=config.limit,
         records_prefix=None,

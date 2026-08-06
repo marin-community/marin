@@ -51,7 +51,6 @@ from experiments.evaluation.evals import (
     HarborDefinition,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
-from experiments.evaluation.models import models
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 
@@ -60,7 +59,7 @@ EVALUATION_CONTROLLER_CLUSTER = "marin"
 class LaunchSpec:
     """One model, evaluation selection, execution target, and record destination."""
 
-    model: str
+    model: ModelConfig
     evals: tuple[str, ...]
     evalchemy_definitions: tuple[EvalchemyDefinition, ...]
     harbor_definitions: tuple[HarborDefinition, ...]
@@ -89,14 +88,14 @@ def _launch_user() -> str:
     return os.environ.get("MARIN_EVAL_USER") or getpass.getuser()
 
 
-def _run_id(model_key: str, eval_key: str) -> str:
+def _run_id(model_name: str, eval_key: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{eval_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_name}-{eval_key}-{uuid.uuid4().hex[:4]}"
 
 
-def _group_id(model_key: str) -> str:
+def _group_id(model_name: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{model_key}-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{model_name}-{uuid.uuid4().hex[:4]}"
 
 
 def _capability_origin(cluster: str) -> str:
@@ -194,7 +193,7 @@ def build_evaluation_batch(
     user: str,
 ) -> EvaluationBatch:
     """Resolve experiment names into one model-serving evaluation batch."""
-    model = models()[spec.model]
+    model = spec.model
     accelerator = MARIN_EVAL_HARDWARE.select(model, spec.platform, spec.accelerator)
     if spec.federated_cluster is not None:
         if accelerator.platform is not Platform.GPU:
@@ -210,7 +209,7 @@ def build_evaluation_batch(
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
-        run_id = _run_id(spec.model, eval_key)
+        run_id = _run_id(model.name, eval_key)
         output_dir = prefix_join(records_prefix, f"{run_id}/results")
         evaluations.append(
             Evaluation(
@@ -228,7 +227,7 @@ def build_evaluation_batch(
 
     endpoint_cluster = accelerator.target_cluster or EVALUATION_CONTROLLER_CLUSTER
     return EvaluationBatch(
-        group_id=_group_id(spec.model),
+        group_id=_group_id(model.name),
         user=user,
         version=spec.version,
         description=spec.description,

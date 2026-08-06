@@ -5,7 +5,7 @@
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
 from fray.client import JobHandle
@@ -22,6 +22,7 @@ from marin.evaluation.records import (
     EvalRef,
     EvalRunRecord,
     HardwareRef,
+    ModelConfigRef,
     ModelRef,
     Provenance,
     RunStatus,
@@ -148,6 +149,7 @@ def _record(
             name=batch.model.name,
             location=batch.model.location,
             backend=batch.model.serve.backend.value,
+            config=ModelConfigRef.model_validate(asdict(batch.model)),
         ),
         eval=identity.eval_ref,
         hardware=HardwareRef(
