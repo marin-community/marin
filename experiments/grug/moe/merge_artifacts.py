@@ -20,6 +20,7 @@ from experiments.grug.moe.expert_merge import (
     ExpertCostMatrix,
     ExpertProbeSet,
     ExpertReservoirCollection,
+    MoeLayerTrace,
     ReservoirSample,
 )
 
@@ -28,7 +29,7 @@ _MATCHING_MANIFEST = "matching_manifest.json"
 _COST_MATRIX = "cost_matrix.npz"
 _ASSIGNMENTS = "assignments.json"
 _MATCHING_METRICS = "matching_metrics.json"
-_FORMAT_VERSION = 1
+_FORMAT_VERSION = 2
 
 
 class ExpertCalibrationArtifact(Artifact):
@@ -49,6 +50,7 @@ class CalibrationArtifactManifest:
     capacity_per_expert: int
     heldout_fraction: float
     calibration_tokens: int
+    trace_capacity: int = 0
     storage_dtype: str = "bfloat16"
     format_version: int = _FORMAT_VERSION
 
@@ -61,6 +63,8 @@ class CalibrationArtifactManifest:
             raise ValueError("heldout_fraction must lie strictly between zero and one")
         if self.calibration_tokens <= 0:
             raise ValueError("calibration_tokens must be positive")
+        if self.trace_capacity < 0:
+            raise ValueError("trace_capacity must be non-negative")
         _storage_dtype(self.storage_dtype)
 
     @classmethod
@@ -77,6 +81,7 @@ class CalibrationArtifactManifest:
             capacity_per_expert=int(payload["capacity_per_expert"]),
             heldout_fraction=float(payload["heldout_fraction"]),
             calibration_tokens=int(payload["calibration_tokens"]),
+            trace_capacity=int(payload["trace_capacity"]),
             storage_dtype=str(payload["storage_dtype"]),
             format_version=format_version,
         )
@@ -165,15 +170,23 @@ def _probe_path(root: str, expert: int) -> str:
     return prefix_join(prefix_join(root, "probes"), f"expert_{expert:04d}.npz")
 
 
+def _layer_trace_path(root: str, layer: int) -> str:
+    return prefix_join(prefix_join(root, "traces"), f"layer_{layer:02d}.npz")
+
+
 def write_calibration_artifact(
     output_path: str,
     reservoirs_by_layer: Mapping[int, ExpertReservoirCollection],
     manifest: CalibrationArtifactManifest,
+    *,
+    traces_by_layer: Mapping[int, MoeLayerTrace] | None = None,
 ) -> None:
     """Write reservoirs and commit their manifest last."""
     if set(reservoirs_by_layer) != set(manifest.layers):
         raise ValueError("reservoir layers do not match the calibration manifest")
     storage_dtype = _storage_dtype(manifest.storage_dtype)
+    if traces_by_layer is not None and set(traces_by_layer) != set(manifest.layers):
+        raise ValueError("trace layers do not match the calibration manifest")
     for layer in manifest.layers:
         reservoirs = reservoirs_by_layer[layer]
         if (
@@ -190,6 +203,29 @@ def write_calibration_artifact(
                     train_weights=calibration.train.weights.astype(np.float32),
                     heldout_states=calibration.heldout.states.astype(storage_dtype),
                     heldout_weights=calibration.heldout.weights.astype(np.float32),
+                )
+            )
+        if traces_by_layer is not None:
+            trace = traces_by_layer[layer]
+            mlp_input = np.asarray(trace.mlp_input)
+            selected_experts = np.asarray(trace.selected_experts)
+            combine_weights = np.asarray(trace.combine_weights)
+            routed_output = np.asarray(trace.routed_output)
+            trace_tokens = mlp_input.shape[0]
+            if (
+                mlp_input.shape != (trace_tokens, manifest.state_dim)
+                or routed_output.shape != mlp_input.shape
+                or selected_experts.shape != combine_weights.shape
+                or selected_experts.shape[0] != trace_tokens
+                or trace_tokens > manifest.trace_capacity
+            ):
+                raise ValueError(f"layer {layer} trace geometry does not match the manifest")
+            StoragePath(_layer_trace_path(output_path, layer)).write_bytes(
+                _npz_bytes(
+                    mlp_input=mlp_input.astype(storage_dtype),
+                    selected_experts=selected_experts.astype(np.int32),
+                    combine_weights=combine_weights.astype(storage_dtype),
+                    routed_output=routed_output.astype(storage_dtype),
                 )
             )
     StoragePath(prefix_join(output_path, _CALIBRATION_MANIFEST)).write_text(
@@ -226,6 +262,19 @@ def read_expert_calibration(
             states=_restore_states(arrays["heldout_states"], manifest.storage_dtype),
             weights=arrays["heldout_weights"].astype(np.float64),
         ),
+    )
+
+
+def read_layer_calibration_trace(path: str, layer: int) -> MoeLayerTrace:
+    manifest = read_calibration_manifest(path)
+    if layer not in manifest.layers:
+        raise ValueError(f"layer {layer} is not present in calibration artifact")
+    arrays = _load_npz(_layer_trace_path(path, layer))
+    return MoeLayerTrace(
+        mlp_input=_restore_states(arrays["mlp_input"], manifest.storage_dtype),
+        selected_experts=arrays["selected_experts"].astype(np.int32),
+        combine_weights=_restore_states(arrays["combine_weights"], manifest.storage_dtype),
+        routed_output=_restore_states(arrays["routed_output"], manifest.storage_dtype),
     )
 
 
@@ -329,6 +378,7 @@ __all__ = [
     "read_cost_matrix",
     "read_expert_calibration",
     "read_expert_probe",
+    "read_layer_calibration_trace",
     "read_matching_manifest",
     "read_matching_metrics",
     "write_calibration_artifact",

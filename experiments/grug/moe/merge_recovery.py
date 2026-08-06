@@ -72,6 +72,9 @@ class RecoveryForward(NamedTuple):
     block_output_nrmse: jax.Array
     router_top1_agreement_with_teacher: jax.Array
     router_topk_agreement_with_teacher: jax.Array
+    routing_entropy_by_layer: jax.Array
+    routing_counts_by_layer: jax.Array
+    capacity_overflow_by_layer: jax.Array
     qb_beta_per_layer: jax.Array
 
 
@@ -84,6 +87,9 @@ class RecoveryLosses(NamedTuple):
     block_output_nrmse: jax.Array
     router_top1_agreement_with_teacher: jax.Array
     router_topk_agreement_with_teacher: jax.Array
+    routing_entropy_by_layer: jax.Array
+    routing_counts_by_layer: jax.Array
+    capacity_overflow_by_layer: jax.Array
     qb_beta_per_layer: jax.Array
 
 
@@ -280,6 +286,9 @@ def recovery_forward(
     block_normalized_errors: list[jax.Array] = []
     router_top1_agreements: list[jax.Array] = []
     router_topk_agreements: list[jax.Array] = []
+    routing_entropies: list[jax.Array] = []
+    routing_counts: list[jax.Array] = []
+    capacity_overflows: list[jax.Array] = []
     qb_betas: list[jax.Array] = []
     for layer_index, student_block in enumerate(student.blocks):
         options = student.block_call_options(mask, layer_index)
@@ -318,6 +327,9 @@ def recovery_forward(
             axis=-1,
         )
         router_topk_agreements.append(jnp.mean(overlap / student_selected.shape[-1]))
+        routing_entropies.append(trace.router_stats["routing_entropy"])
+        routing_counts.append(trace.router_stats["routing_counts"])
+        capacity_overflows.append(trace.router_stats["capacity_overflow"])
 
     normalized_error = jnp.stack(normalized_errors)
     return RecoveryForward(
@@ -327,6 +339,9 @@ def recovery_forward(
         block_output_nrmse=jnp.sqrt(jnp.stack(block_normalized_errors)),
         router_top1_agreement_with_teacher=jnp.stack(router_top1_agreements),
         router_topk_agreement_with_teacher=jnp.stack(router_topk_agreements),
+        routing_entropy_by_layer=jnp.stack(routing_entropies),
+        routing_counts_by_layer=jnp.stack(routing_counts),
+        capacity_overflow_by_layer=jnp.stack(capacity_overflows),
         qb_beta_per_layer=jnp.stack(qb_betas),
     )
 
@@ -394,6 +409,9 @@ def recovery_objective(
         block_output_nrmse=forward.block_output_nrmse,
         router_top1_agreement_with_teacher=forward.router_top1_agreement_with_teacher,
         router_topk_agreement_with_teacher=forward.router_topk_agreement_with_teacher,
+        routing_entropy_by_layer=forward.routing_entropy_by_layer,
+        routing_counts_by_layer=forward.routing_counts_by_layer,
+        capacity_overflow_by_layer=forward.capacity_overflow_by_layer,
         qb_beta_per_layer=forward.qb_beta_per_layer,
     )
 

@@ -2,8 +2,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from fray.cluster import ResourceConfig
 
+from experiments.grug.moe import merge_job_runtime
 from experiments.grug.moe.merge_storage import MergeStoragePaths, validate_merge_storage_region
+
+
+def test_calibration_runtime_region_check_includes_training_data(monkeypatch) -> None:
+    marker = object()
+    captured = {}
+    monkeypatch.setattr(merge_job_runtime, "validate_merge_storage_region", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        merge_job_runtime,
+        "check_gcs_paths_same_region",
+        lambda payload, **_kwargs: captured.update(payload),
+    )
+
+    merge_job_runtime._validate_stage_storage(
+        source_checkpoint="/tmp/teacher",
+        output_path="/tmp/calibration",
+        resources=ResourceConfig.with_cpu(),
+        data=marker,
+    )
+
+    assert captured["data"] is marker
 
 
 def _paths() -> MergeStoragePaths:

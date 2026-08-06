@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import numpy as np
 
 from experiments.grug.moe.expert_merge import (
@@ -8,6 +10,7 @@ from experiments.grug.moe.expert_merge import (
     ExpertCostMatrix,
     ExpertProbeSet,
     ExpertReservoirCollection,
+    MoeLayerTrace,
 )
 from experiments.grug.moe.merge_artifacts import (
     CalibrationArtifactManifest,
@@ -16,6 +19,7 @@ from experiments.grug.moe.merge_artifacts import (
     read_cost_matrix,
     read_expert_calibration,
     read_expert_probe,
+    read_layer_calibration_trace,
     read_matching_manifest,
     read_matching_metrics,
     write_calibration_artifact,
@@ -46,7 +50,14 @@ def test_calibration_artifact_round_trip_preserves_weighted_train_and_heldout_st
         calibration_tokens=12,
     )
 
-    write_calibration_artifact(str(tmp_path), {2: reservoirs}, manifest)
+    trace = MoeLayerTrace(
+        mlp_input=states[:4],
+        selected_experts=selected[:4],
+        combine_weights=combine[:4],
+        routed_output=states[:4] * 2,
+    )
+    manifest = dataclasses.replace(manifest, trace_capacity=4)
+    write_calibration_artifact(str(tmp_path), {2: reservoirs}, manifest, traces_by_layer={2: trace})
 
     restored_manifest = read_calibration_manifest(str(tmp_path))
     restored = read_expert_calibration(str(tmp_path), 2, 1)
@@ -56,6 +67,10 @@ def test_calibration_artifact_round_trip_preserves_weighted_train_and_heldout_st
     np.testing.assert_allclose(restored.train.weights, expected.train.weights)
     np.testing.assert_allclose(restored.heldout.states, expected.heldout.states, rtol=5e-3, atol=2e-2)
     np.testing.assert_allclose(restored.heldout.weights, expected.heldout.weights)
+    restored_trace = read_layer_calibration_trace(str(tmp_path), 2)
+    np.testing.assert_allclose(restored_trace.mlp_input, trace.mlp_input, rtol=5e-3, atol=2e-2)
+    np.testing.assert_array_equal(restored_trace.selected_experts, trace.selected_experts)
+    np.testing.assert_allclose(restored_trace.routed_output, trace.routed_output, rtol=5e-3, atol=2e-2)
 
 
 def _probe(offset: float) -> ExpertProbeSet:

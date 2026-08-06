@@ -5,6 +5,7 @@
 
 import dataclasses
 import logging
+import os
 
 import jax
 import jmp
@@ -15,12 +16,14 @@ from jax.experimental import multihost_utils
 from levanter.checkpoint import latest_checkpoint_path
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.schedule import BatchSchedule
+from rigging.filesystem import check_gcs_paths_same_region
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.moe.expert_merge import (
     AssignmentMode,
     ExpertCalibration,
     ExpertReservoirCollection,
+    MoeLayerTrace,
     build_spectral_probe_set,
     forward_with_moe_traces,
     functional_cost_matrix,
@@ -104,18 +107,24 @@ def _validate_stage_storage(
     output_path: str,
     resources,
     calibration_path: str | None = None,
+    data=None,
 ) -> None:
     """Apply the strict merge storage contract to one materialization stage."""
-    validate_merge_storage_region(
-        MergeStoragePaths(
-            teacher_checkpoint=source_checkpoint,
-            calibration=calibration_path or output_path,
-            converted_checkpoint=output_path,
-            recovery_output=output_path,
-            matching=output_path if calibration_path is not None else None,
-        ),
-        local_ok=isinstance(resources.device, CpuConfig),
+    paths = MergeStoragePaths(
+        teacher_checkpoint=source_checkpoint,
+        calibration=calibration_path or output_path,
+        converted_checkpoint=output_path,
+        recovery_output=output_path,
+        matching=output_path if calibration_path is not None else None,
     )
+    local_ok = isinstance(resources.device, CpuConfig)
+    validate_merge_storage_region(paths, local_ok=local_ok)
+    if data is not None:
+        check_gcs_paths_same_region(
+            {"paths": paths, "data": data},
+            local_ok=local_ok,
+            skip_if_prefix_contains=(),
+        )
 
 
 def _gather_trace_arrays(traces):
@@ -130,13 +139,41 @@ def _add_trace_arrays(
     *,
     token_limit: int,
 ) -> None:
-    mlp_input, selected_experts, combine_weights = trace_arrays
+    mlp_input, selected_experts, combine_weights, _routed_output = trace_arrays
     flat_inputs = np.asarray(mlp_input).reshape(-1, reservoirs.state_dim)[:token_limit]
     reservoirs.add_routes(
         flat_inputs,
         np.asarray(selected_experts).reshape(-1, selected_experts.shape[-1])[:token_limit],
         np.asarray(combine_weights).reshape(-1, combine_weights.shape[-1])[:token_limit],
     )
+
+
+def _append_bounded_trace(
+    chunks: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+    trace_arrays,
+    *,
+    remaining_capacity: int,
+    token_limit: int,
+) -> int:
+    take = min(remaining_capacity, token_limit)
+    if take <= 0:
+        return 0
+    mlp_input, selected_experts, combine_weights, routed_output = trace_arrays
+    state_dim = mlp_input.shape[-1]
+    chunks.append(
+        (
+            np.asarray(mlp_input).reshape(-1, state_dim)[:take],
+            np.asarray(selected_experts).reshape(-1, selected_experts.shape[-1])[:take],
+            np.asarray(combine_weights).reshape(-1, combine_weights.shape[-1])[:take],
+            np.asarray(routed_output).reshape(-1, state_dim)[:take],
+        )
+    )
+    return take
+
+
+def _merge_trace_chunks(chunks: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]) -> MoeLayerTrace:
+    fields = tuple(np.concatenate(values, axis=0) for values in zip(*chunks, strict=True))
+    return MoeLayerTrace(*fields)
 
 
 def _validate_expert_calibration(calibration: ExpertCalibration, *, layer: int, expert: int) -> None:
@@ -157,11 +194,14 @@ def run_calibration_local(config: CalibrationJobConfig) -> None:
         source_checkpoint=config.source.checkpoint_dir,
         output_path=config.output_path,
         resources=config.resources,
+        data=config.data,
     )
     if config.calibration_tokens <= 0:
         raise ValueError(f"calibration_tokens must be positive, got {config.calibration_tokens}")
     if len(set(config.layers)) != len(config.layers):
         raise ValueError(f"calibration layers must be distinct, got {config.layers}")
+    if config.trace_capacity <= 0:
+        raise ValueError(f"trace_capacity must be positive, got {config.trace_capacity}")
 
     initialize_merge_worker()
     mesh = compact_grug_mesh()
@@ -180,6 +220,10 @@ def run_calibration_local(config: CalibrationJobConfig) -> None:
             )
             for layer in config.layers
         }
+        trace_chunks_by_layer: dict[int, list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]] = {
+            layer: [] for layer in config.layers
+        }
+        trace_tokens_by_layer = {layer: 0 for layer in config.layers}
         batch_schedule = BatchSchedule(config.batch_size)
         data_key = jax.random.PRNGKey(config.seed)
         train_dataset = build_train_dataset(
@@ -201,7 +245,12 @@ def run_calibration_local(config: CalibrationJobConfig) -> None:
                 mask=attn_mask,
             )
             return tuple(
-                (traces[layer].mlp_input, traces[layer].selected_experts, traces[layer].combine_weights)
+                (
+                    traces[layer].mlp_input,
+                    traces[layer].selected_experts,
+                    traces[layer].combine_weights,
+                    traces[layer].routed_output,
+                )
                 for layer in layers
             )
 
@@ -215,6 +264,12 @@ def run_calibration_local(config: CalibrationJobConfig) -> None:
             token_limit = min(remaining, batch_tokens)
             for layer, trace_arrays in zip(layers, gathered_traces, strict=True):
                 _add_trace_arrays(reservoirs_by_layer[layer], trace_arrays, token_limit=token_limit)
+                trace_tokens_by_layer[layer] += _append_bounded_trace(
+                    trace_chunks_by_layer[layer],
+                    trace_arrays,
+                    remaining_capacity=config.trace_capacity - trace_tokens_by_layer[layer],
+                    token_limit=token_limit,
+                )
             processed_tokens += token_limit
             logger.info(
                 "Calibration %s collected %d/%d tokens",
@@ -225,18 +280,25 @@ def run_calibration_local(config: CalibrationJobConfig) -> None:
 
         manifest = CalibrationArtifactManifest(
             source_checkpoint=source_checkpoint,
-            source_commit=None,
+            source_commit=config.source.source_commit or os.environ.get("GIT_COMMIT"),
             layers=layers,
             num_experts=config.source.model.num_experts,
             state_dim=config.source.model.hidden_dim,
             capacity_per_expert=config.capacity_per_expert,
             heldout_fraction=config.heldout_fraction,
             calibration_tokens=processed_tokens,
+            trace_capacity=config.trace_capacity,
         )
+        traces_by_layer = {layer: _merge_trace_chunks(trace_chunks_by_layer[layer]) for layer in config.layers}
         _sync_before_and_after_write(
             config.run_id,
             "calibration",
-            lambda: write_calibration_artifact(config.output_path, reservoirs_by_layer, manifest),
+            lambda: write_calibration_artifact(
+                config.output_path,
+                reservoirs_by_layer,
+                manifest,
+                traces_by_layer=traces_by_layer,
+            ),
         )
 
 

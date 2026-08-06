@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import pytest
 from fray.cluster import ResourceConfig
 from levanter.checkpoint import latest_checkpoint_path, load_checkpoint, save_checkpoint
 from levanter.data.dataset import ListAsyncDataset
@@ -193,38 +195,59 @@ def test_conversion_worker_persists_merged_checkpoint_and_ignores_source_optimiz
     assert manifest.recovery_step == 0
     assert len(tuple((output_path / "checkpoints").glob("step-*"))) == 1
 
+    second_root = tmp_path / "second-teacher" / "checkpoints"
+    second_checkpoint = second_root / "step-7"
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        save_checkpoint(
+            {
+                "step": jnp.array(7, dtype=jnp.int32),
+                "params": inputs.teacher,
+                "pending_qb_betas": jnp.arange(8, dtype=jnp.float32).reshape(4, 2),
+                "opt_state": {"source_only": jnp.array(123.0)},
+            },
+            step=7,
+            checkpoint_path=second_checkpoint,
+            is_temporary=False,
+        )
+    with pytest.raises(ValueError, match="stale provenance"):
+        run_conversion_local(
+            dataclasses.replace(
+                config,
+                source=dataclasses.replace(inputs.source, checkpoint_dir=str(second_root)),
+            )
+        )
+
 
 def test_prefit_worker_persists_best_bank_and_balanced_layer_metrics(tmp_path: Path) -> None:
     inputs = _runtime_inputs(tmp_path)
     output_path = tmp_path / "prefit"
-    run_prefit_local(
-        PrefitJobConfig(
-            source=inputs.source,
-            calibration_path=inputs.calibration_path,
-            matching_path=inputs.matching_path,
-            output_path=str(output_path),
-            resources=ResourceConfig.with_cpu(),
-            run_id="test-prefit",
-            representative_layer=1,
-            source_layer=2,
-            probe=SpectralProbeConfig(
-                covariance_rank=2,
-                num_centers=2,
-                num_sensitive_directions=2,
-                directions_per_center=1,
-                radii=(0.15,),
-                ordinary_samples=2,
-            ),
-            config=PrefitConfig(
-                learning_rate=1e-3,
-                steps=1,
-                examples_per_source=1,
-                heldout_examples_per_source=1,
-                eval_every=1,
-                early_stopping_patience=1,
-            ),
-        )
+    config = PrefitJobConfig(
+        source=inputs.source,
+        calibration_path=inputs.calibration_path,
+        matching_path=inputs.matching_path,
+        output_path=str(output_path),
+        resources=ResourceConfig.with_cpu(),
+        run_id="test-prefit",
+        representative_layer=1,
+        source_layer=2,
+        probe=SpectralProbeConfig(
+            covariance_rank=2,
+            num_centers=2,
+            num_sensitive_directions=2,
+            directions_per_center=1,
+            radii=(0.15,),
+            ordinary_samples=2,
+        ),
+        config=PrefitConfig(
+            learning_rate=1e-3,
+            steps=1,
+            examples_per_source=1,
+            heldout_examples_per_source=1,
+            eval_every=1,
+            early_stopping_patience=1,
+        ),
     )
+    run_prefit_local(config)
 
     checkpoint = latest_checkpoint_path(str(output_path / "checkpoints"))
     manifest = json.loads((Path(checkpoint) / "prefit_manifest.json").read_text())
@@ -245,6 +268,9 @@ def test_prefit_worker_persists_best_bank_and_balanced_layer_metrics(tmp_path: P
     restored = load_checkpoint(template, checkpoint, mesh=compact_grug_mesh(expert_axis_size=1))
     assert int(restored.step) == 1
     assert np.isfinite(float(restored.best_loss))
+
+    with pytest.raises(ValueError, match="stale provenance"):
+        run_prefit_local(dataclasses.replace(config, config=dataclasses.replace(config.config, steps=2)))
 
 
 def _data_config() -> LmDataConfig:
@@ -296,28 +322,30 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         "checkpoint_every": 1,
         "checkpoint_token_milestones": (8,),
     }
-    run_recovery_local(
-        RecoveryJobConfig(
-            **common,
-            init_checkpoint_dir=str(converted_path / "checkpoints"),
-            output_path=str(stage_a_path),
-            run_id="test-stage-a",
-            stage=RecoveryStage.LOCAL,
-        )
+    stage_a_config = RecoveryJobConfig(
+        **common,
+        init_checkpoint_dir=str(converted_path / "checkpoints"),
+        output_path=str(stage_a_path),
+        run_id="test-stage-a",
+        stage=RecoveryStage.LOCAL,
     )
+    run_recovery_local(stage_a_config)
 
     stage_b_path = tmp_path / "stage-b"
-    run_recovery_local(
-        RecoveryJobConfig(
-            **common,
-            init_checkpoint_dir=str(stage_a_path / "checkpoints"),
-            output_path=str(stage_b_path),
-            run_id="test-stage-b",
-            stage=RecoveryStage.PRESERVATION,
-            logit_kl_weight=0.1,
-            logit_kl_vocab_chunk_size=8,
-        )
+    stage_b_config = RecoveryJobConfig(
+        **common,
+        init_checkpoint_dir=str(stage_a_path / "checkpoints"),
+        output_path=str(stage_b_path),
+        run_id="test-stage-b",
+        stage=RecoveryStage.PRESERVATION,
+        logit_kl_weight=0.1,
+        logit_kl_vocab_chunk_size=8,
     )
+    run_recovery_local(stage_b_config)
+
+    # Resuming exactly at a milestone must reconstruct the complete teacher-relative eval.
+    run_recovery_local(stage_a_config)
+    run_recovery_local(stage_b_config)
 
     for output_path in (stage_a_path, stage_b_path):
         checkpoint = latest_checkpoint_path(str(output_path / "checkpoints"))
@@ -329,9 +357,15 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         training_metrics = json.loads((output_path / "training_metrics" / "step-1.json").read_text())
         assert initial_eval["max_eval_batches"] == 8
         assert "merge/immediate_validation_loss_delta" in initial_eval["metrics"]
+        assert "eval/paloma/macro_loss" in initial_eval["metrics"]
         assert milestone_eval["tokens"] == 8
         assert "teacher/loss" in milestone_eval["metrics"]
         assert "merge/recovery_tokens_to_threshold" in milestone_eval["metrics"]
         assert "merge/moe_output_nrmse_by_layer/layer_1" in training_metrics["metrics"]
         assert "merge/block_output_nrmse_by_layer/layer_1" in training_metrics["metrics"]
         assert "merge/router_topk_agreement_with_teacher/layer_1" in training_metrics["metrics"]
+        assert "throughput/tokens_per_second" in training_metrics["metrics"]
+        assert training_metrics["metrics"]["throughput/total_tokens"] == 8
+        assert "train/router/layer_1/routing_entropy" in training_metrics["metrics"]
+        assert "train/router/layer_1/capacity_overflow" in training_metrics["metrics"]
+        assert "train/router/layer_1/routing_count/expert_0" in training_metrics["metrics"]

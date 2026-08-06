@@ -7,6 +7,7 @@ import dataclasses
 import json
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -74,7 +75,7 @@ logger = logging.getLogger(__name__)
 
 _CHECKPOINTS_DIRECTORY = "checkpoints"
 _PREFIT_MANIFEST_FILENAME = "prefit_manifest.json"
-_PREFIT_FORMAT_VERSION = 1
+_PREFIT_FORMAT_VERSION = 2
 _RECOVERY_THRESHOLD_FILENAME = "recovery_threshold.json"
 
 
@@ -432,7 +433,30 @@ def _prefit_manifest(
         "stopped_early": stopped_early,
         "nrmse_by_source": nrmse_by_source.tolist(),
         "merge/expert_holdout_nrmse_by_cluster": nrmse_by_cluster,
+        "probe_config": json.loads(json.dumps(dataclasses.asdict(config.probe))),
+        "prefit_config": json.loads(json.dumps(dataclasses.asdict(config.config))),
     }
+
+
+def _validate_prefit_provenance(
+    config: PrefitJobConfig,
+    *,
+    checkpoint: str,
+    source_checkpoint: str,
+) -> None:
+    manifest = json.loads(StoragePath(prefix_join(checkpoint, _PREFIT_MANIFEST_FILENAME)).read_text())
+    expected = {
+        "source_checkpoint": source_checkpoint,
+        "calibration_path": config.calibration_path,
+        "matching_path": config.matching_path,
+        "representative_layer": config.representative_layer,
+        "source_layer": config.source_layer,
+        "probe_config": json.loads(json.dumps(dataclasses.asdict(config.probe))),
+        "prefit_config": json.loads(json.dumps(dataclasses.asdict(config.config))),
+    }
+    mismatches = {key: (manifest.get(key), value) for key, value in expected.items() if manifest.get(key) != value}
+    if mismatches:
+        raise ValueError(f"existing prefit checkpoint has stale provenance: {mismatches}")
 
 
 def run_prefit_local(config: PrefitJobConfig) -> None:
@@ -475,6 +499,11 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
         checkpoint_root = _checkpoint_root(config.output_path)
         own_checkpoint = discover_latest_checkpoint(checkpoint_root)
         if own_checkpoint is not None:
+            _validate_prefit_provenance(
+                config,
+                checkpoint=own_checkpoint,
+                source_checkpoint=source_checkpoint,
+            )
             state = load_checkpoint(state, own_checkpoint, mesh=mesh)
 
         heldout_batch = sample_prefit_batch(
@@ -541,9 +570,9 @@ def _load_prefitted_bank(
     initial_bank: MoEExpertMlp,
     *,
     mesh: jax.sharding.Mesh,
-) -> MoEExpertMlp | None:
+) -> tuple[MoEExpertMlp | None, str | None]:
     if config.prefit_path is None:
-        return None
+        return None, None
     checkpoint = latest_checkpoint_path(config.prefit_path)
     manifest = json.loads(StoragePath(prefix_join(checkpoint, _PREFIT_MANIFEST_FILENAME)).read_text())
     if int(manifest["format_version"]) != _PREFIT_FORMAT_VERSION:
@@ -565,7 +594,28 @@ def _load_prefitted_bank(
         stale_evaluations=jnp.array(0, dtype=jnp.int32),
     )
     restored = load_checkpoint(template, checkpoint, mesh=mesh)
-    return restored.best_bank
+    return restored.best_bank, checkpoint
+
+
+def _validate_conversion_provenance(
+    config: ConversionJobConfig,
+    manifest: MergeCheckpointManifest,
+    matching: MatchingArtifactManifest,
+) -> None:
+    spec = manifest.spec
+    expected_prefit = latest_checkpoint_path(config.prefit_path) if config.prefit_path is not None else None
+    expected = {
+        "source_checkpoint": latest_checkpoint_path(config.source.checkpoint_dir),
+        "calibration_path": config.calibration_path,
+        "cost_matrix_path": prefix_join(config.matching_path, "cost_matrix.npz"),
+        "probe_path": prefix_join(config.matching_path, "probes"),
+        "prefit_checkpoint": expected_prefit,
+    }
+    actual = {name: getattr(spec, name) for name in expected}
+    mismatches = {name: (actual[name], value) for name, value in expected.items() if actual[name] != value}
+    if mismatches:
+        raise ValueError(f"existing conversion checkpoint has stale provenance: {mismatches}")
+    _validate_assignment_provenance(manifest, matching)
 
 
 def _validate_merge_manifest(
@@ -629,7 +679,7 @@ def run_conversion_local(config: ConversionJobConfig) -> None:
                 prefit_applied=config.prefit_path is not None,
                 affected_layers=(config.representative_layer, config.source_layer),
             )
-            _validate_assignment_provenance(manifest, matching)
+            _validate_conversion_provenance(config, manifest, matching)
             logger.info("Converted output already exists at %s", own_checkpoint)
             return
 
@@ -641,23 +691,24 @@ def run_conversion_local(config: ConversionJobConfig) -> None:
         representative_bank = source_state.params.expert_banks[
             source_state.params.blocks[config.representative_layer].expert_bank_index
         ]
-        prefitted_bank = _load_prefitted_bank(config, representative_bank, mesh=mesh)
+        prefitted_bank, prefit_checkpoint = _load_prefitted_bank(config, representative_bank, mesh=mesh)
         spec = OnePairMergeCheckpointSpec(
             representative_layer=config.representative_layer,
             source_layer=config.source_layer,
             source_to_shared=assignment,
             assignment_mode=config.assignment_mode,
             source_checkpoint=source_checkpoint,
+            source_commit=calibration.source_commit,
             calibration_path=config.calibration_path,
             cost_matrix_path=prefix_join(config.matching_path, "cost_matrix.npz"),
             probe_path=prefix_join(config.matching_path, "probes"),
             prefit_applied=prefitted_bank is not None,
+            prefit_checkpoint=prefit_checkpoint,
         )
-        conversion_optimizer = config.source.optimizer.build(max(1, config.source.training_steps))
         converted = convert_grug_state_for_one_pair_merge(
             source_state,
             spec=spec,
-            init_optimizer_state=conversion_optimizer.init,
+            init_optimizer_state=lambda _: optax.EmptyState(),
             shared_bank=prefitted_bank,
         )
         _save_permanent_checkpoint(
@@ -712,7 +763,13 @@ def _load_recovery_initial_weights(
     )
 
 
-def _recovery_metrics(losses: RecoveryLosses, affected_layers: tuple[int, int]) -> dict[str, float]:
+def _recovery_metrics(
+    losses: RecoveryLosses,
+    affected_layers: tuple[int, int],
+    *,
+    tokens_per_second: float | None = None,
+    total_tokens: int | None = None,
+) -> dict[str, float]:
     metrics = {
         "train/loss": float(jax.device_get(losses.total)),
         "train/cross_entropy_loss": float(jax.device_get(losses.cross_entropy)),
@@ -723,11 +780,22 @@ def _recovery_metrics(losses: RecoveryLosses, affected_layers: tuple[int, int]) 
     block_nrmse = np.asarray(jax.device_get(losses.block_output_nrmse))
     top1_agreement = np.asarray(jax.device_get(losses.router_top1_agreement_with_teacher))
     topk_agreement = np.asarray(jax.device_get(losses.router_topk_agreement_with_teacher))
+    routing_entropy = np.asarray(jax.device_get(losses.routing_entropy_by_layer))
+    routing_counts = np.asarray(jax.device_get(losses.routing_counts_by_layer))
+    capacity_overflow = np.asarray(jax.device_get(losses.capacity_overflow_by_layer))
+    if tokens_per_second is not None:
+        metrics["throughput/tokens_per_second"] = tokens_per_second
+    if total_tokens is not None:
+        metrics["throughput/total_tokens"] = float(total_tokens)
     for index, layer in enumerate(affected_layers):
         metrics[f"merge/moe_output_nrmse_by_layer/layer_{layer}"] = float(nrmse[index])
         metrics[f"merge/block_output_nrmse_by_layer/layer_{layer}"] = float(block_nrmse[index])
         metrics[f"merge/router_top1_agreement_with_teacher/layer_{layer}"] = float(top1_agreement[index])
         metrics[f"merge/router_topk_agreement_with_teacher/layer_{layer}"] = float(topk_agreement[index])
+        metrics[f"train/router/layer_{layer}/routing_entropy"] = float(routing_entropy[index])
+        metrics[f"train/router/layer_{layer}/capacity_overflow"] = float(capacity_overflow[index])
+        for expert, count in enumerate(routing_counts[index]):
+            metrics[f"train/router/layer_{layer}/routing_count/expert_{expert}"] = float(count)
     return metrics
 
 
@@ -756,6 +824,7 @@ def _evaluate_recovery_checkpoint(
 ) -> None:
     student_result = evaluator.evaluate(student)
     metrics = _eval_result_metrics(student_result, prefix="student")
+    metrics["eval/paloma/macro_loss"] = float(student_result.macro_avg_loss)
     if teacher is not None:
         teacher_result = evaluator.evaluate(teacher)
         metrics.update(_eval_result_metrics(teacher_result, prefix="teacher"))
@@ -909,7 +978,7 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
                 config,
                 evaluator=evaluator,
                 student=state.params,
-                teacher=None,
+                teacher=teacher_state.params,
                 step=initial_step,
                 tokens=milestone_tokens_by_step[initial_step],
             )
@@ -932,6 +1001,8 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
             make_recovery_train_step(optimizer, recovery_config, logit_kl_loss=logit_kl_loss),
             donate_argnums=(0,),
         )
+        metrics_started = time.monotonic()
+        metrics_start_step = int(state.step)
 
         while int(state.step) < target_steps:
             batch = next(iterator)
@@ -954,6 +1025,14 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
 
             if step % config.checkpoint_every != 0 and step not in milestone_steps and step != target_steps:
                 continue
+            elapsed = max(time.monotonic() - metrics_started, 1e-9)
+            tokens_per_second = (step - metrics_start_step) * tokens_per_step / elapsed
+            checkpoint_metrics = _recovery_metrics(
+                losses,
+                config.affected_layers,
+                tokens_per_second=tokens_per_second,
+                total_tokens=min(step * tokens_per_step, config.training_tokens),
+            )
             recovery_manifest = dataclasses.replace(manifest, recovery_step=step, optimizer_state_reset=True)
             _save_permanent_checkpoint(
                 state,
@@ -969,10 +1048,12 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
                     "stage": config.stage.value,
                     "step": step,
                     "tokens": min(step * tokens_per_step, config.training_tokens),
-                    "metrics": _recovery_metrics(losses, config.affected_layers),
+                    "metrics": checkpoint_metrics,
                 },
                 sync_name=f"recovery_{config.stage.value}_training_metrics_{step}",
             )
+            metrics_started = time.monotonic()
+            metrics_start_step = step
             if step in milestone_steps:
                 _evaluate_recovery_checkpoint(
                     config,

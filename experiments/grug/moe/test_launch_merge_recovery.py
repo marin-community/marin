@@ -12,18 +12,18 @@ from experiments.grug.moe.merge_recovery import RecoveryStage
 _PREFIX = "gs://marin-us-central1/test"
 
 
-def _pipeline():
+def _pipeline(*, teacher_commit: str | None = None):
     teacher = ArtifactStep.adopt(
         "test/grug-merge-teacher",
         "dev",
         "gs://marin-us-central1/test/teacher",
         kind=LevanterCheckpoint,
     )
-    return build_merge_recovery_pipeline(teacher, version="dev")
+    return build_merge_recovery_pipeline(teacher, version="dev", teacher_commit=teacher_commit)
 
 
 def test_merge_pipeline_reuses_calibration_and_matching_across_all_ablation_branches() -> None:
-    pipeline = _pipeline()
+    pipeline = _pipeline(teacher_commit="teacher-sha")
 
     assert {branch.name for branch in pipeline.branches} == set(MergeBranchName)
     assert len({branch.converted.fingerprint() for branch in pipeline.branches}) == 4
@@ -35,6 +35,7 @@ def test_merge_pipeline_reuses_calibration_and_matching_across_all_ablation_bran
         assert config.matching_path == pipeline.matching.path(_PREFIX)
         assert config.assignment_mode is branch.assignment_mode
         assert config.resources.regions == ["us-central1"]
+        assert config.source.source_commit == "teacher-sha"
         assert (config.prefit_path is not None) is branch.prefit_applied
         assert (pipeline.prefit in branch.converted.deps) is branch.prefit_applied
 

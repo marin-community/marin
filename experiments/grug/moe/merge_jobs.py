@@ -22,6 +22,7 @@ class SourceCheckpointConfig:
     optimizer: OptimizerConfig
     training_steps: int
     checkpoint_dir: str
+    source_commit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class CalibrationJobConfig:
     calibration_tokens: int = 2_000_000
     batch_size: int = 32
     capacity_per_expert: int = 2_048
+    trace_capacity: int = 8_192
     heldout_fraction: float = 0.2
     seed: int = 0
 

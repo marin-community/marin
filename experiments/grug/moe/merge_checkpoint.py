@@ -21,7 +21,7 @@ from experiments.grug.moe.model import Transformer
 from experiments.grug.moe.train import GrugTrainState
 
 MERGE_CHECKPOINT_MANIFEST_FILENAME = "merge_manifest.json"
-_MERGE_CHECKPOINT_FORMAT_VERSION = 1
+_MERGE_CHECKPOINT_FORMAT_VERSION = 2
 
 type OptimizerStateInitializer = Callable[[Transformer], optax.OptState]
 
@@ -40,6 +40,7 @@ class OnePairMergeCheckpointSpec:
     cost_matrix_path: str | None = None
     probe_path: str | None = None
     prefit_applied: bool = False
+    prefit_checkpoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ class MergeCheckpointManifest:
             cost_matrix_path=spec_payload.get("cost_matrix_path"),
             probe_path=spec_payload.get("probe_path"),
             prefit_applied=bool(spec_payload.get("prefit_applied", False)),
+            prefit_checkpoint=spec_payload["prefit_checkpoint"],
         )
         return cls(
             spec=spec,

@@ -84,6 +84,7 @@ def build_merge_recovery_pipeline(
     *,
     version: str | None = None,
     resources: ResourceConfig = _MERGE_RESOURCES,
+    teacher_commit: str | None = None,
 ) -> MergeRecoveryPipeline:
     base_model, base_optimizer, _, source_steps = build_from_heuristic(
         budget=_BUDGET,
@@ -107,6 +108,7 @@ def build_merge_recovery_pipeline(
                 optimizer=base_optimizer,
                 training_steps=source_steps,
                 checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                source_commit=teacher_commit,
             ),
             data=mixture(ctx, train, validation=validation),
             output_path=ctx.output_path,
@@ -134,6 +136,7 @@ def build_merge_recovery_pipeline(
                 optimizer=base_optimizer,
                 training_steps=source_steps,
                 checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                source_commit=teacher_commit,
             ),
             calibration_path=ctx.artifact_path(calibration),
             output_path=ctx.output_path,
@@ -161,6 +164,7 @@ def build_merge_recovery_pipeline(
                 optimizer=base_optimizer,
                 training_steps=source_steps,
                 checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                source_commit=teacher_commit,
             ),
             calibration_path=ctx.artifact_path(calibration),
             matching_path=ctx.artifact_path(matching),
@@ -203,6 +207,7 @@ def build_merge_recovery_pipeline(
                     optimizer=base_optimizer,
                     training_steps=source_steps,
                     checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                    source_commit=teacher_commit,
                 ),
                 calibration_path=ctx.artifact_path(calibration),
                 matching_path=ctx.artifact_path(matching),
@@ -254,6 +259,7 @@ def build_merge_recovery_pipeline(
                         optimizer=base_optimizer,
                         training_steps=source_steps,
                         checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                        source_commit=teacher_commit,
                     ),
                     data=mixture(ctx, train, validation=validation),
                     matching_path=ctx.artifact_path(matching),
@@ -311,7 +317,11 @@ def pipeline_from_environment(*, version: str | None = None) -> MergeRecoveryPip
         source,
         kind=LevanterCheckpoint,
     )
-    return build_merge_recovery_pipeline(teacher, version=version)
+    return build_merge_recovery_pipeline(
+        teacher,
+        version=version,
+        teacher_commit=os.environ.get("GRUG_MERGE_TEACHER_COMMIT"),
+    )
 
 
 @click.command()
