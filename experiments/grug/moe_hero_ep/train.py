@@ -7,7 +7,6 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 import equinox as eqx
 import jax
@@ -42,7 +41,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
-from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer, _histogram_from_expert_counts
+from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -100,12 +99,6 @@ class GrugTrainerConfig:
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
     sharding_dump_path: str | None = None
-
-    # Split each optimizer step into this many forward/backward passes. The EP dispatch buffers are
-    # `capacity_factor * tokens_per_shard * top_k` rows, and `tokens_per_shard` is the microbatch's
-    # local slice, so this is the lever that fits a shape whose routing capacity does not.
-    # It changes MFU, so hold it constant across arms of a comparison.
-    microbatches: int = 1
 
 
 @dataclass(frozen=True)
@@ -357,69 +350,6 @@ def _drop_metrics(
     }
 
 
-_ROUTING_COUNTS_KEY = "train/router/routing_counts_per_layer"
-_ROUTING_HIST_SUFFIX = "/routing_hist"
-# Router metrics arrive as a bare dict of raw arrays with no reduction metadata, so gradient
-# accumulation has to classify every key by hand. Counts must sum: `_drop_metrics` divides
-# `moe/dropped_assignments` by the FULL batch's assignment total, so folding it as a mean would
-# understate the drop rate by exactly the microbatch count, silently. Every other scalar is a
-# per-token or per-layer mean. Routing histograms are a pure function of the counts, so they are
-# rebuilt from the summed counts rather than folded field by field.
-_SUMMED_METRICS: frozenset[str] = frozenset({"moe/dropped_assignments", _ROUTING_COUNTS_KEY})
-
-
-def _slice_microbatch(batch: GrugLmExample, start: int, size: int) -> GrugLmExample:
-    """Take one microbatch out of a batch, slicing the attention mask with it.
-
-    Every array a `GrugLmExample` carries is per-example with the batch as its leading axis: the
-    tokens and loss weights, and the mask's segment ids, THD segment lengths, and FA4 bounds.
-    `block_cross_document_attention` populates those mask fields, so the hero batches always have
-    them and slicing the tokens alone would misalign attention against them. `is_causal` and
-    `sliding_window` are static equinox fields, so they are not leaves and carry through untouched.
-
-    Any leaf that does not lead with the batch axis is rejected rather than sliced on a guess.
-    """
-    batch_size = batch.tokens.shape[0]
-
-    def slice_leaf(leaf: jax.Array) -> jax.Array:
-        if leaf.shape[:1] != (batch_size,):
-            raise ValueError(
-                f"microbatching needs every batch leaf to lead with the batch axis {batch_size}, "
-                f"got a leaf of shape {leaf.shape}"
-            )
-        return jax.lax.slice_in_dim(leaf, start, start + size, axis=0)
-
-    return jax.tree_util.tree_map(slice_leaf, batch)
-
-
-def _fold_metrics(per_microbatch: list[dict[str, Any]]) -> dict[str, Any]:
-    """Combine per-microbatch metric dicts into one dict for the whole batch.
-
-    Raises on a key it cannot classify, so a metric added later cannot quietly land in the wrong
-    bucket. See `_SUMMED_METRICS` for why the distinction matters.
-    """
-    folded: dict[str, Any] = {}
-    for key in per_microbatch[0]:
-        values = [metrics[key] for metrics in per_microbatch]
-        if key in _SUMMED_METRICS:
-            folded[key] = sum(values[1:], start=values[0])
-        elif key.endswith(_ROUTING_HIST_SUFFIX):
-            continue  # rebuilt below from the summed counts
-        elif values[0] is None:
-            folded[key] = None
-        elif isinstance(values[0], jax.Array):
-            folded[key] = sum(values[1:], start=values[0]) / len(values)
-        else:
-            raise TypeError(f"metric {key!r} has unfoldable type {type(values[0]).__name__}")
-
-    summed_counts = folded[_ROUTING_COUNTS_KEY]
-    for key in per_microbatch[0]:
-        if key.endswith(_ROUTING_HIST_SUFFIX):
-            layer = int(key.split("/")[-2].removeprefix("layer_"))
-            folded[key] = _histogram_from_expert_counts(summed_counts[layer])
-    return folded
-
-
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -428,10 +358,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
-    microbatches: int = 1,
 ):
-    if microbatches < 1:
-        raise ValueError(f"microbatches must be positive, got {microbatches}")
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if watch_config is not None:
@@ -452,49 +379,18 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
-        def loss_fn(params, micro):
+        def loss_fn(params):
             compute_params = mp.cast_to_compute(params)
             return compute_params.next_token_loss(
-                micro.tokens,
-                micro.loss_weight,
-                mask=micro.attn_mask,
+                batch.tokens,
+                batch.loss_weight,
+                mask=batch.attn_mask,
                 reduction="mean",
                 logsumexp_weight=z_loss,
                 return_router_metrics=True,
             )
 
-        grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-        if microbatches == 1:
-            (loss, summarized_metrics), grads = grad_fn(qb_params, batch)
-        else:
-            # Accumulate in place rather than collecting a list: the gradient tree is parameter
-            # sized, so holding one per microbatch would cost more memory than the smaller
-            # activations save. Adding each microbatch's grads immediately lets XLA free them.
-            #
-            # Deliberately no `optimization_barrier` between microbatches. Sequencing the
-            # accumulator by hand looks like it should cap peak memory, but it forces the whole
-            # gradient tree to be live across the boundary while the next microbatch's backward
-            # builds a second one -- two parameter-sized trees where the fused form needs one. That
-            # cost 591.6 B at capacity 1.25 about 21 GiB more than a GB200 has, on a shape that runs
-            # without it. Leave the scheduling to XLA.
-            micro_size = batch.tokens.shape[0] // microbatches
-            loss = None
-            grads = None
-            per_microbatch = []
-            for index in range(microbatches):
-                micro = _slice_microbatch(batch, index * micro_size, micro_size)
-                (micro_loss, micro_metrics), micro_grads = grad_fn(qb_params, micro)
-                if loss is None:
-                    loss, grads = micro_loss, micro_grads
-                else:
-                    loss = loss + micro_loss
-                    grads = jax.tree_util.tree_map(jnp.add, grads, micro_grads)
-                per_microbatch.append(micro_metrics)
-            # Each microbatch loss is already a token mean over an equal slice, so averaging the
-            # means reproduces the whole-batch mean, and likewise for its gradient.
-            loss = loss / microbatches
-            grads = jax.tree_util.tree_map(lambda leaf: leaf / microbatches, grads)
-            summarized_metrics = _fold_metrics(per_microbatch)
+        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = (
             _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
@@ -564,13 +460,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
         offload_opt_state=config.trainer.offload_opt_state,
-        microbatches=config.trainer.microbatches,
     )
-    if trainer.train_batch_size % config.trainer.microbatches != 0:
-        raise ValueError(
-            f"train_batch_size={trainer.train_batch_size} must divide evenly into "
-            f"microbatches={config.trainer.microbatches}"
-        )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
     if config.trainer.data_seed is not None:
