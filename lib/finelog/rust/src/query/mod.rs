@@ -13,9 +13,9 @@
 pub mod exact_aggregate;
 pub mod exact_prune;
 pub(crate) mod file_scan;
+pub mod index_cache;
 pub mod optimizer;
 pub mod provider;
-pub mod sidecar;
 pub mod string_values;
 pub mod trigram_prune;
 pub mod udf;
@@ -32,6 +32,7 @@ use datafusion::common::TableReference;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::memory_pool::GreedyMemoryPool;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 
 use crate::query::provider::NamespaceProvider;
@@ -55,6 +56,12 @@ const MIN_QUERY_POOL_BYTES: usize = 256 * 1024 * 1024;
 const QUERY_POOL_FRACTION: f64 = 0.7;
 
 const MEBIBYTE: usize = 1024 * 1024;
+
+/// Repartition multi-file Parquet scans once they contain enough work to
+/// amortize parallel decoder setup. DataFusion's 10 MiB default serialized the
+/// narrow covering projections used by dashboard queries, even when they
+/// represented hundreds of thousands of rows across several files.
+const PARQUET_REPARTITION_FILE_MIN_BYTES: usize = MEBIBYTE;
 
 /// Best-effort detect the process memory ceiling: the cgroup v2 limit
 /// (`memory.max`, i.e. the container's `--memory`) if set, else `/proc/meminfo`
@@ -220,7 +227,13 @@ pub fn make_ctx() -> SessionContext {
     cfg.options_mut().sql_parser.dialect = Dialect::DuckDB;
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     cfg.options_mut().execution.parquet.reorder_filters = true;
-    let ctx = SessionContext::new_with_config_rt(cfg, shared_runtime_env());
+    cfg.options_mut().optimizer.repartition_file_min_size = PARQUET_REPARTITION_FILE_MIN_BYTES;
+    let state = SessionStateBuilder::new_with_default_features()
+        .with_config(cfg)
+        .with_runtime_env(shared_runtime_env())
+        .with_query_planner(Arc::new(exact_aggregate::FinelogQueryPlanner))
+        .build();
+    let ctx = SessionContext::new_with_state(state);
     ctx.add_analyzer_rule(Arc::new(crate::query::optimizer::PrefixRangeRewrite));
     udf::register_scalar_udfs(&ctx);
     ctx
@@ -228,6 +241,7 @@ pub fn make_ctx() -> SessionContext {
 
 /// A collected query result: its arrow schema (always present, even for an
 /// empty result so the IPC stream can carry it) and the result batches.
+#[derive(Clone)]
 pub struct QueryResult {
     pub schema: SchemaRef,
     pub batches: Vec<RecordBatch>,
@@ -441,26 +455,12 @@ pub async fn run_query_over(
         // quoted `FROM "iris.worker"` resolves to exactly this registration.
         ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))?;
     }
+    ctx.add_optimizer_rule(Arc::new(exact_aggregate::ExactAggregateRewrite::new(
+        summary_paths,
+    )));
     let started = Instant::now();
     let result = async {
         let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
-        if let Some(request) = exact_aggregate::count_request(df.logical_plan()) {
-            if let Some(paths) = summary_paths.get(&request.table) {
-                let request = request.clone();
-                let paths = paths.clone();
-                if let Some(result) =
-                    tokio::task::spawn_blocking(move || exact_aggregate::execute(&request, &paths))
-                        .await
-                        .map_err(|error| {
-                            datafusion::error::DataFusionError::Execution(format!(
-                                "exact aggregate task join: {error}"
-                            ))
-                        })??
-                {
-                    return Ok(result);
-                }
-            }
-        }
         let schema = Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema
@@ -625,6 +625,18 @@ mod tests {
         );
         // Zero is the explicit disable escape hatch.
         assert_eq!(parse_query_timeout(Some("0")), None);
+    }
+
+    #[test]
+    fn query_context_parallelizes_narrow_parquet_scans() {
+        let ctx = make_ctx();
+        let state = ctx.state();
+        let options = state.config_options();
+        assert_eq!(
+            options.optimizer.repartition_file_min_size,
+            PARQUET_REPARTITION_FILE_MIN_BYTES
+        );
+        assert!(options.execution.parquet.enable_page_index);
     }
 
     #[test]

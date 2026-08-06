@@ -1,5 +1,9 @@
-//! Span-granular trigram (3-gram) presence index over a string column, stored as
-//! a sidecar file next to its parquet segment (`seg_L*_*.parquet.tgm`).
+//! Span-granular trigram (3-gram) presence index over a string column.
+//!
+//! The active writer stores each column as an independently checksummed
+//! `TrigramBloom` section in the segment's `.fidx` bundle. The historical
+//! `.tgm` container codec remains here only for migration cleanup and focused
+//! format tests; the Bloom payload encoding is shared by `.fidx`.
 //!
 //! A span is a fixed [`SIDECAR_SPAN_ROWS`] rows, deliberately independent of the
 //! segment's parquet row groups — those are sized to a byte target, so tying the
@@ -41,7 +45,7 @@
 //!   per span: k u8 | m_words u32 | words (m_words × u64)
 //! ```
 //!
-//! `header_len` lets the [`crate::query::sidecar::SidecarManager`] read the
+//! `header_len` lets the historical sidecar reader read the
 //! header with a single bounded `pread`, check the key band, and only then read a
 //! column's payload slice. `key_min`/`key_max` carry the segment's key range so a
 //! `key`-constrained `contains` query can skip out-of-band segments without
@@ -337,7 +341,7 @@ impl SidecarHeader {
 
 /// One column's parsed per-span blooms — the read-side counterpart of a
 /// [`TrigramIndex`], shared via `Arc` and cached by the
-/// [`crate::query::sidecar::SidecarManager`].
+/// process-wide index cache.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ColumnIndex {
     groups: Vec<SpanBloom>,
@@ -367,7 +371,7 @@ impl ColumnIndex {
         keep_mask_over(&self.groups, trigrams)
     }
 
-    /// Heap bytes backing the blooms — what the sidecar cache charges to its
+    /// Heap bytes backing the blooms — what the index cache charges to its
     /// byte budget for this entry.
     pub fn heap_bytes(&self) -> usize {
         self.groups.iter().map(SpanBloom::heap_bytes).sum::<usize>()
@@ -445,6 +449,11 @@ fn serialize_column(groups: &[SpanBloom]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Serialize one built column for storage in a typed index-bundle section.
+pub(crate) fn serialize_index(index: &TrigramIndex) -> Vec<u8> {
+    serialize_column(&index.groups)
 }
 
 /// The declared header length of a sidecar prefix (bytes `[0, header_len)` hold
@@ -532,8 +541,8 @@ pub fn parse_column(bytes: &[u8], span_count: u32) -> Option<ColumnIndex> {
 
 /// Read a single column's index from a full in-memory sidecar buffer (header +
 /// payloads). Convenience over [`parse_header`] + [`parse_column`] for callers
-/// that already hold the whole file; the [`crate::query::sidecar::SidecarManager`]
-/// uses positioned slice reads instead. `None` if the column is absent or the
+/// that already hold the whole file; the `.fidx` reader uses positioned section
+/// reads instead. `None` if the column is absent or the
 /// buffer is malformed/truncated.
 pub fn read_column_from_bytes(bytes: &[u8], column: &str) -> Option<ColumnIndex> {
     let header = parse_header(bytes)?;
@@ -613,7 +622,7 @@ pub fn write_sidecar(
 /// matches both the parquet string statistics and the lexicographic order used by
 /// the query-time key-range bounds, so the comparison in
 /// [`SidecarHeader::key_band_overlaps`] is sound.
-fn string_key_bounds(
+pub(crate) fn string_key_bounds(
     batches: &[RecordBatch],
     key_column: &str,
 ) -> (Option<Vec<u8>>, Option<Vec<u8>>) {

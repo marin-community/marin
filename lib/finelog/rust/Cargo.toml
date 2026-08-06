@@ -131,7 +131,7 @@ url = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 regex = "1"
 sha2 = "0.10"
-uuid = "1"
+uuid = { version = "1", features = ["v4"] }
 
 # Process allocator (see the `#[global_allocator]` in `main.rs`). The default
 # glibc malloc retains freed query-buffer pages in its per-CPU arenas instead of

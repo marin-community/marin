@@ -1,179 +1,227 @@
-# Finelog Exact Analytics
+# Finelog Segment Index Families
 
-Finelog should answer recurring dashboard filters and low-cardinality rollups in
-well under its 10-second query deadline without becoming a general-purpose OLAP
-database. On copied production telemetry, the motivating training-status query
-took 3.92 seconds and a service-count rollup took 60 milliseconds. This design
-targets at least a 10× reduction for both shapes while preserving the existing
-DataFusion path for every other query.
+Finelog uses a small planner-facing index family to make recurring filters and
+low-cardinality analytics fast without adding a second mutable storage engine.
+Each immutable Parquet segment owns one checksummed `.fidx` metadata bundle.
+Large covering projections remain ordinary narrow Parquet files referenced by
+that bundle.
 
-The production slowdown combined segment-layout rewrites with repeated Grafana
-queries. Concurrency and a 10-second default query deadline contained the
-incident, but copied production shards showed that containment did not make the
-recurring query family cheap. The incident record is
-[Finelog production CPU saturation from Grafana training queries](https://echo.oa.dev/wiki/90).
+This design follows the production query-saturation incident recorded in
+[Echo](https://echo.oa.dev/wiki/90). Repeated Grafana training-status scans
+continued after layout rewrites had finished, held the query-visibility read
+lock longer, and delayed otherwise cheap compaction commits. Concurrency limits
+and a 10-second default deadline contain that failure mode. Segment indexes make
+the recurring queries cheap enough not to reach the containment boundary.
 
-## Challenges
+The architecture was reviewed against PostgreSQL access methods, BRIN, Iceberg
+Puffin, ClickHouse skip indexes and projections, and Parquet page indexes. The
+accepted [Weaver design](https://loom.oa.dev/s/qx90ms6l/artifacts/design) and
+[Claude review](https://loom.oa.dev/s/qx90ms6l/artifacts/claude-review) contain
+the longer comparison.
 
-Finelog queries a snapshot containing many independently written Parquet
-segments. An auxiliary index is safe only when it describes the exact segment
-generation being scanned, and a filtered data copy is safe only when it contains
-every row that could satisfy the predicate. Historical namespaces also need to
-gain the new artifacts without concentrating enough backfill work to recreate
-the CPU saturation this work is intended to avoid.
+## Decisions
 
-The useful workloads have two different shapes. A training dashboard repeatedly
-filters a wide table to three known metric names before performing windowed
-aggregations. A query such as `SELECT service, count(service) ... GROUP BY
-service` needs every row logically, but only the group counts physically. One
-index structure does not efficiently serve both.
+### One bundle per segment
 
-## Costs and risks
+The files for a segment are:
 
-- Exact metadata and filtered projections added 20.4 MB beside 171.9 MB of
-  copied production Parquet, an 11.9% local-storage overhead.
-- Building one historical shard took roughly three seconds on the local
-  benchmark machine. Backfill must remain bounded and lower priority than
-  serving queries.
-- Exact projections accelerate only values declared in the schema. Value-count
-  summaries are omitted above 4,096 distinct values, where an in-sidecar
-  histogram would stop being compact.
-- Derived artifacts are local-only. Restored or newly indexed historical
-  segments use the ordinary scan until local maintenance rebuilds them.
-
-## Design
-
-Add two independent policies to a string column's `ColumnIndex`:
-
-```protobuf
-message ColumnIndex {
-  optional bool trigram = 1;
-  repeated string exact_values = 2;
-  optional bool value_counts = 3;
-}
+```text
+seg_L3_….parquet
+seg_L3_….parquet.fidx
+seg_L3_….parquet.fidx.training-status.parquet
 ```
 
-For `exact_values`, each segment gets an `.eqi` metadata sidecar containing the
-matching global row runs and an `.eqp` Parquet file containing the union of all
-matching rows. The projection keeps the original schema and uses small
-byte-bounded row groups, so ordinary key and timestamp pruning still applies.
-Equality, same-column `IN`, and equivalent same-column `OR` filters may
-substitute projections only when every visible segment has a current artifact
-covering every requested value. Otherwise Finelog uses exact row selections
-where possible or the unchanged Parquet scan.
+`.fidx` has an internal prefix directory. Its fixed header binds the derived
+state to the source segment identity, row count, schema fingerprint, and
+complete index-policy fingerprint. New segments carry a UUID in Parquet
+key-value metadata. Existing current-layout segments that predate that stamp use
+a local generation identity derived from device, inode, length, and nanosecond
+mtime, so adopting indexes does not require another fleet-wide layout rewrite.
+Level-only renames preserve either identity; replacement or layout rewrite
+invalidates the old bundle. A layout rewrite gives an unstamped segment a UUID.
 
-For `value_counts`, `.eqi` stores a complete per-value count, including null,
-when the segment has at most 4,096 distinct values. Finelog recognizes an
-unfiltered one-column group with one `COUNT(*)` or `COUNT(group_column)` and
-combines the segment summaries directly. It uses this path only when every
-visible segment has a complete summary whose row count matches the Parquet
-footer. Filters, joins, multiple grouping columns, other aggregates, and
-high-cardinality columns continue through DataFusion.
+Each directory entry records a stable section ID, method kind, method format
+version, exactness class, concrete coverage, offset, length, checksum algorithm,
+and SHA-256 checksum. The header also records the total bundle length and a
+directory checksum. Readers load the bounded directory first and then issue
+positioned reads only for methods required by the query.
 
-L0 flushes and compaction outputs write current artifacts immediately. A level
-bump renames them with the segment. Deletion and eviction remove them with the
-segment. Maintenance backfills at most one exact artifact per namespace per
-tick, reading indexed columns first and reading complete projected rows only
-when necessary. Missing, malformed, incomplete, or stale state is always a
-performance miss rather than a correctness failure.
+A bad directory, invalid extent, unexpected length, or source-ID mismatch
+disables the bundle. A bad payload checksum disables only that section. Both
+paths increment separate corruption counters and continue with source Parquet.
+Malformed derived data is never a query error.
 
-`telemetry_v1` enables counts for `service`, `kind`, and `name`, and exact
-projection for the `phase`, `step`, and `progress_time_seconds` metric names.
-This covers the observed dashboard and broad analytic queries while keeping
-index policy explicit in the table schema.
+A filesystem directory containing one file per method would still need a
+last-published manifest to define completeness. It would add open, stat, rename,
+cleanup, and cache-key states for every segment while recreating the same
+directory in the filesystem. A namespace-wide index file would be worse: it
+would introduce mutable shared state, its own compaction and recovery, and a
+second locking domain. The segment bundle follows Finelog's existing immutable
+lifecycle.
 
-### Schema contract
+Covering projections stay outside `.fidx` because DataFusion can scan Parquet
+directly and projection data can be much larger than metadata. A builder writes
+and syncs projection files first and publishes the bundle last. The bundle
+reference includes a stable projection-spec ID, projection segment ID, byte
+length, row count, included columns, predicate, and source-row identity domain.
 
-`ColumnIndex.exact_values` is a sorted, deduplicated set. Registration merges
-both policies monotonically: an older client cannot disable an existing index or
-remove an exact value. Both policies are valid only on string columns. The
-Python and Rust schema representations and both checked-in proto copies
-round-trip these fields identically.
+### A closed method family
 
-### Segment-artifact contract
+User schemas remain concise: column flags declare trigram, exact-value, and
+value-count policy, while `Schema.projections` declares independent named
+covering projections. The server compiles those declarations into a closed Rust
+`IndexSpec` enum:
 
-For a segment `<path>.parquet`:
+```text
+TrigramBloom { column }
+ExactPostings { column, values }
+ValueCounts { column }
+CoveringProjection { projection }
+```
 
-- `<path>.parquet.eqi` contains an `FLEQ` magic value, format version, source row
-  count, optional projection row count, and per-column payloads.
-- Exact-value payloads map every configured value, including absent values, to
-  sorted non-overlapping half-open row runs.
-- A value-count payload is present only when it completely accounts for the
-  segment and contains at most 4,096 distinct non-null values plus null.
-- `<path>.parquet.eqp` preserves the source Arrow schema and contains exactly the
-  union of rows selected by every configured exact value.
+This is the useful part of PostgreSQL's access-method and operator-class split:
+storage methods are distinct from the SQL shapes they support. It deliberately
+does not reproduce PostgreSQL's dynamic extension catalog. Adding a method
+requires a typed enum variant, schema validation, a versioned section codec, a
+planner rule, fallback tests, and a copied-shard benchmark. There is no
+free-form method string or runtime plugin.
 
-Writers publish each artifact by temporary-file rename. Artifacts are derived
-local state and are not uploaded as source segments. A compaction merge writes
-new artifacts; a level bump renames existing artifacts; unlink and eviction
-remove them.
+The initial methods do not overlap:
 
-### Query contract
+| Method | Query family | Planner result |
+| --- | --- | --- |
+| `TrigramBloom` | `contains` and literal runs in `LIKE` | Conservative source-row span mask; residual filter retained |
+| `ExactPostings` | Configured `=`, `IN`, and same-column `OR` | Exact source-row selection; residual filter retained |
+| `ValueCounts` | Unfiltered one-column `GROUP BY` with `COUNT(*)` or `COUNT(column)` | Exact aggregate subtree replacement |
+| `CoveringProjection` | Configured predicate whose referenced columns are covered | Per-segment replacement Parquet file |
 
-Finelog may extract equality, literal `IN`, and same-column equality `OR`
-predicates. It may intersect same-column exact constraints under top-level
-`AND`. It must not infer a constraint from a mixed-column disjunction or another
-expression whose truth does not imply the extracted values.
+Parquet already supplies row-group min/max statistics, so Finelog does not add
+a second zone-map or BRIN implementation. A generic equality Bloom is also
+omitted: common telemetry values occur in nearly every time-oriented span and
+would retain most of the data. New sketches, multi-column summaries, token
+indexes, or automatic index selection require measured workloads before joining
+the family. Current source and projection files already carry Parquet column and
+offset page indexes, and DataFusion page-index pruning is enabled. This existing
+layer remains the fine-grained range/equality fallback rather than becoming a
+duplicate `.fidx` method.
 
-Projection substitution is all-or-nothing for a snapshot. Every visible source
-segment must have a parseable sidecar whose row count matches the source footer,
-whose configured values cover the predicate, and whose projection exists with
-the declared row count. Any failed check retains the source files. When a
-projection is unavailable but exact row runs are valid, Finelog may attach
-Parquet row selections without changing the residual filter.
+### Planner substitution and cost guards
 
-The summary path accepts only an unfiltered query with one string grouping
-column and one `COUNT(*)` or `COUNT(group_column)`. Every visible segment must
-have a complete summary for that column. `COUNT(column)` excludes the null
-bucket; `COUNT(*)` includes it. Any unsupported logical-plan shape or incomplete
-segment returns control to DataFusion without a partial result.
+All methods fold into DataFusion planning. Missing, stale, malformed,
+incomplete, or inapplicable state returns `NotApplicable` and leaves the
+ordinary plan intact.
 
-## Alternatives considered
+Trigram masks and postings apply per source segment. A covered projection also
+substitutes per segment; uncovered segments continue through postings or the
+source scan. This makes partial backfill monotonically useful. The residual
+filter remains, so combining these paths cannot add wrong rows.
 
-Parquet min/max statistics do not help the training predicate because metric
-names are interleaved within time-oriented row groups. Parquet Bloom filters can
-reject absent values, but all three motivating values occur throughout the
-segments, so they cannot avoid reading the matching row groups.
+Every row-addressed decision states its row-identity domain. Source postings or
+trigram spans are discarded after a projection changes the row space. A future
+projection-specific method must name that projection's stable spec ID as its
+domain.
 
-Row-run metadata alone is exact and compact, but selecting sparse rows from wide
-source row groups still performs scattered reads and decoding. It remains a
-useful fallback during partial projection coverage.
+Exact postings are used only when they retain at most 25% of a segment. Above
+that threshold, applying a fragmented row selection is more expensive than a
+contiguous Parquet scan. This is a planner cost guard, not a correctness rule.
 
-A materialized aggregate table would make each chosen rollup fast but would
-require query-specific ingestion paths and freshness semantics. Complete
-low-cardinality per-segment counts cover the generic one-column count family
-without introducing another table.
+Value-count substitution requires complete coverage for every visible segment.
+Each segment omits a summary above 4,096 distinct non-null values, and the
+optimizer aborts substitution if the combined result exceeds 16,384 values.
+The logical optimizer emits `FinelogIndexAggregate`; `EXPLAIN`, outer
+projections, `ORDER BY`, and `LIMIT` therefore see and compose with the rewrite.
+`COUNT(column)` excludes the null bucket while `COUNT(*)` includes it.
 
-A general secondary-index engine or full OLAP store would broaden the supported
-query space, but would add compaction, consistency, and operational systems that
-duplicate Finelog's existing segment lifecycle. The observed query families do
-not justify that expansion.
+### Named projections, not column or JSON shattering
 
-## Testing and benchmark
+Parquet already stores ordinary columns separately and DataFusion projects only
+referenced columns. One file per source column would require stable row-position
+joins, more file opens, and a late-materialization operator without reducing the
+column bytes read by the current path.
 
-Unit tests pin sidecar parsing, null counts, the cardinality cap, row-run
-selection, projection completeness, predicate extraction, all-or-nothing
-snapshot fallback, aggregate recognition, schema evolution, L0 creation,
-compaction output, level bumps, backfill, and artifact lifecycle.
+Each covering projection instead declares one predicate and one explicit
+included-column list. The planner substitutes it only when the query's predicate
+values and every scan or filter column are covered. A second exact-value policy
+cannot silently widen an existing projection.
 
-The production-shaped benchmark uses four copied telemetry shards: 29.2 million
-rows and 171.9 MB of source Parquet. The training query returns the same schema
-and 88 rows before and after indexing; its median latency falls from 3.92
-seconds to 237.7 milliseconds, a 16.5× improvement. The unfiltered service-count
-query falls from 60 milliseconds to 4.8 milliseconds, a 12.5× improvement.
-Equivalent counts grouped by `kind` and `name` complete in 5.7 and 6.0
-milliseconds.
+The initial `training-status` projection contains rows whose `name` is `phase`,
+`step`, or `progress_time_seconds` and only these columns:
 
-Rollout should first confirm artifact backfill rate, CPU, and query equivalence
-on `marin-dev`. Production rollout should verify that ordinary queries retain
-their current plans, indexed queries gain coverage gradually, and the 10-second
-deadline remains a final containment boundary rather than a normal termination
-path.
+```text
+seq, timestamp_ms, service, name, value, resource_attributes_json, cluster
+```
 
-## Open questions
+Arbitrary JSON shattering is out of scope. OpenTelemetry attribute bags are
+sparse and evolve by producer. A JSON path should become a typed generated
+column only when a recurring query uses it, copied-shard profiling shows JSON
+extraction remains material after pruning, and the path has a stable type and
+meaning. Once promoted, indexes and projections treat it like any ordinary
+column.
 
-- Should future schema registrations expose a metric for exact-artifact coverage
-  so dashboard owners can see when a newly declared value is fully accelerated?
-- If filtered projections grow materially beyond the measured overhead, should
-  policy accept a per-column storage budget or should operators remove cold
-  values explicitly?
+## Build, cache, and lifecycle
+
+L0 flushes and compaction already hold Arrow batches. One builder feeds every
+configured method and projection from those batches. Historical backfill reads
+the union of required columns once and is bounded to a few bundles per namespace
+per maintenance tick. Index building happens outside the process-wide
+query-visibility write lock.
+
+The query cache keys directories and decoded sections by segment identity and
+section ID. Trigram and exact payloads are charged by decoded heap size. A
+backfill publish invalidates the old entries. Equality queries do not read
+trigram bytes, and aggregate queries do not read postings.
+
+DataFusion repartitions multi-file scans above 1 MiB rather than its 10 MiB
+default. Narrow projections otherwise form one serial scan despite spanning
+several files and hundreds of thousands of rows. Sub-megabyte scans retain the
+lower-overhead serial path.
+
+Level bumps rename the segment, bundle, and named projections together.
+Compaction input deletion, eviction, and table deletion remove all derived
+artifacts. Rebuilds remove projection files no longer referenced by policy.
+Migration cleanup continues deleting legacy `.tgm`, `.eqi`, and `.eqp` files,
+although the query path no longer reads them. Derived files remain local and are
+never uploaded or adopted as source segments.
+
+Faster queries shorten the visibility read-lock hold but do not remove the
+query/compaction publication coupling. Changing that lock is a separate design.
+
+## Observability
+
+`GET /api/segments?namespace=NS&physical=true` reports the source segment ID and
+the readable bundle directory, including method, exactness, version, checksum,
+and payload size. `GET /api/server` reports separate corrupt-bundle and
+corrupt-section counters.
+
+Planner debug events report covered or pruned segments, retained rows, and
+high-selectivity posting fallbacks. Exact aggregate substitution is visible in
+`EXPLAIN` as `FinelogIndexAggregate`. These signals distinguish incomplete
+backfill, an unsupported query shape, poor selectivity, corruption, and a
+planner regression.
+
+The deployment option `query_index_cache_mb` controls decoded bundle-section
+cache size. `query_metadata_cache_mb` remains the independent DataFusion
+Parquet-footer cache.
+
+## Benchmark and acceptance criteria
+
+The completed `.fidx` implementation was measured on four copied production
+telemetry segments containing 29.2 million rows and 171.9 MB of source Parquet.
+The training-status query fell from a 3.601-second median to 232.6 milliseconds
+with the same schema, 88 rows, and result digest: a 15.5× improvement. The
+unfiltered service-count query fell from 59.4 milliseconds to 1.5 milliseconds,
+about 40×. Derived bundles and projections added 8.8 MB, or 5.1%.
+
+With half the projection files deliberately unavailable, the training query
+still completed in 447.4 milliseconds with the same digest, proving per-segment
+fallback is correct and useful during backfill. A 50%-selectivity posting case
+retains the contiguous scan. `EXPLAIN` shows 12 projection scan partitions and
+the `FinelogIndexAggregate` rewrite. Benchmarking uses copied local shards; it
+does not run expensive operations on the production server or bucket.
+
+Parquet page indexes were inspected before accepting another physical method:
+both source and projection columns already carry column and offset indexes, and
+DataFusion enables their pruning by default. The copied-shard result meets the
+target without another projection, smaller pages, JSON shattering, or a new
+page-level `.fidx` method. Those remain evidence-driven follow-ups if a measured
+query still spends material time below the current pruning layers.

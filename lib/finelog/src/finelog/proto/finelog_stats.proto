@@ -30,22 +30,18 @@ enum ColumnType {
   COLUMN_TYPE_MAP = 8;          // pa.map_(pa.string(), pa.string())
 }
 
-// Secondary indexes a column carries to accelerate queries. Extensible: each
-// index type is its own field, so adding one is additive. All-unset means the
-// column is not indexed.
+// User-facing column index policy. The server compiles these declarations and
+// named projections into its closed planner-facing index-method family.
 message ColumnIndex {
-  // Per-row-group trigram (substring) index, stored in each segment's `.tgm`
-  // sidecar so `contains(col, …)` and `col LIKE '%…%'` queries prune row groups
+  // Span-granular trigram index stored in each segment's `.fidx` bundle, so
+  // `contains(col, …)` and `col LIKE '%…%'` queries prune row spans
   // instead of full-scanning. Only meaningful for STRING columns.
   bool trigram = 1;
 
-  // Exact string values indexed in each segment's `.eqi` sidecar. A companion
-  // `.eqp` Parquet projection stores the complete matching rows with small row
-  // groups, so equality and IN predicates over only these values read a compact,
-  // time-prunable file instead of jumping through the full segment.
+  // Exact string values stored as postings in each segment's `.fidx` bundle.
   repeated string exact_values = 2;
 
-  // Persist exact per-value row counts in each segment's `.eqi` sidecar.
+  // Persist exact per-value row counts in each segment's `.fidx` bundle.
   // Finelog can answer GROUP BY column + COUNT(*)/COUNT(column) from these
   // summaries when every visible segment is covered.
   bool value_counts = 3;
@@ -58,6 +54,17 @@ message Column {
   ColumnIndex index = 4;
 }
 
+// A named, predicate-scoped Parquet projection maintained beside each segment.
+// The projection contains complete rows matching `predicate_values`, but only
+// the declared `columns`. The planner substitutes it only when both the query
+// predicate and required columns are covered; otherwise it scans the source.
+message CoveringProjection {
+  string name = 1;
+  string predicate_column = 2;
+  repeated string predicate_values = 3;
+  repeated string columns = 4;
+}
+
 message Schema {
   repeated Column columns = 1;
 
@@ -66,6 +73,10 @@ message Schema {
   // named "timestamp_ms" of type INT64 or TIMESTAMP_MS and uses it
   // implicitly. A schema with neither is rejected at register time.
   string key_column = 2;
+
+  // Independent named projections. Adding one is monotonic on re-register;
+  // changing an existing name's definition is a schema conflict.
+  repeated CoveringProjection projections = 3;
 }
 
 // Write batches are Arrow IPC RecordBatches on the wire — columnar, with

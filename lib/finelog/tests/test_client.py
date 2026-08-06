@@ -22,7 +22,15 @@ from finelog.errors import (
 )
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc import logging_pb2
-from finelog.schema import MAP_STRING_STRING, Column, Schema, schema_from_proto, schema_to_arrow, schema_to_proto
+from finelog.schema import (
+    MAP_STRING_STRING,
+    Column,
+    CoveringProjection,
+    Schema,
+    schema_from_proto,
+    schema_to_arrow,
+    schema_to_proto,
+)
 
 
 class FakeLogClient:
@@ -844,3 +852,22 @@ def test_exact_indexes_round_trip_through_proto():
     back = schema_from_proto(schema_to_proto(schema))
     assert back.columns[0].exact_values == ("phase", "step")
     assert back.columns[1].value_counts
+
+
+def test_covering_projections_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="name", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="value", type=stats_pb2.COLUMN_TYPE_FLOAT64),
+        ),
+        projections=(
+            CoveringProjection(
+                name="training-status",
+                predicate_column="name",
+                predicate_values=("phase", "step"),
+                columns=("name", "value"),
+            ),
+        ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema

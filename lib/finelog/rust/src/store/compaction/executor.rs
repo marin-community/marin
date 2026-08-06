@@ -37,7 +37,9 @@ use crate::store::compaction::merge::{
 };
 use crate::store::compaction::planner::aggregate_key_bounds;
 use crate::store::exact::ExactIndexConfig;
+use crate::store::schema::CoveringProjection;
 use crate::store::segment::{segment_bounds, segment_writer_properties};
+use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
 fn now_ms() -> i64 {
@@ -77,6 +79,7 @@ pub struct PlannedSwap {
 pub struct CompactionIndexes<'a> {
     trigram_columns: &'a [&'a str],
     exact: &'a [ExactIndexConfig],
+    projections: &'a [CoveringProjection],
 }
 
 impl<'a> CompactionIndexes<'a> {
@@ -84,6 +87,19 @@ impl<'a> CompactionIndexes<'a> {
         Self {
             trigram_columns,
             exact,
+            projections: &[],
+        }
+    }
+
+    pub fn with_projections(
+        trigram_columns: &'a [&'a str],
+        exact: &'a [ExactIndexConfig],
+        projections: &'a [CoveringProjection],
+    ) -> Self {
+        Self {
+            trigram_columns,
+            exact,
+            projections,
         }
     }
 }
@@ -300,7 +316,7 @@ fn apply_merge(
     let merged = kway_merge(&projected, &sort_cols)
         .map_err(|e| StatsError::Internal(format!("k-way merge: {e}")))?;
     // `kway_merge` copied the rows it needs into `merged`; free the sorted inputs
-    // now so the segment isn't held in RAM twice through the parquet + sidecar
+    // now so the segment isn't held in RAM twice through the Parquet + index
     // writes below (each input plus the output is a fully materialized,
     // uncompressed copy of the segment).
     drop(projected);
@@ -313,30 +329,25 @@ fn apply_merge(
         ))
     })?;
 
-    // Build the trigram substring-index sidecar next to the merged output, one
-    // bloom set per `indexed_columns` entry (a no-op for namespaces with no
-    // indexed columns). Best-effort: the index is optional, so a missing sidecar
-    // only disables row-group pruning for this segment, never correctness.
-    // Sidecars are built here, at the L0->L1+ merge (where the bulk of queryable
-    // data lands), and carried forward verbatim by single-input level bumps; L0
-    // is intentionally left unindexed.
+    // Build the complete segment-index bundle next to the merged output. The
+    // derived data is optional, so a missing bundle only disables acceleration
+    // for this segment, never correctness. Bundles are carried forward by
+    // single-input level bumps; L0 flushes omit only trigram sections.
     //
     // The parquet rename above already committed the segment, so a crash in the
-    // gap before this write leaves the segment without a sidecar. That is the
-    // same correct-but-unpruned state as any missing sidecar; a later compaction
+    // gap before this write leaves the segment without a bundle. That is the
+    // same correct-but-unaccelerated state as any missing bundle; a later compaction
     // consuming this segment rebuilds it. A terminal-level segment that is never
-    // re-merged (or one written before sidecars existed) stays unindexed until
-    // the maintenance trigram backfill rebuilds it a few segments per tick.
-    if let Err(e) = crate::store::trigram::write_sidecar(
-        &merged_path,
-        &merged,
-        indexes.trigram_columns,
-        key_column,
-    ) {
-        tracing::warn!(path = %merged_path.display(), error = %e, "trigram sidecar write failed");
-    }
-    if let Err(e) = crate::store::exact::write_sidecar(&merged_path, &merged, indexes.exact) {
-        tracing::warn!(path = %merged_path.display(), error = %e, "exact sidecar write failed");
+    // re-merged (or one written before bundles existed) stays unindexed until
+    // maintenance backfills it a few segments per tick.
+    let index_config = SegmentIndexConfig::from_policies(
+        indexes.trigram_columns.iter().copied(),
+        indexes.exact,
+        indexes.projections,
+        key_column.map(str::to_string),
+    );
+    if let Err(error) = write_segment_index(&merged_path, &merged, &index_config) {
+        tracing::warn!(path = %merged_path.display(), %error, "segment index bundle write failed");
     }
 
     let size = std::fs::metadata(&merged_path)
@@ -450,11 +461,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
     use super::*;
-    use crate::store::exact::{
-        projection_path as exact_projection_path, read_sidecar as read_exact_sidecar,
-        sidecar_path as exact_sidecar_path,
-    };
+    use crate::store::index_bundle::{self, SectionKind};
     use crate::store::segment::{read_segment_footer, write_segment_to_dir};
+    use crate::store::segment_index::{parse_projection_reference, read_exact_section};
     use crate::store::types::{seg_filename, SegmentRow};
 
     fn tempdir(tag: &str) -> PathBuf {
@@ -494,7 +503,7 @@ mod tests {
 
     #[test]
     fn projected_read_keeps_row_order_and_drops_other_columns() {
-        // The sidecar backfill indexes a projection of the segment, so the
+        // The index backfill reads a projection of the segment, so the
         // projected read must preserve row order and count exactly — the index
         // chunks values by global row position to stay aligned with row groups.
         let dir = tempdir("projected");
@@ -586,12 +595,18 @@ mod tests {
             exact_values: vec!["c".to_string()],
             value_counts: true,
         };
+        let projections = vec![CoveringProjection::new(
+            "worker-c",
+            "worker_id",
+            ["c"],
+            ["seq", "key", "worker_id"],
+        )];
         let swap = run_job(
             &job,
             &dir,
             &schema(),
             Some("key"),
-            CompactionIndexes::new(&[], std::slice::from_ref(&exact)),
+            CompactionIndexes::with_projections(&[], std::slice::from_ref(&exact), &projections),
             i64::MAX,
             bounds,
         )
@@ -626,13 +641,18 @@ mod tests {
         let mut sorted = keyed.clone();
         sorted.sort();
         assert_eq!(keyed, sorted, "globally sorted by (key, seq)");
-        let exact = read_exact_sidecar(&exact_sidecar_path(&out)).unwrap();
-        assert_eq!(exact.projection_rows, Some(1));
+        let bundle = index_bundle::bundle_path(&out);
+        let header = index_bundle::read_header(&bundle).unwrap();
+        let exact = read_exact_section(&bundle, &header, SectionKind::ValueCounts).unwrap();
         assert_eq!(
             exact.columns["worker_id"].counts.as_ref().unwrap()[&Some("c".to_string())],
             1
         );
-        assert!(exact_projection_path(&out).exists());
+        let reference =
+            parse_projection_reference(&header.section("projection:worker-c").unwrap().coverage)
+                .unwrap();
+        assert_eq!(reference.descriptor.row_count, 1);
+        assert!(crate::store::segment_index::projection_path(&out, &reference).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1041,9 +1061,8 @@ mod tests {
     }
 
     #[test]
-    fn merge_writes_trigram_sidecar_for_data_column() {
-        use crate::store::trigram::{read_column_from_bytes, sidecar_path};
-        let dir = tempdir("tgm_sidecar");
+    fn merge_writes_trigram_bundle_section_for_data_column() {
+        let dir = tempdir("trigram_bundle");
         // Log-form schema with a `data` column (the indexed column).
         let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
             Field::new("seq", DataType::Int64, false),
@@ -1065,8 +1084,8 @@ mod tests {
         let (p1, _) =
             write_segment_to_dir(&dir, 0, 1, &mk(1, &["Bootstrap completed for TPU"])).unwrap();
         let (p2, _) = write_segment_to_dir(&dir, 0, 2, &mk(2, &["unrelated heartbeat"])).unwrap();
-        // L0 inputs have no sidecars (intentionally unindexed).
-        assert!(!sidecar_path(&p1).exists());
+        // These direct test fixtures have no derived bundle.
+        assert!(!index_bundle::bundle_path(&p1).exists());
 
         let job = CompactionJob {
             inputs: vec![
@@ -1087,11 +1106,19 @@ mod tests {
         )
         .unwrap();
 
-        // The merged output carries a sidecar whose mask prunes correctly.
+        // The merged output carries a trigram section whose mask prunes correctly.
         let out = PathBuf::from(&added_seg(&swap).path);
-        let sc = sidecar_path(&out);
-        assert!(sc.exists(), "merge output must have a trigram sidecar");
-        let index = read_column_from_bytes(&std::fs::read(&sc).unwrap(), "data").unwrap();
+        let sc = index_bundle::bundle_path(&out);
+        assert!(sc.exists(), "merge output must have an index bundle");
+        let header = index_bundle::read_header(&sc).unwrap();
+        let section = header.section("trigram:data").unwrap();
+        let coverage =
+            crate::store::segment_index::parse_trigram_coverage(&section.coverage).unwrap();
+        let index = crate::store::trigram::parse_column(
+            &index_bundle::read_section(&sc, &header, "trigram:data").unwrap(),
+            coverage.span_count,
+        )
+        .unwrap();
         assert_eq!(index.len(), 1, "one row group");
         assert_eq!(
             index.keep_mask("Bootstrap completed for TPU").unwrap(),
@@ -1105,8 +1132,8 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_spans_cover_the_written_rows_across_batch_boundaries() {
-        // The prune contract is that the sidecar's spans account for exactly the
+    fn trigram_spans_cover_the_written_rows_across_batch_boundaries() {
+        // The prune contract is that the section's spans account for exactly the
         // segment's rows: the mask is then mapped onto whatever row groups the
         // writer chose. Both sides chunk independently of how the written batches
         // are split, so lock that with input batches whose boundaries straddle a
@@ -1151,7 +1178,7 @@ mod tests {
         assert_eq!(
             index.len(),
             total.div_ceil(SIDECAR_SPAN_ROWS),
-            "the sidecar must carry one Bloom per span of the written rows"
+            "the section must carry one Bloom per span of the written rows"
         );
         std::fs::remove_dir_all(&dir).ok();
     }

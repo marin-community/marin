@@ -1,23 +1,23 @@
-//! Exact string-value indexes stored beside a parquet segment.
+//! Exact string-value index payloads and covering-projection writers.
 //!
-//! The `.eqi` metadata sidecar has two independent, optional payloads per
-//! column:
+//! The active writer stores two independently checksummed `.fidx` section types
+//! per column:
 //!
 //! - row runs for explicitly configured values, used to turn `=` and `IN`
 //!   predicates into parquet row selections when the projection is absent;
 //! - exact counts for every distinct value (including null), used by the
 //!   `GROUP BY column, COUNT(...)` summary path.
 //!
-//! When any values are configured, a companion `.eqp` Parquet file contains
-//! their complete rows. Its small row groups preserve range pruning while
-//! avoiding scattered reads from the full segment. Both files are derived
-//! state: writers publish by atomic rename, queries fall back on missing or
-//! malformed artifacts, and fast paths activate only when every visible segment
-//! is covered.
+//! Independently named covering projections remain narrow Parquet files beside
+//! the source segment and are referenced by `.fidx`. Their small row groups
+//! preserve range pruning while avoiding scattered reads from the full segment.
+//! The historical `.eqi`/`.eqp` container functions remain only for migration
+//! cleanup and focused codec tests.
 
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use arrow::array::{
     Array, BooleanArray, LargeStringArray, RecordBatch, StringArray, StringViewArray,
@@ -25,7 +25,9 @@ use arrow::array::{
 use arrow::compute::filter_record_batch;
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReaderBuilder, RowSelection, RowSelector};
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
+use serde::{Deserialize, Serialize};
 
+use crate::store::schema::CoveringProjection;
 use crate::store::segment::parquet_writer_properties;
 use crate::store::trigram::ByteReader;
 
@@ -37,7 +39,7 @@ const PROJECTION_ROW_GROUP_ROWS: usize = 16_384;
 const TEMP_SUFFIX: &str = ".tmp";
 
 /// One string column's exact indexing policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExactIndexConfig {
     pub column: String,
     pub exact_values: Vec<String>,
@@ -60,7 +62,7 @@ pub struct ExactColumn {
     pub rows: BTreeMap<String, Vec<RowRun>>,
 }
 
-/// Parsed `.eqi` contents.
+/// Decoded exact-postings or value-count section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExactSidecar {
     pub total_rows: u64,
@@ -74,6 +76,16 @@ pub struct ExactSidecar {
 pub enum ExactIndexWrite {
     Written,
     NotApplicable,
+}
+
+/// A published covering projection referenced by the segment index bundle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectionDescriptor {
+    pub name: String,
+    pub row_count: u64,
+    pub columns: Vec<String>,
+    pub predicate_column: String,
+    pub predicate_values: Vec<String>,
 }
 
 impl ExactSidecar {
@@ -91,6 +103,40 @@ impl ExactSidecar {
                         .iter()
                         .all(|value| column.rows.contains_key(value))
             })
+    }
+
+    /// Approximate decoded heap retained by the query cache.
+    pub fn heap_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self
+                .columns
+                .iter()
+                .map(|(name, column)| name.capacity() + column.heap_bytes())
+                .sum::<usize>()
+    }
+}
+
+impl ExactColumn {
+    fn heap_bytes(&self) -> usize {
+        let counts = self.counts.as_ref().map_or(0, |counts| {
+            counts
+                .keys()
+                .map(|value| {
+                    std::mem::size_of::<(Option<String>, u64)>()
+                        + value.as_ref().map_or(0, String::capacity)
+                })
+                .sum()
+        });
+        let rows = self
+            .rows
+            .iter()
+            .map(|(value, runs)| {
+                std::mem::size_of::<(String, Vec<RowRun>)>()
+                    + value.capacity()
+                    + runs.capacity() * std::mem::size_of::<RowRun>()
+            })
+            .sum::<usize>();
+        std::mem::size_of::<Self>() + counts + rows
     }
 }
 
@@ -186,15 +232,11 @@ fn build_column(batches: &[RecordBatch], config: &ExactIndexConfig) -> Option<(E
     Some((ExactColumn { counts, rows }, offset))
 }
 
-/// Build and atomically publish the exact sidecar for `parquet_path`.
-///
-/// Returns [`ExactIndexWrite::NotApplicable`] when no configured column exists
-/// in the batches.
-pub fn write_sidecar(
-    parquet_path: &Path,
+/// Build exact postings and value summaries without publishing any files.
+pub fn build_sidecar(
     batches: &[RecordBatch],
     configs: &[ExactIndexConfig],
-) -> std::io::Result<ExactIndexWrite> {
+) -> Option<ExactSidecar> {
     let mut columns = BTreeMap::new();
     let mut total_rows = None;
     for config in configs {
@@ -208,13 +250,24 @@ pub fn write_sidecar(
         }
         columns.insert(config.column.clone(), column);
     }
-    if columns.is_empty() {
-        return Ok(ExactIndexWrite::NotApplicable);
-    }
-    let mut sidecar = ExactSidecar {
+    (!columns.is_empty()).then_some(ExactSidecar {
         total_rows: total_rows.unwrap_or(0),
         projection_rows: None,
         columns,
+    })
+}
+
+/// Build and atomically publish the exact sidecar for `parquet_path`.
+///
+/// Returns [`ExactIndexWrite::NotApplicable`] when no configured column exists
+/// in the batches.
+pub fn write_sidecar(
+    parquet_path: &Path,
+    batches: &[RecordBatch],
+    configs: &[ExactIndexConfig],
+) -> std::io::Result<ExactIndexWrite> {
+    let Some(mut sidecar) = build_sidecar(batches, configs) else {
+        return Ok(ExactIndexWrite::NotApplicable);
     };
     if sidecar
         .columns
@@ -244,12 +297,19 @@ pub fn projection_path(parquet_path: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// Path of a named covering projection referenced from `<segment>.fidx`.
+pub fn named_projection_path(parquet_path: &Path, name: &str) -> PathBuf {
+    let mut path = parquet_path.as_os_str().to_os_string();
+    path.push(format!(".fidx.{name}.parquet"));
+    PathBuf::from(path)
+}
+
 /// Read a complete exact sidecar. Malformed and unknown versions are absent.
 pub fn read_sidecar(path: &Path) -> Option<ExactSidecar> {
     parse(&std::fs::read(path).ok()?)
 }
 
-fn serialize(sidecar: &ExactSidecar) -> Vec<u8> {
+pub(crate) fn serialize(sidecar: &ExactSidecar) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
     out.push(VERSION);
@@ -341,7 +401,8 @@ fn write_projection(
             writer.write(&batch).map_err(io_other)?;
         }
     }
-    writer.close().map_err(io_other)?;
+    let output = writer.into_inner().map_err(io_other)?;
+    output.sync_all()?;
     if written != expected_rows {
         if let Err(cleanup) = std::fs::remove_file(&tmp_path) {
             return Err(std::io::Error::new(
@@ -360,6 +421,113 @@ fn write_projection(
     }
     std::fs::rename(&tmp_path, &final_path)?;
     Ok(written)
+}
+
+/// Write one named, narrow covering projection and return its descriptor.
+pub fn write_covering_projection(
+    parquet_path: &Path,
+    batches: &[RecordBatch],
+    sidecar: &ExactSidecar,
+    projection: &CoveringProjection,
+) -> std::io::Result<ProjectionDescriptor> {
+    let Some(column) = sidecar.columns.get(&projection.predicate_column) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "projection {:?} predicate column {:?} has no exact postings",
+                projection.name, projection.predicate_column
+            ),
+        ));
+    };
+    let runs = coalesce_runs(
+        projection
+            .predicate_values
+            .iter()
+            .flat_map(|value| column.rows.get(value).into_iter().flatten().copied())
+            .collect(),
+    );
+    if !projection
+        .predicate_values
+        .iter()
+        .all(|value| column.rows.contains_key(value))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "projection {:?} is not covered by postings",
+                projection.name
+            ),
+        ));
+    }
+    let expected_rows = runs.iter().map(|run| run.len).sum::<u64>();
+    let first = batches.first().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "projection has no input batches",
+        )
+    })?;
+    let source_schema = first.schema();
+    let projection_indices: Vec<usize> = projection
+        .columns
+        .iter()
+        .map(|name| {
+            source_schema.index_of(name).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "projection {:?} input is missing column {name:?}",
+                        projection.name
+                    ),
+                )
+            })
+        })
+        .collect::<std::io::Result<_>>()?;
+    let output_schema = Arc::new(
+        source_schema
+            .project(&projection_indices)
+            .map_err(io_other)?,
+    );
+    let final_path = named_projection_path(parquet_path, &projection.name);
+    let tmp_path = temporary_path(&final_path);
+    let output = File::create(&tmp_path)?;
+    let options = ArrowWriterOptions::new().with_properties(
+        parquet_writer_properties(PROJECTION_ROW_GROUP_BYTES, PROJECTION_ROW_GROUP_ROWS)
+            .map_err(io_other)?,
+    );
+    let mut writer =
+        ArrowWriter::try_new_with_options(output, output_schema, options).map_err(io_other)?;
+    let mut written = 0_u64;
+    let mut offset = 0_u64;
+    for batch in batches {
+        let projected = batch.project(&projection_indices).map_err(io_other)?;
+        let mask = run_mask(&runs, offset, batch.num_rows());
+        let filtered = filter_record_batch(&projected, &mask).map_err(io_other)?;
+        if filtered.num_rows() > 0 {
+            written += filtered.num_rows() as u64;
+            writer.write(&filtered).map_err(io_other)?;
+        }
+        offset += batch.num_rows() as u64;
+    }
+    let output = writer.into_inner().map_err(io_other)?;
+    output.sync_all()?;
+    if written != expected_rows || offset != sidecar.total_rows {
+        std::fs::remove_file(&tmp_path).ok();
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "projection {:?} wrote {written}/{expected_rows} rows from {offset}/{} inputs",
+                projection.name, sidecar.total_rows
+            ),
+        ));
+    }
+    std::fs::rename(&tmp_path, &final_path)?;
+    Ok(ProjectionDescriptor {
+        name: projection.name.clone(),
+        row_count: written,
+        columns: projection.columns.clone(),
+        predicate_column: projection.predicate_column.clone(),
+        predicate_values: projection.predicate_values.clone(),
+    })
 }
 
 fn temporary_path(final_path: &Path) -> PathBuf {
@@ -433,7 +601,7 @@ fn io_other(error: impl std::fmt::Display) -> std::io::Error {
     std::io::Error::other(error.to_string())
 }
 
-fn parse(bytes: &[u8]) -> Option<ExactSidecar> {
+pub(crate) fn parse(bytes: &[u8]) -> Option<ExactSidecar> {
     let mut input = ByteReader::new(bytes);
     if input.take(4)? != MAGIC || input.u8()? != VERSION {
         return None;

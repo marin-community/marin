@@ -1,4 +1,4 @@
-//! Exact `GROUP BY string_column, COUNT(...)` from segment sidecars.
+//! Exact `GROUP BY string_column, COUNT(...)` from segment value-count sections.
 //!
 //! The fast path is deliberately narrow. It recognizes one unfiltered table
 //! scan, one string grouping column, and one ordinary `COUNT(*)` or
@@ -6,18 +6,38 @@
 //! DataFusion. Likewise, every visible segment must have a complete count
 //! summary; partial backfill never contributes a partial answer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
+use async_trait::async_trait;
+use datafusion::common::tree_node::Transformed;
+use datafusion::common::DFSchemaRef;
 use datafusion::error::{DataFusionError, Result as DFResult};
-use datafusion::logical_expr::{Expr, LogicalPlan};
+use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::{
+    Expr, Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+};
+use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
+use datafusion_datasource::memory::MemorySourceConfig;
 
+use crate::query::index_cache::IndexCache;
 use crate::query::QueryResult;
-use crate::store::exact::{read_sidecar, sidecar_path};
-use crate::store::segment::segment_row_group_rows;
+use crate::store::index_bundle::SectionKind;
+use crate::store::segment::segment_id_and_row_group_rows;
+
+const MAX_COMBINED_COUNT_VALUES: usize = 16_384;
+
+static NEXT_RESULT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CountMode {
@@ -38,6 +58,180 @@ pub struct CountRequest {
     mode: CountMode,
     output: [OutputColumn; 2],
     schema: SchemaRef,
+}
+
+/// Logical node emitted when every visible segment has an exact count section.
+#[derive(Clone)]
+struct ExactAggregateNode {
+    result_id: u64,
+    result: QueryResult,
+    schema: DFSchemaRef,
+    table: String,
+    column: String,
+    segments: usize,
+}
+
+impl fmt::Debug for ExactAggregateNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExactAggregateNode")
+            .field("result_id", &self.result_id)
+            .field("table", &self.table)
+            .field("column", &self.column)
+            .field("segments", &self.segments)
+            .finish()
+    }
+}
+
+impl PartialEq for ExactAggregateNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.result_id == other.result_id
+    }
+}
+
+impl Eq for ExactAggregateNode {}
+
+impl PartialOrd for ExactAggregateNode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.result_id.partial_cmp(&other.result_id)
+    }
+}
+
+impl Hash for ExactAggregateNode {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.result_id.hash(state);
+    }
+}
+
+impl UserDefinedLogicalNodeCore for ExactAggregateNode {
+    fn name(&self) -> &str {
+        "FinelogIndexAggregate"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        Vec::new()
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        Vec::new()
+    }
+
+    fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "FinelogIndexAggregate: table={}, column={}, segments={}, method=value_counts",
+            self.table, self.column, self.segments
+        )
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        expressions: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> DFResult<Self> {
+        if !expressions.is_empty() || !inputs.is_empty() {
+            return Err(DataFusionError::Plan(
+                "FinelogIndexAggregate has no expressions or inputs".to_string(),
+            ));
+        }
+        Ok(self.clone())
+    }
+}
+
+/// Replaces a supported grouped count with a planner-visible exact-index node.
+#[derive(Debug)]
+pub struct ExactAggregateRewrite {
+    segment_paths: HashMap<String, Vec<String>>,
+}
+
+impl ExactAggregateRewrite {
+    pub fn new(segment_paths: HashMap<String, Vec<String>>) -> Self {
+        Self { segment_paths }
+    }
+}
+
+impl OptimizerRule for ExactAggregateRewrite {
+    fn name(&self) -> &str {
+        "finelog_exact_aggregate"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::BottomUp)
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> DFResult<Transformed<LogicalPlan>> {
+        let Some(request) = count_request(&plan) else {
+            return Ok(Transformed::no(plan));
+        };
+        let Some(paths) = self.segment_paths.get(&request.table) else {
+            return Ok(Transformed::no(plan));
+        };
+        let schema = Arc::clone(plan.schema());
+        let Some(result) = execute(&request, paths)? else {
+            return Ok(Transformed::no(plan));
+        };
+        let result_id = NEXT_RESULT_ID.fetch_add(1, Ordering::Relaxed);
+        let node = ExactAggregateNode {
+            result_id,
+            result,
+            schema,
+            table: request.table,
+            column: request.column,
+            segments: paths.len(),
+        };
+        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+            node: Arc::new(node),
+        })))
+    }
+}
+
+#[derive(Debug)]
+struct ExactAggregatePlanner;
+
+#[async_trait]
+impl ExtensionPlanner for ExactAggregatePlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        _physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> DFResult<Option<Arc<dyn ExecutionPlan>>> {
+        let Some(node) = node.as_any().downcast_ref::<ExactAggregateNode>() else {
+            return Ok(None);
+        };
+        let plan = MemorySourceConfig::try_new_exec(
+            std::slice::from_ref(&node.result.batches),
+            Arc::clone(&node.result.schema),
+            None,
+        )?;
+        Ok(Some(plan))
+    }
+}
+
+/// Query planner that teaches DataFusion how to execute Finelog extension nodes.
+#[derive(Debug)]
+pub struct FinelogQueryPlanner;
+
+#[async_trait]
+impl QueryPlanner for FinelogQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &SessionState,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(ExactAggregatePlanner)])
+            .create_physical_plan(logical_plan, session_state)
+            .await
+    }
 }
 
 /// Recognize the exact aggregate shape without accepting semantically richer
@@ -139,17 +333,19 @@ pub fn execute(request: &CountRequest, segment_paths: &[String]) -> DFResult<Opt
     let mut combined: BTreeMap<Option<String>, u64> = BTreeMap::new();
     for path in segment_paths {
         let parquet = Path::new(path);
-        let Some(sidecar) = read_sidecar(&sidecar_path(parquet)) else {
-            return Ok(None);
-        };
-        let Some(row_groups) = segment_row_group_rows(parquet) else {
+        let Some((source_id, row_groups)) = segment_id_and_row_group_rows(parquet) else {
             return Ok(None);
         };
         let parquet_rows = row_groups.iter().sum::<usize>() as u64;
-        if sidecar.total_rows != parquet_rows {
+        let Some(header) = IndexCache::global().get_header(parquet, source_id, parquet_rows) else {
             return Ok(None);
-        }
-        let Some(counts) = sidecar
+        };
+        let Some(index) =
+            IndexCache::global().get_exact(parquet, &header, SectionKind::ValueCounts)
+        else {
+            return Ok(None);
+        };
+        let Some(counts) = index
             .columns
             .get(&request.column)
             .and_then(|column| column.counts.as_ref())
@@ -166,6 +362,9 @@ pub fn execute(request: &CountRequest, segment_paths: &[String]) -> DFResult<Opt
                 return Ok(None);
             };
             *combined.entry(value.clone()).or_default() = total;
+            if combined.len() > MAX_COMBINED_COUNT_VALUES {
+                return Ok(None);
+            }
         }
     }
     let groups: Vec<Option<String>> = combined.keys().cloned().collect();
@@ -189,18 +388,22 @@ pub fn execute(request: &CountRequest, segment_paths: &[String]) -> DFResult<Opt
             OutputColumn::Group => Arc::clone(&group),
             OutputColumn::Count => Arc::clone(&count),
         })
-        .to_vec();
+        .into_iter()
+        .zip(request.schema.fields())
+        .map(|(array, field)| {
+            if array.data_type() == field.data_type() {
+                Ok(array)
+            } else {
+                cast(&array, field.data_type())
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
     let fields: Vec<Field> = request
         .schema
         .fields()
         .iter()
-        .map(|field| {
-            let field = field.as_ref().clone().with_nullable(true);
-            match field.data_type() {
-                DataType::Utf8View | DataType::LargeUtf8 => field.with_data_type(DataType::Utf8),
-                _ => field,
-            }
-        })
+        .map(|field| field.as_ref().clone())
         .collect();
     let schema = Arc::new(ArrowSchema::new_with_metadata(
         fields,
@@ -213,7 +416,7 @@ pub fn execute(request: &CountRequest, segment_paths: &[String]) -> DFResult<Opt
         column = request.column,
         groups = batch.num_rows(),
         segments = segment_paths.len(),
-        "answered value-count aggregate from exact sidecars"
+        "answered value-count aggregate from index sections"
     );
     Ok(Some(QueryResult {
         schema,
@@ -228,8 +431,9 @@ mod tests {
     use datafusion::prelude::SessionContext;
 
     use super::*;
-    use crate::store::exact::{write_sidecar, ExactIndexConfig};
+    use crate::store::exact::ExactIndexConfig;
     use crate::store::segment::write_segment_to_dir;
+    use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
 
     async fn plan(sql: &str) -> LogicalPlan {
         let schema = Arc::new(ArrowSchema::new(vec![
@@ -312,7 +516,12 @@ mod tests {
             exact_values: Vec::new(),
             value_counts: true,
         };
-        write_sidecar(&parquet, &[batch], &[config]).unwrap();
+        write_segment_index(
+            &parquet,
+            &[batch],
+            &SegmentIndexConfig::from_policies(Vec::<String>::new(), &[config], &[], None),
+        )
+        .unwrap();
         let request = CountRequest {
             table: "telemetry_v1".to_string(),
             column: "service".to_string(),
@@ -345,8 +554,69 @@ mod tests {
             .collect();
         assert_eq!(rows, vec![(None, 0), (Some("api"), 1), (Some("worker"), 2)]);
 
-        std::fs::remove_file(sidecar_path(&parquet)).unwrap();
+        std::fs::remove_file(crate::store::index_bundle::bundle_path(&parquet)).unwrap();
+        IndexCache::global().invalidate(&crate::store::index_bundle::bundle_path(&parquet));
         assert!(execute(&request, &paths).unwrap().is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn exact_aggregate_is_visible_in_explain() {
+        let dir = crate::test_support::unique_dir("exact_aggregate_explain");
+        let source_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "service",
+            DataType::Utf8,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&source_schema),
+            vec![Arc::new(StringArray::from(vec!["worker", "api"]))],
+        )
+        .unwrap();
+        let (parquet, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        write_segment_index(
+            &parquet,
+            &[batch],
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[ExactIndexConfig {
+                    column: "service".to_string(),
+                    exact_values: Vec::new(),
+                    value_counts: true,
+                }],
+                &[],
+                None,
+            ),
+        )
+        .unwrap();
+        let path = parquet.to_string_lossy().into_owned();
+        let provider = crate::query::provider::NamespaceProvider::build(
+            source_schema,
+            std::slice::from_ref(&path),
+        )
+        .unwrap();
+        let ctx = crate::query::make_ctx();
+        ctx.register_table("telemetry_v1", Arc::new(provider))
+            .unwrap();
+        ctx.add_optimizer_rule(Arc::new(ExactAggregateRewrite::new(HashMap::from([(
+            "telemetry_v1".to_string(),
+            vec![path],
+        )]))));
+        let batches = ctx
+            .sql("EXPLAIN SELECT service, count(service) FROM telemetry_v1 GROUP BY service")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let explain = batches
+            .iter()
+            .flat_map(|batch| batch.columns())
+            .filter_map(|column| column.as_any().downcast_ref::<StringArray>())
+            .flat_map(|column| (0..column.len()).map(|row| column.value(row)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(explain.contains("FinelogIndexAggregate"), "{explain}");
         std::fs::remove_dir_all(dir).ok();
     }
 }

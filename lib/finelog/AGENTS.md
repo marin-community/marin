@@ -115,9 +115,9 @@ a `npm run build` round trip into the `dist/` the Rust server reads from disk.
 
 Two surfaces are plain axum JSON rather than proto, because they describe this
 process and its files rather than the wire contract: `GET /api/server` (build
-revision, uptime, store paths, metadata-cache occupancy, the writer's format
-policy) and `GET /api/segments?namespace=NS` (catalog rows, plus footer and
-sidecar detail under `physical=true`). Both sit behind the same default-deny
+revision, uptime, store paths, cache diagnostics, the writer's format policy)
+and `GET /api/segments?namespace=NS` (catalog rows, plus footer and index-bundle
+detail under `physical=true`). Both sit behind the same default-deny
 auth gate as the RPCs. `build.rs` stamps the git commit, its tree hash, and a
 dirty flag into the binary; all three are empty when the build had no checkout
 to read, as in a wheel built from an sdist.
@@ -135,10 +135,22 @@ seeded store on the default port. Point it at a store with real segments via
 
 ## Secondary indexes
 
-A column declared with `ColumnIndex.trigram` gets a substring index in each
-segment's `.tgm` sidecar, covering a fixed span of rows at a time. That index is
-what makes `contains(col, …)`/`col LIKE '%…%'` prune instead of full-scan. Today
-it is on `log.data` and `telemetry_v1.name`.
+A segment with any configured method gets one `.fidx` bundle. The bundle is
+bound to the immutable segment identity and contains a checksummed internal directory
+of typed sections. Trigram Blooms, exact postings, and value counts stay inside
+the bundle. Named covering projections remain narrow Parquet files referenced
+by it. Missing, stale, or corrupt derived data always falls back to source
+Parquet.
+
+The runtime family is closed: `TrigramBloom`, `ExactPostings`, `ValueCounts`,
+and `CoveringProjection`. User-facing `ColumnIndex` flags and
+`Schema.projections` compile into those specs. Adding a method means adding a
+typed enum variant, format version, validation, planner rule, and copied-shard
+benchmark; there is no free-form plugin registry.
+
+A column declared with `ColumnIndex.trigram` gets a span-granular substring
+section. That index makes `contains(col, …)` and `col LIKE '%…%'` prune instead
+of full-scan. Today it is on `log.data` and `telemetry_v1.name`.
 
 A `LIKE` pattern contributes every literal run between its wildcards, all
 required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the
@@ -146,35 +158,36 @@ escaped `%CUDA\_ERROR%` prunes on the single run `CUDA_ERROR`. Runs under three
 bytes carry no trigram and drop out. `NOT LIKE`, `ILIKE`, and an explicit
 `ESCAPE` never prune.
 
-Enabling one is additive and can be done on a live namespace: `RegisterTable`
-turns an index on and never turns one off, and the maintenance backfill rebuilds
-any L≥1 sidecar that is missing or predates the column. Until a sidecar exists
-the query is unpruned, never wrong. Indexing a large namespace takes a while —
-the backfill is a few segments per namespace per 30 s tick — so the speedup
-arrives gradually.
+Enabling an index is additive and can be done on a live namespace. Maintenance
+backfills L≥1 segments a few at a time, reading all required index columns once
+and publishing projections before the bundle. Query methods apply per segment,
+so partial backfill gives partial benefit except for exact aggregates, which
+require complete snapshot coverage.
 
 A string column can also declare `exact_values` and/or `value_counts`.
-`exact_values` writes row runs to `.eqi` plus a complete filtered Parquet
-projection in `.eqp`; an equality or `IN` predicate covered by those values
-substitutes the compact projection only when every visible segment has one.
-Small projection row groups preserve pruning on the namespace key. Missing,
-malformed, or stale artifacts fall back first to exact row selections and then
-to the ordinary scan.
+`exact_values` writes source-row postings. Equality and same-column `IN` or `OR`
+predicates use them only while the selected fraction is at most 25%; denser
+matches retain the contiguous source scan. The residual predicate always
+remains.
 
-`value_counts` records a complete low-cardinality histogram in `.eqi`. An
-unfiltered one-column `GROUP BY` with `COUNT(*)` or `COUNT(column)` combines
-those summaries without opening Parquet. Columns over 4,096 distinct values
-omit the histogram and use DataFusion normally. The exact backfill builds one
-segment per namespace per 30-second tick; L0 flushes and compaction outputs
-write current artifacts immediately.
+`Schema.projections` declares independent named covering projections with one
+predicate and an explicit included-column list. The planner substitutes one
+only when both the predicate values and every referenced query column are
+covered. Covered segments use the projection while uncovered segments retain
+source Parquet. The initial `training-status` projection covers three metric
+names and seven columns.
 
-A sidecar Bloom covers a fixed 16,384-row *span*, which is deliberately not the
-parquet row-group size — row groups are sized to a byte target so a namespace's
-footer stays proportional to its data rather than to its row width. The prune
-maps the span mask onto row groups, emitting a row selection where a row group is
-only partly covered. Sidecars carry a format version; bumping it makes every
-existing sidecar unreadable (queries scan unpruned) until the maintenance
-backfill rebuilds them, a few segments per namespace per 30 s tick.
+`value_counts` records a complete low-cardinality histogram. A DataFusion
+optimizer rule replaces a qualifying unfiltered one-column `GROUP BY` with
+`COUNT(*)` or `COUNT(column)` when every visible segment is covered. The rewrite
+appears as `FinelogIndexAggregate` in `EXPLAIN` and composes with outer
+projections, ordering, and limits. Columns over 4,096 distinct values omit the
+summary; a combined result above 16,384 values falls back to DataFusion.
+
+A trigram Bloom covers a fixed 16,384-row span, deliberately independent of the
+Parquet row-group size. The prune maps its source-row mask onto row groups and
+can emit a partial-row selection. Every `.fidx` section has its own format
+version and checksum, so changing one method invalidates only that method.
 
 Every segment's parquet footer carries the physical layout revision it was
 written with, and maintenance re-encodes stale ones in place a couple per
@@ -185,16 +198,18 @@ is what makes it free: the archive keys objects by basename and the sync step
 only uploads segments the catalog still marks `Local`, so nothing is re-uploaded.
 Staging and committing are separate, with the rename taken under the insertion
 lock, because eviction may drop a segment during the seconds a rewrite runs and
-renaming over a dropped path would resurrect an untracked file. The trigram
-sidecar is deliberately left alone — spans are a fixed row count and the prune
-reads each segment's actual layout — so it stays valid across a rewrite.
+renaming over a dropped path would resurrect an untracked file. UUID-stamped
+bundles remain valid because the rewrite preserves the segment ID, rows, and row
+order. Older unstamped segments use a local file-generation identity until
+rewritten; their old bundle falls back and is rebuilt after the rewrite assigns
+a UUID.
 
 No segment carries a parquet bloom filter. Writing them for every column cost 15%
 of each segment and pruned nothing measurable; the key-column bloom that outlived
 that only served exact-key lookups against unsorted L0, which is a few hundred
 KiB that compaction consumes within a tick or two, against a write cost on every
 flush. L1+ is sorted by `(key, seq)` and prunes the key band from min/max
-statistics; substring queries prune from the trigram sidecar.
+statistics; substring queries prune from the trigram bundle section.
 
 A starts-with predicate — `prefix(col, P)`, `col LIKE 'P%'`, or
 `regexp_matches(col, '^P…')` — prunes only because `PrefixRangeRewrite` ANDs the

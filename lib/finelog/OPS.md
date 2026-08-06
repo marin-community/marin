@@ -73,34 +73,40 @@ depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
 `ERROR`, so any row group holding both survives, where `%CUDA\_ERROR%` — or
 `contains(data, 'CUDA_ERROR')` — gives the index the whole string. Escape the
 underscores when you mean them literally. Adding one is a
-`RegisterTable` away and does not need a reset, but the sidecar backfill runs a
+`RegisterTable` away and does not need a reset, but the index backfill runs a
 few segments per namespace per 30 s tick, so a large namespace speeds up over
 tens of minutes rather than at once.
 
 For repeated equality families, declare the hot string values in
-`ColumnIndex.exact_values`. Finelog writes a compact `.eqp` projection of their
-complete rows and keeps small row groups so a key or timestamp bound still
-prunes. The query uses it for `=` and same-column `IN`/`OR` predicates only when
-every visible segment is covered; partial backfill falls back to exact row
-selection or the ordinary Parquet scan. Exact backfill is deliberately limited
-to one segment per namespace per 30-second tick.
+`ColumnIndex.exact_values`. Finelog stores exact source-row postings in the
+segment's `.fidx` bundle. The planner attaches them for `=` and same-column
+`IN`/`OR` predicates when they retain at most 25% of the segment; denser matches
+keep the contiguous source scan.
+
+Use a named `Schema.projections` entry when the recurring query also benefits
+from a compact physical copy. Each projection declares one predicate and an
+explicit included-column list. Covered segments substitute the narrow Parquet
+file while uncovered segments use postings or source Parquet, so partial
+backfill is useful. `telemetry_v1` has one `training-status` projection for the
+three dashboard metric names.
 
 For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
 Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then
-combine exact per-segment summaries without opening Parquet. The fast path is
+rewrite to a `FinelogIndexAggregate` node that combines exact per-segment
+summaries without opening Parquet. `EXPLAIN` shows the rewrite. It is
 all-or-nothing and limited to one grouping column; filters, joins, multiple
-aggregates, or a column above 4,096 distinct values use DataFusion.
+aggregates, a per-segment column above 4,096 distinct values, or a combined
+result above 16,384 values use DataFusion.
 `telemetry_v1` enables this for `service`, `kind`, and `name`, while its
 training-status metric names also use an exact filtered projection.
 
-A release that bumps the sidecar format spends that same window on every existing
-sidecar at once: all of them read as unusable and every substring query scans
-unpruned until the backfill catches up. Before diagnosing a slow substring query
-after a deploy, check whether the rebuild is still in flight — the sidecar header
-carries its version in the fifth byte, so counting versions across a namespace's
-`.tgm` files separates "still rebuilding" from a real pruning failure. A time bound is the faster answer in the moment: `telemetry_v1` is keyed
-on `timestamp_ms` and a 10-minute window answers in about a second where the same
-query unbounded takes 30.
+`GET /api/segments?namespace=telemetry_v1&physical=true` reports each local
+segment identity and `.fidx` section directory. Use it to distinguish incomplete
+backfill from a planner miss. `GET /api/server` reports corrupt bundle and
+section counters; either condition is a safe scan fallback but should trigger a
+local rebuild investigation. A time bound remains the fastest containment:
+`telemetry_v1` is keyed on `timestamp_ms`, so bounded queries can prune before
+any secondary method runs.
 
 `finelog query` applies a client deadline just past the server's own 10s one.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
@@ -139,6 +145,12 @@ query warning also includes `metadata_cache_limit_bytes`,
 `metadata_cache_size_bytes`, `metadata_cache_entries`, and
 `metadata_cache_hits`. Compare warm-query latency and those fields before
 retaining or increasing an override.
+
+`query_index_cache_mb` bounds decoded `.fidx` headers and sections. Cache
+entries are keyed by segment identity and section ID, charged by decoded heap,
+and invalidated when backfill publishes a replacement bundle. Size it for the
+active trigram, posting, and value-count working set rather than source Parquet
+bytes.
 
 `StoragePolicy` controls eviction of eligible uploaded segments from Finelog's
 local cache. It is not a row-age retention guarantee and does not delete objects

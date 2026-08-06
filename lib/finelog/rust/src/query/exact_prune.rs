@@ -4,14 +4,23 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::query::index_cache::IndexCache;
+use crate::store::exact::{coalesce_runs, RowRun};
+use crate::store::index_bundle::SectionKind;
+use crate::store::segment::{segment_id, segment_id_and_row_group_rows, segment_row_group_rows};
+use crate::store::segment_index::{
+    parse_projection_reference, projection_path, ProjectionReference,
+};
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 
-use crate::store::exact::{coalesce_runs, projection_path, read_sidecar, sidecar_path, RowRun};
-use crate::store::segment::segment_row_group_rows;
+/// Above this retained-row fraction, Parquet's contiguous scan is generally
+/// cheaper than materializing and applying a fragmented row selection.
+const MAX_POSTINGS_SELECTED_NUMERATOR: u64 = 1;
+const MAX_POSTINGS_SELECTED_DENOMINATOR: u64 = 4;
 
 /// Exact string values implied for each column by top-level `=` and `IN`
 /// conjuncts. Multiple constraints on one column are intersected.
@@ -99,21 +108,22 @@ fn string_literal(expr: &Expr) -> Option<String> {
     }
 }
 
-/// Substitute complete filtered projections when available for every segment.
-/// Otherwise attach exact row selections to individual source files; existing
-/// trigram access plans are intersected rather than replaced.
+/// Substitute complete filtered projections for each covered segment. Attach
+/// exact row selections to uncovered source files; existing trigram access
+/// plans are intersected rather than replaced.
 pub fn apply(
     plan: Arc<dyn ExecutionPlan>,
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
+    required_columns: &BTreeSet<String>,
 ) -> Arc<dyn ExecutionPlan> {
     if constraints.is_empty() {
         return plan;
     }
-    if let Some(projections) = build_projection_files(segment_paths, constraints) {
-        return rewrite_projection_files(plan, &projections);
-    }
-    let access_plans = build_access_plans(segment_paths, constraints);
+    let projections = build_projection_files(segment_paths, constraints, required_columns);
+    let projected_segments = projections.keys().cloned().collect();
+    let plan = rewrite_projection_files(plan, &projections);
+    let access_plans = build_access_plans(segment_paths, constraints, &projected_segments);
     if access_plans.is_empty() {
         return plan;
     }
@@ -130,44 +140,65 @@ struct ProjectionFile {
 fn build_projection_files(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
-) -> Option<HashMap<String, ProjectionFile>> {
+    required_columns: &BTreeSet<String>,
+) -> HashMap<String, ProjectionFile> {
     let mut projections = HashMap::new();
     let mut projected_rows = 0_u64;
     let mut total_rows = 0_u64;
     for segment in segment_paths {
         let parquet = Path::new(segment);
-        let basename = parquet.file_name()?.to_str()?;
-        let sidecar = read_sidecar(&sidecar_path(parquet))?;
-        let rows = segment_row_group_rows(parquet)?;
-        if rows.iter().sum::<usize>() as u64 != sidecar.total_rows {
-            return None;
+        let Some(basename) = parquet.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some((source_id, rows)) = segment_id_and_row_group_rows(parquet) else {
+            continue;
+        };
+        let source_rows = rows.iter().sum::<usize>() as u64;
+        let Some(header) = IndexCache::global().get_header(parquet, source_id, source_rows) else {
+            continue;
+        };
+        let Some(reference) = header
+            .sections
+            .iter()
+            .filter(|section| section.kind == SectionKind::CoveringProjection)
+            .filter_map(|section| parse_projection_reference(&section.coverage))
+            .find(|reference| projection_covers(reference, constraints, required_columns))
+        else {
+            continue;
+        };
+        let projection = projection_path(parquet, &reference);
+        let Some(projection_groups) = segment_row_group_rows(&projection) else {
+            continue;
+        };
+        if projection_groups.iter().sum::<usize>() as u64 != reference.descriptor.row_count
+            || segment_id(&projection).map(|id| id.to_string())
+                != Some(reference.file_segment_id.clone())
+        {
+            continue;
         }
-        let projection_rows = sidecar.projection_rows?;
-        let supported = constraints.iter().any(|(column_name, values)| {
-            sidecar
-                .columns
-                .get(column_name)
-                .is_some_and(|column| values.iter().all(|value| column.rows.contains_key(value)))
-        });
-        if !supported {
-            return None;
+        let Some(metadata) = std::fs::metadata(&projection).ok() else {
+            continue;
+        };
+        if metadata.len() != reference.file_bytes {
+            continue;
         }
-        let projection = projection_path(parquet);
-        let projection_groups = segment_row_group_rows(&projection)?;
-        if projection_groups.iter().sum::<usize>() as u64 != projection_rows {
-            return None;
-        }
-        let metadata = std::fs::metadata(&projection).ok()?;
+        let Some(location) = object_store::path::Path::from_filesystem_path(&projection).ok()
+        else {
+            continue;
+        };
+        let Some(modified) = metadata.modified().ok() else {
+            continue;
+        };
         projections.insert(
             basename.to_string(),
             ProjectionFile {
-                location: object_store::path::Path::from_filesystem_path(&projection).ok()?,
+                location,
                 size: metadata.len(),
-                modified: metadata.modified().ok()?,
+                modified,
             },
         );
-        projected_rows += projection_rows;
-        total_rows += sidecar.total_rows;
+        projected_rows += reference.descriptor.row_count;
+        total_rows += source_rows;
     }
     if !projections.is_empty() {
         tracing::debug!(
@@ -177,38 +208,60 @@ fn build_projection_files(
             "exact-value filtered projection"
         );
     }
-    Some(projections)
+    projections
+}
+
+fn projection_covers(
+    reference: &ProjectionReference,
+    constraints: &HashMap<String, Vec<String>>,
+    required_columns: &BTreeSet<String>,
+) -> bool {
+    reference.row_identity == "source_segment_row_offset"
+        && required_columns
+            .iter()
+            .all(|column| reference.descriptor.columns.contains(column))
+        && constraints
+            .get(&reference.descriptor.predicate_column)
+            .is_some_and(|values| {
+                values
+                    .iter()
+                    .all(|value| reference.descriptor.predicate_values.contains(value))
+            })
 }
 
 fn build_access_plans(
     segment_paths: &[String],
     constraints: &HashMap<String, Vec<String>>,
+    projected_segments: &BTreeSet<String>,
 ) -> HashMap<String, ParquetAccessPlan> {
     let mut plans = HashMap::new();
     let mut selected_rows = 0_u64;
     let mut total_rows = 0_u64;
+    let mut high_selectivity_segments = 0_usize;
     for segment in segment_paths {
         let parquet = Path::new(segment);
         let Some(basename) = parquet.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        let Some(sidecar) = read_sidecar(&sidecar_path(parquet)) else {
-            continue;
-        };
-        let Some(row_group_rows) = segment_row_group_rows(parquet) else {
-            continue;
-        };
-        if row_group_rows.iter().sum::<usize>() as u64 != sidecar.total_rows {
-            tracing::warn!(
-                segment = basename,
-                sidecar_rows = sidecar.total_rows,
-                "stale exact sidecar; scanning unpruned"
-            );
+        if projected_segments.contains(basename) {
             continue;
         }
+        let Some((source_id, row_group_rows)) = segment_id_and_row_group_rows(parquet) else {
+            continue;
+        };
+        let total_segment_rows = row_group_rows.iter().sum::<usize>() as u64;
+        let Some(header) = IndexCache::global().get_header(parquet, source_id, total_segment_rows)
+        else {
+            continue;
+        };
+        let Some(index) =
+            IndexCache::global().get_exact(parquet, &header, SectionKind::ExactPostings)
+        else {
+            continue;
+        };
         let mut selected: Option<Vec<RowRun>> = None;
         for (column_name, values) in constraints {
-            let Some(column) = sidecar.columns.get(column_name) else {
+            let Some(column) = index.columns.get(column_name) else {
                 continue;
             };
             if !values.iter().all(|value| column.rows.contains_key(value)) {
@@ -228,8 +281,13 @@ fn build_access_plans(
         let Some(selected) = selected else {
             continue;
         };
-        selected_rows += selected.iter().map(|run| run.len).sum::<u64>();
-        total_rows += sidecar.total_rows;
+        let segment_selected_rows = selected.iter().map(|run| run.len).sum::<u64>();
+        if !postings_are_selective(segment_selected_rows, total_segment_rows) {
+            high_selectivity_segments += 1;
+            continue;
+        }
+        selected_rows += segment_selected_rows;
+        total_rows += total_segment_rows;
         plans.insert(
             basename.to_string(),
             runs_access_plan(&selected, &row_group_rows),
@@ -243,7 +301,21 @@ fn build_access_plans(
             "exact-value prune"
         );
     }
+    if high_selectivity_segments > 0 {
+        tracing::debug!(
+            high_selectivity_segments,
+            max_selected_numerator = MAX_POSTINGS_SELECTED_NUMERATOR,
+            max_selected_denominator = MAX_POSTINGS_SELECTED_DENOMINATOR,
+            "exact postings retained too many rows; scanning those segments contiguously"
+        );
+    }
     plans
+}
+
+fn postings_are_selective(selected_rows: u64, total_rows: u64) -> bool {
+    total_rows > 0
+        && selected_rows.saturating_mul(MAX_POSTINGS_SELECTED_DENOMINATOR)
+            <= total_rows.saturating_mul(MAX_POSTINGS_SELECTED_NUMERATOR)
 }
 
 fn intersect_runs(left: &[RowRun], right: &[RowRun]) -> Vec<RowRun> {
@@ -313,13 +385,17 @@ fn intersect_access_plans(
     if existing.inner().len() != additional.inner().len() {
         return None;
     }
-    let mut combined = existing.clone();
-    for (index, access) in additional.inner().iter().enumerate() {
-        match access {
-            RowGroupAccess::Skip => combined.skip(index),
-            RowGroupAccess::Scan => {}
-            RowGroupAccess::Selection(selection) => {
-                combined.scan_selection(index, selection.clone());
+    let mut combined = ParquetAccessPlan::new_all(existing.inner().len());
+    for (index, (left, right)) in existing.inner().iter().zip(additional.inner()).enumerate() {
+        match (left, right) {
+            (RowGroupAccess::Skip, _) | (_, RowGroupAccess::Skip) => combined.skip(index),
+            (RowGroupAccess::Scan, RowGroupAccess::Scan) => {}
+            (RowGroupAccess::Selection(selection), RowGroupAccess::Scan)
+            | (RowGroupAccess::Scan, RowGroupAccess::Selection(selection)) => {
+                combined.scan_selection(index, selection.clone())
+            }
+            (RowGroupAccess::Selection(left), RowGroupAccess::Selection(right)) => {
+                combined.scan_selection(index, left.intersection(right))
             }
         }
     }
@@ -439,6 +515,39 @@ mod tests {
     }
 
     #[test]
+    fn access_plan_intersection_preserves_both_pruners() {
+        let mut left = ParquetAccessPlan::new_all(2);
+        left.scan_selection(
+            0,
+            RowSelection::from(vec![RowSelector::select(5), RowSelector::skip(5)]),
+        );
+        left.skip(1);
+        let mut right = ParquetAccessPlan::new_all(2);
+        right.scan_selection(
+            0,
+            RowSelection::from(vec![
+                RowSelector::skip(3),
+                RowSelector::select(4),
+                RowSelector::skip(3),
+            ]),
+        );
+
+        let combined = intersect_access_plans(&left, &right).unwrap();
+        let RowGroupAccess::Selection(selection) = &combined.inner()[0] else {
+            panic!("the overlapping row group should retain a selection");
+        };
+        assert_eq!(
+            Vec::<RowSelector>::from(selection.clone()),
+            vec![
+                RowSelector::skip(3),
+                RowSelector::select(2),
+                RowSelector::skip(5),
+            ]
+        );
+        assert!(matches!(combined.inner()[1], RowGroupAccess::Skip));
+    }
+
+    #[test]
     fn run_intersection_is_exact() {
         assert_eq!(
             intersect_runs(
@@ -447,5 +556,12 @@ mod tests {
             ),
             vec![RowRun { start: 3, len: 3 }, RowRun { start: 11, len: 1 }]
         );
+    }
+
+    #[test]
+    fn postings_fall_back_to_contiguous_scan_above_quarter_coverage() {
+        assert!(postings_are_selective(25, 100));
+        assert!(!postings_are_selective(26, 100));
+        assert!(!postings_are_selective(1, 0));
     }
 }

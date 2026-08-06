@@ -24,7 +24,7 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
 use crate::store::ipc::encode_ipc;
 use crate::store::policy::StoragePolicy;
-use crate::store::schema::{schema_to_arrow, Column, Schema};
+use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
 use crate::store::Store;
 
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 8;
@@ -658,6 +658,20 @@ fn telemetry_schema() -> Schema {
         ],
         "timestamp_ms",
     )
+    .with_covering_projection(CoveringProjection::new(
+        "training-status",
+        "name",
+        ["phase", "step", "progress_time_seconds"],
+        [
+            "seq",
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "resource_attributes_json",
+            "cluster",
+        ],
+    ))
 }
 
 fn store_error(error: StatsError) -> ApiError {

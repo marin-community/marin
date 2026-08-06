@@ -563,7 +563,7 @@ impl Store {
 
     /// Run one full maintenance cycle for `name`:
     /// `flush -> compact (planner-drained, or forced L0->L1) -> sync -> evict ->
-    /// backfill missing trigram sidecars`.
+    /// backfill missing segment-index bundles`.
     ///
     /// This is the body the per-namespace background maintenance task runs on its
     /// tick, and the entry point the `--debug-admin` `POST /debug/maintain` drives

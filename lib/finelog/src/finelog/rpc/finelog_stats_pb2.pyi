@@ -50,13 +50,27 @@ class Column(_message.Message):
     index: ColumnIndex
     def __init__(self, name: _Optional[str] = ..., type: _Optional[_Union[ColumnType, str]] = ..., nullable: _Optional[bool] = ..., index: _Optional[_Union[ColumnIndex, _Mapping]] = ...) -> None: ...
 
+class CoveringProjection(_message.Message):
+    __slots__ = ("name", "predicate_column", "predicate_values", "columns")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    PREDICATE_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    PREDICATE_VALUES_FIELD_NUMBER: _ClassVar[int]
+    COLUMNS_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    predicate_column: str
+    predicate_values: _containers.RepeatedScalarFieldContainer[str]
+    columns: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, name: _Optional[str] = ..., predicate_column: _Optional[str] = ..., predicate_values: _Optional[_Iterable[str]] = ..., columns: _Optional[_Iterable[str]] = ...) -> None: ...
+
 class Schema(_message.Message):
-    __slots__ = ("columns", "key_column")
+    __slots__ = ("columns", "key_column", "projections")
     COLUMNS_FIELD_NUMBER: _ClassVar[int]
     KEY_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    PROJECTIONS_FIELD_NUMBER: _ClassVar[int]
     columns: _containers.RepeatedCompositeFieldContainer[Column]
     key_column: str
-    def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ...) -> None: ...
+    projections: _containers.RepeatedCompositeFieldContainer[CoveringProjection]
+    def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ..., projections: _Optional[_Iterable[_Union[CoveringProjection, _Mapping]]] = ...) -> None: ...
 
 class StoragePolicy(_message.Message):
     __slots__ = ("max_segments", "max_bytes", "max_age_seconds")

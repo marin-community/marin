@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{
-    Column as ProtoColumn, ColumnIndex as ProtoColumnIndex, ColumnType, Schema as ProtoSchema,
-    SchemaView,
+    Column as ProtoColumn, ColumnIndex as ProtoColumnIndex, ColumnType,
+    CoveringProjection as ProtoCoveringProjection, Schema as ProtoSchema, SchemaView,
 };
 
 /// Default implicit ordering-key column name when `Schema.key_column` is empty.
@@ -40,16 +40,16 @@ pub const MAX_WRITE_ROWS_BYTES: usize = 16 * 1024 * 1024;
 /// Max rows per RecordBatch. Exactly `1_000_000` (NOT `1 << 20`).
 pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
 
-/// Secondary indexes a column carries. Each index type is its own field so
-/// adding one is additive; `ColumnIndex::default()` is unindexed.
+/// User-facing column index policy. It compiles into the closed planner-facing
+/// [`crate::store::segment_index::IndexSpec`] family.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColumnIndex {
-    /// Per-row-group trigram substring index in each segment's `.tgm` sidecar.
+    /// Span-granular trigram substring section in each segment's `.fidx` bundle.
     /// Only meaningful for STRING columns.
     pub trigram: bool,
-    /// Exact values covered by `.eqi` metadata and a filtered `.eqp` projection.
+    /// Exact values covered by postings and any explicitly declared projection.
     pub exact_values: Vec<String>,
-    /// Exact per-value counts stored in `.eqi`.
+    /// Exact per-value counts stored in the segment's `.fidx` bundle.
     pub value_counts: bool,
 }
 
@@ -60,6 +60,38 @@ pub struct Column {
     pub r#type: ColumnType,
     pub nullable: bool,
     pub index: ColumnIndex,
+}
+
+/// A named filtered Parquet projection that covers a stable query family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoveringProjection {
+    pub name: String,
+    pub predicate_column: String,
+    pub predicate_values: Vec<String>,
+    pub columns: Vec<String>,
+}
+
+impl CoveringProjection {
+    pub fn new(
+        name: impl Into<String>,
+        predicate_column: impl Into<String>,
+        predicate_values: impl IntoIterator<Item = impl Into<String>>,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        let mut predicate_values: Vec<String> =
+            predicate_values.into_iter().map(Into::into).collect();
+        predicate_values.sort();
+        predicate_values.dedup();
+        let mut columns: Vec<String> = columns.into_iter().map(Into::into).collect();
+        let mut seen = std::collections::BTreeSet::new();
+        columns.retain(|column| seen.insert(column.clone()));
+        Self {
+            name: name.into(),
+            predicate_column: predicate_column.into(),
+            predicate_values,
+            columns,
+        }
+    }
 }
 
 impl Column {
@@ -105,6 +137,7 @@ impl Column {
 pub struct Schema {
     pub columns: Vec<Column>,
     pub key_column: String,
+    pub projections: Vec<CoveringProjection>,
 }
 
 impl Schema {
@@ -112,7 +145,13 @@ impl Schema {
         Self {
             columns,
             key_column: key_column.into(),
+            projections: Vec::new(),
         }
+    }
+
+    pub fn with_covering_projection(mut self, projection: CoveringProjection) -> Self {
+        self.projections.push(projection);
+        self
     }
 
     pub fn column(&self, name: &str) -> Option<&Column> {
@@ -257,7 +296,23 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
             .unwrap_or(false);
         cols.push(column);
     }
-    let schema = Schema::new(cols, view.key_column.unwrap_or(""));
+    let projections = view
+        .projections
+        .iter()
+        .map(|projection| {
+            CoveringProjection::new(
+                projection.name.unwrap_or(""),
+                projection.predicate_column.unwrap_or(""),
+                projection
+                    .predicate_values
+                    .iter()
+                    .map(|value| value.to_string()),
+                projection.columns.iter().map(|value| value.to_string()),
+            )
+        })
+        .collect();
+    let mut schema = Schema::new(cols, view.key_column.unwrap_or(""));
+    schema.projections = projections;
     validate_index_policies(&schema)?;
     Ok(schema)
 }
@@ -285,6 +340,17 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
         .collect();
     ProtoSchema {
         columns,
+        projections: schema
+            .projections
+            .iter()
+            .map(|projection| ProtoCoveringProjection {
+                name: Some(projection.name.clone()),
+                predicate_column: Some(projection.predicate_column.clone()),
+                predicate_values: projection.predicate_values.clone(),
+                columns: projection.columns.clone(),
+                ..Default::default()
+            })
+            .collect(),
         ..Default::default()
     }
     .with_key_column(&schema.key_column)
@@ -320,6 +386,8 @@ struct JsonColumn {
 struct JsonSchema {
     key_column: String,
     columns: Vec<JsonColumn>,
+    #[serde(default)]
+    projections: Vec<CoveringProjection>,
 }
 
 fn column_type_name(t: ColumnType) -> &'static str {
@@ -382,6 +450,7 @@ pub fn schema_to_json(schema: &Schema) -> String {
                 },
             })
             .collect(),
+        projections: schema.projections.clone(),
     };
     serde_json::to_string(&payload).expect("schema JSON serialization never fails")
 }
@@ -400,7 +469,10 @@ pub fn schema_from_json(text: &str) -> Result<Schema, StatsError> {
         column.index.value_counts = c.index.value_counts;
         cols.push(column);
     }
-    Ok(Schema::new(cols, payload.key_column))
+    let mut schema = Schema::new(cols, payload.key_column);
+    schema.projections = payload.projections;
+    validate_index_policies(&schema)?;
+    Ok(schema)
 }
 
 // ---------------------------------------------------------------------------
@@ -420,7 +492,11 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
         false,
     ));
     columns.extend(schema.columns);
-    Schema::new(columns, schema.key_column)
+    Schema {
+        columns,
+        key_column: schema.key_column,
+        projections: schema.projections,
+    }
 }
 
 /// Return `schema` with the implicit nullable STRING `cluster` column appended.
@@ -436,13 +512,18 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     let Schema {
         mut columns,
         key_column,
+        projections,
     } = schema;
     columns.push(Column::new(
         IMPLICIT_CLUSTER_COLUMN,
         ColumnType::COLUMN_TYPE_STRING,
         true,
     ));
-    Schema::new(columns, key_column)
+    Schema {
+        columns,
+        key_column,
+        projections,
+    }
 }
 
 /// Resolve the ordering key column name, raising if invalid.
@@ -489,6 +570,61 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
             )));
         }
     }
+    let mut names = std::collections::BTreeSet::new();
+    for projection in &schema.projections {
+        if projection.name.is_empty()
+            || !projection
+                .name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection name {:?} must contain only ASCII letters, digits, '-' or '_'",
+                projection.name
+            )));
+        }
+        if !names.insert(&projection.name) {
+            return Err(StatsError::SchemaValidation(format!(
+                "duplicate projection name {:?}",
+                projection.name
+            )));
+        }
+        let Some(predicate) = schema.column(&projection.predicate_column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection {:?}: unknown predicate column {:?}",
+                projection.name, projection.predicate_column
+            )));
+        };
+        if predicate.r#type != ColumnType::COLUMN_TYPE_STRING {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection {:?}: predicate column {:?} must be STRING",
+                projection.name, projection.predicate_column
+            )));
+        }
+        if projection.predicate_values.is_empty() || projection.columns.is_empty() {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection {:?}: predicate_values and columns must be non-empty",
+                projection.name
+            )));
+        }
+        if !projection.columns.contains(&projection.predicate_column) {
+            return Err(StatsError::SchemaValidation(format!(
+                "projection {:?}: columns must include predicate column {:?}",
+                projection.name, projection.predicate_column
+            )));
+        }
+        for column in &projection.columns {
+            if schema.column(column).is_none()
+                && column != IMPLICIT_SEQ_COLUMN
+                && column != IMPLICIT_CLUSTER_COLUMN
+            {
+                return Err(StatsError::SchemaValidation(format!(
+                    "projection {:?}: unknown included column {:?}",
+                    projection.name, column
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -509,7 +645,7 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
 /// - a differing `key_column` is a *hint*: warn and keep the registered value.
 /// - a secondary index is *monotonically enabled*: a request that asks for one
 ///   on an existing column turns it on, and one that omits it leaves the
-///   registered value alone. Enabling is additive — the sidecar is a derived
+///   registered value alone. Enabling is additive — the bundle is a derived
 ///   artifact the backfill sweep builds, and until it exists the query merely
 ///   scans unpruned — so a newer client can add an index to a live namespace
 ///   without a reset. An older client that does not know about the field can
@@ -527,6 +663,23 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     let mut enable_trigram: Vec<&str> = Vec::new();
     let mut enable_value_counts: Vec<&str> = Vec::new();
     let mut exact_values: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut projections = Vec::new();
+    for requested_projection in &requested.projections {
+        match registered
+            .projections
+            .iter()
+            .find(|projection| projection.name == requested_projection.name)
+        {
+            Some(existing) if existing != requested_projection => {
+                return Err(StatsError::SchemaConflict(format!(
+                    "projection {:?}: definition differs from registered schema",
+                    requested_projection.name
+                )));
+            }
+            Some(_) => {}
+            None => projections.push(requested_projection.clone()),
+        }
+    }
     for rc in &requested.columns {
         match registered.column(&rc.name) {
             None => {
@@ -589,6 +742,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
         && enable_trigram.is_empty()
         && enable_value_counts.is_empty()
         && exact_values.is_empty()
+        && projections.is_empty()
     {
         return Ok(registered.clone());
     }
@@ -623,7 +777,11 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
         }
     }
     merged.extend(extras);
-    Ok(Schema::new(merged, registered.key_column.clone()))
+    let mut merged_schema = Schema::new(merged, registered.key_column.clone());
+    merged_schema.projections = registered.projections.clone();
+    merged_schema.projections.extend(projections);
+    validate_index_policies(&merged_schema)?;
+    Ok(merged_schema)
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,6 +1283,39 @@ mod tests {
                 Err(StatsError::SchemaValidation(_))
             ));
         }
+    }
+
+    #[test]
+    fn covering_projection_round_trips_and_merges_by_name() {
+        let projection = CoveringProjection::new(
+            "training-status",
+            "worker_id",
+            ["phase", "step"],
+            ["seq", "worker_id", "mem_bytes"],
+        );
+        let requested = worker_schema().with_covering_projection(projection.clone());
+        validate_index_policies(&requested).unwrap();
+        assert_eq!(
+            schema_from_json(&schema_to_json(&requested)).unwrap(),
+            requested
+        );
+
+        let registered = with_implicit_seq(worker_schema());
+        let merged = merge_schemas(&registered, &with_implicit_seq(requested)).unwrap();
+        assert_eq!(merged.projections, vec![projection]);
+
+        let conflicting = with_implicit_seq(worker_schema().with_covering_projection(
+            CoveringProjection::new(
+                "training-status",
+                "worker_id",
+                ["other"],
+                ["seq", "worker_id"],
+            ),
+        ));
+        assert!(matches!(
+            merge_schemas(&merged, &conflicting),
+            Err(StatsError::SchemaConflict(_))
+        ));
     }
 
     #[test]

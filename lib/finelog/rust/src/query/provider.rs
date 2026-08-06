@@ -17,6 +17,7 @@
 //! captured; the snapshot here is the read side of that seam.
 
 use std::any::Any;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
@@ -41,7 +42,7 @@ pub struct NamespaceProvider {
     schema: SchemaRef,
     inner: Inner,
     /// The snapshotted sealed segment paths, retained so scans can locate each
-    /// segment's trigram and exact-value sidecars. Empty for the typed-empty
+    /// segment's typed index bundle. Empty for the typed-empty
     /// (no-segments) case.
     segment_paths: Vec<String>,
 }
@@ -163,7 +164,7 @@ impl TableProvider for NamespaceProvider {
         match &self.inner {
             Inner::Listing(t) => {
                 // Delegate to DataFusion's parquet scan (which keeps the existing
-                // range / min-max row-group pruning), then layer sidecar-backed
+                // range / min-max row-group pruning), then layer bundle-backed
                 // filtered projections or access plans onto its files.
                 let plan = t.scan(state, projection, filters, limit).await?;
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
@@ -172,10 +173,30 @@ impl TableProvider for NamespaceProvider {
                     return Ok(plan);
                 }
                 // Key ranges (incl. the analyzer's synthesized prefix bounds) scope
-                // which segments' sidecars the prune reads — cheap expr inspection,
+                // which segments' sections the prune reads — cheap expr inspection,
                 // done here before the blocking work.
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
-                // Sidecar + footer reads are blocking, so run pruning off the
+                let mut required_columns: BTreeSet<String> = projection
+                    .map(|indices| {
+                        indices
+                            .iter()
+                            .map(|&index| self.schema.field(index).name().clone())
+                            .collect()
+                    })
+                    .unwrap_or_else(|| {
+                        self.schema
+                            .fields()
+                            .iter()
+                            .map(|field| field.name().clone())
+                            .collect()
+                    });
+                required_columns.extend(
+                    filters
+                        .iter()
+                        .flat_map(Expr::column_refs)
+                        .map(|column| column.name.clone()),
+                );
+                // Bundle + footer reads are blocking, so run pruning off the
                 // async worker.
                 let segment_paths = self.segment_paths.clone();
                 tokio::task::spawn_blocking(move || {
@@ -185,7 +206,12 @@ impl TableProvider for NamespaceProvider {
                         &needles,
                         &key_ranges,
                     );
-                    crate::query::exact_prune::apply(plan, &segment_paths, &exact)
+                    crate::query::exact_prune::apply(
+                        plan,
+                        &segment_paths,
+                        &exact,
+                        &required_columns,
+                    )
                 })
                 .await
                 .map_err(|e| {
@@ -332,7 +358,22 @@ mod tests {
             exact_values: vec!["w-2".to_string()],
             value_counts: false,
         };
-        crate::store::exact::write_sidecar(&path, &[batch], &[config]).unwrap();
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[config],
+                &[crate::store::schema::CoveringProjection::new(
+                    "workers",
+                    "worker_id",
+                    ["w-2"],
+                    ["seq", "worker_id", "mem_bytes"],
+                )],
+                None,
+            ),
+        )
+        .unwrap();
 
         let provider =
             NamespaceProvider::build(worker_arrow(), &[path.to_string_lossy().into_owned()])
@@ -358,7 +399,11 @@ mod tests {
             .flat_map(|group| group.files())
             .collect();
         assert_eq!(files.len(), 1);
-        assert!(files[0].object_meta.location.as_ref().ends_with(".eqp"));
+        assert!(files[0]
+            .object_meta
+            .location
+            .as_ref()
+            .ends_with(".fidx.workers.parquet"));
         assert!(files[0].extensions.is_none());
 
         ctx.register_table("workers", Arc::new(provider)).unwrap();
@@ -374,7 +419,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_projection_falls_back_for_the_entire_snapshot() {
+    async fn missing_projection_falls_back_only_for_that_segment() {
         let dir = tempdir("exact_projection_fallback");
         let first = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
         let second = worker_batch(3, vec!["w-2", "w-3"], vec![300, 400]);
@@ -385,10 +430,26 @@ mod tests {
             exact_values: vec!["w-2".to_string()],
             value_counts: false,
         };
-        crate::store::exact::write_sidecar(&first_path, &[first], std::slice::from_ref(&config))
+        let index_config = crate::store::segment_index::SegmentIndexConfig::from_policies(
+            Vec::<String>::new(),
+            &[config],
+            &[crate::store::schema::CoveringProjection::new(
+                "workers",
+                "worker_id",
+                ["w-2"],
+                ["seq", "worker_id", "mem_bytes"],
+            )],
+            None,
+        );
+        crate::store::segment_index::write_segment_index(&first_path, &[first], &index_config)
             .unwrap();
-        crate::store::exact::write_sidecar(&second_path, &[second], &[config]).unwrap();
-        std::fs::remove_file(crate::store::exact::projection_path(&second_path)).unwrap();
+        crate::store::segment_index::write_segment_index(&second_path, &[second], &index_config)
+            .unwrap();
+        std::fs::remove_file(crate::store::exact::named_projection_path(
+            &second_path,
+            "workers",
+        ))
+        .unwrap();
         let paths = vec![
             first_path.to_string_lossy().into_owned(),
             second_path.to_string_lossy().into_owned(),
@@ -408,14 +469,26 @@ mod tests {
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .expect("a FileScanConfig");
-        assert!(config
+        let locations: Vec<&str> = config
             .file_groups
             .iter()
-            .all(|group| group.files().iter().all(|file| !file
-                .object_meta
-                .location
-                .as_ref()
-                .ends_with(".eqp"))));
+            .flat_map(|group| group.files())
+            .map(|file| file.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(
+            locations
+                .iter()
+                .filter(|location| location.ends_with(".fidx.workers.parquet"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            locations
+                .iter()
+                .filter(|location| location.ends_with(".parquet"))
+                .count(),
+            2
+        );
 
         ctx.register_table("workers", Arc::new(provider)).unwrap();
         let batches = ctx
@@ -590,7 +663,7 @@ mod tests {
     }
 
     /// Write one segment whose `data` column is a full span of `filler` followed
-    /// by `rg1`, then build its trigram sidecar — so sidecar span 0 lacks the
+    /// by `rg1`, then build its trigram section — so source span 0 lacks the
     /// needle and span 1 carries it. Returns the segment path.
     fn write_two_span_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
         let n0 = SIDECAR_SPAN_ROWS;
@@ -607,11 +680,17 @@ mod tests {
         )
         .unwrap();
         let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
-        // Build the sidecar the way the compactor would.
-        assert!(
-            crate::store::trigram::write_sidecar(&path, &[batch], &["data"], Some("key")).unwrap(),
-            "sidecar should be written for a data column"
-        );
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                ["data"],
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+        )
+        .unwrap();
         path.to_string_lossy().into_owned()
     }
 

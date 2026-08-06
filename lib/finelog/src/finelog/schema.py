@@ -77,6 +77,16 @@ class Column:
 
 
 @dataclass(frozen=True)
+class CoveringProjection:
+    """Named filtered projection used only when its predicate and columns cover a query."""
+
+    name: str
+    predicate_column: str
+    predicate_values: tuple[str, ...]
+    columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Schema:
     """Registered column layout for a namespace.
 
@@ -90,6 +100,7 @@ class Schema:
 
     columns: tuple[Column, ...]
     key_column: str = ""
+    projections: tuple[CoveringProjection, ...] = ()
 
     def column(self, name: str) -> Column | None:
         for c in self.columns:
@@ -148,7 +159,16 @@ def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
                 value_counts=c.index.value_counts,
             )
         )
-    return Schema(columns=tuple(cols), key_column=msg.key_column)
+    projections = tuple(
+        CoveringProjection(
+            name=projection.name,
+            predicate_column=projection.predicate_column,
+            predicate_values=tuple(projection.predicate_values),
+            columns=tuple(projection.columns),
+        )
+        for projection in msg.projections
+    )
+    return Schema(columns=tuple(cols), key_column=msg.key_column, projections=projections)
 
 
 def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
@@ -172,6 +192,15 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
                     exact_values=c.exact_values,
                     value_counts=c.value_counts,
                 ),
+            )
+        )
+    for projection in schema.projections:
+        msg.projections.append(
+            stats_pb2.CoveringProjection(
+                name=projection.name,
+                predicate_column=projection.predicate_column,
+                predicate_values=projection.predicate_values,
+                columns=projection.columns,
             )
         )
     return msg
