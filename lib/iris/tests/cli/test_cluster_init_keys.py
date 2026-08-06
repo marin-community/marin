@@ -84,7 +84,7 @@ def _fake_client(monkeypatch):
     return install
 
 
-def test_reuses_the_key_already_in_secret_manager(_fake_client, existing_key):
+def test_cluster_init_keys_reuses_key_already_in_secret_manager(_fake_client, existing_key):
     secrets = _fake_client(_FakeSecretManager([existing_key.private_pem.encode()]))
 
     result = _run(["--gcp-secret", RESOURCE])
@@ -96,7 +96,7 @@ def test_reuses_the_key_already_in_secret_manager(_fake_client, existing_key):
     assert f"auth.signing_key: gcp-secret://{RESOURCE}/versions/1" in result.output
 
 
-def test_rotate_stores_a_new_key_as_the_next_version(_fake_client, existing_key):
+def test_cluster_init_keys_rotate_stores_new_key_as_next_version(_fake_client, existing_key):
     secrets = _fake_client(_FakeSecretManager([existing_key.private_pem.encode()]))
 
     result = _run(["--gcp-secret", RESOURCE, "--rotate"])
@@ -109,7 +109,7 @@ def test_rotate_stores_a_new_key_as_the_next_version(_fake_client, existing_key)
     assert f"auth.signing_key: gcp-secret://{RESOURCE}/versions/2" in result.output
 
 
-def test_mints_and_stores_a_key_when_the_secret_is_empty(_fake_client):
+def test_cluster_init_keys_mints_and_stores_key_when_secret_is_empty(_fake_client):
     secrets = _fake_client(_FakeSecretManager())
 
     result = _run(["--gcp-secret", RESOURCE])
@@ -121,7 +121,7 @@ def test_mints_and_stores_a_key_when_the_secret_is_empty(_fake_client):
     assert f"auth.signing_key: gcp-secret://{RESOURCE}/versions/1" in result.output
 
 
-def test_a_secret_holding_something_other_than_a_signing_key_is_an_error(_fake_client):
+def test_cluster_init_keys_non_signing_key_secret_is_error(_fake_client):
     secrets = _fake_client(_FakeSecretManager([b"not a pem"]))
 
     result = _run(["--gcp-secret", RESOURCE])
@@ -131,7 +131,7 @@ def test_a_secret_holding_something_other_than_a_signing_key_is_an_error(_fake_c
     assert len(secrets.payloads) == 1, "a bad payload must not be papered over with a new version"
 
 
-def test_a_disabled_latest_version_is_an_error_not_a_silent_rotation(_fake_client, existing_key):
+def test_cluster_init_keys_disabled_latest_version_is_error(_fake_client, existing_key):
     secrets = _fake_client(_FakeSecretManager([existing_key.private_pem.encode()]))
 
     def disabled(request):
@@ -146,7 +146,7 @@ def test_a_disabled_latest_version_is_an_error_not_a_silent_rotation(_fake_clien
     assert len(secrets.payloads) == 1, "an unreadable key must not be replaced with a fresh identity"
 
 
-def test_reuse_still_grants_the_accessor(_fake_client, existing_key):
+def test_cluster_init_keys_reuse_grants_accessor(_fake_client, existing_key):
     secrets = _fake_client(_FakeSecretManager([existing_key.private_pem.encode()]))
 
     result = _run(["--gcp-secret", RESOURCE, "--accessor", "iris-controller@test.iam.gserviceaccount.com"])
@@ -158,7 +158,7 @@ def test_reuse_still_grants_the_accessor(_fake_client, existing_key):
     assert binding.members == ["serviceAccount:iris-controller@test.iam.gserviceaccount.com"]
 
 
-def test_rotate_without_a_secret_is_a_usage_error(_fake_client):
+def test_cluster_init_keys_rotate_without_secret_is_usage_error(_fake_client):
     secrets = _fake_client(_FakeSecretManager())
     runner = CliRunner()
 

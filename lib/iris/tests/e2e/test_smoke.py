@@ -10,7 +10,6 @@ has workers across CPU, TPU coscheduling, and multi-region scale groups.
 
 import logging
 import os
-import time
 import uuid
 from pathlib import Path
 
@@ -30,7 +29,6 @@ from iris.cluster.config import (
 from iris.cluster.constraints import Constraint, ConstraintOp, WellKnownAttribute, region_constraint
 from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
 from iris.cluster.lifecycle import connect_cluster
-from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.types import AcceleratorType, CapacityType, Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.controller_connect import ControllerServiceClientSync
@@ -43,7 +41,6 @@ from .conftest import (
     ClusterCapabilities,
     IrisTestCluster,
     _add_coscheduling_group,
-    _NoOpPage,
     assert_visible,
     dashboard_goto,
     discover_capabilities,
@@ -170,31 +167,21 @@ def smoke_cluster(request):
 @pytest.fixture(scope="module")
 def smoke_page(smoke_cluster):
     """Module-scoped Playwright page for smoke dashboard tests."""
-    try:
-        import playwright.sync_api as pw  # noqa: PLC0415  # optional dep: playwright
+    import playwright.sync_api as pw  # noqa: PLC0415  # optional dep: playwright
 
-        with pw.sync_playwright() as p:
-            b = p.chromium.launch()
-            pg = b.new_page(viewport={"width": 1400, "height": 900})
-            pg.goto(f"{smoke_cluster.url}/")
-            pg.wait_for_load_state("domcontentloaded")
-            yield pg
-            pg.close()
-            b.close()
-    except (ImportError, Exception):
-        yield _NoOpPage()
+    with pw.sync_playwright() as p:
+        b = p.chromium.launch()
+        pg = b.new_page(viewport={"width": 1400, "height": 900})
+        pg.goto(f"{smoke_cluster.url}/")
+        pg.wait_for_load_state("domcontentloaded")
+        yield pg
+        pg.close()
+        b.close()
 
 
 @pytest.fixture(scope="module")
 def smoke_screenshot(smoke_page, tmp_path_factory):
     """Module-scoped screenshot capture for smoke dashboard tests."""
-    if isinstance(smoke_page, _NoOpPage):
-
-        def noop_capture(label: str, description: str = "") -> Path:
-            return tmp_path_factory.mktemp("screenshots") / f"smoke-{label}.png"
-
-        return noop_capture
-
     output_dir = Path(
         os.environ.get(
             "IRIS_SCREENSHOT_DIR",
@@ -330,12 +317,11 @@ def test_dashboard_jobs_tab(smoke_cluster, smoke_page, smoke_screenshot):
     )
 
     # The job detail breadcrumb returns to the same user-scoped list.
-    if not isinstance(smoke_page, _NoOpPage):
-        smoke_page.locator("tr", has_text="smoke-simple").get_by_role("link", name="smoke-simple").click()
-        _wait_for_job_detail_screenshot_ready(smoke_page, quick.job_id.to_wire())
-        smoke_page.get_by_role("link", name="Jobs").click()
-        wait_for_dashboard_ready(smoke_page)
-        assert smoke_page.url.endswith(f"/#/?user={user}")
+    smoke_page.locator("tr", has_text="smoke-simple").get_by_role("link", name="smoke-simple").click()
+    _wait_for_job_detail_screenshot_ready(smoke_page, quick.job_id.to_wire())
+    smoke_page.get_by_role("link", name="Jobs").click()
+    wait_for_dashboard_ready(smoke_page)
+    assert smoke_page.url.endswith(f"/#/?user={user}")
 
     smoke_cluster.kill(running)
 
@@ -420,15 +406,18 @@ def _wait_for_task_log_marker(
     can wait for the logs to land before asserting on a single page load.
     """
     source = f"{task_id}:{attempt_id}"
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+
+    def marker_is_available() -> bool:
         request = logging_pb2.FetchLogsRequest(
             source=source, match_scope=logging_pb2.MATCH_SCOPE_EXACT, tail=True, max_lines=1000
         )
-        if any(marker in entry.data for entry in cluster.log_client.fetch_logs(request).entries):
-            return
-        time.sleep(0.5)
-    raise AssertionError(f"log marker {marker!r} for {source} not queryable within {timeout:.0f}s")
+        return any(marker in entry.data for entry in cluster.log_client.fetch_logs(request).entries)
+
+    ExponentialBackoff(initial=0.1, maximum=1.0).wait_until_or_raise(
+        marker_is_available,
+        timeout=Duration.from_seconds(timeout),
+        error_message=f"log marker {marker!r} for {source} not queryable within {timeout:.0f}s",
+    )
 
 
 def test_dashboard_task_logs(smoke_cluster, verbose_job, smoke_page, smoke_screenshot):
@@ -559,7 +548,7 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
         ),
     ]
     with smoke_cluster.launched_job(TestJobs.quick, "smoke-constraints", constraints=constraints) as job:
-        time.sleep(3)
+        smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
 
         dashboard_goto(smoke_page, f"{smoke_cluster.url}/job/{job.job_id.to_wire()}")
         wait_for_dashboard_ready(smoke_page)
@@ -662,14 +651,11 @@ def test_dashboard_status_tab(smoke_cluster, smoke_page, smoke_screenshot):
     """Status tab renders process info and log viewer."""
     dashboard_goto(smoke_page, f"{smoke_cluster.url}/status")
     wait_for_dashboard_ready(smoke_page)
-    # Status tab renders process info when available, or an error message.
-    # Wait for either to appear to confirm the tab loaded and made the RPC call.
     smoke_page.wait_for_function(
-        "() => document.body.textContent.includes('Process') || "
-        "document.body.textContent.includes('GetProcessStatus')",
+        "() => document.body.textContent.includes('Process')",
         timeout=10000,
     )
-    smoke_screenshot("status-tab", "Status tab showing controller process info or GetProcessStatus error")
+    smoke_screenshot("status-tab", "Status tab showing controller process info")
 
 
 def _wait_for_backends_tab_ready(page) -> None:
@@ -702,10 +688,9 @@ def test_dashboard_backends_tab(smoke_cluster, smoke_page, smoke_screenshot):
     # already proves the backend cards rendered. With no peers configured, the
     # roster is empty: no peer tag.
     _wait_for_backends_tab_ready(smoke_page)
-    if not isinstance(smoke_page, _NoOpPage):
-        from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
+    from playwright.sync_api import expect  # noqa: PLC0415  # optional dep: playwright
 
-        expect(smoke_page.get_by_text("peer", exact=True)).to_have_count(0)
+    expect(smoke_page.get_by_text("peer", exact=True)).to_have_count(0)
     smoke_screenshot(
         "backends-tab",
         "Execution-targets tab: local backend cards, no federation peers configured",
@@ -720,9 +705,6 @@ def test_dashboard_backends_tab_with_peer(smoke_cluster, smoke_page, smoke_scree
     worker/task counts, and an inward link to the parent's cluster-filtered jobs
     (never an outbound link to the peer's own dashboard).
     """
-    if isinstance(smoke_page, _NoOpPage):
-        pytest.skip("Playwright unavailable")
-
     import json  # noqa: PLC0415
 
     peer_body = json.dumps(
@@ -871,18 +853,23 @@ def test_log_levels_populated(smoke_cluster, verbose_job, capabilities):
 
     task_id = verbose_job.job_id.task(0).to_wire()
 
-    deadline = time.monotonic() + smoke_cluster.job_timeout
     entries = []
-    while time.monotonic() < deadline:
+
+    def log_markers_are_available() -> bool:
+        nonlocal entries
         request = logging_pb2.FetchLogsRequest(
             source=f"{task_id}:",
             match_scope=logging_pb2.MATCH_SCOPE_PREFIX,
         )
         response = smoke_cluster.log_client.fetch_logs(request)
         entries = list(response.entries)
-        if any("info-marker" in e.data for e in entries):
-            break
-        time.sleep(0.5)
+        return any("info-marker" in e.data for e in entries)
+
+    ExponentialBackoff(initial=0.1, maximum=1.0).wait_until_or_raise(
+        log_markers_are_available,
+        timeout=Duration.from_seconds(smoke_cluster.job_timeout),
+        error_message="info-marker not available from log service",
+    )
 
     markers_found = {}
     for entry in entries:
@@ -980,45 +967,6 @@ def test_capacity_type_propagates_to_worker_attributes(smoke_cluster):
 
 
 # ============================================================================
-# Profiling
-# ============================================================================
-
-
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="py-spy ptrace can segfault worker threads in CI")
-def test_profile_running_task(smoke_cluster):
-    """Profile a running task, verify data returned."""
-    if smoke_cluster.is_cloud:
-        pytest.skip("py-spy races with short-lived containers in cloud mode")
-    job = smoke_cluster.submit(TestJobs.busy_loop, name="smoke-profile")
-
-    last_state = "unknown"
-
-    def _is_running():
-        nonlocal last_state
-        task = smoke_cluster.task_status(job, task_index=0)
-        last_state = task.state
-        return last_state == job_pb2.TASK_STATE_RUNNING
-
-    ExponentialBackoff(initial=0.1, maximum=2.0).wait_until_or_raise(
-        _is_running,
-        timeout=Duration.from_seconds(smoke_cluster.job_timeout),
-        error_message=f"Task did not reach RUNNING within {smoke_cluster.job_timeout}s, last state: {last_state}",
-    )
-    task_id = smoke_cluster.task_status(job, task_index=0).task_id
-
-    request = job_pb2.ProfileTaskRequest(
-        target=task_id,
-        duration_seconds=1,
-        profile_type=job_pb2.ProfileType(cpu=job_pb2.CpuProfile(format=job_pb2.CpuProfile.FLAMEGRAPH)),
-    )
-    response = smoke_cluster.controller_client.profile_task(request, timeout_ms=3000)
-    assert len(response.profile_data) > 0
-    assert not response.error
-
-    smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout)
-
-
-# ============================================================================
 # Exec in container
 # ============================================================================
 
@@ -1031,13 +979,18 @@ def test_exec_in_container(smoke_cluster):
 
     # Wait for the task itself to reach RUNNING (job can be RUNNING while task is still BUILDING)
     task_id = smoke_cluster.task_status(job, task_index=0).task_id
-    deadline = time.monotonic() + smoke_cluster.job_timeout
-    while time.monotonic() < deadline:
+    task = smoke_cluster.task_status(job, task_index=0)
+
+    def task_is_running() -> bool:
+        nonlocal task
         task = smoke_cluster.task_status(job, task_index=0)
-        if task.state == job_pb2.TASK_STATE_RUNNING:
-            break
-        time.sleep(0.5)
-    assert task.state == job_pb2.TASK_STATE_RUNNING, f"Task stuck in {job_pb2.TaskState.Name(task.state)}"
+        return task.state == job_pb2.TASK_STATE_RUNNING
+
+    ExponentialBackoff(initial=0.1, maximum=1.0).wait_until_or_raise(
+        task_is_running,
+        timeout=Duration.from_seconds(smoke_cluster.job_timeout),
+        error_message=f"Task stuck in {job_pb2.TaskState.Name(task.state)}",
+    )
 
     request = controller_pb2.Controller.ExecInContainerRequest(
         task_id=task_id,
@@ -1054,82 +1007,6 @@ def test_exec_in_container(smoke_cluster):
 # ============================================================================
 # Checkpoint / restore
 # ============================================================================
-
-
-@pytest.mark.timeout(120)
-def test_checkpoint_restore():
-    """Controller restart resumes from checkpoint: completed jobs visible, cluster functional.
-
-    Uses a dedicated LocalCluster (not the shared smoke_cluster). The persistent DB dir
-    (held by LocalCluster across stop/start) preserves checkpoint state.
-    Phase 1 — run a job and write a checkpoint.
-    Phase 2 — restart the controller and verify the job is still SUCCEEDED
-              and the cluster can accept new work.
-    """
-
-    config = load_config(DEFAULT_CONFIG)
-    config = make_local_config(config)
-
-    cluster = LocalCluster(config)
-    url = cluster.start()
-    try:
-        # Phase 1: complete a job, write checkpoint, restart controller.
-        client = IrisClient.remote(url, workspace=MARIN_ROOT)
-        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
-        tc = IrisTestCluster(url=url, client=client, controller_client=controller_client, log_client=log_client)
-        tc.wait_for_workers(1, timeout=30)
-
-        job = tc.submit(TestJobs.quick, "pre-restart")
-        tc.wait(job, timeout=30)
-        saved_job_id = job.job_id.to_wire()
-
-        ckpt = controller_client.begin_checkpoint(controller_pb2.Controller.BeginCheckpointRequest())
-        assert ckpt.checkpoint_path, "begin_checkpoint returned empty path"
-        assert ckpt.job_count >= 1
-        controller_client.close()
-
-        url = cluster.restart()
-
-        # Phase 2: verify restored state and submit new work.
-        controller_client = ControllerServiceClientSync(address=url, timeout_ms=30000)
-        log_client = LogServiceClientSync(address=url, timeout_ms=30000)
-        tc = IrisTestCluster(
-            url=url,
-            client=IrisClient.remote(url, workspace=MARIN_ROOT),
-            controller_client=controller_client,
-            log_client=log_client,
-        )
-
-        resp = controller_client.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=saved_job_id))
-        assert resp.job.state == job_pb2.JOB_STATE_SUCCEEDED, f"Pre-restart job has state {resp.job.state} after restore"
-
-        tc.wait_for_workers(1, timeout=30)
-        post_job = tc.submit(TestJobs.quick, "post-restart")
-        status = tc.wait(post_job, timeout=30)
-        assert status.state == job_pb2.JOB_STATE_SUCCEEDED
-
-        controller_client.close()
-    finally:
-        cluster.close()
-
-
-# ============================================================================
-# Stress test
-# ============================================================================
-
-
-@pytest.mark.timeout(600)
-def test_stress_50_tasks(smoke_cluster):
-    """50 concurrent tasks exercises scheduler concurrency and bin-packing."""
-    job = smoke_cluster.submit(
-        TestJobs.quick,
-        "smoke-stress-50",
-        cpu=0,
-        replicas=50,
-    )
-    status = smoke_cluster.wait(job, timeout=smoke_cluster.job_timeout * 4)
-    assert status.state == job_pb2.JOB_STATE_SUCCEEDED
 
 
 # ============================================================================

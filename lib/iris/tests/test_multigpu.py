@@ -6,6 +6,7 @@ runtime helper, not something the scheduler injects). None of this imports jax."
 
 from __future__ import annotations
 
+import shlex
 import signal
 import subprocess
 import sys
@@ -115,48 +116,52 @@ def test_run_rejects_empty_command() -> None:
         run(nproc=2, devices_per_proc=1, child_argv=[])
 
 
-def test_wrap_prefixes_each_child(monkeypatch: pytest.MonkeyPatch) -> None:
-    """--wrap CMD makes each child run `<CMD> -- <command>` — the process-scope seam."""
-    seen: dict[str, object] = {}
-    monkeypatch.setattr("iris.hooks.multigpu_main.run", lambda nproc, dpp, child_argv: seen.update(argv=child_argv) or 0)
-    main(["--nproc", "2", "--wrap", "python -m iris.hooks.nsys_main --tasks first", "--", "python", "train.py"])
-    assert seen["argv"] == [
-        "python",
-        "-m",
-        "iris.hooks.nsys_main",
-        "--tasks",
-        "first",
-        "--",
-        "python",
-        "train.py",
-    ]
+def _recording_child(output_dir) -> list[str]:
+    code = (
+        "import os,pathlib; "
+        f"pathlib.Path({str(output_dir)!r}, os.environ['IRIS_MULTIGPU_PROCESS_INDEX']).write_text("
+        "os.environ.get('WRAPPED', '0'))"
+    )
+    return _py(code)
+
+
+def _environment_wrapper() -> str:
+    code = (
+        "import os,sys; "
+        "os.environ['WRAPPED']='1'; "
+        "separator=sys.argv.index('--'); "
+        "os.execv(sys.argv[separator + 1], sys.argv[separator + 1:])"
+    )
+    return shlex.join(_py(code))
+
+
+def _assert_process_outputs(output_dir, expected: str) -> None:
+    assert sorted(path.name for path in output_dir.iterdir()) == ["0", "1"]
+    assert {path.read_text() for path in output_dir.iterdir()} == {expected}
+
+
+def test_wrap_prefixes_each_child(tmp_path) -> None:
+    result = main(
+        ["--nproc", "2", "--wrap", _environment_wrapper(), "--", *_recording_child(tmp_path)],
+    )
+    assert result == 0
+    _assert_process_outputs(tmp_path, "1")
 
 
 def _gpu_resources(count: int) -> ResourceSpec:
     return ResourceSpec(cpu=4, memory="8GB", disk="16GB", device=gpu_device("H100", count))
 
 
-def test_hook_wrap_builds_the_command_the_entry_point_parses() -> None:
-    """The programmatic wrap emits exactly what multigpu_main's parser accepts, so a
-    caller can compose it in code or write the same command by hand."""
-    wrapped = MultiGpuHook(nproc=8).wrap(["python", "train.py"])
-    assert wrapped == [
-        "python",
-        "-m",
-        "iris.hooks.multigpu_main",
-        "--nproc",
-        "8",
-        "--devices-per-proc",
-        "1",
-        "--",
-        "python",
-        "train.py",
-    ]
+def test_hook_wrap_builds_command_accepted_by_entry_point(tmp_path) -> None:
+    wrapped = MultiGpuHook(nproc=2).wrap(_recording_child(tmp_path))
+    subprocess.run(wrapped, check=True)
+    _assert_process_outputs(tmp_path, "0")
 
 
-def test_hook_wrap_child_composes_a_per_process_wrapper() -> None:
-    wrapped = MultiGpuHook(nproc=2, wrap_child="python -m iris.hooks.nsys_main --tasks first").wrap(["cmd"])
-    assert wrapped[wrapped.index("--wrap") + 1] == "python -m iris.hooks.nsys_main --tasks first"
+def test_hook_wrap_child_applies_per_process_wrapper(tmp_path) -> None:
+    wrapped = MultiGpuHook(nproc=2, wrap_child=_environment_wrapper()).wrap(_recording_child(tmp_path))
+    subprocess.run(wrapped, check=True)
+    _assert_process_outputs(tmp_path, "1")
 
 
 def test_build_multigpu_hook_groups_devices() -> None:

@@ -123,7 +123,7 @@ _MIRRORS = {
         ("localhost:5000/img:dev", "localhost:5000"),
     ],
 )
-def test_upstream_registry(image_tag: str, expected: str) -> None:
+def test_upstream_registry_with_image_reference_returns_canonical_registry(image_tag: str, expected: str) -> None:
     assert upstream_registry(image_tag) == expected
 
 
@@ -146,7 +146,7 @@ def test_upstream_registry(image_tag: str, expected: str) -> None:
         ("localhost:5000/img:dev", None),
     ],
 )
-def test_docker_hub_repo_path(image_tag: str, expected: str | None) -> None:
+def test_docker_hub_repo_path_with_image_reference_returns_normalized_path(image_tag: str, expected: str | None) -> None:
     assert docker_hub_repo_path(image_tag) == expected
 
 
