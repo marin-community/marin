@@ -29,10 +29,14 @@ COLUMN_TYPE_INT32: ColumnType
 COLUMN_TYPE_MAP: ColumnType
 
 class ColumnIndex(_message.Message):
-    __slots__ = ("trigram",)
+    __slots__ = ("trigram", "exact_values", "value_counts")
     TRIGRAM_FIELD_NUMBER: _ClassVar[int]
+    EXACT_VALUES_FIELD_NUMBER: _ClassVar[int]
+    VALUE_COUNTS_FIELD_NUMBER: _ClassVar[int]
     trigram: bool
-    def __init__(self, trigram: _Optional[bool] = ...) -> None: ...
+    exact_values: _containers.RepeatedScalarFieldContainer[str]
+    value_counts: bool
+    def __init__(self, trigram: _Optional[bool] = ..., exact_values: _Optional[_Iterable[str]] = ..., value_counts: _Optional[bool] = ...) -> None: ...
 
 class Column(_message.Message):
     __slots__ = ("name", "type", "nullable", "index")

@@ -40,9 +40,9 @@ use datafusion::physical_plan::ExecutionPlan;
 pub struct NamespaceProvider {
     schema: SchemaRef,
     inner: Inner,
-    /// The snapshotted sealed segment paths, retained so a `contains()` scan can
-    /// locate each segment's trigram sidecar (`<segment>.tgm`) for row-group
-    /// pruning. Empty for the typed-empty (no-segments) case.
+    /// The snapshotted sealed segment paths, retained so scans can locate each
+    /// segment's trigram and exact-value sidecars. Empty for the typed-empty
+    /// (no-segments) case.
     segment_paths: Vec<String>,
 }
 
@@ -90,6 +90,10 @@ fn view_typed_schema(schema: &SchemaRef) -> SchemaRef {
 }
 
 impl NamespaceProvider {
+    pub fn segment_paths(&self) -> &[String] {
+        &self.segment_paths
+    }
+
     /// Build a provider from the registered arrow `schema` and a snapshot of
     /// sealed segment file paths.
     ///
@@ -159,30 +163,29 @@ impl TableProvider for NamespaceProvider {
         match &self.inner {
             Inner::Listing(t) => {
                 // Delegate to DataFusion's parquet scan (which keeps the existing
-                // range / min-max row-group pruning), then layer the trigram
-                // prune on top by injecting per-file access plans.
+                // range / min-max row-group pruning), then layer sidecar-backed
+                // filtered projections or access plans onto its files.
                 let plan = t.scan(state, projection, filters, limit).await?;
-                // Hot path: a query with no `contains(col, …)`/`LIKE` filter on any
-                // column does only this cheap expr inspection (no I/O) and returns
-                // untouched.
                 let needles = crate::query::trigram_prune::substring_needles_by_column(filters);
-                if needles.is_empty() {
+                let exact = crate::query::exact_prune::values_by_column(filters);
+                if needles.is_empty() && exact.is_empty() {
                     return Ok(plan);
                 }
                 // Key ranges (incl. the analyzer's synthesized prefix bounds) scope
                 // which segments' sidecars the prune reads — cheap expr inspection,
                 // done here before the blocking work.
                 let key_ranges = crate::query::trigram_prune::string_column_ranges(filters);
-                // Substring query: the sidecar + footer reads are blocking, so run
-                // the prune off the async worker.
+                // Sidecar + footer reads are blocking, so run pruning off the
+                // async worker.
                 let segment_paths = self.segment_paths.clone();
                 tokio::task::spawn_blocking(move || {
-                    crate::query::trigram_prune::apply_with_needles(
+                    let plan = crate::query::trigram_prune::apply_with_needles(
                         plan,
                         &segment_paths,
                         &needles,
                         &key_ranges,
-                    )
+                    );
+                    crate::query::exact_prune::apply(plan, &segment_paths, &exact)
                 })
                 .await
                 .map_err(|e| {
@@ -206,6 +209,7 @@ mod tests {
     use crate::store::trigram::SIDECAR_SPAN_ROWS;
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
+    use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
 
     use super::*;
@@ -313,6 +317,119 @@ mod tests {
             .unwrap();
         let ids = first_column_strings(&batches);
         assert_eq!(ids, vec!["w-1", "w-2", "w-3"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn exact_predicate_uses_complete_filtered_projections() {
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+
+        let dir = tempdir("exact_projection");
+        let batch = worker_batch(1, vec!["w-1", "w-2", "w-3"], vec![100, 200, 300]);
+        let (path, _) = write_segment_to_dir(&dir, 1, 1, &batch).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::exact::write_sidecar(&path, &[batch], &[config]).unwrap();
+
+        let provider =
+            NamespaceProvider::build(worker_arrow(), &[path.to_string_lossy().into_owned()])
+                .unwrap();
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let plan = provider
+            .scan(&state, None, &[col("worker_id").eq(lit("w-2"))], None)
+            .await
+            .unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let files: Vec<_> = config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.files())
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].object_meta.location.as_ref().ends_with(".eqp"));
+        assert!(files[0].extensions.is_none());
+
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql("SELECT worker_id FROM workers WHERE worker_id = 'w-2'")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(first_column_strings(&batches), vec!["w-2"]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn missing_projection_falls_back_for_the_entire_snapshot() {
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+
+        let dir = tempdir("exact_projection_fallback");
+        let first = worker_batch(1, vec!["w-1", "w-2"], vec![100, 200]);
+        let second = worker_batch(3, vec!["w-2", "w-3"], vec![300, 400]);
+        let (first_path, _) = write_segment_to_dir(&dir, 1, 1, &first).unwrap();
+        let (second_path, _) = write_segment_to_dir(&dir, 1, 3, &second).unwrap();
+        let config = crate::store::exact::ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["w-2".to_string()],
+            value_counts: false,
+        };
+        crate::store::exact::write_sidecar(&first_path, &[first], std::slice::from_ref(&config))
+            .unwrap();
+        crate::store::exact::write_sidecar(&second_path, &[second], &[config]).unwrap();
+        std::fs::remove_file(crate::store::exact::projection_path(&second_path)).unwrap();
+        let paths = vec![
+            first_path.to_string_lossy().into_owned(),
+            second_path.to_string_lossy().into_owned(),
+        ];
+        let provider = NamespaceProvider::build(worker_arrow(), &paths).unwrap();
+        let ctx = SessionContext::new();
+        let plan = provider
+            .scan(&ctx.state(), None, &[col("worker_id").eq(lit("w-2"))], None)
+            .await
+            .unwrap();
+        let exec = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec");
+        let config = exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        assert!(config
+            .file_groups
+            .iter()
+            .all(|group| group.files().iter().all(|file| !file
+                .object_meta
+                .location
+                .as_ref()
+                .ends_with(".eqp"))));
+
+        ctx.register_table("workers", Arc::new(provider)).unwrap();
+        let batches = ctx
+            .sql("SELECT worker_id FROM workers WHERE worker_id = 'w-2' ORDER BY seq")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(first_column_strings(&batches), vec!["w-2", "w-2"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

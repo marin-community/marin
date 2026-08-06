@@ -69,6 +69,11 @@ class Column:
     # ``contains(col, …)`` / ``col LIKE '%…%'`` queries prune row groups instead
     # of full-scanning. Only meaningful for STRING columns; ignored otherwise.
     trigram_index: bool = False
+    # Exact string values covered by segment metadata and a compact filtered
+    # Parquet projection for equality and IN-list queries.
+    exact_values: tuple[str, ...] = ()
+    # Persist exact per-value counts for GROUP BY + COUNT queries.
+    value_counts: bool = False
 
 
 @dataclass(frozen=True)
@@ -133,7 +138,16 @@ def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
             raise SchemaValidationError(f"column {c.name!r}: unknown column type {c.type!r}")
         if c.name == IMPLICIT_SEQ_COLUMN:
             raise SchemaValidationError(f"column {IMPLICIT_SEQ_COLUMN!r} is reserved (server-assigned implicit column)")
-        cols.append(Column(name=c.name, type=c.type, nullable=c.nullable, trigram_index=c.index.trigram))
+        cols.append(
+            Column(
+                name=c.name,
+                type=c.type,
+                nullable=c.nullable,
+                trigram_index=c.index.trigram,
+                exact_values=tuple(c.index.exact_values),
+                value_counts=c.index.value_counts,
+            )
+        )
     return Schema(columns=tuple(cols), key_column=msg.key_column)
 
 
@@ -153,7 +167,11 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
                 name=c.name,
                 type=c.type,
                 nullable=c.nullable,
-                index=stats_pb2.ColumnIndex(trigram=c.trigram_index),
+                index=stats_pb2.ColumnIndex(
+                    trigram=c.trigram_index,
+                    exact_values=c.exact_values,
+                    value_counts=c.value_counts,
+                ),
             )
         )
     return msg

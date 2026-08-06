@@ -804,6 +804,8 @@ def test_schema_from_proto_consistency():
         assert proto_col.type == src_col.type
         assert proto_col.nullable == src_col.nullable
         assert proto_col.index.trigram == src_col.trigram_index
+        assert tuple(proto_col.index.exact_values) == src_col.exact_values
+        assert proto_col.index.value_counts == src_col.value_counts
 
 
 def test_trigram_index_round_trips_through_proto():
@@ -820,3 +822,25 @@ def test_trigram_index_round_trips_through_proto():
         "level": False,
         "timestamp_ms": False,
     }
+
+
+def test_exact_indexes_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(
+                name="name",
+                type=stats_pb2.COLUMN_TYPE_STRING,
+                nullable=False,
+                exact_values=("phase", "step"),
+            ),
+            Column(
+                name="service",
+                type=stats_pb2.COLUMN_TYPE_STRING,
+                nullable=False,
+                value_counts=True,
+            ),
+        )
+    )
+    back = schema_from_proto(schema_to_proto(schema))
+    assert back.columns[0].exact_values == ("phase", "step")
+    assert back.columns[1].value_counts

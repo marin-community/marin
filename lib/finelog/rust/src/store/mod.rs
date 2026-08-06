@@ -8,6 +8,7 @@
 pub mod adopt;
 pub mod catalog;
 pub mod compaction;
+pub mod exact;
 pub mod ipc;
 pub mod log_read;
 pub mod namespace;

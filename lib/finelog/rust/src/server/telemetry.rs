@@ -638,11 +638,14 @@ fn telemetry_schema() -> Schema {
             Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("batch_id", ColumnType::COLUMN_TYPE_STRING, false),
             Column::new("record_index", ColumnType::COLUMN_TYPE_INT64, false),
-            Column::new("service", ColumnType::COLUMN_TYPE_STRING, false),
-            Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false),
+            Column::new("service", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
+            Column::new("kind", ColumnType::COLUMN_TYPE_STRING, false).with_value_counts(),
             // Metric names are the primary substring-search target
             // (`name LIKE '%nccl%'`), so this column carries the trigram index.
-            Column::new("name", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
+            Column::new("name", ColumnType::COLUMN_TYPE_STRING, false)
+                .with_trigram_index()
+                .with_exact_values(["phase", "step", "progress_time_seconds"])
+                .with_value_counts(),
             Column::new("value", ColumnType::COLUMN_TYPE_FLOAT64, true),
             Column::new("body_json", ColumnType::COLUMN_TYPE_STRING, true),
             Column::new("unit", ColumnType::COLUMN_TYPE_STRING, true),
@@ -663,4 +666,26 @@ fn store_error(error: StatsError) -> ApiError {
         "storage_unavailable",
         format!("telemetry write failed: {error}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_indexes_common_exact_analytics() {
+        let schema = telemetry_schema();
+        let service = schema.column("service").unwrap();
+        let kind = schema.column("kind").unwrap();
+        let name = schema.column("name").unwrap();
+
+        assert!(service.index.value_counts);
+        assert!(kind.index.value_counts);
+        assert!(name.index.trigram);
+        assert!(name.index.value_counts);
+        assert_eq!(
+            name.index.exact_values,
+            ["phase", "progress_time_seconds", "step"]
+        );
+    }
 }

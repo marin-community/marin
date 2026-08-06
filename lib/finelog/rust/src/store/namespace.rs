@@ -35,8 +35,14 @@ use crate::proto::finelog::stats::ColumnType;
 use crate::query::sidecar::{read_header, SidecarManager};
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
-use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
+use crate::store::compaction::executor::{
+    read_segment_projected, run_job, CompactionIndexes, PlannedSwap,
+};
 use crate::store::compaction::planner::plan;
+use crate::store::exact::{
+    projection_path as exact_projection_path, read_sidecar as read_exact_sidecar,
+    sidecar_path as exact_sidecar_path, ExactIndexConfig,
+};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
@@ -49,14 +55,21 @@ use crate::store::segment::{
 use crate::store::trigram::{sidecar_path, write_sidecar};
 use crate::store::types::{basename, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
-/// Best-effort removal of a segment's trigram sidecar (`<path>.tgm`), co-located
-/// with every parquet unlink. A missing sidecar (an L0 / unindexed-namespace
-/// segment never had one) is not an error.
-fn remove_sidecar(parquet_path: &str) {
-    let s = sidecar_path(Path::new(parquet_path));
-    if let Err(e) = std::fs::remove_file(&s) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(path = %s.display(), error = %e, "failed to remove trigram sidecar");
+/// Best-effort removal of a segment's derived index files, co-located with every
+/// parquet unlink. Missing artifacts are not errors.
+fn remove_sidecars(parquet_path: &str) {
+    for (path, kind) in [
+        (sidecar_path(Path::new(parquet_path)), "trigram"),
+        (exact_sidecar_path(Path::new(parquet_path)), "exact"),
+        (
+            exact_projection_path(Path::new(parquet_path)),
+            "exact projection",
+        ),
+    ] {
+        if let Err(e) = std::fs::remove_file(&path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(path = %path.display(), error = %e, sidecar = kind, "failed to remove segment sidecar");
+            }
         }
     }
 }
@@ -92,6 +105,20 @@ fn sidecar_needs_rebuild(segment: &Path, indexed: &[&str]) -> bool {
     }
 }
 
+fn exact_sidecar_needs_rebuild(
+    segment: &Path,
+    expected_rows: i64,
+    indexed: &[ExactIndexConfig],
+) -> bool {
+    let Some(sidecar) = read_exact_sidecar(&exact_sidecar_path(segment)) else {
+        return true;
+    };
+    if !sidecar.covers(indexed) || i64::try_from(sidecar.total_rows).ok() != Some(expected_rows) {
+        return true;
+    }
+    sidecar.projection_rows.is_some() && !exact_projection_path(segment).is_file()
+}
+
 /// Trigram sidecars rebuilt per maintenance tick by the background backfill.
 ///
 /// A single index build over a terminal-level segment is heavy (substantial CPU
@@ -101,6 +128,7 @@ fn sidecar_needs_rebuild(segment: &Path, indexed: &[&str]) -> bool {
 /// format bump does that — converges in tens of minutes instead of hours, during
 /// which its substring queries scan unpruned.
 pub const BACKFILL_SIDECARS_PER_TICK: usize = 4;
+pub const BACKFILL_EXACT_SIDECARS_PER_TICK: usize = 1;
 
 /// Wall-clock a maintenance tick spends re-encoding stale-layout segments.
 ///
@@ -210,6 +238,8 @@ pub struct Namespace {
     /// Segments the sidecar backfill has already rebuilt without reaching
     /// coverage. See [`SidecarBackfillSkips`].
     sidecar_backfill_skips: Mutex<SidecarBackfillSkips>,
+    /// Same retry suppression for exact-value sidecars.
+    exact_backfill_skips: Mutex<SidecarBackfillSkips>,
     /// Segments already confirmed to carry the current physical layout.
     ///
     /// Determining staleness means parsing a segment's whole footer, so without
@@ -362,6 +392,7 @@ impl Namespace {
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
             sidecar_backfill_skips: Mutex::new(SidecarBackfillSkips::default()),
+            exact_backfill_skips: Mutex::new(SidecarBackfillSkips::default()),
             current_layouts: Mutex::new(HashSet::new()),
         });
 
@@ -688,6 +719,13 @@ impl Namespace {
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
     fn write_sealed(&self, dir: &std::path::Path, sealed: &SealedBuffer) -> Result<(), StatsError> {
         let (path, size) = write_segment_to_dir(dir, 0, sealed.min_seq, &sealed.batch)?;
+        if let Err(error) = crate::store::exact::write_sidecar(
+            &path,
+            std::slice::from_ref(&sealed.batch),
+            &self.exact_indexes(),
+        ) {
+            tracing::warn!(namespace = %self.name, path = %path.display(), %error, "exact sidecar write failed for L0");
+        }
         let (min_key, max_key) = self.key_bounds(&sealed.batch);
         let seg = LocalSegment {
             path: path.to_string_lossy().into_owned(),
@@ -809,6 +847,7 @@ impl Namespace {
     /// swap, not the job, and both counts are logged.
     fn run_one_job(&self, dir: &std::path::Path, job: &CompactionJob) -> Result<(), StatsError> {
         let indexed = self.indexed_columns();
+        let exact_indexes = self.exact_indexes();
         let started = Instant::now();
         tracing::info!(
             namespace = %self.name,
@@ -823,7 +862,7 @@ impl Namespace {
             dir,
             &self.arrow_schema,
             self.key_column.as_deref(),
-            &indexed,
+            CompactionIndexes::new(&indexed, &exact_indexes),
             self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
         )?;
@@ -887,6 +926,23 @@ impl Namespace {
             .collect()
     }
 
+    /// Exact row-index and value-count policies for string columns.
+    fn exact_indexes(&self) -> Vec<ExactIndexConfig> {
+        self.schema
+            .columns
+            .iter()
+            .filter(|column| {
+                column.r#type == ColumnType::COLUMN_TYPE_STRING
+                    && (column.index.value_counts || !column.index.exact_values.is_empty())
+            })
+            .map(|column| ExactIndexConfig {
+                column: column.name.clone(),
+                exact_values: column.index.exact_values.clone(),
+                value_counts: column.index.value_counts,
+            })
+            .collect()
+    }
+
     /// Recover the typed Int64 key bounds for an input segment from the in-memory
     /// deque (the catalog round-trip stringifies them, losing numeric ordering).
     fn input_key_bounds(&self, path: &str) -> (Option<i64>, Option<i64>) {
@@ -942,6 +998,21 @@ impl Namespace {
                     let _ = std::fs::remove_file(&sidecar_from);
                 }
             }
+            let (exact_from, exact_to) = (exact_sidecar_path(from), exact_sidecar_path(to));
+            if exact_from.exists() {
+                if let Err(e) = std::fs::rename(&exact_from, &exact_to) {
+                    tracing::warn!(namespace = %self.name, from = %exact_from.display(), error = %e, "failed to carry exact sidecar on level bump");
+                    let _ = std::fs::remove_file(&exact_from);
+                }
+            }
+            let (projection_from, projection_to) =
+                (exact_projection_path(from), exact_projection_path(to));
+            if projection_from.exists() {
+                if let Err(e) = std::fs::rename(&projection_from, &projection_to) {
+                    tracing::warn!(namespace = %self.name, from = %projection_from.display(), error = %e, "failed to carry exact projection on level bump");
+                    let _ = std::fs::remove_file(&projection_from);
+                }
+            }
         }
         let removed_set: std::collections::HashSet<&str> =
             swap.removed.iter().map(|s| s.as_str()).collect();
@@ -992,7 +1063,7 @@ impl Namespace {
                 }
                 // The merged output carries a freshly-built sidecar; the inputs'
                 // sidecars are now stale and unlinked with their parquet.
-                remove_sidecar(path);
+                remove_sidecars(path);
             }
         }
         Ok(())
@@ -1183,7 +1254,7 @@ impl Namespace {
         }
         // The local trigram sidecar is local-only (never uploaded in v1), so it
         // is unlinked with the local parquet on eviction.
-        remove_sidecar(path);
+        remove_sidecars(path);
         removed_bytes
     }
 
@@ -1291,6 +1362,84 @@ impl Namespace {
         built
     }
 
+    /// Rebuild one missing exact-value sidecar per maintenance tick.
+    fn backfill_missing_exact_sidecars(&self, max: usize) -> usize {
+        if self.data_dir.is_none() || max == 0 {
+            return 0;
+        }
+        let indexed = self.exact_indexes();
+        if indexed.is_empty() {
+            return 0;
+        }
+        let fingerprint: Vec<String> = indexed
+            .iter()
+            .map(|config| {
+                format!(
+                    "{}\0{}\0{}",
+                    config.column,
+                    config.value_counts,
+                    config.exact_values.join("\0")
+                )
+            })
+            .collect();
+        let candidates: Vec<(String, i64)> = {
+            let inner = self.inner.lock().unwrap();
+            let mut skips = self.exact_backfill_skips.lock().unwrap();
+            let live: HashSet<&str> = inner
+                .local_segments
+                .iter()
+                .map(|segment| segment.path.as_str())
+                .collect();
+            let fingerprint_refs: Vec<&str> = fingerprint.iter().map(String::as_str).collect();
+            skips.reconcile(&fingerprint_refs, &live);
+            inner
+                .local_segments
+                .iter()
+                .filter(|segment| !skips.paths.contains(&segment.path))
+                .filter(|segment| {
+                    exact_sidecar_needs_rebuild(
+                        Path::new(&segment.path),
+                        segment.row_count,
+                        &indexed,
+                    )
+                })
+                .map(|segment| (segment.path.clone(), segment.row_count))
+                .take(max)
+                .collect()
+        };
+        let projection: Vec<&str> = indexed
+            .iter()
+            .map(|config| config.column.as_str())
+            .collect();
+        let mut built = 0;
+        for (path, expected_rows) in candidates {
+            let parquet = Path::new(&path);
+            let batches = match read_segment_projected(parquet, Some(&projection)) {
+                Ok(batches) => batches,
+                Err(error) => {
+                    tracing::warn!(namespace = %self.name, path, %error, "exact sidecar backfill: read failed");
+                    continue;
+                }
+            };
+            let completed = match crate::store::exact::write_sidecar(parquet, &batches, &indexed) {
+                Ok(true) => {
+                    built += 1;
+                    tracing::debug!(namespace = %self.name, path, "backfilled exact sidecar");
+                    true
+                }
+                Ok(false) => true,
+                Err(error) => {
+                    tracing::warn!(namespace = %self.name, path, %error, "exact sidecar backfill: write failed");
+                    false
+                }
+            };
+            if completed && exact_sidecar_needs_rebuild(parquet, expected_rows, &indexed) {
+                self.exact_backfill_skips.lock().unwrap().paths.insert(path);
+            }
+        }
+        built
+    }
+
     // ----- maintenance orchestration ------------------------------------
 
     /// Run one full maintenance cycle: `flush -> compact -> sync -> evict ->
@@ -1357,6 +1506,13 @@ impl Namespace {
         })
         .await
         .map_err(|e| StatsError::Internal(format!("maintenance backfill task panicked: {e}")))?;
+
+        let ns = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            ns.backfill_missing_exact_sidecars(BACKFILL_EXACT_SIDECARS_PER_TICK)
+        })
+        .await
+        .map_err(|e| StatsError::Internal(format!("exact backfill task panicked: {e}")))?;
 
         // Re-encode segments still on an older physical layout (blocking parquet
         // read + write). Also lowest-priority and bounded: the terminal level is
@@ -2303,6 +2459,18 @@ mod tests {
         ))
     }
 
+    fn exact_data_schema() -> Schema {
+        with_implicit_seq(Schema::new(
+            vec![
+                Column::new("data", ColumnType::COLUMN_TYPE_STRING, false)
+                    .with_exact_values(["log line 0 searchable text"])
+                    .with_value_counts(),
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+            ],
+            "timestamp_ms",
+        ))
+    }
+
     /// `n` rows of searchable `data` + monotonic `timestamp_ms` (non-seq columns
     /// in registered order, as `append_aligned_batch` expects).
     fn data_aligned(n: i64, first: i64) -> AlignedBatch {
@@ -2358,6 +2526,45 @@ mod tests {
         assert!(sidecar.exists(), "backfill rebuilt the sidecar");
         assert_eq!(ns.backfill_missing_sidecars(10), 0, "nothing left to do");
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn exact_backfill_rebuilds_a_missing_filtered_projection() {
+        let dir = tempdir();
+        let ns_dir = dir.join("telemetry.test");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "telemetry.test",
+            exact_data_schema(),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+        ns.append_aligned_batch(&data_aligned(5, 0));
+        ns.flush_once().unwrap();
+
+        let segments = discover_segments(&ns_dir);
+        assert_eq!(segments.len(), 1);
+        let sidecar = exact_sidecar_path(&segments[0]);
+        let projection = exact_projection_path(&segments[0]);
+        assert!(sidecar.exists());
+        assert!(projection.exists());
+        std::fs::remove_file(&projection).unwrap();
+
+        assert_eq!(ns.backfill_missing_exact_sidecars(10), 1);
+        assert!(projection.exists());
+        assert_eq!(ns.backfill_missing_exact_sidecars(10), 0);
+
+        ns.run_maintenance(true).await.unwrap();
+        let promoted = discover_segments(&ns_dir);
+        assert_eq!(promoted.len(), 1);
+        assert!(promoted[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("seg_L1_"));
+        assert!(exact_sidecar_path(&promoted[0]).exists());
+        assert!(exact_projection_path(&promoted[0]).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 

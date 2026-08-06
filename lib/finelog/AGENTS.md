@@ -153,6 +153,21 @@ the query is unpruned, never wrong. Indexing a large namespace takes a while —
 the backfill is a few segments per namespace per 30 s tick — so the speedup
 arrives gradually.
 
+A string column can also declare `exact_values` and/or `value_counts`.
+`exact_values` writes row runs to `.eqi` plus a complete filtered Parquet
+projection in `.eqp`; an equality or `IN` predicate covered by those values
+substitutes the compact projection only when every visible segment has one.
+Small projection row groups preserve pruning on the namespace key. Missing,
+malformed, or stale artifacts fall back first to exact row selections and then
+to the ordinary scan.
+
+`value_counts` records a complete low-cardinality histogram in `.eqi`. An
+unfiltered one-column `GROUP BY` with `COUNT(*)` or `COUNT(column)` combines
+those summaries without opening Parquet. Columns over 4,096 distinct values
+omit the histogram and use DataFusion normally. The exact backfill builds one
+segment per namespace per 30-second tick; L0 flushes and compaction outputs
+write current artifacts immediately.
+
 A sidecar Bloom covers a fixed 16,384-row *span*, which is deliberately not the
 parquet row-group size — row groups are sized to a byte target so a namespace's
 footer stays proportional to its data rather than to its row width. The prune

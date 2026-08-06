@@ -81,11 +81,18 @@ const REWRITE_BATCH_ROWS: usize = 8_192;
 /// cost fell on every flush. L1+ is sorted by `(key, seq)`, so min/max statistics
 /// prune the key band, and substring queries prune from the trigram sidecar.
 pub fn segment_writer_properties() -> Result<WriterProperties, StatsError> {
+    parquet_writer_properties(TARGET_ROW_GROUP_BYTES, MAX_ROW_GROUP_ROWS)
+}
+
+pub(crate) fn parquet_writer_properties(
+    target_row_group_bytes: usize,
+    max_row_group_rows: usize,
+) -> Result<WriterProperties, StatsError> {
     let zstd =
         ZstdLevel::try_new(1).map_err(|e| StatsError::Internal(format!("zstd level 1: {e}")))?;
     Ok(WriterProperties::builder()
-        .set_max_row_group_bytes(Some(TARGET_ROW_GROUP_BYTES))
-        .set_max_row_group_row_count(Some(MAX_ROW_GROUP_ROWS))
+        .set_max_row_group_bytes(Some(target_row_group_bytes))
+        .set_max_row_group_row_count(Some(max_row_group_rows))
         .set_compression(Compression::ZSTD(zstd))
         .set_bloom_filter_enabled(false)
         .set_key_value_metadata(Some(vec![KeyValue::new(

@@ -10,6 +10,8 @@
 //! durability contract makes written rows visible because they are sealed before
 //! WriteRows/PushLogs ack.
 
+pub mod exact_aggregate;
+pub mod exact_prune;
 pub mod optimizer;
 pub mod provider;
 pub mod sidecar;
@@ -17,6 +19,7 @@ pub mod string_values;
 pub mod trigram_prune;
 pub mod udf;
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -421,6 +424,15 @@ pub async fn run_query_over(
     providers: Vec<RegisteredProvider>,
     sql: &str,
 ) -> DFResult<QueryResult> {
+    let summary_paths: HashMap<String, Vec<String>> = providers
+        .iter()
+        .map(|provider| {
+            (
+                provider.name.clone(),
+                provider.provider.segment_paths().to_vec(),
+            )
+        })
+        .collect();
     let names: Vec<String> = providers.iter().map(|p| p.name.clone()).collect();
     for rp in providers {
         // `TableReference::bare` keeps a dotted name (`iris.worker`) as ONE
@@ -431,6 +443,23 @@ pub async fn run_query_over(
     let started = Instant::now();
     let result = async {
         let df = ctx.sql_with_options(sql, read_only_sql_options()).await?;
+        if let Some(request) = exact_aggregate::count_request(df.logical_plan()) {
+            if let Some(paths) = summary_paths.get(&request.table) {
+                let request = request.clone();
+                let paths = paths.clone();
+                if let Some(result) =
+                    tokio::task::spawn_blocking(move || exact_aggregate::execute(&request, &paths))
+                        .await
+                        .map_err(|error| {
+                            datafusion::error::DataFusionError::Execution(format!(
+                                "exact aggregate task join: {error}"
+                            ))
+                        })?
+                {
+                    return Ok(result);
+                }
+            }
+        }
         let schema = Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
         // Match DuckDB's all-nullable result schema (the captured plan schema

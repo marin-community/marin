@@ -36,6 +36,7 @@ use crate::store::compaction::merge::{
     kway_merge, project_to_schema, sort_batch_by, sort_col_indices,
 };
 use crate::store::compaction::planner::aggregate_key_bounds;
+use crate::store::exact::ExactIndexConfig;
 use crate::store::segment::{segment_bounds, segment_writer_properties};
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
@@ -71,6 +72,22 @@ pub struct PlannedSwap {
     pub input_arrow_bytes: i64,
 }
 
+/// Derived indexes to write beside a merged segment.
+#[derive(Clone, Copy)]
+pub struct CompactionIndexes<'a> {
+    trigram_columns: &'a [&'a str],
+    exact: &'a [ExactIndexConfig],
+}
+
+impl<'a> CompactionIndexes<'a> {
+    pub fn new(trigram_columns: &'a [&'a str], exact: &'a [ExactIndexConfig]) -> Self {
+        Self {
+            trigram_columns,
+            exact,
+        }
+    }
+}
+
 /// Resolve `job` into a `PlannedSwap`, performing the heavy read/merge/write for
 /// a multi-input job. `dir` is the namespace directory; `arrow_schema` is the
 /// store-form schema (with `seq`); `key_column` is the namespace's ordering key.
@@ -79,17 +96,15 @@ pub struct PlannedSwap {
 /// read in order and the merge takes the longest prefix that fits, leaving the
 /// rest of the run for the next tick.
 ///
-/// `inputs_by_path` lets the caller supply the typed in-memory key bounds for
-/// each input (the catalog round-trip stringifies them, losing numeric
-/// ordering): a closure mapping an input path to its `(min_key, max_key)`. For a
-/// bump that is the single input's bounds; for a merge it folds them via
-/// `aggregate_key_bounds`.
+/// `input_key_bounds` supplies typed in-memory key bounds for each input (the
+/// catalog round-trip stringifies them, losing numeric ordering). A bump carries
+/// the single input's bounds; a merge folds them via `aggregate_key_bounds`.
 pub fn run_job(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
     key_column: Option<&str>,
-    indexed_columns: &[&str],
+    indexes: CompactionIndexes<'_>,
     max_merge_arrow_bytes: i64,
     input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
@@ -101,7 +116,7 @@ pub fn run_job(
             dir,
             arrow_schema,
             key_column,
-            indexed_columns,
+            indexes,
             max_merge_arrow_bytes,
             &input_key_bounds,
         )
@@ -189,7 +204,7 @@ fn apply_merge(
     dir: &Path,
     arrow_schema: &SchemaRef,
     key_column: Option<&str>,
-    indexed_columns: &[&str],
+    indexes: CompactionIndexes<'_>,
     max_merge_arrow_bytes: i64,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
@@ -313,10 +328,16 @@ fn apply_merge(
     // re-merged (or one written before sidecars existed) stays unindexed until
     // the maintenance backfill (`Namespace::backfill_missing_sidecars`) rebuilds
     // it a few segments per tick.
-    if let Err(e) =
-        crate::store::trigram::write_sidecar(&merged_path, &merged, indexed_columns, key_column)
-    {
+    if let Err(e) = crate::store::trigram::write_sidecar(
+        &merged_path,
+        &merged,
+        indexes.trigram_columns,
+        key_column,
+    ) {
         tracing::warn!(path = %merged_path.display(), error = %e, "trigram sidecar write failed");
+    }
+    if let Err(e) = crate::store::exact::write_sidecar(&merged_path, &merged, indexes.exact) {
+        tracing::warn!(path = %merged_path.display(), error = %e, "exact sidecar write failed");
     }
 
     let size = std::fs::metadata(&merged_path)
@@ -430,6 +451,10 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
     use super::*;
+    use crate::store::exact::{
+        projection_path as exact_projection_path, read_sidecar as read_exact_sidecar,
+        sidecar_path as exact_sidecar_path,
+    };
     use crate::store::segment::{read_segment_footer, write_segment_to_dir};
     use crate::store::types::{seg_filename, SegmentRow};
 
@@ -557,7 +582,21 @@ mod tests {
                 _ => (None, None),
             }
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
+        let exact = ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["c".to_string()],
+            value_counts: true,
+        };
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], std::slice::from_ref(&exact)),
+            i64::MAX,
+            bounds,
+        )
+        .unwrap();
         assert!(swap.bump_rename.is_none());
         assert!(swap.unlink_removed);
         assert_eq!(swap.removed.len(), 3);
@@ -588,6 +627,13 @@ mod tests {
         let mut sorted = keyed.clone();
         sorted.sort();
         assert_eq!(keyed, sorted, "globally sorted by (key, seq)");
+        let exact = read_exact_sidecar(&exact_sidecar_path(&out)).unwrap();
+        assert_eq!(exact.projection_rows, Some(1));
+        assert_eq!(
+            exact.columns["worker_id"].counts.as_ref().unwrap()[&Some("c".to_string())],
+            1
+        );
+        assert!(exact_projection_path(&out).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -655,9 +701,15 @@ mod tests {
         };
 
         // A ceiling holding two of the three segments.
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], one * 2 + 1, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            one * 2 + 1,
+            |_| (None, None),
+        )
         .unwrap();
         assert_eq!(swap.removed.len(), 2, "only the fitting prefix is consumed");
         assert_eq!(
@@ -676,9 +728,15 @@ mod tests {
         );
 
         // A ceiling over the whole job merges it whole, as if uncapped.
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            i64::MAX,
+            |_| (None, None),
+        )
         .unwrap();
         assert_eq!(swap.removed.len(), 3);
         assert_eq!(added_seg(&swap).max_seq, max2);
@@ -705,9 +763,15 @@ mod tests {
             output_level: 1,
             output_min_seq: min_bad,
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            i64::MAX,
+            |_| (None, None),
+        )
         .expect("an unreadable input must not fail the tick");
         assert!(
             swap.bump_rename.is_some(),
@@ -745,9 +809,15 @@ mod tests {
             output_level: 1,
             output_min_seq: min_gone,
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            i64::MAX,
+            |_| (None, None),
+        )
         .expect("a missing input must not fail the tick");
         assert!(
             swap.added.is_none(),
@@ -793,9 +863,15 @@ mod tests {
             output_level: 3,
             output_min_seq: min_gone,
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            i64::MAX,
+            |_| (None, None),
+        )
         .expect("a missing single input must not fail the tick");
         assert!(swap.added.is_none(), "a missing input produces no output");
         assert!(
@@ -823,7 +899,16 @@ mod tests {
             output_level: 1,
             output_min_seq: min0,
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], 1, |_| (None, None)).unwrap();
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            1,
+            |_| (None, None),
+        )
+        .unwrap();
         assert!(swap.bump_rename.is_some(), "must degenerate to a rename");
         assert!(!swap.unlink_removed, "a rename leaves nothing to unlink");
         assert_eq!(swap.removed, vec![p0.to_string_lossy().to_string()]);
@@ -871,7 +956,16 @@ mod tests {
             output_min_seq: 1,
         };
         let bounds = |_: &str| (Some(1), Some(n));
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            i64::MAX,
+            bounds,
+        )
+        .unwrap();
 
         assert_eq!(added_seg(&swap).row_count, n + 1, "no row loss");
         let out = PathBuf::from(&added_seg(&swap).path);
@@ -906,7 +1000,16 @@ mod tests {
             output_min_seq: 1,
         };
         let bounds = |_: &str| (Some(10), Some(20));
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            i64::MAX,
+            bounds,
+        )
+        .unwrap();
 
         // It's a bump: a deferred rename, not a rewrite.
         let (from, to) = swap.bump_rename.clone().unwrap();
@@ -974,9 +1077,15 @@ mod tests {
             output_level: 1,
             output_min_seq: 1,
         };
-        let swap = run_job(&job, &dir, &log, Some("key"), &["data"], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &log,
+            Some("key"),
+            CompactionIndexes::new(&["data"], &[]),
+            i64::MAX,
+            |_| (None, None),
+        )
         .unwrap();
 
         // The merged output carries a sidecar whose mask prunes correctly.
@@ -1082,9 +1191,15 @@ mod tests {
             output_level: 1,
             output_min_seq: 1,
         };
-        let swap = run_job(&job, &dir, &wide, Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &wide,
+            Some("key"),
+            CompactionIndexes::new(&[], &[]),
+            i64::MAX,
+            |_| (None, None),
+        )
         .unwrap();
         let batches = read_segment_batches(Path::new(&added_seg(&swap).path)).unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();

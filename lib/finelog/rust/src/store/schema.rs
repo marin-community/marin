@@ -42,11 +42,15 @@ pub const MAX_WRITE_ROWS_ROWS: usize = 1_000_000;
 
 /// Secondary indexes a column carries. Each index type is its own field so
 /// adding one is additive; `ColumnIndex::default()` (all-false) is unindexed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColumnIndex {
     /// Per-row-group trigram substring index in each segment's `.tgm` sidecar.
     /// Only meaningful for STRING columns.
     pub trigram: bool,
+    /// Exact values covered by `.eqi` metadata and a filtered `.eqp` projection.
+    pub exact_values: Vec<String>,
+    /// Exact per-value counts stored in `.eqi`.
+    pub value_counts: bool,
 }
 
 /// One column in a registered schema.
@@ -71,6 +75,23 @@ impl Column {
     /// Builder: maintain a trigram substring index for this column.
     pub fn with_trigram_index(mut self) -> Self {
         self.index.trigram = true;
+        self
+    }
+
+    /// Builder: maintain a filtered projection for selected string values.
+    pub fn with_exact_values(
+        mut self,
+        values: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.index.exact_values = values.into_iter().map(Into::into).collect();
+        self.index.exact_values.sort();
+        self.index.exact_values.dedup();
+        self
+    }
+
+    /// Builder: persist exact counts for every value in this string column.
+    pub fn with_value_counts(mut self) -> Self {
+        self.index.value_counts = true;
         self
     }
 }
@@ -217,6 +238,23 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
             .as_option()
             .and_then(|ix| ix.trigram)
             .unwrap_or(false);
+        column.index.exact_values = c
+            .index
+            .as_option()
+            .map(|ix| {
+                ix.exact_values
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        column.index.exact_values.sort();
+        column.index.exact_values.dedup();
+        column.index.value_counts = c
+            .index
+            .as_option()
+            .and_then(|ix| ix.value_counts)
+            .unwrap_or(false);
         cols.push(column);
     }
     Ok(Schema::new(cols, view.key_column.unwrap_or("")))
@@ -230,9 +268,12 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
         .filter(|c| c.name != IMPLICIT_SEQ_COLUMN)
         .map(|c| {
             ProtoColumn {
-                index: MessageField::some(
-                    ProtoColumnIndex::default().with_trigram(c.index.trigram),
-                ),
+                index: MessageField::some(ProtoColumnIndex {
+                    exact_values: c.index.exact_values.clone(),
+                    ..ProtoColumnIndex::default()
+                        .with_trigram(c.index.trigram)
+                        .with_value_counts(c.index.value_counts)
+                }),
                 ..Default::default()
             }
             .with_name(&c.name)
@@ -255,6 +296,10 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
 struct JsonColumnIndex {
     #[serde(default)]
     trigram: bool,
+    #[serde(default)]
+    exact_values: Vec<String>,
+    #[serde(default)]
+    value_counts: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -330,6 +375,8 @@ pub fn schema_to_json(schema: &Schema) -> String {
                 nullable: c.nullable,
                 index: JsonColumnIndex {
                     trigram: c.index.trigram,
+                    exact_values: c.index.exact_values.clone(),
+                    value_counts: c.index.value_counts,
                 },
             })
             .collect(),
@@ -345,6 +392,10 @@ pub fn schema_from_json(text: &str) -> Result<Schema, StatsError> {
     for c in payload.columns {
         let mut column = Column::new(c.name, column_type_from_json(&c.r#type)?, c.nullable);
         column.index.trigram = c.index.trigram;
+        column.index.exact_values = c.index.exact_values;
+        column.index.exact_values.sort();
+        column.index.exact_values.dedup();
+        column.index.value_counts = c.index.value_counts;
         cols.push(column);
     }
     Ok(Schema::new(cols, payload.key_column))
@@ -458,6 +509,8 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
 
     let mut extras: Vec<Column> = Vec::new();
     let mut enable_trigram: Vec<&str> = Vec::new();
+    let mut enable_value_counts: Vec<&str> = Vec::new();
+    let mut exact_values: Vec<(&str, Vec<String>)> = Vec::new();
     for rc in &requested.columns {
         match registered.column(&rc.name) {
             None => {
@@ -499,11 +552,28 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 if rc.index.trigram && !existing.index.trigram {
                     enable_trigram.push(rc.name.as_str());
                 }
+                if rc.index.value_counts && !existing.index.value_counts {
+                    enable_value_counts.push(rc.name.as_str());
+                }
+                let additions: Vec<String> = rc
+                    .index
+                    .exact_values
+                    .iter()
+                    .filter(|value| !existing.index.exact_values.contains(value))
+                    .cloned()
+                    .collect();
+                if !additions.is_empty() {
+                    exact_values.push((rc.name.as_str(), additions));
+                }
             }
         }
     }
 
-    if extras.is_empty() && enable_trigram.is_empty() {
+    if extras.is_empty()
+        && enable_trigram.is_empty()
+        && enable_value_counts.is_empty()
+        && exact_values.is_empty()
+    {
         return Ok(registered.clone());
     }
     let mut merged = registered.columns.clone();
@@ -514,6 +584,26 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 "register: enabling trigram index on an existing column",
             );
             column.index.trigram = true;
+        }
+        if enable_value_counts.contains(&column.name.as_str()) {
+            tracing::info!(
+                column = %column.name,
+                "register: enabling exact value counts on an existing column",
+            );
+            column.index.value_counts = true;
+        }
+        if let Some((_, additions)) = exact_values
+            .iter()
+            .find(|(name, _)| *name == column.name.as_str())
+        {
+            tracing::info!(
+                column = %column.name,
+                values = ?additions,
+                "register: enabling exact-value projections on an existing column",
+            );
+            column.index.exact_values.extend(additions.iter().cloned());
+            column.index.exact_values.sort();
+            column.index.exact_values.dedup();
         }
     }
     merged.extend(extras);
@@ -1114,6 +1204,34 @@ mod tests {
         // A client that predates the field sends the column with no index set.
         let merged = merge_schemas(&reg, &with_implicit_seq(worker_schema())).unwrap();
         assert!(merged.column("worker_id").unwrap().index.trigram);
+    }
+
+    #[test]
+    fn merge_monotonically_adds_exact_index_policies() {
+        let reg = with_implicit_seq(worker_schema());
+        let requested = Schema::new(
+            reg.columns
+                .iter()
+                .map(|column| {
+                    if column.name == "worker_id" {
+                        column
+                            .clone()
+                            .with_exact_values(["phase", "step"])
+                            .with_value_counts()
+                    } else {
+                        column.clone()
+                    }
+                })
+                .collect(),
+            "",
+        );
+        let indexed = merge_schemas(&reg, &requested).unwrap();
+        let worker = &indexed.column("worker_id").unwrap().index;
+        assert_eq!(worker.exact_values, vec!["phase", "step"]);
+        assert!(worker.value_counts);
+
+        let older_client = with_implicit_seq(worker_schema());
+        assert_eq!(merge_schemas(&indexed, &older_client).unwrap(), indexed);
     }
 
     #[test]

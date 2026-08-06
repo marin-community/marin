@@ -77,6 +77,22 @@ underscores when you mean them literally. Adding one is a
 few segments per namespace per 30 s tick, so a large namespace speeds up over
 tens of minutes rather than at once.
 
+For repeated equality families, declare the hot string values in
+`ColumnIndex.exact_values`. Finelog writes a compact `.eqp` projection of their
+complete rows and keeps small row groups so a key or timestamp bound still
+prunes. The query uses it for `=` and same-column `IN`/`OR` predicates only when
+every visible segment is covered; partial backfill falls back to exact row
+selection or the ordinary Parquet scan. Exact backfill is deliberately limited
+to one segment per namespace per 30-second tick.
+
+For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
+Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then
+combine exact per-segment summaries without opening Parquet. The fast path is
+all-or-nothing and limited to one grouping column; filters, joins, multiple
+aggregates, or a column above 4,096 distinct values use DataFusion.
+`telemetry_v1` enables this for `service`, `kind`, and `name`, while its
+training-status metric names also use an exact filtered projection.
+
 A release that bumps the sidecar format spends that same window on every existing
 sidecar at once: all of them read as unusable and every substring query scans
 unpruned until the backfill catches up. Before diagnosing a slow substring query

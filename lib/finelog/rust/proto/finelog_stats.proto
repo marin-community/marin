@@ -38,6 +38,17 @@ message ColumnIndex {
   // sidecar so `contains(col, …)` and `col LIKE '%…%'` queries prune row groups
   // instead of full-scanning. Only meaningful for STRING columns.
   bool trigram = 1;
+
+  // Exact string values indexed in each segment's `.eqi` sidecar. A companion
+  // `.eqp` Parquet projection stores the complete matching rows with small row
+  // groups, so equality and IN predicates over only these values read a compact,
+  // time-prunable file instead of jumping through the full segment.
+  repeated string exact_values = 2;
+
+  // Persist exact per-value row counts in each segment's `.eqi` sidecar.
+  // Finelog can answer GROUP BY column + COUNT(*)/COUNT(column) from these
+  // summaries when every visible segment is covered.
+  bool value_counts = 3;
 }
 
 message Column {
