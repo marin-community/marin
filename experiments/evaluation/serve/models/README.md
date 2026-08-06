@@ -21,7 +21,7 @@ the normalized schema under `model.config`.
 ## Schema
 
 ```yaml
-name: qwen3-32b                 # launch identity; catalog entries must be unique
+name: qwen3-32b                 # slash-free launch identity; catalog entries must be unique
 location: Qwen/Qwen3-32B        # HF repo id, or gs://|s3:// HF-format export dir
 revision: null                  # pin an immutable checkpoint (base models); optional
 tokenizer: null                 # required only when location is an object-store path

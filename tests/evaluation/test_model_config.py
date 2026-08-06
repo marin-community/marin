@@ -6,6 +6,7 @@
 import textwrap
 
 import pytest
+from draccus.utils import ParsingError
 from iris.rpc import job_pb2
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import (
@@ -63,6 +64,13 @@ def test_load_model_config_round_trips_the_catalog_shape(tmp_path):
     assert config.serve.vllm_extra_args == ("--enable-prefix-caching",)
     assert dict(config.generation.extra_gen_kwargs) == {"skip_special_tokens": "false"}
     assert "enable_thinking" in config.agent.agent_kwargs["extra_body"]
+
+
+def test_load_model_config_rejects_name_with_job_path_separator(tmp_path):
+    body = "name: Qwen/Qwen3-8B\nlocation: Qwen/Qwen3-8B\n"
+
+    with pytest.raises(ParsingError):
+        load_model_config(_write(tmp_path, "model.yaml", body))
 
 
 def test_load_rejects_unknown_field_at_load_time(tmp_path):
