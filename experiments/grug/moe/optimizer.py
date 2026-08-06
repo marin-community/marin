@@ -44,6 +44,10 @@ def _expert_bank_index(path: object) -> int | None:
     return int(parts[1])
 
 
+def _tied_expert_group_name(group_size: int) -> str:
+    return f"muonh_expert_g{group_size}"
+
+
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
     if array is None or not hasattr(array, "shape"):
         return None
@@ -310,7 +314,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     if group_size <= 1:
                         continue
                     divisor = _tied_expert_lr_divisor(group_size, self.tied_expert_lr_scale)
-                    transforms[f"muonh_expert_g{group_size}"] = self._muonh_transform_at(learning_rate / divisor)
+                    transforms[_tied_expert_group_name(group_size)] = self._muonh_transform_at(learning_rate / divisor)
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
@@ -374,7 +378,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     )
                 group_size = self.expert_bank_group_sizes[bank_index]
                 if group_size > 1:
-                    return f"muonh_expert_g{group_size}"
+                    return _tied_expert_group_name(group_size)
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"

@@ -1,13 +1,22 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, cast
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import pytest
 
 from experiments.grug.moe.optimizer import GrugMoeAdamHConfig, GrugMoeMuonHConfig, TiedExpertLrScale
+
+
+class _ExpertBank(NamedTuple):
+    w_gate: jax.Array
+
+
+class _Parameters(NamedTuple):
+    expert_banks: tuple[_ExpertBank, ...]
+    ordinary: jax.Array
 
 
 def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
@@ -53,10 +62,10 @@ def test_grug_moe_adamh_mask_routes_expert_mlp_weights_to_expert_group():
 )
 def test_grug_moe_muonh_tied_expert_lr_scales_only_reused_banks(scale, expected_ratios):
     matrix = jnp.arange(1, 17, dtype=jnp.float32).reshape(4, 4)
-    params = {
-        "expert_banks": tuple({"w_gate": matrix} for _ in range(3)),
-        "ordinary": matrix,
-    }
+    params = _Parameters(
+        expert_banks=tuple(_ExpertBank(w_gate=matrix) for _ in range(3)),
+        ordinary=matrix,
+    )
     grads = jax.tree.map(jnp.ones_like, params)
     optimizer = GrugMoeMuonHConfig(
         learning_rate=1e-3,
@@ -70,12 +79,9 @@ def test_grug_moe_muonh_tied_expert_lr_scales_only_reused_banks(scale, expected_
     ).build(num_train_steps=10)
 
     updates, _ = optimizer.update(grads, optimizer.init(params), params)
-    updates = cast(dict[str, Any], updates)
-    base_norm = jnp.linalg.norm(updates["expert_banks"][0]["w_gate"])
-    tied_ratios = tuple(
-        jnp.linalg.norm(updates["expert_banks"][bank_index]["w_gate"]) / base_norm for bank_index in (1, 2)
-    )
+    base_norm = jnp.linalg.norm(updates.expert_banks[0].w_gate)
+    tied_ratios = tuple(jnp.linalg.norm(updates.expert_banks[bank_index].w_gate) / base_norm for bank_index in (1, 2))
 
-    assert jnp.linalg.norm(updates["ordinary"]) == pytest.approx(float(base_norm), rel=1e-5)
+    assert jnp.linalg.norm(updates.ordinary) == pytest.approx(float(base_norm), rel=1e-5)
     assert tied_ratios[0] == pytest.approx(float(expected_ratios[0]), rel=2e-3)
     assert tied_ratios[1] == pytest.approx(float(expected_ratios[1]), rel=2e-3)

@@ -51,6 +51,21 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 logger = logging.getLogger(__name__)
 
 
+def _topology_summary(params: Transformer, optimizer: OptimizerConfig) -> dict[str, int | float]:
+    summary: dict[str, int | float] = {
+        "parameter_count": parameter_count(params),
+        "tying/group_size": max(params.config.expert_bank_group_sizes),
+        "tying/unique_expert_parameter_count": parameter_count(params.expert_banks),
+    }
+    if isinstance(optimizer, GrugMoeMuonHConfig):
+        divisors = optimizer.expert_bank_lr_divisors
+        if divisors:
+            summary["tying/expert_lr_divisor"] = max(divisors)
+            for bank_index, divisor in enumerate(divisors):
+                summary[f"tying/expert_lr_divisor_by_bank/bank_{bank_index}"] = divisor
+    return summary
+
+
 @dataclass(frozen=True)
 class GrugTrainerConfig:
     """Runtime knobs for grug training."""
@@ -447,21 +462,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             path_override=config.trainer.sharding_dump_path,
         )
 
-        expert_parameter_count = sum(
-            int(leaf.size) for bank in state.params.expert_banks for leaf in jax.tree_util.tree_leaves(bank)
-        )
-        topology_summary: dict[str, int | float] = {
-            "parameter_count": parameter_count(state.params),
-            "tying/group_size": max(config.model.expert_bank_group_sizes),
-            "tying/unique_expert_parameter_count": expert_parameter_count,
-        }
-        if isinstance(config.optimizer, GrugMoeMuonHConfig):
-            divisors = config.optimizer.expert_bank_lr_divisors
-            if divisors:
-                topology_summary["tying/expert_lr_divisor"] = max(divisors)
-                for bank_index, divisor in enumerate(divisors):
-                    topology_summary[f"tying/expert_lr_divisor_by_bank/bank_{bank_index}"] = divisor
-        levanter.tracker.log_summary(topology_summary)
+        levanter.tracker.log_summary(_topology_summary(state.params, config.optimizer))
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)

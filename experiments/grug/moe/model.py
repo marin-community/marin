@@ -52,6 +52,7 @@ from transformers import PretrainedConfig as HfConfig
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
+_SELECTED_EXPERTS_KEY = "selected_experts"
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -59,6 +60,29 @@ GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+
+
+@dataclass(frozen=True)
+class _BlockInitKeys:
+    attention: PRNGKeyArray
+    router: PRNGKeyArray
+    expert_bank: PRNGKeyArray
+    shared: PRNGKeyArray
+    attention_gated_norm: PRNGKeyArray
+    mlp_gated_norm: PRNGKeyArray
+
+
+def _block_init_keys(key: PRNGKeyArray) -> _BlockInitKeys:
+    attention, mlp, shared, attention_gated_norm, mlp_gated_norm = random.split(key, 5)
+    router, expert_bank = random.split(mlp, 2)
+    return _BlockInitKeys(
+        attention=attention,
+        router=router,
+        expert_bank=expert_bank,
+        shared=shared,
+        attention_gated_norm=attention_gated_norm,
+        mlp_gated_norm=mlp_gated_norm,
+    )
 
 
 def _mesh_axis_size(mesh: jax.sharding.AbstractMesh | None, axis_name: str) -> int:
@@ -552,9 +576,9 @@ def _cross_loop_agreement(
     for bank_id in range(max(bank_for_layer) + 1):
         layer_indices = [layer_index for layer_index, layer_bank in enumerate(bank_for_layer) if layer_bank == bank_id]
         for first_offset, first_layer in enumerate(layer_indices):
-            first_selected = router_stats[first_layer]["selected_experts"]
+            first_selected = router_stats[first_layer][_SELECTED_EXPERTS_KEY]
             for second_layer in layer_indices[first_offset + 1 :]:
-                second_selected = router_stats[second_layer]["selected_experts"]
+                second_selected = router_stats[second_layer][_SELECTED_EXPERTS_KEY]
                 top1_agreements.append(jnp.mean(first_selected[:, 0] == second_selected[:, 0]))
                 intersection_size = jnp.sum(
                     jnp.any(first_selected[:, :, None] == second_selected[:, None, :], axis=-1),
@@ -645,7 +669,7 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
-        router_stats["selected_experts"] = selected_experts
+        router_stats[_SELECTED_EXPERTS_KEY] = selected_experts
         # Sharded QB: compute beta locally per device, then average.
         mesh = get_abstract_mesh()
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
@@ -682,15 +706,13 @@ class MoEMLP(eqx.Module):
 
 
 def _init_expert_bank(cfg: GrugModelConfig, *, block_key: PRNGKeyArray) -> MoEExpertMlp:
-    """Initialize a bank from the expert subkey used by the former per-block MoEMLP."""
-    _, mlp_key, _, _, _ = random.split(block_key, 5)
-    _, expert_key = random.split(mlp_key, 2)
+    """Initialize the routed expert bank associated with a block key."""
     return MoEExpertMlp.init(
         num_experts=cfg.num_experts,
         hidden_dim=cfg.hidden_dim,
         intermediate_dim=cfg.intermediate_dim,
         initializer_std=cfg.initializer_std,
-        key=expert_key,
+        key=_block_init_keys(block_key).expert_bank,
         implementation=cfg.moe_implementation,
         activation=ActivationFunctionEnum.silu,
         capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
@@ -709,20 +731,19 @@ class Block(eqx.Module):
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, expert_bank_index: int, key: PRNGKeyArray) -> "Block":
-        attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
-        router_key, _ = random.split(mlp_key, 2)
+        keys = _block_init_keys(key)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
+                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=keys.shared
             )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
-            attn=CausalSelfAttention.init(cfg, key=attn_key),
+            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=keys.attention_gated_norm),
+            attn=CausalSelfAttention.init(cfg, key=keys.attention),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=MoEMLP.init(cfg, key=router_key),
+            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=keys.mlp_gated_norm),
+            mlp=MoEMLP.init(cfg, key=keys.router),
             shared=shared,
             expert_bank_index=expert_bank_index,
         )

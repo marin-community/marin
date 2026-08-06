@@ -12,7 +12,7 @@ from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.jax_utils import leaf_key_paths
 
-from experiments.grug.moe.model import GrugModelConfig, GrugMoeHfConfig, Transformer
+from experiments.grug.moe.model import GrugModelConfig, GrugMoeHfConfig, Transformer, _cross_loop_agreement
 from experiments.grug.moe.train import _apply_qb_betas
 
 
@@ -72,21 +72,28 @@ def test_expert_bank_mapping_stores_each_bank_once():
 
 def test_shared_bank_gradient_equals_sum_of_layer_use_site_gradients():
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
-        model = Transformer.init(_tiny_config(mapping=(0, 0)), key=jax.random.key(2))
-        bank = model.expert_banks[0]
-        inputs = (
-            jnp.linspace(-1.0, 1.0, 32, dtype=jnp.float32).reshape(1, 2, 16),
-            jnp.linspace(1.0, -0.5, 32, dtype=jnp.float32).reshape(1, 2, 16),
-        )
+        key = jax.random.key(2)
+        tied_model = Transformer.init(_tiny_config(mapping=(0, 0)), key=key)
+        untied_model = Transformer.init(_tiny_config(mapping=(0, 1)), key=key)
+        shared_bank = tied_model.expert_banks[0]
+        untied_banks = (shared_bank, shared_bank)
+        tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
 
-        def layer_loss(expert_bank, layer_index):
-            routed, _ = model.blocks[layer_index].mlp(inputs[layer_index], expert_bank)
-            return jnp.sum(jnp.square(routed))
+        def tied_loss(expert_bank):
+            current = eqx.tree_at(lambda model: model.expert_banks, tied_model, (expert_bank,))
+            return jnp.sum(jnp.square(current.logits(tokens)))
 
-        separate_grads = tuple(jax.grad(layer_loss)(bank, layer_index) for layer_index in range(2))
-        joint_grad = jax.grad(lambda expert_bank: layer_loss(expert_bank, 0) + layer_loss(expert_bank, 1))(bank)
+        def untied_loss(expert_banks):
+            current = eqx.tree_at(lambda model: model.expert_banks, untied_model, expert_banks)
+            return jnp.sum(jnp.square(current.logits(tokens)))
+
+        tied_logits = tied_model.logits(tokens)
+        untied_logits = eqx.tree_at(lambda model: model.expert_banks, untied_model, untied_banks).logits(tokens)
+        joint_grad = jax.grad(tied_loss)(shared_bank)
+        separate_grads = jax.grad(untied_loss)(untied_banks)
         expected_grad = jax.tree.map(lambda first, second: first + second, *separate_grads)
 
+    np.testing.assert_array_equal(tied_logits, untied_logits)
     assert all(float(jnp.linalg.norm(leaf)) > 0 for grad in separate_grads for leaf in _array_leaves(grad))
     for actual, expected in zip(_array_leaves(joint_grad), _array_leaves(expected_grad), strict=True):
         np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
@@ -136,10 +143,20 @@ def test_qb_updates_and_router_statistics_remain_layer_specific():
     assert not np.array_equal(first_stats["routing_counts"], second_stats["routing_counts"])
     assert model_stats["routing_counts_per_layer"].shape == (2, 4)
     assert model_stats["qb_beta_per_layer"].shape == (2, 4)
-    assert 0.0 <= float(model_stats["top1_cross_loop_agreement"]) <= 1.0
-    assert 0.0 <= float(model_stats["topk_set_overlap"]) <= 1.0
     for before, after in zip(original_bank, _array_leaves(updated.expert_banks), strict=True):
         np.testing.assert_array_equal(before, after)
+
+
+def test_cross_loop_metrics_match_known_top1_and_topk_overlap():
+    router_stats = [
+        {"selected_experts": jnp.array([[0, 1], [2, 3]], dtype=jnp.int32)},
+        {"selected_experts": jnp.array([[0, 2], [3, 1]], dtype=jnp.int32)},
+    ]
+
+    top1_agreement, topk_overlap = _cross_loop_agreement(router_stats, bank_for_layer=(0, 0))
+
+    assert top1_agreement == 0.5
+    assert topk_overlap == 0.5
 
 
 def test_shared_dense_mlps_remain_per_layer_when_experts_are_tied():

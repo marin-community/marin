@@ -58,15 +58,15 @@ _TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8")
 
 # Nemotron CC mixture weights: the corpus's TiB proportions, plus starcoder and
 # proof-pile at their published weights. Policy lives here, in the experiment.
-_NEMOTRON_WEIGHTS = {
-    "hq_actual": 0.91351,
-    "hq_synth": 2.72,
-    "medium_high": 0.82471,
-    "medium": 3.38,
-    "medium_low": 1.54,
-    "low_actual": 0.70123,
-    "low_synth": 0.62771,
-}
+_NEMOTRON_WEIGHTS = (
+    ("hq_actual", 0.91351),
+    ("hq_synth", 2.72),
+    ("medium_high", 0.82471),
+    ("medium", 3.38),
+    ("medium_low", 1.54),
+    ("low_actual", 0.70123),
+    ("low_synth", 0.62771),
+)
 _STARCODER_WEIGHT = 0.25
 _PROOFPILE_WEIGHT = 0.055
 
@@ -127,6 +127,23 @@ def slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
         resources=_SLIMPAJAMA_TOKENIZE_RESOURCES,
         version="2026.06.28",
     )
+
+
+def grug_moe_training_datasets() -> dict[ArtifactStep[TokenizedCache], float]:
+    """Build the standard weighted Grug MoE pretraining mixture."""
+    nemotron = nemotron_datasets(tokenizer=llama3_tokenizer)
+    train = {nemotron[split]: weight for split, weight in _NEMOTRON_WEIGHTS}
+    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
+    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
+    return train
+
+
+def grug_moe_validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
+    """Build the standard Grug MoE validation suites."""
+    return [
+        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
+        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
+    ]
 
 
 def _resolve_run_id(default_run_id: str) -> str:
@@ -224,14 +241,8 @@ def grug_moe_baseline(*, version: str | None = None) -> ArtifactStep[LevanterChe
     """
     name = "grug/4_10_baseline_moe"
     version = resolve_version(name, version)
-    nem = nemotron_datasets(tokenizer=llama3_tokenizer)
-    train = {nem[split]: weight for split, weight in _NEMOTRON_WEIGHTS.items()}
-    train[starcoder_dataset(tokenizer=llama3_tokenizer)] = _STARCODER_WEIGHT
-    train[proofpile_dataset(tokenizer=llama3_tokenizer)] = _PROOFPILE_WEIGHT
-    validation = [
-        *paloma_datasets(tokenizer=llama3_tokenizer).values(),
-        *uncheatable_datasets(tokenizer=llama3_tokenizer).values(),
-    ]
+    train = grug_moe_training_datasets()
+    validation = grug_moe_validation_datasets()
 
     def build_config(ctx: StepContext) -> GrugMoeLaunchConfig:
         return GrugMoeLaunchConfig(
