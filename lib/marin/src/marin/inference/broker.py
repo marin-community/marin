@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 
 from marin.inference.types import (
+    BrokerStats,
     InferenceRequest,
     InferenceResponse,
     InferenceWorkerMetadata,
@@ -90,6 +91,7 @@ class InferenceBroker:
         # Insertion-ordered set of request ids for diagnostics.
         self._pending: dict[str, None] = {}
         self._worker_metadata: dict[str, InferenceWorkerMetadata] = {}
+        self._completed_total = 0
 
     def register_worker(self, worker_id: str, metadata: InferenceWorkerMetadata) -> None:
         with self._lock:
@@ -129,6 +131,7 @@ class InferenceBroker:
                 self._request_leases.pop(response.request_id, None)
                 self._responses.append(response)
                 self._pending.pop(response.request_id, None)
+                self._completed_total += 1
         if dropped_ids:
             logger.warning(
                 "InferenceBroker dropped responses for inactive request leases count=%d request_ids=%s",
@@ -150,3 +153,13 @@ class InferenceBroker:
     def pending(self) -> list[str]:
         with self._lock:
             return list(self._pending)
+
+    def stats(self) -> BrokerStats:
+        with self._lock:
+            return BrokerStats(
+                queued=self._requests.size(),
+                leased=self._requests.pending(),
+                responses_ready=len(self._responses),
+                workers=len(self._worker_metadata),
+                completed_total=self._completed_total,
+            )
