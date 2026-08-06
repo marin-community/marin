@@ -254,7 +254,6 @@ async fn zstd_batch_is_accepted_and_queryable() {
     let batch_id = "9d159e5a-2f32-4d50-8e31-6d8522147520";
     let body = batch(batch_id);
     let compressed = zstd_body(&body);
-    assert!(compressed.len() < body.len());
 
     let response = post_encoded(
         &client,

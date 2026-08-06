@@ -90,9 +90,6 @@ const FORWARD_BATCH_ROWS: i64 = 50_000;
 /// chunk toward this budget.
 const FORWARD_BATCH_BYTES: usize = MAX_WRITE_ROWS_BYTES - (1 << 20);
 
-/// Arrow IPC contains repeated strings, especially for telemetry resource attributes.
-/// Level 1 retains almost all of zstd's default-level ratio without spending regional
-/// Finelog CPU on a short-lived copy that the hub will encode again for storage.
 const FORWARD_REQUEST_COMPRESSION: &str = "zstd";
 const FINELOG_ZSTD_LEVEL: i32 = 1;
 
