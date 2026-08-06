@@ -87,6 +87,16 @@ class CoveringProjection:
 
 
 @dataclass(frozen=True)
+class GroupedExtrema:
+    """Bounded per-segment rollup over a filtered JSON-derived dimension."""
+
+    filter_column: str
+    group_json_column: str
+    group_json_key: str
+    extrema_column: str
+
+
+@dataclass(frozen=True)
 class Schema:
     """Registered column layout for a namespace.
 
@@ -101,6 +111,7 @@ class Schema:
     columns: tuple[Column, ...]
     key_column: str = ""
     projections: tuple[CoveringProjection, ...] = ()
+    grouped_extrema: tuple[GroupedExtrema, ...] = ()
 
     def column(self, name: str) -> Column | None:
         for c in self.columns:
@@ -168,7 +179,21 @@ def schema_from_proto(msg: stats_pb2.Schema) -> Schema:
         )
         for projection in msg.projections
     )
-    return Schema(columns=tuple(cols), key_column=msg.key_column, projections=projections)
+    grouped_extrema = tuple(
+        GroupedExtrema(
+            filter_column=config.filter_column,
+            group_json_column=config.group_json_column,
+            group_json_key=config.group_json_key,
+            extrema_column=config.extrema_column,
+        )
+        for config in msg.grouped_extrema
+    )
+    return Schema(
+        columns=tuple(cols),
+        key_column=msg.key_column,
+        projections=projections,
+        grouped_extrema=grouped_extrema,
+    )
 
 
 def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
@@ -201,6 +226,15 @@ def schema_to_proto(schema: Schema) -> stats_pb2.Schema:
                 predicate_column=projection.predicate_column,
                 predicate_values=projection.predicate_values,
                 columns=projection.columns,
+            )
+        )
+    for config in schema.grouped_extrema:
+        msg.grouped_extrema.append(
+            stats_pb2.GroupedExtrema(
+                filter_column=config.filter_column,
+                group_json_column=config.group_json_column,
+                group_json_key=config.group_json_key,
+                extrema_column=config.extrema_column,
             )
         )
     return msg

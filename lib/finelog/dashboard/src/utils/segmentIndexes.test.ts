@@ -35,7 +35,7 @@ function segment(level: number, sections: string[], bundleBytes = 10, externalBy
         checksum: 'crc32c',
         sections: sections.map((id) => ({
           id,
-          kind: id,
+          kind: id.startsWith('group-extrema:') ? 'group_extrema' : id,
           exactness: 'exact',
           methodVersion: 1,
           checksum: 'crc32c',
@@ -79,6 +79,7 @@ test('L0 segments are excluded from every derived-index coverage denominator', (
       l0Unindexed: summary.l0Unindexed,
       projection: summary.methods.find((method) => method.id === 'projection:training-status'),
       counts: summary.methods.find((method) => method.id === 'value-counts'),
+      adaptiveMethods: summary.adaptiveMethods,
       countColumns: summary.countColumns,
       bytes: summary.bytes,
     },
@@ -87,6 +88,7 @@ test('L0 segments are excluded from every derived-index coverage denominator', (
       l0Unindexed: 1,
       projection: { id: 'projection:training-status', indexed: 1, eligible: 2 },
       counts: { id: 'value-counts', indexed: 2, eligible: 2 },
+      adaptiveMethods: [],
       countColumns: [{ id: 'service', indexed: 2, eligible: 2 }],
       bytes: 70,
     },
@@ -113,4 +115,57 @@ test('a missing external projection is not reported as covered', () => {
     summary.methods.find((method) => method.id === 'projection:training-status'),
     { id: 'projection:training-status', indexed: 0, eligible: 1 },
   )
+})
+
+test('adaptive aggregate sections report coverage without becoming required policy', () => {
+  const id = 'group-extrema:service:resource_attributes_json:job_id:timestamp_ms'
+  const covered = segment(1, [
+    'exact-postings',
+    'projection:training-status',
+    'trigram:name',
+    'value-counts',
+    id,
+  ])
+  const declined = segment(2, [
+    'exact-postings',
+    'projection:training-status',
+    'trigram:name',
+    'value-counts',
+  ])
+  const summary = segmentIndexSummary([covered, declined], schema)
+  assert.ok(summary)
+  assert.equal(summary.stableIndexed, 2)
+  assert.equal(summary.methods.find((method) => method.id === id), undefined)
+  assert.deepEqual(summary.adaptiveMethods.find((method) => method.id === id), {
+    id,
+    indexed: 1,
+    eligible: 2,
+  })
+})
+
+test('configured adaptive aggregate is visible at zero coverage', () => {
+  const telemetrySchema: ProtoSchema = {
+    columns: [
+      { name: 'timestamp_ms', type: 'COLUMN_TYPE_INT64' },
+      { name: 'service', type: 'COLUMN_TYPE_STRING' },
+      { name: 'resource_attributes_json', type: 'COLUMN_TYPE_STRING' },
+    ],
+    groupedExtrema: [
+      {
+        filterColumn: 'service',
+        groupJsonColumn: 'resource_attributes_json',
+        groupJsonKey: 'job_id',
+        extremaColumn: 'timestamp_ms',
+      },
+    ],
+  }
+  const summary = segmentIndexSummary([segment(3, [])], telemetrySchema)
+  assert.ok(summary)
+  assert.deepEqual(summary.adaptiveMethods, [
+    {
+      id: 'group-extrema:service:resource_attributes_json:job_id:timestamp_ms',
+      indexed: 0,
+      eligible: 1,
+    },
+  ])
 })

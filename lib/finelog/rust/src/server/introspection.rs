@@ -30,7 +30,9 @@ use crate::store::segment::{
     TARGET_ROW_GROUP_BYTES,
 };
 use crate::store::segment_index::parse_trigram_coverage;
-use crate::store::segment_index::{parse_projection_reference, projection_path};
+use crate::store::segment_index::{
+    parse_group_extrema_config, parse_projection_reference, projection_path,
+};
 use crate::store::trigram::SIDECAR_SPAN_ROWS;
 use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
@@ -337,6 +339,15 @@ fn physical_info(
                         SectionKind::CoveringProjection => reference
                             .as_ref()
                             .map(|reference| reference.descriptor.columns.clone())
+                            .unwrap_or_default(),
+                        SectionKind::GroupExtrema => parse_group_extrema_config(&section.coverage)
+                            .map(|config| {
+                                vec![
+                                    config.filter_column,
+                                    format!("{}->{}", config.json_column, config.json_key),
+                                    config.extrema_column,
+                                ]
+                            })
                             .unwrap_or_default(),
                     };
                     let available = if section.kind == SectionKind::CoveringProjection {

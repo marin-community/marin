@@ -167,30 +167,6 @@ fn contains_udf() -> ScalarUDF {
     string_predicate_udf("contains", |text, sub| Ok(text.contains(sub)))
 }
 
-/// The raw JSON value at top-level object key `key` in the document `text`, if
-/// `text` parses as a JSON object that contains `key`.
-///
-/// `None` when `text` is not a JSON object (invalid JSON, or a top-level
-/// scalar/array) or the key is absent; a key present with an explicit JSON
-/// `null` value returns `Some(JsonValue::Null)`.
-fn json_object_value(text: &str, key: &str) -> Option<JsonValue> {
-    match serde_json::from_str::<JsonValue>(text).ok()? {
-        JsonValue::Object(mut map) => map.remove(key),
-        _ => None,
-    }
-}
-
-/// Render a resolved JSON value as text for `json_get`: a JSON string unquoted,
-/// other scalars and nested arrays/objects as their compact JSON form, an
-/// explicit JSON `null` as SQL NULL.
-fn json_value_as_text(value: JsonValue) -> Option<String> {
-    match value {
-        JsonValue::Null => None,
-        JsonValue::String(s) => Some(s),
-        other => Some(other.to_string()),
-    }
-}
-
 /// Element count of a top-level JSON array (its length) or object (its key
 /// count); `None` for a scalar, an explicit `null`, or non-JSON input.
 fn json_length_value(text: &str) -> Option<i64> {
@@ -384,7 +360,7 @@ fn json_get_column(
                     {
                         previous_value.clone().expect("matching lookup is cached")
                     } else {
-                        let value = json_object_value(row_text, row_key);
+                        let value = crate::json::object_value(row_text, row_key);
                         previous_text = Some(row_text);
                         previous_key = Some(row_key);
                         previous_value = Some(value.clone());
@@ -409,7 +385,7 @@ fn build_json_output(
             let mut b = StringBuilder::new();
             for i in 0..n {
                 match resolve(i) {
-                    Resolved::Value(jv) => b.append_option(json_value_as_text(jv)),
+                    Resolved::Value(jv) => b.append_option(crate::json::value_as_text(jv)),
                     _ => b.append_null(),
                 }
             }

@@ -51,6 +51,7 @@ pub enum SectionKind {
     ExactPostings = 2,
     ValueCounts = 3,
     CoveringProjection = 4,
+    GroupExtrema = 5,
 }
 
 impl SectionKind {
@@ -60,6 +61,7 @@ impl SectionKind {
             2 => Some(Self::ExactPostings),
             3 => Some(Self::ValueCounts),
             4 => Some(Self::CoveringProjection),
+            5 => Some(Self::GroupExtrema),
             _ => None,
         }
     }
@@ -70,6 +72,7 @@ impl SectionKind {
             Self::ExactPostings => "exact_postings",
             Self::ValueCounts => "value_counts",
             Self::CoveringProjection => "covering_projection",
+            Self::GroupExtrema => "group_extrema",
         }
     }
 }

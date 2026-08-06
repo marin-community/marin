@@ -75,6 +75,22 @@ pub fn stats() -> ExactAggregateStats {
     }
 }
 
+pub(crate) fn record_full() {
+    FULL_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_partial() {
+    PARTIAL_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_declined() {
+    DECLINED_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_fallback() {
+    FALLBACK_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum CountMode {
     AllRows,
@@ -258,7 +274,7 @@ impl OptimizerRule for ExactAggregateRewrite {
 }
 
 #[derive(Debug)]
-struct ExactAggregatePlanner;
+pub(crate) struct ExactAggregatePlanner;
 
 #[async_trait]
 impl ExtensionPlanner for ExactAggregatePlanner {
@@ -462,9 +478,12 @@ impl QueryPlanner for FinelogQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(ExactAggregatePlanner)])
-            .create_physical_plan(logical_plan, session_state)
-            .await
+        DefaultPhysicalPlanner::with_extension_planners(vec![
+            Arc::new(ExactAggregatePlanner),
+            Arc::new(crate::query::group_extrema::GroupExtremaPlanner),
+        ])
+        .create_physical_plan(logical_plan, session_state)
+        .await
     }
 }
 

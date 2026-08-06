@@ -62,15 +62,29 @@ class CoveringProjection(_message.Message):
     columns: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, name: _Optional[str] = ..., predicate_column: _Optional[str] = ..., predicate_values: _Optional[_Iterable[str]] = ..., columns: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class GroupedExtrema(_message.Message):
+    __slots__ = ("filter_column", "group_json_column", "group_json_key", "extrema_column")
+    FILTER_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    GROUP_JSON_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    GROUP_JSON_KEY_FIELD_NUMBER: _ClassVar[int]
+    EXTREMA_COLUMN_FIELD_NUMBER: _ClassVar[int]
+    filter_column: str
+    group_json_column: str
+    group_json_key: str
+    extrema_column: str
+    def __init__(self, filter_column: _Optional[str] = ..., group_json_column: _Optional[str] = ..., group_json_key: _Optional[str] = ..., extrema_column: _Optional[str] = ...) -> None: ...
+
 class Schema(_message.Message):
-    __slots__ = ("columns", "key_column", "projections")
+    __slots__ = ("columns", "key_column", "projections", "grouped_extrema")
     COLUMNS_FIELD_NUMBER: _ClassVar[int]
     KEY_COLUMN_FIELD_NUMBER: _ClassVar[int]
     PROJECTIONS_FIELD_NUMBER: _ClassVar[int]
+    GROUPED_EXTREMA_FIELD_NUMBER: _ClassVar[int]
     columns: _containers.RepeatedCompositeFieldContainer[Column]
     key_column: str
     projections: _containers.RepeatedCompositeFieldContainer[CoveringProjection]
-    def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ..., projections: _Optional[_Iterable[_Union[CoveringProjection, _Mapping]]] = ...) -> None: ...
+    grouped_extrema: _containers.RepeatedCompositeFieldContainer[GroupedExtrema]
+    def __init__(self, columns: _Optional[_Iterable[_Union[Column, _Mapping]]] = ..., key_column: _Optional[str] = ..., projections: _Optional[_Iterable[_Union[CoveringProjection, _Mapping]]] = ..., grouped_extrema: _Optional[_Iterable[_Union[GroupedExtrema, _Mapping]]] = ...) -> None: ...
 
 class StoragePolicy(_message.Message):
     __slots__ = ("max_segments", "max_bytes", "max_age_seconds")

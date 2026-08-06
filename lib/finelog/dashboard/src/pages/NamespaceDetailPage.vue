@@ -289,6 +289,16 @@ watch(() => props.name, loadAll)
         </span>
       </div>
       <div
+        v-if="backfillSummary?.indexes?.adaptiveMethods.length"
+        class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-text-muted pb-2"
+      >
+        <span>adaptive summaries</span>
+        <span v-for="method in backfillSummary.indexes.adaptiveMethods" :key="method.id">
+          <span class="font-mono text-text">{{ method.id }}</span>
+          built on {{ formatNumber(method.indexed) }} of {{ formatNumber(method.eligible) }} local L1+
+        </span>
+      </div>
+      <div
         v-if="backfillSummary?.indexes?.countColumns.length"
         class="flex flex-wrap gap-x-6 gap-y-1 text-xs text-text-muted pb-2"
       >

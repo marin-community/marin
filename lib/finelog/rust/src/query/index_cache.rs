@@ -8,10 +8,12 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::store::exact::ExactSection;
+use crate::store::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
 use crate::store::index_bundle::{self, BundleHeader, SectionKind};
 use crate::store::segment::segment_id_and_row_group_rows;
 use crate::store::segment_index::{
-    parse_trigram_coverage, read_exact_section, trigram_section_id, TrigramCoverage,
+    parse_trigram_coverage, read_exact_section, read_group_extrema_section, trigram_section_id,
+    TrigramCoverage,
 };
 use crate::store::trigram::{self, ColumnIndex};
 
@@ -165,6 +167,40 @@ impl IndexCache {
         Some(self.insert(key, Cached::Exact(Arc::clone(&index)), bytes, || index))
     }
 
+    pub fn get_group_extrema(
+        &self,
+        parquet_path: &Path,
+        header: &BundleHeader,
+        config: &GroupExtremaConfig,
+    ) -> Option<Arc<GroupExtremaSection>> {
+        let bundle_path = index_bundle::bundle_path(parquet_path);
+        let section = header.sections.iter().find(|section| {
+            section.kind == SectionKind::GroupExtrema
+                && crate::store::segment_index::parse_group_extrema_config(&section.coverage)
+                    .as_ref()
+                    == Some(config)
+        })?;
+        let key = Key::Section(
+            bundle_path.clone(),
+            header.binding.segment_id,
+            section.id.clone(),
+        );
+        if let Some(Cached::GroupExtrema(index)) = self.lookup(&key) {
+            return Some(index);
+        }
+        let Some(index) = read_group_extrema_section(&bundle_path, header, config) else {
+            self.corrupt_sections.fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
+        let bytes = index.heap_bytes();
+        let index = Arc::new(index);
+        Some(
+            self.insert(key, Cached::GroupExtrema(Arc::clone(&index)), bytes, || {
+                index
+            }),
+        )
+    }
+
     pub fn invalidate(&self, bundle_path: &Path) {
         self.cache.lock().unwrap().remove_path(bundle_path);
     }
@@ -236,11 +272,21 @@ impl CachedValue<ExactSection> for Cached {
     }
 }
 
+impl CachedValue<GroupExtremaSection> for Cached {
+    fn value(self) -> Option<Arc<GroupExtremaSection>> {
+        match self {
+            Self::GroupExtrema(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 enum Cached {
     Header(Arc<BundleHeader>),
     Trigram(Arc<ColumnIndex>),
     Exact(Arc<ExactSection>),
+    GroupExtrema(Arc<GroupExtremaSection>),
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]

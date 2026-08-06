@@ -9,6 +9,7 @@ pub mod adopt;
 pub mod catalog;
 pub mod compaction;
 pub mod exact;
+pub mod group_extrema;
 pub mod index_bundle;
 pub mod ipc;
 pub mod log_read;

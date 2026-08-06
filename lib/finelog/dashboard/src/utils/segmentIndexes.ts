@@ -12,6 +12,7 @@ export interface SegmentIndexSummary {
   stableEligible: number
   l0Unindexed: number
   methods: IndexCoverage[]
+  adaptiveMethods: IndexCoverage[]
   countColumns: IndexCoverage[]
   bytes: number
 }
@@ -31,6 +32,15 @@ export function configuredIndexMethods(schema: ProtoSchema | null): string[] {
   if (hasValueCounts) ids.push('value-counts')
   for (const projection of schema.projections ?? []) ids.push(`projection:${projection.name}`)
   return ids.sort()
+}
+
+function configuredAdaptiveMethods(schema: ProtoSchema): string[] {
+  return (
+    schema.groupedExtrema?.map(
+      (config) =>
+        `group-extrema:${config.filterColumn}:${config.groupJsonColumn}:${config.groupJsonKey}:${config.extremaColumn}`,
+    ) ?? []
+  ).sort()
 }
 
 /** Coverage among local segments whose physical artifacts were inspected. */
@@ -54,6 +64,18 @@ export function segmentIndexSummary(
     )
   const sections = (segment: SegmentInfo) =>
     segment.physical?.indexBundle?.sections.filter((section) => section.available) ?? []
+  const adaptiveMethods = [
+    ...new Set(
+      [
+        ...configuredAdaptiveMethods(schema),
+        ...stable.flatMap((segment) =>
+          sections(segment)
+            .filter((section) => section.kind === 'group_extrema')
+            .map((section) => section.id),
+        ),
+      ],
+    ),
+  ].sort()
   const requiredCountColumns =
     schema?.columns?.filter((column) => column.index?.valueCounts).map((column) => column.name) ?? []
   const requiredPostingColumns = new Set(
@@ -103,6 +125,11 @@ export function segmentIndexSummary(
         eligible: stable.length,
       }
     }),
+    adaptiveMethods: adaptiveMethods.map((id) => ({
+      id,
+      indexed: stable.filter((segment) => covers(segment, id)).length,
+      eligible: stable.length,
+    })),
     countColumns: countColumnNames.map((column) => ({
       id: column,
       indexed: stable.filter((segment) =>

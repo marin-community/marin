@@ -16,8 +16,10 @@ use serde::{Deserialize, Serialize};
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::{
     Column as ProtoColumn, ColumnIndex as ProtoColumnIndex, ColumnType,
-    CoveringProjection as ProtoCoveringProjection, Schema as ProtoSchema, SchemaView,
+    CoveringProjection as ProtoCoveringProjection, GroupedExtrema as ProtoGroupedExtrema,
+    Schema as ProtoSchema, SchemaView,
 };
+use crate::store::group_extrema::GroupExtremaConfig;
 
 /// Default implicit ordering-key column name when `Schema.key_column` is empty.
 pub const IMPLICIT_KEY_COLUMN: &str = "timestamp_ms";
@@ -138,6 +140,7 @@ pub struct Schema {
     pub columns: Vec<Column>,
     pub key_column: String,
     pub projections: Vec<CoveringProjection>,
+    pub grouped_extrema: Vec<GroupExtremaConfig>,
 }
 
 impl Schema {
@@ -146,11 +149,17 @@ impl Schema {
             columns,
             key_column: key_column.into(),
             projections: Vec::new(),
+            grouped_extrema: Vec::new(),
         }
     }
 
     pub fn with_covering_projection(mut self, projection: CoveringProjection) -> Self {
         self.projections.push(projection);
+        self
+    }
+
+    pub fn with_grouped_extrema(mut self, config: GroupExtremaConfig) -> Self {
+        self.grouped_extrema.push(config);
         self
     }
 
@@ -311,8 +320,21 @@ pub fn schema_from_proto_view(view: &SchemaView) -> Result<Schema, StatsError> {
             )
         })
         .collect();
+    let grouped_extrema = view
+        .grouped_extrema
+        .iter()
+        .map(|config| {
+            GroupExtremaConfig::new(
+                config.filter_column.unwrap_or(""),
+                config.group_json_column.unwrap_or(""),
+                config.group_json_key.unwrap_or(""),
+                config.extrema_column.unwrap_or(""),
+            )
+        })
+        .collect();
     let mut schema = Schema::new(cols, view.key_column.unwrap_or(""));
     schema.projections = projections;
+    schema.grouped_extrema = grouped_extrema;
     validate_index_policies(&schema)?;
     Ok(schema)
 }
@@ -348,6 +370,17 @@ pub fn schema_to_proto_owned(schema: &Schema) -> ProtoSchema {
                 predicate_column: Some(projection.predicate_column.clone()),
                 predicate_values: projection.predicate_values.clone(),
                 columns: projection.columns.clone(),
+                ..Default::default()
+            })
+            .collect(),
+        grouped_extrema: schema
+            .grouped_extrema
+            .iter()
+            .map(|config| ProtoGroupedExtrema {
+                filter_column: Some(config.filter_column.clone()),
+                group_json_column: Some(config.json_column.clone()),
+                group_json_key: Some(config.json_key.clone()),
+                extrema_column: Some(config.extrema_column.clone()),
                 ..Default::default()
             })
             .collect(),
@@ -388,6 +421,8 @@ struct JsonSchema {
     columns: Vec<JsonColumn>,
     #[serde(default)]
     projections: Vec<CoveringProjection>,
+    #[serde(default)]
+    grouped_extrema: Vec<GroupExtremaConfig>,
 }
 
 fn column_type_name(t: ColumnType) -> &'static str {
@@ -451,6 +486,7 @@ pub fn schema_to_json(schema: &Schema) -> String {
             })
             .collect(),
         projections: schema.projections.clone(),
+        grouped_extrema: schema.grouped_extrema.clone(),
     };
     serde_json::to_string(&payload).expect("schema JSON serialization never fails")
 }
@@ -471,6 +507,7 @@ pub fn schema_from_json(text: &str) -> Result<Schema, StatsError> {
     }
     let mut schema = Schema::new(cols, payload.key_column);
     schema.projections = payload.projections;
+    schema.grouped_extrema = payload.grouped_extrema;
     validate_index_policies(&schema)?;
     Ok(schema)
 }
@@ -496,6 +533,7 @@ pub fn with_implicit_seq(schema: Schema) -> Schema {
         columns,
         key_column: schema.key_column,
         projections: schema.projections,
+        grouped_extrema: schema.grouped_extrema,
     }
 }
 
@@ -513,6 +551,7 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
         mut columns,
         key_column,
         projections,
+        grouped_extrema,
     } = schema;
     columns.push(Column::new(
         IMPLICIT_CLUSTER_COLUMN,
@@ -523,6 +562,7 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
         columns,
         key_column,
         projections,
+        grouped_extrema,
     }
 }
 
@@ -625,6 +665,55 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
             }
         }
     }
+    let mut grouped_extrema = std::collections::BTreeSet::new();
+    for config in &schema.grouped_extrema {
+        if !grouped_extrema.insert(config) {
+            return Err(StatsError::SchemaValidation(format!(
+                "duplicate grouped-extrema declaration {config:?}"
+            )));
+        }
+        let Some(filter) = schema.column(&config.filter_column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: unknown filter column {:?}",
+                config.filter_column
+            )));
+        };
+        if filter.r#type != ColumnType::COLUMN_TYPE_STRING {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: filter column {:?} must be STRING",
+                config.filter_column
+            )));
+        }
+        let Some(document) = schema.column(&config.json_column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: unknown JSON column {:?}",
+                config.json_column
+            )));
+        };
+        if document.r#type != ColumnType::COLUMN_TYPE_STRING {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: JSON column {:?} must be STRING",
+                config.json_column
+            )));
+        }
+        if config.json_key.is_empty() {
+            return Err(StatsError::SchemaValidation(
+                "grouped extrema: JSON key must be non-empty".to_string(),
+            ));
+        }
+        let Some(extrema) = schema.column(&config.extrema_column) else {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: unknown extrema column {:?}",
+                config.extrema_column
+            )));
+        };
+        if extrema.r#type != ColumnType::COLUMN_TYPE_INT64 {
+            return Err(StatsError::SchemaValidation(format!(
+                "grouped extrema: extrema column {:?} must be INT64",
+                config.extrema_column
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -666,6 +755,12 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     let mut enable_value_counts: Vec<&str> = Vec::new();
     let mut exact_values: Vec<(&str, Vec<String>)> = Vec::new();
     let mut projections = Vec::new();
+    let grouped_extrema = requested
+        .grouped_extrema
+        .iter()
+        .filter(|config| !registered.grouped_extrema.contains(config))
+        .cloned()
+        .collect::<Vec<_>>();
     for requested_projection in &requested.projections {
         match registered
             .projections
@@ -745,6 +840,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
         && enable_value_counts.is_empty()
         && exact_values.is_empty()
         && projections.is_empty()
+        && grouped_extrema.is_empty()
     {
         return Ok(registered.clone());
     }
@@ -782,6 +878,8 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
     let mut merged_schema = Schema::new(merged, registered.key_column.clone());
     merged_schema.projections = registered.projections.clone();
     merged_schema.projections.extend(projections);
+    merged_schema.grouped_extrema = registered.grouped_extrema.clone();
+    merged_schema.grouped_extrema.extend(grouped_extrema);
     validate_index_policies(&merged_schema)?;
     Ok(merged_schema)
 }
@@ -1317,6 +1415,40 @@ mod tests {
         assert!(matches!(
             merge_schemas(&merged, &conflicting),
             Err(StatsError::SchemaConflict(_))
+        ));
+    }
+
+    #[test]
+    fn grouped_extrema_round_trips_and_merges_monotonically() {
+        let config = GroupExtremaConfig::new("worker_id", "worker_id", "job", "timestamp_ms");
+        let requested = worker_schema().with_grouped_extrema(config.clone());
+        validate_index_policies(&requested).unwrap();
+        assert_eq!(
+            schema_from_json(&schema_to_json(&requested)).unwrap(),
+            requested
+        );
+
+        let registered = with_implicit_seq(worker_schema());
+        let merged = merge_schemas(&registered, &with_implicit_seq(requested)).unwrap();
+        assert_eq!(merged.grouped_extrema, vec![config]);
+        assert_eq!(
+            merge_schemas(&merged, &with_implicit_seq(worker_schema())).unwrap(),
+            merged,
+            "an older registration cannot remove a declared rollup"
+        );
+    }
+
+    #[test]
+    fn grouped_extrema_validates_declared_column_roles() {
+        let invalid = worker_schema().with_grouped_extrema(GroupExtremaConfig::new(
+            "mem_bytes",
+            "worker_id",
+            "job",
+            "timestamp_ms",
+        ));
+        assert!(matches!(
+            validate_index_policies(&invalid),
+            Err(StatsError::SchemaValidation(_))
         ));
     }
 

@@ -13,6 +13,7 @@
 pub mod exact_aggregate;
 pub mod exact_prune;
 pub(crate) mod file_scan;
+pub mod group_extrema;
 pub mod index_cache;
 pub mod optimizer;
 pub mod provider;
@@ -461,6 +462,9 @@ pub async fn run_query_over(
         ctx.register_table(TableReference::bare(rp.name), Arc::new(rp.provider))?;
     }
     ctx.add_optimizer_rule(Arc::new(exact_aggregate::ExactAggregateRewrite::new(
+        aggregate_sources.clone(),
+    )));
+    ctx.add_optimizer_rule(Arc::new(group_extrema::GroupExtremaRewrite::new(
         aggregate_sources,
     )));
     let started = Instant::now();

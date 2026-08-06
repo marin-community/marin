@@ -20,6 +20,7 @@
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
 //! freshly allocated seq under the lock, and never writes parquet.
 
+use std::cmp::Reverse;
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -969,6 +970,7 @@ impl Namespace {
             self.key_column.clone(),
         )
         .with_adaptive_value_counts(self.adaptive_count_columns())
+        .with_adaptive_group_extrema(self.schema.grouped_extrema.clone())
     }
 
     /// Recover the typed Int64 key bounds for an input segment from the in-memory
@@ -1334,7 +1336,7 @@ impl Namespace {
                 .map(|segment| segment.path.as_str())
                 .collect();
             skips.reconcile(&[fingerprint.as_str()], &live);
-            segments
+            let mut candidates = segments
                 .iter()
                 .filter(|segment| !skips.paths.contains(&segment.path))
                 .filter(|segment| {
@@ -1346,6 +1348,10 @@ impl Namespace {
                             &config,
                         )
                 })
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|segment| Reverse(segment.max_seq));
+            candidates
+                .into_iter()
                 .take(max)
                 .map(|segment| BackfillCandidate {
                     path: segment.path.clone(),
@@ -2453,6 +2459,64 @@ mod tests {
                 index,
                 crate::store::segment_index::IndexSpec::AdaptiveValueCounts { column }
                     if column == "data"
+            )
+        }));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn grouped_extrema_are_declared_instead_of_column_inferred() {
+        let dir = tempdir();
+        let schema = Schema::new(
+            vec![
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                Column::new("service", ColumnType::COLUMN_TYPE_STRING, false),
+                Column::new(
+                    "resource_attributes_json",
+                    ColumnType::COLUMN_TYPE_STRING,
+                    false,
+                ),
+            ],
+            "timestamp_ms",
+        );
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let undeclared = open_ns(
+            "same_columns_without_policy",
+            with_implicit_seq(schema.clone()),
+            Some(dir.join("same_columns_without_policy")),
+            Arc::clone(&catalog),
+        );
+        assert!(!undeclared
+            .segment_index_config()
+            .indexes
+            .iter()
+            .any(|index| {
+                matches!(
+                    index,
+                    crate::store::segment_index::IndexSpec::AdaptiveGroupExtrema { .. }
+                )
+            }));
+
+        let config = crate::store::group_extrema::GroupExtremaConfig::new(
+            "service",
+            "resource_attributes_json",
+            "job_id",
+            "timestamp_ms",
+        );
+        let declared = open_ns(
+            "declared_policy",
+            with_implicit_seq(schema.with_grouped_extrema(config)),
+            Some(dir.join("declared_policy")),
+            catalog,
+        );
+        assert!(declared.segment_index_config().indexes.iter().any(|index| {
+            matches!(
+                index,
+                crate::store::segment_index::IndexSpec::AdaptiveGroupExtrema { config }
+                    if config.filter_column == "service"
+                        && config.json_column == "resource_attributes_json"
+                        && config.json_key == "job_id"
+                        && config.extrema_column == "timestamp_ms"
             )
         }));
         std::fs::remove_dir_all(dir).ok();

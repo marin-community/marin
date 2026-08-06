@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
+use crate::store::group_extrema::GroupExtremaConfig;
 use crate::store::ipc::encode_ipc;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{schema_to_arrow, Column, CoveringProjection, Schema};
@@ -681,6 +682,12 @@ fn telemetry_schema() -> Schema {
             "resource_attributes_json",
             "cluster",
         ],
+    ))
+    .with_grouped_extrema(GroupExtremaConfig::new(
+        "service",
+        "resource_attributes_json",
+        "job_id",
+        "timestamp_ms",
     ))
 }
 

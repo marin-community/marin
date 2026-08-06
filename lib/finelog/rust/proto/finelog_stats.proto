@@ -65,6 +65,16 @@ message CoveringProjection {
   repeated string columns = 4;
 }
 
+// An exact, bounded per-segment rollup for a filtered JSON-derived dimension.
+// The section is omitted when its group cardinality exceeds the server's
+// adaptive budget; queries then scan only those uncovered segments.
+message GroupedExtrema {
+  string filter_column = 1;
+  string group_json_column = 2;
+  string group_json_key = 3;
+  string extrema_column = 4;
+}
+
 message Schema {
   repeated Column columns = 1;
 
@@ -77,6 +87,11 @@ message Schema {
   // Independent named projections. Adding one is monotonic on re-register;
   // changing an existing name's definition is a schema conflict.
   repeated CoveringProjection projections = 3;
+
+  // Independent grouped-extrema rollups. Adding one is monotonic on
+  // re-register. Finelog interprets only the declared column roles; producers
+  // own their semantic meaning.
+  repeated GroupedExtrema grouped_extrema = 4;
 }
 
 // Write batches are Arrow IPC RecordBatches on the wire — columnar, with

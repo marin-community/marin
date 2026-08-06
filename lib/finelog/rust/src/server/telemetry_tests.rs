@@ -192,6 +192,12 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     );
     assert_eq!(schema.projections.len(), 1);
     assert_eq!(schema.projections[0].name, "training-status");
+    assert_eq!(schema.grouped_extrema.len(), 1);
+    let grouped = &schema.grouped_extrema[0];
+    assert_eq!(grouped.filter_column, "service");
+    assert_eq!(grouped.json_column, "resource_attributes_json");
+    assert_eq!(grouped.json_key, "job_id");
+    assert_eq!(grouped.extrema_column, "timestamp_ms");
 }
 
 #[tokio::test]

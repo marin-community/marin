@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::store::exact::{
     self, ExactColumn, ExactIndexConfig, ExactSection, ProjectionDescriptor,
 };
+use crate::store::group_extrema::{self, GroupExtremaConfig, GroupExtremaSection};
 use crate::store::index_bundle::{self, Exactness, SectionInput, SectionKind, SegmentBinding};
 use crate::store::schema::CoveringProjection;
 use crate::store::segment::{segment_id, segment_id_and_row_group_rows};
@@ -20,6 +21,7 @@ const TRIGRAM_METHOD_VERSION: u8 = 1;
 const EXACT_POSTINGS_METHOD_VERSION: u8 = 1;
 const VALUE_COUNTS_METHOD_VERSION: u8 = 1;
 const PROJECTION_METHOD_VERSION: u8 = 1;
+const GROUP_EXTREMA_METHOD_VERSION: u8 = 1;
 pub const SOURCE_ROW_OFFSET_IDENTITY: &str = "source_segment_row_offset";
 
 /// Complete secondary-index policy for a namespace segment.
@@ -37,6 +39,7 @@ pub enum IndexSpec {
     ExactPostings { column: String, values: Vec<String> },
     ValueCounts { column: String },
     AdaptiveValueCounts { column: String },
+    AdaptiveGroupExtrema { config: GroupExtremaConfig },
     CoveringProjection { projection: CoveringProjection },
 }
 
@@ -106,6 +109,18 @@ impl SegmentIndexConfig {
         self
     }
 
+    pub fn with_adaptive_group_extrema(
+        mut self,
+        configs: impl IntoIterator<Item = GroupExtremaConfig>,
+    ) -> Self {
+        self.indexes.extend(
+            configs
+                .into_iter()
+                .map(|config| IndexSpec::AdaptiveGroupExtrema { config }),
+        );
+        self
+    }
+
     /// Columns a one-pass backfill must read from the source segment.
     pub fn input_columns(&self) -> Vec<&str> {
         let mut columns: BTreeSet<&str> = BTreeSet::new();
@@ -116,6 +131,11 @@ impl SegmentIndexConfig {
                 | IndexSpec::ValueCounts { column }
                 | IndexSpec::AdaptiveValueCounts { column } => {
                     columns.insert(column.as_str());
+                }
+                IndexSpec::AdaptiveGroupExtrema { config } => {
+                    columns.insert(config.filter_column.as_str());
+                    columns.insert(config.json_column.as_str());
+                    columns.insert(config.extrema_column.as_str());
                 }
                 IndexSpec::CoveringProjection { projection } => {
                     columns.extend(projection.columns.iter().map(String::as_str));
@@ -150,6 +170,7 @@ impl SegmentIndexConfig {
                     false,
                 ),
                 IndexSpec::TrigramBloom { .. } => continue,
+                IndexSpec::AdaptiveGroupExtrema { .. } => continue,
             };
             let config = configs
                 .entry(column.to_string())
@@ -299,6 +320,7 @@ pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIn
                 section_covers_column(&header, "value-counts", column)
             }
             IndexSpec::AdaptiveValueCounts { .. } | IndexSpec::CoveringProjection { .. } => true,
+            IndexSpec::AdaptiveGroupExtrema { .. } => true,
         };
         if !covered {
             return true;
@@ -358,6 +380,7 @@ pub fn write_segment_index(
     })?;
 
     let mut sections = build_trigram_sections(batches, config);
+    append_group_extrema_sections(&mut sections, batches, config);
     let mut referenced_projection_paths = BTreeSet::new();
     let exact_configs = config.exact_configs();
     let exact = exact::build_sidecar(batches, &exact_configs);
@@ -486,6 +509,59 @@ fn build_trigram_sections(
             }
         })
         .collect()
+}
+
+fn group_extrema_section_id(config: &GroupExtremaConfig) -> String {
+    format!(
+        "group-extrema:{}:{}:{}:{}",
+        config.filter_column, config.json_column, config.json_key, config.extrema_column
+    )
+}
+
+fn append_group_extrema_sections(
+    sections: &mut Vec<SectionInput>,
+    batches: &[RecordBatch],
+    config: &SegmentIndexConfig,
+) {
+    for method in &config.indexes {
+        let IndexSpec::AdaptiveGroupExtrema { config } = method else {
+            continue;
+        };
+        let Some(section) = group_extrema::build(batches, config) else {
+            continue;
+        };
+        let Some(payload) = group_extrema::serialize(&section) else {
+            continue;
+        };
+        sections.push(SectionInput {
+            id: group_extrema_section_id(config),
+            kind: SectionKind::GroupExtrema,
+            method_version: GROUP_EXTREMA_METHOD_VERSION,
+            exactness: Exactness::ExactAggregate,
+            coverage: serde_json::to_vec(config)
+                .expect("group-extrema coverage serialization never fails"),
+            payload,
+        });
+    }
+}
+
+pub fn parse_group_extrema_config(bytes: &[u8]) -> Option<GroupExtremaConfig> {
+    serde_json::from_slice(bytes).ok()
+}
+
+pub fn read_group_extrema_section(
+    bundle_path: &Path,
+    header: &index_bundle::BundleHeader,
+    config: &GroupExtremaConfig,
+) -> Option<GroupExtremaSection> {
+    let id = group_extrema_section_id(config);
+    let section = header.section(&id)?;
+    if section.kind != SectionKind::GroupExtrema
+        || parse_group_extrema_config(&section.coverage).as_ref() != Some(config)
+    {
+        return None;
+    }
+    group_extrema::parse(&index_bundle::read_section(bundle_path, header, &id)?)
 }
 
 fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSection) {

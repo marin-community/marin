@@ -26,6 +26,7 @@ from finelog.schema import (
     MAP_STRING_STRING,
     Column,
     CoveringProjection,
+    GroupedExtrema,
     Schema,
     schema_from_proto,
     schema_to_arrow,
@@ -866,6 +867,27 @@ def test_covering_projections_round_trip_through_proto():
                 predicate_column="name",
                 predicate_values=("phase", "step"),
                 columns=("name", "value"),
+            ),
+        ),
+    )
+
+    assert schema_from_proto(schema_to_proto(schema)) == schema
+
+
+def test_grouped_extrema_round_trip_through_proto():
+    schema = Schema(
+        columns=(
+            Column(name="timestamp", type=stats_pb2.COLUMN_TYPE_INT64, nullable=False),
+            Column(name="scope", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+            Column(name="labels", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        ),
+        key_column="timestamp",
+        grouped_extrema=(
+            GroupedExtrema(
+                filter_column="scope",
+                group_json_column="labels",
+                group_json_key="identity",
+                extrema_column="timestamp",
             ),
         ),
     )
