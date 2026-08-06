@@ -379,10 +379,24 @@ class ZephyrCoordinator:
         Args:
             worker_id: Stable identity of the worker slot.
             worker_handle: Actor handle for the current process.
-            incarnation: Opaque per-process token, minted once at worker startup.
+            incarnation: Per-process token minted once at worker startup, ordered so a
+                superseded attempt sorts below the incarnation that replaced it.
         """
         with self._lock:
             known = self._worker_incarnations.get(worker_id)
+            # Fence superseded attempts. A register_worker RPC that timed out on a dead
+            # worker can still be delivered after its replacement has registered; taking
+            # it as the current reconstruction would requeue shards the replacement is
+            # actively running and point the coordinator at the dead handle.
+            if known is not None and incarnation < known:
+                logger.info(
+                    "Worker %s: ignoring superseded registration (incarnation %s < current %s)",
+                    worker_id,
+                    incarnation,
+                    known,
+                )
+                return tuple(self._memory_tables.values())
+
             self._worker_handles[worker_id] = worker_handle
             self._worker_incarnations[worker_id] = incarnation
             self._worker_states[worker_id] = WorkerState.ACTIVE

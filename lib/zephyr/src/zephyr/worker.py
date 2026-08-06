@@ -57,10 +57,19 @@ class ZephyrWorker:
         self._coordinator = coordinator_handle
         self._stage_runner_factory = stage_runner_factory
         self._shutdown_event = threading.Event()
-        # Identifies this worker PROCESS. A worker reconstructed after preemption reuses
-        # its worker_id but mints a new incarnation, which is what lets the coordinator
-        # requeue the dead process's in-flight tasks without touching a live worker's.
-        self._incarnation = uuid.uuid4().hex
+        # Identifies this worker PROCESS, and orders it against earlier ones. A worker
+        # reconstructed after preemption reuses its worker_id but mints a newer
+        # incarnation, which is what lets the coordinator requeue the dead process's
+        # in-flight tasks without touching a live worker's.
+        #
+        # The leading timestamp makes incarnations comparable, so the coordinator can
+        # ignore a registration that a newer process has already superseded -- a
+        # timed-out register_worker RPC from a dead process can still be delivered after
+        # its replacement has registered. Wall clock rather than monotonic, because the
+        # replacement is a different process (often on a different host); NTP skew is
+        # milliseconds while reconstruction takes seconds, and the uuid suffix keeps
+        # incarnations distinct if two ever share a nanosecond.
+        self._incarnation = f"{time.time_ns():020d}-{uuid.uuid4().hex[:8]}"
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, CounterEntry] = {}
         # Runners and sub-IDs for currently active slots — written by _stage_manager,

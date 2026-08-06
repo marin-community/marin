@@ -1108,7 +1108,7 @@ def test_worker_reregistration_does_not_count_toward_shard_failures(coordinator)
         cost=_TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock(), "inc-0")
+    coordinator.register_worker("worker-0", MagicMock(), "inc-00000")
 
     for reconstruction in range(1, MAX_SHARD_FAILURES * 5 + 1):
         status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
@@ -1116,7 +1116,7 @@ def test_worker_reregistration_does_not_count_toward_shard_failures(coordinator)
         # Simulate preemption + Iris reconstruction: a NEW worker process reuses the
         # worker_id while a task is still recorded in-flight against the dead one, so it
         # reports a fresh incarnation.
-        coordinator.register_worker("worker-0", MagicMock(), f"inc-{reconstruction}")
+        coordinator.register_worker("worker-0", MagicMock(), f"inc-{reconstruction:05d}")
         assert 0 not in run.in_flight
         assert run.fatal_error is None
 
@@ -1791,12 +1791,12 @@ def test_same_incarnation_reregistering_does_not_requeue_running_work(coordinato
     """
     task = _one_task()
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock(), "inc-A")
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0001")
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK and work is not None
     assert task.shard_idx in run.in_flight
 
-    coordinator.register_worker("worker-0", MagicMock(), "inc-A")
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0001")
 
     assert task.shard_idx in run.in_flight, "same incarnation must leave in-flight work alone"
     assert not run.task_queue, "the shard must not have been requeued"
@@ -1811,22 +1811,52 @@ def test_new_incarnation_requeues_the_dead_process_in_flight_work(coordinator):
     """
     task = _one_task()
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock(), "inc-A")
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0001")
     coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert task.shard_idx in run.in_flight
 
-    coordinator.register_worker("worker-0", MagicMock(), "inc-B")
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0002")
 
     assert task.shard_idx not in run.in_flight, "the dead process's shard must be released"
     assert [t.shard_idx for t in run.task_queue] == [task.shard_idx], "and requeued for dispatch"
 
 
-def test_deregistration_lets_a_reused_worker_id_count_as_first_contact(coordinator):
-    """After a clean exit the slot is free, so a later process is not 'reconstructed'."""
-    start_test_stage(coordinator, [_one_task()])
-    coordinator.register_worker("worker-0", MagicMock(), "inc-A")
+def test_registration_after_deregistration_does_not_requeue(coordinator):
+    """A clean exit frees the slot, so a later process must not be treated as a reconstruction.
+
+    Asserted through dispatch rather than internal bookkeeping: the newly registered
+    process pulls the task and nothing is requeued behind it.
+    """
+    task = _one_task()
+    run = start_test_stage(coordinator, [task])
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0001")
     coordinator.deregister_worker("worker-0")
 
-    coordinator.register_worker("worker-0", MagicMock(), "inc-B")
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0002")
+    status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
 
-    assert coordinator._worker_incarnations["worker-0"] == "inc-B"
+    assert status == PullStatus.RUN_TASK and work is not None
+    assert task.shard_idx in run.in_flight
+    assert not run.task_queue, "nothing requeued for a slot that exited cleanly"
+
+
+def test_superseded_registration_cannot_requeue_the_replacement_work(coordinator):
+    """A timed-out RPC from a dead process can arrive after its replacement registered.
+
+    Treating that stale attempt as the current reconstruction would requeue shards the
+    replacement is actively running, and point the coordinator at the dead handle.
+    """
+    task = _one_task()
+    run = start_test_stage(coordinator, [task])
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0001")  # dead process
+    live_handle = MagicMock()
+    coordinator.register_worker("worker-0", live_handle, "inc-0002")  # replacement
+    coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert task.shard_idx in run.in_flight
+
+    # The dead process's registration finally lands.
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0001")
+
+    assert task.shard_idx in run.in_flight, "the replacement's in-flight shard must survive"
+    assert not run.task_queue, "a superseded registration must not requeue"
+    assert coordinator._worker_handles["worker-0"] is live_handle, "must not revert to the dead handle"
