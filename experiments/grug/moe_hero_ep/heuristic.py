@@ -7,6 +7,10 @@
 Adam learning rates, epsilon, and beta2 from the token budget and batch size. ``build_hero_configs``
 pairs it with the fixed hero model spec so a launcher gets both configs back from a single
 ``(num_train_steps, batch_size)`` call, keeping the hero self-contained.
+
+The hero model is d6144 with 48 layers, 128 routed experts at top-4, and two shared experts:
+359.6 B total parameters and 20.9 B active per token. The launcher sweeps expert count, expert
+width, routed top-k, and capacity factor from this spec.
 """
 
 import math
@@ -73,31 +77,38 @@ class MoeHeuristic:
         )
 
 
+HERO_MODEL = GrugModelConfig(
+    vocab_size=128_256,
+    hidden_dim=6144,
+    intermediate_dim=3072,
+    shared_expert_intermediate_dim=6144 // 2,
+    num_shared_experts=2,
+    num_experts=128,
+    num_experts_per_token=4,
+    num_layers=48,
+    num_heads=48,
+    num_kv_heads=12,
+    local_kv_heads=12,
+    global_kv_heads=6,
+    head_dim=128,
+    max_seq_len=4096,
+    sliding_window=512,
+    global_every=6,
+    capacity_factor=1.0,
+    initializer_std=0.5 / math.sqrt(6144),
+    qk_mult=1.3,
+    sconv=True,
+    attention_implementation="gpu_fa4_cute",
+    moe_implementation="fixed_all_to_all",
+    expert_chunks=1,
+    report_capacity_overflow=True,
+    rope_fused=True,
+)
+
+
 def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
     """The fixed EP64 hero model plus its compute-scaled MuonH optimizer."""
-    model = GrugModelConfig(
-        vocab_size=128_256,
-        hidden_dim=5120,
-        intermediate_dim=1280,
-        shared_expert_intermediate_dim=5120,
-        num_shared_experts=1,
-        num_experts=256,
-        num_experts_per_token=8,
-        num_layers=48,
-        num_heads=40,
-        num_kv_heads=10,
-        head_dim=128,
-        max_seq_len=4096,
-        sliding_window=2048,
-        global_every=4,
-        capacity_factor=1.0,
-        initializer_std=0.5 / math.sqrt(5120),
-        qk_mult=1.3,
-        attention_implementation="gpu_fa4_cute",
-        moe_implementation="fixed_all_to_all",
-        expert_chunks=1,
-        report_capacity_overflow=True,
-    )
+    model = HERO_MODEL
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_train_steps,
         batch_size=batch_size,
