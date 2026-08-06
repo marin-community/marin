@@ -1,11 +1,29 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Step 3: route each fetched PDF to OCR or to text extraction, with the FinePDFs XGBoost model.
+"""Step 3: route each fetched PDF to the VLM or to Docling, on measured extraction agreement.
 
 Two steps. :func:`model_step` stages the trained booster into the marin prefix once, pinned by
 content hash so a run's predictions are attributable to an exact set of weights. :func:`classify_step`
 maps over the fetch step's Parquet shards and scores every PDF.
+
+**What this model is asked, and why it is not the FinePDFs one.** This step previously ran the
+FinePDFs XGBoost router, which is trained to answer *is this a scan?* The decision actually being
+made is different: *will Docling read this document the way the VLM would?* A born-digital paper
+with a broken ToUnicode CMap, an invisible OCR layer over a bitmap, a two-column layout, or a page
+of equations has healthy "not a scan" statistics and extracts badly. Measured against VLM output on
+a 100,000-document sample, the FinePDFs rule sent 31.4% of documents to the VLM while leaving 28.7%
+of the whole corpus on the Docling route with materially degraded text, catching only 42% of the
+documents Docling cannot read. The booster here is trained directly on Docling-versus-VLM agreement
+using :mod:`~experiments.build_pdf_source.quality.route_features`; at a matched budget it removes
+about a fifth of that silent loss, and most of the gain comes from the features rather than from
+retraining -- see ``docs/reports/pdf-extraction-routing.md``.
+
+**The operating point is 50% of documents to the VLM, and it was chosen from the cost/quality
+frontier rather than inherited.** Below ~35% nearly every additional document sent to the VLM is one
+Docling would have botched, so stopping earlier leaves cheap quality unbought; past ~50% the
+marginal document costs more than two VLM runs per document actually rescued. See
+:data:`DOCLING_CONFIDENCE_THRESHOLD`.
 
 The output is a routing table, not a copy of the corpus: one narrow row per PDF keyed by
 ``(warc_filename, warc_record_offset)``, which is unique where ``content_digest`` is not (the crawl
@@ -13,19 +31,17 @@ holds ~9.8% exact-duplicate PDFs). At ~30 MB for a 10% sample it fits in a task'
 extraction (#7618) can broadcast it and join in a map, rather than paying to have 411 GiB of PDF
 bytes copied forward through this step.
 
-Inference is batched. The upstream implementation built a one-row ``pandas.DataFrame`` per document
-and called ``predict_proba`` on it; here a Parquet row group's documents are scored in one
-:meth:`xgboost.Booster.inplace_predict` over a float32 matrix, which also drops pandas and the
-scikit-learn ``XGBClassifier`` wrapper from the hot path. The per-document cost that remains is
-PyMuPDF parsing -- see :mod:`experiments.build_pdf_source.ocr_features` for what was removed there.
+Inference is batched: a Parquet row group's documents are scored in one
+:meth:`xgboost.Booster.inplace_predict` over a float32 matrix. The per-document cost that remains is
+PyMuPDF parsing, about 35 ms per page against Docling's ~1 s, so the router stays far cheaper than
+the extraction it decides to skip.
 
-PyMuPDF, XGBoost and :mod:`~experiments.build_pdf_source.ocr_features` are imported inside the
-functions that use them, not at module scope. They live in marin-core's ``datakit`` extra, which the
-workers get via ``pip_dependency_groups`` but the entrypoint job does not: its ``uv sync`` carries no
-extras. Since :mod:`~experiments.build_pdf_source.pipeline` imports this module to build its steps,
-a module-scope ``import pymupdf`` here kills the driver before it submits anything. This mirrors how
-:mod:`~experiments.build_pdf_source.fetch` defers ``warcio``. The booster's feature contract lives in
-:mod:`~experiments.build_pdf_source.ocr_feature_names`, which is pure data and always importable.
+PyMuPDF, XGBoost and :mod:`~experiments.build_pdf_source.quality.route_features` are imported inside
+the functions that use them, not at module scope. They live in marin-core's ``datakit`` extra, which
+the workers get via ``pip_dependency_groups`` but the entrypoint job does not: its ``uv sync`` carries
+no extras. Since :mod:`~experiments.build_pdf_source.pipeline` imports this module to build its
+steps, a module-scope ``import pymupdf`` here kills the driver before it submits anything. This
+mirrors how :mod:`~experiments.build_pdf_source.fetch` defers ``warcio``.
 """
 
 import hashlib
@@ -47,32 +63,32 @@ from zephyr.execution import ZephyrContext
 from zephyr.runners import SubprocessRunner
 
 from experiments.build_pdf_source.common import (
-    DOWNLOAD_CHUNK_BYTES,
-    REQUEST_TIMEOUT,
-    USER_AGENT,
     OcrModelData,
     PdfClassificationData,
     PdfSourceData,
-    session,
 )
-from experiments.build_pdf_source.ocr_feature_names import FEATURE_NAMES
 
 logger = logging.getLogger(__name__)
 
-# The trained OCR router from https://github.com/huggingface/finepdfs, pinned to the commit the
-# weights were read from. GitHub serves Git-LFS content from the ``media.`` host; the plain
-# ``raw.`` host returns the 131-byte pointer file instead.
-OCR_MODEL_REPO = "huggingface/finepdfs"
-OCR_MODEL_REVISION = "15aa381fae828c8acd6efa058fa0b41d2c602ede"
-OCR_MODEL_PATH_IN_REPO = "models/xgb_ocr_classifier/xgb_classifier.ubj"
-OCR_MODEL_SHA256 = "b44c818261a246de84c35d3ba80b6e8d5f17f1ce376adb25922a80c9a2415227"
-OCR_MODEL_FILENAME = "xgb_classifier.ubj"
+# The routing booster, trained by :mod:`experiments.build_pdf_source.quality.fit_route_booster` on
+# the 100k oracle sample and staged content-addressed. Pinned by hash rather than by path so a run's
+# predictions are attributable to exact weights; regenerate with that module, not by editing this.
+ROUTE_MODEL_SOURCE = "s3://marin-us-east-02a/marin/data/datakit/model/pdf_route_classifier_00757366/route_classifier.ubj"
+ROUTE_MODEL_SHA256 = "007573661947c3d3ff33fcc76f918382791cb4bed036cb1f25163b92aa3eecb8"
+ROUTE_MODEL_FILENAME = "route_classifier.ubj"
 
-# FinePDFs' routing rule. A document goes to OCR when the model is at least this confident, or when
-# any sampled page produced a replacement character -- garbled text means the embedded text layer
-# is unusable however confident the model is that one exists. See the upstream training notebook
-# (``models/model_prep_code/ocr_xgb_classifier_train``) for the threshold's derivation.
-OCR_PROBABILITY_THRESHOLD = 0.2
+# The booster predicts P(Docling reads this document as well as the VLM does). A document goes to
+# the VLM below this confidence. The value is the 50th percentile of the model's own output on the
+# scoring corpus -- calibrated, not tuned: the score is a probability of a *proxy* label (bigram
+# recall against VLM text), so only its rank carries meaning and the threshold is a quantile.
+# Recalibrating for a different budget on a new corpus is therefore a quantile, not a retrain.
+#
+# 50% of documents to the VLM sits at the frontier's knee (45.5%). Held out on documents from
+# domains the model never saw, this point catches 79% of the documents Docling reads badly and
+# leaves 11.4% of the corpus mis-routed to Docling, against 30.3% for the FinePDFs rule at its own
+# budget and 26.8% for that rule rethresholded to spend the same 50%.
+DOCLING_CONFIDENCE_THRESHOLD = 0.542031
+TARGET_VLM_FRACTION = 0.50
 
 _SOURCE_COLUMNS = ["pdf", "warc_filename", "warc_record_offset", "content_digest", "url"]
 # What an extraction step reads back out of the routing table -- see :func:`routing_keys`.
@@ -85,12 +101,15 @@ _OUTPUT_SCHEMA = pa.schema(
         pa.field("content_digest", pa.string(), nullable=False),
         pa.field("url", pa.string(), nullable=False),
         pa.field("needs_ocr", pa.bool_(), nullable=True),
-        pa.field("ocr_prob", pa.float32(), nullable=True),
+        # P(Docling matches the VLM); ``needs_ocr`` is this against DOCLING_CONFIDENCE_THRESHOLD.
+        pa.field("docling_confidence", pa.float32(), nullable=True),
         pa.field("num_pages", pa.int32(), nullable=True),
         pa.field("num_pages_sampled", pa.int32(), nullable=True),
-        pa.field("garbled_text_ratio", pa.float32(), nullable=True),
-        pa.field("is_form", pa.bool_(), nullable=True),
-        pa.field("is_scanner_produced", pa.bool_(), nullable=True),
+        # Kept on the row because they are the signals a human reaches for first when auditing a
+        # routing decision, and reading them back out of the model is not possible.
+        pa.field("replacement_ratio", pa.float32(), nullable=True),
+        pa.field("invisible_char_ratio", pa.float32(), nullable=True),
+        pa.field("column_count", pa.float32(), nullable=True),
         pa.field("pdf_bytes", pa.int64(), nullable=False),
         # Null unless the PDF could not be read; the routing columns are null when it is set.
         pa.field("classification_error", pa.string(), nullable=True),
@@ -107,26 +126,17 @@ _MAX_WORKERS = 28
 _HEARTBEAT_TIMEOUT = 15 * 60
 
 
-def ocr_model_url() -> str:
-    """Return the LFS media URL for the pinned booster."""
-    return f"https://media.githubusercontent.com/media/{OCR_MODEL_REPO}/{OCR_MODEL_REVISION}/{OCR_MODEL_PATH_IN_REPO}"
-
-
-def stage_ocr_model(output_path: str) -> OcrModelData:
-    """Copy the pinned booster into the marin prefix, refusing anything that fails its hash."""
-    url = ocr_model_url()
-    with session().get(url, headers={"user-agent": USER_AGENT}, stream=True, timeout=REQUEST_TIMEOUT) as response:
-        response.raise_for_status()
-        payload = b"".join(response.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES))
-
+def stage_route_model(output_path: str) -> OcrModelData:
+    """Copy the pinned booster into the step's output prefix, refusing anything that fails its hash."""
+    payload = StoragePath(ROUTE_MODEL_SOURCE).read_bytes()
     digest = hashlib.sha256(payload).hexdigest()
-    if digest != OCR_MODEL_SHA256:
-        raise ValueError(f"{url} hashed to {digest}, expected {OCR_MODEL_SHA256}")
+    if digest != ROUTE_MODEL_SHA256:
+        raise ValueError(f"{ROUTE_MODEL_SOURCE} hashed to {digest}, expected {ROUTE_MODEL_SHA256}")
 
-    model_path = prefix_join(output_path, OCR_MODEL_FILENAME)
+    model_path = prefix_join(output_path, ROUTE_MODEL_FILENAME)
     StoragePath(model_path).write_bytes(payload)
-    logger.info("Staged OCR router (%d bytes) at %s", len(payload), model_path)
-    return OcrModelData(model_path=model_path, revision=OCR_MODEL_REVISION, sha256=digest)
+    logger.info("Staged routing booster (%d bytes) at %s", len(payload), model_path)
+    return OcrModelData(model_path=model_path, revision=ROUTE_MODEL_SHA256[:12], sha256=digest)
 
 
 @cache
@@ -137,21 +147,39 @@ def load_booster(model_path: str) -> "xgboost.Booster":  # noqa: F821
     the inference path -- constructing the sklearn wrapper imports it. One thread is right because
     Zephyr costs each map task at one CPU and runs several per worker; the default would have every
     task claim every core.
+
+    The booster's own ``feature_names`` are checked against the feature module, because a booster
+    whose feature order has moved would score confident nonsense rather than fail.
     """
-    import pymupdf  # noqa: PLC0415
     import xgboost as xgb  # noqa: PLC0415
+
+    from experiments.build_pdf_source.quality.route_feature_names import FEATURE_NAMES  # noqa: PLC0415
 
     booster = xgb.Booster()
     booster.load_model(bytearray(StoragePath(model_path).read_bytes()))
     booster.set_param({"nthread": 1})
 
-    if tuple(booster.feature_names or ()) != FEATURE_NAMES:
+    trained_on = tuple(booster.feature_names or ())
+    if trained_on != tuple(FEATURE_NAMES):
+        missing = set(trained_on) ^ set(FEATURE_NAMES)
         raise ValueError(
-            f"{model_path} expects {len(booster.feature_names or ())} features in a different order "
-            f"than ocr_features.FEATURE_NAMES provides ({len(FEATURE_NAMES)})"
+            f"{model_path} expects {len(trained_on)} features in a different order or set than "
+            f"route_feature_names.FEATURE_NAMES provides ({len(FEATURE_NAMES)}); differing: {sorted(missing)[:8]}"
         )
-    pymupdf.TOOLS.mupdf_display_errors(False)
     return booster
+
+
+@cache
+def _silence_mupdf() -> None:
+    """Stop MuPDF writing a diagnostic to stderr for every damaged page.
+
+    Called before any document is opened rather than alongside the booster load, which happens
+    after a whole batch has already been parsed: damaged PDFs are ordinary input here, and at
+    corpus scale their per-page complaints are the bulk of the log.
+    """
+    import pymupdf  # noqa: PLC0415
+
+    pymupdf.TOOLS.mupdf_display_errors(False)
 
 
 def _document_seed(content_digest: str, warc_filename: str, warc_record_offset: int) -> int:
@@ -164,17 +192,18 @@ def _document_seed(content_digest: str, warc_filename: str, warc_record_offset: 
     return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big")
 
 
-def _classify_row(row: dict) -> tuple[dict, "DocumentFeatures | None"]:  # noqa: F821
-    """Return the output row for one PDF, and its features when they could be extracted.
+def _classify_row(row: dict) -> tuple[dict, "DocumentSignals | None"]:  # noqa: F821
+    """Return the output row for one PDF, and its signals when they could be extracted.
 
     Every column is present on every row, so an unreadable PDF is a fully-formed row whose routing
-    columns are null and whose ``classification_error`` says why. ``ocr_prob`` and ``needs_ocr`` stay
-    null until :func:`classify_batch` scores the batch.
+    columns are null and whose ``classification_error`` says why. ``docling_confidence`` and
+    ``needs_ocr`` stay null until :func:`classify_batch` scores the batch.
     """
     import pymupdf  # noqa: PLC0415
 
-    from experiments.build_pdf_source.ocr_features import CorruptPdf, document_features  # noqa: PLC0415
+    from experiments.build_pdf_source.quality.route_features import CorruptPdf, signals_for_routing  # noqa: PLC0415
 
+    _silence_mupdf()
     output = {
         "warc_filename": row["warc_filename"],
         "warc_record_offset": row["warc_record_offset"],
@@ -182,17 +211,17 @@ def _classify_row(row: dict) -> tuple[dict, "DocumentFeatures | None"]:  # noqa:
         "url": row["url"],
         "pdf_bytes": len(row["pdf"]),
         "needs_ocr": None,
-        "ocr_prob": None,
+        "docling_confidence": None,
         "num_pages": None,
         "num_pages_sampled": None,
-        "garbled_text_ratio": None,
-        "is_form": None,
-        "is_scanner_produced": None,
+        "replacement_ratio": None,
+        "invisible_char_ratio": None,
+        "column_count": None,
         "classification_error": None,
     }
     try:
         with pymupdf.open(stream=row["pdf"], filetype="pdf") as doc:
-            features = document_features(
+            signals = signals_for_routing(
                 doc,
                 seed=_document_seed(row["content_digest"], row["warc_filename"], row["warc_record_offset"]),
             )
@@ -209,37 +238,38 @@ def _classify_row(row: dict) -> tuple[dict, "DocumentFeatures | None"]:  # noqa:
     return (
         output
         | {
-            "num_pages": features.num_pages,
-            "num_pages_sampled": features.num_pages_successfully_sampled,
-            "garbled_text_ratio": features.garbled_text_ratio,
-            "is_form": features.is_form,
-            "is_scanner_produced": features.creator_or_producer_is_known_scanner,
+            "num_pages": signals.page_count,
+            "num_pages_sampled": signals.pages_sampled,
+            "replacement_ratio": signals.maximum["replacement_ratio"],
+            "invisible_char_ratio": signals.maximum["invisible_char_ratio"],
+            "column_count": signals.maximum["column_count"],
         },
-        features,
+        signals,
     )
 
 
 def classify_batch(batch: pa.RecordBatch, model_path: str) -> Iterator[dict]:
-    """Score one Parquet row group's PDFs, extracting features per document but predicting once."""
+    """Score one Parquet row group's PDFs, extracting signals per document but predicting once."""
+    from experiments.build_pdf_source.quality.route_feature_names import FEATURE_NAMES  # noqa: PLC0415
+
     rows: list[dict] = []
-    matrix: list[np.ndarray] = []
+    matrix: list[list[float]] = []
     scored: list[int] = []
 
     for row in batch.to_pylist():
-        output, features = _classify_row(row)
-        if features is not None:
+        output, signals = _classify_row(row)
+        if signals is not None:
+            vector = signals.feature_vector()
             scored.append(len(rows))
-            matrix.append(features.vector())
+            matrix.append([vector[name] for name in FEATURE_NAMES])
         rows.append(output)
 
     if matrix:
         booster = load_booster(model_path)
-        probabilities = booster.inplace_predict(np.vstack(matrix), validate_features=False)
-        for index, probability in zip(scored, probabilities.tolist(), strict=True):
-            rows[index]["ocr_prob"] = probability
-            rows[index]["needs_ocr"] = (
-                probability >= OCR_PROBABILITY_THRESHOLD or rows[index]["garbled_text_ratio"] > 0.0
-            )
+        confidences = booster.inplace_predict(np.asarray(matrix, dtype=np.float32), validate_features=False)
+        for index, confidence in zip(scored, confidences.tolist(), strict=True):
+            rows[index]["docling_confidence"] = confidence
+            rows[index]["needs_ocr"] = confidence < DOCLING_CONFIDENCE_THRESHOLD
 
     counters.pipeline.update_counter("focus_crawl_pdf/classified", len(scored))
     counters.pipeline.update_counter("focus_crawl_pdf/needs_ocr", sum(1 for row in rows if row.get("needs_ocr")))
@@ -250,7 +280,7 @@ def classify_pdfs(output_path: str, source_output_path: str, model_output_path: 
     """Score every fetched PDF and write the routing table to ``output_path``."""
     source = read_artifact(source_output_path, PdfSourceData)
     model = read_artifact(model_output_path, OcrModelData)
-    logger.info("Classifying %s with %s (%s)", source.main_output_dir, model.model_path, model.revision[:8])
+    logger.info("Classifying %s with %s (%s)", source.main_output_dir, model.model_path, model.revision)
 
     output_dir = prefix_join(output_path, "outputs/main")
     pipeline = (
@@ -282,7 +312,7 @@ def routing_keys(classification_dir: str, needs_ocr: bool) -> frozenset[tuple[st
     into two datasets.
 
     ``needs_ocr`` is null for documents the classifier could not read at all, and those are on
-    neither route: a PDF that PyMuPDF could not open to extract features will not open for
+    neither route: a PDF that PyMuPDF could not open to extract signals will not open for
     extraction and will not render either.
     """
     filesystem, path = url_to_fs(classification_dir)
@@ -303,28 +333,23 @@ def routing_keys(classification_dir: str, needs_ocr: bool) -> frozenset[tuple[st
 
 
 def model_step() -> StepSpec:
-    """Build the step that stages the FinePDFs OCR router."""
+    """Build the step that stages the PDF routing booster."""
     return StepSpec(
-        name="data/datakit/model/finepdfs_xgb_ocr_classifier",
-        hash_attrs={
-            "repo": OCR_MODEL_REPO,
-            "revision": OCR_MODEL_REVISION,
-            "path_in_repo": OCR_MODEL_PATH_IN_REPO,
-            "sha256": OCR_MODEL_SHA256,
-        },
-        fn=remote(stage_ocr_model, resources=_MODEL_RESOURCES, pip_dependency_groups=["datakit"]),
+        name="data/datakit/model/pdf_route_classifier",
+        hash_attrs={"source": ROUTE_MODEL_SOURCE, "sha256": ROUTE_MODEL_SHA256},
+        fn=remote(stage_route_model, resources=_MODEL_RESOURCES, pip_dependency_groups=["datakit"]),
     )
 
 
 def classify_step(source: StepSpec, model: StepSpec) -> StepSpec:
-    """Build the OCR routing step for a fetched PDF source and a staged model."""
+    """Build the routing step for a fetched PDF source and a staged model."""
     return StepSpec(
         name="data/datakit/classify/common_crawl_focus_2026_22_pdf_ocr",
         deps=[source, model],
         hash_attrs={
-            "ocr_probability_threshold": OCR_PROBABILITY_THRESHOLD,
-            "feature_count": len(FEATURE_NAMES),
-            "schema_version": 1,
+            "docling_confidence_threshold": DOCLING_CONFIDENCE_THRESHOLD,
+            "model_sha256": ROUTE_MODEL_SHA256,
+            "schema_version": 2,
         },
         fn=remote(
             partial(

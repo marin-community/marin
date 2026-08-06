@@ -71,35 +71,42 @@ EDUCATIONAL_LEVEL = 4  # oracle level (raw score 3) that FineWeb-Edu treats as t
 # rather than imported: importing that module would drag zephyr/fray into this training job.
 MODEL_CALIB = "calib_bme.json"
 
-# fasttext grid, selected on val Spearman. Centred on *low* capacity on purpose: the
-# usual CC-quality recipe (dim 100+, bucket 2M, lr 0.3+) is tuned for millions of
-# documents and simply memorises an 18k-row training split, so the sweep has to reach
-# down to small buckets, few epochs, and unigrams for the baseline to be a fair one.
+# fasttext grid, selected on val Spearman. The useful capacity moves with the size of
+# the training split, so this grid has to be re-centred whenever the corpus changes: on
+# the 18k-row 10k-document sample the standard CC-quality recipe (dim 100, bucket 2M,
+# lr 0.3+, 25 epochs) simply memorised the split and val Spearman fell monotonically in
+# lr and epochs, so the sweep had to reach down to a few epochs and unigrams. The 100k
+# sample gives ~170k training rows and reopens the high end, so the grid spans both
+# regimes and keeps the low end only densely enough to bracket the optimum from below.
 FASTTEXT_DEFAULTS = {
     "dim": 100,
     "minCount": 2,
-    "bucket": 200_000,
+    "bucket": 2_000_000,
     "loss": "softmax",
+    "wordNgrams": 2,
     "thread": 16,
     "verbose": 0,
 }
 FASTTEXT_GRID = (
-    # Few-epoch regime: val Spearman peaks here and falls monotonically as the
-    # classifier is allowed to keep fitting, so the sweep is densest at the low end.
-    {"lr": 0.1, "epoch": 1, "wordNgrams": 2, "bucket": 2_000_000},
-    {"lr": 0.1, "epoch": 2, "wordNgrams": 2, "bucket": 2_000_000},
-    {"lr": 0.1, "epoch": 3, "wordNgrams": 2, "bucket": 2_000_000},
-    {"lr": 0.1, "epoch": 5, "wordNgrams": 2, "bucket": 2_000_000},
-    {"lr": 0.05, "epoch": 5, "wordNgrams": 2, "bucket": 2_000_000},
-    {"lr": 0.05, "epoch": 10, "wordNgrams": 2, "bucket": 2_000_000},
-    {"lr": 0.2, "epoch": 3, "wordNgrams": 2, "bucket": 2_000_000},
-    {"lr": 0.1, "epoch": 5, "wordNgrams": 2},
-    {"lr": 0.05, "epoch": 15, "wordNgrams": 2, "dim": 50},
-    {"lr": 0.1, "epoch": 15, "wordNgrams": 2, "minCount": 5},
-    {"lr": 0.1, "epoch": 3, "wordNgrams": 1},
-    {"lr": 0.1, "epoch": 5, "wordNgrams": 1},
-    {"lr": 0.05, "epoch": 15, "wordNgrams": 1, "dim": 50},
-    {"lr": 0.1, "epoch": 5, "wordNgrams": 2, "bucket": 2_000_000, "loss": "ova"},
+    # Low end, kept so a corpus that still prefers few epochs is not selected at a boundary.
+    {"lr": 0.1, "epoch": 1},
+    {"lr": 0.1, "epoch": 2},
+    {"lr": 0.1, "epoch": 3},
+    {"lr": 0.1, "epoch": 5},
+    # Standard CC-quality territory, which only becomes reachable at this corpus size.
+    {"lr": 0.1, "epoch": 10},
+    {"lr": 0.2, "epoch": 10},
+    {"lr": 0.3, "epoch": 10},
+    {"lr": 0.2, "epoch": 25},
+    {"lr": 0.3, "epoch": 25},
+    {"lr": 0.5, "epoch": 25},
+    {"lr": 0.3, "epoch": 50},
+    # Capacity and representation variants at a mid-range schedule.
+    {"lr": 0.2, "epoch": 25, "dim": 50},
+    {"lr": 0.2, "epoch": 25, "minCount": 5},
+    {"lr": 0.2, "epoch": 25, "bucket": 200_000},
+    {"lr": 0.2, "epoch": 25, "wordNgrams": 1},
+    {"lr": 0.2, "epoch": 25, "loss": "ova"},
 )
 
 
@@ -152,7 +159,7 @@ def split_by_document(rows: dict, seed: int, holdout_frac: float = HOLDOUT_DOC_F
             segments=[rows["segment"][i] for i in idx],
         )
 
-    splits = tuple(build(name) for name in ("train", "val", "holdout"))
+    splits = (build("train"), build("val"), build("holdout"))
     for split in splits:
         logger.info("%s: %d rows / %d docs", split.name, split.n, len(set(split.doc_ids)))
     return splits
@@ -207,12 +214,22 @@ def _fasttext_scores(model, texts: list[str]) -> np.ndarray:
     return out
 
 
-def train_fasttext(train: Split, val: Split, work_dir: str) -> tuple[object, dict]:
-    """Fit the fasttext grid, returning the model with the best val Spearman."""
+def train_fasttext(train: Split, val: Split, work_dir: str, seed: int) -> tuple[object, dict]:
+    """Fit the fasttext grid, returning the model with the best val Spearman.
+
+    The training file is written in shuffled order because fasttext streams it
+    sequentially, once per epoch, on a learning rate that decays to zero -- it
+    never shuffles internally. Label rows arrive grouped by segment, so writing
+    them in their natural order trains the model on every ``begin`` window, then
+    every ``middle``, then every ``end`` at a vanishing learning rate. That alone
+    cost the baseline 0.6 Spearman and drove its ``end`` correlation negative.
+    """
     train_path = os.path.join(work_dir, "train.txt")
+    order = np.random.default_rng(seed).permutation(train.n)
+    levels = train.levels.tolist()
     with open(train_path, "w") as stream:
-        for text, level in zip(train.texts, train.levels.tolist(), strict=True):
-            stream.write(_fasttext_line(text, level) + "\n")
+        for i in order.tolist():
+            stream.write(_fasttext_line(train.texts[i], levels[i]) + "\n")
 
     best_model, best_params, best_rho = None, None, -2.0
     for overrides in FASTTEXT_GRID:
@@ -421,7 +438,7 @@ def main() -> None:
     hp = TrainHParams(seed=args.seed, epochs=args.epochs)
 
     with tempfile.TemporaryDirectory() as work_dir:
-        baseline, baseline_params = train_fasttext(train, val, work_dir)
+        baseline, baseline_params = train_fasttext(train, val, work_dir, args.seed)
     baseline_result = report(
         "fasttext", _fasttext_scores(baseline, train.texts), _fasttext_scores(baseline, holdout.texts), train, holdout
     )

@@ -263,9 +263,17 @@ const META_ORDER = [
   "completion_tokens",
 ];
 
+// Each loadDoc takes the next generation; anything awaiting an older one drops its
+// result instead of painting it. The text pane is written from the fast /api/doc
+// call and the PDF only after a multi-MB fetch plus a pdf.js parse, so without this
+// a quick ←/→ leaves one document's PDF beside another's OCR text.
+let loadGeneration = 0;
+
 async function loadDoc(id) {
+  const generation = ++loadGeneration;
   const res = await fetch("/api/doc/" + id);
   const doc = await res.json();
+  if (generation !== loadGeneration) return;
   state.doc = doc;
   state.openSegment = null;
   el("reasoning").classList.add("hidden");
@@ -293,7 +301,7 @@ async function loadDoc(id) {
 
   renderChips(doc);
   renderPages(doc);
-  await loadPdf(doc.id);
+  await loadPdf(doc.id, generation);
 }
 
 function renderChips(doc) {
@@ -360,7 +368,8 @@ function renderPages(doc) {
   area.scrollTop = 0;
 }
 
-async function loadPdf(id) {
+async function loadPdf(id, generation) {
+  const current = () => generation === loadGeneration;
   state.pdf = null;
   state.pdfPage = 1;
   const canvas = el("pdfCanvas");
@@ -371,6 +380,7 @@ async function loadPdf(id) {
   el("pdfPageLabel").textContent = "– / –";
 
   const res = await fetch("/api/pdf/" + id);
+  if (!current()) return;
   if (!res.ok) {
     let reason = "PDF not yet available";
     try {
@@ -378,26 +388,37 @@ async function loadPdf(id) {
     } catch (e) {
       /* non-JSON body */
     }
-    placeholder.textContent = "PDF not yet available — " + reason;
+    if (current()) placeholder.textContent = "PDF not yet available — " + reason;
     return;
   }
   const buf = await res.arrayBuffer();
+  if (!current()) return;
+  let pdf;
   try {
-    state.pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   } catch (e) {
-    placeholder.textContent = "failed to parse PDF: " + e.message;
+    if (current()) placeholder.textContent = "failed to parse PDF: " + e.message;
     return;
   }
+  // Claim the shared canvas only when this load is still the active one: a stale
+  // parse resolving here would repaint the previous document over the current text.
+  if (!current()) return;
+  state.pdf = pdf;
   placeholder.classList.add("hidden");
   canvas.classList.remove("hidden");
   await showPdfPage(1, false);
 }
 
 async function showPdfPage(n, sync) {
-  if (!state.pdf) return;
-  n = Math.min(Math.max(1, n), state.pdf.numPages);
+  // One canvas is shared by every document, so a render that is still awaiting when
+  // the next document (or page) is selected must drop out rather than paint over it.
+  const pdf = state.pdf;
+  if (!pdf) return;
+  n = Math.min(Math.max(1, n), pdf.numPages);
   state.pdfPage = n;
-  const page = await state.pdf.getPage(n);
+  const stale = () => pdf !== state.pdf || n !== state.pdfPage;
+  const page = await pdf.getPage(n);
+  if (stale()) return;
   const canvas = el("pdfCanvas");
   const width = el("pdfArea").clientWidth - 24;
   const base = page.getViewport({ scale: 1 });
@@ -405,7 +426,8 @@ async function showPdfPage(n, sync) {
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-  el("pdfPageLabel").textContent = `${n} / ${state.pdf.numPages}`;
+  if (stale()) return;
+  el("pdfPageLabel").textContent = `${n} / ${pdf.numPages}`;
   if (sync !== false) scrollTextToPage(n);
   markCurrentDivider(n);
 }

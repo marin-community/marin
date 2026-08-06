@@ -182,6 +182,7 @@ One-off analysis pages published to durable public hosting (see
     - [GitHub Issue #648](https://github.com/marin-community/marin/issues/648)
     - [Data Browser](https://marin.community/data-browser/view?paths=%5B%22gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Fexp648_ar5iv_training-f49d7f.json%22%5D)
 - [Markdownification Processing Report](./markdownified-datasets.md)
+- [Routing PDFs between Docling and the VLM](./pdf-extraction-routing.md)
 
 ## Supervised Fine Tuning
 

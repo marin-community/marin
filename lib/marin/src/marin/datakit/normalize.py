@@ -400,6 +400,7 @@ def normalize_to_parquet(
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    coordinator_resources: ResourceConfig | None = None,
     file_extensions: tuple[str, ...] | None = None,
     dedup_mode: DedupMode = DedupMode.EXACT,
     bare: bool = False,
@@ -439,6 +440,11 @@ def normalize_to_parquet(
             Scale up when increasing partition size.
         max_workers: Maximum number of Zephyr workers for the pipeline.
             Defaults to 1024.
+        coordinator_resources: Resources for the Zephyr coordinator actor.
+            Defaults to Zephyr's own 1 GB, which holds the shard, retry and
+            shuffle state for every map task. A source spread over thousands of
+            small files needs more, and exceeding it is an OOM kill (exit 137)
+            once the run is nearly complete rather than a graceful failure.
         file_extensions: Tuple of file extensions to include (e.g.
             ``(".parquet",)``).  Defaults to all extensions supported by
             ``zephyr.readers.load_file``.
@@ -483,7 +489,10 @@ def normalize_to_parquet(
         drop_fields=drop_fields,
         output_schema=output_schema,
     )
-    ctx = ZephyrContext(name="normalize", resources=resources, max_workers=max_workers)
+    ctx_kwargs: dict = {"name": "normalize", "resources": resources, "max_workers": max_workers}
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
+    ctx = ZephyrContext(**ctx_kwargs)
     outcome = ctx.execute(pipeline)
     counters_dict = dict(outcome.counters)
 
@@ -513,6 +522,7 @@ def normalize_step(
     max_whitespace_run_chars: int = DEFAULT_MAX_WHITESPACE_RUN_CHARS,
     worker_resources: ResourceConfig | None = None,
     max_workers: int = DEFAULT_MAX_WORKERS,
+    coordinator_resources: ResourceConfig | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
     relative_input_path: str | None = None,
@@ -582,6 +592,7 @@ def normalize_step(
             max_whitespace_run_chars=max_whitespace_run_chars,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            coordinator_resources=coordinator_resources,
             file_extensions=file_extensions,
             dedup_mode=dedup_mode,
             bare=bare,
