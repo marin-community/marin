@@ -1,0 +1,74 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Public list and diagnostic views over completed journeys."""
+
+from iris.rpc import job_pb2
+
+
+def test_list_jobs_filters_terminal_and_pending_jobs_and_cancel_finished_is_noop(journey):
+    finished = journey.submit("finished")
+    journey.settle()
+    journey.succeed(finished[0])
+    journey.settle()
+    pending = journey.submit("pending")
+
+    assert [job.job_id for job in journey.jobs(state="succeeded")] == [finished.wire_id]
+    assert [job.job_id for job in journey.jobs(state="pending")] == [pending.wire_id]
+
+    journey.cancel(finished)
+
+    assert journey.job(finished).state == job_pb2.JOB_STATE_SUCCEEDED
+
+
+def test_failed_task_status_distills_root_cause_from_real_log_transport(journey):
+    job = journey.submit("root-cause")
+    journey.settle()
+    journey.fail(job[0], error="application failed")
+    journey.settle()
+    journey.push_task_logs(
+        job[0],
+        [
+            " 50%|#####     | 500/1000 [00:10<00:10, 5.0it/s]",
+            "Traceback (most recent call last):",
+            "RuntimeError: CUDA error: an illegal memory access was encountered",
+        ],
+    )
+
+    detail = journey.task_detail(job[0])
+
+    assert detail.task.state == job_pb2.TASK_STATE_FAILED
+    assert "RuntimeError: CUDA error: an illegal memory access was encountered" in detail.root_cause_highlights
+    assert not any("500/1000" in line for line in detail.root_cause_highlights)
+
+
+def test_succeeded_task_status_omits_failure_highlights_even_with_error_like_logs(journey):
+    job = journey.submit("clean-status")
+    journey.settle()
+    journey.succeed(job[0])
+    journey.settle()
+    journey.push_task_logs(job[0], ["RuntimeError: stale text from a successful task"])
+
+    detail = journey.task_detail(job[0])
+
+    assert detail.task.state == job_pb2.TASK_STATE_SUCCEEDED
+    assert list(detail.root_cause_highlights) == []
+
+
+def test_list_tasks_reports_current_timing_and_only_the_latest_failed_attempt(journey):
+    job = journey.submit("bounded-attempt-list", failure_retries=2)
+    journey.settle()
+    journey.fail(job[0], error="first failure")
+    journey.settle()
+    journey.fail(job[0], error="latest failure")
+    journey.settle()
+
+    (listed,) = journey.tasks(job)
+    detail = journey.task(job[0])
+
+    assert listed.state == job_pb2.TASK_STATE_RUNNING
+    assert listed.started_at.epoch_ms > 0
+    assert [attempt.attempt_id for attempt in listed.attempts] == [1, 2]
+    assert listed.attempts[0].error == "latest failure"
+    assert listed.attempts[-1].started_at == listed.started_at
+    assert [attempt.attempt_id for attempt in detail.attempts] == [0, 1, 2]
