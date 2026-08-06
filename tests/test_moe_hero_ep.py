@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import os
 import subprocess
 import sys
@@ -196,3 +197,53 @@ def test_hybrid_kv_branches_agree_on_sharding_when_model_axis_is_wide(size):
     tokens = jax.ShapeDtypeStruct((64, 128), jnp.int32)
     with set_mesh(mesh):
         jax.eval_shape(lambda t: model.Transformer.init(cfg, key=jax.random.key(0))(t)[0], tokens)
+
+
+def _latent_shapes(size="d768", latent_dim=None):
+    shape = small_scale_abl_launch.SMALL_SHAPES[size]
+    cfg = small_scale_abl_launch._small_model(shape, 1.0, "reference", "fixed_all_to_all", 1, 128)
+    return dataclasses.replace(cfg, latent_dim=latent_dim)
+
+
+def test_latent_moe_shrinks_the_dispatched_width_but_not_the_token():
+    # The point of LatentMoE is that the all-to-all payload narrows while the residual stream does
+    # not, so the expert weights must be latent-wide and the layer output hidden-wide.
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, 1, 64, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    cfg = _latent_shapes(latent_dim=192)
+    tokens = jax.ShapeDtypeStruct((64, 128), jnp.int32)
+    with set_mesh(mesh):
+        built = jax.eval_shape(lambda: model.MoEMLP.init(cfg, key=jax.random.key(0)))
+        out = jax.eval_shape(lambda t: model.Transformer.init(cfg, key=jax.random.key(0))(t)[0], tokens)
+
+    assert built.w_latent_down.shape == (cfg.hidden_dim, 192)
+    assert built.w_latent_up.shape == (192, cfg.hidden_dim)
+    # Expert banks are latent-wide: this is what narrows the dispatch.
+    assert built.expert_mlp.w_gate.shape[1] == 192
+    assert built.expert_mlp.w_up.shape[1] == 192
+    assert built.expert_mlp.w_down.shape[2] == 192
+    # The residual stream is untouched.
+    assert out.shape[-1] == cfg.hidden_dim
+
+
+def test_latent_moe_is_absent_by_default():
+    # Every recorded run predates this feature, so the default must build the identical layer.
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape(1, 1, 64, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
+    )
+    cfg = _latent_shapes(latent_dim=None)
+    with set_mesh(mesh):
+        built = jax.eval_shape(lambda: model.MoEMLP.init(cfg, key=jax.random.key(0)))
+    assert built.w_latent_down is None and built.w_latent_up is None
+    assert built.expert_mlp.w_gate.shape[1] == cfg.hidden_dim
+
+
+def test_latent_dim_above_hidden_is_rejected():
+    # A latent wider than the hidden dim adds communication instead of removing it.
+    with pytest.raises(ValueError, match="latent_dim must be in"):
+        _latent_shapes(latent_dim=99999)

@@ -140,6 +140,13 @@ class GrugModelConfig:
     num_shared_experts: int = 1
     num_experts: int = 256
     num_experts_per_token: int = 4
+    # LatentMoE (arXiv 2601.18089): routed experts operate in a latent space of this width instead
+    # of `hidden_dim`. Tokens are projected down before routing and back up after the combine, so
+    # the expert-parallel all-to-all carries `latent_dim`-wide rows -- communication falls by
+    # `hidden_dim / latent_dim`. Shared experts and the router stay at `hidden_dim`. To hold FLOPs
+    # constant the paper scales the routed bank and top-k by the same ratio. None keeps a
+    # standard MoE, in which case no projection is built and the layer is unchanged.
+    latent_dim: int | None = None
     num_layers: int = 6
     num_heads: int = 4
     num_kv_heads: int = 1
@@ -194,6 +201,11 @@ class GrugModelConfig:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
+        if self.latent_dim is not None and not 0 < self.latent_dim <= self.hidden_dim:
+            raise ValueError(
+                f"latent_dim must be in (0, hidden_dim={self.hidden_dim}], got {self.latent_dim}; "
+                "it only reduces communication when it is smaller than the hidden dimension"
+            )
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
         if self.capacity_factor <= 0:
@@ -730,11 +742,14 @@ class MoEMLP(eqx.Module):
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    # LatentMoE projections. Both None for a standard MoE, in which case the layer is unchanged.
+    w_latent_down: jax.Array | None
+    w_latent_up: jax.Array | None
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert = random.split(key, 2)
+        k_router, k_expert, k_down, k_up = random.split(key, 4)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -742,12 +757,24 @@ class MoEMLP(eqx.Module):
             raise ValueError(f"num_experts={cfg.num_experts} must be divisible by expert axis size={expert_axis_size}")
 
         d, e = cfg.hidden_dim, cfg.num_experts
+        # Routed experts live in the latent space; the router reads the full-width token, so its
+        # own projection keeps `hidden_dim`.
+        expert_width = cfg.latent_dim if cfg.latent_dim is not None else d
+        latent = cfg.latent_dim
         return MoEMLP(
             router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
+            w_latent_down=(
+                None
+                if latent is None
+                else reshard(_init_weight(k_down, (d, latent), cfg.initializer_std), P(None, None))
+            ),
+            w_latent_up=(
+                None if latent is None else reshard(_init_weight(k_up, (latent, d), cfg.initializer_std), P(None, None))
+            ),
             expert_mlp=MoEExpertMlp.init(
                 num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
+                hidden_dim=expert_width,
                 intermediate_dim=cfg.intermediate_dim,
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
@@ -809,8 +836,19 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        # LatentMoE: compress before dispatch so the expert-parallel all-to-all carries
+        # `latent_dim`-wide rows in both directions. The router above already read the full-width
+        # token, and the shared experts in the enclosing block never see this path.
+        routed_input = x_flat
+        if self.w_latent_down is not None:
+            routed_input = jnp.einsum(
+                "td,dl->tl",
+                x_flat,
+                reshard(self.w_latent_down, P(None, None)).astype(x_flat.dtype),
+                out_sharding=_batch_spec(),
+            )
         moe_out = self.expert_mlp(
-            x_flat,
+            routed_input,
             selected_experts.astype(jnp.int32),
             combine_weights,
             mesh=get_abstract_mesh(),
@@ -822,6 +860,16 @@ class MoEMLP(eqx.Module):
             routed_flat = moe_out
             dropped_assignments = _zero_dropped_assignments()
         router_stats["capacity_overflow"] = dropped_assignments
+
+        # Expand after the combine: `expert_mlp` already returns the weight-summed expert output,
+        # which is the vector the paper's W_up acts on.
+        if self.w_latent_up is not None:
+            routed_flat = jnp.einsum(
+                "tl,ld->td",
+                routed_flat,
+                reshard(self.w_latent_up, P(None, None)).astype(routed_flat.dtype),
+                out_sharding=_batch_spec(),
+            )
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())

@@ -247,6 +247,17 @@ def _compute_flops(
         local_kv_heads=model_config.local_kv_heads,
         global_kv_heads=model_config.global_kv_heads,
     )
+    # `lm_flops_per_token` prices every matmul at `hidden_dim`. Under LatentMoE the routed experts
+    # live at `latent_dim` instead, and two projections are added per layer, so correct both terms
+    # or MFU is overstated by roughly the compression ratio.
+    if model_config.latent_dim is not None:
+        latent, hidden = model_config.latent_dim, model_config.hidden_dim
+        # Matches the routed term in `lm_flops_per_token`: 2 * 3 * width * intermediate * top_k.
+        routed_delta = 2 * 3 * model_config.intermediate_dim * model_config.num_experts_per_token * (latent - hidden)
+        # W_down (hidden -> latent) and W_up (latent -> hidden), once per token each.
+        projection = 2 * 2 * hidden * latent
+        flops_per_token += model_config.num_layers * (routed_delta + projection)
+
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {
