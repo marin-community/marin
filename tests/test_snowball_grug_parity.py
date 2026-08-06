@@ -81,7 +81,8 @@ def _capture_experiment(model: "gm.Transformer", tokens: jax.Array) -> list[np.n
         layer_mask = long if is_long else short
         use_pko = is_long and not cfg.disable_pko
         disable_rope = is_long and cfg.disable_long_rope
-        hidden, _ = block(hidden, layer_mask, use_pko, disable_rope)
+        expert_bank = model.expert_banks[block.expert_bank_index]
+        hidden, _ = block(hidden, layer_mask, expert_bank, use_pko, disable_rope)
         outs.append(hidden)
     outs.append(model.final_gated_norm(model.final_norm(hidden)))
     return outs

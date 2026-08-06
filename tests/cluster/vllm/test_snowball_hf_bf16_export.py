@@ -32,7 +32,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import validate_single_name_config
 from levanter.tokenizers import load_tokenizer
 
-from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.model import Block, GrugModelConfig, MoEMLP, Transformer
 from tests.cluster.vllm.snowball import SNOWBALL
 from tests.cluster.vllm.snowball_checkpoint import (
     VendoredTransformer,
@@ -58,12 +58,28 @@ def _decode_main_config(model_config: dict[str, Any]) -> GrugModelConfig:
 def _to_main_model(params: VendoredTransformer, config: GrugModelConfig) -> Transformer:
     assert params.stacked_blocks is not None
     source = cast(Any, params)
+    source_blocks = tuple(source.stacked_blocks.unstacked())
+    expert_banks = tuple(block.mlp.expert_mlp for block in source_blocks)
+    blocks = tuple(
+        Block(
+            rms_attn=block.rms_attn,
+            attn_gated_norm=block.attn_gated_norm,
+            attn=block.attn,
+            rms_mlp=block.rms_mlp,
+            mlp_gated_norm=block.mlp_gated_norm,
+            mlp=MoEMLP(router=block.mlp.router, router_bias=block.mlp.router_bias, cfg=config),
+            shared=block.shared,
+            expert_bank_index=layer_index,
+        )
+        for layer_index, block in enumerate(source_blocks)
+    )
     return Transformer(
         token_embed=source.token_embed,
         embed_norm=source.embed_norm,
         embed_gated_norm=source.embed_gated_norm,
         output_proj=source.output_proj,
-        blocks=tuple(source.stacked_blocks.unstacked()),
+        blocks=blocks,
+        expert_banks=expert_banks,
         final_norm=source.final_norm,
         final_gated_norm=source.final_gated_norm,
         config=config,

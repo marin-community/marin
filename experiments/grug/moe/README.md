@@ -76,6 +76,66 @@ long layers.
 - **Expert parallelism**: `ragged_all_to_all` or ring-based via
   `levanter.grug.grug_moe.moe_mlp` (default: ring). Default capacity factor 1.0.
 
+## Cross-layer tied experts
+
+`GrugModelConfig.expert_bank_for_layer` assigns each layer to an explicit routed-expert
+bank stored once under `Transformer.expert_banks`. `None` resolves to one bank per layer.
+Attention, routers and QB biases, RMSNorm and GatedNorm parameters, shared dense MLPs,
+and residual blocks remain per-layer.
+
+The first d512 architecture gate uses these mappings:
+
+```python
+# Untied control
+(0, 1, 2, 3, 4, 5)
+# Pairwise middle tying
+(0, 1, 1, 2, 2, 3)
+# One four-layer middle bank
+(0, 1, 1, 1, 1, 2)
+```
+
+[`launch_tied_experts.py`](./launch_tied_experts.py) builds the matched matrix at
+sequence length 4096 and batch size 32. The default `smoke` phase runs 500 steps,
+or 65,536,000 tokens. It compares the untied control with unscaled, `1/sqrt(g)`,
+and `1/g` tied-bank learning rates for both tied topologies. The optimizer schedule
+horizon remains the full d512 schedule, so the smoke covers its first 500 updates
+instead of compressing the full decay into 500 steps.
+
+```bash
+GRUG_TIED_PHASE=smoke .venv/bin/iris --cluster=marin job run \
+  --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.moe.launch_tied_experts --version dev --run
+
+GRUG_TIED_PHASE=full .venv/bin/iris --cluster=marin job run \
+  --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" \
+  -- python -m experiments.grug.moe.launch_tied_experts --version YYYY.MM.DD --run
+```
+
+### Prior work and deviation
+
+This architecture follows Martin Jaggi, [“Tying the Loop—Tied Expert Layers in
+Mixture-of-Experts Language Models”](https://arxiv.org/abs/2606.16825), 2026.
+Jaggi's expert-tie condition shares routed FFN gate, up, and down tensors while
+retaining per-layer attention, routers, and normalization (Sections 1 and 3,
+Table 1). The controlled experiments use a 2+2 untied prelude/coda, and the
+production-style experiments test groups of two and four layers. The Grug d512
+mapping uses one input and one output anchor because the model has six layers;
+the proposed d768 follow-up can test the paper's 2+2 anchor topology directly.
+
+Jaggi divides the tied-expert learning rate by `sqrt(g)`. Its group-of-four
+ablation reports final validation loss 3.503 for `1/sqrt(g)`, 3.506 for `1/g`,
+and 3.542 without scaling (Section 3.5). Weight decay remains uncompensated.
+Grug therefore treats the divisor as an explicit smoke-test ablation. The current
+MuonH implementation does not apply its inherited weight-decay field, so the
+weight-decay choice has no effect in this experiment.
+
+Jaggi trains tied models from initialization. Post-hoc expert matching, spectral
+probes, router permutation, shared-bank prefit, and teacher-on-student-state
+recovery are separate hypotheses tracked in
+[`grug-cross-layer-expert-merging.md`](../../../.agents/logbooks/grug-cross-layer-expert-merging.md).
+They should start only after the tied-from-scratch architecture gate produces a
+contemporaneous d512 control.
+
 ## Scaling heuristic
 
 [`MoeHeuristic`](./heuristic.py) turns `(budget, hidden_dim)` into model +

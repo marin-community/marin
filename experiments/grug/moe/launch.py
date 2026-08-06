@@ -44,6 +44,7 @@ from experiments.datasets.starcoder import starcoder_dataset
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.model import GrugModelConfig
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
 
@@ -171,11 +172,21 @@ def run_grug_moe_trial(config: GrugMoeLaunchConfig) -> None:
 
     grug_trainer = dataclasses.replace(config.grug_trainer, trainer=trainer)
 
+    optimizer = config.optimizer
+    if isinstance(optimizer, GrugMoeMuonHConfig):
+        group_sizes = config.model.expert_bank_group_sizes
+        if optimizer.expert_bank_group_sizes is not None and optimizer.expert_bank_group_sizes != group_sizes:
+            raise ValueError(
+                "optimizer expert_bank_group_sizes must match the model topology; "
+                f"got {optimizer.expert_bank_group_sizes}, expected {group_sizes}"
+            )
+        optimizer = dataclasses.replace(optimizer, expert_bank_group_sizes=group_sizes)
+
     run_config = GrugRunConfig(
         model=config.model,
         data=config.data,
         resources=config.resources,
-        optimizer=config.optimizer,
+        optimizer=optimizer,
         trainer=grug_trainer,
         eval=config.eval,
         processes_per_task=config.processes_per_task,

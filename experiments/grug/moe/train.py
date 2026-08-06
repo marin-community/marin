@@ -41,6 +41,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.model import GrugModelConfig, Transformer
+from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -257,15 +258,11 @@ class GrugTrainState:
 def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     """Set router biases from QB betas (computed on previous step)."""
     new_blocks = list(model.blocks)
-    moe_idx = 0
     for i, block in enumerate(model.blocks):
-        if block.mlp is None:
-            continue
-        new_bias = -qb_betas[moe_idx]
+        new_bias = -qb_betas[i]
         new_bias = new_bias - jnp.mean(new_bias)
-        new_mlp = eqx.tree_at(lambda m: m.router_bias, block.mlp, new_bias)
-        new_blocks[i] = eqx.tree_at(lambda b: b.mlp, block, new_mlp)
-        moe_idx += 1
+        new_mlp = eqx.tree_at(lambda mlp: mlp.router_bias, block.mlp, new_bias)
+        new_blocks[i] = eqx.tree_at(lambda current_block: current_block.mlp, block, new_mlp)
     return eqx.tree_at(lambda t: t.blocks, model, tuple(new_blocks))
 
 
@@ -278,13 +275,12 @@ def initial_state(
     ema_beta: float | None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
-    num_moe_layers = sum(1 for b in params.blocks if b.mlp is not None)
     return GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         ema_params=params if ema_beta is not None else None,
-        pending_qb_betas=jnp.zeros((num_moe_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros((len(params.blocks), model_config.num_experts)),
     )
 
 
@@ -330,6 +326,11 @@ def _make_train_step(
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+        for bank_index, (bank_grad, bank_update) in enumerate(
+            zip(grads.expert_banks, updates.expert_banks, strict=True)
+        ):
+            metrics[f"tying/expert_gradient_norm_by_bank/bank_{bank_index}"] = optax.global_norm(bank_grad)
+            metrics[f"tying/update_norm_by_bank/bank_{bank_index}"] = optax.global_norm(bank_update)
         params = optax.apply_updates(qb_params, updates)
 
         if ema_beta is None:
@@ -446,7 +447,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             path_override=config.trainer.sharding_dump_path,
         )
 
-        levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+        expert_parameter_count = sum(
+            int(leaf.size) for bank in state.params.expert_banks for leaf in jax.tree_util.tree_leaves(bank)
+        )
+        topology_summary: dict[str, int | float] = {
+            "parameter_count": parameter_count(state.params),
+            "tying/group_size": max(config.model.expert_bank_group_sizes),
+            "tying/unique_expert_parameter_count": expert_parameter_count,
+        }
+        if isinstance(config.optimizer, GrugMoeMuonHConfig):
+            divisors = config.optimizer.expert_bank_lr_divisors
+            if divisors:
+                topology_summary["tying/expert_lr_divisor"] = max(divisors)
+                for bank_index, divisor in enumerate(divisors):
+                    topology_summary[f"tying/expert_lr_divisor_by_bank/bank_{bank_index}"] = divisor
+        levanter.tracker.log_summary(topology_summary)
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)
@@ -537,7 +552,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                        if (key.startswith("train/router/") or key.startswith("moe_bias/") or key.startswith("tying/"))
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:

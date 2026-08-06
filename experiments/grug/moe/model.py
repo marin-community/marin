@@ -119,6 +119,8 @@ class GrugModelConfig:
     num_experts: int = 256
     num_experts_per_token: int = 4
     num_layers: int = 6
+    expert_bank_for_layer: tuple[int, ...] | None = None
+    """Routed-expert bank ID used by each layer. ``None`` gives one bank per layer."""
     num_heads: int = 4
     num_kv_heads: int = 1
     head_dim: int | None = None
@@ -146,6 +148,8 @@ class GrugModelConfig:
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
+        if self.num_layers <= 0:
+            raise ValueError("num_layers must be positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.vocab_size <= 0:
@@ -160,7 +164,32 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim < 0:
             raise ValueError("shared_expert_intermediate_dim must be non-negative")
+        bank_for_layer = self.resolved_expert_bank_for_layer
+        bank_ids = set(bank_for_layer)
+        expected_bank_ids = set(range(len(bank_ids)))
+        if bank_ids != expected_bank_ids:
+            raise ValueError(
+                "expert_bank_for_layer must use contiguous bank IDs starting at zero; " f"got {bank_for_layer}"
+            )
         resolve_moe_implementation(self.moe_implementation)
+
+    @property
+    def resolved_expert_bank_for_layer(self) -> tuple[int, ...]:
+        if self.expert_bank_for_layer is None:
+            return tuple(range(self.num_layers))
+        if len(self.expert_bank_for_layer) != self.num_layers:
+            raise ValueError(
+                "expert_bank_for_layer must contain one bank ID per layer; "
+                f"got {len(self.expert_bank_for_layer)} entries for {self.num_layers} layers"
+            )
+        if any(bank_id < 0 for bank_id in self.expert_bank_for_layer):
+            raise ValueError("expert_bank_for_layer bank IDs must be non-negative")
+        return self.expert_bank_for_layer
+
+    @property
+    def expert_bank_group_sizes(self) -> tuple[int, ...]:
+        bank_for_layer = self.resolved_expert_bank_for_layer
+        return tuple(bank_for_layer.count(bank_id) for bank_id in range(max(bank_for_layer) + 1))
 
     @property
     def Embed(self) -> Axis:
@@ -198,6 +227,7 @@ class GrugModelConfig:
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
+        expert_bank_for_layer = _hf_config_attr(hf_config, ("expert_bank_for_layer",))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
             hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
@@ -214,6 +244,9 @@ class GrugModelConfig:
             num_experts=int(_hf_config_attr(hf_config, ("num_experts", "num_local_experts"), 8)),
             num_experts_per_token=int(_hf_config_attr(hf_config, ("num_experts_per_token", "num_experts_per_tok"), 2)),
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
+            expert_bank_for_layer=(
+                tuple(int(bank_id) for bank_id in expert_bank_for_layer) if expert_bank_for_layer is not None else None
+            ),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
             num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
             head_dim=_hf_config_attr(hf_config, ("head_dim", "attention_head_dim")),
@@ -249,6 +282,7 @@ class GrugModelConfig:
             "num_experts_per_tok": self.num_experts_per_token,
             "moe_intermediate_size": self.intermediate_dim,
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
+            "expert_bank_for_layer": list(self.resolved_expert_bank_for_layer),
             # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "grugmoe_attention_mode": "production",
@@ -482,6 +516,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
+    activation_norm = router_metrics["activation_norm_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
     # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
@@ -494,7 +529,9 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
-        "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
+        "tying/top1_cross_loop_agreement": router_metrics["top1_cross_loop_agreement"],
+        "tying/topk_set_overlap": router_metrics["topk_set_overlap"],
+        "qb_beta_per_layer": router_metrics["qb_beta_per_layer"],
     }
     for i in range(num_layers):
         out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
@@ -502,7 +539,33 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
         out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
+        out[f"tying/activation_norm_by_layer/layer_{i}"] = activation_norm[i]
     return out
+
+
+def _cross_loop_agreement(
+    router_stats: list[dict[str, jax.Array]],
+    bank_for_layer: tuple[int, ...],
+) -> tuple[jax.Array, jax.Array]:
+    top1_agreements: list[jax.Array] = []
+    topk_overlaps: list[jax.Array] = []
+    for bank_id in range(max(bank_for_layer) + 1):
+        layer_indices = [layer_index for layer_index, layer_bank in enumerate(bank_for_layer) if layer_bank == bank_id]
+        for first_offset, first_layer in enumerate(layer_indices):
+            first_selected = router_stats[first_layer]["selected_experts"]
+            for second_layer in layer_indices[first_offset + 1 :]:
+                second_selected = router_stats[second_layer]["selected_experts"]
+                top1_agreements.append(jnp.mean(first_selected[:, 0] == second_selected[:, 0]))
+                intersection_size = jnp.sum(
+                    jnp.any(first_selected[:, :, None] == second_selected[:, None, :], axis=-1),
+                    axis=-1,
+                )
+                topk_overlaps.append(jnp.mean(intersection_size / first_selected.shape[-1]))
+
+    if not top1_agreements:
+        nan = jnp.asarray(jnp.nan, dtype=jnp.float32)
+        return nan, nan
+    return jnp.mean(jnp.stack(top1_agreements)), jnp.mean(jnp.stack(topk_overlaps))
 
 
 def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
@@ -531,16 +594,14 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
 
 
 class MoEMLP(eqx.Module):
-    """QB-routed MoE with sigmoid combine weights."""
+    """Per-layer QB router and dispatch logic for an explicit expert bank."""
 
     router: jax.Array
     router_bias: jax.Array
-    expert_mlp: MoEExpertMlp
     cfg: GrugModelConfig = eqx.field(static=True)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "MoEMLP":
-        k_router, k_expert = random.split(key, 2)
         mesh = get_abstract_mesh()
 
         expert_axis_size = _mesh_axis_size(mesh, "expert")
@@ -549,18 +610,8 @@ class MoEMLP(eqx.Module):
 
         d, e = cfg.hidden_dim, cfg.num_experts
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, e), cfg.initializer_std), P(None, None)),
+            router=reshard(_init_weight(key, (d, e), cfg.initializer_std), P(None, None)),
             router_bias=jnp.zeros((e,)),
-            expert_mlp=MoEExpertMlp.init(
-                num_experts=cfg.num_experts,
-                hidden_dim=cfg.hidden_dim,
-                intermediate_dim=cfg.intermediate_dim,
-                initializer_std=cfg.initializer_std,
-                key=k_expert,
-                implementation=cfg.moe_implementation,
-                activation=ActivationFunctionEnum.silu,
-                capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
-            ),
             cfg=cfg,
         )
 
@@ -568,6 +619,7 @@ class MoEMLP(eqx.Module):
     def __call__(
         self,
         x: Float[Array, "B S D"],
+        expert_bank: MoEExpertMlp,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
@@ -593,6 +645,7 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
+        router_stats["selected_experts"] = selected_experts
         # Sharded QB: compute beta locally per device, then average.
         mesh = get_abstract_mesh()
         s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
@@ -614,7 +667,7 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
-        routed_flat, dropped_assignments = self.expert_mlp(
+        routed_flat, dropped_assignments = expert_bank(
             x_flat,
             selected_experts.astype(jnp.int32),
             combine_weights,
@@ -628,6 +681,22 @@ class MoEMLP(eqx.Module):
         return routed, router_stats
 
 
+def _init_expert_bank(cfg: GrugModelConfig, *, block_key: PRNGKeyArray) -> MoEExpertMlp:
+    """Initialize a bank from the expert subkey used by the former per-block MoEMLP."""
+    _, mlp_key, _, _, _ = random.split(block_key, 5)
+    _, expert_key = random.split(mlp_key, 2)
+    return MoEExpertMlp.init(
+        num_experts=cfg.num_experts,
+        hidden_dim=cfg.hidden_dim,
+        intermediate_dim=cfg.intermediate_dim,
+        initializer_std=cfg.initializer_std,
+        key=expert_key,
+        implementation=cfg.moe_implementation,
+        activation=ActivationFunctionEnum.silu,
+        capacity_factor=_DEFAULT_EP_CAPACITY_FACTOR,
+    )
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -636,10 +705,12 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    expert_bank_index: int = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> "Block":
+    def init(cfg: GrugModelConfig, *, expert_bank_index: int, key: PRNGKeyArray) -> "Block":
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
+        router_key, _ = random.split(mlp_key, 2)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
@@ -651,8 +722,9 @@ class Block(eqx.Module):
             attn=CausalSelfAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
-            mlp=MoEMLP.init(cfg, key=mlp_key),
+            mlp=MoEMLP.init(cfg, key=router_key),
             shared=shared,
+            expert_bank_index=expert_bank_index,
         )
 
     @named_call
@@ -660,13 +732,14 @@ class Block(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
+        expert_bank: MoEExpertMlp,
         use_pko: bool = False,
         disable_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in)
+        mlp_out, router_stats = self.mlp(mlp_in, expert_bank)
         if self.shared is not None:
             mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
         x = x + mlp_out
@@ -679,6 +752,7 @@ class Transformer(eqx.Module):
     embed_gated_norm: GatedNorm
     output_proj: jax.Array
     blocks: tuple[Block, ...]
+    expert_banks: tuple[MoEExpertMlp, ...]
     final_norm: RMSNorm
     final_gated_norm: GatedNorm
     config: GrugModelConfig = eqx.field(static=True)
@@ -708,13 +782,21 @@ class Transformer(eqx.Module):
             _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pembed_vocab
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
-        blocks = tuple(Block.init(cfg, key=block_keys[i]) for i in range(cfg.num_layers))
+        bank_for_layer = cfg.resolved_expert_bank_for_layer
+        blocks = tuple(
+            Block.init(cfg, expert_bank_index=bank_for_layer[i], key=block_keys[i]) for i in range(cfg.num_layers)
+        )
+        first_layer_for_bank = tuple(bank_for_layer.index(bank_id) for bank_id in range(max(bank_for_layer) + 1))
+        expert_banks = tuple(
+            _init_expert_bank(cfg, block_key=block_keys[layer_index]) for layer_index in first_layer_for_bank
+        )
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
             output_proj=output_proj,
             blocks=blocks,
+            expert_banks=expert_banks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
             config=cfg,
@@ -750,16 +832,24 @@ class Transformer(eqx.Module):
 
         num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
+        activation_norms: list[jax.Array] = []
         for i, block in enumerate(self.blocks):
             is_last = i == num_blocks - 1
             is_long = i % 4 == 3 or is_last
             layer_mask = long_mask if is_long else short_mask
             use_pko = is_long and not cfg.disable_pko
             disable_rope = is_long and cfg.disable_long_rope
+            expert_bank = self.expert_banks[block.expert_bank_index]
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden, layer_mask, use_pko, disable_rope
+                hidden, layer_mask, expert_bank, use_pko, disable_rope
             )
             moe_router_stats.append(router_stats)
+            activation_norms.append(jnp.sqrt(jnp.mean(jnp.square(hidden.astype(jnp.float32)))))
+
+        top1_agreement, topk_overlap = _cross_loop_agreement(
+            moe_router_stats,
+            cfg.resolved_expert_bank_for_layer,
+        )
 
         router_metrics = {
             "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
@@ -768,6 +858,9 @@ class Transformer(eqx.Module):
             "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
             "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
             "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
+            "activation_norm_per_layer": jnp.stack(activation_norms, axis=0),
+            "top1_cross_loop_agreement": top1_agreement,
+            "topk_set_overlap": topk_overlap,
         }
         hidden = self.final_gated_norm(self.final_norm(hidden))
         return hidden, router_metrics
@@ -867,6 +960,7 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
 
     for layer_index, block in enumerate(model.blocks):
         layer_prefix = f"model.layers.{layer_index}"
+        expert_bank = model.expert_banks[block.expert_bank_index]
         tensors.update(
             {
                 f"{layer_prefix}.input_layernorm.weight": block.rms_attn.weight,
@@ -884,9 +978,9 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                 f"{layer_prefix}.mlp_gated_norm.up_proj.weight": _linear_inference_tensor(block.mlp_gated_norm.w_up),
                 f"{layer_prefix}.mlp.router.weight": _linear_inference_tensor(block.mlp.router),
                 f"{layer_prefix}.mlp.router.bias": block.mlp.router_bias,
-                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_gate),
-                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_up),
-                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(block.mlp.expert_mlp.w_down),
+                f"{layer_prefix}.mlp.experts.gate_proj.weight": _linear_inference_tensor(expert_bank.w_gate),
+                f"{layer_prefix}.mlp.experts.up_proj.weight": _linear_inference_tensor(expert_bank.w_up),
+                f"{layer_prefix}.mlp.experts.down_proj.weight": _linear_inference_tensor(expert_bank.w_down),
             }
         )
         if block.shared is not None:

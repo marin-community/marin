@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 from dataclasses import dataclass
+from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +14,34 @@ from levanter.optim.util import CoefficientType
 from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe.adamh import scale_by_adamh
+
+
+class TiedExpertLrScale(StrEnum):
+    """Learning-rate divisor applied to expert banks reused across layers."""
+
+    UNSCALED = "unscaled"
+    SQRT = "sqrt"
+    LINEAR = "linear"
+
+
+def _tied_expert_lr_divisor(group_size: int, scale: TiedExpertLrScale) -> float:
+    if group_size <= 0:
+        raise ValueError(f"expert bank group size must be positive, got {group_size}")
+    if scale is TiedExpertLrScale.UNSCALED:
+        return 1.0
+    if scale is TiedExpertLrScale.SQRT:
+        return math.sqrt(group_size)
+    if scale is TiedExpertLrScale.LINEAR:
+        return float(group_size)
+    raise ValueError(f"unknown tied expert LR scale: {scale}")
+
+
+def _expert_bank_index(path: object) -> int | None:
+    path_str = ".".join(path) if isinstance(path, (list, tuple)) else str(path)
+    parts = path_str.lower().split(".")
+    if len(parts) < 3 or parts[0] != "expert_banks" or not parts[1].isdigit():
+        return None
+    return int(parts[1])
 
 
 def _target_named_sharding(array) -> jax.sharding.NamedSharding | None:
@@ -131,8 +161,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
     """AdamH for Grug MoE. Four optimizer groups, no flags.
 
     - adamh: attention weights, dense MLP weights (2D matrices)
-    - adamh_expert: expert MLP weights (mlp.expert_mlp.w_gate,
-      mlp.expert_mlp.w_up, mlp.expert_mlp.w_down, shared.w_*)
+    - adamh_expert: routed expert-bank and per-layer shared dense MLP weights
     - adam: norms, biases, router, embeddings, attention gates (1D / small params)
     """
 
@@ -197,7 +226,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
                 return "adam"
             if "router_bias" in path_lower or "attn_gate" in path_lower or ".router" in path_lower:
                 return "adam"
-            if ".mlp.expert_mlp.w_" in path_lower or ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
+            if "expert_banks." in path_lower or ".mlp.w_" in path_lower or ".shared.w_" in path_lower:
                 return "adamh_expert"
             if hasattr(param, "ndim") and param.ndim >= 2:
                 return "adamh"
@@ -209,7 +238,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
 @OptimizerConfig.register_subclass("grug_moe_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
-    """May Recipe MuonH optimizer: 3 LR groups (muonh / adamh / adam).
+    """May Recipe MuonH optimizer with bank-aware tied-expert learning rates.
 
     Three LR groups:
     - ``muonh``: matrices (attn, MoE MLP, shared) **and** all GatedNorms.
@@ -232,29 +261,30 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     muon_epsilon: float = 1e-8
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
+    expert_bank_group_sizes: tuple[int, ...] | None = None
+    tied_expert_lr_scale: TiedExpertLrScale = TiedExpertLrScale.SQRT
+    schedule_horizon_steps: int | None = None
+
+    @property
+    def expert_bank_lr_divisors(self) -> tuple[float, ...]:
+        if self.expert_bank_group_sizes is None:
+            return ()
+        return tuple(
+            _tied_expert_lr_divisor(group_size, self.tied_expert_lr_scale) for group_size in self.expert_bank_group_sizes
+        )
 
     def build(self, num_train_steps):
-        learning_rate_schedule = self.lr_scheduler(num_train_steps)
-        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        schedule_horizon_steps = self.schedule_horizon_steps
+        if schedule_horizon_steps is None:
+            schedule_horizon_steps = num_train_steps
+        if schedule_horizon_steps < num_train_steps:
+            raise ValueError(
+                f"schedule_horizon_steps={schedule_horizon_steps} must be >= num_train_steps={num_train_steps}"
+            )
+        learning_rate_schedule = self.lr_scheduler(schedule_horizon_steps)
+        adam_lr_schedule = self.lr_scheduler(schedule_horizon_steps, override_lr=self.adam_lr)
 
         def optimizer(learning_rate, adam_lr):
-            def muonh_transform():
-                components = []
-                if self.max_grad_norm:
-                    components.append(optax.clip_by_global_norm(self.max_grad_norm))
-                components.append(
-                    scale_with_grug_muonh(
-                        momentum=self.momentum,
-                        nesterov=self.nesterov,
-                        steps=self.backend_steps,
-                        muon_eps=self.muon_epsilon,
-                        learning_rate=learning_rate,
-                        coefficient_type=self.coefficient_type,
-                    )
-                )
-                components.append(_match_named_update_sharding())
-                return optax.chain(*components)
-
             def adamh_transform_at(lr):
                 components = []
                 if self.max_grad_norm:
@@ -271,10 +301,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return optax.chain(*components)
 
             transforms = {
-                "muonh": muonh_transform(),
+                "muonh": self._muonh_transform_at(learning_rate),
                 "adamh": adamh_transform_at(learning_rate),
                 "adam": adam_transform_at(adam_lr),
             }
+            if self.expert_bank_group_sizes is not None:
+                for group_size in set(self.expert_bank_group_sizes):
+                    if group_size <= 1:
+                        continue
+                    divisor = _tied_expert_lr_divisor(group_size, self.tied_expert_lr_scale)
+                    transforms[f"muonh_expert_g{group_size}"] = self._muonh_transform_at(learning_rate / divisor)
             return optax.multi_transform(transforms, self.create_mask)
 
         return optax.inject_hyperparams(optimizer)(
@@ -282,7 +318,39 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             adam_lr=adam_lr_schedule,
         )
 
+    def _muonh_transform_at(self, learning_rate) -> optax.GradientTransformation:
+        components = []
+        if self.max_grad_norm:
+            components.append(optax.clip_by_global_norm(self.max_grad_norm))
+        components.append(
+            scale_with_grug_muonh(
+                momentum=self.momentum,
+                nesterov=self.nesterov,
+                steps=self.backend_steps,
+                muon_eps=self.muon_epsilon,
+                learning_rate=learning_rate,
+                coefficient_type=self.coefficient_type,
+            )
+        )
+        components.append(_match_named_update_sharding())
+        return optax.chain(*components)
+
     def create_mask(self, params):
+        if self.expert_bank_group_sizes is not None:
+            if any(group_size <= 0 for group_size in self.expert_bank_group_sizes):
+                raise ValueError(f"expert_bank_group_sizes must be positive: {self.expert_bank_group_sizes}")
+            if hasattr(params, "expert_banks") and len(params.expert_banks) != len(self.expert_bank_group_sizes):
+                raise ValueError(
+                    "expert_bank_group_sizes must contain one entry per expert bank; "
+                    f"got {self.expert_bank_group_sizes} for {len(params.expert_banks)} banks"
+                )
+            if hasattr(params, "config"):
+                model_group_sizes = params.config.expert_bank_group_sizes
+                if tuple(self.expert_bank_group_sizes) != tuple(model_group_sizes):
+                    raise ValueError(
+                        "optimizer expert_bank_group_sizes must match the model topology; "
+                        f"got {self.expert_bank_group_sizes}, expected {model_group_sizes}"
+                    )
         paths = leaf_key_paths(params)
 
         def mask_fn(param, path):
@@ -297,6 +365,16 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "adam"
             if "output_proj" in path_lower or "lm_head" in path_lower:
                 return "adamh"
+            bank_index = _expert_bank_index(path)
+            if bank_index is not None and self.expert_bank_group_sizes is not None:
+                if len(self.expert_bank_group_sizes) <= bank_index:
+                    raise ValueError(
+                        "expert_bank_group_sizes does not cover expert bank path "
+                        f"{path_str}: {self.expert_bank_group_sizes}"
+                    )
+                group_size = self.expert_bank_group_sizes[bank_index]
+                if group_size > 1:
+                    return f"muonh_expert_g{group_size}"
             # GatedNorms route to muonh (NS + Frobenius hyperball), same as matrices.
             if "gated_norm" in path_lower:
                 return "muonh"
@@ -310,5 +388,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 __all__ = [
     "GrugMoeAdamHConfig",
     "GrugMoeMuonHConfig",
+    "TiedExpertLrScale",
     "scale_with_grug_muonh",
 ]
