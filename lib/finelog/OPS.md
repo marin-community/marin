@@ -86,7 +86,7 @@ carries its version in the fifth byte, so counting versions across a namespace's
 on `timestamp_ms` and a 10-minute window answers in about a second where the same
 query unbounded takes 30.
 
-`finelog query` applies a client deadline just past the server's own 60s one.
+`finelog query` applies a client deadline just past the server's own 10s one.
 Raise both with `--timeout` and `FINELOG_QUERY_TIMEOUT_MS` if a query genuinely
 needs longer.
 
