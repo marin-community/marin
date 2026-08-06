@@ -125,6 +125,27 @@ def initialize_merge_worker() -> None:
     DistributedConfig().initialize()
 
 
+def compact_merge_mesh(*, expert_axis_size: int = 1, replica_axis_size: int | None = None) -> jax.sharding.Mesh:
+    """Build a merge mesh that keeps non-expert parameter dimensions whole.
+
+    Merge workers may expose a whole TPU slice as local devices in one process,
+    unlike the process-per-device training layout. Put every device not used for
+    expert parallelism on the replica axis so the local MoE fallback does not
+    shard its hidden/output dimensions over ``data``.
+    """
+    if replica_axis_size is None:
+        global_device_count = jax.device_count()
+        if global_device_count % expert_axis_size != 0:
+            raise ValueError(
+                f"global device count {global_device_count} must be divisible by expert axis size {expert_axis_size}"
+            )
+        replica_axis_size = global_device_count // expert_axis_size
+    return compact_grug_mesh(
+        expert_axis_size=expert_axis_size,
+        replica_axis_size=replica_axis_size,
+    )
+
+
 def _checkpoint_root(output_path: str) -> str:
     return prefix_join(output_path, _CHECKPOINTS_DIRECTORY)
 
@@ -472,7 +493,7 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
         },
     )
     initialize_merge_worker()
-    mesh = compact_grug_mesh(
+    mesh = compact_merge_mesh(
         expert_axis_size=config.expert_axis_size,
         replica_axis_size=config.replica_axis_size,
     )
@@ -658,7 +679,7 @@ def run_conversion_local(config: ConversionJobConfig) -> None:
         },
     )
     initialize_merge_worker()
-    mesh = compact_grug_mesh(
+    mesh = compact_merge_mesh(
         expert_axis_size=config.expert_axis_size,
         replica_axis_size=config.replica_axis_size,
     )
@@ -895,7 +916,7 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
         },
     )
     initialize_merge_worker()
-    mesh = compact_grug_mesh(
+    mesh = compact_merge_mesh(
         expert_axis_size=config.expert_axis_size,
         replica_axis_size=config.replica_axis_size,
     )

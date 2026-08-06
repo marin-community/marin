@@ -3,6 +3,9 @@
 
 import dataclasses
 import json
+import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -165,6 +168,52 @@ def _runtime_inputs(tmp_path: Path) -> _RuntimeInputs:
         calibration_path=str(calibration_path),
         matching_path=str(matching_path),
         teacher=teacher,
+    )
+
+
+def test_merge_mesh_supports_closed_expert_weights_on_multi_device() -> None:
+    script = """
+import jax
+import jax.numpy as jnp
+import numpy as np
+from haliax.partitioning import set_mesh
+from levanter.grug.grug_moe import MoEExpertMlp
+from experiments.grug.moe.merge_recovery_runtime import compact_merge_mesh
+
+mesh = compact_merge_mesh()
+assert mesh.shape[\"replica_dcn\"] == 4
+assert mesh.shape[\"data\"] == 1
+with set_mesh(mesh):
+    bank = jax.jit(
+        lambda key: MoEExpertMlp.init(
+            num_experts=4,
+            hidden_dim=16,
+            intermediate_dim=8,
+            initializer_std=0.02,
+            key=key,
+            implementation=\"scatter\",
+        )
+    )(jax.random.key(0))
+    inputs = jnp.ones((16, 16), dtype=jnp.float32)
+    selected = jnp.arange(16, dtype=jnp.int32).reshape(-1, 1) % 4
+    weights = jnp.ones((16, 1), dtype=jnp.float32)
+    closed = jax.jit(lambda x, expert_ids, combine: bank(x, expert_ids, combine))(
+        inputs, selected, weights
+    )
+    explicit = jax.jit(lambda current, x, expert_ids, combine: current(x, expert_ids, combine))(
+        bank, inputs, selected, weights
+    )
+np.testing.assert_allclose(closed, explicit, rtol=1e-5, atol=1e-5)
+"""
+    environment = os.environ.copy()
+    environment["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parents[3],
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
     )
 
 

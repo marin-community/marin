@@ -14,7 +14,6 @@ from fray.types import CpuConfig
 from haliax.partitioning import set_mesh
 from jax.experimental import multihost_utils
 from levanter.checkpoint import latest_checkpoint_path
-from levanter.grug.sharding import compact_grug_mesh
 from levanter.schedule import BatchSchedule
 from rigging.filesystem import check_gcs_paths_same_region
 
@@ -42,7 +41,7 @@ from experiments.grug.moe.merge_jobs import (
     MatchingJobConfig,
     SourceCheckpointConfig,
 )
-from experiments.grug.moe.merge_recovery_runtime import initialize_merge_worker
+from experiments.grug.moe.merge_recovery_runtime import compact_merge_mesh, initialize_merge_worker
 from experiments.grug.moe.merge_storage import MergeStoragePaths, validate_merge_storage_region
 from experiments.grug.moe.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe.train import build_train_dataset, build_train_loader, initial_state
@@ -204,7 +203,7 @@ def run_calibration_local(config: CalibrationJobConfig) -> None:
         raise ValueError(f"trace_capacity must be positive, got {config.trace_capacity}")
 
     initialize_merge_worker()
-    mesh = compact_grug_mesh()
+    mesh = compact_merge_mesh()
     with set_mesh(mesh):
         state, source_checkpoint = _load_source_state(config.source, mesh)
         if any(layer < 0 or layer >= config.source.model.num_layers for layer in config.layers):
@@ -313,7 +312,7 @@ def run_matching_local(config: MatchingJobConfig) -> None:
         raise ValueError("representative_layer and source_layer must differ")
 
     initialize_merge_worker()
-    mesh = compact_grug_mesh()
+    mesh = compact_merge_mesh()
     with set_mesh(mesh):
         state, source_checkpoint = _load_source_state(config.source, mesh)
         calibration_manifest = read_calibration_manifest(config.calibration_path)
