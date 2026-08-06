@@ -529,7 +529,7 @@ def dataset_for_component(
         )
     elif isinstance(fmt, ChatLmDatasetFormat):
         # Chat has no continuous-stream mode: a falsy pack means one conversation per example.
-        max_segments, slice_strategy = _resolve_pack_config(pack)
+        max_segments, slice_strategy = _resolve_pack_config(pack, packed_slice_strategy=fmt.slice_strategy)
         return ChatDataset(
             cache,
             Pos,
