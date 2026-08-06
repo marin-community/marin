@@ -56,17 +56,16 @@ class Flavor:
 
     expert_axis_size: int
     moe_implementation: str
-    expert_chunks: int
 
 
 FLAVORS: dict[str, Flavor] = {
-    "ep": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "fixed_all_to_all", 1),
+    "ep": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "fixed_all_to_all"),
     # The upstream transport. Its capacity factor scales one pooled receiver buffer per device
     # rather than a per-(sender, expert) cell, so at the same factor it buys the same bytes and
     # drops far less -- every expert on a device draws from one pool. `fixed_all_to_all` exists
     # because this path measured slow, which is what a same-shape run is for.
-    "ep-ragged": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "ragged_all_to_all", 1),
-    "fsdp-nodrop": Flavor(1, "scatter", 1),
+    "ep-ragged": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "ragged_all_to_all"),
+    "fsdp-nodrop": Flavor(1, "scatter"),
 }
 
 
@@ -153,7 +152,9 @@ def build_hero_run(
     model = dataclasses.replace(
         model,
         moe_implementation=sharding.moe_implementation,
-        expert_chunks=sharding.expert_chunks,
+        # Every flavor here is chunk-free; `expert_chunks` above one is the local dropping path
+        # that only the separate FSDP hero uses.
+        expert_chunks=1,
     )
     # A bank that does not divide the expert axis fails inside `moe_mlp`, which is after the rack is
     # already allocated and the workspace is built. Reject it here instead.
@@ -305,7 +306,7 @@ def build_hero_run(
     type=click.IntRange(min=0),
     default=0,
     show_default=True,
-    help="Run the paloma/uncheatable suites every N steps. 0 disables eval (throughput-only run).",
+    help="Run the paloma suite every N steps. 0 disables eval (throughput-only run).",
 )
 @click.option(
     "--profile-steps",
