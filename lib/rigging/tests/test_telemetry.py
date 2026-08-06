@@ -28,11 +28,11 @@ class FakeResponse:
 TransportOutcome = Callable[[str], FakeResponse]
 
 
-def status_outcome(status_code: int) -> TransportOutcome:
+def status_outcome(status_code: int, *, headers: dict[str, str] | None = None) -> TransportOutcome:
     return lambda batch_id: FakeResponse(
         status_code,
         {"batch_id": batch_id, "status": "accepted"} if status_code == 200 else {"error": {"code": "rejected"}},
-        {},
+        headers or {},
     )
 
 
@@ -72,8 +72,9 @@ class RecordingTransport:
 
 
 class RecordingSession:
-    def __init__(self) -> None:
-        self.request: tuple[str, bytes, dict[str, str], tuple[float, float]] | None = None
+    def __init__(self, outcomes: list[TransportOutcome] | None = None) -> None:
+        self.outcomes = deque(outcomes or [status_outcome(200)])
+        self.requests: list[tuple[str, bytes, dict[str, str], tuple[float, float]]] = []
         self.closed = False
 
     def post(
@@ -84,9 +85,10 @@ class RecordingSession:
         headers: dict[str, str],
         timeout: tuple[float, float],
     ) -> FakeResponse:
-        self.request = (endpoint, data, headers, timeout)
+        self.requests.append((endpoint, data, headers, timeout))
         batch_id = headers["Idempotency-Key"]
-        return FakeResponse(200, {"batch_id": batch_id, "status": "accepted"}, {})
+        outcome = self.outcomes.popleft() if self.outcomes else status_outcome(200)
+        return outcome(batch_id)
 
     def close(self) -> None:
         self.closed = True
@@ -140,7 +142,7 @@ def test_unconfigured_instruments_are_noops() -> None:
 
 
 def test_requests_transport_sends_zstd_body(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = RecordingSession()
+    session = RecordingSession([status_outcome(200, headers={"Accept-Encoding": "zstd"})])
     monkeypatch.setattr(telemetry.requests, "Session", lambda: session)
     transport = telemetry._RequestsTransport()
     record = b'{"name":"worker_cpu","value":1}'
@@ -148,8 +150,8 @@ def test_requests_transport_sends_zstd_body(monkeypatch: pytest.MonkeyPatch) -> 
 
     transport.post("http://finelog/v1/telemetry", body, "batch-1", (1.0, 2.0))
 
-    assert session.request is not None
-    endpoint, compressed, headers, timeout = session.request
+    assert len(session.requests) == 1
+    endpoint, compressed, headers, timeout = session.requests[0]
     assert endpoint == "http://finelog/v1/telemetry"
     assert headers == {
         "Content-Encoding": "zstd",
@@ -157,8 +159,35 @@ def test_requests_transport_sends_zstd_body(monkeypatch: pytest.MonkeyPatch) -> 
         "Idempotency-Key": "batch-1",
     }
     assert timeout == (1.0, 2.0)
-    assert len(compressed) < len(body)
     assert zstandard.ZstdDecompressor().decompress(compressed) == body
+
+
+def test_requests_transport_falls_back_until_server_advertises_zstd(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = RecordingSession(
+        [
+            status_outcome(400),
+            status_outcome(200),
+            status_outcome(200, headers={"Accept-Encoding": "zstd"}),
+            status_outcome(200, headers={"Accept-Encoding": "zstd"}),
+        ]
+    )
+    monkeypatch.setattr(telemetry.requests, "Session", lambda: session)
+    transport = telemetry._RequestsTransport()
+    body = b'{"records":[{"name":"worker_cpu","value":1}]}'
+
+    transport.post("http://finelog/v1/telemetry", body, "batch-1", (1.0, 2.0))
+    transport.post("http://finelog/v1/telemetry", body, "batch-2", (1.0, 2.0))
+    transport.post("http://finelog/v1/telemetry", body, "batch-3", (1.0, 2.0))
+
+    assert len(session.requests) == 4
+    assert session.requests[0][2]["Content-Encoding"] == "zstd"
+    assert zstandard.ZstdDecompressor().decompress(session.requests[0][1]) == body
+    assert session.requests[1][1] == body
+    assert "Content-Encoding" not in session.requests[1][2]
+    assert session.requests[2][1] == body
+    assert "Content-Encoding" not in session.requests[2][2]
+    assert session.requests[3][2]["Content-Encoding"] == "zstd"
+    assert zstandard.ZstdDecompressor().decompress(session.requests[3][1]) == body
 
 
 def test_invalid_configuration_stays_inert(caplog: pytest.LogCaptureFixture) -> None:

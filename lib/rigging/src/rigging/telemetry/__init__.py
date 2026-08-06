@@ -159,25 +159,62 @@ class _Transport(Protocol):
     def close(self) -> None: ...
 
 
+class _ServerCompression(enum.Enum):
+    UNKNOWN = enum.auto()
+    SUPPORTED = enum.auto()
+    UNSUPPORTED = enum.auto()
+
+
 class _RequestsTransport:
     def __init__(self) -> None:
         self._session = requests.Session()
         self._compressor = zstandard.ZstdCompressor(level=_FINELOG_ZSTD_LEVEL)
+        self._server_compression = _ServerCompression.UNKNOWN
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> requests.Response:
+        content_encoding = None if self._server_compression is _ServerCompression.UNSUPPORTED else "zstd"
+        response = self._post(endpoint, body, batch_id, timeout, content_encoding)
+        if _accepts_zstd(response):
+            self._server_compression = _ServerCompression.SUPPORTED
+            return response
+        if self._server_compression is not _ServerCompression.UNKNOWN or response.status_code not in {400, 415}:
+            return response
+
+        response = self._post(endpoint, body, batch_id, timeout, None)
+        self._server_compression = (
+            _ServerCompression.SUPPORTED if _accepts_zstd(response) else _ServerCompression.UNSUPPORTED
+        )
+        return response
+
+    def _post(
+        self,
+        endpoint: str,
+        body: bytes,
+        batch_id: str,
+        timeout: tuple[float, float],
+        content_encoding: str | None,
+    ) -> requests.Response:
+        headers = {
+            "Content-Type": "application/json",
+            "Idempotency-Key": batch_id,
+        }
+        if content_encoding is not None:
+            headers["Content-Encoding"] = content_encoding
+            body = self._compressor.compress(body)
         return self._session.post(
             endpoint,
-            data=self._compressor.compress(body),
-            headers={
-                "Content-Encoding": "zstd",
-                "Content-Type": "application/json",
-                "Idempotency-Key": batch_id,
-            },
+            data=body,
+            headers=headers,
             timeout=timeout,
         )
 
     def close(self) -> None:
         self._session.close()
+
+
+def _accepts_zstd(response: _Response) -> bool:
+    encodings = response.headers.get("Accept-Encoding", "")
+    return any(encoding.strip().lower() == "zstd" for encoding in encodings.split(","))
 
 
 @dataclass(frozen=True)

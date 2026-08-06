@@ -197,6 +197,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
     .await;
 
     assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.headers["accept-encoding"], "zstd");
     assert_eq!(response.payload["status"], "accepted");
     assert_eq!(response.payload["deduplicated"], false);
     assert_eq!(response.payload["record_count"], 2);

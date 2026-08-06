@@ -8,7 +8,7 @@ use std::sync::Arc;
 use arrow::array::{Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use axum::body::{to_bytes, Body};
 use axum::extract::{Request, State};
-use axum::http::header::{CONTENT_TYPE, RETRY_AFTER};
+use axum::http::header::{ACCEPT_ENCODING, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::from_fn_with_state;
 use axum::response::{IntoResponse, Response};
@@ -20,6 +20,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, OnceCell, OwnedSemaphorePermit, Semaphore};
 use tower_http::decompression::RequestDecompressionLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
 use crate::errors::StatsError;
@@ -291,6 +292,10 @@ pub fn router(
         .route("/v1/telemetry", post(post_telemetry))
         .with_state(state)
         .layer(RequestDecompressionLayer::new())
+        .layer(SetResponseHeaderLayer::if_not_present(
+            ACCEPT_ENCODING,
+            HeaderValue::from_static("zstd"),
+        ))
         .layer(from_fn_with_state(auth, auth_gate))
 }
 
