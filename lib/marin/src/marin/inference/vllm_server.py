@@ -3,6 +3,7 @@
 
 import dataclasses
 import functools
+import json
 import logging
 import os
 import shutil
@@ -15,6 +16,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -30,6 +32,7 @@ from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper,
 from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
+from marin.inference.vllm_release import MARIN_VLLM_GPU_RELEASE, VLLM_WHEEL_PROVENANCE_ENV_VAR
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -43,7 +46,7 @@ _REMOVED_VLLM_MODE_MESSAGE = (
 # Pin the RunAI loader for both CUDA variants. The upstream vllm[runai] extra allows a compatible
 # range, while the Marin git fork does not bundle it.
 _RUNAI_STREAMER_REQUIREMENT = "runai-model-streamer[s3]==0.16.1"
-_CUDA_TORCH_BACKEND = "cu130"
+_UPSTREAM_CUDA_TORCH_BACKEND = "cu130"
 _FLASHINFER_SAMPLER_ENV_VAR = "VLLM_USE_FLASHINFER_SAMPLER"
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
@@ -91,6 +94,8 @@ class VllmLauncherWithEnvironment:
         return self.launcher.command()
 
     def env(self) -> dict[str, str]:
+        if VLLM_WHEEL_PROVENANCE_ENV_VAR in self.environment:
+            raise ValueError(f"{VLLM_WHEEL_PROVENANCE_ENV_VAR} is reserved for the verified wheel launcher")
         environment = dict(self.launcher.env())
         environment.update(self.environment)
         return environment
@@ -130,8 +135,7 @@ class IsolatedCudaVllm:
 
     source: VllmType = VllmType.UPSTREAM
     version: str | None = None
-    """Exact PyPI pin; required for ``UPSTREAM``, ignored for ``MARIN_FORK`` (the fork pin comes
-    from ``tool.uv.sources.vllm``)."""
+    """Exact PyPI pin; required for ``UPSTREAM`` and ignored for ``MARIN_FORK``."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
 
@@ -141,9 +145,16 @@ class IsolatedCudaVllm:
 
     def command(self) -> list[str]:
         if self.source is VllmType.MARIN_FORK:
-            from_spec = VLLM_FORK_REQUIREMENT
+            wheel = MARIN_VLLM_GPU_RELEASE.wheel_for_current_platform()
+            from_spec = wheel.requirement()
+            torch_backend = MARIN_VLLM_GPU_RELEASE.torch_backend
+            executable = "python"
+            executable_args = [str(Path(__file__).with_name("vllm_wheel_entrypoint.py"))]
         else:
             from_spec = f"vllm[runai]=={self.version}"
+            torch_backend = _UPSTREAM_CUDA_TORCH_BACKEND
+            executable = "vllm"
+            executable_args = []
         return [
             "uvx",
             "--from",
@@ -153,8 +164,9 @@ class IsolatedCudaVllm:
             "--python",
             self.python_version,
             "--torch-backend",
-            _CUDA_TORCH_BACKEND,
-            "vllm",
+            torch_backend,
+            executable,
+            *executable_args,
         ]
 
     def env(self) -> dict[str, str]:
@@ -169,12 +181,20 @@ class IsolatedCudaVllm:
             _AWS_CONFIG_FILE_ENV_VAR: _write_virtual_hosted_s3_config(),
         }
         if self.source is VllmType.MARIN_FORK:
-            environment["VLLM_USE_PRECOMPILED"] = "1"
+            wheel = MARIN_VLLM_GPU_RELEASE.wheel_for_current_platform()
+            environment[VLLM_WHEEL_PROVENANCE_ENV_VAR] = json.dumps(
+                dataclasses.asdict(MARIN_VLLM_GPU_RELEASE.provenance(wheel)), sort_keys=True
+            )
         return environment
 
     def cache_identity(self) -> str:
-        source = VLLM_FORK_REQUIREMENT if self.source is VllmType.MARIN_FORK else f"vllm=={self.version}"
-        return f"cuda:{source}:{self.python_version}:{_CUDA_TORCH_BACKEND}"
+        if self.source is VllmType.MARIN_FORK:
+            source = MARIN_VLLM_GPU_RELEASE.wheel_for_current_platform().requirement()
+            torch_backend = MARIN_VLLM_GPU_RELEASE.torch_backend
+        else:
+            source = f"vllm=={self.version}"
+            torch_backend = _UPSTREAM_CUDA_TORCH_BACKEND
+        return f"cuda:{source}:{self.python_version}:{torch_backend}"
 
 
 def _write_virtual_hosted_s3_config() -> str:
