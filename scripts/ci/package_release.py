@@ -111,6 +111,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                 Path("lib/zephyr/pyproject.toml"),
                 Path("lib/levanter/pyproject.toml"),
                 Path("lib/haliax/src/haliax/__about__.py"),
+                Path("lib/finestore/pyproject.toml"),
             ),
             artifacts=MappingProxyType(
                 {
@@ -123,6 +124,7 @@ PACKAGES: Mapping[str, PackageFamily] = MappingProxyType(
                         "marin-zephyr",
                         "marin-levanter",
                         "marin-haliax",
+                        "marin-finestore",
                     )
                 }
             ),
