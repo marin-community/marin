@@ -61,6 +61,11 @@ class Flavor:
 
 FLAVORS: dict[str, Flavor] = {
     "ep": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "fixed_all_to_all", 1),
+    # The upstream transport. Its capacity factor scales one pooled receiver buffer per device
+    # rather than a per-(sender, expert) cell, so at the same factor it buys the same bytes and
+    # drops far less -- every expert on a device draws from one pool. `fixed_all_to_all` exists
+    # because this path measured slow, which is what a same-shape run is for.
+    "ep-ragged": Flavor(HERO_EP_EXPERT_AXIS_SIZE, "ragged_all_to_all", 1),
     "fsdp-nodrop": Flavor(1, "scatter", 1),
 }
 
