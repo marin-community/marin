@@ -226,7 +226,7 @@ def build_evaluation_batch(
             )
         )
 
-    endpoint_cluster = accelerator.target_cluster or EVALUATION_CONTROLLER_CLUSTER
+    endpoint_cluster = accelerator.target_cluster or spec.submission_cluster
     return EvaluationBatch(
         group_id=_group_id(model.name),
         user=user,

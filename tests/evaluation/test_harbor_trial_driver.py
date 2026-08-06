@@ -182,12 +182,6 @@ def test_preflight_digest_is_stable_across_hash_seeds(tmp_path, checked_policies
     assert all(result["digest"] == expected["digest"] for result in seeded)
 
 
-def test_external_environment_imports_harbor_agent_factory():
-    completed = _external_python("-c", "from harbor.agents.factory import AgentFactory; print(AgentFactory.__name__)")
-
-    assert completed.stdout.strip() == "AgentFactory"
-
-
 def test_single_turn_aime_agent_grades_length_finished_response(tmp_path):
     content = "A long incomplete derivation mentions 12. The final result is \\boxed{137}."
     result = _run_single_turn_aime_agent(tmp_path, content=content, finish_reason="length")

@@ -58,8 +58,8 @@ def _fake_conversion(arch: LmConfig | None = None) -> HfToLevanterCheckpoint:
         name="checkpoints/hf-to-levanter/qwen-qwen3-0.6b-qwen3",
         version="2026.07.17",
         artifact_type=LevanterCheckpoint,
-        run=lambda config: None,
-        build_config=lambda ctx: {},
+        run=lambda _config: None,
+        build_config=lambda _ctx: {},
     )
     return HfToLevanterCheckpoint(step=step, model=arch or _tiny_arch())
 

@@ -42,6 +42,10 @@ from experiments.evaluation.launch import (
 )
 from experiments.evaluation.models import models
 
+_ACCELERATOR_RUNTIME_ARG = "accelerator"
+_SUBMISSION_CLUSTER_RUNTIME_ARG = "submission_cluster"
+_FEDERATED_CLUSTER_RUNTIME_ARG = "federated_cluster"
+
 
 @dataclass(frozen=True)
 class EvalStepConfig:
@@ -82,7 +86,7 @@ class CatalogEvaluationModel:
     def deps(self) -> tuple[ArtifactStep, ...]:
         return ()
 
-    def resolve(self, ctx: StepContext) -> ModelConfig:
+    def resolve(self, _ctx: StepContext) -> ModelConfig:
         return models()[self.name]
 
 
@@ -133,9 +137,9 @@ def eval_model_step(
             evals=evals,
             limit=limit,
             artifact_path=ctx.output_path,
-            accelerator=ctx.runtime_arg("accelerator"),
-            submission_cluster=ctx.runtime_arg("submission_cluster"),
-            federated_cluster=ctx.runtime_arg("federated_cluster"),
+            accelerator=ctx.runtime_arg(_ACCELERATOR_RUNTIME_ARG),
+            submission_cluster=ctx.runtime_arg(_SUBMISSION_CLUSTER_RUNTIME_ARG),
+            federated_cluster=ctx.runtime_arg(_FEDERATED_CLUSTER_RUNTIME_ARG),
             version=version,
         )
 
@@ -148,9 +152,9 @@ def eval_model_step(
         build_config=build_config,
         deps=deps,
         runtime_args={
-            "accelerator": accelerator,
-            "submission_cluster": submission_cluster,
-            "federated_cluster": federated_cluster,
+            _ACCELERATOR_RUNTIME_ARG: accelerator,
+            _SUBMISSION_CLUSTER_RUNTIME_ARG: submission_cluster,
+            _FEDERATED_CLUSTER_RUNTIME_ARG: federated_cluster,
         },
     )
 

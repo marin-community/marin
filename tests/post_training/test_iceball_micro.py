@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from click.testing import CliRunner
+from marin.execution.lazy import materialized_config
 
 from experiments.post_training import iceball_micro
 
@@ -54,17 +55,24 @@ def test_workflow_is_one_dependency_chain_through_both_evaluators() -> None:
     assert workflow.evaluation.name.endswith("gsm8k-smoke,aime-smoke")
 
 
-def test_rl_separates_policy_and_rollout_gpus() -> None:
+def test_rl_separates_policy_and_rollout_gpus(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "marin.rl.skyrl.discover_hf_checkpoints",
+        lambda _artifact_path: ["gs://test-prefix/checkpoints/iceball-micro-sft/hf/step-8"],
+    )
     workflow = iceball_micro.build_workflow(version="2026.08.01")
 
-    request = json.loads(workflow.rl.fingerprint_payload())["request"]
-    assert request["topology"]["num_nodes"] == 2
-    assert request["topology"]["role_plan"]["colocate_all"] is False
+    request = materialized_config(workflow.rl, "gs://test-prefix").request
+    assert request.topology.num_nodes == 2
+    assert request.topology.role_plan.colocate_all is False
 
 
-def test_cli_can_select_rl_as_the_terminal_stage() -> None:
-    result = CliRunner().invoke(iceball_micro.main, ["--version", "2026.08.01", "--stage", "rl"])
+def test_cli_can_run_rl_as_the_terminal_stage(monkeypatch) -> None:
+    submitted = []
+    monkeypatch.setattr("marin.experiment.cli.run", lambda *handles, max_concurrent: submitted.extend(handles))
+
+    result = CliRunner().invoke(iceball_micro.main, ["--version", "2026.08.01", "--stage", "rl", "--run"])
 
     assert result.exit_code == 0
-    assert "checkpoints/iceball-micro-rl@2026.08.01" in result.output
-    assert "evals/iceball-micro" not in result.output
+    assert len(submitted) == 1
+    assert submitted[0].name == "checkpoints/iceball-micro-rl"

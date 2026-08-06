@@ -77,6 +77,7 @@ from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSp
 
 logger = logging.getLogger(__name__)
 
+ICEBALL_MODEL_NAME = "iceball-micro"
 QWEN_TOKENIZER = "Qwen/Qwen3-0.6B-Base"
 QWEN_TOKENIZER_REVISION = "da87bfb"
 FINEWEB_DATASET = "HuggingFaceFW/fineweb-edu"
@@ -95,11 +96,11 @@ ICEBALL_GPU_VARIANT = "GB200"
 ICEBALL_TRAIN_ACCELERATOR = f"4x{ICEBALL_GPU_VARIANT}"
 ICEBALL_EVAL_ACCELERATOR = f"{ICEBALL_GPU_VARIANT}x1"
 ICEBALL_SEQUENCE_LENGTH = 512
-ICEBALL_WANDB_PROJECT = "marin-iceball-micro"
-FINEWEB_ARTIFACT_NAME = "documents/iceball-micro-fineweb-edu"
-FINEWEB_TOKENIZED_ARTIFACT_NAME = "tokenized/iceball-micro-fineweb-edu-qwen3"
+ICEBALL_WANDB_PROJECT = f"marin-{ICEBALL_MODEL_NAME}"
+FINEWEB_ARTIFACT_NAME = f"documents/{ICEBALL_MODEL_NAME}-fineweb-edu"
+FINEWEB_TOKENIZED_ARTIFACT_NAME = f"tokenized/{ICEBALL_MODEL_NAME}-fineweb-edu-qwen3"
 FINEWEB_TRAIN_FILENAME = "train.jsonl.gz"
-GSM8K_ARTIFACT_NAME = "documents/iceball-micro-gsm8k-skyrl"
+GSM8K_ARTIFACT_NAME = f"documents/{ICEBALL_MODEL_NAME}-gsm8k-skyrl"
 GSM8K_TRAIN_FILENAME = "train.parquet"
 GSM8K_VALIDATION_FILENAME = "validation.parquet"
 
@@ -339,7 +340,7 @@ def _fineweb_step(version: str) -> ArtifactStep[TokenizedCache]:
         tokenizer=QWEN_TOKENIZER,
         raw=raw,
         glob=FINEWEB_TRAIN_FILENAME,
-        tags=("iceball-micro", "fineweb-edu"),
+        tags=(ICEBALL_MODEL_NAME, "fineweb-edu"),
     )
 
 
@@ -357,11 +358,11 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     """Compose every iceball-micro stage as one inspectable artifact graph."""
     fineweb_version = version or resolve_version(FINEWEB_TOKENIZED_ARTIFACT_NAME, None)
     fineweb = _fineweb_step(fineweb_version)
-    pretrain_name = "checkpoints/iceball-micro-pretrain"
+    pretrain_name = f"checkpoints/{ICEBALL_MODEL_NAME}-pretrain"
     pretrain = train_lm(
         name=pretrain_name,
         version=version or resolve_version(pretrain_name, None),
-        run_id="iceball-micro-pretrain",
+        run_id=f"{ICEBALL_MODEL_NAME}-pretrain",
         model=ICEBALL_QWEN3_CONFIG,
         optimizer=AdamConfig(
             learning_rate=3e-4,
@@ -378,10 +379,10 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
         evals=None,
         resources=_TRAIN_RESOURCES,
         wandb_project=ICEBALL_WANDB_PROJECT,
-        tags=("iceball-micro", "pretrain", "qwen3"),
+        tags=(ICEBALL_MODEL_NAME, "pretrain", "qwen3"),
     )
 
-    sft_name = "checkpoints/iceball-micro-sft"
+    sft_name = f"checkpoints/{ICEBALL_MODEL_NAME}-sft"
     sft_spec = SFTSpec(
         name=sft_name,
         version=version or resolve_version(sft_name, None),
@@ -420,7 +421,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     sft = sft_step(sft_spec, resources_from_accelerator(ICEBALL_TRAIN_ACCELERATOR))
 
     gsm8k = _gsm8k_step(version or resolve_version(GSM8K_ARTIFACT_NAME, None))
-    rl_name = "checkpoints/iceball-micro-rl"
+    rl_name = f"checkpoints/{ICEBALL_MODEL_NAME}-rl"
     rl = skyrl_step(
         SkyRLSpec(
             name=rl_name,
@@ -457,12 +458,12 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
         ),
     )
 
-    evaluation_name = f"evals/iceball-micro/{ICEBALL_EVALS}"
+    evaluation_name = f"evals/{ICEBALL_MODEL_NAME}/{ICEBALL_EVALS}"
     evaluation = eval_model_step(
         SkyRLEvaluationModel(
             step=rl,
             model=ModelConfig(
-                name="iceball-micro",
+                name=ICEBALL_MODEL_NAME,
                 location=SKYRL_POLICY_LOCATION,
                 tokenizer=QWEN_TOKENIZER,
                 apply_chat_template=True,

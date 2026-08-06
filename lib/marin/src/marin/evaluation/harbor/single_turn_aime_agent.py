@@ -7,10 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 import shlex
-import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -20,6 +18,7 @@ from typing import Any
 from harbor.agents.base import BaseAgent  # pyrefly: ignore[missing-import]
 from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.models.agent.context import AgentContext  # pyrefly: ignore[missing-import]
+from rigging.timing import ExponentialBackoff, retry_with_backoff
 from upath import UPath  # pyrefly: ignore[missing-import]
 
 _BOXED_ANSWER = re.compile(r"\\boxed\s*\{\s*([0-9]{1,3})\s*\}")
@@ -28,8 +27,6 @@ _INVALID_AIME_ANSWER = "-1"
 _RESPONSE_LOG = "response.txt"
 _RETRYABLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _MAX_RETRY_DELAY = 5.0
-
-logger = logging.getLogger(__name__)
 
 
 def _model_request_should_retry(exc: Exception) -> bool:
@@ -69,27 +66,23 @@ def _completion_content(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    payload: object | None = None
-    for attempt in range(max_attempts):
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = json.load(response)
-            break
-        except (TimeoutError, urllib.error.URLError) as exc:
-            attempts_exhausted = attempt + 1 >= max_attempts
-            if attempts_exhausted or not _model_request_should_retry(exc):
-                raise
-            delay = min(retry_initial * (2**attempt), _MAX_RETRY_DELAY)
-            logger.warning(
-                "Harbor model request failed (attempt %d/%d), retrying in %.2fs: %s",
-                attempt + 1,
-                max_attempts,
-                delay,
-                exc,
-            )
-            time.sleep(delay)
 
-    assert payload is not None
+    def request_content() -> object:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.load(response)
+
+    payload = retry_with_backoff(
+        request_content,
+        retryable=_model_request_should_retry,
+        max_attempts=max_attempts,
+        backoff=ExponentialBackoff(
+            initial=min(retry_initial, _MAX_RETRY_DELAY),
+            maximum=_MAX_RETRY_DELAY,
+            factor=2.0,
+            jitter=0,
+        ),
+        operation="Harbor model request",
+    )
     if not isinstance(payload, Mapping):
         raise ValueError("model response must be a JSON object")
     choices = payload.get("choices")
@@ -113,7 +106,7 @@ def _aime_answer(content: str) -> str:
 
 
 class SingleTurnAimeAgent(BaseAgent):
-    """Write the last AIME-sized integer from a bounded model request for verification.
+    """Write the final boxed value, or last AIME-sized integer, from a bounded request.
 
     Unlike an interactive terminal agent, this smoke agent deliberately accepts an OpenAI
     completion whose finish reason is ``length``. That keeps weak or newly initialized models
@@ -156,14 +149,14 @@ class SingleTurnAimeAgent(BaseAgent):
     def version(self) -> str:
         return "1.1.0"
 
-    async def setup(self, environment: BaseEnvironment) -> None:
+    async def setup(self, _environment: BaseEnvironment) -> None:
         return
 
     async def run(
         self,
         instruction: str,
         environment: BaseEnvironment,
-        context: AgentContext,
+        _context: AgentContext,
     ) -> None:
         assert self.model_name is not None
         served_model = self.model_name.split("/", maxsplit=1)[-1]

@@ -337,6 +337,31 @@ def test_submit_evaluation_batch_uses_resolved_federated_cluster_and_priority(mo
     assert captured["priority_band"] == job_pb2.PRIORITY_BAND_INTERACTIVE
 
 
+def test_build_evaluation_batch_uses_submission_cluster_for_direct_endpoint(monkeypatch):
+    clusters: list[str] = []
+    monkeypatch.setattr(
+        "experiments.evaluation.launch._capability_origin",
+        lambda cluster: clusters.append(cluster) or "https://iris.example",
+    )
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=("mmlu-smoke",),
+        evalchemy_definitions=(),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="custom-controller",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+
+    assert clusters == ["custom-controller"]
+
+
 def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
     _install_fake_harbor_preflight(monkeypatch)
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
