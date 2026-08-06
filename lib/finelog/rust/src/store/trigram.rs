@@ -74,7 +74,9 @@
 
 use std::path::{Path, PathBuf};
 
-use arrow::array::{Array, LargeStringArray, RecordBatch, StringArray};
+use arrow::array::RecordBatch;
+
+use crate::store::string_column::StringColumn;
 
 /// Sidecar file magic + version.
 const TGM_MAGIC: &[u8; 4] = b"FLTG";
@@ -741,32 +743,6 @@ impl TrigramSet {
         let mut bloom = SpanBloom::with_capacity(self.len(), fpr);
         self.for_each(|t| bloom.insert(t));
         bloom
-    }
-}
-
-/// A read-only view over a string column as either `Utf8` or `LargeUtf8`.
-enum StringColumn<'a> {
-    Utf8(&'a StringArray),
-    Large(&'a LargeStringArray),
-}
-
-impl<'a> StringColumn<'a> {
-    fn new(col: &'a dyn Array) -> Option<StringColumn<'a>> {
-        if let Some(a) = col.as_any().downcast_ref::<StringArray>() {
-            Some(StringColumn::Utf8(a))
-        } else {
-            col.as_any()
-                .downcast_ref::<LargeStringArray>()
-                .map(StringColumn::Large)
-        }
-    }
-
-    #[inline]
-    fn value(&self, row: usize) -> Option<&str> {
-        match self {
-            StringColumn::Utf8(a) => (!a.is_null(row)).then(|| a.value(row)),
-            StringColumn::Large(a) => (!a.is_null(row)).then(|| a.value(row)),
-        }
     }
 }
 

@@ -19,15 +19,14 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, BooleanArray, LargeStringArray, RecordBatch, StringArray, StringViewArray,
-};
+use arrow::array::{BooleanArray, RecordBatch};
 use arrow::compute::filter_record_batch;
 use parquet::arrow::arrow_writer::{ArrowWriter, ArrowWriterOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::store::schema::CoveringProjection;
 use crate::store::segment::parquet_writer_properties;
+use crate::store::string_column::StringColumn;
 use crate::store::trigram::ByteReader;
 
 const MAGIC: &[u8; 4] = b"FLEQ";
@@ -116,35 +115,6 @@ impl ExactColumn {
     }
 }
 
-enum Strings<'a> {
-    Utf8(&'a StringArray),
-    Large(&'a LargeStringArray),
-    View(&'a StringViewArray),
-}
-
-impl<'a> Strings<'a> {
-    fn new(array: &'a dyn Array) -> Option<Self> {
-        if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
-            return Some(Self::Utf8(values));
-        }
-        if let Some(values) = array.as_any().downcast_ref::<LargeStringArray>() {
-            return Some(Self::Large(values));
-        }
-        array
-            .as_any()
-            .downcast_ref::<StringViewArray>()
-            .map(Self::View)
-    }
-
-    fn value(&self, row: usize) -> Option<&str> {
-        match self {
-            Self::Utf8(values) => (!values.is_null(row)).then(|| values.value(row)),
-            Self::Large(values) => (!values.is_null(row)).then(|| values.value(row)),
-            Self::View(values) => (!values.is_null(row)).then(|| values.value(row)),
-        }
-    }
-}
-
 fn build_column(batches: &[RecordBatch], config: &ExactIndexConfig) -> Option<(ExactColumn, u64)> {
     let mut rows: BTreeMap<String, Vec<RowRun>> = config
         .exact_values
@@ -158,7 +128,7 @@ fn build_column(batches: &[RecordBatch], config: &ExactIndexConfig) -> Option<(E
     let mut offset = 0_u64;
     for batch in batches {
         let index = batch.schema().index_of(&config.column).ok()?;
-        let values = Strings::new(batch.column(index).as_ref())?;
+        let values = StringColumn::new(batch.column(index).as_ref())?;
         for row in 0..batch.num_rows() {
             let value = values.value(row);
             if let Some(counts) = string_counts.as_mut() {

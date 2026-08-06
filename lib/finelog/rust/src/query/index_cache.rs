@@ -23,6 +23,10 @@ pub struct IndexCache {
     cache: Mutex<Lru>,
     corrupt_bundles: AtomicU64,
     corrupt_sections: AtomicU64,
+    aggregate_full: AtomicU64,
+    aggregate_partial: AtomicU64,
+    aggregate_declined: AtomicU64,
+    aggregate_fallbacks: AtomicU64,
 }
 
 impl fmt::Debug for IndexCache {
@@ -40,6 +44,22 @@ pub struct CorruptionCounts {
     pub sections: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AggregateOutcome {
+    Full,
+    Partial,
+    Declined,
+    Fallback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AggregateStats {
+    pub full: u64,
+    pub partial: u64,
+    pub declined: u64,
+    pub fallbacks: u64,
+}
+
 pub struct IndexedSegment {
     pub header: Arc<BundleHeader>,
     pub row_group_rows: Arc<[usize]>,
@@ -55,6 +75,10 @@ impl IndexCache {
             cache: Mutex::new(Lru::new(budget_bytes)),
             corrupt_bundles: AtomicU64::new(0),
             corrupt_sections: AtomicU64::new(0),
+            aggregate_full: AtomicU64::new(0),
+            aggregate_partial: AtomicU64::new(0),
+            aggregate_declined: AtomicU64::new(0),
+            aggregate_fallbacks: AtomicU64::new(0),
         }
     }
 
@@ -209,6 +233,25 @@ impl IndexCache {
         CorruptionCounts {
             bundles: self.corrupt_bundles.load(Ordering::Relaxed),
             sections: self.corrupt_sections.load(Ordering::Relaxed),
+        }
+    }
+
+    pub(crate) fn record_aggregate(&self, outcome: AggregateOutcome) {
+        let counter = match outcome {
+            AggregateOutcome::Full => &self.aggregate_full,
+            AggregateOutcome::Partial => &self.aggregate_partial,
+            AggregateOutcome::Declined => &self.aggregate_declined,
+            AggregateOutcome::Fallback => &self.aggregate_fallbacks,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn aggregate_stats(&self) -> AggregateStats {
+        AggregateStats {
+            full: self.aggregate_full.load(Ordering::Relaxed),
+            partial: self.aggregate_partial.load(Ordering::Relaxed),
+            declined: self.aggregate_declined.load(Ordering::Relaxed),
+            fallbacks: self.aggregate_fallbacks.load(Ordering::Relaxed),
         }
     }
 
@@ -485,5 +528,33 @@ mod tests {
             }
         );
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn aggregate_counters_are_isolated_per_store_cache() {
+        let first = IndexCache::with_budget_bytes(1024);
+        let second = IndexCache::with_budget_bytes(1024);
+        first.record_aggregate(AggregateOutcome::Full);
+        first.record_aggregate(AggregateOutcome::Declined);
+        second.record_aggregate(AggregateOutcome::Fallback);
+
+        assert_eq!(
+            first.aggregate_stats(),
+            AggregateStats {
+                full: 1,
+                partial: 0,
+                declined: 1,
+                fallbacks: 0,
+            }
+        );
+        assert_eq!(
+            second.aggregate_stats(),
+            AggregateStats {
+                full: 0,
+                partial: 0,
+                declined: 0,
+                fallbacks: 1,
+            }
+        );
     }
 }

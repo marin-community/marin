@@ -8,10 +8,10 @@
 
 use std::collections::BTreeMap;
 
-use arrow::array::{
-    Array, Int64Array, LargeStringArray, RecordBatch, StringArray, StringViewArray,
-};
+use arrow::array::{Array, Int64Array, RecordBatch};
 use serde::{Deserialize, Serialize};
+
+use crate::store::string_column::StringColumn;
 
 const MAX_GROUPS: usize = 4_096;
 const MAX_KEY_BYTES: usize = 1024 * 1024;
@@ -69,35 +69,6 @@ impl GroupExtremaSection {
     }
 }
 
-enum Strings<'a> {
-    Utf8(&'a StringArray),
-    Large(&'a LargeStringArray),
-    View(&'a StringViewArray),
-}
-
-impl<'a> Strings<'a> {
-    fn new(array: &'a dyn Array) -> Option<Self> {
-        if let Some(values) = array.as_any().downcast_ref::<StringArray>() {
-            return Some(Self::Utf8(values));
-        }
-        if let Some(values) = array.as_any().downcast_ref::<LargeStringArray>() {
-            return Some(Self::Large(values));
-        }
-        array
-            .as_any()
-            .downcast_ref::<StringViewArray>()
-            .map(Self::View)
-    }
-
-    fn value(&self, row: usize) -> Option<&str> {
-        match self {
-            Self::Utf8(values) => (!values.is_null(row)).then(|| values.value(row)),
-            Self::Large(values) => (!values.is_null(row)).then(|| values.value(row)),
-            Self::View(values) => (!values.is_null(row)).then(|| values.value(row)),
-        }
-    }
-}
-
 /// Build one exact section, declining when the distinct key budget is exceeded.
 pub fn build(batches: &[RecordBatch], config: &GroupExtremaConfig) -> Option<GroupExtremaSection> {
     let mut groups: BTreeMap<String, BTreeMap<String, (i64, i64)>> = BTreeMap::new();
@@ -109,8 +80,8 @@ pub fn build(batches: &[RecordBatch], config: &GroupExtremaConfig) -> Option<Gro
         let filter_index = batch.schema().index_of(&config.filter_column).ok()?;
         let json_index = batch.schema().index_of(&config.json_column).ok()?;
         let extrema_index = batch.schema().index_of(&config.extrema_column).ok()?;
-        let filter = Strings::new(batch.column(filter_index).as_ref())?;
-        let documents = Strings::new(batch.column(json_index).as_ref())?;
+        let filter = StringColumn::new(batch.column(filter_index).as_ref())?;
+        let documents = StringColumn::new(batch.column(json_index).as_ref())?;
         let extrema = batch
             .column(extrema_index)
             .as_any()
@@ -199,6 +170,7 @@ pub fn parse(payload: &[u8]) -> Option<GroupExtremaSection> {
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;

@@ -10,6 +10,13 @@ pub struct HalfOpenIntRange {
     pub upper: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IntComparison {
+    pub column: String,
+    pub operator: Operator,
+    pub value: i64,
+}
+
 pub fn half_open_int_range(predicate: &Expr) -> Option<HalfOpenIntRange> {
     let mut terms = Vec::new();
     conjuncts(predicate, &mut terms);
@@ -17,14 +24,17 @@ pub fn half_open_int_range(predicate: &Expr) -> Option<HalfOpenIntRange> {
     let mut lower = None;
     let mut upper = None;
     for term in terms {
-        let (term_column, operator, value) = int_comparison(term)?;
-        if column.as_ref().is_some_and(|column| column != &term_column) {
+        let comparison = int_comparison(term)?;
+        if column
+            .as_ref()
+            .is_some_and(|column| column != &comparison.column)
+        {
             return None;
         }
-        column = Some(term_column);
-        match operator {
-            Operator::GtEq if lower.replace(value).is_none() => {}
-            Operator::Lt if upper.replace(value).is_none() => {}
+        column = Some(comparison.column);
+        match comparison.operator {
+            Operator::GtEq if lower.replace(comparison.value).is_none() => {}
+            Operator::Lt if upper.replace(comparison.value).is_none() => {}
             _ => return None,
         }
     }
@@ -46,14 +56,16 @@ pub fn conjuncts<'a>(expr: &'a Expr, output: &mut Vec<&'a Expr>) {
     }
 }
 
-pub fn int_comparison(expr: &Expr) -> Option<(String, Operator, i64)> {
+pub(crate) fn int_comparison(expr: &Expr) -> Option<IntComparison> {
     let Expr::BinaryExpr(binary) = expr else {
         return None;
     };
     match (binary.left.as_ref(), binary.right.as_ref()) {
-        (Expr::Column(column), literal) => {
-            Some((column.name.clone(), binary.op, int_literal(literal)?))
-        }
+        (Expr::Column(column), literal) => Some(IntComparison {
+            column: column.name.clone(),
+            operator: binary.op,
+            value: int_literal(literal)?,
+        }),
         (literal, Expr::Column(column)) => {
             let operator = match binary.op {
                 Operator::Lt => Operator::Gt,
@@ -62,7 +74,11 @@ pub fn int_comparison(expr: &Expr) -> Option<(String, Operator, i64)> {
                 Operator::GtEq => Operator::LtEq,
                 _ => return None,
             };
-            Some((column.name.clone(), operator, int_literal(literal)?))
+            Some(IntComparison {
+                column: column.name.clone(),
+                operator,
+                value: int_literal(literal)?,
+            })
         }
         _ => None,
     }

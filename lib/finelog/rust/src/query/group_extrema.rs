@@ -41,9 +41,8 @@ use datafusion::physical_plan::{
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use futures::TryStreamExt;
 
-use crate::query::exact_aggregate::{
-    record_declined, record_fallback, record_full, record_partial, AggregateSource,
-};
+use crate::query::exact_aggregate::AggregateSource;
+use crate::query::index_cache::AggregateOutcome;
 use crate::query::predicate::{conjuncts, int_comparison};
 use crate::query::provider::NamespaceProvider;
 use crate::store::group_extrema::GroupExtremaConfig;
@@ -425,30 +424,33 @@ async fn adaptive_physical_plan(
     let classify_source = source.clone();
     let coverage =
         tokio::task::spawn_blocking(move || classify_coverage(&classify_request, &classify_source))
-            .await;
+            .await
+            .map_err(|error| {
+                source
+                    .index_cache
+                    .record_aggregate(AggregateOutcome::Fallback);
+                DataFusionError::Execution(format!("grouped-extrema coverage task failed: {error}"))
+            })?;
     let coverage = match coverage {
-        Ok(Some(coverage)) => {
+        Some(coverage) => {
             covered_metric.add(coverage.covered_segments);
             uncovered_metric.add(coverage.uncovered_paths.len());
             if coverage.covered_segments > 0 {
                 coverage
             } else {
-                record_declined();
+                source
+                    .index_cache
+                    .record_aggregate(AggregateOutcome::Declined);
                 return DefaultPhysicalPlanner::default()
                     .create_physical_plan(&fallback, session_state)
                     .await;
             }
         }
-        Ok(None) => {
+        None => {
             uncovered_metric.add(source.segment_paths.len());
-            record_declined();
-            return DefaultPhysicalPlanner::default()
-                .create_physical_plan(&fallback, session_state)
-                .await;
-        }
-        Err(error) => {
-            record_fallback();
-            tracing::warn!(%error, "grouped-extrema coverage task failed; using source aggregate");
+            source
+                .index_cache
+                .record_aggregate(AggregateOutcome::Declined);
             return DefaultPhysicalPlanner::default()
                 .create_physical_plan(&fallback, session_state)
                 .await;
@@ -458,7 +460,9 @@ async fn adaptive_physical_plan(
     let logical_plan = match indexed_extrema_plan(&request, &source, coverage) {
         Ok(plan) => plan,
         Err(error) => {
-            record_fallback();
+            source
+                .index_cache
+                .record_aggregate(AggregateOutcome::Fallback);
             tracing::warn!(%error, "could not plan grouped-extrema aggregate; using source aggregate");
             return DefaultPhysicalPlanner::default()
                 .create_physical_plan(&fallback, session_state)
@@ -471,14 +475,18 @@ async fn adaptive_physical_plan(
     {
         Ok(plan) => {
             if partial_coverage {
-                record_partial();
+                source
+                    .index_cache
+                    .record_aggregate(AggregateOutcome::Partial);
             } else {
-                record_full();
+                source.index_cache.record_aggregate(AggregateOutcome::Full);
             }
             Ok(plan)
         }
         Err(error) => {
-            record_fallback();
+            source
+                .index_cache
+                .record_aggregate(AggregateOutcome::Fallback);
             tracing::warn!(%error, "could not build grouped-extrema aggregate; using source aggregate");
             DefaultPhysicalPlanner::default()
                 .create_physical_plan(&fallback, session_state)
@@ -720,13 +728,13 @@ pub fn group_extrema_request(plan: &LogicalPlan) -> Option<GroupExtremaRequest> 
             }
             continue;
         }
-        if let Some((column, operator, value)) = int_comparison(term) {
-            if column != extrema.name {
+        if let Some(comparison) = int_comparison(term) {
+            if comparison.column != extrema.name {
                 return None;
             }
-            match operator {
-                Operator::GtEq if lower.replace(value).is_none() => {}
-                Operator::Lt if upper.replace(value).is_none() => {}
+            match comparison.operator {
+                Operator::GtEq if lower.replace(comparison.value).is_none() => {}
+                Operator::Lt if upper.replace(comparison.value).is_none() => {}
                 _ => return None,
             }
             continue;

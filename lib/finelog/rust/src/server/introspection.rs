@@ -257,7 +257,7 @@ async fn get_server(State(store): State<Arc<Store>>) -> impl IntoResponse {
     let memory = store.memory_summary();
     let cache = metadata_cache_stats();
     let corruption = store.index_cache().corruption_counts();
-    let aggregate = crate::query::exact_aggregate::stats();
+    let aggregate = store.index_cache().aggregate_stats();
     Json(ServerInfoResponse {
         build: build_info(),
         process: ProcessInfo {

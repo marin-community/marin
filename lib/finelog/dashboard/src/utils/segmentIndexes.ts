@@ -1,6 +1,9 @@
 import type { SegmentInfo } from '@/types/introspection'
 import type { ProtoSchema } from '@/types/stats'
 
+const EXACT_POSTINGS_SECTION = 'exact-postings'
+const VALUE_COUNTS_SECTION = 'value-counts'
+
 export interface IndexCoverage {
   id: string
   indexed: number
@@ -28,8 +31,8 @@ export function configuredIndexMethods(schema: ProtoSchema | null): string[] {
     hasExactPostings ||= Boolean(column.index?.exactValues?.length)
     hasValueCounts ||= Boolean(column.index?.valueCounts)
   }
-  if (hasExactPostings || schema.projections?.length) ids.push('exact-postings')
-  if (hasValueCounts) ids.push('value-counts')
+  if (hasExactPostings || schema.projections?.length) ids.push(EXACT_POSTINGS_SECTION)
+  if (hasValueCounts) ids.push(VALUE_COUNTS_SECTION)
   for (const projection of schema.projections ?? []) ids.push(`projection:${projection.name}`)
   return ids.sort()
 }
@@ -88,13 +91,13 @@ export function segmentIndexSummary(
   }
   const covers = (segment: SegmentInfo, method: string): boolean => {
     const available = sections(segment)
-    if (method === 'value-counts') {
+    if (method === VALUE_COUNTS_SECTION) {
       const columns = new Set(
         available.find((section) => section.id === method)?.columns ?? [],
       )
       return requiredCountColumns.every((column) => columns.has(column))
     }
-    if (method === 'exact-postings') {
+    if (method === EXACT_POSTINGS_SECTION) {
       const columns = new Set(
         available.find((section) => section.id === method)?.columns ?? [],
       )
@@ -109,7 +112,7 @@ export function segmentIndexSummary(
     ...new Set(
       stable.flatMap((segment) =>
         sections(segment)
-          .filter((section) => section.id === 'value-counts')
+          .filter((section) => section.id === VALUE_COUNTS_SECTION)
           .flatMap((section) => section.columns),
       ),
     ),
@@ -134,7 +137,7 @@ export function segmentIndexSummary(
       id: column,
       indexed: stable.filter((segment) =>
         sections(segment).some(
-          (section) => section.id === 'value-counts' && section.columns.includes(column),
+          (section) => section.id === VALUE_COUNTS_SECTION && section.columns.includes(column),
         ),
       ).length,
       eligible: stable.length,

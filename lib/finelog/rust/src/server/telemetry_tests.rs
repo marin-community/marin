@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -204,16 +205,33 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
             "step",
         ]
     );
-    assert_eq!(schema.projections.len(), 9);
-    assert_eq!(schema.projections[0].name, "training-status");
-    assert_eq!(schema.projections[1].name, "training-run-attribution");
-    assert_eq!(schema.projections[2].name, "accelerator-power");
-    assert_eq!(schema.projections[3].name, "accelerator-memory");
-    assert_eq!(schema.projections[4].name, "accelerator-faults");
-    assert_eq!(schema.projections[5].name, "accelerator-inventory");
-    assert_eq!(schema.projections[6].name, "accelerator-temperature");
-    assert_eq!(schema.projections[7].name, "accelerator-tensor-activity");
-    assert_eq!(schema.projections[8].name, "accelerator-utilization");
+    let projections: BTreeMap<_, _> = schema
+        .projections
+        .iter()
+        .map(|projection| (projection.name.as_str(), projection))
+        .collect();
+    assert_eq!(
+        projections.keys().copied().collect::<Vec<_>>(),
+        [
+            "accelerator-faults",
+            "accelerator-inventory",
+            "accelerator-memory",
+            "accelerator-power",
+            "accelerator-temperature",
+            "accelerator-tensor-activity",
+            "accelerator-utilization",
+            "training-run-attribution",
+            "training-status",
+        ]
+    );
+    let power = projections["accelerator-power"];
+    assert_eq!(power.predicate_column, "name");
+    assert_eq!(power.predicate_values, ["gpu_power_watts"]);
+    assert!(power.columns.iter().any(|column| column == "value"));
+    assert!(power
+        .columns
+        .iter()
+        .any(|column| column == "attributes_json"));
     assert_eq!(schema.grouped_extrema.len(), 1);
     let grouped = &schema.grouped_extrema[0];
     assert_eq!(grouped.filter_column, "service");

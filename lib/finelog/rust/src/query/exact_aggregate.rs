@@ -14,7 +14,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
@@ -43,7 +42,7 @@ use datafusion::physical_plan::{
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use futures::TryStreamExt;
 
-use crate::query::index_cache::IndexCache;
+use crate::query::index_cache::{AggregateOutcome, IndexCache};
 use crate::query::predicate::{half_open_int_range, HalfOpenIntRange};
 use crate::query::provider::NamespaceProvider;
 use crate::store::index_bundle::SectionKind;
@@ -53,46 +52,6 @@ const MAX_COMBINED_COUNT_VALUES: usize = 16_384;
 const INDEX_GROUP_COLUMN: &str = "__finelog_index_group";
 const INDEX_COUNT_COLUMN: &str = "__finelog_index_count";
 const INDEX_TOTAL_COLUMN: &str = "__finelog_index_total";
-
-static FULL_INDEX_AGGREGATES: AtomicU64 = AtomicU64::new(0);
-static PARTIAL_INDEX_AGGREGATES: AtomicU64 = AtomicU64::new(0);
-static DECLINED_INDEX_AGGREGATES: AtomicU64 = AtomicU64::new(0);
-static FALLBACK_INDEX_AGGREGATES: AtomicU64 = AtomicU64::new(0);
-
-/// Process-lifetime decisions made by the exact aggregate execution path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExactAggregateStats {
-    pub full: u64,
-    pub partial: u64,
-    pub declined: u64,
-    pub fallbacks: u64,
-}
-
-/// Snapshot the exact aggregate execution counters.
-pub fn stats() -> ExactAggregateStats {
-    ExactAggregateStats {
-        full: FULL_INDEX_AGGREGATES.load(Ordering::Relaxed),
-        partial: PARTIAL_INDEX_AGGREGATES.load(Ordering::Relaxed),
-        declined: DECLINED_INDEX_AGGREGATES.load(Ordering::Relaxed),
-        fallbacks: FALLBACK_INDEX_AGGREGATES.load(Ordering::Relaxed),
-    }
-}
-
-pub(crate) fn record_full() {
-    FULL_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
-}
-
-pub(crate) fn record_partial() {
-    PARTIAL_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
-}
-
-pub(crate) fn record_declined() {
-    DECLINED_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
-}
-
-pub(crate) fn record_fallback() {
-    FALLBACK_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum CountMode {
@@ -122,14 +81,8 @@ struct CountRange {
     filter_expr: Expr,
 }
 
-fn range_signature(request: &CountRequest) -> Option<(&str, i64, i64)> {
-    request.range.as_ref().map(|range| {
-        (
-            range.bounds.column.as_str(),
-            range.bounds.lower,
-            range.bounds.upper,
-        )
-    })
+fn range_signature(request: &CountRequest) -> Option<&HalfOpenIntRange> {
+    request.range.as_ref().map(|range| &range.bounds)
 }
 
 /// Logical node emitted for a grouped count that can use segment summaries.
@@ -451,18 +404,19 @@ async fn adaptive_physical_plan(
     let classify_source = source.clone();
     let coverage =
         tokio::task::spawn_blocking(move || classify_coverage(&classify_request, &classify_source))
-            .await;
+            .await
+            .map_err(|error| {
+                source
+                    .index_cache
+                    .record_aggregate(AggregateOutcome::Fallback);
+                DataFusionError::Execution(format!("value-count coverage task failed: {error}"))
+            })?;
     let coverage = match coverage {
-        Ok(Some(coverage)) if coverage.covered_segments > 0 => coverage,
-        Ok(_) => {
-            DECLINED_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
-            return DefaultPhysicalPlanner::default()
-                .create_physical_plan(&fallback, session_state)
-                .await;
-        }
-        Err(error) => {
-            FALLBACK_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(%error, "value-count coverage task failed; using source aggregate");
+        Some(coverage) if coverage.covered_segments > 0 => coverage,
+        _ => {
+            source
+                .index_cache
+                .record_aggregate(AggregateOutcome::Declined);
             return DefaultPhysicalPlanner::default()
                 .create_physical_plan(&fallback, session_state)
                 .await;
@@ -472,7 +426,9 @@ async fn adaptive_physical_plan(
     let logical_plan = match indexed_aggregate_plan(&request, &source, coverage) {
         Ok(plan) => plan,
         Err(error) => {
-            FALLBACK_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+            source
+                .index_cache
+                .record_aggregate(AggregateOutcome::Fallback);
             tracing::warn!(%error, "could not plan value-count aggregate; using source aggregate");
             return DefaultPhysicalPlanner::default()
                 .create_physical_plan(&fallback, session_state)
@@ -485,14 +441,18 @@ async fn adaptive_physical_plan(
     {
         Ok(plan) => {
             if partial_coverage {
-                PARTIAL_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+                source
+                    .index_cache
+                    .record_aggregate(AggregateOutcome::Partial);
             } else {
-                FULL_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+                source.index_cache.record_aggregate(AggregateOutcome::Full);
             }
             Ok(plan)
         }
         Err(error) => {
-            FALLBACK_INDEX_AGGREGATES.fetch_add(1, Ordering::Relaxed);
+            source
+                .index_cache
+                .record_aggregate(AggregateOutcome::Fallback);
             tracing::warn!(%error, "could not build value-count aggregate; using source aggregate");
             DefaultPhysicalPlanner::default()
                 .create_physical_plan(&fallback, session_state)

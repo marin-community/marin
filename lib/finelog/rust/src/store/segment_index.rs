@@ -22,6 +22,8 @@ const EXACT_POSTINGS_METHOD_VERSION: u8 = 1;
 const VALUE_COUNTS_METHOD_VERSION: u8 = 1;
 const PROJECTION_METHOD_VERSION: u8 = 1;
 const GROUP_EXTREMA_METHOD_VERSION: u8 = 1;
+const EXACT_POSTINGS_SECTION_ID: &str = "exact-postings";
+const VALUE_COUNTS_SECTION_ID: &str = "value-counts";
 pub const SOURCE_ROW_OFFSET_IDENTITY: &str = "source_segment_row_offset";
 
 /// Complete secondary-index policy for a namespace segment.
@@ -314,10 +316,10 @@ pub fn needs_rebuild(parquet_path: &Path, expected_rows: i64, config: &SegmentIn
                 header.section(&trigram_section_id(column)).is_some()
             }
             IndexSpec::ExactPostings { column, .. } => {
-                section_covers_column(&header, "exact-postings", column)
+                section_covers_column(&header, EXACT_POSTINGS_SECTION_ID, column)
             }
             IndexSpec::ValueCounts { column } => {
-                section_covers_column(&header, "value-counts", column)
+                section_covers_column(&header, VALUE_COUNTS_SECTION_ID, column)
             }
             IndexSpec::AdaptiveValueCounts { .. } | IndexSpec::CoveringProjection { .. } => true,
             IndexSpec::AdaptiveGroupExtrema { .. } => true,
@@ -584,7 +586,7 @@ fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSectio
     };
     if !postings.columns.is_empty() {
         sections.push(SectionInput {
-            id: "exact-postings".to_string(),
+            id: EXACT_POSTINGS_SECTION_ID.to_string(),
             kind: SectionKind::ExactPostings,
             method_version: EXACT_POSTINGS_METHOD_VERSION,
             exactness: Exactness::ExactRows,
@@ -619,7 +621,7 @@ fn append_exact_sections(sections: &mut Vec<SectionInput>, sidecar: &ExactSectio
     };
     if !counts.columns.is_empty() {
         sections.push(SectionInput {
-            id: "value-counts".to_string(),
+            id: VALUE_COUNTS_SECTION_ID.to_string(),
             kind: SectionKind::ValueCounts,
             method_version: VALUE_COUNTS_METHOD_VERSION,
             exactness: Exactness::ExactAggregate,
