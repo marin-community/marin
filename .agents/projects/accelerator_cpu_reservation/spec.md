@@ -26,13 +26,7 @@ Each object is cluster-scoped, non-default, and has a description stating that i
 PROTECTED_WORKLOAD_PRIORITY_CLASSES: dict[int, tuple[str, int]]
 
 def build_protected_workload_priority_class_manifests() -> list[dict]:
-    """Return the canonical Kueue WorkloadPriorityClass manifests.
-
-    The result contains exactly one manifest for each user-selectable Iris
-    priority band, ordered production, interactive, batch. Names and values are
-    stable cluster contracts shared by IaC, the manual installer, preflight, and
-    Pod lowering.
-    """
+    """Return one canonical WorkloadPriorityClass manifest per Iris band."""
 ```
 
 `lib/iris/src/iris/cluster/backends/k8s/tasks.py` extends `PodConfig` with:
