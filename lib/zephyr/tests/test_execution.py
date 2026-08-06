@@ -456,7 +456,7 @@ def test_status_reports_alive_workers_not_total(coordinator):
 
     # Register 3 workers
     for i in range(3):
-        coordinator.register_worker(f"worker-{i}", MagicMock())
+        coordinator.register_worker(f"worker-{i}", MagicMock(), f"inc-{i}")
 
     status = coordinator.get_status()
     assert len(status.workers) == 3
@@ -488,7 +488,7 @@ def test_status_reports_alive_workers_not_total(coordinator):
     # Simulate worker-0 re-registering while worker-2 holds the task in-flight
     # (race between heartbeat requeue and re-registration).
     # Since worker-0 has no in-flight task anymore, this is a no-op for requeueing.
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
     status = coordinator.get_status()
     assert status.workers["worker-0"]["state"] == "active"
     alive = sum(1 for w in status.workers.values() if w["state"] == "active")
@@ -498,7 +498,7 @@ def test_status_reports_alive_workers_not_total(coordinator):
     # worker-2 dies while holding the task, and before heartbeat fires,
     # it re-registers — the in-flight task should be requeued.
     assert 0 in run.in_flight  # worker-2 holds shard 0
-    coordinator.register_worker("worker-2", MagicMock())
+    coordinator.register_worker("worker-2", MagicMock(), "inc-worker-2")
     assert 0 not in run.in_flight  # in-flight cleared
     assert len(run.task_queue) == 1  # task was requeued
 
@@ -525,11 +525,11 @@ def test_draining_pool_releases_idle_workers_during_the_last_stage_tail(tmp_path
     try:
         start_test_stage(coordinator, [_make_task("tail")], stage_name="tail", is_last_stage=True)
 
-        coordinator.register_worker("worker-0", MagicMock())
+        coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
         status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
         assert status == PullStatus.RUN_TASK  # drains the queue, worker-0 now busy
 
-        coordinator.register_worker("worker-1", MagicMock())
+        coordinator.register_worker("worker-1", MagicMock(), "inc-worker-1")
         status, _work = coordinator.pull_task("worker-1", _TEST_WORKER_AVAILABLE)
         assert status == PullStatus.SHUTDOWN
 
@@ -551,10 +551,10 @@ def test_draining_pool_keeps_workers_before_the_last_stage(tmp_path, actor_conte
     try:
         start_test_stage(coordinator, [_make_task("mid")], stage_name="mid", is_last_stage=False)
 
-        coordinator.register_worker("worker-0", MagicMock())
+        coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
         assert coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)[0] == PullStatus.RUN_TASK
 
-        coordinator.register_worker("worker-1", MagicMock())
+        coordinator.register_worker("worker-1", MagicMock(), "inc-worker-1")
         status, _work = coordinator.pull_task("worker-1", _TEST_WORKER_AVAILABLE)
         assert status == PullStatus.NO_WORK_BACKOFF
     finally:
@@ -569,11 +569,11 @@ def test_pull_task_backs_off_instead_of_shutting_a_worker_down(coordinator):
     """
     start_test_stage(coordinator, [_make_task("mid")], stage_name="mid", is_last_stage=True)
 
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
     status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK  # drain the queue
 
-    coordinator.register_worker("worker-1", MagicMock())
+    coordinator.register_worker("worker-1", MagicMock(), "inc-worker-1")
     status, _work = coordinator.pull_task("worker-1", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.NO_WORK_BACKOFF
 
@@ -585,7 +585,7 @@ def test_pull_task_returns_shutdown_on_coordinator_shutdown(coordinator):
     start_test_stage(coordinator, [_make_task("any")], stage_name="any")
     coordinator._shutdown_event.set()
 
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
     status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.SHUTDOWN
 
@@ -720,7 +720,7 @@ def test_progress_metric_resets_at_stage_start_and_advances_after_a_shard(coordi
     assert emitted[-1][0] == 1_000.0
     assert emitted[-1][1]["run"] == _TEST_EXECUTION_ID
 
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
     assert work is not None
@@ -930,7 +930,7 @@ def test_report_error_requeues_until_max_shard_failures(coordinator):
         cost=_TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
 
     # Each failure should re-queue until the limit
     for i in range(MAX_SHARD_FAILURES - 1):
@@ -960,7 +960,7 @@ def test_heartbeat_timeouts_do_not_count_toward_shard_failures(coordinator):
         cost=_TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
 
     # Far more heartbeat timeouts than MAX_SHARD_FAILURES — must not abort.
     for _ in range(MAX_SHARD_FAILURES * 5):
@@ -1006,7 +1006,7 @@ def test_repeated_infra_failures_on_same_shard_eventually_abort(coordinator):
         cost=_TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
 
     # One short of the cap: still re-queues, no abort yet.
     for _ in range(MAX_SHARD_INFRA_FAILURES - 1):
@@ -1044,7 +1044,7 @@ def test_max_shard_failures_override_via_constructor(coordinator):
         cost=_TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
 
     # First failure: re-queues, no abort.
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
@@ -1078,7 +1078,7 @@ def test_max_shard_infra_failures_override_via_constructor(coordinator):
         cost=_TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
 
     # First infra failure: re-queues, no abort.
     status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
@@ -1108,14 +1108,15 @@ def test_worker_reregistration_does_not_count_toward_shard_failures(coordinator)
         cost=_TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-0")
 
-    for _ in range(MAX_SHARD_FAILURES * 5):
+    for reconstruction in range(1, MAX_SHARD_FAILURES * 5 + 1):
         status, _work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
         assert status == PullStatus.RUN_TASK
-        # Simulate preemption + Iris reconstruction: worker re-registers while
-        # a task is still recorded as in-flight on the old handle.
-        coordinator.register_worker("worker-0", MagicMock())
+        # Simulate preemption + Iris reconstruction: a NEW worker process reuses the
+        # worker_id while a task is still recorded in-flight against the dead one, so it
+        # reports a fresh incarnation.
+        coordinator.register_worker("worker-0", MagicMock(), f"inc-{reconstruction}")
         assert 0 not in run.in_flight
         assert run.fatal_error is None
 
@@ -1133,7 +1134,7 @@ def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(coord
         cost=_TEST_TASK_COST,
     )
     run = start_test_stage(coordinator, [task])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
 
     # Several preemption cycles first — these must not count.
     for _ in range(5):
@@ -1170,8 +1171,8 @@ def test_wait_for_stage_fails_when_all_workers_die(coordinator):
     run = start_test_stage(coordinator, [task])
 
     # Register 2 workers
-    coordinator.register_worker("worker-0", MagicMock())
-    coordinator.register_worker("worker-1", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
+    coordinator.register_worker("worker-1", MagicMock(), "inc-worker-1")
 
     # Kill all workers via heartbeat timeout
     coordinator._last_seen["worker-0"] = 0.0
@@ -1202,7 +1203,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(coordinator):
     run = start_test_stage(coordinator, [task])
 
     # Register and kill a worker
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
     coordinator._last_seen["worker-0"] = 0.0
     coordinator.check_heartbeats(timeout=0.0)
     assert coordinator._worker_states["worker-0"] == WorkerState.FAILED
@@ -1211,7 +1212,7 @@ def test_wait_for_stage_resets_dead_timer_on_recovery(coordinator):
     # after a short delay (simulating recovery before timeout expires)
     def recover_and_complete():
         time.sleep(0.1)
-        coordinator.register_worker("worker-0", MagicMock())
+        coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
         status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
         assert status == PullStatus.RUN_TASK
         assert work is not None
@@ -1692,7 +1693,7 @@ def test_failed_execution_drains_in_flight_tasks_before_teardown(coordinator):
     shared data or writes chunks nothing will clean up.
     """
     run = start_test_stage(coordinator, [_make_task("drain-me")])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
     assert run.in_flight, "expected a dispatched task to drain"
@@ -1724,7 +1725,7 @@ def test_failed_execution_drains_in_flight_tasks_before_teardown(coordinator):
 def test_coordinator_shutdown_does_not_end_the_drain(coordinator):
     """A task writing during teardown is no safer than one writing at any other time."""
     run = start_test_stage(coordinator, [_make_task("drain-me")])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
     status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
 
@@ -1752,7 +1753,7 @@ def test_coordinator_shutdown_does_not_end_the_drain(coordinator):
 def test_undrained_execution_keeps_storage(coordinator, tmp_path):
     """Release keeps storage when an active task does not drain."""
     run = start_test_stage(coordinator, [_make_task("still-running")])
-    coordinator.register_worker("worker-0", MagicMock())
+    coordinator.register_worker("worker-0", MagicMock(), "inc-worker-0")
     status, _ = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
     assert status == PullStatus.RUN_TASK
 
@@ -1768,3 +1769,64 @@ def test_undrained_execution_keeps_storage(coordinator, tmp_path):
 
     coordinator.release_execution(_TEST_EXECUTION_ID)
     assert shared_data.exists()
+
+
+def _one_task() -> ShardTask:
+    return ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+        cost=_TEST_TASK_COST,
+    )
+
+
+def test_same_incarnation_reregistering_does_not_requeue_running_work(coordinator):
+    """A retried registration must not discard work the same process is running.
+
+    register_worker is retried when its RPC times out client-side, and the earlier
+    attempt may already have landed. Requeuing on any second registration would treat a
+    healthy worker's in-flight shard as lost and hand it to someone else.
+    """
+    task = _one_task()
+    run = start_test_stage(coordinator, [task])
+    coordinator.register_worker("worker-0", MagicMock(), "inc-A")
+    status, work = coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK and work is not None
+    assert task.shard_idx in run.in_flight
+
+    coordinator.register_worker("worker-0", MagicMock(), "inc-A")
+
+    assert task.shard_idx in run.in_flight, "same incarnation must leave in-flight work alone"
+    assert not run.task_queue, "the shard must not have been requeued"
+
+
+def test_new_incarnation_requeues_the_dead_process_in_flight_work(coordinator):
+    """A reconstructed worker reports a new incarnation, orphaning the old one's tasks.
+
+    Heartbeats cannot recover these: the replacement process keeps ``_last_seen`` fresh
+    under the same worker_id, so the shard would sit in_flight forever and the stage
+    would never finish.
+    """
+    task = _one_task()
+    run = start_test_stage(coordinator, [task])
+    coordinator.register_worker("worker-0", MagicMock(), "inc-A")
+    coordinator.pull_task("worker-0", _TEST_WORKER_AVAILABLE)
+    assert task.shard_idx in run.in_flight
+
+    coordinator.register_worker("worker-0", MagicMock(), "inc-B")
+
+    assert task.shard_idx not in run.in_flight, "the dead process's shard must be released"
+    assert [t.shard_idx for t in run.task_queue] == [task.shard_idx], "and requeued for dispatch"
+
+
+def test_deregistration_lets_a_reused_worker_id_count_as_first_contact(coordinator):
+    """After a clean exit the slot is free, so a later process is not 'reconstructed'."""
+    start_test_stage(coordinator, [_one_task()])
+    coordinator.register_worker("worker-0", MagicMock(), "inc-A")
+    coordinator.deregister_worker("worker-0")
+
+    coordinator.register_worker("worker-0", MagicMock(), "inc-B")
+
+    assert coordinator._worker_incarnations["worker-0"] == "inc-B"

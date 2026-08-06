@@ -328,6 +328,10 @@ class ZephyrCoordinator:
         # out-of-order heartbeats.
         self._worker_counters: dict[str, CounterSnapshot] = {}
         self._worker_handles: dict[str, ActorHandle] = {}
+        # Process identity behind each worker_id. A reconstructed worker reuses its
+        # worker_id but reports a fresh incarnation, which is how the coordinator tells
+        # "this worker died mid-task and came back" from "this worker registered twice".
+        self._worker_incarnations: dict[str, str] = {}
         self._worker_group: Any = None  # ActorGroup, set via set_worker_group()
         self._memory_tables: dict[str, MemoryTableRegistration] = {}
         self._coordinator_thread: threading.Thread | None = None
@@ -356,29 +360,52 @@ class ZephyrCoordinator:
         """Set the worker ActorGroup so the coordinator can detect permanent worker death."""
         self._worker_group = worker_group
 
-    def register_worker(self, worker_id: str, worker_handle: ActorHandle) -> tuple[MemoryTableRegistration, ...]:
+    def register_worker(
+        self,
+        worker_id: str,
+        worker_handle: ActorHandle,
+        incarnation: str,
+    ) -> tuple[MemoryTableRegistration, ...]:
         """Called by workers when they come online to register with coordinator.
 
-        Handles re-registration from reconstructed workers (e.g. after node
-        preemption) by updating the stale handle and resetting worker state. The
-        returned table registrations let the worker restore table metadata
-        before it polls for tasks. Table data is reloaded lazily on first use.
+        ``incarnation`` identifies the worker *process*. A worker reconstructed after
+        preemption reuses its ``worker_id`` but reports a new incarnation, and only then
+        does the coordinator requeue what the dead process was holding -- otherwise a
+        task in flight on a healthy worker would be silently duplicated.
+
+        The returned table registrations let the worker restore table metadata before it
+        polls for tasks. Table data is reloaded lazily on first use.
+
+        Args:
+            worker_id: Stable identity of the worker slot.
+            worker_handle: Actor handle for the current process.
+            incarnation: Opaque per-process token, minted once at worker startup.
         """
         with self._lock:
-            if worker_id in self._worker_handles:
-                logger.info("Worker %s re-registering (likely reconstructed), updating handle", worker_id)
-                self._worker_handles[worker_id] = worker_handle
-                self._worker_states[worker_id] = WorkerState.ACTIVE
-                self._last_seen[worker_id] = time.monotonic()
-                # NOTE: if there was a task assigned to the worker, there's a race condition between marking
-                # the worker as unhealthy via heartbeat and re-registration. If we do not requeue we may silently
-                # lose tasks.
+            known = self._worker_incarnations.get(worker_id)
+            self._worker_handles[worker_id] = worker_handle
+            self._worker_incarnations[worker_id] = incarnation
+            self._worker_states[worker_id] = WorkerState.ACTIVE
+            self._last_seen[worker_id] = time.monotonic()
+
+            if known is None:
+                logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+            elif known != incarnation:
+                # New process behind a known id: the previous one died mid-task, and its
+                # in-flight shards are otherwise orphaned. Heartbeats cannot catch this,
+                # because this live process keeps ``_last_seen`` fresh.
+                logger.info(
+                    "Worker %s reconstructed (incarnation %s -> %s); requeuing its in-flight tasks",
+                    worker_id,
+                    known,
+                    incarnation,
+                )
                 self._maybe_requeue_worker_tasks(worker_id)
             else:
-                self._worker_handles[worker_id] = worker_handle
-                self._worker_states[worker_id] = WorkerState.ACTIVE
-                self._last_seen[worker_id] = time.monotonic()
-                logger.info("Worker %s registered, total: %d", worker_id, len(self._worker_handles))
+                # Same process registering again -- a retry after a client-side timeout
+                # whose server side had already succeeded. Requeuing here would discard
+                # work this worker is legitimately running.
+                logger.info("Worker %s re-sent registration for the same incarnation", worker_id)
             return tuple(self._memory_tables.values())
 
     def register_memory_table(self, registration: MemoryTableRegistration) -> None:
@@ -402,6 +429,7 @@ class ZephyrCoordinator:
         """Remove a sub-worker that has finished its stage pool."""
         with self._lock:
             self._worker_handles.pop(worker_id, None)
+            self._worker_incarnations.pop(worker_id, None)
             self._worker_states.pop(worker_id, None)
             self._last_seen.pop(worker_id, None)
 
