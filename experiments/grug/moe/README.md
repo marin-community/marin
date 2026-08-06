@@ -103,13 +103,21 @@ instead of compressing the full decay into 500 steps.
 
 ```bash
 GRUG_TIED_PHASE=smoke .venv/bin/iris --cluster=marin job run \
-  --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" \
+  --no-wait --region us-central1 --reserve v5p-8 \
+  -e MARIN_PREFIX gs://marin-us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.grug.moe.launch_tied_experts --version dev --run
 
 GRUG_TIED_PHASE=full .venv/bin/iris --cluster=marin job run \
-  --no-wait --reserve v5p-8 -e WANDB_API_KEY "$WANDB_API_KEY" \
+  --no-wait --region us-central1 --reserve v5p-8 \
+  -e MARIN_PREFIX gs://marin-us-central1 -e WANDB_API_KEY "$WANDB_API_KEY" \
   -- python -m experiments.grug.moe.launch_tied_experts --version YYYY.MM.DD --run
 ```
+
+The launcher also pins its TPU request to `us-central1`. The worker validates
+checkpoint and output GCS paths against its own region before model or data
+initialization. Keep the eventual calibration, cost matrices, converted
+checkpoint, and recovery output in the same region; the merge path validates
+all four locations without the training-data skip used by ordinary runs.
 
 ### Prior work and deviation
 
@@ -135,6 +143,30 @@ recovery are separate hypotheses tracked in
 [`grug-cross-layer-expert-merging.md`](../../../.agents/logbooks/grug-cross-layer-expert-merging.md).
 They should start only after the tied-from-scratch architecture gate produces a
 contemporaneous d512 control.
+
+### One-pair conversion prototype
+
+The first conversion merges layers 2 and 3 into topology `(0,1,2,2,3,4)`.
+[`expert_merge.py`](./expert_merge.py) collects weighted per-expert routed
+states, constructs covariance/JVP finite-difference probes, evaluates all
+candidate experts in bounded chunks, solves identity/native/spectral
+assignments, and permutes the source router and pending QB state. Native
+checkpoint conversion writes a manifest containing the topology, assignment,
+source commit, and artifact paths.
+
+[`expert_prefit.py`](./expert_prefit.py) balances every minibatch by source
+layer and source expert while fitting only the replacement bank.
+[`merge_recovery.py`](./merge_recovery.py) exposes the two recovery phases:
+local recovery trains only the shared bank and leaves QB unchanged;
+preservation recovery adds the two affected routers and restricts QB updates to
+those layers. Teacher MoE targets are evaluated on each current student MLP
+input. A positive logit-KL weight requires an explicit fused or streaming KL
+callback because the recovery path does not materialize full-vocabulary
+teacher and student logits.
+
+These modules have local behavior and checkpoint tests. They have not produced
+a surgery result; calibration and recovery remain gated on the matched d512
+architecture runs above.
 
 ## Scaling heuristic
 

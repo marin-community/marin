@@ -40,7 +40,8 @@ _HIDDEN_DIM = 512
 _SEQUENCE_LENGTH = 4096
 _TARGET_STEPS = 2**14
 _SMOKE_STEPS = 500
-_TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8")
+_EXPERIMENT_REGION = "us-central1"
+_TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8", regions=[_EXPERIMENT_REGION])
 _TRAIN_RESOURCES_KEY = "train_resources"
 
 _BASELINE_TOPOLOGY = (0, 1, 2, 3, 4, 5)

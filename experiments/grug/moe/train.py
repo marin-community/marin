@@ -37,6 +37,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from marin.training.training import check_train_config_paths
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -390,6 +391,9 @@ def _make_train_step(
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
+    # This runs on the accelerator worker, where the VM region is authoritative.
+    # Check checkpoint and output buckets before initializing data or model state.
+    check_train_config_paths(config, config.resources)
     trainer = config.trainer.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)

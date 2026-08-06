@@ -653,12 +653,8 @@ class MoEMLP(eqx.Module):
         )
 
     @named_call
-    def __call__(
-        self,
-        x: Float[Array, "B S D"],
-        expert_bank: MoEExpertMlp,
-    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        b, s, _ = x.shape
+    def route(self, x: Float[Array, "B S D"]) -> "MoERouting":
+        """Compute routed expert IDs, combine weights, and QB statistics."""
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
@@ -704,18 +700,42 @@ class MoEMLP(eqx.Module):
             out_specs=P(),
         )(s_minus_alpha)
 
+        return MoERouting(
+            x_flat=x_flat,
+            selected_experts=selected_experts,
+            combine_weights=combine_weights,
+            router_stats=router_stats,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: Float[Array, "B S D"],
+        expert_bank: MoEExpertMlp,
+    ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
+        b, s, _ = x.shape
+        routing = self.route(x)
+
         routed_flat, dropped_assignments = expert_bank(
-            x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
+            routing.x_flat,
+            routing.selected_experts.astype(jnp.int32),
+            routing.combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=True,
         )
+        router_stats = routing.router_stats
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
+
+
+class MoERouting(NamedTuple):
+    x_flat: jax.Array
+    selected_experts: jax.Array
+    combine_weights: jax.Array
+    router_stats: dict[str, jax.Array]
 
 
 def _init_expert_bank(cfg: GrugModelConfig, *, block_key: PRNGKeyArray) -> MoEExpertMlp:
@@ -762,6 +782,43 @@ class Block(eqx.Module):
         )
 
     @named_call
+    def forward_with_moe_trace(
+        self,
+        x: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        expert_bank: MoEExpertMlp,
+        use_pko: bool = False,
+        disable_rope: bool = False,
+    ) -> "MoeBlockTrace":
+        """Run a block and expose the exact routed-MoE calibration boundary."""
+        attn_in = self.attn_gated_norm(self.rms_attn(x))
+        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
+        mlp_input = self.mlp_gated_norm(self.rms_mlp(x))
+        routing = self.mlp.route(mlp_input)
+        routed_flat, dropped_assignments = expert_bank(
+            routing.x_flat,
+            routing.selected_experts.astype(jnp.int32),
+            routing.combine_weights,
+            mesh=get_abstract_mesh(),
+            report_capacity_overflow=True,
+        )
+        routed_output = rearrange(routed_flat, "(b s) d -> b s d", b=x.shape[0], s=x.shape[1])
+        routed_output = reshard(routed_output, _batch_spec())
+        router_stats = routing.router_stats
+        router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+        mlp_output = routed_output
+        if self.shared is not None:
+            mlp_output = mlp_output + self.shared(mlp_input, activation=ActivationFunctionEnum.silu)
+        return MoeBlockTrace(
+            hidden=x + mlp_output,
+            mlp_input=mlp_input,
+            selected_experts=routing.selected_experts,
+            combine_weights=routing.combine_weights,
+            routed_output=routed_output,
+            router_stats=router_stats,
+        )
+
+    @named_call
     def __call__(
         self,
         x: Float[Array, "B S D"],
@@ -770,14 +827,23 @@ class Block(eqx.Module):
         use_pko: bool = False,
         disable_rope: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        attn_in = self.attn_gated_norm(self.rms_attn(x))
-        x = x + self.attn(attn_in, mask, use_pko=use_pko, disable_rope=disable_rope)
-        mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out, router_stats = self.mlp(mlp_in, expert_bank)
-        if self.shared is not None:
-            mlp_out = mlp_out + self.shared(mlp_in, activation=ActivationFunctionEnum.silu)
-        x = x + mlp_out
-        return x, router_stats
+        trace = self.forward_with_moe_trace(x, mask, expert_bank, use_pko, disable_rope)
+        return trace.hidden, trace.router_stats
+
+
+class MoeBlockTrace(NamedTuple):
+    hidden: jax.Array
+    mlp_input: jax.Array
+    selected_experts: jax.Array
+    combine_weights: jax.Array
+    routed_output: jax.Array
+    router_stats: dict[str, jax.Array]
+
+
+class BlockCallOptions(NamedTuple):
+    mask: AttentionMask
+    use_pko: bool
+    disable_rope: bool
 
 
 class Transformer(eqx.Module):
@@ -840,6 +906,30 @@ class Transformer(eqx.Module):
     def Vocab(self) -> Axis:
         return Axis("vocab", self.config.vocab_size)
 
+    def embed_inputs(self, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+        hidden = self.token_embed.at[token_ids].get(out_sharding=_batch_spec())
+        return self.embed_gated_norm(self.embed_norm(hidden))
+
+    def block_call_options(
+        self,
+        mask: AttentionMask | jax.Array,
+        layer_index: int,
+    ) -> BlockCallOptions:
+        """Resolve the attention mask and long-layer switches for one block."""
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        is_last = layer_index == len(self.blocks) - 1
+        is_long = layer_index % 4 == 3 or is_last
+        layer_mask = AttentionMask(
+            is_causal=True,
+            sliding_window=None if is_long else self.config.sliding_window,
+            segment_ids=segment_ids,
+        )
+        return BlockCallOptions(
+            mask=layer_mask,
+            use_pko=is_long and not self.config.disable_pko,
+            disable_rope=is_long and self.config.disable_long_rope,
+        )
+
     @named_call
     def __call__(
         self,
@@ -849,33 +939,25 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        batch_spec = _batch_spec()
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_gated_norm(self.embed_norm(hidden))
-
-        # Short layers: sliding window. Long layers (every 4th + last): full causal.
-        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
-        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        hidden = self.embed_inputs(token_ids)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
         else:
             remat_policy = None
 
-        num_blocks = len(self.blocks)
         moe_router_stats: list[dict[str, jax.Array]] = []
         activation_norms: list[jax.Array] = []
         for i, block in enumerate(self.blocks):
-            is_last = i == num_blocks - 1
-            is_long = i % 4 == 3 or is_last
-            layer_mask = long_mask if is_long else short_mask
-            use_pko = is_long and not cfg.disable_pko
-            disable_rope = is_long and cfg.disable_long_rope
+            options = self.block_call_options(mask, i)
             expert_bank = self.expert_banks[block.expert_bank_index]
             hidden, router_stats = eqx.filter_checkpoint(block, policy=remat_policy)(
-                hidden, layer_mask, expert_bank, use_pko, disable_rope
+                hidden,
+                options.mask,
+                expert_bank,
+                options.use_pko,
+                options.disable_rope,
             )
             moe_router_stats.append(router_stats)
             activation_norms.append(jnp.sqrt(jnp.mean(jnp.square(hidden.astype(jnp.float32)))))

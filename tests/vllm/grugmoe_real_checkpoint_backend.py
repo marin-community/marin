@@ -317,7 +317,6 @@ def _legacy_split_expert_inference_state_dict(model: Any, cfg: Any, prefix: str 
 def _load_legacy_split_expert_checkpoint(checkpoint_path: str, model_cfg: Any):
     import equinox as eqx  # noqa: PLC0415
     import jax  # noqa: PLC0415
-    import jax.numpy as jnp  # noqa: PLC0415
     from haliax import Axis  # noqa: PLC0415
     from levanter.checkpoint import latest_checkpoint_path, load_checkpoint  # noqa: PLC0415
     from levanter.utils.jax_utils import is_inexact_arrayish  # noqa: PLC0415
@@ -346,7 +345,8 @@ def _load_legacy_split_expert_checkpoint(checkpoint_path: str, model_cfg: Any):
         for layer_index in range(cfg.num_layers):
             block = current.blocks[layer_index]
             expert = current.expert_banks[block.expert_bank_index]
-            gate, up = jnp.split(expert.w_gate_up, [cfg.intermediate_dim], axis=-1)
+            gate = expert.w_gate
+            up = expert.w_up
             original_mlp = block.mlp
             split_mlp = LegacySplitMoEMLP(
                 router=original_mlp.router,
@@ -669,16 +669,15 @@ def _selected_logprob(logits: Any, token_id: int) -> float:
 
 def _executable_model_from_legacy_split(model: Any) -> Any:
     import equinox as eqx  # noqa: PLC0415
-    import jax.numpy as jnp  # noqa: PLC0415
     from levanter.grug.grug_moe import MoEExpertMlp  # noqa: PLC0415
     from levanter.utils.activation import ActivationFunctionEnum  # noqa: PLC0415
 
     from experiments.grug.moe.model import MoEMLP, Transformer  # noqa: PLC0415
 
     def expert_bank_from_legacy_split(split_mlp: Any) -> MoEExpertMlp:
-        w_gate_up = jnp.concatenate([split_mlp.w_gate, split_mlp.w_up], axis=-1)
         return MoEExpertMlp(
-            w_gate_up=w_gate_up,
+            w_gate=split_mlp.w_gate,
+            w_up=split_mlp.w_up,
             w_down=split_mlp.w_down,
             implementation=split_mlp.cfg.moe_implementation,
             activation=ActivationFunctionEnum.silu,
