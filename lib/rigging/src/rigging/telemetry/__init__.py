@@ -25,6 +25,7 @@ from rigging.timing import ExponentialBackoff
 logger = logging.getLogger(__name__)
 
 _FINELOG_ZSTD_LEVEL = 1
+_ZSTD_ENCODING = "zstd"
 
 DEFAULT_MAX_QUEUE_RECORDS = 10_000
 DEFAULT_MAX_QUEUE_BYTES = 16 << 20
@@ -172,7 +173,7 @@ class _RequestsTransport:
         self._server_compression = _ServerCompression.UNKNOWN
 
     def post(self, endpoint: str, body: bytes, batch_id: str, timeout: tuple[float, float]) -> requests.Response:
-        content_encoding = None if self._server_compression is _ServerCompression.UNSUPPORTED else "zstd"
+        content_encoding = None if self._server_compression is _ServerCompression.UNSUPPORTED else _ZSTD_ENCODING
         response = self._post(endpoint, body, batch_id, timeout, content_encoding)
         if _accepts_zstd(response):
             self._server_compression = _ServerCompression.SUPPORTED
@@ -214,7 +215,7 @@ class _RequestsTransport:
 
 def _accepts_zstd(response: _Response) -> bool:
     encodings = response.headers.get("Accept-Encoding", "")
-    return any(encoding.strip().lower() == "zstd" for encoding in encodings.split(","))
+    return any(encoding.strip().lower() == _ZSTD_ENCODING for encoding in encodings.split(","))
 
 
 @dataclass(frozen=True)
