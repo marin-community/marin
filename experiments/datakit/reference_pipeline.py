@@ -350,9 +350,16 @@ def build_fuzzy_dedup_steps(
     dedup_worker_resources: ResourceConfig | None = None,
     dedup_map_task_resources: ResourceConfig | None = None,
     dedup_reduce_task_resources: ResourceConfig | None = None,
+    dedup_output_path: str | None = None,
     zephyr_context: ZephyrContext | None = None,
 ) -> FuzzyDedupSteps:
-    """Build only the MinHash and global fuzzy-dedup parts of the Datakit DAG."""
+    """Build only the MinHash and global fuzzy-dedup parts of the Datakit DAG.
+
+    ``dedup_output_path`` pins the dedup step's output tree instead of deriving
+    it from the step hash. Use it to continue an existing run: connected
+    components then resumes from the completed ``it_N`` directories under that
+    tree, which a raised ``cc_max_iterations`` would otherwise re-key away from.
+    """
     mh = scale.minhash
     minhash = {
         name: compute_minhash_attrs_step(
@@ -382,6 +389,7 @@ def build_fuzzy_dedup_steps(
         coordinator_resources=coordinator_resources,
         map_task_resources=dedup_map_task_resources,
         reduce_task_resources=dedup_reduce_task_resources,
+        override_output_path=dedup_output_path,
         zephyr_context=zephyr_context,
     )
     return FuzzyDedupSteps(minhash=minhash, dedup=dedup)

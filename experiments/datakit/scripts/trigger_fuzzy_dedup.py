@@ -35,7 +35,9 @@ from dataclasses import replace
 from fray.types import ResourceConfig
 from marin.execution.step_runner import StepRunner, step_is_built
 from marin.execution.step_spec import StepSpec
+from marin.execution.step_status import get_status_path
 from marin.processing.classification.deduplication.fuzzy_dups import DEFAULT_CC_MAX_ITERATIONS
+from rigging.filesystem import StoragePath
 from rigging.log_setup import configure_logging
 
 from experiments.datakit.reference_pipeline import (
@@ -112,6 +114,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_DEDUP_INPUT_SHARDS,
         help=f"Input map shards for global fuzzy dedup. Default: {DEFAULT_DEDUP_INPUT_SHARDS}.",
+    )
+    parser.add_argument(
+        "--dedup-output-path",
+        default=None,
+        help=(
+            "Pin the global fuzzy-dedup output tree instead of deriving it from the step hash. "
+            "Use it with a raised --cc-max-iterations to continue an existing run: connected "
+            "components resumes from the completed it_N directories under this tree."
+        ),
+    )
+    parser.add_argument(
+        "--rerun-completed",
+        action="store_true",
+        help=(
+            "Clear a SUCCESS status at the dedup output before running, so a completed step runs "
+            "again in place. Required to continue a run that already reached its iteration cap."
+        ),
     )
     parser.add_argument(
         "--dedup-reduce-shards",
@@ -276,7 +295,22 @@ def _build_steps(args: argparse.Namespace) -> FuzzyDedupSteps:
         dedup_worker_resources=dedup_worker_resources,
         dedup_map_task_resources=dedup_map_task_resources,
         dedup_reduce_task_resources=dedup_reduce_task_resources,
+        dedup_output_path=args.dedup_output_path,
     )
+
+
+def _clear_completed_status(output_path: str) -> None:
+    """Drop a SUCCESS status so the runner rebuilds this output in place.
+
+    The dedup step is otherwise served from cache once its status file says
+    SUCCESS, which blocks a continuation over the same output tree.
+    """
+    status_path = StoragePath(get_status_path(output_path))
+    if not status_path.exists():
+        logger.info("No status file at %s; nothing to clear.", status_path)
+        return
+    logger.warning("Clearing completed status %s so the dedup step runs again in place.", status_path)
+    status_path.rm()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -296,6 +330,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"{len(steps.minhash)} MinHash step(s) would run.")
         print(f"Global fuzzy-dedup output: {steps.dedup.output_path}")
         return
+
+    if args.rerun_completed:
+        _clear_completed_status(steps.dedup.output_path)
 
     StepRunner().run([steps.dedup], max_concurrent=args.max_concurrent)
 
