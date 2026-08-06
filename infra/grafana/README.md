@@ -448,14 +448,16 @@ older revisions to `Editor`; Grafana's normal role synchronization rejects that 
 the organization has no `Admin`. Requests without IAP's identity header remain anonymous
 `Viewer`.
 
-That anonymous fallback is not a public access path. Cloud Run grants `run.invoker` only to
-the IAP service agent, and [IAP authenticates ordinary application requests before they reach
-the container](https://cloud.google.com/run/docs/securing/identity-aware-proxy-cloud-run). If
-Grafana later admits direct public traffic, the backend must distinguish it by validating the
-signed [`X-Goog-IAP-JWT-Assertion`](https://cloud.google.com/iap/docs/identity-howto) or by
-using separate backends that prevent public traffic from supplying auth-proxy headers. The
-unsigned `X-Goog-Authenticated-User-Email` header is not a safe discriminator once a caller
-can bypass IAP and reach the container directly.
+Cloud Run grants `run.invoker` only to the IAP service agent, and direct Cloud Run IAP
+[routes every ingress path through IAP](https://cloud.google.com/run/docs/securing/identity-aware-proxy-cloud-run).
+IAP [strips client-provided `X-Goog-*` headers](https://cloud.google.com/iap/docs/signed-headers-howto)
+before forwarding a request, so the presence of `X-Goog-Authenticated-User-Email` safely
+distinguishes authenticated users in this deployment. To allow anonymous viewing later, grant
+IAP's `roles/iap.httpsResourceAccessor` role to `allUsers`. IAP then admits ordinary requests
+[without checking authentication credentials](https://cloud.google.com/iap/docs/force-login),
+so they have no identity claim and remain Grafana `Viewer`. A sign-in link to
+`?gcp-iap-mode=FORCE_LOGIN` lets a visitor authenticate through IAP; subsequent requests carry
+the email header and become `Editor`.
 
 The OAuth consent screen is project-level and shared across the project's IAP services. The
 shared Cloud Run component admits the OpenAthena Workspace domain and the Loom VM service
