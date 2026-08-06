@@ -492,15 +492,21 @@ def spectral_directions(
         )
     scaled_basis = jnp.asarray(manifold.scaled_basis)
     centers_array = jnp.asarray(centers)
-    w_gate = bank.w_gate[expert_index]
-    w_up = bank.w_up[expert_index]
-    w_down = bank.w_down[expert_index]
+    mesh = get_abstract_mesh()
+    if mesh.empty:
+        w_gate = bank.w_gate[expert_index]
+        w_up = bank.w_up[expert_index]
+        w_down = bank.w_down[expert_index]
+    else:
+        w_gate = bank.w_gate.at[expert_index].get(out_sharding=P("data", "model"))
+        w_up = bank.w_up.at[expert_index].get(out_sharding=P("data", "model"))
+        w_down = bank.w_down.at[expert_index].get(out_sharding=P("model", "data"))
     activation_fn = (
         bank.activation.to_jax_fn() if isinstance(bank.activation, ActivationFunctionEnum) else bank.activation
     )
-    model_sharding = None if get_abstract_mesh().empty else P("model")
-    data_sharding = None if get_abstract_mesh().empty else P("data")
-    replicated_matrix_sharding = None if get_abstract_mesh().empty else P(None, None)
+    model_sharding = None if mesh.empty else P("model")
+    data_sharding = None if mesh.empty else P("data")
+    replicated_matrix_sharding = None if mesh.empty else P(None, None)
 
     def center_gram(center: jax.Array) -> jax.Array:
         def expert_fn(value: jax.Array) -> jax.Array:

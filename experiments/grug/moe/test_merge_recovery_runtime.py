@@ -178,6 +178,12 @@ import jax.numpy as jnp
 import numpy as np
 from haliax.partitioning import set_mesh
 from levanter.grug.grug_moe import MoEExpertMlp
+from experiments.grug.moe.expert_merge import (
+    ReservoirSample,
+    SpectralProbeConfig,
+    build_spectral_probe_set,
+    eval_expert,
+)
 from experiments.grug.moe.merge_recovery_runtime import compact_merge_mesh
 
 mesh = compact_merge_mesh()
@@ -203,7 +209,25 @@ with set_mesh(mesh):
     explicit = jax.jit(lambda current, x, expert_ids, combine: current(x, expert_ids, combine))(
         bank, inputs, selected, weights
     )
+    states = np.random.default_rng(0).normal(size=(32, 16)).astype(np.float32)
+    sample = ReservoirSample(states=states, weights=np.ones(32, dtype=np.float32))
+    probes = build_spectral_probe_set(
+        bank,
+        0,
+        sample,
+        sample,
+        config=SpectralProbeConfig(
+            covariance_rank=4,
+            num_centers=4,
+            num_sensitive_directions=2,
+            directions_per_center=1,
+            ordinary_samples=4,
+        ),
+    )
+    expert_output = eval_expert(bank, 0, states[:4])
 np.testing.assert_allclose(closed, explicit, rtol=1e-5, atol=1e-5)
+assert probes.spectral_pairs.shape == (8, 2, 16)
+assert expert_output.shape == (4, 16)
 """
     environment = os.environ.copy()
     environment["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
