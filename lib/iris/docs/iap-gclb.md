@@ -182,7 +182,9 @@ outage this section documents.
 
 The `aud` is always a client IAP registers; only the **identity** and how the
 token is minted differ. Resolution lives in `rigging/credentials.py`
-(`_edge_provider`) and `iris/cli/connect.py` (`_cluster_auth_from_config`):
+(`edge_provider`) and `iris/cli/connect.py` (`_cluster_auth_from_config`).
+`iris whoami` reports which path is in effect for a cluster (with the caller's
+email and the edge token's expiry) by minting through that same resolver:
 
 | Caller | Token source | `aud` | Identity |
 | ------ | ------------ | ----- | -------- |

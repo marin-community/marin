@@ -72,6 +72,10 @@ IRIS_CLUSTER_CONFIG_DIRS: tuple[str, ...] = tuple(
 )
 DEFAULT_CONTROLLER_TIMEOUT_MS = 30_000
 
+# Credential-store cluster name when nothing else identifies the cluster (no
+# --cluster, config name, local controller, or --controller-url to derive one).
+DEFAULT_CLUSTER_NAME = "default"
+
 
 @dataclass(frozen=True)
 class ControllerEndpoint:
@@ -113,7 +117,7 @@ def resolve_cluster_name(
         return "local"
     if controller_url:
         return cluster_name_from_url(controller_url)
-    return "default"
+    return DEFAULT_CLUSTER_NAME
 
 
 def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
@@ -136,17 +140,23 @@ def _cluster_auth_from_config(auth: AuthConfig) -> ClusterAuth:
     return ClusterAuth(AuthProvider.NONE)
 
 
+def cluster_auth_for(config: IrisClusterConfig | None) -> ClusterAuth:
+    """The cluster's resolved auth shape (IAP params, or network trust).
+
+    Adapts iris's config to rigging's shared vocabulary; a config with no auth
+    block (or none at all) means network-location trust.
+    """
+    if config is not None and config.auth is not None:
+        return _cluster_auth_from_config(config.auth)
+    return ClusterAuth(AuthProvider.NONE)
+
+
 def client_credentials(
     config: IrisClusterConfig | None,
     cluster_name: str,
 ) -> ClientCredentials:
     """Resolve the cluster's client credentials via the shared rigging resolver."""
-    auth = (
-        _cluster_auth_from_config(config.auth)
-        if config is not None and config.auth is not None
-        else ClusterAuth(AuthProvider.NONE)
-    )
-    return credentials_for(cluster_name, auth)
+    return credentials_for(cluster_name, cluster_auth_for(config))
 
 
 def connect_controller(
