@@ -21,6 +21,9 @@ ROOT = Path(__file__).parents[1]
 EXTERNAL_ROOT = Path(__file__).with_name("external")
 GENERATED_PINS = ROOT / "lib" / "marin" / "src" / "marin" / "external_dependencies.py"
 GIT_SUFFIX = ".git"
+GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu-release.toml"
 
@@ -97,7 +100,7 @@ def locked_git_source(lock_path: Path, distribution: str) -> tuple[str, str]:
     package = locked_package(lock_path, distribution)
     source = package["source"]["git"]
     repository_with_query, separator, commit = source.partition("#")
-    if not separator or not re.fullmatch(r"[0-9a-f]{40}", commit):
+    if not separator or GIT_COMMIT_PATTERN.fullmatch(commit) is None:
         raise ValueError(f"{lock_path}: expected a Git source ending in a full commit, found {source!r}")
     repository, _, _ = repository_with_query.partition("?")
     return repository, commit
@@ -139,7 +142,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
             for wheel in config["wheels"]
         ),
     )
-    if not re.fullmatch(r"[0-9a-f]{40}", release.source_commit):
+    if GIT_COMMIT_PATTERN.fullmatch(release.source_commit) is None:
         raise ValueError(f"{path}: expected a full vLLM source commit, found {release.source_commit!r}")
     if not re.fullmatch(r"cu[0-9]+", release.torch_backend):
         raise ValueError(f"{path}: expected a CUDA torch backend, found {release.torch_backend!r}")
@@ -158,7 +161,7 @@ def load_vllm_gpu_release(path: Path) -> VllmGpuRelease:
             raise ValueError(f"{path}: {wheel.architecture} wheel URL is not an asset from {release.release_tag}")
         if f"/{wheel_filename_prefix}" not in wheel.url or not wheel.url.endswith(f"_{wheel.architecture}.whl"):
             raise ValueError(f"{path}: {wheel.architecture} wheel URL does not match vLLM version {release.version}")
-        if not re.fullmatch(r"[0-9a-f]{64}", wheel.sha256):
+        if SHA256_PATTERN.fullmatch(wheel.sha256) is None:
             raise ValueError(f"{path}: {wheel.architecture} wheel has invalid SHA-256 {wheel.sha256!r}")
     return release
 
@@ -184,11 +187,12 @@ def render_pins(
     def wrapped_string_literal(value: str, *, indent: str) -> str:
         chunks = []
         remaining = value
-        while len(remaining) > 88:
-            slash = remaining.rfind("/", 0, 89) + 1
-            split_at = slash if slash >= 44 else remaining.rfind("-", 0, 89) + 1
+        while len(remaining) > GENERATED_STRING_CHUNK_WIDTH:
+            search_end = GENERATED_STRING_CHUNK_WIDTH + 1
+            slash = remaining.rfind("/", 0, search_end) + 1
+            split_at = slash if slash >= GENERATED_STRING_CHUNK_WIDTH // 2 else remaining.rfind("-", 0, search_end) + 1
             if split_at <= 0:
-                split_at = 88
+                split_at = GENERATED_STRING_CHUNK_WIDTH
             chunks.append(remaining[:split_at])
             remaining = remaining[split_at:]
         chunks.append(remaining)

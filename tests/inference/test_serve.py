@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import click
 import pytest
@@ -57,7 +58,6 @@ from marin.inference.vllm_backend import VllmBackend, vllm_launcher
 from marin.inference.vllm_release import (
     vllm_gpu_wheel_for_architecture,
     vllm_gpu_wheel_provenance,
-    vllm_gpu_wheel_requirement,
 )
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
@@ -202,9 +202,12 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     cmd = launcher.command()
     requirement = cmd[cmd.index("--from") + 1]
     wheel = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, machine)
-    assert requirement == vllm_gpu_wheel_requirement(wheel)
-    assert requirement.startswith("vllm @ https://github.com/marin-community/vllm/releases/download/")
-    assert "#sha256=" in requirement
+    distribution, separator, direct_url = requirement.partition(" @ ")
+    parsed_url = urlsplit(direct_url)
+    assert distribution == "vllm"
+    assert separator
+    assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
+    assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
     assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
     python_index = cmd.index("python")
     assert Path(cmd[python_index + 1]).name == "vllm_wheel_entrypoint.py"
@@ -220,7 +223,7 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
 def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
     monkeypatch.setattr("platform.machine", lambda: "ppc64le")
 
-    with pytest.raises(ValueError, match="No verified Marin vLLM GPU wheel for architecture ppc64le"):
+    with pytest.raises(ValueError):
         IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
 
 

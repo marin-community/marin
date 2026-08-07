@@ -30,7 +30,7 @@ def vllm_gpu_wheel_for_architecture(release: VllmGpuRelease, architecture: str) 
 
 
 def current_vllm_gpu_wheel(release: VllmGpuRelease) -> VllmGpuWheel:
-    """Resolve the verified wheel on the current worker."""
+    """Select by ``platform.machine()`` for heterogeneous Iris GPU workers."""
     return vllm_gpu_wheel_for_architecture(release, platform.machine())
 
 
