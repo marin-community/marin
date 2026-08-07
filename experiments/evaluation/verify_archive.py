@@ -11,6 +11,9 @@ written but silently collapsed because two of them shared a merge key.
 Aggregate group rows (``mmlu`` over its 57 subtasks) carry no samples of their own. Evalchemy marks
 them with a ``sample_count`` field that leaf tasks lack, which is how they are excluded here —
 counting them would inflate the expectation by a factor of the group nesting depth.
+
+Only lm-eval mechanisms write these files. A Harbor run states nowhere how many trials it should
+hold, so it is reported as unverifiable rather than as a run whose expectation happens to be zero.
 """
 
 from __future__ import annotations
@@ -65,6 +68,7 @@ class RunVerification:
     expected_rows: int
     actual_rows: int
     multi_filter_tasks: tuple[str, ...]
+    results_files: int = 0
     error: str | None = None
 
     @property
@@ -72,8 +76,13 @@ class RunVerification:
         return self.expected_rows - self.actual_rows
 
     @property
+    def unverifiable(self) -> bool:
+        """A Harbor run writes no ``results_*.json``, so nothing here states what it should hold."""
+        return self.error is None and self.results_files == 0
+
+    @property
     def ok(self) -> bool:
-        return self.error is None and self.missing_rows == 0
+        return self.error is None and not self.unverifiable and self.missing_rows == 0
 
 
 def _document_count(values: dict) -> int | None:
@@ -112,6 +121,7 @@ def leaf_task_expectations(results_json: dict) -> dict[str, TaskExpectation]:
 def verify_run(results_path: str) -> RunVerification:
     """Compare one run's archive sample count against what its results files claim was scored."""
     expectations: dict[str, TaskExpectation] = {}
+    results_files = 0
     try:
         root = StoragePath(results_path)
         for directory, _, names in root.walk():
@@ -122,6 +132,7 @@ def verify_run(results_path: str) -> RunVerification:
                 # counting it here would hold the archive to a total it was never meant to reach.
                 if is_scratch_artifact((directory / name).relative_to(root)):
                     continue
+                results_files += 1
                 expectations.update(leaf_task_expectations(json.loads((directory / name).read_text())))
         actual_rows = archive_sample_count(results_path)
     except Exception as exc:
@@ -136,6 +147,7 @@ def verify_run(results_path: str) -> RunVerification:
         )
     return RunVerification(
         results_path=results_path,
+        results_files=results_files,
         tasks=len(expectations),
         documents=sum(item.documents for item in expectations.values()),
         expected_rows=sum(item.expected_rows for item in expectations.values()),
@@ -172,11 +184,13 @@ def main(results_paths: tuple[str, ...], records_prefixes: tuple[str, ...], only
         configure_coreweave_s3()
     selected = _selected_results_paths(results_paths, records_prefixes)
 
-    verified = short = errored = missing_rows = 0
+    verified = short = errored = unverifiable = missing_rows = 0
     with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
         for result in pool.map(verify_run, selected):
             if result.error is not None:
                 errored += 1
+            elif result.unverifiable:
+                unverifiable += 1
             elif result.missing_rows > 0:
                 short += 1
                 missing_rows += result.missing_rows
@@ -193,6 +207,7 @@ def main(results_paths: tuple[str, ...], records_prefixes: tuple[str, ...], only
                 "selected_runs": len(selected),
                 "verified_runs": verified,
                 "short_runs": short,
+                "unverifiable_runs": unverifiable,
                 "errored_runs": errored,
                 "missing_rows": missing_rows,
             },
