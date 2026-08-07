@@ -44,7 +44,11 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import prepare_grug_checkpoint_restore, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import (
+    GrugCheckpointRestoreMode,
+    prepare_grug_checkpoint_restore,
+    restore_grug_state_from_checkpoint,
+)
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
@@ -512,7 +516,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             mesh=mesh,
         )
         checkpoint_search_paths = trainer.checkpoint_search_paths(run_id)
-        restore_plan = prepare_grug_checkpoint_restore(checkpoint_search_paths, trainer.load_checkpoint)
+        restore_plan = prepare_grug_checkpoint_restore(
+            checkpoint_search_paths, GrugCheckpointRestoreMode(trainer.load_checkpoint)
+        )
         data_iterator = train_loader.iter_from_step(restore_plan.expected_step)
         iterator = LoadingTimeTrackerIterator(data_iterator)
 

@@ -7,6 +7,7 @@ import logging
 import os
 import urllib.parse
 from collections.abc import Callable, Sequence
+from enum import Enum
 from typing import ClassVar, Protocol, TypeVar, cast
 
 import fsspec
@@ -41,6 +42,12 @@ class GrugCheckpointRestorePlan:
     expected_step: int
 
 
+class GrugCheckpointRestoreMode(Enum):
+    DISABLED = False
+    OPTIONAL = None
+    REQUIRED = True
+
+
 def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
     fs, _, (plain_path,) = fsspec.get_fs_token_paths(path)
     return fs, plain_path
@@ -62,14 +69,14 @@ def _checkpoint_candidates(checkpoint_search_paths: Sequence[str]) -> GrugCheckp
 
 
 def prepare_grug_checkpoint_restore(
-    checkpoint_search_paths: Sequence[str], load_checkpoint_setting: bool | None
+    checkpoint_search_paths: Sequence[str], mode: GrugCheckpointRestoreMode
 ) -> GrugCheckpointRestorePlan:
     """Discover checkpoint candidates and the data step to prefetch."""
     if not checkpoint_search_paths:
-        if load_checkpoint_setting:
+        if mode is GrugCheckpointRestoreMode.REQUIRED:
             raise FileNotFoundError("load_checkpoint=True but no checkpoint search paths are configured.")
         return GrugCheckpointRestorePlan((), 0)
-    if load_checkpoint_setting is False:
+    if mode is GrugCheckpointRestoreMode.DISABLED:
         return GrugCheckpointRestorePlan((), 0)
     return _checkpoint_candidates(checkpoint_search_paths)
 
@@ -132,7 +139,9 @@ def restore_grug_state_from_checkpoint(
         return state
 
     if restore_plan is None:
-        restore_plan = prepare_grug_checkpoint_restore(checkpoint_search_paths, load_checkpoint_setting)
+        restore_plan = prepare_grug_checkpoint_restore(
+            checkpoint_search_paths, GrugCheckpointRestoreMode(load_checkpoint_setting)
+        )
     last_error: FileNotFoundError | None = None
 
     for candidate in restore_plan.candidate_paths:

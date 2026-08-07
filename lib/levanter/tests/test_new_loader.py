@@ -78,7 +78,7 @@ class BlockingBatchDataset(AsyncDataset[np.ndarray]):
     async def getitem_async(self, index: int) -> np.ndarray:
         return np.array(index, dtype=np.int32)
 
-    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+    async def get_batch(self, _indices: Sequence[int]) -> Sequence[np.ndarray]:
         self.started.set()
         try:
             await asyncio.Future()
@@ -95,7 +95,6 @@ def test_loader_iterator_close_cancels_in_flight_prefetch():
         assert dataset.started.wait(timeout=5)
         iterator.close()
         assert dataset.cancelled.wait(timeout=5)
-        iterator.close()
 
 
 class StructuredDataset(AsyncDataset):

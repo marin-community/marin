@@ -50,6 +50,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.base.model import GrugModelConfig, Transformer
 from experiments.grug.checkpointing import (
+    GrugCheckpointRestoreMode,
     init_weights_only_from_checkpoint,
     prepare_grug_checkpoint_restore,
     restore_grug_state_from_checkpoint,
@@ -466,7 +467,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             batch_pspec=config.trainer.train_batch_pspec,
         )
         checkpoint_search_paths = trainer.checkpoint_search_paths(run_id)
-        restore_plan = prepare_grug_checkpoint_restore(checkpoint_search_paths, trainer.load_checkpoint)
+        restore_plan = prepare_grug_checkpoint_restore(
+            checkpoint_search_paths, GrugCheckpointRestoreMode(trainer.load_checkpoint)
+        )
         data_iterator = train_loader.iter_from_step(restore_plan.expected_step)
         iterator = LoadingTimeTrackerIterator(data_iterator)
 
