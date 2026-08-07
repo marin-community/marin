@@ -4,12 +4,20 @@
 """Behavioral contracts for Marin-owned package releases."""
 
 import hashlib
+import tomllib
 from pathlib import Path
 
 import pytest
 import yaml
 
 from scripts.ci.package_release import (
+    LINUX_TARGETS,
+    MAC_TARGETS,
+    PACKAGES,
+    PYTHON_LIBS_FAMILY,
+    ArtifactExpectation,
+    BuildOperation,
+    NativeBuild,
     PublishedArtifact,
     artifact_manifest,
     cargo_compatible_version,
@@ -23,51 +31,44 @@ from scripts.ci.package_release import (
     update_native_requirement,
     validate_targeted_lock_change,
 )
+from scripts.python_libs_package import PACKAGES as BUNDLED_LIBRARIES
 
 RELEASE_WORKFLOW = Path(".github/workflows/marin-release-libs-wheels.yaml")
 
+PLATFORM_WHEEL_TAGS = (
+    "cp312-cp312-manylinux_2_28_x86_64.whl",
+    "cp312-cp312-manylinux_2_28_aarch64.whl",
+    "cp312-cp312-macosx_11_0_x86_64.whl",
+    "cp312-cp312-macosx_11_0_arm64.whl",
+)
+
+# maturin builds one wheel per Rust target on the leg that owns that platform.
+WHEELS_PER_LEG = {BuildOperation.LINUX: len(LINUX_TARGETS), BuildOperation.MACOS: len(MAC_TARGETS)}
+
+
+def _project_name(directory: Path) -> str:
+    return tomllib.loads((directory / "pyproject.toml").read_text())["project"]["name"]
+
 
 def _artifact_names(package: str, version: str) -> list[str]:
-    if package == "python-libs":
-        return [
-            filename
-            for distribution in (
-                "marin_core",
-                "marin_iris",
-                "marin_fray",
-                "marin_rigging",
-                "marin_zephyr",
-                "marin_levanter",
-                "marin_haliax",
-            )
-            for filename in (
-                f"{distribution}-{version}-py3-none-any.whl",
-                f"{distribution}-{version}.tar.gz",
-            )
-        ]
+    """Name the artifact set the build legs upload for a complete `package` release.
 
-    platform_wheels = [f"cp312-cp312-manylinux_2_28_{arch}.whl" for arch in ("x86_64", "aarch64")] + [
-        f"cp312-cp312-macosx_11_0_{arch}.whl" for arch in ("x86_64", "arm64")
-    ]
-    if package == "iris":
-        return [
-            f"marin_iris_native-{version}-{platform_wheels[0]}",
-            f"marin_iris_native-{version}-{platform_wheels[1]}",
-            f"marin_iris_native-{version}-{platform_wheels[2]}",
-            f"marin_iris_native-{version}-{platform_wheels[3]}",
-            f"marin_iris_native-{version}.tar.gz",
-        ]
-
-    pure_distribution, native_distribution = {
-        "dupekit": ("marin_dupekit", "marin_dupekit_native"),
-        "finelog": ("marin_finelog", "marin_finelog_server"),
-    }[package]
-    return [
-        f"{pure_distribution}-{version}-py3-none-any.whl",
-        f"{pure_distribution}-{version}.tar.gz",
-        *(f"{native_distribution}-{version}-{platform}" for platform in platform_wheels),
-        f"{native_distribution}-{version}.tar.gz",
-    ]
+    Filenames are spelled out from the wheel naming spec rather than borrowed from
+    the release script, so `artifact_manifest` still has to recover the distribution
+    and the artifact kind from each name on its own.
+    """
+    names = []
+    for distribution, expectation in PACKAGES[package].artifacts.items():
+        stem = f"{distribution.replace('-', '_')}-{version}"
+        if expectation.pure_python:
+            assert expectation.wheels == 1, "a pure-Python distribution has exactly one py3-none-any wheel"
+            names.append(f"{stem}-py3-none-any.whl")
+        else:
+            assert expectation.wheels <= len(PLATFORM_WHEEL_TAGS), "add a platform tag for the new build leg"
+            names.extend(f"{stem}-{tag}" for tag in PLATFORM_WHEEL_TAGS[: expectation.wheels])
+        assert expectation.sdists == 1, "an sdist filename is fully determined, so a distribution has one"
+        names.append(f"{stem}.tar.gz")
+    return names
 
 
 def _write_artifacts(root: Path, package: str, version: str) -> list[Path]:
@@ -251,6 +252,45 @@ def test_update_native_requirement_never_downgrades_floor() -> None:
     assert update_native_requirement(text, "marin-iris-native", "0.1.4")[0] == text
 
 
+def test_python_libs_release_expectations_track_the_bundle_builder() -> None:
+    """The release gate and the builder must agree on which libraries ship.
+
+    A library the builder produces but the release table omits is built and never
+    published; one the table requires but the builder skips fails the manifest check
+    at the end of the release run, after every wheel has already been built.
+    """
+    family = PACKAGES[PYTHON_LIBS_FAMILY]
+
+    # The builder runs `uv build --wheel --sdist` once per library.
+    assert dict(family.artifacts) == {
+        distribution: ArtifactExpectation(wheels=1, sdists=1, pure_python=True) for distribution in BUNDLED_LIBRARIES
+    }
+    assert set(family.declared_version_paths) == {
+        Path(library["path"]) / library["version_file"] for library in BUNDLED_LIBRARIES.values()
+    }
+
+
+@pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
+def test_native_release_expectations_track_the_build_legs(package: str) -> None:
+    """Native families must expect exactly the distributions and wheels their legs build.
+
+    The distribution names come from the pyprojects maturin and uv build, and the
+    wheel counts from the Rust targets each leg compiles. Expect fewer artifacts than
+    the legs emit and the extras are published unverified; expect more and the release
+    stalls on artifacts nobody builds.
+    """
+    family = PACKAGES[package]
+    build = family.build
+    assert isinstance(build, NativeBuild)
+
+    native_wheels = sum(WHEELS_PER_LEG.get(operation, 0) for _, operation in family.build_legs)
+    expected = {_project_name(build.native_path): ArtifactExpectation(wheels=native_wheels, sdists=1, pure_python=False)}
+    if build.pure_path is not None:
+        expected[_project_name(build.pure_path)] = ArtifactExpectation(wheels=1, sdists=1, pure_python=True)
+
+    assert dict(family.artifacts) == expected
+
+
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog", "python-libs"])
 def test_artifact_manifest_requires_complete_release_pair(tmp_path: Path, package: str) -> None:
     version = "0.3.0.dev30194118926"
@@ -261,6 +301,31 @@ def test_artifact_manifest_requires_complete_release_pair(tmp_path: Path, packag
     assert set(manifest) == {path.name for path in paths}
     with pytest.raises(ValueError, match="artifact manifest"):
         artifact_manifest(package, version, paths[:-1])
+
+
+@pytest.mark.parametrize(
+    ("package", "distribution"),
+    [("python-libs", "marin-core"), ("iris", "marin-iris-native")],
+)
+def test_artifact_manifest_rejects_a_wheel_built_for_the_wrong_target(
+    tmp_path: Path, package: str, distribution: str
+) -> None:
+    """A pure-Python leg must not ship a platform wheel, nor a native leg a py3-none-any wheel.
+
+    Either one has the right count and uploads cleanly, so the manifest is the only
+    place that notices the leg built the wrong thing.
+    """
+    version = "0.3.0.dev30194118926"
+    paths = _write_artifacts(tmp_path, package, version)
+    stem = f"{distribution.replace('-', '_')}-{version}"
+    pure_python = PACKAGES[package].artifacts[distribution].pure_python
+    wrong_tag = PLATFORM_WHEEL_TAGS[0] if pure_python else "py3-none-any.whl"
+
+    wheel = next(path for path in paths if path.name.startswith(f"{stem}-") and path.name.endswith(".whl"))
+    paths[paths.index(wheel)] = wheel.rename(wheel.parent / f"{stem}-{wrong_tag}")
+
+    with pytest.raises(ValueError, match="Wrong wheel kind"):
+        artifact_manifest(package, version, paths)
 
 
 def test_reconcile_published_artifacts_accepts_matching_partial_upload(tmp_path: Path) -> None:
