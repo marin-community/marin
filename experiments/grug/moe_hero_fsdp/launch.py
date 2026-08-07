@@ -5,6 +5,7 @@
 
 import dataclasses
 import os
+from collections.abc import Callable
 from datetime import timedelta
 
 import click
@@ -28,7 +29,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
-from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug, run_grug_supervised
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -62,8 +63,14 @@ class HeroThroughputResult(Artifact):
     """Metrics and resumable checkpoints from the rack-scale throughput hero run."""
 
 
-def build_hero_run(
-    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
+def _build_hero_run(
+    *,
+    run_id: str,
+    dp_racks: int,
+    num_steps: int,
+    save_checkpoints: bool,
+    run: Callable[[GrugRunConfig], None],
+    version: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run.
 
@@ -156,10 +163,38 @@ def build_hero_run(
         name=user_namespaced_name(name, version),
         version=version,
         artifact_type=HeroThroughputResult,
-        run=run_grug,
+        run=run,
         build_config=build_config,
         deps=(slim,),
         runtime_args={"train_resources": train_resources},
+    )
+
+
+def build_hero_run(
+    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build the ordinary rack-local FSDP hero run."""
+    return _build_hero_run(
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        save_checkpoints=save_checkpoints,
+        run=run_grug,
+        version=version,
+    )
+
+
+def build_supervised_hero_run(
+    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build the rack-local FSDP hero run with one crash supervisor per task."""
+    return _build_hero_run(
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        save_checkpoints=save_checkpoints,
+        run=run_grug_supervised,
+        version=version,
     )
 
 
@@ -181,7 +216,12 @@ def build_hero_run(
 )
 @build_options
 def main(run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool) -> ArtifactStep[HeroThroughputResult]:
-    return build_hero_run(run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, save_checkpoints=save_checkpoints)
+    return build_hero_run(
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        save_checkpoints=save_checkpoints,
+    )
 
 
 if __name__ == "__main__":

@@ -25,6 +25,11 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
 W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass
 `-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
 
+Use `experiments.grug.moe_hero_fsdp.launch_supervised` instead of `launch` for NCCL diagnostics.
+Each GPU task then runs training in a child process with XLA's 60-second per-execution deadman and
+no in-pod restart. A deadman abort or another child failure fails the task immediately; the existing
+15-minute progress watchdog remains the fallback.
+
 Checkpoint staging benchmark:
 
 ```bash

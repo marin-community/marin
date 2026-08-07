@@ -33,6 +33,9 @@ from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.recovery.detection import DetectionConfig
+from levanter.recovery.supervisor import GPUHangSupervisor
+from levanter.recovery.types import RunOutcome
 from levanter.schedule import BatchSchedule
 from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
@@ -58,6 +61,8 @@ HERO_FSDP_RUNTIME_ENV = {
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+HERO_EXECUTION_TERMINATE_TIMEOUT = 60.0
+HERO_SUPERVISOR_STARTUP_TIMEOUT = 12 * 60 * 60.0
 
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
@@ -678,6 +683,50 @@ def run_grug(config: GrugRunConfig) -> None:
     )
 
 
+def _run_grug_supervised_local(config: GrugRunConfig) -> None:
+    """Run one local trainer under the XLA hang-deadman subprocess supervisor."""
+    run_id = config.trainer.trainer.id
+    if run_id is None:
+        raise ValueError("trainer.id must be set before supervised training")
+
+    with GPUHangSupervisor(
+        detection=DetectionConfig(
+            execution_terminate_timeout_seconds=HERO_EXECUTION_TERMINATE_TIMEOUT,
+            enable_recoverability=False,
+        ),
+        # The production loop does not yet emit the recovery heartbeat. Keep the
+        # host watchdog outside the coordinator's 12-hour deadline; XLA's
+        # per-execution deadman and ProgressWatchdog remain active in the child.
+        deadman_timeout=HERO_SUPERVISOR_STARTUP_TIMEOUT,
+        startup_timeout=HERO_SUPERVISOR_STARTUP_TIMEOUT,
+        max_restarts_per_run=0,
+    ) as supervisor:
+        result = supervisor.run(_run_grug_local, config, label=run_id)
+
+    if result.outcome is not RunOutcome.COMPLETED:
+        faults = ", ".join(
+            f"attempt={fault.attempt} class={fault.fault_class} returncode={fault.returncode}" for fault in result.faults
+        )
+        raise RuntimeError(f"supervised trainer {run_id!r} ended with outcome={result.outcome}; faults=[{faults}]")
+
+
+def run_grug_supervised(config: GrugRunConfig) -> None:
+    """Dispatch grug training with one crash supervisor per GPU task."""
+    trainer = config.trainer.trainer
+    if trainer.id is None:
+        raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    _apply_hero_fsdp_runtime_defaults()
+    dispatch_grug_training_run(
+        run_id=trainer.id,
+        config=config,
+        local_entrypoint=_run_grug_supervised_local,
+        resources=config.resources,
+        max_retries_failure=0,
+        processes_per_task=config.processes_per_task,
+    )
+
+
 __all__ = [
     "GrugEvalConfig",
     "GrugRunConfig",
@@ -685,4 +734,5 @@ __all__ = [
     "GrugTrainerConfig",
     "initial_state",
     "run_grug",
+    "run_grug_supervised",
 ]

@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # SPDX-License-Identifier: Apache-2.0
-"""Minimal single-file JAX reproducer for a silent collective wedge on GB200 NVL72.
+"""Minimal single-file JAX reproducer for the NCCL 2.28.9 proxy-slot wedge on GB200 NVL72.
 
 Symptom: a multi-node JAX/XLA job stops making progress with no error. Every rank
 stays alive, no timeout fires, GPUs sit at 100% SM utilisation with 0% memory
 traffic, and NCCL RAS reports one rank a few collective operations behind the rest,
-static forever.
+static forever. NCCL 2.29.3-1 and later contain the upstream aarch64 proxy-slot
+fix and should complete the requested step count.
 
 This file contains no model framework and no custom CUDA kernels -- no attention,
 no MoE, no flash-attn, no CuTe/CUTLASS. It is a dense MLP stack that keeps only the
@@ -42,6 +43,7 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
 
 # --------------------------------------------------------------------------
 # Runtime environment. MUST happen before `import jax`.
@@ -56,6 +58,28 @@ RUNTIME_ENV = {
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
+
+PROVENANCE_ENV_KEYS = (
+    "CUDA_CACHE_DISABLE",
+    "CUDA_LAUNCH_BLOCKING",
+    "CUDA_MODULE_LOADING",
+    "JAX_ENABLE_PGLE",
+    "NCCL_BUFFSIZE",
+    "NCCL_CTA_POLICY",
+    "NCCL_CUMEM_ENABLE",
+    "NCCL_DEBUG",
+    "NCCL_DEBUG_SUBSYS",
+    "NCCL_LAUNCH_ORDER_IMPLICIT",
+    "NCCL_MAX_NCHANNELS",
+    "NCCL_NCHANNELS_PER_PEER",
+    "NCCL_NVLS_ENABLE",
+    "NCCL_PROTO",
+    "NCCL_RUNTIME_CONNECT",
+    "NCCL_WORK_FIFO_BYTES",
+    "XLA_FLAGS",
+    "XLA_PYTHON_CLIENT_ALLOCATOR",
+)
+PROVENANCE_LIBRARY_NAMES = ("libcuda.so", "libcudart.so", "libnccl.so")
 
 
 def _apply_runtime_defaults() -> None:
@@ -102,6 +126,21 @@ FSDP_IN_OUT_SPEC = P("data", "model")
 FSDP_OUT_IN_SPEC = P("model", "data")
 BATCH_SPEC = P(BATCH_AXES, None)
 REPLICATED = P(None, None)
+
+
+def print_runtime_provenance() -> None:
+    """Print filtered child-process environment and loaded GPU library paths."""
+    environ_entries = Path("/proc/self/environ").read_bytes().split(b"\0")
+    environ = dict(entry.decode(errors="replace").split("=", 1) for entry in environ_entries if b"=" in entry)
+    selected_environ = " ".join(f"{key}={environ[key]!r}" for key in PROVENANCE_ENV_KEYS if key in environ)
+    print(f"[repro] /proc/self/environ {selected_environ}", flush=True)
+
+    loaded_paths = {
+        line.rsplit(maxsplit=1)[-1]
+        for line in Path("/proc/self/maps").read_text().splitlines()
+        if any(library in line for library in PROVENANCE_LIBRARY_NAMES)
+    }
+    print(f"[repro] /proc/self/maps GPU libraries={sorted(loaded_paths)}", flush=True)
 
 
 def build_mesh(
@@ -316,6 +355,7 @@ def main(argv=None) -> int:
         f"XLA_PYTHON_CLIENT_ALLOCATOR={os.environ.get('XLA_PYTHON_CLIENT_ALLOCATOR')!r}",
         flush=True,
     )
+    print_runtime_provenance()
 
     mesh = build_mesh(
         dp_racks=args.dp_racks,
