@@ -32,6 +32,11 @@ SERVICE = "marin-grafana"
 LOOM_STACK = "organization/marin-loom/marin-loom"
 LOOM_WORKLOAD = "grafana-alerts"
 LOOM_ALERT_REPOSITORY = "marin-community/marin"
+# Secret Manager secret holding the Slack bot token the bridge announces alerts
+# with. A bot token rather than the existing incoming webhook because only
+# chat.postMessage returns the message timestamp, and that timestamp is the thread
+# Loom routes to the triage session. Hand-placed like the other runtime secrets.
+SLACK_BOT_TOKEN_SECRET = "marin-grafana-slack-bot-token"
 
 # The cloudsql stack (infra/cloudsql) publishes the marin-metadata connection name that backs
 # Grafana's state. On the self-managed GCS backend a stack reference is
@@ -112,6 +117,13 @@ def main() -> None:
         env["LOOM_ALERT_URL"] = loom_client.apply(lambda client: client["loomUrl"])
         env["LOOM_ALERT_PROFILE"] = loom_client.apply(lambda client: client["profile"])
         env["LOOM_ALERT_REPOSITORY"] = LOOM_ALERT_REPOSITORY
+        # The bridge is the only thing that announces critical alerts, so neither
+        # the channel nor the token is optional the way SMTP is: without them the
+        # container refuses to boot rather than dropping alerting silently. The
+        # channel is a Slack id (`C…`) and @marinbot must be a member of it.
+        slack_alerts_channel = config.require("slack_alerts_channel")
+        env["SLACK_ALERTS_CHANNEL"] = slack_alerts_channel
+        secrets.append(SecretEnv(name="SLACK_ALERTS_BOT_TOKEN", secret=SLACK_BOT_TOKEN_SECRET))
     if custom_domain:
         env["GF_SERVER_ROOT_URL"] = f"https://{custom_domain}"
     if secret_exists(provider, SMTP_SECRET):
