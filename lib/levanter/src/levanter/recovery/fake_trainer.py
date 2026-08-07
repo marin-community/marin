@@ -1,10 +1,11 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fake trainer entrypoints for exercising the supervisor without a GPU.
+"""Fake trainer entrypoint for exercising the supervisor without a GPU.
 
-Imported by ``levanter.recovery._child`` in tests via its module+qualname, so it
-must be a real installed module (not a test file). It imports no JAX.
+Spawned like a real trainer by ``levanter.recovery.child`` via its module and
+qualname, so it must be a real installed module, not a test file. It makes no JAX
+device calls, so the supervisor's whole recovery state machine runs on CPU.
 """
 
 from __future__ import annotations
@@ -15,20 +16,20 @@ import sys
 import time
 
 from levanter.recovery.detection import touch_heartbeat
-from levanter.recovery.faults import InjectedStickyFault
+from levanter.recovery.faults import STICKY_CUDA_ERROR, InjectedStickyFault
 from levanter.recovery.supervisor import ENV_ATTEMPT, ENV_HEARTBEAT_PATH
 
 
 logger = logging.getLogger(__name__)
 
-ENV_BEHAVIOR = "SELFTEST_BEHAVIOR"
+ENV_BEHAVIOR = "LEVANTER_FAKE_TRAINER_BEHAVIOR"
 
 
 def fake_trainer(config: dict) -> None:
-    """Step ``config['steps']`` times, injecting ``SELFTEST_BEHAVIOR`` once.
+    """Step ``config['steps']`` times, injecting the configured behaviour once.
 
     The behaviour fires only on the first attempt unless ``always`` is set, so a
-    supervised restart runs clean and completes — mirroring a real trainer that
+    supervised restart runs clean and completes, mirroring a real trainer that
     resumes from the snapshot after a one-off fault.
     """
     behavior = os.environ.get(ENV_BEHAVIOR, "complete")
@@ -48,9 +49,9 @@ def fake_trainer(config: dict) -> None:
 
 def _inject(behavior: str) -> None:
     if behavior == "sticky":
-        raise InjectedStickyFault("selftest: CUDA_ERROR_ILLEGAL_INSTRUCTION: an illegal instruction was encountered")
+        raise InjectedStickyFault(f"fake trainer: {STICKY_CUDA_ERROR}: an illegal instruction was encountered")
     if behavior == "hang":
-        logger.warning("selftest: freezing (heartbeat stops); deadman should fire")
+        logger.warning("fake trainer: freezing (heartbeat stops); deadman should fire")
         while True:
             time.sleep(3600)
     if behavior == "crash":
@@ -59,4 +60,4 @@ def _inject(behavior: str) -> None:
         sys.exit(7)  # non-sentinel nonzero -> FaultClass.HARD, not restarted
     if behavior == "complete":
         return
-    raise ValueError(f"unknown selftest behavior: {behavior}")
+    raise ValueError(f"unknown fake-trainer behavior: {behavior}")

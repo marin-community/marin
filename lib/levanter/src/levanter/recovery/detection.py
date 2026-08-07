@@ -48,8 +48,8 @@ logger = logging.getLogger(__name__)
 EXECUTION_TERMINATE_TIMEOUT_FLAG = "xla_gpu_execution_terminate_timeout"
 EXECUTION_PROGRESS_TRACKING_FLAG = "xla_gpu_execution_progress_tracking"
 NCCL_INIT_TERMINATION_TIMEOUT_FLAG = "xla_gpu_nccl_termination_timeout_seconds"
-# Phase-2 recoverability recipe (default off): keep collectives non-blocking and
-# async so a failed peer aborts the clique instead of wedging the whole mesh.
+# Multi-process recoverability recipe (default off): keep collectives non-blocking
+# and async so a failed peer aborts the clique instead of wedging the whole mesh.
 NCCL_BLOCKING_COMMUNICATORS_FLAG = "xla_gpu_nccl_blocking_communicators"
 NCCL_ASYNC_EXECUTION_FLAG = "xla_gpu_nccl_async_execution"
 
@@ -68,6 +68,10 @@ DEFAULT_NCCL_INIT_TIMEOUT_SECONDS = 120
 # arms; the diagnostic budget bounds the on-timeout diagnostic thread.
 DEFAULT_FALLBACK_STARTUP_GRACE_SECONDS = 3600.0
 DEFAULT_FALLBACK_DIAGNOSTIC_TIMEOUT_SECONDS = 20.0
+
+# Set on the trainer to skip the levanter fallback watchdog and isolate the XLA
+# execution deadman (an ablation knob).
+ENV_DISABLE_WATCHDOG = "LEVANTER_DISABLE_WATCHDOG"
 
 # Substrings (matched case-insensitively) that identify a poisoned CUDA context.
 # These faults leave the device unusable, so the supervisor must not warm-restart

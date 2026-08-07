@@ -21,6 +21,9 @@ EXIT_OK = 0
 EXIT_STALL = 124
 EXIT_STICKY_FAULT = 125
 
+# Default host-memory snapshot tier. tmpfs on Linux, so a snapshot is a RAM copy.
+DEFAULT_TMPFS_DIR = "/dev/shm"
+
 
 class FaultClass(StrEnum):
     """How the supervisor interpreted a trainer subprocess exit."""
@@ -103,6 +106,21 @@ class AblationSpec:
     num_steps: int | None = None  # override the entrypoint default when set
     deadman_timeout: float | None = None  # override the supervisor deadman for this run
     notes: str = ""
+
+
+@dataclass(frozen=True)
+class ChildSpec:
+    """The record the supervisor pickles for the trainer subprocess.
+
+    ``entry_module``/``entry_qualname`` name an importable entrypoint the child
+    resolves and calls; ``config`` is the opaque, separately-picklable argument
+    passed to it. A dataclass (rather than a bare dict) keeps the field names a
+    shared contract, so a rename fails at import instead of silently at runtime.
+    """
+
+    entry_module: str
+    entry_qualname: str
+    config: object
 
 
 class FaultKind(StrEnum):

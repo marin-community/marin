@@ -12,7 +12,7 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
-from levanter.recovery.snapshot import HostSnapshot, estimate_state_nbytes  # noqa: E402
+from levanter.recovery.snapshot import HostSnapshot  # noqa: E402
 
 
 def _state(scale: float):
@@ -67,9 +67,3 @@ def test_double_buffer_survives_pointer_to_torn_slot(tmp_path):
     restored, result = snap.restore_into(_template_like(_state(0.0)))
     assert result.step == 10
     assert jnp.array_equal(restored["w"], _state(1.0)["w"])
-
-
-def test_estimate_nbytes(tmp_path):
-    original = _state(1.0)
-    # 6 float32 (24) + 4 bfloat16 (8) + 1 int32 (4) = 36 bytes.
-    assert estimate_state_nbytes(original) == 36

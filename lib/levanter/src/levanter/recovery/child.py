@@ -23,13 +23,13 @@ import pickle
 import sys
 
 from levanter.recovery.detection import classify_exception
-from levanter.recovery.types import EXIT_STALL, EXIT_STICKY_FAULT, FaultClass
+from levanter.recovery.types import EXIT_STALL, EXIT_STICKY_FAULT, ChildSpec, FaultClass
 
 
 logger = logging.getLogger(__name__)
 
 
-def _load_spec(spec_path: str):
+def _load_spec(spec_path: str) -> ChildSpec:
     with open(spec_path, "rb") as f:
         return pickle.load(f)
 
@@ -44,12 +44,11 @@ def main() -> None:
     args = parser.parse_args()
 
     spec = _load_spec(args.spec)
-    module = importlib.import_module(spec["entry_module"])
-    entrypoint = getattr(module, spec["entry_qualname"])
-    config = spec["config"]
+    module = importlib.import_module(spec.entry_module)
+    entrypoint = getattr(module, spec.entry_qualname)
 
     try:
-        entrypoint(config)
+        entrypoint(spec.config)
     except BaseException as exc:  # noqa: BLE001 - map to the exit-code contract, then re-signal
         fault_class = classify_exception(exc)
         logger.exception("trainer subprocess raised; classified as %s", fault_class)

@@ -5,7 +5,7 @@
 
 Covers the full state machine (clean run, recover from sticky/crash/hang,
 propagate hard failures, exhaust the restart budget, health-gate escalation)
-without a GPU by spawning ``levanter.recovery._selftest.fake_trainer``.
+without a GPU by spawning ``levanter.recovery.fake_trainer.fake_trainer``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from levanter.recovery import supervisor as sup
-from levanter.recovery._selftest import ENV_BEHAVIOR, fake_trainer
+from levanter.recovery.fake_trainer import ENV_BEHAVIOR, fake_trainer
 from levanter.recovery.detection import DetectionConfig
 from levanter.recovery.supervisor import GPUHangSupervisor
 from levanter.recovery.types import FaultClass, RunOutcome
@@ -24,7 +24,6 @@ def _make_supervisor(tmp_path, **overrides):
         detection=DetectionConfig(execution_terminate_timeout_seconds=60.0),
         deadman_timeout=3.0,
         snapshot_tmpfs_base=str(tmp_path / "shm"),
-        snapshot_nvme_base=str(tmp_path / "nvme"),
         poll_interval=0.25,
         startup_timeout=30.0,
         work_dir=str(tmp_path / "work"),

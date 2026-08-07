@@ -14,7 +14,7 @@ Demonstrates the two things the framework buys us on a single warm pod:
 
 Run on a reserved GPU node::
 
-    python -m experiments.grug.recovery.run_ablations --nvme-base /mnt/local/recovery
+    python -m experiments.grug.recovery.run_ablations
     python -m experiments.grug.recovery.run_ablations --smoke   # one direct run, no supervisor
 """
 
@@ -26,9 +26,10 @@ import logging
 import os
 import tempfile
 
+from levanter.recovery.detection import ENV_DISABLE_WATCHDOG
 from levanter.recovery.faults import ENV_FAULT_KIND, ENV_FAULT_STEP, FaultKind
-from levanter.recovery.supervisor import GPUHangSupervisor
-from levanter.recovery.types import AblationSpec, RunResult
+from levanter.recovery.supervisor import ENV_RUN_ID, ENV_SNAPSHOT_TMPFS_BASE, GPUHangSupervisor
+from levanter.recovery.types import DEFAULT_TMPFS_DIR, AblationSpec, RunResult
 
 from experiments.grug.recovery.config import RecoveryRunConfig, grug_model_preset
 from experiments.grug.recovery.train import recovery_train
@@ -55,7 +56,7 @@ def build_ablations(*, fault_step: int, sweep_steps: int) -> list[AblationSpec]:
                 ENV_FAULT_KIND: FaultKind.SPIN.value,
                 ENV_FAULT_STEP: str(fault_step),
                 "XLA_FLAGS": "--xla_gpu_execution_terminate_timeout=60s --xla_gpu_execution_progress_tracking=8",
-                "LEVANTER_DISABLE_WATCHDOG": "1",
+                ENV_DISABLE_WATCHDOG: "1",
             },
             deadman_timeout=180.0,
             notes="isolate the JAX-level deadman: CRASH => XLA killed the wedge; STALL => host deadman had to",
@@ -103,7 +104,7 @@ def _summary(results: list[RunResult]) -> str:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="10b", choices=["1b", "3b", "10b"])
+    parser.add_argument("--model", default="10b", choices=["tiny", "1b", "3b", "10b"])
     parser.add_argument("--num-steps", type=int, default=24)
     parser.add_argument("--sweep-steps", type=int, default=8)
     parser.add_argument("--fault-step", type=int, default=12)
@@ -112,9 +113,8 @@ def main() -> None:
     parser.add_argument("--model-axis-size", type=int, default=1)
     parser.add_argument("--snapshot-every", type=int, default=4)
     parser.add_argument("--deadman-timeout", type=float, default=45.0)
-    parser.add_argument("--nvme-base", default=os.path.join(tempfile.gettempdir(), "levanter-recovery-nvme"))
-    parser.add_argument("--tmpfs-base", default="/dev/shm")
-    parser.add_argument("--compile-cache", default=None, help="JAX_COMPILATION_CACHE_DIR (defaults under --nvme-base)")
+    parser.add_argument("--tmpfs-base", default=DEFAULT_TMPFS_DIR, help="host-RAM snapshot tier")
+    parser.add_argument("--compile-cache", default=None, help="JAX_COMPILATION_CACHE_DIR (defaults under $TMPDIR)")
     parser.add_argument("--smoke", action="store_true", help="run recovery_train once directly, no supervisor")
     parser.add_argument("--only", nargs="*", default=None, help="subset of ablation names to run")
     args = parser.parse_args()
@@ -129,12 +129,12 @@ def main() -> None:
     )
 
     if args.smoke:
-        os.environ.setdefault("LEVANTER_SNAPSHOT_NVME_BASE", args.nvme_base)
-        os.environ.setdefault("LEVANTER_RUN_ID", "smoke")
+        os.environ[ENV_SNAPSHOT_TMPFS_BASE] = args.tmpfs_base
+        os.environ[ENV_RUN_ID] = "smoke"
         recovery_train(config)
         return
 
-    compile_cache = args.compile_cache or os.path.join(args.nvme_base, "jax-cache")
+    compile_cache = args.compile_cache or os.path.join(tempfile.gettempdir(), "levanter-recovery-jax-cache")
     common_env = {"JAX_COMPILATION_CACHE_DIR": compile_cache}
 
     ablations = build_ablations(fault_step=args.fault_step, sweep_steps=args.sweep_steps)
@@ -146,7 +146,6 @@ def main() -> None:
         detection=config.detection,
         deadman_timeout=args.deadman_timeout,
         snapshot_tmpfs_base=args.tmpfs_base,
-        snapshot_nvme_base=args.nvme_base,
     ) as supervisor:
         for ablation in ablations:
             run_config = (

@@ -13,7 +13,7 @@ realistic) on synthetic data, and layers on the recovery machinery:
 - a per-step heartbeat the supervisor's deadman watches,
 - optional fault injection to exercise all of the above.
 
-Exceptions propagate: ``levanter.recovery._child`` maps them onto the exit-code
+Exceptions propagate: ``levanter.recovery.child`` maps them onto the exit-code
 contract, and the supervisor restarts recoverable faults. Do not swallow here.
 """
 
@@ -36,14 +36,15 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.recovery import detection, faults
-from levanter.recovery.snapshot import HostSnapshot, estimate_state_nbytes, resolve_snapshot_root
+from levanter.recovery.detection import ENV_DISABLE_WATCHDOG
+from levanter.recovery.snapshot import HostSnapshot, estimate_state_nbytes, snapshot_root
 from levanter.recovery.supervisor import (
     ENV_ATTEMPT,
     ENV_HEARTBEAT_PATH,
     ENV_RUN_ID,
-    ENV_SNAPSHOT_NVME_BASE,
     ENV_SNAPSHOT_TMPFS_BASE,
 )
+from levanter.recovery.types import DEFAULT_TMPFS_DIR
 from levanter.utils.jax_utils import parameter_count
 
 from experiments.grug.base.train import GrugTrainState, _make_train_step, initial_state
@@ -106,12 +107,7 @@ def recovery_train(config: RecoveryRunConfig) -> None:
         state_bytes = estimate_state_nbytes(state)
         logger.info("model params=%.2fB  full state=%.1f GiB", n_params / 1e9, state_bytes / 2**30)
 
-        root = resolve_snapshot_root(
-            run_id=run_id,
-            tmpfs_base=os.environ.get(ENV_SNAPSHOT_TMPFS_BASE, "/dev/shm"),
-            nvme_base=os.environ.get(ENV_SNAPSHOT_NVME_BASE, tempfile.gettempdir()),
-            state_nbytes=state_bytes,
-        )
+        root = snapshot_root(run_id, os.environ.get(ENV_SNAPSHOT_TMPFS_BASE, DEFAULT_TMPFS_DIR))
         snapshot = HostSnapshot(root)
         restored = snapshot.restore_into(state)
         if restored is not None:
@@ -126,11 +122,11 @@ def recovery_train(config: RecoveryRunConfig) -> None:
             logger.info("no snapshot found; starting from step 0")
 
         batch = _make_synthetic_batch(config, mesh)
-        # LEVANTER_DISABLE_WATCHDOG isolates the XLA execution deadman by turning
-        # off the levanter fallback watchdog for an ablation.
-        if os.environ.get("LEVANTER_DISABLE_WATCHDOG"):
+        # ENV_DISABLE_WATCHDOG isolates the XLA execution deadman by turning off the
+        # levanter fallback watchdog for an ablation.
+        if os.environ.get(ENV_DISABLE_WATCHDOG):
             watchdog = None
-            logger.info("levanter fallback watchdog disabled (LEVANTER_DISABLE_WATCHDOG)")
+            logger.info("levanter fallback watchdog disabled (%s)", ENV_DISABLE_WATCHDOG)
         else:
             watchdog = detection.fallback_watchdog_config(
                 config.watchdog_step_timeout_seconds,

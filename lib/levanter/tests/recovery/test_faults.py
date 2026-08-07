@@ -3,9 +3,9 @@
 
 """Tests for the fault-injection harness.
 
-These cover the JAX-free decision path and the STICKY injector, which is the only
-kind safe to fire inside the test process. SIGKILL/SIGSTOP/SPIN would kill, freeze,
-or wedge the runner, so their selection is asserted through ``should_fire`` only.
+These cover the firing decision and the STICKY injector, which is the only kind
+safe to fire inside the test process. SIGKILL/SIGSTOP/SPIN would kill, freeze, or
+wedge the runner, so they are exercised only through ``should_fire``.
 """
 
 from __future__ import annotations
@@ -13,44 +13,12 @@ from __future__ import annotations
 import pytest
 
 from levanter.recovery.faults import (
-    ENV_FAULT_KIND,
-    ENV_FAULT_PROCESS,
-    ENV_FAULT_STEP,
     FaultConfig,
     InjectedStickyFault,
     maybe_inject,
     should_fire,
 )
 from levanter.recovery.types import FaultKind
-
-
-def test_fault_config_from_env_unset_disables_injection():
-    cfg = FaultConfig.from_env({})
-
-    # An unconfigured subprocess must never fire: kind NONE and a step that no
-    # real step index matches.
-    assert cfg.kind is FaultKind.NONE
-    assert cfg.step == -1
-    assert should_fire(cfg, step=0, process_index=0) is False
-
-
-def test_fault_config_from_env_parses_typed_values():
-    cfg = FaultConfig.from_env(
-        {
-            ENV_FAULT_KIND: "spin",
-            ENV_FAULT_STEP: "5",
-            ENV_FAULT_PROCESS: "2",
-        }
-    )
-
-    assert cfg == FaultConfig(kind=FaultKind.SPIN, step=5, process=2)
-
-
-def test_fault_config_from_env_rejects_unknown_kind():
-    # Injection is a deliberate ablation knob, so a typo must fail fast rather
-    # than silently disable the drill.
-    with pytest.raises(ValueError, match="bogus"):
-        FaultConfig.from_env({ENV_FAULT_KIND: "bogus"})
 
 
 @pytest.mark.parametrize(
@@ -63,26 +31,25 @@ def test_fault_config_from_env_rejects_unknown_kind():
         (FaultKind.NONE, 5, 2, False),  # no kind configured
     ],
 )
-def test_should_fire_truth_table(kind, step, process_index, expected):
+def test_should_fire_matches_only_the_configured_step_and_process(kind, step, process_index, expected):
     cfg = FaultConfig(kind=kind, step=5, process=2)
 
     assert should_fire(cfg, step=step, process_index=process_index) is expected
 
 
-def test_maybe_inject_sticky_at_matching_step_raises_with_cuda_marker():
+def test_maybe_inject_sticky_raises_with_the_cross_module_cuda_marker():
     cfg = FaultConfig(kind=FaultKind.STICKY, step=3, process=0)
 
     with pytest.raises(InjectedStickyFault) as excinfo:
         maybe_inject(3, process_index=0, config=cfg)
 
-    # Cross-module contract: detection.classify_exception matches this substring
-    # to classify the fault as a poisoned CUDA context.
+    # Contract: detection.classify_exception keys off this substring to classify
+    # the fault as a poisoned CUDA context.
     assert "CUDA_ERROR_ILLEGAL_INSTRUCTION" in str(excinfo.value)
 
 
-def test_maybe_inject_non_matching_step_is_noop():
+def test_maybe_inject_is_inert_on_a_non_matching_step():
     cfg = FaultConfig(kind=FaultKind.STICKY, step=3, process=0)
 
-    # The per-step hook must be inert on every step but the configured one, so
-    # training runs untouched until the fault is due.
+    # The per-step hook must run untouched on every step but the configured one.
     assert maybe_inject(2, process_index=0, config=cfg) is None

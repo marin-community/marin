@@ -6,7 +6,7 @@
 The supervisor is the long-lived parent process inside an Iris task. It never
 creates a CUDA context (it makes no JAX device calls, so the child subprocess
 owns the GPUs); it spawns the trainer as a subprocess
-(``python -m levanter.recovery._child``), watches it two ways —
+(``python -m levanter.recovery.child``), watches it two ways —
 
 - exit-code contract (``levanter.recovery.types.classify_returncode``): the XLA
   hang watchdog's ``LOG(FATAL)`` shows up as a fatal signal, the sticky-error
@@ -18,7 +18,7 @@ and on a recoverable fault kills the child's process group, gates on GPU health,
 and re-execs it. The re-exec'd trainer restores from the host snapshot on its
 own, so a fault costs a process restart, not a scheduler round-trip.
 
-This implements the single-node / full-restart tier (Phase 1). The multi-process
+This implements the single-node, full-restart tier. The multi-process
 survivor-in-place tier layers on top via the recoverability recipe in
 ``levanter.recovery.detection`` and cross-node coordination; it is out of scope
 here.
@@ -39,8 +39,11 @@ from typing import Any, Callable
 
 from levanter.recovery.detection import DetectionConfig, recovery_xla_env
 from levanter.recovery.faults import ENV_FAULT_KIND, ENV_FAULT_STEP
+from levanter.recovery.snapshot import remove_snapshot
 from levanter.recovery.types import (
+    DEFAULT_TMPFS_DIR,
     RECOVERABLE,
+    ChildSpec,
     FaultClass,
     FaultRecord,
     RunOutcome,
@@ -53,11 +56,10 @@ logger = logging.getLogger(__name__)
 
 ENV_HEARTBEAT_PATH = "LEVANTER_HEARTBEAT_PATH"
 ENV_SNAPSHOT_TMPFS_BASE = "LEVANTER_SNAPSHOT_TMPFS_BASE"
-ENV_SNAPSHOT_NVME_BASE = "LEVANTER_SNAPSHOT_NVME_BASE"
 ENV_RUN_ID = "LEVANTER_RUN_ID"
 ENV_ATTEMPT = "LEVANTER_RECOVERY_ATTEMPT"
 
-_CHILD_MODULE = "levanter.recovery._child"
+_CHILD_MODULE = "levanter.recovery.child"
 _KILL_ESCALATION_GRACE = 10.0
 
 
@@ -76,8 +78,7 @@ class GPUHangSupervisor:
         *,
         detection: DetectionConfig,
         deadman_timeout: float,
-        snapshot_tmpfs_base: str = "/dev/shm",
-        snapshot_nvme_base: str,
+        snapshot_tmpfs_base: str = DEFAULT_TMPFS_DIR,
         poll_interval: float = 2.0,
         startup_timeout: float = 1800.0,
         max_restarts_per_run: int = 3,
@@ -91,7 +92,6 @@ class GPUHangSupervisor:
         self.detection = detection
         self.deadman_timeout = deadman_timeout
         self.snapshot_tmpfs_base = snapshot_tmpfs_base
-        self.snapshot_nvme_base = snapshot_nvme_base
         self.poll_interval = poll_interval
         self.startup_timeout = startup_timeout
         self.max_restarts_per_run = max_restarts_per_run
@@ -130,7 +130,7 @@ class GPUHangSupervisor:
         Returns when the run completes, fails unrecoverably, or exhausts its
         restart budget.
         """
-        deadman = deadman_timeout if deadman_timeout is not None else self.deadman_timeout
+        deadman_timeout = deadman_timeout if deadman_timeout is not None else self.deadman_timeout
         heartbeat_path = os.path.join(self._work_dir, f"{label}.heartbeat")
         spec_path = self._write_spec(entrypoint, config, label)
         started = time.monotonic()
@@ -150,7 +150,7 @@ class GPUHangSupervisor:
             )
             self._active_child = child
 
-            returncode, deadman_fired = self._monitor(child, heartbeat_path, deadman)
+            returncode, deadman_fired = self._monitor(child, heartbeat_path, deadman_timeout)
             last_step = _read_heartbeat_step(heartbeat_path) or last_step
             self._active_child = None
             fault_class = classify_returncode(returncode, deadman=deadman_fired)
@@ -158,6 +158,9 @@ class GPUHangSupervisor:
 
             if fault_class is FaultClass.NONE:
                 logger.info("run[%s] completed cleanly at step %s (attempt %d)", label, last_step, attempt)
+                # Free the host snapshot now the run is done, so a completed ablation
+                # does not hold multi-GiB of tmpfs while the next label runs.
+                remove_snapshot(label, self.snapshot_tmpfs_base)
                 return RunResult(
                     label=label,
                     outcome=RunOutcome.COMPLETED,
@@ -175,7 +178,7 @@ class GPUHangSupervisor:
                     returncode=returncode,
                     wall_time=wall,
                     last_step=last_step,
-                    detail="deadman" if deadman else "",
+                    detail="deadman" if deadman_fired else "",
                 )
             )
             logger.warning(
@@ -276,17 +279,16 @@ class GPUHangSupervisor:
         env = recovery_xla_env(self.detection, base)
         env[ENV_HEARTBEAT_PATH] = heartbeat_path
         env[ENV_SNAPSHOT_TMPFS_BASE] = self.snapshot_tmpfs_base
-        env[ENV_SNAPSHOT_NVME_BASE] = self.snapshot_nvme_base
         env[ENV_RUN_ID] = label
         env[ENV_ATTEMPT] = str(attempt)
         return env
 
     def _write_spec(self, entrypoint: Callable[[Any], None], config: Any, label: str) -> str:
-        spec = {
-            "entry_module": entrypoint.__module__,
-            "entry_qualname": entrypoint.__qualname__,
-            "config": config,
-        }
+        spec = ChildSpec(
+            entry_module=entrypoint.__module__,
+            entry_qualname=entrypoint.__qualname__,
+            config=config,
+        )
         spec_path = os.path.join(self._work_dir, f"{label}.spec.pkl")
         with open(spec_path, "wb") as f:
             pickle.dump(spec, f)

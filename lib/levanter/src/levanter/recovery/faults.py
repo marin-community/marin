@@ -126,9 +126,8 @@ def maybe_inject(
     """Per-step hook: inject the configured fault when this step should fire.
 
     Resolves ``config`` from the environment and ``process_index`` from
-    ``jax.process_index()`` when not supplied. JAX is imported lazily, and the
-    process index is resolved only when a fault is actually configured, so the
-    no-fault path stays JAX-free.
+    ``jax.process_index()`` when not supplied, and resolves the process index only
+    when a fault is actually configured.
 
     Depending on the fault kind this may raise, terminate, freeze, or wedge the
     calling process; see the module docstring.
@@ -203,7 +202,7 @@ def _inject_spin() -> None:
         "(models a silent GPU/NCCL hang; this call never returns)."
     )
 
-    def _cond(carry: object) -> object:
+    def _cond(_: object) -> object:
         return jnp.bool_(True)
 
     def _body(carry: object) -> object:

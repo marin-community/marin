@@ -9,14 +9,13 @@ without touching the durable (GCS) checkpoint. It is deliberately transformation
 free: leaves are pulled to host with ``jax.device_get`` and pushed back with
 ``jax.device_put`` using the target leaf's own sharding.
 
-Scope: this is the single-node (Phase 1) store. ``jax.device_get`` gathers each
-sharded leaf into one host array, so save throughput is bounded by a single
-serialized device-to-host copy and the whole state must fit in one host's RAM.
-The multi-node / large-model tier must instead copy each host's *local* shards
-in parallel (no gather) so save scales past one host; see the TODO in ``save``.
+Scope: this is the single-node store. ``jax.device_get`` gathers each sharded
+leaf into one host array, so save throughput is bounded by a single serialized
+device-to-host copy and the whole state must fit in one host's RAM. The
+multi-node / large-model tier must instead copy each host's *local* shards in
+parallel (no gather) so save scales past one host; see the TODO in ``save``.
 
-Layout under ``root`` (which may be tmpfs ``/dev/shm`` or an NVMe hostPath — the
-store does not care which)::
+Layout under ``root`` (tmpfs under ``/dev/shm``)::
 
     root/
       latest            # {"generation": G, "slot": S} written last, atomically
@@ -39,12 +38,15 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import time
 from dataclasses import dataclass
 
 import jax
 import numpy as np
 from jaxtyping import PyTree
+
+from levanter.recovery.types import DEFAULT_TMPFS_DIR
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,9 @@ _NUM_SLOTS = 2
 _POINTER_NAME = "latest"
 _META_NAME = "meta.json"
 _DATA_NAME = "data.bin"
+# Per-run snapshots live under <base>/<_SNAPSHOT_SUBDIR>/<run_id>; the pin marker
+# is a sibling <run_id>.root file.
+_SNAPSHOT_SUBDIR = "levanter-recovery"
 
 
 @dataclass(frozen=True)
@@ -160,10 +165,10 @@ class HostSnapshot:
         target_slot = (pointer.slot + 1) % _NUM_SLOTS if pointer is not None else 0
 
         leaves, _ = jax.tree_util.tree_flatten(state)
-        # Phase-1 single-node path: device_get GATHERS each sharded leaf onto one
-        # host, so throughput is one serialized D2H copy and the state must fit in
-        # one host's RAM. TODO(phase-2): copy leaf.addressable_shards in parallel
-        # (no gather) so save scales past one host and one D2H link (multi-node tier).
+        # Single-node path: device_get GATHERS each sharded leaf onto one host, so
+        # throughput is one serialized D2H copy and the state must fit in one host's
+        # RAM. TODO: copy leaf.addressable_shards in parallel (no gather) so save
+        # scales past one host and one D2H link (the multi-node / large-model tier).
         host_leaves = jax.device_get(leaves)
 
         slot_dir = _slot_dir(self.root, target_slot)
@@ -306,74 +311,20 @@ def estimate_state_nbytes(state: PyTree) -> int:
     return total
 
 
-def choose_snapshot_root(
-    *,
-    state_nbytes: int,
-    shm_dir: str = "/dev/shm",
-    fallback_dir: str,
-    run_id: str,
-    safety_factor: float = 2.2,
-) -> str:
-    """Pick a snapshot root: prefer tmpfs when a double buffer fits, else NVMe.
+def snapshot_root(run_id: str, tmpfs_base: str = DEFAULT_TMPFS_DIR) -> str:
+    """Return the host-snapshot root for a run.
 
-    ``safety_factor`` covers both slots (2x) plus headroom. ``fallback_dir`` is
-    the large NVMe hostPath tier used for states too big for the memory tmpfs.
+    Snapshots always live in tmpfs (host RAM); there is no spill tier. The path is
+    deterministic from ``run_id``, so every restart of a run agrees on it without a
+    pin marker. If a state's double buffer does not fit in tmpfs the save fails
+    loudly on write, which is the intended signal that the tier is undersized.
     """
-    required = int(state_nbytes * safety_factor)
-    shm_free = _free_bytes(shm_dir)
-    if shm_free is not None and shm_free >= required:
-        root = os.path.join(shm_dir, "levanter-recovery", run_id)
-        logger.info(
-            "Snapshot tier: tmpfs %s (free %.1f GiB >= required %.1f GiB)",
-            shm_dir,
-            shm_free / 2**30,
-            required / 2**30,
-        )
-        return root
-    root = os.path.join(fallback_dir, "levanter-recovery", run_id)
-    logger.info(
-        "Snapshot tier: NVMe %s (tmpfs free %s < required %.1f GiB)",
-        fallback_dir,
-        "n/a" if shm_free is None else f"{shm_free / 2**30:.1f} GiB",
-        required / 2**30,
-    )
-    return root
+    return os.path.join(tmpfs_base, _SNAPSHOT_SUBDIR, run_id)
 
 
-def resolve_snapshot_root(
-    *,
-    run_id: str,
-    tmpfs_base: str,
-    nvme_base: str,
-    state_nbytes: int,
-) -> str:
-    """Pick a snapshot root once and pin it across restarts.
+def remove_snapshot(run_id: str, tmpfs_base: str = DEFAULT_TMPFS_DIR) -> None:
+    """Delete a run's snapshot root so a finished run frees its tmpfs.
 
-    The first process for a run chooses tmpfs vs NVMe by free space and records
-    the choice in a marker on the (durable-across-restart) NVMe base; later
-    re-execs read the marker so every attempt agrees on where the snapshot lives.
+    A missing root is ignored: nothing may have been saved yet.
     """
-    marker_dir = os.path.join(nvme_base, "levanter-recovery")
-    os.makedirs(marker_dir, exist_ok=True)
-    marker = os.path.join(marker_dir, f"{run_id}.root")
-    if os.path.exists(marker):
-        with open(marker) as f:
-            return f.read().strip()
-    root = choose_snapshot_root(
-        state_nbytes=state_nbytes,
-        shm_dir=tmpfs_base,
-        fallback_dir=nvme_base,
-        run_id=run_id,
-    )
-    os.makedirs(root, exist_ok=True)
-    with open(marker, "w") as f:
-        f.write(root)
-    return root
-
-
-def _free_bytes(path: str) -> int | None:
-    try:
-        stat = os.statvfs(path)
-    except OSError:
-        return None
-    return stat.f_bavail * stat.f_frsize
+    shutil.rmtree(snapshot_root(run_id, tmpfs_base), ignore_errors=True)
