@@ -9,16 +9,125 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from haliax.nn import ArrayStacked
+from jax.sharding import PartitionSpec as P
+from jax.sharding import get_abstract_mesh
+from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MoEExpertMlp
 
-from experiments.grug.moe.expert_merge import validate_bijection
-from experiments.june_tpu_67b_a2b.moe.model import MoEMLP, Transformer
+from experiments.grug.moe.expert_merge import MoeLayerTrace, validate_bijection
+from experiments.june_tpu_67b_a2b.moe.model import MoeBlockTrace, MoEMLP, Transformer
+
+_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 def _require_stacked_model(model: Transformer) -> tuple[ArrayStacked, ArrayStacked]:
     if model.stacked_blocks is None or not isinstance(model.expert_banks, ArrayStacked):
         raise ValueError("June one-pair conversion currently requires array-stacked blocks and expert banks")
     return model.stacked_blocks, model.expert_banks
+
+
+def stacked_expert_bank_at(expert_banks: ArrayStacked, bank_index: jax.Array | int) -> MoEExpertMlp:
+    """Select one bank from an array-stacked expert container with execution sharding."""
+    stacked = expert_banks.stacked
+    return dataclasses.replace(
+        stacked,
+        w_gate=stacked.w_gate.at[bank_index].get(out_sharding=P("expert", "data", "model")),
+        w_up=stacked.w_up.at[bank_index].get(out_sharding=P("expert", "data", "model")),
+        w_down=stacked.w_down.at[bank_index].get(out_sharding=P("expert", "model", "data")),
+    )
+
+
+def expert_bank_for_layer(model: Transformer, layer_index: int) -> MoEExpertMlp:
+    """Return one layer's explicit expert bank with its execution sharding restored."""
+    _, expert_banks = _require_stacked_model(model)
+    if not 0 <= layer_index < model.config.num_layers:
+        raise IndexError(f"layer_index must be in [0, {model.config.num_layers}), got {layer_index}")
+    bank_index = model.config.resolved_expert_bank_for_layer[layer_index]
+    return stacked_expert_bank_at(expert_banks, bank_index)
+
+
+def _sample_block_trace(trace: MoeBlockTrace, token_indices: jax.Array | None) -> MoeLayerTrace:
+    mlp_input = trace.mlp_input.reshape(-1, trace.mlp_input.shape[-1])
+    routed_output = trace.routed_output.reshape(-1, trace.routed_output.shape[-1])
+    selected_experts = trace.selected_experts
+    combine_weights = trace.combine_weights
+    if token_indices is not None:
+        mesh = get_abstract_mesh()
+        batch_shards = int(np.prod([mesh.shape[axis] for axis in _BATCH_AXES]))
+        if token_indices.ndim != 1 or token_indices.shape[0] % batch_shards != 0:
+            raise ValueError(
+                "token_indices must be one-dimensional with a length divisible by the batch mesh size; "
+                f"got shape {token_indices.shape} for {batch_shards} shards"
+            )
+        vector_sharding = jax.sharding.NamedSharding(mesh, P(_BATCH_AXES, None))
+        mlp_input = mlp_input.at[token_indices].get(out_sharding=vector_sharding)
+        routed_output = routed_output.at[token_indices].get(out_sharding=vector_sharding)
+        selected_experts = selected_experts.at[token_indices].get(out_sharding=vector_sharding)
+        combine_weights = combine_weights.at[token_indices].get(out_sharding=vector_sharding)
+    return MoeLayerTrace(
+        mlp_input=mlp_input,
+        selected_experts=selected_experts,
+        combine_weights=combine_weights,
+        routed_output=routed_output,
+    )
+
+
+def forward_with_moe_traces(
+    model: Transformer,
+    token_ids: jax.Array,
+    *,
+    target_layers: tuple[int, ...],
+    token_indices: jax.Array | None = None,
+    mask: AttentionMask | jax.Array | None = None,
+) -> tuple[jax.Array, dict[int, MoeLayerTrace], jax.Array]:
+    """Run the stacked model and return sampled MoE traces plus per-layer capacity overflow."""
+    stacked_blocks, expert_banks = _require_stacked_model(model)
+    if mask is None:
+        mask = AttentionMask.causal()
+    if len(set(target_layers)) != len(target_layers):
+        raise ValueError(f"target_layers contains duplicates: {target_layers}")
+    if any(layer < 0 or layer >= model.config.num_layers for layer in target_layers):
+        raise IndexError(f"target_layers must lie in [0, {model.config.num_layers}), got {target_layers}")
+    ordered_targets = tuple(sorted(target_layers))
+
+    cfg = model.config
+    segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+    short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+    long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+    mask_schedule = ((jnp.arange(cfg.num_layers) % 4) == 3) | (jnp.arange(cfg.num_layers) == cfg.num_layers - 1)
+    bank_schedule = jnp.asarray(cfg.resolved_expert_bank_for_layer, dtype=jnp.int32)
+
+    def scan_layer(carry: jax.Array, scan_inputs):
+        layer, use_long_mask, bank_index = scan_inputs
+        expert_bank = expert_banks.get_layer(bank_index)
+        block_trace = layer.forward_with_moe_trace(
+            carry,
+            short_mask,
+            long_mask,
+            use_long_mask,
+            expert_bank,
+            False,
+            cfg.disable_long_rope,
+        )
+        sampled_trace = _sample_block_trace(block_trace, token_indices)
+        trace_arrays = (
+            sampled_trace.mlp_input,
+            sampled_trace.selected_experts,
+            sampled_trace.combine_weights,
+            sampled_trace.routed_output,
+        )
+        return block_trace.hidden, (trace_arrays, block_trace.router_stats["capacity_overflow"])
+
+    hidden, (stacked_trace_arrays, capacity_overflow) = jax.lax.scan(
+        scan_layer,
+        model.embed_inputs(token_ids),
+        xs=(stacked_blocks.stacked, mask_schedule, bank_schedule),
+    )
+    traces = {
+        target_layer: MoeLayerTrace(*(value[target_layer] for value in stacked_trace_arrays))
+        for target_layer in ordered_targets
+    }
+    return model.finalize_hidden(hidden), traces, capacity_overflow
 
 
 def _take_leading_axis(value: jax.Array, indices: tuple[int, ...]) -> jax.Array:
@@ -150,4 +259,10 @@ def convert_one_expert_pair(
     )
 
 
-__all__ = ["convert_one_expert_pair", "permute_pending_qb_beta"]
+__all__ = [
+    "convert_one_expert_pair",
+    "expert_bank_for_layer",
+    "forward_with_moe_traces",
+    "permute_pending_qb_beta",
+    "stacked_expert_bank_at",
+]

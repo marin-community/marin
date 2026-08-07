@@ -24,6 +24,8 @@ _DEFAULT_MAHALANOBIS_QUANTILE = 0.995
 _DEFAULT_COVARIANCE_EPSILON = 1e-6
 _DEFAULT_COST_ETA = 0.5
 _DEFAULT_NORMALIZATION_EPSILON = 1e-8
+_RANDOMIZED_SVD_OVERSAMPLING = 8
+_RANDOMIZED_SVD_POWER_ITERATIONS = 2
 
 
 @dataclass(frozen=True)
@@ -171,19 +173,19 @@ class ExpertReservoirCollection:
         if np.any(selected < 0) or np.any(selected >= self.num_experts):
             raise ValueError("selected_experts contains an out-of-range expert ID")
 
-        route_inputs = np.repeat(inputs, selected.shape[1], axis=0)
-        route_experts = selected.reshape(-1)
-        route_weights = np.square(combine.astype(np.float64)).reshape(-1)
-        heldout = self._rng.random(route_experts.shape[0]) < self.heldout_fraction
+        heldout = self._rng.random(selected.shape) < self.heldout_fraction
         for expert in range(self.num_experts):
-            expert_routes = route_experts == expert
+            token_indices, route_indices = np.nonzero(selected == expert)
+            expert_states = inputs[token_indices]
+            expert_weights = np.square(combine[token_indices, route_indices].astype(np.float64))
+            expert_heldout = heldout[token_indices, route_indices]
             self._train[expert].add(
-                route_inputs[expert_routes & ~heldout],
-                route_weights[expert_routes & ~heldout],
+                expert_states[~expert_heldout],
+                expert_weights[~expert_heldout],
             )
             self._heldout[expert].add(
-                route_inputs[expert_routes & heldout],
-                route_weights[expert_routes & heldout],
+                expert_states[expert_heldout],
+                expert_weights[expert_heldout],
             )
 
     def calibration(self, expert_index: int) -> ExpertCalibration:
@@ -244,6 +246,17 @@ class SpectralDirections:
     input_directions: np.ndarray
     covariance_directions: np.ndarray
     sensitivity_eigenvalues: np.ndarray
+
+
+@dataclass(frozen=True)
+class SpectralProbePreparation:
+    """Host-computed inputs needed to finish one expert's spectral probes."""
+
+    manifold: InputManifold
+    centers: np.ndarray
+    ordinary_inputs: np.ndarray
+    ordinary_weights: np.ndarray
+    config: SpectralProbeConfig
 
 
 @dataclass(frozen=True)
@@ -332,6 +345,7 @@ def estimate_input_manifold(
     rank: int,
     mahalanobis_quantile: float = _DEFAULT_MAHALANOBIS_QUANTILE,
     epsilon: float = _DEFAULT_COVARIANCE_EPSILON,
+    seed: int = 0,
 ) -> InputManifold:
     states = np.asarray(states, dtype=np.float64)
     weights = np.asarray(weights, dtype=np.float64)
@@ -351,12 +365,10 @@ def estimate_input_manifold(
     normalized_weights = weights / np.sum(weights)
     mean = np.sum(states * normalized_weights[:, None], axis=0)
     centered = states - mean
-    covariance = centered.T @ (centered * normalized_weights[:, None])
-    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
-    order = np.argsort(eigenvalues)[::-1]
-    eigenvalues = eigenvalues[order]
-    eigenvectors = eigenvectors[:, order]
-    retained = min(rank, states.shape[1], int(np.sum(eigenvalues > epsilon)))
+    weighted_centered = centered * np.sqrt(normalized_weights[:, None])
+    eigenvectors, singular_values = _randomized_right_singular_vectors(weighted_centered, rank=rank, seed=seed)
+    eigenvalues = np.square(singular_values)
+    retained = min(rank, int(np.sum(eigenvalues > epsilon)))
     if retained == 0:
         return InputManifold(
             mean=mean.astype(np.float32),
@@ -376,6 +388,39 @@ def estimate_input_manifold(
     )
 
 
+def _randomized_right_singular_vectors(
+    matrix: np.ndarray,
+    *,
+    rank: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Approximate leading right singular vectors without forming ``matrix.T @ matrix``."""
+    max_rank = min(matrix.shape)
+    sketch_size = min(max_rank, rank + _RANDOMIZED_SVD_OVERSAMPLING)
+    rng = np.random.default_rng(seed)
+    random_projection = rng.standard_normal((matrix.shape[0], sketch_size))
+    basis = matrix.T @ random_projection
+    for _ in range(_RANDOMIZED_SVD_POWER_ITERATIONS):
+        basis, _ = np.linalg.qr(basis, mode="reduced")
+        basis = matrix.T @ (matrix @ basis)
+    basis, _ = np.linalg.qr(basis, mode="reduced")
+    projected = matrix @ basis
+    _, singular_values, projected_right_vectors = np.linalg.svd(projected, full_matrices=False)
+    right_vectors = basis @ projected_right_vectors.T
+    right_vectors = _canonicalize_vector_signs(right_vectors)
+    return right_vectors, singular_values
+
+
+def _canonicalize_vector_signs(vectors: np.ndarray) -> np.ndarray:
+    if vectors.shape[1] == 0:
+        return vectors
+    columns = np.arange(vectors.shape[1])
+    pivots = np.argmax(np.abs(vectors), axis=0)
+    signs = np.sign(vectors[pivots, columns])
+    signs[signs == 0] = 1.0
+    return vectors * signs[None, :]
+
+
 def eval_all_experts(
     bank: MoEExpertMlp,
     x: np.ndarray | jax.Array,
@@ -384,7 +429,7 @@ def eval_all_experts(
     expert_chunk_size: int | None = None,
 ) -> jax.Array:
     """Evaluate every expert in ``bank`` on every input without routing."""
-    inputs = jnp.asarray(x)
+    inputs = jnp.asarray(x, dtype=bank.w_gate.dtype)
     if inputs.ndim != 2 or inputs.shape[1] != bank.w_gate.shape[1]:
         raise ValueError(f"x must have shape [P, {bank.w_gate.shape[1]}], got {inputs.shape}")
     num_experts = int(bank.w_gate.shape[0])
@@ -394,6 +439,18 @@ def eval_all_experts(
         raise ValueError(f"expert_chunk_size must be positive, got {expert_chunk}")
     if probe_chunk <= 0:
         raise ValueError(f"probe_chunk_size must be positive, got {probe_chunk}")
+    mesh = get_abstract_mesh()
+    activation_fn = (
+        bank.activation.to_jax_fn() if isinstance(bank.activation, ActivationFunctionEnum) else bank.activation
+    )
+    input_sharding = None if mesh.empty else P(None, "data")
+    hidden_sharding = None if mesh.empty else P(None, None, "model")
+    output_sharding = None if mesh.empty else P(None, None, "data")
+    gate_weight_sharding = None if mesh.empty else P(None, "data", "model")
+    down_weight_sharding = None if mesh.empty else P(None, "model", "data")
+    if input_sharding is not None:
+        inputs = jax.sharding.reshard(inputs, input_sharding)
+
     probe_outputs = []
     for probe_start in range(0, int(inputs.shape[0]), probe_chunk):
         probe_stop = min(probe_start + probe_chunk, int(inputs.shape[0]))
@@ -401,27 +458,19 @@ def eval_all_experts(
         expert_outputs = []
         for expert_start in range(0, num_experts, expert_chunk):
             expert_stop = min(expert_start + expert_chunk, num_experts)
-            chunk_experts = expert_stop - expert_start
-            expanded_inputs = jnp.broadcast_to(
-                probe_inputs[:, None, :],
-                (probe_inputs.shape[0], chunk_experts, probe_inputs.shape[1]),
-            ).reshape(-1, probe_inputs.shape[1])
-            selected_experts = jnp.broadcast_to(
-                jnp.arange(expert_start, expert_stop, dtype=jnp.int32)[None, :],
-                (probe_inputs.shape[0], chunk_experts),
-            ).reshape(-1, 1)
-            evaluation_bank = dataclasses.replace(
-                bank,
-                capacity_factor=max(bank.capacity_factor, num_experts / chunk_experts),
+            w_gate = bank.w_gate.at[expert_start:expert_stop].get(out_sharding=gate_weight_sharding)
+            w_up = bank.w_up.at[expert_start:expert_stop].get(out_sharding=gate_weight_sharding)
+            w_down = bank.w_down.at[expert_start:expert_stop].get(out_sharding=down_weight_sharding)
+            gate = jnp.einsum("pd,edi->pei", probe_inputs, w_gate, out_sharding=hidden_sharding)
+            up = jnp.einsum("pd,edi->pei", probe_inputs, w_up, out_sharding=hidden_sharding)
+            expert_outputs.append(
+                jnp.einsum(
+                    "pei,eid->ped",
+                    activation_fn(gate) * up,
+                    w_down,
+                    out_sharding=output_sharding,
+                )
             )
-            chunk_output = evaluation_bank(
-                expanded_inputs,
-                selected_experts,
-                jnp.ones((expanded_inputs.shape[0], 1), dtype=expanded_inputs.dtype),
-            )
-            if isinstance(chunk_output, tuple):
-                chunk_output = chunk_output[0]
-            expert_outputs.append(chunk_output.reshape(probe_inputs.shape[0], chunk_experts, -1))
         probe_outputs.append(jnp.concatenate(expert_outputs, axis=1))
     return jnp.concatenate(probe_outputs, axis=0)
 
@@ -429,19 +478,29 @@ def eval_all_experts(
 def eval_expert(bank: MoEExpertMlp, expert_index: int, x: np.ndarray | jax.Array) -> jax.Array:
     if not 0 <= expert_index < bank.w_gate.shape[0]:
         raise IndexError(f"expert_index must be in [0, {bank.w_gate.shape[0]}), got {expert_index}")
-    inputs = jnp.asarray(x)
-    evaluation_bank = dataclasses.replace(
-        bank,
-        capacity_factor=max(bank.capacity_factor, float(bank.w_gate.shape[0])),
+    inputs = jnp.asarray(x, dtype=bank.w_gate.dtype)
+    mesh = get_abstract_mesh()
+    gate_weight_sharding = None if mesh.empty else P("data", "model")
+    down_weight_sharding = None if mesh.empty else P("model", "data")
+    input_sharding = None if mesh.empty else P(None, "data")
+    hidden_sharding = None if mesh.empty else P(None, "model")
+    output_sharding = None if mesh.empty else P(None, "data")
+    w_gate = bank.w_gate.at[expert_index].get(out_sharding=gate_weight_sharding)
+    w_up = bank.w_up.at[expert_index].get(out_sharding=gate_weight_sharding)
+    w_down = bank.w_down.at[expert_index].get(out_sharding=down_weight_sharding)
+    if input_sharding is not None:
+        inputs = jax.sharding.reshard(inputs, input_sharding)
+    activation_fn = (
+        bank.activation.to_jax_fn() if isinstance(bank.activation, ActivationFunctionEnum) else bank.activation
     )
-    output = evaluation_bank(
-        inputs,
-        jnp.full((inputs.shape[0], 1), expert_index, dtype=jnp.int32),
-        jnp.ones((inputs.shape[0], 1), dtype=inputs.dtype),
+    gate = jnp.einsum("pd,di->pi", inputs, w_gate, out_sharding=hidden_sharding)
+    up = jnp.einsum("pd,di->pi", inputs, w_up, out_sharding=hidden_sharding)
+    return jnp.einsum(
+        "pi,id->pd",
+        activation_fn(gate) * up,
+        w_down,
+        out_sharding=output_sharding,
     )
-    if isinstance(output, tuple):
-        return output[0]
-    return output
 
 
 def _farthest_centers(
@@ -490,8 +549,8 @@ def spectral_directions(
             covariance_directions=np.empty((0, 0), dtype=np.float32),
             sensitivity_eigenvalues=np.empty((0,), dtype=np.float32),
         )
-    scaled_basis = jnp.asarray(manifold.scaled_basis)
-    centers_array = jnp.asarray(centers)
+    scaled_basis = jnp.asarray(manifold.scaled_basis, dtype=bank.w_gate.dtype)
+    centers_array = jnp.asarray(centers, dtype=bank.w_gate.dtype)
     mesh = get_abstract_mesh()
     if mesh.empty:
         w_gate = bank.w_gate[expert_index]
@@ -550,21 +609,21 @@ def _bounded_radius(
     return max(0.0, min(requested_radius, boundary))
 
 
-def build_spectral_probe_set(
-    bank: MoEExpertMlp,
-    expert_index: int,
+def prepare_spectral_probe_set(
     manifold_sample: ReservoirSample,
     heldout_sample: ReservoirSample,
     *,
     config: SpectralProbeConfig = SpectralProbeConfig(),
     seed: int = 0,
-) -> ExpertProbeSet:
+) -> SpectralProbePreparation:
+    """Prepare covariance, centers, and native probes using host-side NumPy only."""
     manifold = estimate_input_manifold(
         manifold_sample.states,
         manifold_sample.weights,
         rank=config.covariance_rank,
         mahalanobis_quantile=config.mahalanobis_quantile,
         epsilon=config.covariance_epsilon,
+        seed=seed,
     )
     centers = _farthest_centers(
         manifold_sample.states,
@@ -573,6 +632,35 @@ def build_spectral_probe_set(
         count=config.num_centers,
         seed=seed,
     )
+    rng = np.random.default_rng(seed + 1)
+    ordinary_count = min(config.ordinary_samples, heldout_sample.states.shape[0])
+    if ordinary_count == 0:
+        raise ValueError("heldout_sample must contain at least one routed state")
+    probabilities = heldout_sample.weights / np.sum(heldout_sample.weights)
+    ordinary_indices = rng.choice(
+        heldout_sample.states.shape[0],
+        size=ordinary_count,
+        replace=False,
+        p=probabilities,
+    )
+    return SpectralProbePreparation(
+        manifold=manifold,
+        centers=np.asarray(centers, dtype=np.float32),
+        ordinary_inputs=np.asarray(heldout_sample.states[ordinary_indices], dtype=np.float32),
+        ordinary_weights=np.asarray(heldout_sample.weights[ordinary_indices], dtype=np.float32),
+        config=config,
+    )
+
+
+def finalize_spectral_probe_set(
+    bank: MoEExpertMlp,
+    expert_index: int,
+    preparation: SpectralProbePreparation,
+) -> ExpertProbeSet:
+    """Finish spectral probes by computing expert JVP sensitivity directions."""
+    manifold = preparation.manifold
+    centers = preparation.centers
+    config = preparation.config
     directions = spectral_directions(
         bank,
         expert_index,
@@ -615,25 +703,33 @@ def build_spectral_probe_set(
                         np.stack([center - bounded_radius * input_direction, center + bounded_radius * input_direction])
                     )
 
-    rng = np.random.default_rng(seed + 1)
-    ordinary_count = min(config.ordinary_samples, heldout_sample.states.shape[0])
-    if ordinary_count == 0:
-        raise ValueError("heldout_sample must contain at least one routed state")
-    probabilities = heldout_sample.weights / np.sum(heldout_sample.weights)
-    ordinary_indices = rng.choice(
-        heldout_sample.states.shape[0],
-        size=ordinary_count,
-        replace=False,
-        p=probabilities,
-    )
     return ExpertProbeSet(
-        ordinary_inputs=np.asarray(heldout_sample.states[ordinary_indices], dtype=np.float32),
-        ordinary_weights=np.asarray(heldout_sample.weights[ordinary_indices], dtype=np.float32),
-        centers=np.asarray(centers, dtype=np.float32),
+        ordinary_inputs=preparation.ordinary_inputs,
+        ordinary_weights=preparation.ordinary_weights,
+        centers=centers,
         spectral_pairs=np.asarray(pairs, dtype=np.float32).reshape(-1, 2, manifold.mean.shape[0]),
         input_directions=directions.input_directions,
         sensitivity_eigenvalues=directions.sensitivity_eigenvalues,
     )
+
+
+def build_spectral_probe_set(
+    bank: MoEExpertMlp,
+    expert_index: int,
+    manifold_sample: ReservoirSample,
+    heldout_sample: ReservoirSample,
+    *,
+    config: SpectralProbeConfig = SpectralProbeConfig(),
+    seed: int = 0,
+) -> ExpertProbeSet:
+    """Build one expert's probes, composing host preparation and accelerator finalization."""
+    preparation = prepare_spectral_probe_set(
+        manifold_sample,
+        heldout_sample,
+        config=config,
+        seed=seed,
+    )
+    return finalize_spectral_probe_set(bank, expert_index, preparation)
 
 
 def expert_costs(
@@ -861,6 +957,7 @@ __all__ = [
     "MoeLayerTrace",
     "ReservoirSample",
     "SpectralProbeConfig",
+    "SpectralProbePreparation",
     "WeightedReservoir",
     "add_moe_trace_to_reservoirs",
     "build_spectral_probe_set",
@@ -869,10 +966,12 @@ __all__ = [
     "eval_all_experts",
     "eval_expert",
     "expert_costs",
+    "finalize_spectral_probe_set",
     "forward_with_moe_traces",
     "functional_cost_matrix",
     "permute_pending_qb_beta",
     "permute_router",
+    "prepare_spectral_probe_set",
     "solve_expert_assignment",
     "spectral_directions",
     "validate_bijection",

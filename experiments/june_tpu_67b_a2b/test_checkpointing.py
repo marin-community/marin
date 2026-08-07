@@ -14,7 +14,7 @@ from levanter.checkpoint import save_checkpoint
 from levanter.grug.grug_moe import MoEExpertMlp
 from levanter.grug.sharding import compact_grug_mesh
 
-from experiments.june_tpu_67b_a2b.checkpointing import load_june_checkpoint
+from experiments.june_tpu_67b_a2b.checkpointing import load_june_checkpoint, load_legacy_june_stacked_experts
 from experiments.june_tpu_67b_a2b.moe.model import GrugModelConfig, Transformer
 from experiments.june_tpu_67b_a2b.moe.train import GrugTrainState, init_weights_only_from_checkpoint
 
@@ -138,11 +138,32 @@ def test_load_june_checkpoint_adapts_legacy_stacked_experts_and_preserves_qb(tmp
             },
             str(tmp_path),
             mesh=mesh,
-            allow_partial=True,
         )
 
     np.testing.assert_array_equal(loaded["pending_qb_betas"], pending_qb_betas)
     _assert_array_trees_equal(loaded["params"], source)
+
+
+def test_load_legacy_june_stacked_experts_reads_only_expert_subtree(tmp_path):
+    config = _tiny_stacked_config()
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    with jax.set_mesh(mesh):
+        source = Transformer.init(config, key=jax.random.key(11))
+        assert isinstance(source.expert_banks, ArrayStacked)
+        _save_legacy_checkpoint(
+            tmp_path,
+            source,
+            jnp.zeros((config.num_layers, config.num_experts), dtype=jnp.float32),
+        )
+        exemplar = jax.tree.map(
+            lambda value: jax.ShapeDtypeStruct(value.shape, value.dtype, sharding=value.sharding),
+            source.expert_banks.stacked,
+        )
+
+        loaded = load_legacy_june_stacked_experts(exemplar, str(tmp_path), mesh=mesh)
+
+    for actual, expected in zip(_array_leaves(loaded), _array_leaves(source.expert_banks.stacked), strict=True):
+        np.testing.assert_array_equal(actual, expected)
 
 
 def test_load_june_checkpoint_rejects_legacy_optimizer_state(tmp_path):

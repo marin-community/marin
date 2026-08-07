@@ -189,7 +189,7 @@ def scale_with_grug_muonh(
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-@OptimizerConfig.register_subclass("grug_moe_adamh_v2")
+@OptimizerConfig.register_subclass("june_grug_moe_adamh_v2")
 @dataclass(frozen=True)
 class GrugMoeAdamHConfig(OptimizerConfig):
     """AdamH for Grug MoE. Four optimizer groups, no flags.
@@ -270,7 +270,7 @@ class GrugMoeAdamHConfig(OptimizerConfig):
         return jax.tree.map(mask_fn, params, paths)
 
 
-@OptimizerConfig.register_subclass("grug_moe_muonh_v1")
+@OptimizerConfig.register_subclass("june_grug_moe_muonh_v1")
 @dataclass(frozen=True)
 class GrugMoeMuonHConfig(OptimizerConfig):
     """May Recipe MuonH optimizer with bank-aware tied-expert learning rates.

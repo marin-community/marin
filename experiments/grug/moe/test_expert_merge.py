@@ -27,10 +27,12 @@ from experiments.grug.moe.expert_merge import (
     convert_one_expert_pair,
     estimate_input_manifold,
     eval_all_experts,
+    finalize_spectral_probe_set,
     forward_with_moe_traces,
     functional_cost_matrix,
     permute_pending_qb_beta,
     permute_router,
+    prepare_spectral_probe_set,
     solve_expert_assignment,
 )
 from experiments.grug.moe.model import GrugModelConfig, MoEMLP, Transformer
@@ -102,6 +104,19 @@ def test_eval_all_experts_matches_independent_swiglu_reference_across_chunks():
     assert actual.shape == (5, 3, 3)
     np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(actual, eval_all_experts(bank, inputs), rtol=0, atol=0)
+
+
+def test_eval_all_experts_supports_model_axis_sharding():
+    mesh = compact_grug_mesh(expert_axis_size=1, replica_axis_size=1, model_axis_size=jax.device_count())
+    with jax.set_mesh(mesh):
+        bank = _bank(num_experts=4, hidden_dim=8, intermediate_dim=8, seed=17)
+        inputs = jnp.arange(128 * 8, dtype=jnp.float32).reshape(128, 8) / 100.0
+        actual = eval_all_experts(bank, inputs, expert_chunk_size=2)
+        gate = jnp.einsum("pd,edi->pei", inputs, bank.w_gate)
+        up = jnp.einsum("pd,edi->pei", inputs, bank.w_up)
+        expected = jnp.einsum("pei,eid->ped", jax.nn.silu(gate) * up, bank.w_down)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
 
 def test_router_and_pending_qb_permutation_preserve_routed_function():
@@ -271,6 +286,32 @@ def test_weighted_input_manifold_recovers_rank_two_support():
     )
 
 
+def test_randomized_input_manifold_recovers_weighted_high_dimensional_subspace():
+    rng = np.random.default_rng(12)
+    num_states = 192
+    state_dim = 384
+    rank = 5
+    basis, _ = np.linalg.qr(rng.normal(size=(state_dim, rank)))
+    latent = rng.normal(size=(num_states, rank)) * np.array([9.0, 5.0, 2.5, 1.2, 0.6])
+    states = latent @ basis.T + 0.01 * rng.normal(size=(num_states, state_dim))
+    weights = rng.lognormal(mean=0.0, sigma=0.7, size=num_states)
+    normalized_weights = weights / np.sum(weights)
+    centered = states - np.sum(states * normalized_weights[:, None], axis=0)
+    weighted_centered = centered * np.sqrt(normalized_weights[:, None])
+    _, expected_singular_values, expected_right_vectors = np.linalg.svd(weighted_centered, full_matrices=False)
+
+    manifold = estimate_input_manifold(states, weights, rank=rank, seed=9)
+    repeated = estimate_input_manifold(states, weights, rank=rank, seed=9)
+
+    np.testing.assert_allclose(manifold.eigenvalues, np.square(expected_singular_values[:rank]), rtol=2e-4, atol=1e-6)
+    actual_projector = manifold.eigenvectors @ manifold.eigenvectors.T
+    expected_basis = expected_right_vectors[:rank].T
+    expected_projector = expected_basis @ expected_basis.T
+    np.testing.assert_allclose(actual_projector, expected_projector, rtol=2e-3, atol=2e-3)
+    np.testing.assert_array_equal(manifold.eigenvectors, repeated.eigenvectors)
+    np.testing.assert_array_equal(manifold.eigenvalues, repeated.eigenvalues)
+
+
 def test_spectral_probes_are_centered_and_bounded_on_native_support():
     bank = _bank(num_experts=1, hidden_dim=3, intermediate_dim=2, seed=4)
     states = np.array(
@@ -297,9 +338,13 @@ def test_spectral_probes_are_centered_and_bounded_on_native_support():
         ordinary_samples=3,
     )
 
-    probes = build_spectral_probe_set(bank, 0, sample, sample, config=config, seed=5)
+    preparation = prepare_spectral_probe_set(sample, sample, config=config, seed=5)
+    probes = finalize_spectral_probe_set(bank, 0, preparation)
+    composed_probes = build_spectral_probe_set(bank, 0, sample, sample, config=config, seed=5)
     manifold = estimate_input_manifold(states, np.ones(states.shape[0]), rank=2)
 
+    for probe_field in dataclasses.fields(ExpertProbeSet):
+        np.testing.assert_array_equal(getattr(probes, probe_field.name), getattr(composed_probes, probe_field.name))
     assert probes.spectral_pairs.shape == (4, 2, 3)
     assert np.all(np.diff(probes.sensitivity_eigenvalues) <= 0)
     for pair_index, pair in enumerate(probes.spectral_pairs):

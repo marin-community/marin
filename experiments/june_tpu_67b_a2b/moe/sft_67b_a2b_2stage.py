@@ -123,7 +123,7 @@ _model = dataclasses.replace(
 )
 
 # --- Optimizer: AdamH (not Muon). Muon's Newton-Schulz workspace is a ~21GiB replicated per-device
-# floor that never shards -> OOMs on H100 (marin #6693). AdamH (grug_moe_adamh_v2) has no NS
+# floor that never shards -> OOMs on H100 (marin #6693). AdamH (june_grug_moe_adamh_v2) has no NS
 # workspace (elementwise m/v moments). Fresh SFT schedule (weights-only init resets it). First-pass LRs. ---
 _SFT_ADAMH_LR: float = 5e-5  # adamh group (attn/dense matrices) + expert group (expert_lr=None -> this)
 _SFT_ADAM_LR: float = 5e-5  # adam group (norms / router / embeddings)

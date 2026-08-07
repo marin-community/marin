@@ -43,6 +43,13 @@ goes stale on the next commit.
 - Purpose: canonical Mixture-of-Experts variant; carries its own model, optimizer, train loop, and launch wiring so it can iterate independently of the dense template.
 - Issue: https://github.com/marin-community/marin/pull/3046
 
+### june-tpu-67b-a2b
+- Path: `experiments/june_tpu_67b_a2b/`
+- Origin: moe
+- Introduced: c5aadc97c
+- Status: active
+- Purpose: vendored June 67B-A2B TPU training and inference snapshot; also carries the explicit expert-bank and same-region one-pair merge experiments needed to operate its historical array-stacked checkpoints.
+
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834

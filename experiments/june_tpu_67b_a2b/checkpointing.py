@@ -24,6 +24,24 @@ StateT = TypeVar("StateT")
 _LEGACY_EXPERT_PATH = ("stacked_blocks", "stacked", "mlp", "expert_mlp")
 
 
+def load_legacy_june_stacked_experts(
+    exemplar: StateT,
+    checkpoint_path: str,
+    *,
+    mesh: jax.sharding.Mesh,
+    _load_fn: Callable[..., Any] = load_checkpoint,
+) -> StateT:
+    """Load only the legacy array-stacked routed-expert subtree."""
+    expert_path = ("params", *_LEGACY_EXPERT_PATH)
+    loaded = _load_fn(
+        _nested_mapping(expert_path, exemplar),
+        checkpoint_path,
+        mesh=mesh,
+        allow_partial=False,
+    )
+    return cast(StateT, _value_at_path(loaded, expert_path))
+
+
 def load_june_checkpoint(
     tree: StateT,
     checkpoint_path: str,

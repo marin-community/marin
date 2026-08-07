@@ -11,7 +11,7 @@ author: dlwh
 - Goal: Test whether Grug can train with explicit shared routed-expert banks, then whether an untied checkpoint can be converted into that architecture by functional expert matching and recovery training.
 - Primary metrics: `eval/paloma/macro_loss`, throughput, peak accelerator memory, routing health, expert gradient/update norms, immediate conversion loss, affected-layer MoE NRMSE, and recovery tokens.
 - Constraints: Tie only `MoEExpertMlp`; keep attention, routers and QB biases, norms and GatedNorms, shared dense MLPs, and residual blocks unique per layer. Use contemporaneous controls. Do not launch surgery before the tied-from-scratch architecture gate passes.
-- Coordinating issue/PR: none yet.
+- Coordinating issue: https://github.com/marin-community/marin/issues/8032
 - Experiment series: `GRUG-XEM`.
 
 ## Current TL;DR
@@ -34,6 +34,7 @@ author: dlwh
 - `GRUG-XEM-H4`: Functional matching plus shared-bank prefit can merge one adjacent middle-layer pair more efficiently than identity-ID conversion. Current test: layers 2-3 spectral-plus-prefit pipeline from the matched d512 untied checkpoint.
 - `GRUG-XEM-H5`: Covariance-aware finite-difference spectral matching materially improves immediate MoE error, validation-loss spike, or recovery tokens over native-state-only matching. Next test: compare saved identity, native-only, and spectral cost matrices on the same calibration artifact; drop spectral probes if they miss the stated 15%/20% gates.
 - `GRUG-XEM-H6`: A recent June 67B-A2B checkpoint admits a one-pair middle-layer merge without cross-region checkpoint or data movement. Next test: validate legacy schema migration locally, then dispatch a central2-only one-pair smoke from step 105149 after the d512 surgery gate passes.
+- `GRUG-XEM-H7`: The tied-minus-untied loss gap diminishes at d768 when four middle layers share one bank behind two-layer input and output anchors. Next test: matched d768 untied, unscaled-tied, and `1/sqrt(g)`-tied runs at `2.81e18` FLOPs.
 
 ### Blocked
 
@@ -307,3 +308,17 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Result: the recommended completed teacher is `gs://marin-us-central2/grug/moe_67b_a2b_d2560_ep1_rep8_bs1024_seq65536_sw2k_v4_2048_muon_cooldown_step102k-3dac46/checkpoints/step-105149/` with recorded Paloma macro 2.224. Its training cache, Paloma and uncheatable caches, output bucket, and v4-2048 resources are all available in `us-central2`. The main 10T run is still active and is not selected as the first teacher. Explicit expert-bank ownership is now implemented in the vendored June model for both unstacked and array-stacked execution; eight focused tests, the variant-contract suite, lint, and Pyrefly pass.
 - Interpretation: the no-copy large-scale route is central2 compute against the completed step-105149 central2 checkpoint. The refactor changes the native checkpoint paths from per-block experts to `params.expert_banks`, so a tested legacy schema adapter is required before any large worker is launched.
 - Next action: finish the local legacy-checkpoint adapter and tied-bank update scaling, then port the smallest one-pair conversion smoke. Do not dispatch it until the d512 one-pair gate passes.
+
+### 2026-08-06 17:45 - GRUG-XEM-003 June 67B one-pair calibration and matching gate
+
+- Hypothesis: The completed step-105149 checkpoint can be calibrated without changing its EP1 routed function, and its two middle expert banks can be matched without loading attention or duplicating dense host eigendecompositions.
+- Commit Hash: `c71a00ca46` plus the uncommitted June calibration/matching diff.
+- Commands:
+  - `/Users/dlwh/src/marin/.venv/bin/pytest --session-timeout=100000 -q` over all five June test files, canonical expert-merge/artifact tests, and `tests/test_grug_variant_contracts.py`.
+  - Four-virtual-device CPU runs of the June trace parity test on a data-axis mesh and the exploded expert evaluator on a model-axis mesh.
+  - `/Users/dlwh/src/marin/.venv/bin/pyrefly check` over the canonical expert matching and June checkpoint/runtime/launch files.
+  - `MARIN_PREFIX=gs://marin-us-central2 ...python -m experiments.june_tpu_67b_a2b.moe.launch_merge_recovery --stage calibration --version dev` without `--run`.
+- Config: source layers 12-13, exact source `qk_mult=1.57`, sequence length 8192, batch 128, a 2 million-token target rounded to two complete batches (2,097,152 tokens), 131,072 sampled states per batch, 2,048 states per expert, and zero tolerated capacity overflow. Calibration uses v4-256 with `(replica=1,data=128,expert=1,model=1)`, preserving the teacher's EP1 backend. Expert-only matching uses v4-64 with `(replica=2,data=1,expert=1,model=16)`.
+- Result: 56 tests passed and one unrelated variant-contract case skipped. Focused lint and Pyrefly passed. The trace path is one ordinary full-layer scan and matches the normal stacked forward path on a data-sharded mesh. The exploded evaluator uses direct chunked SwiGLU matmuls and supports model-axis sharding. Weighted covariance estimation uses deterministic randomized rank-32 SVD without forming a 2560-by-2560 covariance. CPU probe preparation is divided across matching hosts, gathered once, then finalized through synchronized TPU JVPs. The matching worker loads only the legacy routed-expert subtree, not attention or optimizer state. Every checkpoint, dataset cache, artifact, and TPU resource remains in `us-central2`.
+- Interpretation: the invalid model-axis attention geometry, EP256 capacity clipping, EP-sharded 128-sample evaluator, duplicated dense eigendecomposition, and source-config mismatch found in review are removed. Calibration still all-gathers the sampled trace across 32 workers, but only process zero retains the roughly 10.7 GB float32 reservoirs; the v4-256 topology reduces replicated host traffic eightfold from the rejected v4-2048 design.
+- Next action: snapshot this implementation, but keep the `us-central2` calibration unlaunched until the d512 one-pair surgery passes its recovery gate. Then babysit compile, HBM, strict checkpoint coverage, zero overflow, and artifact commit before launching expert-only matching.

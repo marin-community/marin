@@ -868,6 +868,15 @@ class Transformer(eqx.Module):
             config=cfg,
         )
 
+    def embed_inputs(self, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
+        """Embed token IDs and apply the input normalization stack."""
+        hidden = self.token_embed.at[token_ids].get(out_sharding=_batch_spec())
+        return self.embed_gated_norm(self.embed_norm(hidden))
+
+    def finalize_hidden(self, hidden: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        """Apply the final normalization stack."""
+        return self.final_gated_norm(self.final_norm(hidden))
+
     @named_call
     def __call__(
         self,
@@ -877,11 +886,8 @@ class Transformer(eqx.Module):
         if mask is None:
             mask = AttentionMask.causal()
 
-        batch_spec = _batch_spec()
         cfg = self.config
-        hidden = self.token_embed.at[token_ids].get(out_sharding=batch_spec)
-        hidden = self.embed_norm(hidden)
-        hidden = self.embed_gated_norm(hidden)
+        hidden = self.embed_inputs(token_ids)
 
         # Short layers: sliding window. Long layers (every 4th + last): full causal.
         segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
@@ -949,7 +955,7 @@ class Transformer(eqx.Module):
                 "qb_beta_per_layer": stacked_router_stats["qb_beta"],
                 "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
             }
-        hidden = self.final_gated_norm(self.final_norm(hidden))
+        hidden = self.finalize_hidden(hidden)
         return hidden, router_metrics
 
     @named_call
