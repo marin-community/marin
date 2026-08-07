@@ -15,25 +15,28 @@ from finestore.eval import (
     EvaluationStore,
     Grading,
     SampleKind,
-    export_lm_eval_samples,
-    preserved_sample_sources,
-    rebuild_lm_eval_samples,
     sample_from_archive_row,
     sample_to_archive_row,
     write_sample_parquet,
 )
 from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
+from marin.evaluation.lm_eval_samples import (
+    export_lm_eval_samples,
+    preserved_sample_sources,
+    rebuild_lm_eval_samples,
+    run_artifacts,
+)
 from rigging.filesystem import StoragePath
 
-from experiments.evaluation.cli import SweepOutcome, _sweep_archives, selected_archives
-from experiments.evaluation.migrate_archive import (
+from experiments.evaluation.migrations.cli import SweepOutcome, _sweep_archives, selected_archives
+from experiments.evaluation.migrations.migrate_archive import (
     MigrationCounts,
     archive_sample_count,
     legacy_archive_prefix,
     migrate_run,
 )
-from experiments.evaluation.migrate_archive import (
+from experiments.evaluation.migrations.migrate_archive import (
     main as migrate_archive_cli,
 )
 from infra.evaldash.src.samples import fetch_artifact, fetch_samples, list_sample_tasks
@@ -214,6 +217,40 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     source.unlink()
     assert rebuild_lm_eval_samples(str(results)) == 2
     assert CompositeReader(str(results)).scan("samples").num_rows == 2
+
+
+def test_export_preserves_every_artifact_the_harness_left(tmp_path):
+    # evalchemy's resume state lives under a dot-directory, which the earlier `**/*` globs never
+    # matched, so it was the one thing a rebuilt archive could not account for.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
+    (results / "gsm8k_5shot" / "model" / "results_20260807.json").write_text(json.dumps({"results": {}}))
+    resume = results / "gsm8k_5shot" / ".resume" / "model" / "gsm8k" / "resume"
+    resume.mkdir(parents=True)
+    (resume / "fingerprint.json").write_text(json.dumps({"num_fewshot": 5}))
+    (resume / "manifest.jsonl").write_text('{"payload": {"output": " 18"}}\n')
+
+    export_lm_eval_samples(str(results))
+
+    preserved = {name for name in CompositeReader(str(results)).keys("blobs") for name in [name[0]]}
+    for relative in run_artifacts(str(results)):
+        assert f"sources/{relative}" in preserved, relative
+    assert any(".resume" in name for name in preserved)
+
+
+def test_preserving_artifacts_never_includes_the_archive_itself(tmp_path):
+    # The archive shares the run's root, so a re-export that treated its own shards as artifacts
+    # would fold the archive into itself and grow without bound.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
+    export_lm_eval_samples(str(results))
+
+    before = len(run_artifacts(str(results)))
+    export_lm_eval_samples(str(results))
+
+    assert run_artifacts(str(results)) == sorted(run_artifacts(str(results)))
+    assert len(run_artifacts(str(results))) == before
+    assert not any(name.startswith(("samples/", "steps/", "blobs/")) for name in run_artifacts(str(results)))
 
 
 def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):

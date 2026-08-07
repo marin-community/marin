@@ -7,6 +7,7 @@ Every eval mechanism normalizes its native per-question output into :class:`Eval
 time, and every consumer (the dashboard's sample browser, ad-hoc parquet analysis) reads that
 contract back through this module -- the producer and consumer share one schema definition, so a
 format change is a change to this file and its round-trip test, never a guessing game in a viewer.
+The conversion from a mechanism's native output lives with that mechanism, not here.
 
 A sample is either ``multiple_choice`` (the model scored a fixed choice list by loglikelihood;
 ``choices`` carries the per-choice scores with the model's pick and the gold index resolved at
@@ -30,16 +31,14 @@ import dataclasses
 import hashlib
 import json
 import logging
-import re
 from collections.abc import Iterable
 from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem import prefix_join
 
-from finestore.layout import BLOBS_TABLE
 from finestore.reader import CompositeReader
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
@@ -66,10 +65,6 @@ PRIMARY_METRIC_PRIORITY = ("exact_match", "accuracy", "acc_norm", "acc", "pass@1
 # Tie-break among same-base metrics that differ only in lm-eval filter. flexible-extract outranks
 # strict-match: chat models solve gsm8k-style problems but rarely emit the strict "#### N" format.
 FILTER_PRIORITY = ("flexible-extract",)
-
-# A ``tempfile.mkdtemp`` directory name that ended up inside a results tree. See
-# :func:`is_scratch_artifact`.
-_SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 
 
 class SampleKind(StrEnum):
@@ -165,19 +160,6 @@ def primary_filter(filters: Iterable[str]) -> str | None:
     return min(names)
 
 
-def is_scratch_artifact(relative_path: str) -> bool:
-    """Whether an artifact under a run came from the harness's scratch directory.
-
-    evalchemy runs the harness in a ``tempfile`` working directory and copies the tree into the
-    results path, so a retried evaluation leaves a second complete tree under a ``tmp<random>/``
-    segment. Both trees are real, and their loglikelihoods differ because inference is not
-    deterministic, but only the canonical copy produced the metrics on the run's record. Indexing
-    both would put two different rows on one primary key; the scratch copy is still preserved as a
-    source blob, so nothing is discarded by leaving it out of the table.
-    """
-    return _SCRATCH_SEGMENT.search(relative_path) is not None
-
-
 def base_metric(name: str) -> str:
     """A metric key without lm-eval's ``,<filter>`` suffix (``exact_match,none`` -> ``exact_match``)."""
     return name.split(",", 1)[0]
@@ -208,213 +190,6 @@ def primary_metric(metrics: dict[str, float]) -> tuple[str, float] | None:
 
 
 # --------------------------------------------------------------------------------------------------
-# lm-eval adapter: normalize one --log_samples row into the contract.
-# --------------------------------------------------------------------------------------------------
-
-# lm-eval per-sample fields that are structural rather than metric values. ``schema_version`` is
-# lm-eval's own row-format stamp and ``metrics`` its list of metric *names*, so both would otherwise
-# be mistaken for scores by the numeric sweep below.
-_LM_EVAL_STRUCTURAL_KEYS = frozenset(
-    {
-        "doc",
-        "doc_id",
-        "target",
-        "arguments",
-        "resps",
-        "filtered_resps",
-        "filter",
-        "metrics",
-        "schema_version",
-        "task_name",
-        "doc_hash",
-        "prompt_hash",
-        "target_hash",
-    }
-)
-
-
-def _loglikelihood_pair(entry) -> tuple[float, bool] | None:
-    """Unwrap a response entry to ``(loglikelihood, is_greedy)``, tolerating a singleton wrapper."""
-    if isinstance(entry, list) and len(entry) == 1:
-        entry = entry[0]
-    if (
-        isinstance(entry, list)
-        and len(entry) == 2
-        and isinstance(entry[0], (int, float))
-        and not isinstance(entry[0], bool)
-        and isinstance(entry[1], bool)
-    ):
-        return float(entry[0]), entry[1]
-    return None
-
-
-def _is_multiple_choice(arguments, responses) -> bool:
-    if not isinstance(arguments, list) or len(arguments) <= 1:
-        return False
-    if not isinstance(responses, list) or len(responses) != len(arguments):
-        return False
-    return all(_loglikelihood_pair(entry) is not None for entry in responses)
-
-
-def _choice_labels(doc, count: int) -> list[str]:
-    # arc-style docs carry {"choices": {"label": [...], "text": [...]}}; other tasks (mmlu,
-    # hellaswag) store choices as a plain list, which gets the A/B/C default.
-    choices = doc.get("choices") if isinstance(doc, dict) else None
-    labels = choices.get("label") if isinstance(choices, dict) else None
-    if isinstance(labels, list) and len(labels) == count and all(isinstance(label, str) for label in labels):
-        return labels
-    return [chr(ord("A") + i) for i in range(count)]
-
-
-def _resolve_target_choice(target, choices: list[Choice]) -> int | None:
-    if isinstance(target, bool):
-        return None
-    if isinstance(target, int):
-        return target if 0 <= target < len(choices) else None
-    if isinstance(target, str):
-        trimmed = target.strip()
-        for i, choice in enumerate(choices):
-            if choice.label == trimmed or choice.text.strip() == trimmed:
-                return i
-        if trimmed.isdigit():
-            index = int(trimmed)
-            return index if 0 <= index < len(choices) else None
-    return None
-
-
-def _parse_chat_messages(text: str) -> list[Message] | None:
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(parsed, list) or not parsed:
-        return None
-    messages = []
-    for item in parsed:
-        if (
-            not isinstance(item, dict)
-            or not isinstance(item.get("role"), str)
-            or not isinstance(item.get("content"), str)
-        ):
-            return None
-        messages.append(Message(role=item["role"], content=item["content"]))
-    return messages
-
-
-def _sample_metrics(raw: dict) -> dict[str, float]:
-    metrics: dict[str, float] = {}
-    for key, value in raw.items():
-        if key in _LM_EVAL_STRUCTURAL_KEYS or isinstance(value, bool):
-            continue
-        if isinstance(value, (int, float)):
-            metrics[key] = float(value)
-    return metrics
-
-
-def _correct(metrics: dict[str, float]) -> bool | None:
-    picked = primary_metric(metrics)
-    if picked is None:
-        return None
-    return picked[1] >= 1.0
-
-
-def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -> Grading | None:
-    """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag.
-
-    A per-sample row scores one extraction filter and names it in its own ``filter`` field, unlike an
-    aggregate result key which carries the filter as a ``,<filter>`` suffix. Both spellings are
-    accepted so the grading records the filter whichever shape the row uses.
-    """
-    picked = primary_metric(metrics)
-    if picked is None:
-        return None
-    name, value = picked
-    metric_filter = extraction_filter or (name.split(",", 1)[1] if "," in name else None)
-    return Grading(
-        method=f"lm-eval:{base_metric(name)}",
-        metric=name,
-        filter=metric_filter,
-        score=value,
-        passed=value >= 1.0,
-    )
-
-
-def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
-    """Normalize one lm-eval ``--log_samples`` row into an :class:`EvalSample`.
-
-    Multiple-choice rows carry one ``arguments`` entry per choice (``[context, continuation]``,
-    context identical across entries) and per-choice ``[loglikelihood, is_greedy]`` responses; the
-    model's pick is the loglikelihood argmax and the gold index is resolved from ``target`` (an
-    index, a label, or the choice text). Generation rows carry a single prompt -- raw text, or a
-    JSON-encoded chat message list when the chat API served the request.
-
-    A task that applies several extraction filters emits one row per (document, filter), each with
-    its own responses and score. The row's filter is recorded on the grading and forms part of the
-    sample's archive identity, so the variants coexist instead of overwriting one another.
-    """
-    arguments = raw.get("arguments")
-    responses = raw.get("resps")
-    doc = raw.get("doc")
-    target = raw.get("target")
-    metrics = _sample_metrics(raw)
-    extraction_filter = raw.get("filter")
-    common = {
-        "task": task,
-        "doc_id": str(raw.get("doc_id")),
-        "metrics": metrics,
-        "correct": _correct(metrics),
-        "grading": _lm_eval_grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None),
-        "target_text": target if isinstance(target, str) else json.dumps(target, ensure_ascii=False),
-        "doc": doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False),
-    }
-
-    if isinstance(arguments, list) and isinstance(responses, list) and _is_multiple_choice(arguments, responses):
-        labels = _choice_labels(doc, len(arguments))
-        choices = []
-        for i, entry in enumerate(arguments):
-            text = entry[1] if isinstance(entry, list) and len(entry) > 1 and isinstance(entry[1], str) else ""
-            pair = _loglikelihood_pair(responses[i])
-            loglikelihood, is_greedy = pair if pair is not None else (None, None)
-            choices.append(Choice(label=labels[i], text=text, loglikelihood=loglikelihood, is_greedy=is_greedy))
-        scored = [(choice.loglikelihood, i) for i, choice in enumerate(choices) if choice.loglikelihood is not None]
-        context = arguments[0][0] if isinstance(arguments[0], list) and isinstance(arguments[0][0], str) else ""
-        return EvalSample(
-            kind=SampleKind.MULTIPLE_CHOICE,
-            prompt_text=context,
-            choices=choices,
-            model_choice=max(scored)[1] if scored else None,
-            target_choice=_resolve_target_choice(target, choices),
-            **common,
-        )
-
-    prompt = ""
-    if isinstance(arguments, list) and arguments:
-        first = arguments[0]
-        candidate = first[0] if isinstance(first, list) and first else first
-        if isinstance(candidate, str):
-            prompt = candidate
-    output = ""
-    if isinstance(responses, list) and responses:
-        first = responses[0]
-        if isinstance(first, list) and first and isinstance(first[0], str):
-            output = first[0]
-        elif isinstance(first, str):
-            output = first
-    filtered = raw.get("filtered_resps")
-    if isinstance(filtered, list) and filtered:
-        filtered = filtered[0]
-    messages = _parse_chat_messages(prompt)
-    return EvalSample(
-        kind=SampleKind.GENERATION,
-        prompt_text=None if messages else prompt,
-        prompt_messages=messages,
-        output=output,
-        extracted=filtered if isinstance(filtered, str) else json.dumps(filtered, ensure_ascii=False),
-        **common,
-    )
-
-
-# --------------------------------------------------------------------------------------------------
 # Writer: the parquet schema is the pydantic model, so ``EvalSample.model_validate(row)`` on any
 # ``to_pylist`` row is the reader.
 # --------------------------------------------------------------------------------------------------
@@ -432,11 +207,6 @@ def write_sample_parquet(fs, dest: str, samples: Iterable[EvalSample]) -> None:
         pq.write_table(table, handle)
 
 
-def _task_from_filename(name: str, suffix: str) -> str:
-    # samples_<task>_<timestamp>.<suffix>; the timestamp contains no underscore.
-    return name[len(SAMPLES_PREFIX) : -len(suffix)].rsplit("_", 1)[0]
-
-
 # --------------------------------------------------------------------------------------------------
 # finestore archive adapter: an eval run's durable output is one finestore archive rooted at its
 # results directory, with a ``samples`` table (one row per evaluated question, this contract), a
@@ -452,7 +222,6 @@ ARCHIVE_STEPS_TABLE = "steps"
 # bytes of a file the export read, keyed by its path relative to the run's results root, so a rebuild
 # can recover the same inputs from the archive alone.
 SOURCES_PREFIX = "sources"
-RESULTS_PREFIX = "results_"
 
 # The archive's own keys on a samples row, added at write time (not EvalSample fields): a sample is
 # unique within a run by its task, its document, the trial that produced it (for multi-attempt Harbor
@@ -610,9 +379,8 @@ class EvaluationStore:
     def add_source_artifact(self, name: str, raw: bytes, *, content_type: str) -> str:
         """Preserve one evaluator-native source file inside the archive; return its blob URI.
 
-        ``name`` is the file's path relative to the run's results root, which
-        :func:`rebuild_lm_eval_samples` reads back to re-derive the tables without the surrounding
-        results tree still being intact.
+        ``name`` is the file's path relative to the run's results root, so a rebuild can re-derive
+        the tables from the archive alone, without the surrounding results tree still being intact.
         """
         return self._store.write(
             prefix_join(SOURCES_PREFIX, name),
@@ -659,129 +427,9 @@ class EvaluationStore:
         self.close()
 
 
-def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> int:
-    """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
-
-    Returns the number of samples written. The source jsonl is kept as the mechanism's native
-    artifact and is additionally preserved inside the archive, so the run can be rebuilt from the
-    archive alone. Re-running is idempotent: an unchanged source produces identical rows, which
-    collapse on the primary key without conflict. A run with no sample source is left untouched.
-
-    Raises if the archive holds samples written under an older contract. Those rows cannot collapse
-    against rows written under the current one, and finestore does not delete, so bringing them
-    forward is a migration rather than an export.
-    """
-    root = StoragePath(out_path)
-    sources = list(StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob())
-    if not sources:
-        # With no source there is nothing to write, and nothing that could stand in for what is
-        # already stored, so a run evaluated by another mechanism keeps the archive it has.
-        return 0
-    require_current_samples(out_path)
-    store = EvaluationStore.open(out_path, writer_id=writer_id)
-    count = 0
-    try:
-        for path in StoragePath(prefix_join(out_path, f"**/{RESULTS_PREFIX}*.json")).glob():
-            store.add_source_artifact(path.relative_to(root), path.read_bytes(), content_type="application/json")
-            # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
-            store.flush()
-        for path in sources:
-            relative = path.relative_to(root)
-            payload = path.read_bytes()
-            store.add_source_artifact(relative, payload, content_type="application/x-ndjson")
-            store.flush()
-            if is_scratch_artifact(relative):
-                continue
-            count += _add_lm_eval_rows(store, path.name, payload)
-        store.seal()
-    finally:
-        store.close()
-    return count
-
-
 def stale_samples_version(out_path: str) -> int | None:
     """The samples table's contract version when it predates :data:`SCHEMA_VERSION`, else ``None``."""
     stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is None or stored_version == SCHEMA_VERSION:
         return None
     return stored_version
-
-
-def require_current_samples(out_path: str) -> None:
-    """Raise if the archive's samples predate the current contract.
-
-    A widened primary key reads as null on the older shards, so those rows would survive beside the
-    ones a writer adds now rather than collapsing against them. Removing them is a migration's job,
-    not a writer's.
-    """
-    stored_version = stale_samples_version(out_path)
-    if stored_version is None:
-        return
-    raise ValueError(
-        f"{out_path} holds samples written under schema v{stored_version}; this writer is at "
-        f"v{SCHEMA_VERSION}. Migrate the archive with experiments.evaluation.migrations.samples_v4."
-    )
-
-
-def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> int:
-    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the rows added.
-
-    Splits only on the physical LF delimiter, so a literal U+2028/U+2029 inside a JSON string stays
-    part of its record rather than being taken for a record boundary.
-    """
-    rows = [json.loads(line) for line in payload.decode().split("\n") if line.strip()]
-    if not rows:
-        logger.warning("samples file %s is empty; skipping archive export", filename)
-        return 0
-    task = _task_from_filename(filename, ".jsonl")
-    for raw in rows:
-        store.add_sample(sample_from_lm_eval(task, raw))
-    return len(rows)
-
-
-def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
-    """The ``sources/`` blob names holding this archive's ``samples_*.jsonl`` inputs.
-
-    Empty for an archive written before source preservation, whose rebuild must come from the
-    surrounding results tree instead.
-    """
-    return tuple(
-        sorted(
-            key[0]
-            for key in CompositeReader(out_path).keys(BLOBS_TABLE)
-            if isinstance(key[0], str)
-            and key[0].startswith(f"{SOURCES_PREFIX}/")
-            and key[0].endswith(".jsonl")
-            and SAMPLES_PREFIX in key[0]
-        )
-    )
-
-
-def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int:
-    """Rebuild a run's ``samples`` table from the source artifacts preserved inside its archive.
-
-    The inputs are the ``sources/`` blobs written by :func:`export_lm_eval_samples`, so this repairs
-    an archive whose surrounding results tree has been pruned, or one an export left half written.
-    Returns the number of samples written. Rows the archive already holds are reproduced exactly and
-    collapse against themselves, so nothing is deleted; an archive at an older contract raises, and
-    one preserving no sources raises too.
-    """
-    reader = CompositeReader(out_path)
-    names = preserved_sample_sources(out_path)
-    if not names:
-        raise FileNotFoundError(f"archive at {out_path!r} preserves no sample sources to rebuild from")
-    require_current_samples(out_path)
-    store = EvaluationStore.open(out_path, writer_id=writer_id)
-    count = 0
-    try:
-        for name in names:
-            if is_scratch_artifact(name):
-                continue
-            payload = reader.read_blob(name)
-            if payload is None:
-                raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
-            count += _add_lm_eval_rows(store, name.rsplit("/", 1)[-1], payload)
-        store.seal()
-    finally:
-        store.close()
-    return count

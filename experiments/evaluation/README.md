@@ -67,7 +67,7 @@ useful after a change to the contract in `finestore.eval` (the parquet files are
 regenerated in place; the source jsonl is untouched):
 
 ```bash
-uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin-eval-metadata/evals
+uv run python -m experiments.evaluation.migrations.cli backfill-samples --prefix gs://marin-eval-metadata/evals
 ```
 
 A task scored under several extraction filters (gsm8k under `strict-match` and `flexible-extract`)
@@ -89,9 +89,10 @@ dashboard) without cluster access.
 
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`finestore.eval`, the per-sample contract -- `EvalSample`, normalized from
-lm-eval's native row shape, with the parquet schema *being* the Pydantic model) -- load them with
-pandas/duckdb, or read them back with `EvalSample.model_validate`, to zoom into any run.
+parquet sibling (`marin.evaluation.lm_eval_samples` normalizes lm-eval's native row shape into
+`EvalSample`, the per-sample contract in `finestore.eval`, with the parquet schema *being* the
+Pydantic model) -- load them with pandas/duckdb, or read them back with `EvalSample.model_validate`,
+to zoom into any run.
 
 Evaldash treats these records as the source of truth. Its background ingestor scans every configured
 object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implemented in

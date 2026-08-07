@@ -162,24 +162,30 @@ deleting, which no code in this library does — see
 
 ## Preserved sources
 
-`export_lm_eval_samples` writes every `samples_*.jsonl` and `results_*.json` it
-reads into the archive's `blobs` table under a `sources/` prefix, alongside the
-rows normalized from them. Shards are zstd-compressed, so a text artifact costs
-roughly a third of its raw size. The archive is then self-describing:
-`rebuild_lm_eval_samples(root)` re-derives the `samples` table from those blobs
-alone, repairing a run whose results tree was pruned or whose export died half
-written. It reproduces existing rows exactly, so they collapse against themselves
-and nothing is deleted.
+An exporter writes the evaluator-native files into the archive's `blobs` table
+under a `sources/` prefix (`EvaluationStore.add_source_artifact`), alongside the
+rows normalized from them. It preserves every artifact the harness left in the
+results tree, not only the files it reads — `run_artifacts` lists the tree rather
+than globbing it, so the harness's dot-directories (evalchemy keeps resume state
+under `.resume/`) are included, and skips the archive's own tables and markers so
+a re-export cannot fold the archive into itself. Shards are zstd-compressed, so a
+text artifact costs roughly a third of its raw size. The archive is then
+self-describing: the `samples` table can be re-derived from those blobs alone,
+repairing a run whose results tree was pruned or whose export died half written.
+A rebuild reproduces existing rows exactly, so they collapse against themselves
+and nothing is deleted. `marin.evaluation.lm_eval_samples` implements both halves
+for lm-eval output — `export_lm_eval_samples` and `rebuild_lm_eval_samples`.
 
 evalchemy runs the harness in a `tempfile` working directory and copies the tree
 into the results path, so a retried evaluation leaves a second complete tree
 under a `tmp<random>/` segment. Both are real evaluations and their
 loglikelihoods differ, because inference is not deterministic, but only the
-canonical tree produced the metrics on the run's record. `is_scratch_artifact`
-identifies the retry: it is preserved as a source blob like any other, and
-contributes no rows, so the samples a reader sees come from the same evaluation
-as the headline score. Indexing both would instead put two different rows on one
-primary key, which is a `PrimaryKeyConflict`, not a silent fold.
+canonical tree produced the metrics on the run's record. That exporter's
+`is_scratch_artifact` identifies the retry: it is preserved as a source blob like
+any other, and contributes no rows, so the samples a reader sees come from the
+same evaluation as the headline score. Indexing both would instead put two
+different rows on one primary key, which is a `PrimaryKeyConflict`, not a silent
+fold.
 
 Writing to an archive clears its `SEALED` marker. "Sealed" therefore means
 "these are the finished contents" rather than "some session once finished", so
@@ -188,7 +194,7 @@ carrying a marker that vouches for a table it no longer describes.
 
 ## Migration
 
-`experiments.evaluation.migrate_archive` backfills a run written before the
+`experiments.evaluation.migrations.migrate_archive` backfills a run written before the
 archive existed. Legacy runs stored one `samples_<task>_<ts>.parquet` per (sub)task and
 referenced Harbor trajectories by a `gs://` URI. The tool reads those files,
 writes the rows into the run's `samples` table, and for agentic samples pulls
