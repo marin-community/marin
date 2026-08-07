@@ -3,27 +3,25 @@
 
 """Command-line entry point for the eval launcher.
 
-``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``. Two commands:
-``launch`` submits runs and optionally waits for their object-store records; ``backfill-samples``
-rebuilds every run's finestore sample archive from its kept ``samples_*.jsonl`` sources.
+``uv run python -m experiments.evaluation.cli launch --model qwen3-8b --evals smoke``.
+``launch`` submits runs and optionally waits for their object-store records. Fleet-wide archive
+sweeps are administrative and live in :mod:`experiments.evaluation.migrations.cli`.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import click
-from finestore.eval import export_lm_eval_samples
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.records import DEFAULT_SCAN_PREFIXES, list_records
 from marin.evaluation.runner import EvaluationBatch, wait_and_report
 from rigging.config_discovery import find_project_root
-from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 from experiments.evaluation.evals import EvalchemyDefinition, HarborDefinition, resolve_eval_keys
 from experiments.evaluation.launch import (
@@ -33,6 +31,8 @@ from experiments.evaluation.launch import (
     prepare_evaluation_batch,
 )
 from experiments.evaluation.models import models
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
@@ -217,24 +217,6 @@ def launch(
         if no_wait:
             return
         wait_and_report([group])
-
-
-@cli.command("backfill-samples")
-@click.option(
-    "--prefix",
-    "prefixes",
-    multiple=True,
-    default=DEFAULT_SCAN_PREFIXES,
-    show_default=True,
-    help="Object-store prefix(es) to scan for records; repeatable.",
-)
-def backfill_samples(prefixes: tuple[str, ...]) -> None:
-    """Rebuild every run's finestore sample archive from its kept ``samples_*.jsonl`` sources."""
-    configure_coreweave_s3()
-    for prefix in prefixes:
-        for record in list_records(prefix):
-            written = export_lm_eval_samples(record.results_path)
-            click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
 
 
 def main() -> None:
