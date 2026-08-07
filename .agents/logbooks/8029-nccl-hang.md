@@ -186,7 +186,21 @@ author: power
 - Purpose: Escalate scale after two clean 8-rack arms.
 - Caveat: #8029 records no 12-rack stock wedge. The only 12-rack data point is `CUDA_LAUNCH_BLOCKING` clean through 2,580 steps, so this is an untested scale rather than a known-higher-hazard one.
 
+### 2026-08-07 08:40 UTC - mhf-8rack-1ppg-stock-long-20260807
+
+- Command: `... --job-name mhf-8rack-1ppg-stock-long-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch_stock_control --run-id mhf-8rack-1ppg-stock-long-20260807 --dp-racks 8 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/mhf-8rack-1ppg-stock-long-20260807-coord`.
+- Git SHA: `dcc91df478`.
+- Hardware: 128 Iris tasks, 512 GPUs across eight NVL72 racks on `cw-us-east-08a`.
+- Purpose: Full 1,000-step exposure at the documented wedge scale, to convert two short clean arms into one strong null.
+
 ## Event Log
+
+### 2026-08-07 08:40 UTC - Twelve racks will not schedule; capacity is contended
+
+- `mhf-12rack-1ppg-stock-20260807` held all 192 tasks in `building`/`SchedulingGated` behind Kueue for 30 minutes with zero placement (`pod does not have a host assigned`). Cancelled.
+- Two `/rav/mhep-1t-*` runs (16 tasks each) started at 08:36, minutes after the eight-rack arm was stopped at 08:07. Releasing the allocation before confirming the replacement could place is what lost it.
+- Twelve racks is in any case an untested scale: #8029 records no 12-rack stock wedge, only `CUDA_LAUNCH_BLOCKING` clean through 2,580 steps. All five recorded FSDP wedges are 8-rack, so a long null at 8 racks carries more information than a short run at 12.
 
 ### 2026-08-07 08:20 UTC - The NCCL pin does not explain non-reproduction
 
