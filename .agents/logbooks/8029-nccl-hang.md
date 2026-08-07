@@ -196,6 +196,13 @@ author: power
 
 ## Event Log
 
+### 2026-08-07 10:45 UTC - The NCCL pin broke iris CI; expressed as a floor instead
+
+- `unit (iris)` failed on `test_restores_cuda13_shared_library_package_when_present[nvidia-nccl-cu13-2.28.9-...]`, which passes on `origin/main` at `839e5e9e18` and failed on this branch, so the branch broke it.
+- Cause: `40a504c48f` added `nvidia-nccl-cu13==2.30.7` to the root `[tool.uv] override-dependencies`. uv applies overrides across the whole workspace, including the isolated `uv pip install --no-index --find-links <wheelhouse> nvidia-nccl-cu13==2.28.9` the test runs to stage an older CUDA 13 shared library, which the override made unsatisfiable.
+- Fix: drop the override; raise the floor to `>=2.29.3` on the GPU extras of `lib/marin` and `lib/levanter`. GPU and training extras still resolve to 2.30.7, so the deployed hero stack is unchanged; only consumers that never touch a GPU may take an older build.
+- Two checks remain red and both are pre-existing on `main`: `unit (marin)`'s `test_artifact_manifest_requires_complete_release_pair[python-libs]` (marin-finestore has no wheel or sdist), reproduced on `839e5e9e18`; and `iris-e2e-smoke`'s `test_dashboard_constraints` timeout at `test_smoke.py:551`, matching `main` at `631d7579` and `b5df0ed5` line for line.
+
 ### 2026-08-07 08:55 UTC - Node health sampling was underpowered; old-code bisect staged
 
 - Sampled 20 GPUs across five racks of the live allocation: zero correctable and uncorrectable row remaps, no pending or failed remaps, zero volatile ECC.
