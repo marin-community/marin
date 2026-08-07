@@ -38,6 +38,21 @@ author: power
 - Checkpoint policy: None.
 - Babysitter: Codex, two-minute cadence through first progress and terminal state.
 
+### 2026-08-07 02:34 UTC - moe-hero-fsdp-nccl2307-2rack-1000-20260807
+
+- Command: `uv run --frozen iris --cluster=marin job run --target-cluster cw-us-east-08a --priority production --no-wait --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 43200 --max-retries 0 --job-name moe-hero-fsdp-nccl2307-2rack-1000-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch_supervised --run-id moe-hero-fsdp-nccl2307-2rack-1000-20260807 --dp-racks 2 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/moe-hero-fsdp-nccl2307-2rack-1000-20260807-coord`; expected child `grug-train-moe-hero-fsdp-nccl2307-2rack-1000-20260807`.
+- Git SHA: `1ba73a2951247e7bdd2e87974ef36625e2c6a478`.
+- Dirty tree: No; the commit was pushed before submission.
+- Source bundle: Iris workspace bundle, 9.8 MB; no content ID was reported.
+- Hardware: 32 workers, four GB200 GPUs each, two NVL72 racks on `cw-us-east-08a`.
+- W&B: ID and display name `moe-hero-fsdp-nccl2307-2rack-1000-20260807`, project `marin_moe`, group `moe-hero-fsdp`, resume `allow`.
+- Output root: `s3://marin-us-east-02a/marin/grug/moe-hero-fsdp-nccl2307-2rack-1000-20260807/2026.08.07`.
+- Initialization: None.
+- Final step: 1000.
+- Checkpoint policy: Metrics only; no checkpoints.
+- Babysitter: Codex, two-minute cadence through first progress, then at most 15 minutes.
+
 ## Event Log
 
 ### 2026-08-07 02:11 UTC - Two-rack NCCL 2.30.7 gate completed
@@ -60,3 +75,10 @@ author: power
 - Evidence: Task 0 reported 512 devices, mesh `(8, 64, 1, 1)`, driver 595.71.05, NCCL 2.30.7+cuda13.3, and `no wedge reproduced for ablation baseline through 1000 steps`.
 - Decision: Close the minimal-repro ablation ledger and start the 300B FSDP matrix sequentially at two racks.
 - Next: Run 1000 supervised steps at two racks; promote to four racks only after a clean terminal result.
+
+### 2026-08-07 02:34 UTC - Two-rack 300B gate submitted
+
+- Status: The production-priority coordinator is pending with zero failures or preemptions.
+- Evidence: Iris accepted the 9.8 MB bundle from the clean source commit.
+- Decision: Keep the single two-rack request; do not submit the four-rack gate until this run is terminal.
+- Next: Verify the resolved plan, W&B identity, NCCL provenance, and first training step.
