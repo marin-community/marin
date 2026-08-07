@@ -21,16 +21,18 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import click
-from finestore.eval import ARCHIVE_SAMPLES_TABLE, RESULTS_PREFIX
-from finestore.reader import CompositeReader
+from finestore.eval import RESULTS_PREFIX
 from marin.evaluation.records import list_records
 from rigging.filesystem import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
+from experiments.evaluation.migrate_archive import archive_sample_count
+
 logger = logging.getLogger(__name__)
 
-# results_*.json keys that describe a task rather than score it.
-_STRUCTURAL_KEYS = frozenset({"name", "alias", "sample_len"})
+# The documents a task evaluated, and the keys that describe a task rather than score it.
+_DOCUMENT_COUNT = "sample_len"
+_STRUCTURAL_KEYS = frozenset({"name", "alias", _DOCUMENT_COUNT})
 
 # Present only on an aggregate group row, so its absence identifies a leaf task.
 _GROUP_MARKER = "sample_count"
@@ -42,7 +44,6 @@ _MAX_WORKERS = 16
 class TaskExpectation:
     """What one leaf task should contribute to the archive."""
 
-    task: str
     documents: int
     filters: tuple[str, ...]
 
@@ -86,9 +87,9 @@ def leaf_task_expectations(results_json: dict) -> dict[str, TaskExpectation]:
             if metric.endswith("_stderr"):
                 continue
             filters.add(extraction_filter)
-        documents = values.get("sample_len")
+        documents = values.get(_DOCUMENT_COUNT)
         if filters and isinstance(documents, (int, float)):
-            expectations[task] = TaskExpectation(task=task, documents=int(documents), filters=tuple(sorted(filters)))
+            expectations[task] = TaskExpectation(documents=int(documents), filters=tuple(sorted(filters)))
     return expectations
 
 
@@ -100,7 +101,7 @@ def verify_run(results_path: str) -> RunVerification:
             for name in names:
                 if name.startswith(RESULTS_PREFIX) and name.endswith(".json"):
                     expectations.update(leaf_task_expectations(json.loads((directory / name).read_text())))
-        table = CompositeReader(results_path).scan(ARCHIVE_SAMPLES_TABLE, columns=["task"])
+        actual_rows = archive_sample_count(results_path)
     except Exception as exc:
         return RunVerification(
             results_path=results_path,
@@ -116,7 +117,7 @@ def verify_run(results_path: str) -> RunVerification:
         tasks=len(expectations),
         documents=sum(item.documents for item in expectations.values()),
         expected_rows=sum(item.expected_rows for item in expectations.values()),
-        actual_rows=0 if table is None else table.num_rows,
+        actual_rows=actual_rows,
         multi_filter_tasks=tuple(sorted(name for name, item in expectations.items() if len(item.filters) > 1)),
     )
 

@@ -89,15 +89,18 @@ class CompositeReader:
         return tuple(key) if key else _DEFAULT_MERGE_KEY
 
     def schema_version(self, table: str) -> int | None:
-        """The caller's logical schema version for ``table``, or ``None`` if the table does not exist.
+        """The caller's logical schema version for ``table``, or ``None`` if it holds no shards.
 
-        A writer compares this against its own contract version to tell a fresh archive and an
-        up-to-date one from an archive whose rows predate the current row shape.
+        A writer compares this against its own contract version to tell a fresh archive from one
+        whose rows predate the current row shape. A table with shards always has a ``_schema.json``
+        (the store writes it at registration), so a missing file there is a corrupt or foreign
+        archive and propagates rather than reading as "fresh" — which would skip the rebuild that a
+        contract change needs.
         """
-        try:
-            return self._meta(table).schema_version
-        except FileNotFoundError:
+        fs, _ = factory.url_to_fs(self.root)
+        if not self._list_shards(fs, table):
             return None
+        return self._meta(table).schema_version
 
     def _meta(self, table: str) -> TableMetadata:
         if table in self._meta_cache:

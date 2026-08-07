@@ -269,7 +269,17 @@ def _empty_samples(*, available: bool, error: str, task: str, offset: int, limit
     )
 
 
-def _select_extraction_filter(table: pa.Table, requested: str | None) -> tuple[pa.Table, tuple[str, ...], str | None]:
+class FilteredTask(BaseModel):
+    """One task's rows narrowed to a single extraction filter, with the choices that were available."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    rows: pa.Table
+    available: tuple[str, ...]
+    selected: str | None
+
+
+def _select_extraction_filter(table: pa.Table, requested: str | None) -> FilteredTask:
     """Narrow a task's rows to one extraction filter, and report the choices.
 
     A task scored under several filters holds one sample per (document, filter). Showing them all
@@ -279,14 +289,14 @@ def _select_extraction_filter(table: pa.Table, requested: str | None) -> tuple[p
     returned untouched.
     """
     if FILTER_COLUMN not in table.column_names:
-        return table, (), None
+        return FilteredTask(rows=table, available=(), selected=None)
     values = table.column(FILTER_COLUMN).to_pylist()
     available = tuple(sorted({value for value in values if value}))
     if len(available) <= 1:
-        return table, available, available[0] if available else None
+        return FilteredTask(rows=table, available=available, selected=available[0] if available else None)
     selected = requested if requested in available else primary_filter(available)
     indices = [i for i, value in enumerate(values) if value == selected]
-    return table.take(pa.array(indices, type=pa.int64())), available, selected
+    return FilteredTask(rows=table.take(pa.array(indices, type=pa.int64())), available=available, selected=selected)
 
 
 def _task_table(results_path: str, task: str) -> pa.Table | None:
@@ -331,7 +341,8 @@ def fetch_samples(
     # ``metrics`` is a finestore ``map<string,double>`` in the archive (a struct in the legacy layout);
     # materialize map columns as dicts so a row is ``{name: value}`` either way. Non-map columns ignore
     # the flag.
-    table, available_filters, selected_filter = _select_extraction_filter(table, extraction_filter)
+    filtered = _select_extraction_filter(table, extraction_filter)
+    table = filtered.rows
     columns = set(table.column_names)
     correct_values = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
     metric_maps = (
@@ -365,8 +376,8 @@ def fetch_samples(
         task=task,
         primary_metric=primary,
         metric_columns=metric_columns,
-        extraction_filters=available_filters,
-        extraction_filter=selected_filter,
+        extraction_filters=filtered.available,
+        extraction_filter=filtered.selected,
         total=len(indices),
         offset=offset,
         limit=limit,

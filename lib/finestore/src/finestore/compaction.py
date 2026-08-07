@@ -91,11 +91,12 @@ class CompactionResult:
     superseded: int = 0
 
 
-def _merge_dedup(streams: list[Iterator[_MergeItem]], merge_key: tuple[str, ...], counter: list[int]) -> Iterator[dict]:
+def _merge_dedup(streams: list[Iterator[_MergeItem]], counter: list[int]) -> Iterator[dict]:
     """Merge per-shard sorted streams into one merge-key-ordered stream, one surviving row per key.
 
-    Losing rows are counted into ``counter[0]`` so the caller can report supersession instead of
-    discarding it without trace.
+    Each item already carries its merge-key tuple, so the streams are grouped on that. Losing rows
+    are counted into ``counter[0]`` so the caller can report supersession instead of discarding it
+    without trace.
     """
     merged = heapq.merge(*streams, key=lambda item: item[0])
     for _key, group in itertools.groupby(merged, key=lambda item: item[0]):
@@ -126,7 +127,7 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> CompactionR
 
     streams = [_shard_rows(shard, unified, merge_key, pa_fs) for shard in shards]
     superseded = [0]
-    survivors = _merge_dedup(streams, merge_key, superseded)
+    survivors = _merge_dedup(streams, superseded)
     first = next(survivors, None)
     if first is None:
         return CompactionResult(written=0)

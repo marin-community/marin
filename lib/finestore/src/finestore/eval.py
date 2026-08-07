@@ -467,11 +467,9 @@ def steps_schema() -> pa.Schema:
 
 
 def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
-    """One archive ``samples`` row: the sample's JSON-mode dump plus its archive keys.
-
-    The ``filter`` key is derived from the sample's own grading rather than passed in, so the row's
-    identity and the filter the UI displays can never disagree.
-    """
+    """One archive ``samples`` row: the sample's JSON-mode dump plus its ``trial_id`` and ``filter``
+    archive keys. The filter comes from the sample's own grading, so a caller sets it by grading the
+    sample, not by passing it here."""
     row = sample.model_dump(mode="json")
     row[TRIAL_ID_COLUMN] = trial_id
     row[FILTER_COLUMN] = (sample.grading.filter or "") if sample.grading else ""
@@ -593,10 +591,9 @@ class EvaluationStore:
     def add_source_artifact(self, name: str, raw: bytes, *, content_type: str) -> str:
         """Preserve one evaluator-native source file inside the archive; return its blob URI.
 
-        The archive becomes self-describing: the normalized rows and the bytes they were derived from
-        live together, so a later contract change can rebuild the tables without the surrounding
-        results tree still being intact. Payloads ride the ``blobs`` table and compress with the rest
-        of the shard, so a text artifact costs a fraction of its raw size.
+        ``name`` is the file's path relative to the run's results root, which
+        :func:`rebuild_lm_eval_samples` reads back to re-derive the tables without the surrounding
+        results tree still being intact.
         """
         return self._store.write(
             prefix_join(SOURCES_PREFIX, name),
@@ -694,32 +691,43 @@ def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> 
     return len(rows)
 
 
+def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
+    """The ``sources/`` blob names holding this archive's ``samples_*.jsonl`` inputs.
+
+    Empty for an archive written before source preservation, whose rebuild must come from the
+    surrounding results tree instead.
+    """
+    return tuple(
+        sorted(
+            key[0]
+            for key in CompositeReader(out_path).keys(BLOBS_TABLE)
+            if isinstance(key[0], str)
+            and key[0].startswith(f"{SOURCES_PREFIX}/")
+            and key[0].endswith(".jsonl")
+            and SAMPLES_PREFIX in key[0]
+        )
+    )
+
+
 def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int:
     """Rebuild a run's ``samples`` table from the source artifacts preserved inside its archive.
 
     The inputs are the ``sources/`` blobs written by :func:`export_lm_eval_samples`, so this works on
-    an archive whose surrounding results tree has been pruned. Returns the number of samples written,
-    or -1 when the archive preserves no sample sources and the caller must fall back to the results
-    tree.
+    an archive whose surrounding results tree has been pruned. Returns the number of samples written.
+    Check :func:`preserved_sample_sources` first: an archive holding none cannot be rebuilt this way
+    and raises.
     """
     reader = CompositeReader(out_path)
-    names = [
-        key[0]
-        for key in reader.keys(BLOBS_TABLE)
-        if isinstance(key[0], str)
-        and key[0].startswith(f"{SOURCES_PREFIX}/")
-        and key[0].endswith(".jsonl")
-        and SAMPLES_PREFIX in key[0]
-    ]
+    names = preserved_sample_sources(out_path)
     if not names:
-        return -1
+        raise FileNotFoundError(f"archive at {out_path!r} preserves no sample sources to rebuild from")
     # The preserved sources are the complete input, so the existing rows are replaced rather than
     # merged into: rows written under an older merge key would otherwise survive beside the new ones.
     drop_table(out_path, ARCHIVE_SAMPLES_TABLE)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:
-        for name in sorted(names):
+        for name in names:
             payload = reader.read_blob(name)
             if payload is None:
                 raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")

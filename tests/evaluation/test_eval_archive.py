@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from click.testing import CliRunner
 from finestore.eval import (
     Choice,
@@ -15,6 +16,7 @@ from finestore.eval import (
     Grading,
     SampleKind,
     export_lm_eval_samples,
+    preserved_sample_sources,
     rebuild_lm_eval_samples,
     sample_from_archive_row,
     sample_to_archive_row,
@@ -214,13 +216,17 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
 
 
 def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):
+    # An archive written before source preservation must be rebuilt from the results tree; saying so
+    # is what keeps a caller from reading "0 samples" as a successful rebuild.
     results = str(tmp_path / "run" / "results")
     store = EvaluationStore.open(results, writer_id="evalchemy")
     store.add_sample(EvalSample(task="gsm8k", doc_id="1", kind=SampleKind.GENERATION, output="4"))
     store.seal()
     store.close()
 
-    assert rebuild_lm_eval_samples(results) == -1
+    assert preserved_sample_sources(results) == ()
+    with pytest.raises(FileNotFoundError):
+        rebuild_lm_eval_samples(results)
 
 
 def test_re_export_replaces_rows_written_under_an_older_contract(tmp_path):

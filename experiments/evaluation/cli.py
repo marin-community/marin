@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import click
-from finestore.eval import export_lm_eval_samples
+from finestore.eval import export_lm_eval_samples, preserved_sample_sources, rebuild_lm_eval_samples
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
@@ -236,6 +236,32 @@ def backfill_samples(prefixes: tuple[str, ...]) -> None:
     for prefix in prefixes:
         for record in list_records(prefix):
             written = export_lm_eval_samples(record.results_path)
+            click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
+
+
+@cli.command("rebuild-samples")
+@click.option(
+    "--prefix",
+    "prefixes",
+    multiple=True,
+    default=DEFAULT_SCAN_PREFIXES,
+    show_default=True,
+    help="Object-store prefix(es) to scan for records; repeatable.",
+)
+def rebuild_samples(prefixes: tuple[str, ...]) -> None:
+    """Rebuild sample archives from the sources preserved inside them, ignoring the results tree.
+
+    Use this after a change to the contract in ``finestore.eval`` when a run's evaluator-native
+    files are no longer beside it. Runs whose archive predates source preservation are skipped and
+    still need ``backfill-samples``.
+    """
+    configure_coreweave_s3()
+    for prefix in prefixes:
+        for record in list_records(prefix):
+            if not preserved_sample_sources(record.results_path):
+                click.echo(f"{record.run_id}  no preserved sources  {record.results_path}")
+                continue
+            written = rebuild_lm_eval_samples(record.results_path)
             click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
 
 
