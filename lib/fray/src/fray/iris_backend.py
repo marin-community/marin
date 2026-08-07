@@ -221,6 +221,9 @@ def wrap_multiprocess(entrypoint: IrisEntrypoint, resources: ResourceSpec, proce
 def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | None = None) -> EnvironmentSpec | None:
     """Convert fray EnvironmentConfig to Iris EnvironmentSpec."""
     env_vars = dict(env.env_vars) if env is not None else {}
+    extras = list(env.extras) if env is not None else []
+    if env is None and isinstance(device, GpuConfig):
+        extras = ["gpu"]
     if device is not None:
         for key, value in device.default_env_vars().items():
             env_vars.setdefault(key, value)
@@ -229,7 +232,7 @@ def convert_environment(env: EnvironmentConfig | None, device: DeviceConfig | No
     return EnvironmentSpec(
         pip_packages=list(env.pip_packages) if env is not None else [],
         env_vars=env_vars,
-        extras=list(env.extras) if env is not None else [],
+        extras=extras,
         setup_scripts=list(env.setup_scripts) if env is not None and env.setup_scripts is not None else None,
         sync_packages=list(env.sync_packages) if env is not None else [],
     )
