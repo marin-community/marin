@@ -294,6 +294,22 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
     return eqx.tree_at(lambda t: t.stacked_blocks.stacked.mlp.router_bias, model, new_bias)
 
 
+def _bias_stats(bias: jax.Array) -> dict[str, jax.Array]:
+    """Per-expert router-bias summary aggregated over all MoE layers (QB diagnostics).
+
+    ``bias`` is the applied router bias, shape ``[num_moe_layers, num_experts]``. Drop
+    fraction is logged separately; these five track the bias distribution's spread.
+    """
+    flat = bias.reshape(-1)
+    return {
+        "moe_bias/min": jnp.min(flat),
+        "moe_bias/max": jnp.max(flat),
+        "moe_bias/mean": jnp.mean(flat),
+        "moe_bias/p05": jnp.percentile(flat, 5.0),
+        "moe_bias/p95": jnp.percentile(flat, 95.0),
+    }
+
+
 def _optimizer_state_to_memory_kind(tree, memory_kind: str):
     """Move named-sharded optimizer arrays to a JAX memory kind."""
 
@@ -392,6 +408,7 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
+        metrics.update(_bias_stats(qb_params.stacked_blocks.stacked.mlp.router_bias))
         opt_state_in = (
             _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         )
