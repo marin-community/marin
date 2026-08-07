@@ -31,6 +31,7 @@ from levanter.recovery.faults import ENV_FAULT_KIND, ENV_FAULT_STEP, FaultKind
 from levanter.recovery.supervisor import ENV_RUN_ID, ENV_SNAPSHOT_TMPFS_BASE, GPUHangSupervisor
 from levanter.recovery.types import DEFAULT_TMPFS_DIR, AblationSpec, RunResult
 
+from experiments.grug.recovery.ablation_catalog import environment_ablations, selected_ablations
 from experiments.grug.recovery.config import RecoveryRunConfig, grug_model_preset
 from experiments.grug.recovery.train import recovery_train
 
@@ -61,31 +62,7 @@ def build_ablations(*, fault_step: int, sweep_steps: int) -> list[AblationSpec]:
             deadman_timeout=180.0,
             notes="isolate the JAX-level deadman: CRASH => XLA killed the wedge; STALL => host deadman had to",
         ),
-        AblationSpec(name="baseline", env={}, num_steps=sweep_steps, notes="stock flags"),
-        AblationSpec(
-            name="nccl-launch-order-implicit",
-            env={"NCCL_LAUNCH_ORDER_IMPLICIT": "1"},
-            num_steps=sweep_steps,
-            notes="#7344 arm: implicit launch order",
-        ),
-        AblationSpec(
-            name="nccl-proto-no-ll128",
-            env={"NCCL_PROTO": "^LL128"},
-            num_steps=sweep_steps,
-            notes="new arm: exclude LL128 (flag-corruption class on new NVLink)",
-        ),
-        AblationSpec(
-            name="nccl-cumem-off",
-            env={"NCCL_CUMEM_ENABLE": "0"},
-            num_steps=sweep_steps,
-            notes="new arm: disable cuMem fabric-handle path (MNNVL-era allocation)",
-        ),
-        AblationSpec(
-            name="cuda-module-loading-eager",
-            env={"CUDA_MODULE_LOADING": "EAGER"},
-            num_steps=sweep_steps,
-            notes="new arm: eager module load (lazy-JIT race hypothesis)",
-        ),
+        *environment_ablations(num_steps=sweep_steps),
     ]
 
 
@@ -138,8 +115,7 @@ def main() -> None:
     common_env = {"JAX_COMPILATION_CACHE_DIR": compile_cache}
 
     ablations = build_ablations(fault_step=args.fault_step, sweep_steps=args.sweep_steps)
-    if args.only:
-        ablations = [a for a in ablations if a.name in set(args.only)]
+    ablations = selected_ablations(ablations, args.only)
 
     results: list[RunResult] = []
     with GPUHangSupervisor(
