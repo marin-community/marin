@@ -11,7 +11,13 @@ import httpx
 import loom_alerts
 import pytest
 from config import LoomAlertConfig, SlackAlertConfig
-from loom_alerts import LoomAlertClient, LoomAlertDeliveryError, LoomAlertPayloadError, SlackAlertClient
+from loom_alerts import (
+    LoomAlertClient,
+    LoomAlertDeliveryError,
+    LoomAlertPayloadError,
+    SlackAlertClient,
+    SlackAnnouncementError,
+)
 
 SLACK_CHANNEL = "C0123ABCD"
 
@@ -299,6 +305,14 @@ def test_the_fallback_shares_the_announcement_rules():
 def test_the_fallback_rejects_a_malformed_body():
     with pytest.raises(LoomAlertPayloadError, match="alerts list"):
         asyncio.run(announce_only_client(FakeSlack()).announce({}))
+
+
+def test_a_fallback_announcement_slack_refused_is_raised_so_grafana_retries():
+    """The critical receiver can swallow a Slack failure because the triage session
+    still opens. This one posts and stops, so a swallowed failure would drop the
+    notification entirely."""
+    with pytest.raises(SlackAnnouncementError, match="did not accept"):
+        asyncio.run(announce_only_client(FakeSlack(ok=False)).announce(alert_payload()))
 
 
 def test_alert_card_escapes_text_and_drops_links_that_could_break_out():

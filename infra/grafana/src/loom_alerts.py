@@ -3,25 +3,19 @@
 
 """Announce Grafana alerts in Slack, and for critical ones open Loom triage there.
 
-The bridge owns every Slack alert message rather than Grafana's own Slack contact
-point. For critical alerts that is load-bearing: an incoming webhook answers with
-a bare `ok` and never reveals the message timestamp, so Grafana cannot tell
-anyone which thread it posted to, while posting here yields the `channel`/`ts`
-that Loom needs to route the thread to the triage session. That is what lets the
-operator read status and steer in the same place the alert appeared.
+Every alert group arrives as a Grafana webhook and is announced with
+`chat.postMessage`, which returns the `channel`/`ts` naming a thread. One alert
+keeps one thread for its whole life: re-notifications and the resolution are
+posted under the original announcement, so a webhook retry adds nothing and a
+still-firing note appears only after the thread has been quiet.
 
-`SlackAnnouncer` holds that Slack behavior on its own, so the two receivers
-differ only in what follows the announcement. `LoomAlertClient` opens a triage
-run on the thread it announced; `SlackAlertClient` announces and stops, which is
-what the fallback for malformed or unlabeled alerts wants — those have no
-incident to triage. Sharing the announcer keeps one channel, one credential, and
-one rendering, so alert text reaches Slack escaped either way.
-
-Slack is posted to first, so a critical alert reaches people even when Loom is
-unreachable — and that failure is reported into the thread rather than only into
-Grafana's delivery log. Announcements are deduplicated on alert identity: Grafana
-retries a failed webhook and re-notifies an unresolved alert every
-`repeat_interval`, and neither should open a second thread.
+Two receivers share that behavior through `SlackAnnouncer` and differ in what
+follows. `LoomAlertClient` opens a Loom triage run naming the thread it just
+announced, which is what lets the operator read status and steer in the same
+place the alert appeared; Slack is posted first, so the alert lands even when
+Loom is unreachable, and that failure is reported into the thread.
+`SlackAlertClient` announces and stops, and raises when Slack refuses, because it
+has no second delivery path.
 """
 
 import dataclasses
@@ -60,6 +54,10 @@ class LoomAlertPayloadError(ValueError):
 
 class LoomAlertDeliveryError(RuntimeError):
     """Google identity federation or Loom run creation failed."""
+
+
+class SlackAnnouncementError(RuntimeError):
+    """Slack did not accept an announcement that had no other delivery path."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -239,14 +237,22 @@ class SlackAlertClient:
         self._announcer = SlackAnnouncer(config.slack)
 
     async def announce(self, payload: object) -> SlackThread | None:
-        """Announce the group's firing alerts, or note its resolution."""
+        """Announce the group's firing alerts, returning None for a resolution.
+
+        Raises `SlackAnnouncementError` when Slack did not accept the post. This
+        receiver has no second leg, so a swallowed failure would drop the whole
+        notification; failing lets Grafana retry it.
+        """
         firing = _firing_alerts(payload)
         thread_key = _thread_key(payload)
         async with httpx.AsyncClient(timeout=self._http_timeout, transport=self._transport) as client:
             if not firing:
                 await self._announcer.announce_resolution(client, payload, thread_key)
                 return None
-            return await self._announcer.announce(client, payload, firing, thread_key)
+            thread = await self._announcer.announce(client, payload, firing, thread_key)
+            if thread is None:
+                raise SlackAnnouncementError("Slack did not accept the alert announcement")
+            return thread
 
 
 class LoomAlertClient:

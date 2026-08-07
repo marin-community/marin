@@ -185,9 +185,8 @@ class SlackAlertConfig:
 
 @dataclasses.dataclass(frozen=True)
 class LoomAlertConfig:
-    """Identity-federated Loom destination for critical alerts, and where they are
-    announced. Every alert the bridge delivers is also announced, so the Slack
-    destination is part of this configuration rather than a parallel optional."""
+    """The identity-federated Loom destination for critical alerts, and the Slack
+    channel every alert is announced in."""
 
     url: str
     profile: str

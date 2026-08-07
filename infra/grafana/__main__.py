@@ -33,9 +33,9 @@ LOOM_STACK = "organization/marin-loom/marin-loom"
 LOOM_WORKLOAD = "grafana-alerts"
 LOOM_ALERT_REPOSITORY = "marin-community/marin"
 # Secret Manager secret holding the Slack bot token the bridge announces alerts
-# with. A bot token rather than the existing incoming webhook because only
-# chat.postMessage returns the message timestamp, and that timestamp is the thread
-# Loom routes to the triage session. Hand-placed like the other runtime secrets.
+# with. A bot token rather than an incoming webhook because only chat.postMessage
+# returns the message timestamp, and that timestamp is the thread Loom routes to
+# the triage session. Hand-placed like the other runtime secrets.
 SLACK_BOT_TOKEN_SECRET = "marin-grafana-slack-bot-token"
 
 # The cloudsql stack (infra/cloudsql) publishes the marin-metadata connection name that backs
@@ -57,7 +57,7 @@ SMTP_SECRET = "marin-grafana-smtp-credentials"
 # bridge mints short-lived installation tokens from it (github_app.py), so nothing
 # long-lived expires under the GitHub panels. Hand-placed like the other runtime
 # secrets — the Cloud Run deploy account is fail-closed on secret creation — and
-# allowlisted for IAM binding in infra/permissions.
+# declared for IAM binding in infra/pulumi/src/iac/gcp/iam_data.yaml.
 GITHUB_APP_PRIVATE_KEY_SECRET = "marin-grafana-github-app-private-key"
 
 
@@ -134,7 +134,7 @@ def main() -> None:
     # not secret and rides stack config. Optional like SMTP: unset, the panels deploy
     # unauthenticated (build panel shows no data), so the merge deploy never blocks.
     #   gcloud secrets create marin-grafana-github-app-private-key \
-    #     --project=hai-gcp-models --data-file=key.pem   # (then allowlist in infra/permissions)
+    #     --project=hai-gcp-models --data-file=key.pem   # (grants live in iam_data.yaml)
     #   pulumi config set marin-grafana:github_app_client_id <client-id>
     github_app_client_id = config.get("github_app_client_id")
     if github_app_client_id and secret_exists(provider, GITHUB_APP_PRIVATE_KEY_SECRET):

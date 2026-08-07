@@ -335,12 +335,12 @@ the caller and verifier cannot drift through duplicated configuration.
 All secrets live in Secret Manager, hand-placed, and reach the container as env
 vars via the `CloudRunService` `secrets` field; the values never enter Pulumi or
 git. The deploy account is fail-closed on secret creation, so the program only
-references secrets — each must exist and be listed in the `infra/permissions`
-allowlist for the deploy account to bind IAM on it.
+references secrets — each must exist and be declared in
+`infra/pulumi/src/iac/gcp/iam_data.yaml` for the deploy account to bind IAM on it.
 
-Loom alert delivery does not add a secret. The bridge authenticates with the
-Cloud Run service account and short-lived Google/Loom tokens, while Pulumi owns
-the identity-to-profile binding.
+Loom itself needs no secret: the bridge authenticates with the Cloud Run service
+account and short-lived Google/Loom tokens, and Pulumi owns the
+identity-to-profile binding. The Slack bot token is the one alerting credential.
 
 | Env var | Secret | Feeds |
 |---|---|---|
@@ -530,8 +530,7 @@ so the merge-triggered deploy never blocks. The client id is already set, so
 enabling auth is one step (plus its permissions grant):
 
 ```bash
-# Its grants are already declared in infra/pulumi/src/iac/gcp/iam_data.yaml
-# (infra/permissions, which this used to name, is retired), so:
+# Its grants are declared in infra/pulumi/src/iac/gcp/iam_data.yaml, so:
 gcloud secrets create marin-grafana-github-app-private-key \
   --project=hai-gcp-models --data-file=key.pem
 ```

@@ -86,7 +86,13 @@ from github_app import GithubAppAuth
 from github_source import GithubSource
 from iris_source import IrisSource
 from k8s_source import K8sFleet, K8sSource
-from loom_alerts import LoomAlertClient, LoomAlertDeliveryError, LoomAlertPayloadError, SlackAlertClient
+from loom_alerts import (
+    LoomAlertClient,
+    LoomAlertDeliveryError,
+    LoomAlertPayloadError,
+    SlackAlertClient,
+    SlackAnnouncementError,
+)
 from nightly_config import NIGHTLY_LANES
 from overview import PROVISIONING_LOOKBACK_HOURS, provisioning_query, provisioning_rows
 from starlette.applications import Starlette
@@ -658,7 +664,14 @@ def create_app(
             thread = await slack_alerts.announce(payload)
         except (json.JSONDecodeError, LoomAlertPayloadError) as err:
             return JSONResponse({"error": str(err)}, status_code=400)
-        return JSONResponse({"announced": thread is not None}, status_code=202)
+        except SlackAnnouncementError as err:
+            # This receiver posts and stops, so a failed announcement is the whole
+            # notification. Fail so Grafana retries instead of counting it sent.
+            logger.warning("Slack alert announcement failed: %s", err)
+            return JSONResponse({"error": str(err)}, status_code=502)
+        if thread is None:
+            return JSONResponse({"announced": False, "reason": "no firing alerts"}, status_code=202)
+        return JSONResponse({"announced": True}, status_code=202)
 
     return Starlette(
         routes=[
