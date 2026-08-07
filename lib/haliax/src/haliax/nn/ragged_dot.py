@@ -147,12 +147,9 @@ def _triton_default_block_sizes(m: int, k: int, n: int) -> tuple[int, int, int]:
 def _triton_default_matmul(m: int, k: int, n: int, num_groups: int, dtype) -> Callable[..., jax.Array]:
     """Build the default-layout kernel for one static shape.
 
-    ``pl.pallas_call`` returns a fresh ``jax.jit`` wrapper per call, and JAX's
-    tracing cache is keyed on function identity, so building it inside the call
-    re-traces the kernel and its index maps at every call site. A grouped MoE
-    layer reaches this from several chunks in both directions, and the cost
-    lands in lowering. One wrapper per static shape collapses that onto a single
-    trace.
+    ``pl.pallas_call`` returns a fresh ``jax.jit`` wrapper per call and JAX's
+    tracing cache is keyed on function identity, so building it inline re-traces
+    the kernel and its index maps at every call site.
     """
     block_m, block_n, block_k = _triton_default_block_sizes(m, k, n)
     return pl.pallas_call(
@@ -215,10 +212,7 @@ def _triton_ragged_contracting_dim_dot_kernel(
 
 @functools.lru_cache(maxsize=None)
 def _triton_ragged_contracting_dim_matmul(k: int, m: int, n: int, dtype) -> Callable[..., jax.Array]:
-    """Build the drhs-layout kernel for one static shape, vmapped over groups.
-
-    Memoized for the same reason as :func:`_triton_default_matmul`.
-    """
+    """Build the drhs-layout kernel for one static shape, vmapped over groups."""
     block_m = min(128, int(pl.next_power_of_2(m)))
     block_n = min(128, int(pl.next_power_of_2(n)))
     block_k = min(32, int(pl.next_power_of_2(k)))

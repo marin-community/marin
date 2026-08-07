@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import click
 import pytest
@@ -20,7 +21,7 @@ from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.external_dependencies import VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -54,6 +55,10 @@ from marin.inference.levanter_backend import (
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
+from marin.inference.vllm_release import (
+    vllm_gpu_wheel_for_architecture,
+    vllm_gpu_wheel_provenance,
+)
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -190,21 +195,36 @@ def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
     ]
 
 
-def test_isolated_cuda_vllm_marin_fork_command_and_env():
+@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine):
+    monkeypatch.setattr("platform.machine", lambda: machine)
     launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
     cmd = launcher.command()
-    assert cmd[:5] == [
-        "uvx",
-        "--from",
-        VLLM_FORK_REQUIREMENT,
-        "--with",
-        "runai-model-streamer[s3]==0.16.1",
-    ]
-    assert "--torch-backend" in cmd and cmd[cmd.index("--torch-backend") + 1] == "cu130"
+    requirement = cmd[cmd.index("--from") + 1]
+    wheel = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, machine)
+    distribution, separator, direct_url = requirement.partition(" @ ")
+    parsed_url = urlsplit(direct_url)
+    assert distribution == "vllm"
+    assert separator
+    assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
+    assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
+    assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
+    python_index = cmd.index("python")
+    assert Path(cmd[python_index + 1]).name == "vllm_wheel_entrypoint.py"
+    expected_provenance = json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
+    assert json.loads(cmd[python_index + 2]) == expected_provenance
     env = launcher.env()
-    assert env["VLLM_USE_PRECOMPILED"] == "1"
+    assert "VLLM_USE_PRECOMPILED" not in env
     assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
+    assert requirement in launcher.cache_identity()
+
+
+def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
+    monkeypatch.setattr("platform.machine", lambda: "ppc64le")
+
+    with pytest.raises(ValueError):
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():

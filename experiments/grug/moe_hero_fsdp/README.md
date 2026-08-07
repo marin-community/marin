@@ -25,6 +25,14 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
 W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass
 `-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
 
+Pass `--mode supervised` for NCCL diagnostics. Each GPU task runs training in a child process with
+XLA's 600-second per-execution deadman and no in-pod restart. The supervisor allows one hour for the
+first completed step, then 30 minutes between completed steps. A deadman abort or another child
+failure fails the task immediately; the existing 15-minute progress watchdog remains the fallback.
+
+Use `--mode failsafe-control` to keep the XLA failsafes without the supervisor parent, or
+`--mode stock-control` to run without either and without task retries.
+
 Checkpoint staging benchmark:
 
 ```bash
@@ -39,41 +47,12 @@ synchronous host-staging and asynchronous commit phases without enabling Python 
 The entire artifact is pinned under `marin_temp_bucket(ttl_days=1)`, so it is disposable and covered
 by the one-day lifecycle policy.
 
-Compilation-cache probe:
+### Kernel cache
 
-```bash
-RID="ccprobe-1"
-iris --cluster=marin job run --no-wait --enable-extra-resources \
-  --target-cluster cw-us-east-08a --priority interactive \
-  --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
-  -e JAX_EXPLAIN_CACHE_MISSES 1 \
-  -e JAX_COMPILATION_CACHE_DIR s3://marin-us-east-02a/marin/compile-cache-probe/"$RID" \
-  -- python -m experiments.grug.moe_hero_fsdp.compile_cache_probe \
-    --run-id "$RID" --nodes 2 --num-steps 8 --version dev --run
-```
-
-Four layers on two nodes, about five minutes end to end, on the same `run_grug` entrypoint and the
-same kernels as the hero. `JAX_EXPLAIN_CACHE_MISSES` turns JAX's per-module hit and miss accounting
-into WARNING lines in the task logs. Give each run its own `JAX_COMPILATION_CACHE_DIR` for a cold
-measurement, or repeat a prefix for a warm one. Add `-e JAX_DEBUG_LOG_MODULES jax._src.cache_key` to
-get the running hash after each cache-key component, which is how you find out *which* input
-changed when two runs that should share a key do not.
-
-On a hero rerun whose configuration has not changed, `-e JAX_COMPILATION_CACHE_EXPECT_PGLE 1` turns
-every unexpected compilation-cache write into a warning and loads the PGLE-optimized executable
-without re-running PGLE profiling.
-
-### The two caches a hero start depends on
-
-JAX's compilation cache only covers XLA compilation. The QuACK and FA4 kernels compile through
-CuTeDSL during MLIR lowering, which runs before JAX can compute the cache key, so a compilation-cache
-hit still regenerates every kernel. `TrainerConfig.cutlass_kernel_cache_dir` is the store that
-recovers those; the hero and the probe share
-`marin_temp_bucket(ttl_days=30, prefix="cutlass-kernel-cache")`. Entries are content-addressed on the
-kernel configuration, the launcher source, the argument specification, the device architecture, and
-the CuTeDSL and QuACK versions, so sharing one prefix across runs is safe and an edit to a launcher
-invalidates only its own kernels. Pass `--kernel-cache-dir` a fresh prefix to force a cold compile;
-the task logs report a hit or a miss per kernel.
+The QuACK and FA4 kernels compile through CuTeDSL during MLIR lowering, before JAX's compilation
+cache is consulted, so a compilation-cache hit still regenerates them. Levanter persists them under
+`cutlass-kernels/` inside whatever `jax_compilation_cache_dir` is in effect. Entries are
+content-addressed, so runs share them and a launcher edit invalidates only its own kernels.
 
 ## Files
 
@@ -85,7 +64,6 @@ the task logs report a hit or a miss per kernel.
 | `adamh.py` | AdamH (Adam direction + Frobenius hyperball scale-invariant step) |
 | `heuristic.py` | May Recipe compute-scaling LR refit; derives the optimizer from steps + batch |
 | `train.py` | training loop, state init, dispatch, hero runtime env |
-| `compile_cache_probe.py` | four-layer two-node run for measuring compilation-cache hits and misses |
 | `launch.py` | rack-scaled resources, DP/FSDP mesh, batch, tracker, dataset, and entry point |
 
 ## What's distinctive about this run
@@ -107,6 +85,7 @@ the task logs report a hit or a miss per kernel.
   the scan.
 
 ### Systems (FSDP)
+- Each Iris task reserves one four-GPU GB200 node and starts one JAX process per GPU.
 - **One rack**: `expert_axis_size=1`, `replica_axis_size=1` → one 64-GPU `data` axis.
 - **Two racks**: `expert_axis_size=1`, `replica_axis_size=2` → two DP replicas, each with a
   64-GPU `data` axis. Model parameters are replicated across `replica_dcn` and FSDP-sharded only

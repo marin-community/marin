@@ -170,13 +170,30 @@ FERRY_GROUPS: tuple[FerryGroup, ...] = (
 
 
 @dataclasses.dataclass(frozen=True)
+class SlackAlertConfig:
+    """Where the bridge announces critical alerts.
+
+    A bot token rather than an incoming webhook because only `chat.postMessage`
+    returns the message timestamp, and that timestamp is the thread Loom routes
+    to the triage session.
+    """
+
+    bot_token: str
+    # A Slack channel id (`C…`), not a `#name`: Loom validates the id it is given.
+    channel: str
+
+
+@dataclasses.dataclass(frozen=True)
 class LoomAlertConfig:
-    """Identity-federated Loom destination for critical alerts."""
+    """Identity-federated Loom destination for critical alerts, and where they are
+    announced. Every alert the bridge delivers is also announced, so the Slack
+    destination is part of this configuration rather than a parallel optional."""
 
     url: str
     profile: str
     repository: str
     http_timeout: float
+    slack: SlackAlertConfig
 
 
 @dataclasses.dataclass(frozen=True)
@@ -215,11 +232,21 @@ class BridgeConfig:
             repository = os.environ.get("LOOM_ALERT_REPOSITORY")
             if not profile or not repository:
                 raise ValueError("LOOM_ALERT_PROFILE and LOOM_ALERT_REPOSITORY are required when LOOM_ALERT_URL is set")
+            # The bridge is the only thing that announces critical alerts now that
+            # Grafana's own Slack receiver is gone, so a missing token would take
+            # alerting down silently. Fail the boot instead.
+            bot_token = os.environ.get("SLACK_ALERTS_BOT_TOKEN")
+            channel = os.environ.get("SLACK_ALERTS_CHANNEL")
+            if not bot_token or not channel:
+                raise ValueError(
+                    "SLACK_ALERTS_BOT_TOKEN and SLACK_ALERTS_CHANNEL are required when LOOM_ALERT_URL is set"
+                )
             loom_alerts = LoomAlertConfig(
                 url=loom_url.rstrip("/"),
                 profile=profile,
                 repository=repository,
                 http_timeout=http_timeout,
+                slack=SlackAlertConfig(bot_token=bot_token, channel=channel),
             )
         return BridgeConfig(
             max_rows=int(os.environ.get("GRAFANA_BRIDGE_MAX_ROWS", "200000")),

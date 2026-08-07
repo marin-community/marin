@@ -142,12 +142,17 @@ referenced Harbor trajectories by a `gs://` URI. The tool reads those files,
 writes the rows into the run's `samples` table, and for agentic samples pulls
 each referenced trajectory into the `blobs` table (rewriting the sample's
 `trajectory_uri` to a `finestore://` reference) and flattens its steps into a
-`steps` table. It is idempotent — samples dedupe on their primary key — and
-never deletes the source files, so a migration can be validated before the
-legacy layout is retired.
+`steps` table. It is idempotent because samples dedupe on their primary key.
+`--archive-legacy` moves validated source Parquets to deterministic region-local
+30-day storage. `--from-legacy-archive` reads those preserved Parquets to rebuild
+the archive at the original results path without moving the backup again.
 
 ```shell
 uv run python -m experiments.evaluation.migrate_archive gs://bucket/run/results
+
+# Rebuild from the Parquets moved by an earlier --archive-legacy run.
+uv run python -m experiments.evaluation.migrate_archive \
+  gs://bucket/run/results --from-legacy-archive
 ```
 
 ## Packaging

@@ -51,8 +51,7 @@ class _BackwardBlockSparseMetadata:
 def _import_cutlass_cute() -> _CutlassCuteModules:
     """Return the CuTe/CUTLASS module bundle.
 
-    Memoized so the bundle is a singleton: the launcher factories are keyed on it,
-    and a fresh bundle per call would defeat their memoization.
+    The launcher factories are keyed on this bundle, so it has to be a singleton.
     """
     cute = importlib.import_module("cutlass.cute")
     cjax = importlib.import_module("cutlass.jax")

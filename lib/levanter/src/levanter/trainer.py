@@ -4,6 +4,7 @@
 import atexit
 import copy
 import functools
+import importlib.util
 import logging as pylogging
 import os
 import sys
@@ -30,7 +31,7 @@ from typing import (
 
 import equinox as eqx
 import haliax as hax
-from rigging.filesystem import StoragePath
+from rigging.filesystem import StoragePath, prefix_join
 import haliax.tree_util
 import jax
 import jax.numpy as jnp
@@ -842,6 +843,23 @@ def _initialize_global_tracker(config, run_id):
     levanter.tracker.set_global_tracker(tracker)
 
 
+_CUTLASS_KERNEL_CACHE_SUBDIR = "cutlass-kernels"
+
+
+def _install_cutlass_kernel_cache() -> None:
+    """Persist CuTeDSL kernel object code alongside the JAX compilation cache.
+
+    The two caches want the same location for the same reason, so this derives one
+    from the other instead of adding a second knob. Skipped when no compilation
+    cache is configured, or on a build without ``cutlass.jax``.
+    """
+    cache_dir = jax.config.jax_compilation_cache_dir
+    if not cache_dir or importlib.util.find_spec("cutlass") is None:
+        return
+
+    install_cutlass_kernel_cache(CutlassKernelCache(directory=prefix_join(cache_dir, _CUTLASS_KERNEL_CACHE_SUBDIR)))
+
+
 @dataclass
 class TrainerConfig:
     seed: int = 0  # random seed
@@ -927,14 +945,6 @@ class TrainerConfig:
         default_factory=lambda: copy.deepcopy(DEFAULT_JAX_CONFIG)
     )  # config to pass to jax.config.update
     jax_compilation_cache_dir: Optional[str] = None
-
-    cutlass_kernel_cache_dir: Optional[str] = None
-    """Store for compiled CuTeDSL kernel object code, local or an fsspec URL.
-
-    Only useful on GPU runs that use the QuACK or FA4 CuTe kernels. Those compile
-    during MLIR lowering, before the JAX compilation cache is consulted, so they
-    are the one part of startup that cache cannot recover. Nodes change between
-    allocations, so an object-store URL is what makes the cache survive."""
 
     distributed: DistributedConfig = DistributedConfig()
 
@@ -1030,11 +1040,6 @@ class TrainerConfig:
         """number of nodes"""
         return max(getattr(device, "slice_index", 0) for device in jax.devices()) + 1
 
-    @property
-    def num_devices_per_slice(self):
-        """number of devices within a slice"""
-        return jax.device_count() // self.num_slices
-
     @cached_property
     def mesh_axis_specs(self) -> List[str]:
         """Materialized mesh axis names; validates mesh config."""
@@ -1085,8 +1090,7 @@ class TrainerConfig:
         if self.jax_compilation_cache_dir is not None:
             jax.config.update("jax_compilation_cache_dir", self.jax_compilation_cache_dir)
 
-        if self.cutlass_kernel_cache_dir is not None:
-            install_cutlass_kernel_cache(CutlassKernelCache(directory=self.cutlass_kernel_cache_dir))
+        _install_cutlass_kernel_cache()
 
     def _maybe_set_id(self):
         # always do this so we don't get weird hangs if the id isn't set right

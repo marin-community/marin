@@ -115,13 +115,11 @@ def configure_jax_compilation_cache() -> None:
 def _enable_node_local_xla_autotune_cache() -> None:
     """Point XLA's per-fusion autotune cache at the node-local Iris cache mount.
 
-    Set through ``XLA_FLAGS``, which is the only place one cache can be local while
-    the compilation cache is remote. The flag is on JAX's
-    ``xla_flags_to_exclude_from_cache_key`` list, so it does not perturb the
-    compilation cache key.
+    Goes through ``XLA_FLAGS`` because JAX derives this path from the compilation
+    cache dir, which is remote. The flag is on ``xla_flags_to_exclude_from_cache_key``,
+    so it stays out of the compilation cache key.
 
-    GPU tasks only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
-    An explicit setting in ``XLA_FLAGS`` wins.
+    GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
     """
     if TaskResources.from_environment().gpu_count == 0:
         return

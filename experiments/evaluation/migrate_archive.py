@@ -12,9 +12,10 @@ missing, its sample and original URI are preserved.
 
 It is idempotent — samples dedupe on ``(task, doc_id, trial_id)`` — and validates every normalized
 sample, every available raw trajectory blob, and each flattened trajectory step before optionally
-moving the superseded ``samples_*.parquet`` files to region-local 30-day storage. Evalchemy's native
-JSONL and Harbor's job tree remain in place because current writers still use them as
-mechanism-native artifacts and resume state.
+moving the superseded ``samples_*.parquet`` files to region-local 30-day storage. A later migration
+can read those archived Parquets while writing replacement shards at the original results path.
+Evalchemy's native JSONL and Harbor's job tree remain in place because current writers still use
+them as mechanism-native artifacts and resume state.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterable
+from enum import StrEnum
 from urllib.parse import urlsplit
 
 import click
@@ -62,6 +64,12 @@ _OBJECT_CHECKSUM_KEYS = ("md5Hash", "md5", "ETag", "etag", "checksum")
 
 SampleKey = tuple[str, str, str]
 StepKey = tuple[str, str, str, int | None]
+
+
+class _MigrationMode(StrEnum):
+    KEEP_LEGACY = "keep_legacy"
+    ARCHIVE_LEGACY = "archive_legacy"
+    FROM_LEGACY_ARCHIVE = "from_legacy_archive"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -112,6 +120,7 @@ class MigrationPlan:
     """Read-only plan for one results path."""
 
     results_path: str
+    legacy_source: str
     legacy_files: int
     legacy_bytes: int
     archive_prefix: str | None
@@ -149,21 +158,26 @@ def _trial_id(sample: EvalSample) -> str:
     return _trial_id_from_uri(uri)
 
 
-def legacy_sample_files(results_path: str) -> tuple[LegacySampleFile, ...]:
-    """List the legacy normalized sample Parquets beneath one results path."""
-    root = StoragePath(results_path)
+def legacy_sample_files(legacy_source: str) -> tuple[LegacySampleFile, ...]:
+    """List the legacy normalized sample Parquets beneath one live or archived source."""
+    root = StoragePath(legacy_source)
     if not root.exists():
-        raise FileNotFoundError(results_path)
+        raise FileNotFoundError(legacy_source)
     files = []
     for directory, _, names in root.walk():
         for name in names:
             if not (name.startswith(SAMPLES_PREFIX) and name.endswith(SAMPLES_SUFFIX)):
                 continue
             source = directory / name
+            relative_root = (
+                dataclasses.replace(root, scheme=source.scheme, netloc=source.netloc, rooted=source.rooted)
+                if root.is_local and source.is_local
+                else root
+            )
             files.append(
                 LegacySampleFile(
                     source=str(source),
-                    relative_path=source.relative_to(root),
+                    relative_path=source.relative_to(relative_root),
                     size=source.size(),
                 )
             )
@@ -187,13 +201,18 @@ def _legacy_sample_inventory(files: Iterable[LegacySampleFile]) -> tuple[int, di
     return rows, samples
 
 
-def migrate_run(results_path: str, *, writer_id: str = _MIGRATION_WRITER_ID) -> MigrationCounts:
+def migrate_run(
+    results_path: str,
+    *,
+    files: tuple[LegacySampleFile, ...] | None = None,
+    writer_id: str = _MIGRATION_WRITER_ID,
+) -> MigrationCounts:
     """Backfill one run's legacy sample parquets into its finestore archive. Safe to re-run."""
     sample_count = step_count = trajectory_count = missing_trajectory_count = 0
     # Archive shards are named ``{seq}-{uid}.parquet`` under per-table subdirs, so the legacy
     # ``samples_*.parquet`` filter below never picks them up: a re-run reads only legacy sources.
     with EvaluationStore.open(results_path, writer_id=writer_id) as store:
-        for sample in _legacy_sample_rows(legacy_sample_files(results_path)):
+        for sample in _legacy_sample_rows(legacy_sample_files(results_path) if files is None else files):
             trial_id = _trial_id(sample)
             uri = sample.trajectory_uri
             if sample.kind == SampleKind.AGENTIC and uri and not uri.startswith(_ARCHIVE_URI_PREFIX):
@@ -425,14 +444,16 @@ def legacy_archive_prefix(results_path: str) -> str:
     return destination
 
 
-def migration_plan(results_path: str) -> MigrationPlan:
+def migration_plan(results_path: str, *, legacy_source: str | None = None) -> MigrationPlan:
     """Return the read-only migration and archival plan for one run."""
-    files = legacy_sample_files(results_path)
+    legacy_source = legacy_source or results_path
+    files = legacy_sample_files(legacy_source)
     return MigrationPlan(
         results_path=results_path,
+        legacy_source=legacy_source,
         legacy_files=len(files),
         legacy_bytes=sum(file.size for file in files),
-        archive_prefix=legacy_archive_prefix(results_path) if files else None,
+        archive_prefix=legacy_archive_prefix(results_path) if files and legacy_source == results_path else None,
     )
 
 
@@ -462,9 +483,10 @@ def migrate_run_and_archive(
 def _migrate_and_validate(
     results_path: str,
     writer_id: str,
+    legacy_source: str | None = None,
 ) -> tuple[tuple[LegacySampleFile, ...], MigrationCounts, ValidationCounts]:
-    files = legacy_sample_files(results_path)
-    counts = migrate_run(results_path, writer_id=writer_id)
+    files = legacy_sample_files(legacy_source or results_path)
+    counts = migrate_run(results_path, files=files, writer_id=writer_id)
     validation = validate_run(results_path, files=files)
     return files, counts, validation
 
@@ -472,10 +494,11 @@ def _migrate_and_validate(
 def migrate_run_and_validate(
     results_path: str,
     *,
+    legacy_source: str | None = None,
     writer_id: str = _MIGRATION_WRITER_ID,
 ) -> MigrationResult:
     """Migrate and validate one run without retiring its legacy inputs."""
-    _, counts, validation = _migrate_and_validate(results_path, writer_id)
+    _, counts, validation = _migrate_and_validate(results_path, writer_id, legacy_source)
     return MigrationResult(
         results_path=results_path,
         counts=counts,
@@ -498,6 +521,16 @@ def _selected_results_paths(results_paths: tuple[str, ...], records_prefixes: tu
     return tuple(sorted(selected))
 
 
+def _migration_mode(*, archive_legacy: bool, from_legacy_archive: bool) -> _MigrationMode:
+    if archive_legacy and from_legacy_archive:
+        raise click.UsageError("--from-legacy-archive requires --keep-legacy")
+    if archive_legacy:
+        return _MigrationMode.ARCHIVE_LEGACY
+    if from_legacy_archive:
+        return _MigrationMode.FROM_LEGACY_ARCHIVE
+    return _MigrationMode.KEEP_LEGACY
+
+
 @click.command()
 @click.argument("results_paths", nargs=-1)
 @click.option(
@@ -512,34 +545,47 @@ def _selected_results_paths(results_paths: tuple[str, ...], records_prefixes: tu
     default=False,
     help="Move validated samples_*.parquet files to region-local 30-day storage.",
 )
+@click.option(
+    "--from-legacy-archive",
+    is_flag=True,
+    help="Read inputs from each run's deterministic region-local 30-day legacy archive.",
+)
 @click.option("--dry-run", is_flag=True, help="List eligible runs, sizes, and archive destinations without writing.")
 def main(
     results_paths: tuple[str, ...],
     records_prefixes: tuple[str, ...],
     writer_id: str,
     archive_legacy: bool,
+    from_legacy_archive: bool,
     dry_run: bool,
 ) -> None:
     """Backfill one or more RESULTS_PATHS, or every run under --records-prefix."""
     logging.basicConfig(level=logging.INFO)
     if not results_paths and not records_prefixes:
         raise click.UsageError("pass at least one RESULTS_PATH or --records-prefix")
+    mode = _migration_mode(archive_legacy=archive_legacy, from_legacy_archive=from_legacy_archive)
     if any(path.startswith("s3://") for path in (*results_paths, *records_prefixes)):
         configure_coreweave_s3()
     selected = _selected_results_paths(results_paths, records_prefixes)
     migrated = archived = skipped = 0
     for results_path in selected:
-        plan = migration_plan(results_path)
+        legacy_source = (
+            legacy_archive_prefix(results_path) if mode is _MigrationMode.FROM_LEGACY_ARCHIVE else results_path
+        )
+        if mode is _MigrationMode.FROM_LEGACY_ARCHIVE and not StoragePath(legacy_source).exists():
+            skipped += 1
+            continue
+        plan = migration_plan(results_path, legacy_source=legacy_source)
         if not plan.legacy_files:
             skipped += 1
             continue
         if dry_run:
             click.echo(json.dumps({"status": "planned", **dataclasses.asdict(plan)}, sort_keys=True))
             continue
-        if archive_legacy:
+        if mode is _MigrationMode.ARCHIVE_LEGACY:
             result = migrate_run_and_archive(results_path, writer_id=writer_id)
         else:
-            result = migrate_run_and_validate(results_path, writer_id=writer_id)
+            result = migrate_run_and_validate(results_path, legacy_source=legacy_source, writer_id=writer_id)
         migrated += 1
         archived += result.archived_files
         click.echo(json.dumps({"status": "migrated", **dataclasses.asdict(result)}, sort_keys=True))

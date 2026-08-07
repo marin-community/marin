@@ -10,15 +10,13 @@ compilation-cache hit still pays for every kernel. CuTeDSL's own in-memory and
 on-disk caches cannot cover it either: ``cutlass.cute.compile`` forces
 ``no_cache=True``, leaving only an in-process dict keyed on launcher identity.
 
-This module fills that gap. It wraps ``get_or_compile_kernel`` so a compile
-consults an object store first, keyed on everything that determines the kernel:
-the launcher's configuration and defining source, the argument specification, the
-device architecture, and the CuTeDSL and QuACK versions. Reconstructing a compile
-needs nothing but the object code — ``cutlass.jax`` derives the fingerprint from
-it by SHA-256 — so a stored blob is a complete substitute for running CuTeDSL.
+:func:`install` wraps ``get_or_compile_kernel`` to consult an object store first,
+keyed on the launcher's configuration and defining source, the argument
+specification, the device architecture, and the CuTeDSL and QuACK versions.
+``cutlass.jax`` derives a kernel's fingerprint from its object code by SHA-256, so
+a stored blob reconstructs a compile with nothing else.
 
-Launchers opt in through :func:`cute_launcher_factory`, which also memoizes the
-factory so one process compiles each distinct kernel once.
+Launchers opt in through :func:`cute_launcher_factory`.
 """
 
 import dataclasses
@@ -105,8 +103,7 @@ class CutlassKernelCache:
     """Content-addressed store of compiled CuTeDSL kernel object code.
 
     Args:
-        directory: Store location, local or any fsspec URL. Nodes come and go, so
-            an object-store URL is what makes the cache survive a reschedule.
+        directory: Store location, local or any fsspec URL.
     """
 
     directory: str
@@ -116,8 +113,8 @@ class CutlassKernelCache:
         return path.read_bytes() if path.exists() else None
 
     def store(self, key: str, module: bytes) -> None:
-        # Stage and rename so a reader never observes a partial object: every
-        # process compiles the same kernels at the same time.
+        # Every process compiles the same kernels at once, so stage and rename
+        # rather than let a reader see a half-written object.
         path = str(self._object(key))
         with atomic_rename(path) as staged:
             StoragePath(staged).write_bytes(module)
