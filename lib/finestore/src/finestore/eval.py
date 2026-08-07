@@ -31,7 +31,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from enum import StrEnum
 
 import pyarrow as pa
@@ -42,13 +42,13 @@ from rigging.filesystem import StoragePath, prefix_join
 from finestore.layout import BLOBS_TABLE
 from finestore.reader import CompositeReader
 from finestore.schema import arrow_schema
-from finestore.store import DataStore, replace_table
+from finestore.store import DataStore
 
 logger = logging.getLogger(__name__)
 
 # 3: metrics moved from an inferred struct to a pinned ``map<string,double>`` and the unused
 # ``exchange_uri`` was dropped (finestore now pins both eval tables' schemas from these models).
-# 4: the lm-eval extraction filter joined the samples merge key. A task that scores one document
+# 4: the lm-eval extraction filter joined the samples primary key. A task that scores one document
 # under several filters (gsm8k under strict-match and flexible-extract) emits one sample per filter,
 # and each is a distinct row rather than one overwriting the other.
 SCHEMA_VERSION = 4
@@ -172,7 +172,7 @@ def is_scratch_artifact(relative_path: str) -> bool:
     results path, so a retried evaluation leaves a second complete tree under a ``tmp<random>/``
     segment. Both trees are real, and their loglikelihoods differ because inference is not
     deterministic, but only the canonical copy produced the metrics on the run's record. Indexing
-    both would put two different rows on one merge key; the scratch copy is still preserved as a
+    both would put two different rows on one primary key; the scratch copy is still preserved as a
     source blob, so nothing is discarded by leaving it out of the table.
     """
     return _SCRATCH_SEGMENT.search(relative_path) is not None
@@ -481,7 +481,7 @@ def samples_schema() -> pa.Schema:
 
 def steps_schema() -> pa.Schema:
     """The pinned ``steps`` table schema, derived from :class:`StepRecord` (its own columns carry the
-    merge key), so token-id and logprob columns keep their list types across shards."""
+    primary key), so token-id and logprob columns keep their list types across shards."""
     return arrow_schema(StepRecord)
 
 
@@ -592,10 +592,10 @@ class EvaluationStore:
     def __init__(self, store: DataStore) -> None:
         self._store = store
         self._samples = store.table(
-            ARCHIVE_SAMPLES_TABLE, schema=samples_schema(), merge_key=SAMPLES_MERGE_KEY, schema_version=SCHEMA_VERSION
+            ARCHIVE_SAMPLES_TABLE, schema=samples_schema(), primary_key=SAMPLES_MERGE_KEY, schema_version=SCHEMA_VERSION
         )
         self._steps = store.table(
-            ARCHIVE_STEPS_TABLE, schema=steps_schema(), merge_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION
+            ARCHIVE_STEPS_TABLE, schema=steps_schema(), primary_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION
         )
 
     @classmethod
@@ -659,23 +659,17 @@ class EvaluationStore:
         self.close()
 
 
-def export_lm_eval_samples(
-    out_path: str,
-    *,
-    writer_id: str = "evalchemy",
-    superseded_prefix: Callable[[int], str] | None = None,
-) -> int:
+def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> int:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
     Returns the number of samples written. The source jsonl is kept as the mechanism's native
     artifact and is additionally preserved inside the archive, so the run can be rebuilt from the
-    archive alone after a contract change. Re-running is idempotent: an unchanged source produces
-    identical rows, which collapse on the merge key without conflict. A run with no sample source is
-    left untouched.
+    archive alone. Re-running is idempotent: an unchanged source produces identical rows, which
+    collapse on the primary key without conflict. A run with no sample source is left untouched.
 
-    Replacing a table written under an older contract needs somewhere to put the rows first.
-    ``superseded_prefix`` maps that stored version to a destination outside the run; without it an
-    export that would have to replace rows raises instead.
+    Raises if the archive holds samples written under an older contract. Those rows cannot collapse
+    against rows written under the current one, and finestore does not delete, so bringing them
+    forward is a migration rather than an export.
     """
     root = StoragePath(out_path)
     sources = list(StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob())
@@ -683,7 +677,7 @@ def export_lm_eval_samples(
         # With no source there is nothing to write, and nothing that could stand in for what is
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
         return 0
-    _replace_superseded_samples(out_path, superseded_prefix)
+    require_current_samples(out_path)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:
@@ -706,65 +700,27 @@ def export_lm_eval_samples(
 
 
 def stale_samples_version(out_path: str) -> int | None:
-    """The samples table's contract version when it predates the current one, else ``None``.
-
-    Rows an older contract left cannot collapse against new ones, because a widened merge key reads
-    as null on their shards, so a caller writing at the current version has to replace them
-    wholesale. A table already at the current version merges idempotently instead, because identical
-    rows share a digest.
-    """
+    """The samples table's contract version when it predates :data:`SCHEMA_VERSION`, else ``None``."""
     stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is None or stored_version == SCHEMA_VERSION:
         return None
     return stored_version
 
 
-def preserve_and_replace_samples(
-    out_path: str, stored_version: int, superseded_prefix: Callable[[int], str] | None
-) -> None:
-    """Snapshot the samples table outside the run, then drop it.
+def require_current_samples(out_path: str) -> None:
+    """Raise if the archive's samples predate the current contract.
 
-    The snapshot completes and is size-verified before the drop, so a failure at any point leaves
-    either the original table or a full copy of it; an existing snapshot is never overwritten.
-    Nothing here may be the only copy of anything, so a caller with nowhere to put the rows is
-    refused rather than served.
-    """
-    if superseded_prefix is None:
-        raise ValueError(
-            f"{out_path} holds schema v{stored_version} samples that a writer at v{SCHEMA_VERSION} has "
-            "to replace; pass superseded_prefix to say where they are preserved first"
-        )
-    destination = superseded_prefix(stored_version)
-    logger.info(
-        "replacing %s samples written under schema v%s at v%s, preserved at %s",
-        out_path,
-        stored_version,
-        SCHEMA_VERSION,
-        destination,
-    )
-    replace_table(out_path, ARCHIVE_SAMPLES_TABLE, destination)
-
-
-def _replace_superseded_samples(out_path: str, superseded_prefix: Callable[[int], str] | None) -> None:
-    """Replace a samples table an lm-eval export supersedes, refusing one it cannot reproduce.
-
-    Agentic samples come from Harbor, which writes no lm-eval source, so an lm-eval path that
-    replaced a table holding them would leave a table missing that half. It stops instead; a
-    migration, whose legacy parquets do reproduce those rows, replaces the table directly.
+    A widened primary key reads as null on the older shards, so those rows would survive beside the
+    ones a writer adds now rather than collapsing against them. Removing them is a migration's job,
+    not a writer's.
     """
     stored_version = stale_samples_version(out_path)
     if stored_version is None:
         return
-    stored = CompositeReader(out_path).scan(ARCHIVE_SAMPLES_TABLE, columns=["kind"])
-    if stored is None:
-        return
-    agentic = sum(1 for kind in stored["kind"].to_pylist() if kind == SampleKind.AGENTIC)
-    if agentic:
-        raise ValueError(
-            f"{out_path} holds {agentic} agentic sample(s) that an lm-eval export cannot regenerate; "
-            "migrate the run instead of replacing its samples table"
-        )
-    preserve_and_replace_samples(out_path, stored_version, superseded_prefix)
+    raise ValueError(
+        f"{out_path} holds samples written under schema v{stored_version}; this writer is at "
+        f"v{SCHEMA_VERSION}. Migrate the archive with experiments.evaluation.migrations.samples_v4."
+    )
 
 
 def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> int:
@@ -801,29 +757,20 @@ def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
     )
 
 
-def rebuild_lm_eval_samples(
-    out_path: str,
-    *,
-    writer_id: str = "rebuild",
-    superseded_prefix: Callable[[int], str] | None = None,
-) -> int:
+def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int:
     """Rebuild a run's ``samples`` table from the source artifacts preserved inside its archive.
 
-    The inputs are the ``sources/`` blobs written by :func:`export_lm_eval_samples`, so this works on
-    an archive whose surrounding results tree has been pruned. Returns the number of samples written.
-    Check :func:`preserved_sample_sources` first: an archive holding none cannot be rebuilt this way
-    and raises. ``superseded_prefix`` says where the rows being replaced are preserved, as in
-    :func:`export_lm_eval_samples`.
+    The inputs are the ``sources/`` blobs written by :func:`export_lm_eval_samples`, so this repairs
+    an archive whose surrounding results tree has been pruned, or one an export left half written.
+    Returns the number of samples written. Rows the archive already holds are reproduced exactly and
+    collapse against themselves, so nothing is deleted; an archive at an older contract raises, and
+    one preserving no sources raises too.
     """
     reader = CompositeReader(out_path)
     names = preserved_sample_sources(out_path)
     if not names:
         raise FileNotFoundError(f"archive at {out_path!r} preserves no sample sources to rebuild from")
-    # The preserved sources are the complete input, so the existing rows are replaced rather than
-    # merged into: rows written under an older merge key would otherwise survive beside the new ones.
-    stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
-    if stored_version is not None:
-        preserve_and_replace_samples(out_path, stored_version, superseded_prefix)
+    require_current_samples(out_path)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:

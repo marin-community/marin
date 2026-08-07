@@ -39,16 +39,17 @@ from finestore.eval import (
     EvaluationStore,
     SampleKind,
     StepRecord,
-    preserve_and_replace_samples,
     sample_from_archive_row,
     stale_samples_version,
     trajectory_step_rows,
 )
 from finestore.reader import CompositeReader
-from marin.evaluation.archive_backup import legacy_archive_prefix, superseded_samples_prefix
 from marin.evaluation.records import list_records
 from rigging.filesystem import StoragePath, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+from experiments.evaluation.migrations.archive_backup import legacy_archive_prefix
+from experiments.evaluation.migrations.samples_v4 import preserve_and_replace_samples
 
 logger = logging.getLogger(__name__)
 
@@ -203,17 +204,13 @@ def _legacy_sample_inventory(files: Iterable[LegacySampleFile]) -> tuple[int, di
 def _replace_stale_samples(results_path: str) -> None:
     """Clear a samples table written under an older contract, preserving it outside the run first.
 
-    The legacy parquets this migration reads reproduce every row of the table, including the agentic
-    ones an lm-eval export cannot, so replacing it outright is sound here where an export refuses. It
-    is also necessary: rows written under a narrower merge key cannot collapse against the new ones
-    and would survive beside them as duplicates.
+    The legacy parquets this migration reads reproduce every row of the table, agentic ones included,
+    so it may replace a table outright where an lm-eval export refuses. Rows written under a narrower
+    primary key would otherwise survive beside the new ones as duplicates.
     """
     stored_version = stale_samples_version(results_path)
-    if stored_version is None:
-        return
-    preserve_and_replace_samples(
-        results_path, stored_version, lambda version: superseded_samples_prefix(results_path, version)
-    )
+    if stored_version is not None:
+        preserve_and_replace_samples(results_path, stored_version)
 
 
 def migrate_run(

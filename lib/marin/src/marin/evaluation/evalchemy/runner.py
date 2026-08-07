@@ -18,7 +18,6 @@ from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath, prefix_join
 
-from marin.evaluation.archive_backup import superseded_samples_prefix
 from marin.evaluation.evalchemy.client import CONFIG_ENV_KEY
 from marin.evaluation.evalchemy.config import RESERVED_ENDPOINT_MODEL_ARGS
 from marin.evaluation.evalchemy.result import EvalchemyResult
@@ -253,10 +252,7 @@ def run_evalchemy(
     eval_job = _run_evalchemy_child(model, config, output_dir, env_vars)
     try:
         _verify_durable_artifacts(output_dir)
-        samples_written = export_lm_eval_samples(
-            output_dir,
-            superseded_prefix=lambda version: superseded_samples_prefix(output_dir, version),
-        )
+        samples_written = export_lm_eval_samples(output_dir)
     except Exception as exc:
         raise EvalPipelineError(
             str(exc),

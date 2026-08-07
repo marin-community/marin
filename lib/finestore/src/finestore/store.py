@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Protocol
 
 import pyarrow as pa
-from rigging.filesystem import StoragePath, factory, prefix_join
+from rigging.filesystem import StoragePath
 
 from finestore.compaction import compact
 from finestore.layout import (
@@ -58,77 +58,8 @@ def _default_writer_id() -> str:
     return uuid.uuid4().hex
 
 
-def copy_table(root: str, table: str, destination: str) -> int:
-    """Copy every object of ``table`` under ``root`` to ``destination``; return the number copied.
-
-    The whole table directory is copied, ``_schema.json`` included, so the destination is a readable
-    table rather than a pile of shards. An object already at the destination is left as it is: a
-    snapshot taken before an earlier attempt is the more faithful copy, and re-running an interrupted
-    copy must not overwrite it. Each copy's size is verified against its source before this returns,
-    so a caller may treat success as licence to delete the originals.
-    """
-    source_root = StoragePath(prefix_join(root, table))
-    source_fs, source_key = factory.url_to_fs(str(source_root))
-    destination_fs, _ = factory.url_to_fs(destination)
-    if not source_fs.exists(source_key):
-        return 0
-    copied = 0
-    for source in source_fs.find(source_key):
-        relative = source[len(source_key) :].strip("/")
-        _, target = factory.url_to_fs(prefix_join(destination, relative))
-        if destination_fs.exists(target):
-            continue
-        destination_fs.makedirs(target.rsplit("/", 1)[0], exist_ok=True)
-        with source_fs.open(source, "rb") as reader, destination_fs.open(target, "wb") as writer:
-            writer.write(reader.read())
-        written = destination_fs.info(target)["size"]
-        expected = source_fs.info(source)["size"]
-        if written != expected:
-            raise OSError(f"copy of {source} is {written} bytes, expected {expected}")
-        copied += 1
-    logger.info("finestore copied %d object(s) of table %s to %s", copied, table, destination)
-    return copied
-
-
-def drop_table(root: str, table: str) -> int:
-    """Delete every shard of ``table`` under ``root``; return the number removed.
-
-    A rebuild that widens a merge key needs this. Rows written under the old key cannot collapse
-    against rows written under the new one — the added column reads as null on the old shards and as
-    a value on the new — so without dropping first, both generations survive and the table reports
-    more rows than the source holds. Leaves ``_schema.json`` in place for the writer to overwrite.
-    """
-    reader = CompositeReader(root)
-    shards = reader.list_shards(table)
-    if not shards:
-        return 0
-    fs, _ = factory.url_to_fs(root)
-    for shard in shards:
-        fs.rm(shard.path)
-    logger.info("finestore dropped %d shard(s) of table %s under %s", len(shards), table, root)
-    return len(shards)
-
-
-def replace_table(root: str, table: str, destination: str) -> None:
-    """Snapshot ``table`` to ``destination``, then drop it, for a caller that can rewrite its rows.
-
-    This is the only sanctioned way to remove a table's contents. The snapshot completes and is
-    size-verified before anything is deleted, so a failure leaves either the original or a full copy
-    outside the run. A caller reaches for this after widening a merge key, because rows written under
-    the old key cannot collapse against rows written under the new one and would otherwise survive
-    beside them.
-    """
-    copy_table(root, table, destination)
-    drop_table(root, table)
-
-
-class MergeKeyConflict(ValueError):
-    """Two rows in one writer session share a merge key but carry different payloads.
-
-    The reader keeps one row per merge key, so accepting both would discard one of them with no
-    record that it existed. Either the merge key is too narrow to identify a row, or the caller meant
-    to replace the earlier row and should declare :attr:`OnConflict.SUPERSEDE`.
-    """
+class PrimaryKeyConflict(ValueError):
+    """Two rows in one writer session share a primary key but carry different payloads."""
 
 
 def _row_digest(row: Mapping[str, object]) -> bytes:
@@ -262,33 +193,30 @@ class DataStore:
         self,
         name: str,
         *,
+        primary_key: Sequence[str],
         schema: pa.Schema | None = None,
-        merge_key: Sequence[str] | None = None,
         schema_version: int = 1,
         on_conflict: OnConflict = OnConflict.ERROR,
     ) -> DataTable:
         """Register (or fetch) a table and return a handle for appending to it.
 
-        ``merge_key`` names the columns a reader collapses duplicates on (keeping the latest); it is
-        persisted to the table's ``_schema.json`` so readers that did not open the writer can recover
-        it. Calling ``table`` again with the same ``name`` returns the same handle, so every appender
-        shares one buffer and one sequence counter.
+        ``primary_key`` names the columns that identify a row, and is persisted to ``_schema.json``
+        so a reader that did not open the writer can recover it. A table whose rows have no natural
+        identity declares a nonce column rather than no key.
 
-        ``on_conflict`` decides what a repeated merge key means within this session:
-        :attr:`OnConflict.ERROR` (the default) treats it as a primary key and raises
-        :class:`MergeKeyConflict` when the payload differs, while :attr:`OnConflict.SUPERSEDE`
-        accepts the replacement. A table with no ``merge_key`` collapses nothing and ignores the
-        policy.
+        ``on_conflict`` decides what two rows sharing a key mean: :attr:`OnConflict.ERROR` raises
+        :class:`PrimaryKeyConflict` unless the payloads are identical, :attr:`OnConflict.SUPERSEDE`
+        accepts the newer row.
 
-        On registration the table's sequence counter resumes above the highest ``_seq`` any shard has
-        already persisted, so a row this writer appends now always outranks a row a prior session left
-        behind — a re-run of an existing key wins, and nothing can shadow it.
+        Calling ``table`` again with the same ``name`` returns the same handle, so every appender
+        shares one buffer and one sequence counter. The counter resumes above the highest ``_seq``
+        any shard has persisted, so a row appended now outranks one a prior session left behind.
         """
         with self._register_lock:
             existing = self._tables.get(name)
             if existing is not None:
                 return existing
-            key = tuple(merge_key) if merge_key is not None else None
+            key = tuple(primary_key)
             start_seq = CompositeReader(self.root).max_seq(name) + 1
             table = DataTable(
                 name,
@@ -296,7 +224,7 @@ class DataStore:
                 layout=self._layout,
                 max_buffer_bytes=self._max_buffer_bytes,
                 scheduler=self,
-                merge_key=key,
+                primary_key=key,
                 schema=schema,
                 schema_version=schema_version,
                 on_conflict=on_conflict,
@@ -307,9 +235,9 @@ class DataStore:
             return table
 
     def _write_schema_meta(self, table: DataTable) -> None:
-        """Persist the table's merge key, logical schema version, and conflict policy to ``_schema.json``."""
+        """Persist the table's primary key, logical schema version, and conflict policy to ``_schema.json``."""
         meta = TableMetadata(
-            merge_key=table.merge_key,
+            primary_key=table.primary_key,
             schema_version=table.schema_version,
             on_conflict=table.on_conflict,
         )
@@ -321,11 +249,11 @@ class DataStore:
         The blob is buffered and flushed with every other table, so many small writes never block on a
         per-object round trip -- the point of routing them through the archive rather than one object
         each. The payload rides inline as a Parquet binary column and ``metadata`` as a JSON string the
-        reader can project without touching the payload. The table's merge key is the blob name, so a
+        reader can project without touching the payload. The table's primary key is the blob name, so a
         re-write supersedes the prior one and a compacted shard is sorted by name for a pruned lookup.
         """
         blobs = self._tables.get(BLOBS_TABLE) or self.table(
-            BLOBS_TABLE, merge_key=(BLOB_NAME_COLUMN,), on_conflict=OnConflict.SUPERSEDE
+            BLOBS_TABLE, primary_key=(BLOB_NAME_COLUMN,), on_conflict=OnConflict.SUPERSEDE
         )
         blobs.append(
             {
@@ -423,14 +351,14 @@ class DataTable:
         layout: FineStoreLayout,
         max_buffer_bytes: int,
         scheduler: FlushScheduler,
-        merge_key: tuple[str, ...] | None,
+        primary_key: tuple[str, ...] | None,
         schema: pa.Schema | None,
         schema_version: int,
         on_conflict: OnConflict = OnConflict.ERROR,
         start_seq: int = 0,
     ) -> None:
         self.name = name
-        self.merge_key = merge_key
+        self.primary_key = primary_key
         self.schema_version = schema_version
         self.on_conflict = on_conflict
         self._writer_id = writer_id
@@ -446,7 +374,7 @@ class DataTable:
         # caught even when the earlier row was already flushed to a shard. Only an ERROR table pays
         # for this; a SUPERSEDE table means to replace rows and keeps no history.
         self._digests: dict[tuple, bytes] | None = (
-            {} if merge_key is not None and on_conflict is OnConflict.ERROR else None
+            {} if primary_key is not None and on_conflict is OnConflict.ERROR else None
         )
 
     def append(self, row: dict) -> None:
@@ -456,11 +384,11 @@ class DataTable:
         self.extend([row])
 
     def _check_conflict(self, row: dict) -> None:
-        """Raise if ``row`` repeats a merge key this session already wrote with a different payload."""
+        """Raise if ``row`` repeats a primary key this session already wrote with a different payload."""
         if self._digests is None:
             return
-        assert self.merge_key is not None
-        key = tuple(row.get(name) for name in self.merge_key)
+        assert self.primary_key is not None
+        key = tuple(row.get(name) for name in self.primary_key)
         digest = _row_digest(row)
         previous = self._digests.get(key)
         if previous is None:
@@ -468,17 +396,17 @@ class DataTable:
             return
         if previous == digest:
             return
-        pairs = ", ".join(f"{name}={row.get(name)!r}" for name in self.merge_key)
-        raise MergeKeyConflict(
-            f"table {self.name!r} already holds a different row for merge key ({pairs}). "
-            f"The reader keeps one row per merge key, so writing both would discard one silently. "
-            f"Widen {self.merge_key} to identify the row, or declare on_conflict=SUPERSEDE to replace it."
+        pairs = ", ".join(f"{name}={row.get(name)!r}" for name in self.primary_key)
+        raise PrimaryKeyConflict(
+            f"table {self.name!r} already holds a different row for primary key ({pairs}). "
+            f"The reader keeps one row per primary key, so writing both would discard one silently. "
+            f"Widen {self.primary_key} to identify the row, or declare on_conflict=SUPERSEDE to replace it."
         )
 
     def extend(self, rows: Iterable[dict]) -> None:
         """Buffer many rows for the next flush (see :meth:`append`).
 
-        Raises :class:`MergeKeyConflict` on an ``ERROR`` table when a row repeats a merge key with a
+        Raises :class:`PrimaryKeyConflict` on an ``ERROR`` table when a row repeats a primary key with a
         different payload. The conflicting row is rejected before it enters the buffer, so the
         exception leaves the table holding exactly the rows that were accepted.
         """

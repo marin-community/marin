@@ -4,13 +4,13 @@
 """Compaction: merge a table's small shards into one sorted, deduplicated next-generation shard.
 
 Compaction is an optimization, not a correctness requirement — a reader deduplicates regardless. It
-streams a k-way merge over the table's shards in merge-key order and writes the surviving rows to the
+streams a k-way merge over the table's shards in primary-key order and writes the surviving rows to the
 next generation, one row group at a time, then optionally deletes the shards it superseded. Because
 the merged rows keep their original ``_seq`` and the new shard has a higher generation, a reader
 prefers it; a crash between the write and the delete leaves both, and dedup still returns one row per
 key.
 
-The merge is bounded in memory. A compacted shard (generation >= 1) was written in merge-key order,
+The merge is bounded in memory. A compacted shard (generation >= 1) was written in primary-key order,
 so it streams a row group at a time; a level-0 shard is one flush (bounded by the writer's row cap),
 so it is sorted in memory. Neither path materializes the whole table, so an archive far larger than
 memory still compacts.
@@ -45,44 +45,44 @@ _COMPACTOR = "compactor"
 # uniform; it also bounds the merge's working set independently of the archive's total size.
 _COMPACT_BATCH_ROWS = ROW_GROUP_ROWS
 
-# One item in the merge heap: (merge-key tuple, generation, seq, row dict). The key sorts the merge;
+# One item in the merge heap: (primary-key tuple, generation, seq, row dict). The key sorts the merge;
 # seq then generation breaks ties so the latest write of a key wins (same rule the reader applies).
 _MergeItem = tuple[tuple, int, int, dict]
 
 
-def _key_tuple(row: dict, merge_key: tuple[str, ...]) -> tuple:
-    """A null-safe, order-stable merge-key tuple: ``None`` sorts before any value without comparing it."""
-    return tuple((row.get(name) is None, row.get(name)) for name in merge_key)
+def _key_tuple(row: dict, primary_key: tuple[str, ...]) -> tuple:
+    """A null-safe, order-stable primary-key tuple: ``None`` sorts before any value without comparing it."""
+    return tuple((row.get(name) is None, row.get(name)) for name in primary_key)
 
 
-def _shard_rows(shard: Shard, unified: pa.Schema, merge_key: tuple[str, ...], pa_fs) -> Iterator[_MergeItem]:
-    """Yield a shard's rows in merge-key order, each tagged for the merge's tie-break.
+def _shard_rows(shard: Shard, unified: pa.Schema, primary_key: tuple[str, ...], pa_fs) -> Iterator[_MergeItem]:
+    """Yield a shard's rows in primary-key order, each tagged for the merge's tie-break.
 
     A level-0 shard is unsorted but bounded by the writer's row cap, so it is sorted in memory; a
-    compacted shard was written in merge-key order, so its row groups stream in order. Reading through
+    compacted shard was written in primary-key order, so its row groups stream in order. Reading through
     the unified schema promotes columns a shard lacks to null.
     """
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
     if shard.generation == 0:
         table = dataset.to_table()
-        sort_columns = [(name, "ascending") for name in merge_key if name in unified.names]
+        sort_columns = [(name, "ascending") for name in primary_key if name in unified.names]
         if sort_columns:
             table = table.sort_by(sort_columns)
         batches = table.to_batches()
     else:
-        # A compacted shard is already in merge-key order; scan it single-threaded so its row groups
+        # A compacted shard is already in primary-key order; scan it single-threaded so its row groups
         # stream in that order (a threaded scan may reorder them, breaking the merge invariant).
         batches = dataset.scanner(use_threads=False).to_batches()
     for batch in batches:
         for row in batch.to_pylist():
-            yield _key_tuple(row, merge_key), shard.generation, row.get(SEQ_COLUMN) or 0, row
+            yield _key_tuple(row, primary_key), shard.generation, row.get(SEQ_COLUMN) or 0, row
 
 
 @dataclass(frozen=True)
 class CompactionResult:
     """What one compaction did: rows written, and rows a later write of the same key replaced.
 
-    ``superseded`` counts inputs that lost their merge key to a higher ``(seq, generation)`` row. It
+    ``superseded`` counts inputs that lost their primary key to a higher ``(seq, generation)`` row. It
     is zero for a table whose keys are unique, so a non-zero count is the signal that supersession
     actually happened rather than an assumption that it did not.
     """
@@ -92,9 +92,9 @@ class CompactionResult:
 
 
 def _merge_dedup(streams: list[Iterator[_MergeItem]], counter: list[int]) -> Iterator[dict]:
-    """Merge per-shard sorted streams into one merge-key-ordered stream, one surviving row per key.
+    """Merge per-shard sorted streams into one primary-key-ordered stream, one surviving row per key.
 
-    Each item already carries its merge-key tuple, so the streams are grouped on that. Losing rows
+    Each item already carries its primary-key tuple, so the streams are grouped on that. Losing rows
     are counted into ``counter[0]`` so the caller can report supersession instead of discarding it
     without trace.
     """
@@ -116,7 +116,7 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> CompactionR
     shards = reader.list_shards(table)
     if not shards:
         return CompactionResult(written=0)
-    merge_key = reader.merge_key(table)
+    primary_key = reader.primary_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
 
     fs, _ = factory.url_to_fs(root)
@@ -125,7 +125,7 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> CompactionR
         [pq.read_schema(shard.path, filesystem=pa_fs) for shard in shards], promote_options="permissive"
     )
 
-    streams = [_shard_rows(shard, unified, merge_key, pa_fs) for shard in shards]
+    streams = [_shard_rows(shard, unified, primary_key, pa_fs) for shard in shards]
     superseded = [0]
     survivors = _merge_dedup(streams, superseded)
     first = next(survivors, None)

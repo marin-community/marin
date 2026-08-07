@@ -158,11 +158,6 @@ def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: st
     }
 
 
-def _backup(tmp_path):
-    """Where a replaced samples table is preserved, keyed by the contract version being replaced."""
-    return lambda version: str(tmp_path / f"backup-v{version}")
-
-
 def _write_jsonl(results, rows: list[dict]):
     path = results / "gsm8k_5shot" / "model" / "samples_gsm8k_20260807.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -217,7 +212,7 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     assert blob == source.read_bytes()
 
     source.unlink()
-    assert rebuild_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path)) == 2
+    assert rebuild_lm_eval_samples(str(results)) == 2
     assert CompositeReader(str(results)).scan("samples").num_rows == 2
 
 
@@ -235,9 +230,9 @@ def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):
         rebuild_lm_eval_samples(results)
 
 
-def test_re_export_replaces_rows_written_under_an_older_contract(tmp_path):
-    # A v3 archive folded both filters onto one key. Re-exporting must replace those rows, not leave
-    # the folded one beside the two new ones -- their merge keys no longer line up.
+def test_export_refuses_an_archive_written_under_an_older_contract(tmp_path):
+    # A v3 archive folded both filters onto one key, and those rows cannot collapse against v4 rows.
+    # finestore does not delete, so the export stops rather than leaving the folded row beside them.
     results = tmp_path / "run" / "results"
     _write_jsonl(
         results,
@@ -249,7 +244,8 @@ def test_re_export_replaces_rows_written_under_an_older_contract(tmp_path):
     export_lm_eval_samples(str(results))
     _stamp_schema_version(results, 3)
 
-    assert export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path)) == 2
+    with pytest.raises(ValueError, match="schema v3"):
+        export_lm_eval_samples(str(results))
     assert CompositeReader(str(results)).scan("samples").num_rows == 2
 
 
@@ -288,65 +284,10 @@ def test_export_leaves_an_archive_it_has_no_source_for(tmp_path):
     assert CompositeReader(str(results)).scan("samples").num_rows == 1
 
 
-def test_export_refuses_to_replace_samples_from_another_mechanism(tmp_path):
-    # An archive holding both mechanisms cannot be brought forward by re-reading the jsonl, because
-    # that only reproduces the lm-eval half. Erroring keeps the other half.
-    results = tmp_path / "run" / "results"
-    _harbor_archive(results, version=3)
-    _write_jsonl(results, [_lm_eval_row(0, "flexible-extract", 1.0, "4")])
-
-    with pytest.raises(ValueError, match="agentic"):
-        export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
-    assert CompositeReader(str(results)).scan("samples").num_rows == 1
-
-
-def test_replacing_a_table_preserves_it_outside_the_run_first(tmp_path):
-    # A contract change is the one moment the archive holds rows nothing else does. They go to the
-    # 30-day bucket before the drop, so a bad rebuild is recoverable rather than terminal.
-    results = tmp_path / "run" / "results"
-    _write_jsonl(results, [_lm_eval_row(0, "strict-match", 0.0, "[invalid]")])
-    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
-    _stamp_schema_version(results, 3)
-
-    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
-
-    preserved = CompositeReader(str(tmp_path / "backup-v3"))
-    assert preserved.scan("samples") is None  # the snapshot is the table itself, not a nested copy
-    assert (tmp_path / "backup-v3" / "_schema.json").exists()
-    assert list((tmp_path / "backup-v3").rglob("*.parquet"))
-
-
-def test_replacing_a_table_refuses_without_somewhere_to_preserve_it(tmp_path):
-    results = tmp_path / "run" / "results"
-    _write_jsonl(results, [_lm_eval_row(0, "strict-match", 0.0, "[invalid]")])
-    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
-    _stamp_schema_version(results, 3)
-
-    with pytest.raises(ValueError, match="superseded_prefix"):
-        export_lm_eval_samples(str(results))
-    assert CompositeReader(str(results)).scan("samples").num_rows == 1
-
-
-def test_an_existing_snapshot_is_never_overwritten(tmp_path):
-    # The first snapshot is the pristine one. A resumed or repeated replace must not put a degraded
-    # table on top of it.
-    results = tmp_path / "run" / "results"
-    backup = tmp_path / "backup-v3"
-    backup.mkdir()
-    (backup / "_schema.json").write_text('{"sentinel": true}')
-    _write_jsonl(results, [_lm_eval_row(0, "strict-match", 0.0, "[invalid]")])
-    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
-    _stamp_schema_version(results, 3)
-
-    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
-
-    assert json.loads((backup / "_schema.json").read_text()) == {"sentinel": True}
-
-
 def test_a_retried_evaluation_indexes_only_the_published_tree(tmp_path):
     # evalchemy copies its temp working directory into the results tree, so a retry leaves a second
     # complete evaluation whose loglikelihoods differ. Only the canonical tree produced the metrics
-    # on the run's record, and indexing both would put two different rows on one merge key.
+    # on the run's record, and indexing both would put two different rows on one primary key.
     results = tmp_path / "run" / "results"
     _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
     scratch = results / "gsm8k_5shot" / "tmpp90h6r1d" / "model" / "samples_gsm8k_20260807.jsonl"
