@@ -117,6 +117,22 @@ author: power
 - Diagnostic control: Ordinary launcher with no supervisor, recovery XLA flags, environment ablation, or profiler/debugger attachment.
 - Babysitter: Codex, two-minute cadence through first progress, then at most 15 minutes.
 
+### 2026-08-07 03:55 UTC - moe-hero-fsdp-nccl2307-2rack-1ppg-supervised-1000-20260807
+
+- Command: `uv run --frozen iris --cluster=marin job run --target-cluster cw-us-east-08a --priority production --no-wait --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 43200 --max-retries 0 --job-name moe-hero-fsdp-nccl2307-2rack-1ppg-supervised-1000-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch_supervised --run-id moe-hero-fsdp-nccl2307-2rack-1ppg-supervised-1000-20260807 --dp-racks 2 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/moe-hero-fsdp-nccl2307-2rack-1ppg-supervised-1000-20260807-coord`; child `/power/moe-hero-fsdp-nccl2307-2rack-1ppg-supervised-1000-20260807-coord/grug-train-moe-hero-fsdp-nccl2307-2rack-1ppg-supervised-1000-20260807`.
+- Git SHA: `fe7ed155797efcebb3ff11b0a678da8b11aac0be`.
+- Dirty tree: No; the commit was pushed before submission.
+- Source bundle: Iris workspace bundle, 9.8 MB; no content ID was reported.
+- Hardware: 32 Iris tasks, four GB200 GPUs and four JAX processes per task, 128 processes/GPUs across two NVL72 racks on `cw-us-east-08a`.
+- W&B: ID and display name `moe-hero-fsdp-nccl2307-2rack-1ppg-supervised-1000-20260807`, project `marin_moe`, group `moe-hero-fsdp`, resume `allow`.
+- Output root: `s3://marin-us-east-02a/marin/grug/moe-hero-fsdp-nccl2307-2rack-1ppg-supervised-1000-20260807/2026.08.07`.
+- Initialization: None.
+- Final step: 1000.
+- Checkpoint policy: Metrics only; no checkpoints.
+- Diagnostics: One supervisor per GPU process with XLA's 60-second execution deadman, progress tracking, and NCCL-init timeout; no environment ablation or debugger.
+- DRI: User; monitor `scratch/20260807-0355_monitoring_state.json` polls every 60 seconds and exits on terminal state, explicit hang/failure signal, 30-minute startup stall, or 15-minute post-progress stall.
+
 ## Event Log
 
 ### 2026-08-07 03:47 UTC - Clean one-process-per-node control stopped
