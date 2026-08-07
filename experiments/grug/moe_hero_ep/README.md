@@ -7,7 +7,7 @@ This self-contained variant is the one-rack EP64 baseline for GB200 NVL72.
 - Model: d6144, 48 layers, 128 routed experts, top-4 routing, and two shared experts of width 3072.
   This is 359.6 B total parameters and 20.9 B active per token.
 - Attention: 48 heads, 12 local and 6 global KV heads, head dimension 128, sequence length 4096,
-  sliding window 512, and every sixth layer full-causal. SConv and fused RoPE are on.
+  sliding window 2048, and every fourth layer full-causal. SConv and fused RoPE are on.
 - Mesh: 64-way expert parallelism across 16 workers with four GB200 GPUs each. Two whole experts
   land on each device.
 - Batch: 1024 sequences.

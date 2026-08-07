@@ -61,7 +61,9 @@ XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
-    os.environ.update(HERO_FSDP_RUNTIME_ENV)
+    # setdefault (not update) so the launch env can override a default -- e.g. -e JAX_ENABLE_PGLE 0.
+    for key, value in HERO_FSDP_RUNTIME_ENV.items():
+        os.environ.setdefault(key, value)
     xla_flags = os.environ.get("XLA_FLAGS", "")
     command_buffer_flag_name = XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG.partition("=")[0]
     if any(flag.partition("=")[0] == command_buffer_flag_name for flag in xla_flags.split()):
@@ -175,6 +177,7 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -194,6 +197,9 @@ def build_tagged_evaluator(
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        # Cast params to compute dtype (bf16): the FA4/CuTe attention path requires bf16 inputs, and eval
+        # runs the f32 master weights unless cast (the train step casts via compute_params).
+        model = mp.cast_to_compute(model)
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -524,6 +530,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 max_seq_len=config.model.max_seq_len,
                 mesh=mesh,
                 eval_cfg=eval_cfg,
+                mp=trainer.mp,
             )
 
         profiler_cfg = trainer.profiler

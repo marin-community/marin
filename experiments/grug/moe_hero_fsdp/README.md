@@ -63,7 +63,7 @@ by the one-day lifecycle policy.
   parallel to `v`), and a **headwise sigmoid attention gate** — all structural / always-on, no flags.
 - **SConv** — Inkling-style depthwise causal 1-D conv at all four sites (`k`, `v`, `attn`, `mlp`),
   identity-init so it's inert at step 0.
-- **Sliding-window attention (512)** with **every 6th layer global** (full-causal). Short layers use
+- **Sliding-window attention (2048)** with **every 4th layer global** (full-causal). Short layers use
   half-RoPE; global layers run **rope-free**. RoPE is the fused single-pass form (`rope_fused`).
 - **Always array-stacked**: all blocks run through one compiled `lax.scan` body (the unrolled
   program OOMs). The per-layer sliding window rides in as precomputed FA4 bound arrays selected in
