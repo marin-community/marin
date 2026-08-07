@@ -28,11 +28,13 @@ from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
+from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
 from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import (
     GrugAblationSweepConfig,
+    GrugEvalConfig,
     GrugRunConfig,
     GrugRunMode,
     GrugTrainerConfig,
@@ -78,6 +80,13 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
     )
 
 
+# Paloma only, matching the EP launcher. `paloma_dataset` and `uncheatable_dataset` both hardcode a
+# `-llama3` cache suffix regardless of the tokenizer argument, so the two suites collide on one cache
+# name; paloma alone keeps the eval sets consistent with the EP arm they are compared against.
+def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
+    return list(paloma_datasets(tokenizer=llama3_tokenizer).values())
+
+
 class HeroThroughputResult(Artifact):
     """Metrics and resumable checkpoints from the rack-scale throughput hero run."""
 
@@ -94,6 +103,8 @@ def _hero_run_config(
     wandb_project: str,
     slim: ArtifactStep[TokenizedCache],
     run_mode: GrugRunMode,
+    validation: list[ArtifactStep[TokenizedCache]] | None = None,
+    eval_every: int = 0,
     watch_interval: int = HERO_WATCH_INTERVAL,
     profile_start_step: int | None = None,
     profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
@@ -151,11 +162,13 @@ def _hero_run_config(
     )
     return GrugRunConfig(
         model=model,
-        data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+        data=mixture(ctx, {slim: 1.0}, validation=validation or [], shuffle=_SLIMPAJAMA_SHUFFLE),
         resources=ctx.runtime_arg("train_resources"),
         optimizer=optimizer,
         trainer=dataclasses.replace(grug_trainer, trainer=trainer),
-        eval=None,
+        # Off by default so a throughput run stays a throughput run. Turn it on to make a run
+        # scoreable: comparing configs needs held-out loss, not train loss.
+        eval=(GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None),
         processes_per_task=HERO_PROCESSES_PER_TASK,
         run_mode=run_mode,
     )
@@ -195,11 +208,27 @@ class _HeroRunParts:
 
 
 def _hero_run_parts(
-    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool, version: str | None
+    *,
+    run_id: str,
+    dp_racks: int,
+    num_steps: int,
+    save_checkpoints: bool,
+    version: str | None,
+    schedule_steps: int | None = None,
 ) -> _HeroRunParts:
     _validate_hero_args(run_id, dp_racks, num_steps)
+    if schedule_steps is not None and schedule_steps <= 0:
+        raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
     batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
-    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
+    # The optimizer heuristic scales learning rate, adam_lr, and epsilon from the token budget
+    # implied by `num_train_steps * batch * seq`, so `schedule_steps` sets the budget the schedule is
+    # built for while `num_steps` bounds the run. That trains the head of a long run's schedule at
+    # the rate the long run would use. An EP/FSDP pair must pass the same value or the two arms train
+    # at different rates. Default keeps them equal, the previous behavior.
+    model, optimizer = build_hero_configs(
+        num_train_steps=schedule_steps if schedule_steps is not None else num_steps,
+        batch_size=batch_size,
+    )
     name = f"grug/{run_id}"
     return _HeroRunParts(
         batch_size=batch_size,
@@ -229,6 +258,8 @@ def build_hero_run(
     run_id: str,
     dp_racks: int,
     num_steps: int,
+    schedule_steps: int | None = None,
+    eval_every: int = 0,
     save_checkpoints: bool = True,
     run_mode: GrugRunMode = GrugRunMode.DEFAULT,
     watch_interval: int = HERO_WATCH_INTERVAL,
@@ -252,7 +283,12 @@ def build_hero_run(
         raise ValueError(f"profile_start_step must fall inside (0, {num_steps}), got {profile_start_step}")
 
     parts = _hero_run_parts(
-        run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, save_checkpoints=save_checkpoints, version=version
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        schedule_steps=schedule_steps,
+        save_checkpoints=save_checkpoints,
+        version=version,
     )
     batch_size = parts.batch_size
     model, optimizer = parts.model, parts.optimizer
@@ -260,6 +296,7 @@ def build_hero_run(
     grug_trainer = parts.grug_trainer
     train_resources = parts.train_resources
     name, version, slim = parts.name, parts.version, parts.slim
+    validation = _validation_datasets() if eval_every > 0 else []
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         return _hero_run_config(
@@ -273,6 +310,8 @@ def build_hero_run(
             wandb_project=wandb_project,
             slim=slim,
             run_mode=run_mode,
+            validation=validation,
+            eval_every=eval_every,
             watch_interval=watch_interval,
             profile_start_step=profile_start_step,
             profile_num_steps=profile_num_steps,
@@ -284,7 +323,7 @@ def build_hero_run(
         artifact_type=HeroThroughputResult,
         run=run_grug,
         build_config=build_config,
-        deps=(slim,),
+        deps=(slim, *validation),
         runtime_args={"train_resources": train_resources},
     )
 
@@ -359,6 +398,23 @@ def build_ablation_sweep_hero_run(
     help="Number of training steps.",
 )
 @click.option(
+    "--eval-every",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Run the paloma suite every N steps. 0 disables evaluation.",
+)
+@click.option(
+    "--schedule-steps",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Build the learning-rate schedule for this many steps instead of --num-steps. The optimizer "
+        "heuristic scales its rates from the implied token budget, so this trains the head of a long "
+        "run's schedule. Defaults to --num-steps."
+    ),
+)
+@click.option(
     "--save-checkpoints/--no-save-checkpoints",
     default=True,
     show_default=True,
@@ -395,6 +451,8 @@ def main(
     run_id: str,
     dp_racks: int,
     num_steps: int,
+    schedule_steps: int | None,
+    eval_every: int,
     save_checkpoints: bool,
     mode: str,
     watch_interval: int,
@@ -405,6 +463,8 @@ def main(
         run_id=run_id,
         dp_racks=dp_racks,
         num_steps=num_steps,
+        schedule_steps=schedule_steps,
+        eval_every=eval_every,
         save_checkpoints=save_checkpoints,
         run_mode=GrugRunMode(mode),
         watch_interval=watch_interval,
