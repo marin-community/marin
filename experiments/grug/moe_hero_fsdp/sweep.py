@@ -42,7 +42,8 @@ PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 # moved ahead of its all-gather, and NVLink SHARP for collectives.
 COMBINED_ENV = {"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"}
 COMBINED_ARGS = ["--small-param-sharding", "fsdp", "--interleave-before-gather"]
-# Wave 5 put the expert-chunk optimum one step below the hero's 4.
+# Wave 5 measured expert_chunks=2 at +1.63% on the unmodified hero. Wave 7 suggests it does not
+# survive stacking with the adopted configuration, which wave 8 settles in-window.
 CHUNKED_ARGS = [*COMBINED_ARGS, "--expert-chunks", "2"]
 # `_apply_hero_fsdp_runtime_defaults` leaves XLA_FLAGS alone once it already names
 # `--xla_gpu_enable_command_buffer`, so an arm can re-enable CUDA graphs without a code change.
@@ -213,30 +214,30 @@ WAVES = {
     # direct substitute for PGLE, which has never produced a non-empty trace on this cluster, so
     # the scheduler has been working from static cost estimates the whole time.
     "w8": [
-        Arm("base", env=COMBINED_ENV, args=CHUNKED_ARGS, note="this wave's control"),
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="adopted configuration; this wave's control"),
+        Arm(
+            "chunkstack",
+            env=COMBINED_ENV,
+            args=CHUNKED_ARGS,
+            note="expert_chunks=2 on top of the adopted configuration, in-window",
+        ),
         Arm(
             "o1",
             env={**COMBINED_ENV, "JAX_OPTIMIZATION_LEVEL": "O1"},
-            args=CHUNKED_ARGS,
+            args=COMBINED_ARGS,
             note="the O1 optimization bundle, including the analytical SOL latency estimator",
         ),
         Arm(
             "solonly",
             env={**COMBINED_ENV, "XLA_FLAGS": f"{SOL_ESTIMATOR_FLAG} {_COMMAND_BUFFER_DISABLED}"},
-            args=CHUNKED_ARGS,
+            args=COMBINED_ARGS,
             note="the SOL estimator alone, to separate it from the rest of O1",
-        ),
-        Arm(
-            "ncclmem",
-            env={**COMBINED_ENV, "XLA_FLAGS": f"{NCCL_MEMORY_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
-            args=CHUNKED_ARGS,
-            note="shrink NCCL's own footprint; freed HBM buys back rematerialization",
         ),
     ],
     # Wave 9: zero-copy collectives, the B200 launch-mode workaround, and the fusion flags.
     # `nccl_user_buffers` needs NCCL_NVLS_ENABLE=1, which the adopted configuration already sets.
     "w9": [
-        Arm("base", env=COMBINED_ENV, args=CHUNKED_ARGS, note="this wave's control"),
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
         Arm(
             "userbuffers",
             env={
@@ -244,19 +245,19 @@ WAVES = {
                 "XLA_FLAGS": f"--xla_gpu_enable_nccl_user_buffers=true {_COMMAND_BUFFER_DISABLED}",
                 "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": "2048",
             },
-            args=CHUNKED_ARGS,
+            args=COMBINED_ARGS,
             note="zero-copy collectives with a preallocated user-buffer pool",
         ),
         Arm(
             "ncclgroup",
             env={**COMBINED_ENV, "NCCL_LAUNCH_MODE": "GROUP"},
-            args=CHUNKED_ARGS,
+            args=COMBINED_ARGS,
             note="B200 workaround for multi-device single-process gangs; this hero is 4 GPUs per process",
         ),
         Arm(
             "fusions",
             env={**COMBINED_ENV, "XLA_FLAGS": f"{FUSION_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
-            args=CHUNKED_ARGS,
+            args=COMBINED_ARGS,
             note="cuDNN GEMM fusion and the custom fusions, against 5.00 s/step of memory-bound fusions",
         ),
     ],
