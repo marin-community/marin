@@ -386,3 +386,19 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Result: the teacher checkpoint, calibration marker, and matching marker exist. All nine branch output roots were empty before submission. Iris accepted `/dlwh/grug-xem-merge-identity-20260807`, `/dlwh/grug-xem-merge-native-20260807`, and `/dlwh/grug-xem-merge-spectral-20260807`. Initial logs explicitly pruned calibration and matching as already succeeded and dispatched only the three conversion children. No initial HBM, OOM, runtime, or dependency-region error appeared.
 - Interpretation: the ablation starts from one fixed teacher/calibration/matching snapshot. Any difference among identity, native, and spectral is downstream of assignment choice; shared dependency reruns cannot confound the comparison.
 - Next action: verify each conversion manifest and immediate validation/MoE error, then babysit Stage A and Stage B through permanent checkpoints and final metrics. The separately owned spectral-plus-prefit controller remains outside this monitor.
+
+### 2026-08-07 13:45 - GRUG-XEM-002 no-prefit Stage-A comparison
+
+- Hypothesis: Native-output or spectral assignment yields a materially better 50-million-token local-recovery trajectory than identity IDs.
+- Commit Hash: launch `75db260d33b1878c101c536dc4d25ebf8d2e8841`; recovery sharding fix `31018a607f`.
+- Result: all three conversions committed step-0 checkpoints and reused the same teacher, calibration, and matching artifacts. Their first Stage-A attempts failed at a jitted source-to-shared assignment gather whose replicated permutation lacked an explicit sharded result. A four-CPU-device regression reproduced the fault. The fix reshards the permutation as replicated and gives the indexed result the batch/expert layout; focused tests and required lint pass. After stop and resubmit, all three Stage-A runs committed 50-million-token artifacts.
+
+  | Assignment | Token-0 validation delta | 50M MoE loss | 50M MoE NRMSE L2 | 50M MoE NRMSE L3 |
+  |---|---:|---:|---:|---:|
+  | Identity | +0.208200 | 0.230568 | 0.248910 | 0.631806 |
+  | Native | +0.186542 | 0.244239 | 0.268925 | 0.645102 |
+  | Spectral | +0.192147 | 0.241543 | 0.258572 | 0.645156 |
+
+  Every aligned checkpoint retained exact teacher router top-1 and top-k agreement and zero capacity overflow. At 50 million tokens spectral improved native MoE loss by 1.1% and layer-2 MoE NRMSE by 3.9%, while layer-3 NRMSE was effectively tied and its token-0 validation spike was 3.0% worse. This does not meet the 15% spectral initialization gate.
+- Interpretation: spectral matching does not clearly overtake native-only matching in the no-prefit arm. The initial native advantage is modest, and identity ultimately has the lowest local-distillation error, showing that Stage-A adaptation can reorder the initializations. Native remains the default initializer because the decision criterion prioritizes immediate conversion quality and does not justify the spectral machinery.
+- Next action: keep the committed Stage-A artifacts, stop identity and spectral before Stage B, and babysit native through the 200-million-token preservation stage. The separately owned spectral-plus-prefit controller remains outside this monitor.
