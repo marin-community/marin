@@ -105,3 +105,10 @@ author: power
 - Evidence: Worker 1 reported a 128-device clique initialization stuck at 02:43:57, XLA's hang watchdog reported `jit_train_step` unfinished after one minute at 02:44:47, and the child aborted at 02:44:57. The supervisor classified `crash returncode=-6 last_step=None`, exhausted its zero-restart budget, and Iris coscheduled the other 31 workers down.
 - Decision: Stop rack-count promotion and retry the environment-variable matrix at the failing two-rack scale, ordered by low expected steady-state cost and relevance to communicator initialization.
 - Next: Start with `NCCL_RUNTIME_CONNECT=0`, then promote a clean arm through 1000 steps before resuming the 4/8/12-rack matrix; continue through the catalog if it wedges.
+
+### 2026-08-07 02:56 UTC - Runtime-connect arm failed before step zero
+
+- Status: `NCCL_RUNTIME_CONNECT=0` did not resolve the 300B run and changed the terminal failure from the XLA watchdog to `std::bad_alloc`.
+- Evidence: The 128-device clique initially warned at 10 seconds, completed after 14.5 seconds, and the first `jit_train_step` then aborted on `std::bad_alloc` at 02:55:24. The supervisor classified `crash returncode=-6 last_step=None`; 31 sibling tasks were coscheduled down.
+- Decision: Reject this arm because it does not reach a training step and continue in low-impact order.
+- Next: Run `CUDA_MODULE_LOADING=EAGER` at the same two-rack shape.
