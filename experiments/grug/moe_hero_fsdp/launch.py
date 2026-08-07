@@ -36,6 +36,7 @@ DEFAULT_WANDB_PROJECT = "marin_moe"
 HERO_FSDP_BATCH_SIZE = 1024
 HERO_NODES_PER_RACK = 16
 HERO_PROCESSES_PER_TASK = 1
+HERO_GPUS_PER_NODE = 4
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
 # This must exceed XLA's 10-minute collective timeout.
@@ -46,6 +47,18 @@ HERO_STALL_DIAGNOSTIC_TIMEOUT = timedelta(seconds=20)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
+
+
+def hero_gb200_nodes(replicas: int) -> ResourceConfig:
+    """Whole gb200-4x nodes: four GPUs, and the CPU, RAM, and disk that come with them."""
+    return ResourceConfig.with_gpu(
+        "GB200",
+        count=HERO_GPUS_PER_NODE,
+        cpu=120,
+        ram="850g",
+        disk="1t",
+        replicas=replicas,
+    )
 
 
 def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
@@ -92,14 +105,7 @@ def build_hero_run(
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
-    train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=4,
-        cpu=120,
-        ram="850g",
-        disk="1t",
-        replicas=HERO_NODES_PER_RACK * dp_racks,
-    )
+    train_resources = hero_gb200_nodes(HERO_NODES_PER_RACK * dp_racks)
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     slim = _slimpajama_6b_dataset()

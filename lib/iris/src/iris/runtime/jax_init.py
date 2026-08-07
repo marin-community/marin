@@ -17,7 +17,7 @@ from enum import StrEnum
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.filesystem import marin_prefix
+from rigging.filesystem import marin_prefix, prefix_join
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
@@ -84,41 +84,22 @@ def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> Non
 
 
 def configure_jax_compilation_cache() -> None:
-    """Set up both compilation caches: JAX's on object storage, XLA's on the node.
+    """Place JAX's compilation cache on object storage and XLA's autotune cache on the node.
 
-    JAX keeps compiled executables in a persistent cache it reads and writes
-    through fsspec, so a ``gs://``/``s3://`` prefix works and is what we want:
-    the cache is written only by process 0 (``jax._src.compiler._cache_write``),
-    so every other process and every later run can only benefit if they share
-    one location. A node-local directory would leave all but one node
-    permanently cold and would lose the cache on every reschedule.
+    The JAX cache defaults to a subdirectory of the active Marin prefix, unless
+    ``JAX_COMPILATION_CACHE_DIR`` or ``jax.config`` already names one. It has to
+    be somewhere every process can read: JAX writes it only from process 0, so a
+    node-local copy would leave every other node cold.
 
-    XLA's per-fusion autotune cache is a different mechanism with the opposite
-    constraint. XLA opens it from C++ through ``tsl::Env``, which an OSS jaxlib
-    registers no object-store filesystem with, so a URL crashes the first
-    compile with "UNIMPLEMENTED: File system scheme ... not implemented". JAX
-    derives that path from ``jax_compilation_cache_dir``, which leaves no way to
-    split the two through JAX's own configuration. So on a remote cache dir we
-    turn JAX's derivation off and set XLA's flag ourselves, pointing it at the
-    node-local Iris cache mount. ``--xla_gpu_per_fusion_autotune_cache_dir`` is
-    on JAX's ``xla_flags_to_exclude_from_cache_key`` list, so naming it in
-    ``XLA_FLAGS`` does not perturb the compilation cache key.
-
-    Autotuning runs only on a compilation-cache miss, so a node-local autotune
-    cache makes misses cheaper without making hits rarer. How much cheaper
-    depends on how much of the model XLA actually autotunes: a four-layer MoE
-    whose matmuls go through QuACK and CUTLASS custom calls showed no measurable
-    difference between a warm and a cold autotune directory.
-
-    An explicit ``JAX_COMPILATION_CACHE_DIR`` or ``jax.config`` setting picks the
-    JAX cache location; otherwise it lands under the cluster's region-local
-    Marin prefix.
+    A remote JAX cache additionally disables JAX's XLA sub-cache derivation,
+    which would otherwise hand XLA's C++ filesystem layer a URL it cannot open,
+    and redirects XLA's per-fusion autotune cache to node-local disk instead.
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
     cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or jax.config.jax_compilation_cache_dir
     if not cache_dir:
-        cache_dir = f"{marin_prefix().rstrip('/')}/{_COMPILATION_CACHE_SUBDIR}"
+        cache_dir = prefix_join(marin_prefix(), _COMPILATION_CACHE_SUBDIR)
         os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
         jax.config.update("jax_compilation_cache_dir", cache_dir)
     logger.info("JAX compilation cache: %s", cache_dir)
@@ -134,9 +115,14 @@ def configure_jax_compilation_cache() -> None:
 def _enable_node_local_xla_autotune_cache() -> None:
     """Point XLA's per-fusion autotune cache at the node-local Iris cache mount.
 
-    Only GPU tasks: the flag exists in a CUDA jaxlib and a TPU or CPU build
-    aborts the process on an unknown XLA flag. An explicit setting in
-    ``XLA_FLAGS`` wins.
+    Set through ``XLA_FLAGS`` rather than JAX's ``jax_persistent_cache_enable_xla_caches``,
+    which derives the path from the compilation cache dir and so cannot put one
+    remote and the other local. The flag is on JAX's
+    ``xla_flags_to_exclude_from_cache_key`` list, so it does not perturb the
+    compilation cache key.
+
+    GPU tasks only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
+    An explicit setting in ``XLA_FLAGS`` wins.
     """
     if TaskResources.from_environment().gpu_count == 0:
         return

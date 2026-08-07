@@ -7,8 +7,13 @@ The hero run's compile is minutes long, so a caching change costs an hour per
 iteration to evaluate. This launcher runs the same ``run_grug`` entrypoint, the
 same ``sonic_cute`` / ``gpu_fa4_cute`` kernels, and the same PGLE and mesh
 wiring against a four-layer model, which brings the loop down to a few minutes
-while keeping every cache key input that matters: XLA flags, PGLE's two-key
-scheme, and the per-fusion autotune sweep.
+while keeping every cache key input that matters: XLA flags, device topology,
+and PGLE's two-key scheme.
+
+Compile time does not scale down with the model, so the probe measures cache
+hits and keys, not the cost of a hero compile. Four layers of custom-call
+matmuls also leave XLA little to autotune, so it is the wrong instrument for
+measuring the per-fusion autotune cache.
 
 Two nodes is the smallest shape that exercises cross-node behavior — JAX writes
 persistent cache entries only from process 0, so a single node cannot show
@@ -29,7 +34,6 @@ import math
 
 import click
 import jmp
-from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
@@ -47,11 +51,13 @@ from rigging.filesystem import marin_temp_bucket, prefix_join
 from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_fsdp.launch import (
     _SLIMPAJAMA_SHUFFLE,
+    HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
     HERO_PROCESS_STALL_TIMEOUT,
     HERO_PROCESSES_PER_TASK,
     HERO_TRAIN_STEP_TIMEOUT,
     _slimpajama_6b_dataset,
+    hero_gb200_nodes,
 )
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
 from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
@@ -64,7 +70,6 @@ DEFAULT_PROBE_NODES = 2
 DEFAULT_PROBE_STEPS = 8
 PROBE_SEQUENCES_PER_DEVICE = 8
 PROBE_OUTPUT_TTL_DAYS = 1
-PROBE_GPUS_PER_NODE = 4
 
 
 class CompileCacheProbeResult(Artifact):
@@ -74,10 +79,9 @@ class CompileCacheProbeResult(Artifact):
 def build_probe_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
     """Build the four-layer probe model.
 
-    Layer count, expert count, and top-k are the only departures from the hero
-    shape that matter for compile time. Head dim, sequence length, sliding
-    window, expert chunking, and both kernel backends are unchanged, so the
-    autotune sweep covers the same fusions.
+    Head dim, sliding window, expert chunking, and both kernel backends match the
+    hero, so the compiled program has the same kinds of fusions and custom calls.
+    Layer and expert counts are cut to keep an iteration under five minutes.
     """
     hidden_dim = 2048
     model = GrugModelConfig(
@@ -131,7 +135,7 @@ def build_compile_cache_probe_run(
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
-    batch_size = nodes * PROBE_GPUS_PER_NODE * PROBE_SEQUENCES_PER_DEVICE
+    batch_size = nodes * HERO_GPUS_PER_NODE * PROBE_SEQUENCES_PER_DEVICE
     model, optimizer = build_probe_configs(num_train_steps=num_steps, batch_size=batch_size)
     # One DP replica per node: parameters are FSDP-sharded over each node's four
     # GPUs and replicated across nodes, the hero's rack-local layout at node scale.
@@ -146,14 +150,7 @@ def build_compile_cache_probe_run(
         replica_axis_size=nodes,
         sharding_dump_path=None,
     )
-    train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=PROBE_GPUS_PER_NODE,
-        cpu=120,
-        ram="850g",
-        disk="1t",
-        replicas=nodes,
-    )
+    train_resources = hero_gb200_nodes(nodes)
     name = f"grug/compile-cache-probe/{run_id}"
     version = resolve_version(name, version)
     step_name = user_namespaced_name(name, version)

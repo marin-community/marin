@@ -370,10 +370,8 @@ def _disable_xla_autotune_subcache(env: dict) -> None:
     XLA's C++ ``tsl::Env`` which only supports local paths, so it cannot follow
     the compilation cache onto ``gs://`` or ``s3://``.
 
-    This is the fallback for backends outside an Iris task.  Iris tasks reach
-    ``iris.runtime.jax_init.configure_jax_compilation_cache``, which applies the
-    same guard and additionally redirects XLA's autotune cache to node-local
-    disk instead of leaving it off.
+    This covers backends that never reach Iris's JAX init, which applies the
+    same guard and redirects the autotune cache to node-local disk.
     """
     cache_dir = env.get("JAX_COMPILATION_CACHE_DIR", "")
     if "://" not in cache_dir:
