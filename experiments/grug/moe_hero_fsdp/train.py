@@ -18,6 +18,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from iris.cluster.runtime.env import UV_CACHE_PATH
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -51,9 +52,25 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 logger = logging.getLogger(__name__)
 
+# Iris backs this mount with node-local NVMe through a hostPath, so entries outlive the
+# pod and a rerun on the same node skips XLA compilation entirely. It also replaces the
+# object-store default from `configure_jax_compilation_cache`, which forces JAX to disable
+# XLA's per-fusion autotune cache: XLA reads that directory from C++, where `gs://`-style
+# URLs are not a supported filesystem scheme.
+HERO_FSDP_COMPILATION_CACHE_DIR = f"{UV_CACHE_PATH}/jax-compilation-cache"
+# Nothing prunes the node cache directory, and every distinct step shape, PGLE pass, and
+# watch variant adds an entry. Bound it so a long series of runs cannot fill the NVMe.
+HERO_FSDP_COMPILATION_CACHE_MAX_BYTES = 100 * 1024**3
+
 HERO_FSDP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "1",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
+}
+# Applied only when unset: JAX_COMPILATION_CACHE_DIR is the documented way to redirect the
+# cache, so a value chosen for a specific run has to survive.
+HERO_FSDP_COMPILATION_CACHE_ENV = {
+    "JAX_COMPILATION_CACHE_DIR": HERO_FSDP_COMPILATION_CACHE_DIR,
+    "JAX_COMPILATION_CACHE_MAX_SIZE": str(HERO_FSDP_COMPILATION_CACHE_MAX_BYTES),
 }
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
@@ -62,6 +79,8 @@ XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
     os.environ.update(HERO_FSDP_RUNTIME_ENV)
+    for name, value in HERO_FSDP_COMPILATION_CACHE_ENV.items():
+        os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "")
     command_buffer_flag_name = XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG.partition("=")[0]
     if any(flag.partition("=")[0] == command_buffer_flag_name for flag in xla_flags.split()):
