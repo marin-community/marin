@@ -5,7 +5,10 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from experiments.grug.moe_hero_fsdp import launch, train
+import jax.numpy as jnp
+from levanter.grug.attention import AttentionMask
+
+from experiments.grug.moe_hero_fsdp import launch, model, train
 
 
 def test_build_hero_run_uses_run_id_argument(monkeypatch):
@@ -43,3 +46,19 @@ def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypa
         train.run_grug(config)
 
         assert os.environ["XLA_FLAGS"] == explicit_flags
+
+
+def test_layer_attention_masks_preserve_thd_segment_metadata():
+    mask = AttentionMask.causal().with_segment_ids(
+        jnp.array([[0, 0, 1, 1, -1, -1]], dtype=jnp.int32),
+        max_segments=3,
+    )
+
+    short_mask, long_mask = model._layer_attention_masks(mask, sliding_window=512)
+
+    assert short_mask.thd_segment_metadata is mask.thd_segment_metadata
+    assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
+    assert short_mask.segment_ids is mask.segment_ids
+    assert long_mask.segment_ids is mask.segment_ids
+    assert short_mask.sliding_window == 512
+    assert long_mask.sliding_window is None
