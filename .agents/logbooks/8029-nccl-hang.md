@@ -133,7 +133,48 @@ author: power
 - Diagnostics: One supervisor per GPU process with XLA's 60-second execution deadman, progress tracking, and NCCL-init timeout; no environment ablation or debugger.
 - DRI: User; monitor `scratch/20260807-0355_monitoring_state.json` polls every 60 seconds and exits on terminal state, explicit hang/failure signal, 30-minute startup stall, or 15-minute post-progress stall.
 
+### 2026-08-07 04:13 UTC - mhf-2rack-1ppg-clean-20260807
+
+- Command: `... --job-name mhf-2rack-1ppg-clean-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch --run-id mhf-2rack-1ppg-clean-20260807 --dp-racks 2 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/mhf-2rack-1ppg-clean-20260807-coord`.
+- Git SHA: `f1ee764317`.
+- Hardware: 32 Iris tasks, four GB200 GPUs and four JAX processes per task, 128 processes across two NVL72 racks on `cw-us-east-08a`.
+- Diagnostic control: One process per GPU, no supervisor, no recovery XLA flags, no environment ablation.
+- Purpose: Separate the process topology from the recovery instrumentation as the cause of the pre-step-0 `std::bad_alloc`.
+
+### 2026-08-07 04:16 UTC - mhf-2rack-1ppg-sup-notrack-20260807
+
+- Command: as above with `-e XLA_FLAGS "--xla_gpu_execution_progress_tracking=0"` and `launch_supervised`.
+- Job: `/power/mhf-2rack-1ppg-sup-notrack-20260807-coord`.
+- Environment ablation: `XLA_FLAGS=--xla_gpu_execution_progress_tracking=0`.
+- Purpose: Test whether the deadman's thunk-reporting path, not the trainer, threw the allocation errors.
+
+### 2026-08-07 04:24 UTC - mhf-2rack-1ppg-sup-dm600-20260807
+
+- Command: as above with `-e XLA_FLAGS "--xla_gpu_execution_progress_tracking=0 --xla_gpu_execution_terminate_timeout=600s"`.
+- Job: `/power/mhf-2rack-1ppg-sup-dm600-20260807-coord`.
+- Purpose: Confirm the supervised path clears step 0 once the deadman exceeds a cold first execution.
+
+### 2026-08-07 04:40 UTC - mhf-8rack-1ppg-sup-base-20260807
+
+- Command: `... --job-name mhf-8rack-1ppg-sup-base-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch_supervised --run-id mhf-8rack-1ppg-sup-base-20260807 --dp-racks 8 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/mhf-8rack-1ppg-sup-base-20260807-coord`.
+- Git SHA: `bab625f751`.
+- Hardware: 128 Iris tasks, 512 GPUs across eight NVL72 racks on `cw-us-east-08a`.
+- Detection: In-code defaults — 600s XLA execution deadman, thunk reporting off, no restart budget.
+- Purpose: Reproduce the #7344 wedge at the scale where it is documented (steps 17-200).
+
 ## Event Log
+
+### 2026-08-07 04:38 UTC - Recovery instrumentation, not the model, caused every pre-step-0 failure
+
+- Finding: `--xla_gpu_execution_progress_tracking=8` is "number of thunks to report in progress tracking on execution timeout". It runs only when the deadman fires, and on a module this size it throws `std::bad_alloc` / `std::length_error`, replacing the abort diagnostic with an allocation error.
+- Finding: The 60s per-execution deadman cannot survive step 0 at rack scale. The first `jit_train_step` execution measured 261s at 2 racks (loop entry 04:32:16, step 1 at 04:36:38); it carries `ncclCommSplit` across every rank, lazy CUDA module loading, and a PGLE profile pass.
+- Evidence: A thread dump of the clean run's rank 0 four minutes into the first `train_step` showed `active+gil` in `jax/_src/interpreters/partial_eval.py`, i.e. jaxpr construction, not a blocked collective.
+- Consequence: The 02:46, 02:56 (`NCCL_RUNTIME_CONNECT=0`), 03:03 (`CUDA_MODULE_LOADING=EAGER`), 03:23 (failsafe-only) and 03:55 (one process per GPU) arms all aborted on their own deadman before step 1 and carry no ablation verdict. `CUDA_MODULE_LOADING=EAGER` in particular is untested, and lazy module loading resolves inside exactly the first execution those runs never survived.
+- Fix: `bab625f751` sets the hero deadman to 600s and thunk reporting to 0, with a regression test pinning the deadman above the measured first execution.
+- Result: One process per GPU at 300B is healthy — 18.5 s/step, loss 6.59 at step 25 on the clean 2-rack control.
+
 
 ### 2026-08-07 03:47 UTC - Clean one-process-per-node control stopped
 
