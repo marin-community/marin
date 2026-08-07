@@ -565,7 +565,7 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
     count = 0
     try:
         for path in StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob():
-            rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+            rows = [json.loads(line) for line in path.read_text().split("\n") if line.strip()]
             if not rows:
                 logger.warning("samples file %s is empty; skipping archive export", path)
                 continue

@@ -68,6 +68,11 @@ def test_groups_roll_up_mixed_launch_status(store):
     assert groups["snowball-2026.07.20"]["n_succeeded"] == 4
 
 
+def test_status_rollup_does_not_invent_evaluator_failure():
+    assert server._status_rollup({"artifact_failed", "infra_failed"}) == "mixed"
+    assert server._status_rollup({"failed", "artifact_failed", "infra_failed"}) == "failed"
+
+
 def test_fetch_runs_filters_and_get_record_round_trip(store):
     tootsie = store.fetch_runs(model="tootsie-8b")
     assert {row["status"] for row in tootsie} == {"succeeded", "failed", "infra_failed"}
