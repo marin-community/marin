@@ -1,0 +1,100 @@
+diff --git a/quack/operand_transform/kinds.py b/quack/operand_transform/kinds.py
+index 4d8b01d..d7d95f1 100644
+--- a/quack/operand_transform/kinds.py
++++ b/quack/operand_transform/kinds.py
+@@ -64,10 +64,10 @@ class _StripAux:
+
+     multicast = False  # small boxes: dup loads beat mcast box-splitting
+
+-    def __init__(self, gemm, gran_m, gran_k):
++    def __init__(self, gemm, gran_m, gran_k, dtype=None):
+         self.gemm = gemm
+         self.gran_m, self.gran_k = gran_m, gran_k
+-        self.dtype = gemm.mma_a_dtype
++        self.dtype = gemm.mma_a_dtype if dtype is None else dtype
+
+     def _geometry(self):
+         # resolved LAZILY — tile_K is 0 at transform-ctor time when the ctor
+@@ -114,10 +114,11 @@ class _StripArg:
+     slots share a value falls out of the layout composition — any
+     granularities dividing the tile work, including quad-varying ones."""
+
+-    def __init__(self, gemm, gran_m, gran_k):
++    def __init__(self, gemm, gran_m, gran_k, dtype=None):
+         self.gemm = gemm
+         self.gran_m, self.gran_k = gran_m, gran_k  # geometry resolves lazily
+-        self.aux = _StripAux(gemm, gran_m, gran_k)
++        self.value_dtype = gemm.mma_a_dtype if dtype is None else dtype
++        self.aux = _StripAux(gemm, gran_m, gran_k, self.value_dtype)
+         self._tCsS = None
+         self._rvals = None
+
+@@ -148,7 +149,7 @@ class _StripArg:
+         # (duplicates share a register) and compacts the rest, so the cache
+         # holds exactly the per-lane distinct values
+         self._rvals = cute.make_rmem_tensor(
+-            self._tCsS[None, None, None, 0].layout, gemm.mma_a_dtype
++            self._tCsS[None, None, None, 0].layout, self.value_dtype
+         )
+
+     @cute.jit
+@@ -188,11 +189,12 @@ class StripKind:
+
+     fn_facing = True
+
+-    def __init__(self, gran_m, gran_k):
++    def __init__(self, gran_m, gran_k, dtype=None):
+         self.gran_m, self.gran_k = gran_m, gran_k
++        self.dtype = dtype
+
+     def device_arg(self, gemm):
+-        return _StripArg(gemm, self.gran_m, self.gran_k)
++        return _StripArg(gemm, self.gran_m, self.gran_k, self.dtype)
+
+     def host_view(self, A, value, tile_m, tile_k):
+         """The user tensor is (outer-groups, inner-groups) row-major with the
+@@ -204,7 +206,13 @@ class StripKind:
+         k-tile) — see :class:`_StripAux`)."""
+         granm, g_m, grank, g_k, k_inner = strip_geometry(self.gran_m, self.gran_k, tile_m, tile_k)
+         m, k = A.shape
+-        assert value.dtype == A.dtype and value.element_size() == 2
++        if self.dtype is None:
++            expected_dtype = A.dtype
++        else:
++            assert self.dtype is cutlass.Float32, "only FP32 non-MMA strips are implemented"
++            expected_dtype = torch.float32
++        assert value.dtype == expected_dtype
++        assert value.element_size() == (A.element_size() if self.dtype is None else 4)
+         assert value.is_contiguous(), "strip operands need a contiguous (outer, inner) tensor"
+         assert m % tile_m == 0, f"M ({m}) must be divisible by tile_M ({tile_m})"
+         rk = -(-k // tile_k)
+@@ -236,7 +244,8 @@ class StripKind:
+             shape, stride = (g_k, g_m, gm, rk, 1), (1, sym8(), sym8(), g_k, 1)
+         else:
+             shape, stride = (g_m, g_k, gm, rk, 1), (1, sym8(), g_m, sym8(), 1)
+-        return cute.runtime.make_fake_tensor(a_dtype, shape, stride=stride, assumed_align=16)
++        dtype = a_dtype if self.dtype is None else self.dtype
++        return cute.runtime.make_fake_tensor(dtype, shape, stride=stride, assumed_align=16)
+
+
+ class SeedKind:
+@@ -266,5 +275,6 @@ ARG_KINDS = {
+     "colvec_k32": StripKind(gran_m=1, gran_k=32),
+     "colvec_k16": StripKind(gran_m=1, gran_k=16),
+     "kvec_m64": StripKind(gran_m=64, gran_k=1),
++    "colvec_ktile_fp32": StripKind(gran_m=1, gran_k=None, dtype=cutlass.Float32),
+     "seed_i64x2": SeedKind(),
+ }
+diff --git a/quack/operand_transform/transform.py b/quack/operand_transform/transform.py
+index 3a73d57..f34c669 100644
+--- a/quack/operand_transform/transform.py
++++ b/quack/operand_transform/transform.py
+@@ -445,7 +445,7 @@ class TransformAValue(TransformA):
+                     # per-element operand values, staged from the kind's
+                     # register cache (folds to selects; fragment dtype so
+                     # the fn math stays packed)
+-                    sv = cute.make_rmem_tensor((vec,), buf.element_type)
++                    sv = cute.make_rmem_tensor((vec,), impl.value_dtype)
+                     for i in cutlass.range_constexpr(vec):
+                         sv[i] = impl.element(coords[c * vec + i], m, b)
+                     args.append(sv.load())

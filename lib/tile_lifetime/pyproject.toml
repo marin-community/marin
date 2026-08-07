@@ -1,0 +1,29 @@
+[build-system]
+requires = ["uv_build>=0.7.19,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "tile_lifetime"
+
+[project]
+name = "marin-tile-lifetime"
+version = "0.1.0"
+description = "Research compiler for Transformer tile-lifetime execution plans"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jax==0.10.1",
+    "numpy>=2.0",
+]
+
+[dependency-groups]
+test = [
+    "pytest>=8.4",
+    "pytest-timeout",
+]
+
+[tool.pytest.ini_options]
+timeout = 30
+timeout_method = "thread"
+addopts = "--durations=10 -v --import-mode=importlib"
+pythonpath = ["src", "tests"]

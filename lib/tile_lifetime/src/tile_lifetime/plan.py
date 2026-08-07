@@ -1,0 +1,311 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Inspectable execution-plan representation."""
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+from tile_lifetime.ir import DType
+
+
+class NumericalPolicy(StrEnum):
+    """Finite-precision transformations permitted by a compilation."""
+
+    BITWISE_EXACT = "bitwise_exact"
+    ALLOW_ROUNDING_REORDER = "allow_rounding_reorder"
+
+
+class NumericalEquivalence(StrEnum):
+    """Numerical relationship between source and transformed programs."""
+
+    BITWISE_EXACT = "bitwise_exact"
+    ALGEBRAICALLY_EXACT = "algebraically_exact"
+
+
+class AttachmentSite(StrEnum):
+    """Tile lifetime where an operation executes."""
+
+    GEMM_PROLOGUE = "gemm_prologue"
+    GEMM_EPILOGUE = "gemm_epilogue"
+    ATTENTION_SCORE_TRANSFORM = "attention_score_transform"
+    ATTENTION_ONLINE_UPDATE = "attention_online_update"
+    ATTENTION_OUTPUT_TRANSFORM = "attention_output_transform"
+    AUXILIARY_REDUCTION = "auxiliary_reduction"
+    MATERIALIZED_TRANSFORM = "materialized_transform"
+
+
+class MaterializationDisposition(StrEnum):
+    """Physical disposition of a logical or synthesized value."""
+
+    MATERIALIZE = "materialize"
+    ALIAS = "alias"
+    PROLOGUE_ONLY = "prologue_only"
+    EPILOGUE_ONLY = "epilogue_only"
+    PARTIAL_REDUCTION_ONLY = "partial_reduction_only"
+    INTERNAL_ATTENTION_STATE = "internal_attention_state"
+
+
+@dataclass(frozen=True)
+class Attachment:
+    """A semantic operation placed in a skeleton's tile lifetime."""
+
+    operation: str
+    site: AttachmentSite
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class GemmSkeleton:
+    """Fixed GEMM mainloop with a programmable epilogue."""
+
+    name: str
+    input: str
+    weight: str
+    output: str
+    shape: tuple[int, int, int]
+    accumulation_dtype: DType
+    backend: str | None = None
+    input_layout: str | None = None
+    output_layout: str | None = None
+    physical_tile_shape: tuple[int, int, int] | None = None
+    cluster_shape: tuple[int, int, int] | None = None
+    pingpong: bool | None = None
+    prologue: tuple[Attachment, ...] = ()
+    epilogue: tuple[Attachment, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReductionSkeleton:
+    """Small reduction over tile partial statistics."""
+
+    name: str
+    input: str
+    output: str
+    operator: str
+    reduction_dtype: DType
+
+
+@dataclass(frozen=True)
+class StreamingAttentionSkeleton:
+    """Finite-family exact online-softmax attention skeleton."""
+
+    name: str
+    query: str
+    key: str
+    value: str
+    output: str
+    score_value: str
+    probability_value: str
+    query_block_size: int
+    key_value_block_size: int
+    head_dimension: int
+    query_heads: int
+    key_value_heads: int
+    causal: bool
+    scale: float
+    backend: str
+    input_layout: str
+    output_layout: str
+    pipeline_stages: int
+    producer_threads: int
+    consumer_threads: int
+    pack_gqa: bool
+    mma_pv_is_rs: bool
+    intra_warpgroup_overlap: bool
+    persistent_scheduler: bool
+    register_estimate: int | None
+    online_state: tuple[str, ...]
+    attachments: tuple[Attachment, ...] = ()
+
+
+@dataclass(frozen=True)
+class TransformSkeleton:
+    """Fallback materialized tensor transformation."""
+
+    name: str
+    operation: str
+    inputs: tuple[str, ...]
+    output: str
+
+
+class PersistentTaskPlacement(StrEnum):
+    """Physical worker domain assigned to one persistent MoE task."""
+
+    COMMUNICATION_SM = "communication_sm"
+    CLUSTER = "cluster"
+    CTA_LOCAL = "cta_local"
+
+
+@dataclass(frozen=True)
+class PersistentTaskRole:
+    """One visible task in an expert-parallel persistent schedule."""
+
+    name: str
+    placement: PersistentTaskPlacement
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    waits_for: tuple[str, ...] = ()
+    signals: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PersistentWorkerRole:
+    """A specialized worker group used by the persistent kernel."""
+
+    name: str
+    count: int
+    responsibilities: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReadinessEvent:
+    """Global readiness counter connecting persistent tasks."""
+
+    name: str
+    producers: tuple[str, ...]
+    consumers: tuple[str, ...]
+    granularity: str
+
+
+@dataclass(frozen=True)
+class PaddedExpertSchedule:
+    """Bounded dispatch schedule grouped into padded local-expert segments."""
+
+    all_gathered_expert_indices: str
+    peer_rank: str
+    peer_token_index: str
+    padded_token_count: str
+    tokens_per_local_expert: str
+    capacity: int
+    capacity_factor: int
+    expert_padding: int
+
+
+@dataclass(frozen=True)
+class ExpertParallelMoESkeleton:
+    """Explicit shared-and-routed expert program for a persistent kernel family."""
+
+    name: str
+    input: str
+    output: str
+    router_logits: str
+    expert_indices: str
+    router_weights: str
+    top_k: int
+    normalize_router_weights: bool
+    routed_precision: str
+    local_token_count: int
+    hidden_size: int
+    intermediate_size: int
+    global_experts: int
+    local_experts: int
+    shared_experts: int
+    expert_parallel_size: int
+    shared_gate_weight: str
+    shared_up_weight: str
+    shared_down_weight: str
+    routed_gate_weight: str
+    routed_up_weight: str
+    routed_down_weight: str
+    shared_gate_buffer: str
+    shared_up_buffer: str
+    shared_hidden_buffer: str
+    shared_output_buffer: str
+    dispatch_send_buffer: str
+    routed_input_buffer: str
+    routed_gate_buffer: str
+    routed_up_buffer: str
+    routed_hidden_buffer: str
+    routed_output_buffer: str
+    combine_receive_buffer: str
+    swiglu_operation: str
+    schedule: PaddedExpertSchedule
+    readiness_events: tuple[ReadinessEvent, ...]
+    task_roles: tuple[PersistentTaskRole, ...]
+    worker_roles: tuple[PersistentWorkerRole, ...]
+    communication_sm_count: int
+    minibatch_size: int
+    macrobatch_size: int
+    cluster_size: int
+    threads_per_cluster_block: int
+    grouped_gemm_tile: tuple[int, int, int]
+    swiglu_tile: tuple[int, int]
+    dispatch_tile: tuple[int, int]
+    combine_tile: tuple[int, int]
+    backend: str
+    backend_revision: str
+
+
+ExecutionSkeleton = (
+    GemmSkeleton | ReductionSkeleton | StreamingAttentionSkeleton | TransformSkeleton | ExpertParallelMoESkeleton
+)
+
+
+@dataclass(frozen=True)
+class MaterializationRecord:
+    """Disposition selected for one logical or synthesized value."""
+
+    value: str
+    shape: tuple[int, ...]
+    dtype: DType
+    disposition: MaterializationDisposition
+    reason: str
+    alias_of: str | None = None
+
+
+@dataclass(frozen=True)
+class RewriteExplanation:
+    """Structured proof and tradeoff record for one rewrite."""
+
+    name: str
+    applied: bool
+    original_fragment: tuple[str, ...]
+    transformed_fragment: tuple[str, ...]
+    semantic_properties: tuple[str, ...]
+    legality_checks: tuple[str, ...]
+    estimated_benefit: str
+    numerical_equivalence: NumericalEquivalence
+    numerical_effect: str
+    rejection_reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RegionPlan:
+    """Selected skeleton sequence, materializations, and rewrite evidence."""
+
+    skeletons: tuple[ExecutionSkeleton, ...]
+    materializations: tuple[MaterializationRecord, ...]
+    rewrites: tuple[RewriteExplanation, ...]
+
+    @property
+    def activation_materializations(self) -> tuple[MaterializationRecord, ...]:
+        """Return activation-sized values written to global memory."""
+        return tuple(
+            record
+            for record in self.materializations
+            if record.disposition is MaterializationDisposition.MATERIALIZE and len(record.shape) >= 2
+        )
+
+    @property
+    def sequence_squared_materializations(self) -> tuple[MaterializationRecord, ...]:
+        """Return materialized logical scores or probabilities from attention skeletons."""
+        values = {
+            value
+            for skeleton in self.skeletons
+            if isinstance(skeleton, StreamingAttentionSkeleton)
+            for value in (skeleton.score_value, skeleton.probability_value)
+        }
+        return tuple(
+            record
+            for record in self.materializations
+            if record.value in values and record.disposition is MaterializationDisposition.MATERIALIZE
+        )
+
+    def materialization(self, value: str) -> MaterializationRecord:
+        """Return the disposition for one named value."""
+        matches = tuple(record for record in self.materializations if record.value == value)
+        if len(matches) != 1:
+            raise KeyError(f"expected one materialization record for {value!r}, found {len(matches)}")
+        return matches[0]

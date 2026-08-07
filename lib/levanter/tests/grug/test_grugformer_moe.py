@@ -14,7 +14,11 @@ from haliax.nn.ragged_dot import ragged_dot
 
 import levanter.grug.grug_moe as grug_moe
 from levanter.grug._moe.common import _prepare_moe_dispatch, _prepare_moe_dispatch_indices_with_assignment_ids
-from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
+from levanter.grug._moe.ep_deepep import (
+    _collapse_deepep_local_assignments,
+    _deepep_assignment_capacity,
+    _pack_deepep_local_assignments,
+)
 from levanter.grug._moe.sonic import sonic_gather_sum
 from levanter.grug.grug_moe import (
     MoEExpertMlp,
@@ -225,6 +229,156 @@ def test_deepep_local_assignment_packing_uses_local_expert_ids():
     )
     np.testing.assert_allclose(np.asarray(local_assignments.x_dispatch[3:]), 0, rtol=0, atol=0)
     np.testing.assert_allclose(np.asarray(local_assignments.assignment_weights[3:]), 0, rtol=0, atol=0)
+
+
+def test_deepep_local_assignment_collapse_uses_fixed_route_slot_order_in_fp32():
+    recv_capacity = 3
+    topk = 3
+    recv_x = jnp.arange(recv_capacity * 2, dtype=jnp.float32).reshape(recv_capacity, 2)
+    recv_topk_idx = jnp.array(
+        [
+            [2, 0, 1],
+            [1, -1, 0],
+            [0, 1, 2],
+        ],
+        dtype=jnp.int32,
+    )
+    recv_topk_weights = jnp.array(
+        [
+            [1.0, 1.0, 1.0],
+            [0.25, 0.0, 0.75],
+            [1.0, 1.0, 1.0],
+        ],
+        dtype=jnp.float32,
+    )
+    assignments = _pack_deepep_local_assignments(
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        local_experts=3,
+        num_recv_tokens=jnp.array(2, dtype=jnp.int32),
+    )
+
+    route_values = jnp.array(
+        [
+            [1.0e4, 3.0],
+            [-1.0e4, 5.0],
+            [1.0, 7.0],
+            [11.0, 13.0],
+            [0.0, 0.0],
+            [17.0, 19.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+        ],
+        dtype=jnp.bfloat16,
+    )
+    out_dispatch = jnp.take(route_values, assignments.assignment_positions, axis=0)
+
+    @jax.jit
+    def collapse(out):
+        return _collapse_deepep_local_assignments(
+            out,
+            assignments.assignment_positions,
+            assignments.assignment_valid,
+            recv_topk_weights,
+            recv_capacity=recv_capacity,
+            num_recv_tokens=jnp.array(2, dtype=jnp.int32),
+        )
+
+    actual = collapse(out_dispatch)
+    repeated = collapse(out_dispatch)
+    expected_fp32 = jnp.zeros((recv_capacity, route_values.shape[1]), dtype=jnp.float32)
+    for route_slot in range(topk):
+        expected_fp32 = (
+            expected_fp32
+            + route_values.reshape(recv_capacity, topk, -1)[:, route_slot].astype(jnp.float32)
+            * recv_topk_weights[:, route_slot, None]
+        )
+    expected = jnp.where(jnp.arange(recv_capacity)[:, None] < 2, expected_fp32, 0).astype(route_values.dtype)
+
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+    np.testing.assert_array_equal(np.asarray(repeated), np.asarray(expected))
+
+
+def test_deepep_local_assignment_compaction_bounds_capacity_and_reports_exact_overflow():
+    local_tokens = 2
+    recv_capacity = 5
+    num_recv_tokens = 4
+    topk = 3
+    hidden = 2
+    assignment_capacity = _deepep_assignment_capacity(
+        local_tokens=local_tokens,
+        topk=topk,
+        capacity_factor=1.0,
+    )
+    assert assignment_capacity == 6
+    assert assignment_capacity < recv_capacity * topk
+
+    recv_x = jnp.arange(recv_capacity * hidden, dtype=jnp.float32).reshape(recv_capacity, hidden)
+    recv_topk_idx = jnp.array(
+        [
+            [2, 0, 1],
+            [1, -1, 0],
+            [0, 2, 1],
+            [-1, 1, 2],
+            [0, 1, 2],
+        ],
+        dtype=jnp.int32,
+    )
+    recv_topk_weights = jnp.array(
+        [
+            [0.2, 0.3, 0.5],
+            [0.6, 0.0, 0.4],
+            [0.25, 0.5, 0.25],
+            [0.0, 0.75, 0.25],
+            [0.1, 0.2, 0.7],
+        ],
+        dtype=jnp.float32,
+    )
+    route_values = jnp.arange(recv_capacity * topk * hidden, dtype=jnp.float32).reshape(recv_capacity, topk, hidden)
+
+    @jax.jit
+    def compact_and_merge(values):
+        assignments = _pack_deepep_local_assignments(
+            recv_x,
+            recv_topk_idx,
+            recv_topk_weights,
+            local_experts=3,
+            num_recv_tokens=jnp.array(num_recv_tokens, dtype=jnp.int32),
+            assignment_capacity=assignment_capacity,
+        )
+        out_dispatch = jnp.take(values.reshape(-1, hidden), assignments.assignment_positions, axis=0)
+        recv_out = _collapse_deepep_local_assignments(
+            out_dispatch,
+            assignments.assignment_positions,
+            assignments.assignment_valid,
+            recv_topk_weights,
+            recv_capacity=recv_capacity,
+            num_recv_tokens=jnp.array(num_recv_tokens, dtype=jnp.int32),
+        )
+        return (
+            recv_out,
+            assignments.assignment_positions,
+            assignments.assignment_valid,
+            assignments.overflow_assignments,
+        )
+
+    actual, selected_positions, selected_valid, overflow = compact_and_merge(route_values)
+    assert int(overflow) == 4
+    assert selected_positions.shape == (assignment_capacity,)
+
+    selected_mask = jnp.zeros((recv_capacity * topk,), dtype=jnp.bool_)
+    selected_mask = selected_mask.at[selected_positions].set(selected_valid).reshape(recv_capacity, topk)
+    expected = jnp.zeros((recv_capacity, hidden), dtype=jnp.float32)
+    for route_slot in range(topk):
+        expected = expected + jnp.where(
+            selected_mask[:, route_slot, None],
+            route_values[:, route_slot] * recv_topk_weights[:, route_slot, None],
+            0,
+        )
+
+    np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=0, atol=0)
 
 
 def test_prepare_moe_dispatch_indices_match_materialized_dispatch():

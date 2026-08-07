@@ -206,6 +206,7 @@ members = [
     "marin-levanter",
     "marin-rigging",
     "marin-root",
+    "marin-tile-lifetime",
     "marin-zephyr",
 ]
 constraints = [
@@ -5240,6 +5241,33 @@ requires-dist = [
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "watchdog" },
+]
+
+[[package]]
+name = "marin-tile-lifetime"
+version = "0.1.0"
+source = { editable = "lib/tile_lifetime" }
+dependencies = [
+    { name = "jax" },
+    { name = "numpy" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jax", specifier = "==0.10.1" },
+    { name = "numpy", specifier = ">=2.0" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]
