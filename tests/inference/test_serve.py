@@ -184,28 +184,11 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
     assert "vllm" not in script
 
 
-def test_isolated_cuda_vllm_upstream_provisions_cuda_compiler():
-    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
-    cmd = launcher.command()
-    env = launcher.env()
-    requirements = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--with"]
-    assert set(requirements) >= {
-        "nvidia-cuda-nvcc==13.0.88",
-        "nvidia-cuda-crt==13.0.88",
-        "nvidia-nvvm==13.0.88",
-    }
-    assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
-    assert cmd[:5] == [
-        "uvx",
-        "--from",
-        f"vllm[runai]=={DEFAULT_CUDA_VLLM_VERSION}",
-        "--with",
-        "runai-model-streamer[s3]==0.16.1",
-    ]
-
-
 @pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
 def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine):
+    # uvx is the external install boundary. The direct wheel, digest-bearing URL, CUDA ABI,
+    # entrypoint, and provenance payload are its immutable contract; entrypoint behavior is
+    # exercised separately in test_vllm_wheel_entrypoint.py.
     monkeypatch.setattr("platform.machine", lambda: machine)
     launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
     cmd = launcher.command()
@@ -266,7 +249,15 @@ def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
     )
     vllm.chmod(0o755)
 
-    command = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION).command()
+    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
+    command = launcher.command()
+    requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
+    assert set(requirements) >= {
+        "nvidia-cuda-nvcc==13.0.88",
+        "nvidia-cuda-crt==13.0.88",
+        "nvidia-nvvm==13.0.88",
+    }
+    assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
     bootstrap_index = command.index("-c")
     bootstrap = command[bootstrap_index + 1]
     wrapped_command = command[bootstrap_index + 2 :]

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import tempfile
 import uuid
@@ -19,6 +18,7 @@ from marin.evaluation.model_config import ModelConfig
 from marin.evaluation.utils import discover_hf_checkpoints
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.remote import sanitize_job_name
 from marin.external_dependencies import MARIN_SKYRL
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import prefix_join
@@ -267,17 +267,13 @@ def _launcher_command(requirement: str, request_path: str) -> list[str]:
     ]
 
 
-def _iris_job_name(run_id: str, attempt_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", f"{run_id}-{attempt_id}")
-
-
 def run_skyrl(config: SkyRLRunConfig) -> SkyRLModel:
     """Run the pinned external launcher and return its validated model value."""
     envelope = {
         "request": asdict(config.request),
         "execution": {
             **asdict(config.execution),
-            "job_name": _iris_job_name(config.request.run_id, config.request.attempt_id),
+            "job_name": sanitize_job_name(f"{config.request.run_id}-{config.request.attempt_id}"),
         },
     }
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request_file:

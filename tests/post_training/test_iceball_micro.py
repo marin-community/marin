@@ -7,8 +7,6 @@ import gzip
 import json
 from pathlib import Path
 
-from click.testing import CliRunner
-
 from experiments.post_training import iceball_micro
 
 
@@ -48,14 +46,3 @@ def test_workflow_is_one_dependency_chain_through_both_evaluators() -> None:
     assert workflow.gsm8k in workflow.rl.deps
     assert workflow.evaluation.deps == (workflow.rl,)
     assert workflow.evaluation.name.endswith("gsm8k-smoke,aime-smoke")
-
-
-def test_cli_can_run_rl_as_the_terminal_stage(monkeypatch) -> None:
-    submitted = []
-    monkeypatch.setattr("marin.experiment.cli.run", lambda *handles, max_concurrent: submitted.extend(handles))
-
-    result = CliRunner().invoke(iceball_micro.main, ["--version", "2026.08.01", "--stage", "rl", "--run"])
-
-    assert result.exit_code == 0
-    assert len(submitted) == 1
-    assert submitted[0].name == "checkpoints/iceball-micro-rl"

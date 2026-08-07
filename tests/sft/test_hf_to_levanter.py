@@ -112,8 +112,8 @@ def test_training_handle_resolves_native_checkpoint_series_directory():
         name="checkpoints/upstream",
         version="2026.07.17",
         artifact_type=LevanterCheckpoint,
-        run=lambda config: None,
-        build_config=lambda ctx: {},
+        run=lambda _config: None,
+        build_config=lambda _ctx: {},
     )
     model = LevanterCheckpointModel(init_from=upstream, model=_tiny_arch(), tokenizer_path="gs://tok")
     step = sft_step(_spec(model), ResourceConfig.with_cpu())

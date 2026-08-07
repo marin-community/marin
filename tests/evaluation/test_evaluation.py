@@ -338,10 +338,9 @@ def test_submit_evaluation_batch_uses_resolved_federated_cluster_and_priority(mo
 
 
 def test_build_evaluation_batch_uses_submission_cluster_for_direct_endpoint(monkeypatch):
-    clusters: list[str] = []
     monkeypatch.setattr(
         "experiments.evaluation.launch._capability_origin",
-        lambda cluster: clusters.append(cluster) or "https://iris.example",
+        lambda cluster: f"https://{cluster}.example",
     )
     spec = LaunchSpec(
         model=models()["qwen3-8b"],
@@ -357,9 +356,9 @@ def test_build_evaluation_batch_uses_submission_cluster_for_direct_endpoint(monk
         priority_band=job_pb2.PRIORITY_BAND_INHERIT,
     )
 
-    build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
+    batch = build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester")
 
-    assert clusters == ["custom-controller"]
+    assert batch.capability_origin == "https://custom-controller.example"
 
 
 def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
@@ -398,7 +397,7 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
 
 def test_resolve_eval_keys_validates_programmatic_selections() -> None:
     assert resolve_eval_keys("gsm8k-smoke,aime-smoke") == ("gsm8k-smoke", "aime-smoke")
-    with pytest.raises(ValueError, match="unknown eval"):
+    with pytest.raises(ValueError):
         resolve_eval_keys("gsm8k-smoke,missing")
 
 

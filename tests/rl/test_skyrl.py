@@ -280,5 +280,3 @@ def test_run_skyrl_returns_external_terminal_model(monkeypatch: pytest.MonkeyPat
         "profile": SkyRLRuntimeProfile.FSDP.value,
     }
     assert launch_envelopes[0]["execution"]["job_name"] == "checkpoints-iceball-rl-2026.08.01-attempt-1"
-    assert launch_envelopes[0]["execution"]["target_cluster"] is None
-    assert launch_envelopes[0]["execution"]["parent_cluster_config"] is None

@@ -32,9 +32,8 @@ import itertools
 import json
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, fields
-from typing import Any
 
 import click
 import duckdb
@@ -92,7 +91,8 @@ ICEBALL_EVALS = "gsm8k-smoke,aime-smoke"
 ICEBALL_CLUSTER = "cw-us-east-08a"
 ICEBALL_CLUSTER_CONFIG = f"lib/iris/config/{ICEBALL_CLUSTER}.yaml"
 ICEBALL_GPU_VARIANT = "GB200"
-ICEBALL_TRAIN_ACCELERATOR = f"4x{ICEBALL_GPU_VARIANT}"
+ICEBALL_TRAIN_GPUS = 4
+ICEBALL_TRAIN_ACCELERATOR = f"{ICEBALL_TRAIN_GPUS}x{ICEBALL_GPU_VARIANT}"
 ICEBALL_EVAL_ACCELERATOR = f"{ICEBALL_GPU_VARIANT}x1"
 ICEBALL_SEQUENCE_LENGTH = 512
 ICEBALL_WANDB_PROJECT = f"marin-{ICEBALL_MODEL_NAME}"
@@ -102,17 +102,9 @@ FINEWEB_TRAIN_FILENAME = "train.jsonl.gz"
 GSM8K_ARTIFACT_NAME = f"documents/{ICEBALL_MODEL_NAME}-gsm8k-skyrl"
 GSM8K_TRAIN_FILENAME = "train.parquet"
 GSM8K_VALIDATION_FILENAME = "validation.parquet"
+SKYRL_GSM8K_ENVIRONMENT = "gsm8k"
 
 _FINAL_ANSWER = re.compile(r"####\s*(-?[0-9.,]+)")
-_DATA_RESOURCES = ResourceConfig.with_cpu(cpu=4, ram="32g", disk="32g")
-_TRAIN_RESOURCES = ResourceConfig.with_gpu(
-    ICEBALL_GPU_VARIANT,
-    count=4,
-    cpu=64,
-    ram="512g",
-    disk="256g",
-    regions=[ANY_REGION],
-)
 
 ICEBALL_QWEN3_CONFIG = Qwen3Config(
     max_seq_len=ICEBALL_SEQUENCE_LENGTH,
@@ -135,8 +127,8 @@ ICEBALL_QWEN3_CONFIG = Qwen3Config(
 ICEBALL_RL_ROLE_PLAN = SkyRLRolePlan(
     colocate_all=False,
     policy_num_nodes=1,
-    policy_num_gpus_per_node=4,
-    num_inference_engines=4,
+    policy_num_gpus_per_node=ICEBALL_TRAIN_GPUS,
+    num_inference_engines=ICEBALL_TRAIN_GPUS,
     inference_engine_tensor_parallel_size=1,
     train_batch_size=16,
     policy_mini_batch_size=16,
@@ -163,7 +155,7 @@ context_budget:
   max_turns: 1
 
 environment:
-  env_class: gsm8k
+  env_class: {SKYRL_GSM8K_ENVIRONMENT}
 
 trainer:
   strategy: fsdp2
@@ -276,7 +268,7 @@ def _fineweb_texts(config: FineWebSliceConfig) -> Iterator[str]:
         for shard in shards:
             rows = connection.execute(
                 "SELECT text FROM read_parquet($shard) LIMIT $row_limit",
-                {"shard": f"hf://{shard}", "row_limit": remaining},
+                {"shard": filesystem.unstrip_protocol(shard), "row_limit": remaining},
             ).fetchall()
             yield from (text for (text,) in rows)
             remaining -= len(rows)
@@ -285,7 +277,7 @@ def _fineweb_texts(config: FineWebSliceConfig) -> Iterator[str]:
     raise ValueError(f"Requested {config.rows} FineWeb-Edu rows but the pinned source ended early")
 
 
-def _gsm8k_record(example: dict[str, Any], split: str, index: int) -> dict[str, Any]:
+def _gsm8k_record(example: Mapping[str, str], split: str, index: int) -> dict[str, object]:
     match = _FINAL_ANSWER.search(example["answer"])
     if match is None:
         raise ValueError(f"GSM8K row {split}/{index} has no final answer marker")
@@ -299,7 +291,7 @@ def _gsm8k_record(example: dict[str, Any], split: str, index: int) -> dict[str, 
                 "content": f'{question} Let\'s think step by step and output the final answer after "####".',
             }
         ],
-        "env_class": "gsm8k",
+        "env_class": SKYRL_GSM8K_ENVIRONMENT,
         "reward_spec": {"method": "rule", "ground_truth": answer},
         "extra_info": {
             "split": split,
@@ -325,12 +317,12 @@ def write_gsm8k_parquet(config: Gsm8kParquetConfig) -> None:
         logger.info("Wrote %d GSM8K rows to %s", len(records), destination)
 
 
-def _fineweb_step(version: str) -> ArtifactStep[TokenizedCache]:
+def _fineweb_step(version: str, resources: ResourceConfig) -> ArtifactStep[TokenizedCache]:
     raw = ArtifactStep(
         name=FINEWEB_ARTIFACT_NAME,
         version=version,
         artifact_type=Artifact,
-        run=remote(write_fineweb_slice, resources=_DATA_RESOURCES),
+        run=remote(write_fineweb_slice, resources=resources),
         build_config=lambda ctx: FineWebSliceConfig(output_path=ctx.output_path),
     )
     return tokenized(
@@ -343,20 +335,29 @@ def _fineweb_step(version: str) -> ArtifactStep[TokenizedCache]:
     )
 
 
-def _gsm8k_step(version: str) -> ArtifactStep[Artifact]:
+def _gsm8k_step(version: str, resources: ResourceConfig) -> ArtifactStep[Artifact]:
     return ArtifactStep(
         name=GSM8K_ARTIFACT_NAME,
         version=version,
         artifact_type=Artifact,
-        run=remote(write_gsm8k_parquet, resources=_DATA_RESOURCES),
+        run=remote(write_gsm8k_parquet, resources=resources),
         build_config=lambda ctx: Gsm8kParquetConfig(output_path=ctx.output_path),
     )
 
 
 def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     """Compose every iceball-micro stage as one inspectable artifact graph."""
+    data_resources = ResourceConfig.with_cpu(cpu=4, ram="32g", disk="32g")
+    train_resources = ResourceConfig.with_gpu(
+        ICEBALL_GPU_VARIANT,
+        count=ICEBALL_TRAIN_GPUS,
+        cpu=64,
+        ram="512g",
+        disk="256g",
+        regions=[ANY_REGION],
+    )
     fineweb_version = version or resolve_version(FINEWEB_TOKENIZED_ARTIFACT_NAME, None)
-    fineweb = _fineweb_step(fineweb_version)
+    fineweb = _fineweb_step(fineweb_version, data_resources)
     pretrain_name = f"checkpoints/{ICEBALL_MODEL_NAME}-pretrain"
     pretrain = train_lm(
         name=pretrain_name,
@@ -376,7 +377,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
         num_train_steps=16,
         z_loss_weight=1e-4,
         evals=None,
-        resources=_TRAIN_RESOURCES,
+        resources=train_resources,
         wandb_project=ICEBALL_WANDB_PROJECT,
         tags=(ICEBALL_MODEL_NAME, "pretrain", "qwen3"),
     )
@@ -419,7 +420,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
     )
     sft = sft_step(sft_spec, resources_from_accelerator(ICEBALL_TRAIN_ACCELERATOR))
 
-    gsm8k = _gsm8k_step(version or resolve_version(GSM8K_ARTIFACT_NAME, None))
+    gsm8k = _gsm8k_step(version or resolve_version(GSM8K_ARTIFACT_NAME, None), data_resources)
     rl_name = f"checkpoints/{ICEBALL_MODEL_NAME}-rl"
     rl = skyrl_step(
         SkyRLSpec(
@@ -436,7 +437,7 @@ def build_workflow(*, version: str | None = None) -> IceballMicroWorkflow:
             validation_data=(ArtifactDataSource(gsm8k, relative_path=GSM8K_VALIDATION_FILENAME),),
             topology=SkyRLTopology(
                 num_nodes=2,
-                gpus_per_node=4,
+                gpus_per_node=ICEBALL_TRAIN_GPUS,
                 gpu_variant=ICEBALL_GPU_VARIANT,
                 role_plan=ICEBALL_RL_ROLE_PLAN,
             ),

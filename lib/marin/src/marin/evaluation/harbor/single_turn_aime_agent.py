@@ -67,12 +67,12 @@ def _completion_content(
         method="POST",
     )
 
-    def request_content() -> object:
+    def request_payload() -> object:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.load(response)
 
     payload = retry_with_backoff(
-        request_content,
+        request_payload,
         retryable=_model_request_should_retry,
         max_attempts=max_attempts,
         backoff=ExponentialBackoff(

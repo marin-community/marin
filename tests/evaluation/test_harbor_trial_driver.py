@@ -119,15 +119,15 @@ def _run_single_turn_aime_agent(
                 self.close()
 
 
-        attempts = 0
+        class UrlOpen:
+            def __init__(self):
+                self.attempts = 0
 
-
-        def urlopen(request, timeout):
-            global attempts
-            attempts += 1
-            if attempts <= {transient_failures}:
-                raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", None, None)
-            return Response({response_bytes!r})
+            def __call__(self, request, timeout):
+                self.attempts += 1
+                if self.attempts <= {transient_failures}:
+                    raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", None, None)
+                return Response({response_bytes!r})
 
 
         class Environment:
@@ -145,6 +145,7 @@ def _run_single_turn_aime_agent(
                 )
 
 
+        urlopen = UrlOpen()
         agent_module.urllib.request.urlopen = urlopen
         agent = agent_module.SingleTurnAimeAgent(
             logs_dir=agent_module.Path({str(logs_dir)!r}),
@@ -158,7 +159,7 @@ def _run_single_turn_aime_agent(
         print(json.dumps({{
             "answer": agent_module.Path({str(answer_path)!r}).read_text(),
             "response": agent_module.Path({str(logs_dir / "response.txt")!r}).read_text(),
-            "attempts": attempts,
+            "attempts": urlopen.attempts,
         }}))
         """
     )
