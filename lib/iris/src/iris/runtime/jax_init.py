@@ -121,9 +121,9 @@ def _enable_node_local_xla_autotune_cache() -> None:
 
     GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
 
-    The mount arrives with the worker, which on the VM clusters restarts on its own
-    daily schedule rather than with the controller, so for up to a day after a
-    rollout the directory is simply absent. That is a skip, not an error.
+    The mount arrives with the worker, and VM-cluster workers restart on their own
+    daily schedule. For up to a day after a rollout a task can land on a worker
+    whose mount is absent or unwritable; skip the cache there.
     """
     if TaskResources.from_environment().gpu_count == 0:
         return

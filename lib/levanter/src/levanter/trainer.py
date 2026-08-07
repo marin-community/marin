@@ -68,7 +68,7 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
 from levanter.cutlass_kernel_cache import CutlassKernelCache
-from levanter.cutlass_kernel_cache import install_if_available as install_cutlass_kernel_cache
+from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.loader import _round_to_nearest_multiple

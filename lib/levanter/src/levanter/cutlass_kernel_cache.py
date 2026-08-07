@@ -109,8 +109,6 @@ class CutlassKernelCache:
     directory: str
 
     def load(self, key: str) -> bytes | None:
-        # A store that cannot be reached is a miss, not a failure: the caller
-        # compiles instead. Training must not depend on the cache being healthy.
         try:
             path = self._object(key)
             return path.read_bytes() if path.exists() else None
@@ -139,31 +137,21 @@ def _root(directory: str) -> StoragePath:
     return path
 
 
-def install_if_available(cache: CutlassKernelCache) -> bool:
-    """Install ``cache`` when ``cutlass.jax`` can actually be imported.
-
-    The package being present does not mean it imports: ``cutlass.jax`` pulls in
-    CUDA bindings, so it fails on a CPU task running the GPU image, or on a host
-    whose driver does not match. Returns whether the cache was installed.
-    """
-    try:
-        importlib.import_module("cutlass.jax.primitive")
-    except ImportError as exc:
-        logger.info("CuTeDSL kernel cache skipped, cutlass.jax unavailable: %s", exc)
-        return False
-
-    install(cache)
-    return True
-
-
 def install(cache: CutlassKernelCache) -> None:
     """Route ``cutlass.jax`` kernel compiles through ``cache``.
 
     Patches ``cutlass.jax.primitive``, which binds ``get_or_compile_kernel`` at
-    import time, rather than the function's defining module. Idempotent.
+    import time, rather than the function's defining module. Idempotent, and a
+    no-op when ``cutlass.jax`` will not import: a CPU task on the GPU image has
+    the package but not the CUDA bindings it pulls in.
     """
-    primitive = importlib.import_module("cutlass.jax.primitive")
-    compile_module = importlib.import_module("cutlass.jax.compile")
+    try:
+        primitive = importlib.import_module("cutlass.jax.primitive")
+        compile_module = importlib.import_module("cutlass.jax.compile")
+    except ImportError as exc:
+        logger.info("CuTeDSL kernel cache skipped, cutlass.jax unavailable: %s", exc)
+        return
+
     if getattr(primitive.get_or_compile_kernel, "_levanter_kernel_cache", None) is not None:
         logger.info("CuTeDSL kernel cache already installed")
         return

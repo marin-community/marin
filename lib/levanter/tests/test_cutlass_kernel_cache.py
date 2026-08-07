@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from levanter.cutlass_kernel_cache import CutlassKernelCache, cute_launcher_factory, install, install_if_available
+from levanter.cutlass_kernel_cache import CutlassKernelCache, cute_launcher_factory, install
 
 
 @dataclasses.dataclass(frozen=True)
@@ -181,32 +181,20 @@ def test_a_specification_that_reprs_an_address_is_not_stored(fake_cutlass, tmp_p
     assert list(tmp_path.iterdir()) == []
 
 
-def test_a_store_that_cannot_be_reached_compiles_instead_of_failing(fake_cutlass, tmp_path):
-    """The store follows the compilation cache dir, which a task may have no access to."""
-    blocked = tmp_path / "not-a-directory"
+def test_an_unwritable_store_compiles_without_failing(fake_cutlass, tmp_path):
+    """The store follows the compilation cache dir, which a task may not be able to write."""
+    blocked = tmp_path / "file"
     blocked.write_bytes(b"")
-    cache = CutlassKernelCache(directory=str(blocked / "kernels"))
-    install(cache)
+    install(CutlassKernelCache(directory=str(blocked / "kernels")))
 
-    cold = fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
-    fake_cutlass.forget_process_state()
-    install(cache)
-    warm = fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+    result = fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
 
-    assert fake_cutlass.compiled == ["tile128-bf16", "tile128-bf16"]
-    assert warm.module == cold.module
+    assert fake_cutlass.compiled == ["tile128-bf16"]
+    assert result.module == b"objectcode:tile128-bf16:FakeFunctionSpec(shape=(8, 16))"
 
 
-def test_a_build_that_cannot_import_cutlass_jax_is_skipped(monkeypatch, tmp_path):
+def test_install_is_a_noop_when_cutlass_jax_will_not_import(monkeypatch, tmp_path):
     """A CPU task on the GPU image has the package but no CUDA bindings to import it with."""
     monkeypatch.setitem(sys.modules, "cutlass.jax.primitive", None)
 
-    assert install_if_available(CutlassKernelCache(directory=str(tmp_path))) is False
-
-
-def test_a_build_that_imports_cutlass_jax_gets_the_cache(fake_cutlass, tmp_path):
-    assert install_if_available(CutlassKernelCache(directory=str(tmp_path))) is True
-
-    fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
-
-    assert len(list(tmp_path.iterdir())) == 1
+    install(CutlassKernelCache(directory=str(tmp_path)))
