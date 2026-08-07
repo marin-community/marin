@@ -34,13 +34,13 @@ from finestore.eval import (
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
+    SCHEMA_VERSION,
     TRIAL_ID_COLUMN,
     EvalSample,
     EvaluationStore,
     SampleKind,
     StepRecord,
     sample_from_archive_row,
-    stale_samples_version,
     trajectory_step_rows,
 )
 from finestore.reader import CompositeReader
@@ -208,8 +208,8 @@ def _replace_stale_samples(results_path: str) -> None:
     so it may replace a table outright where an lm-eval export refuses. Rows written under a narrower
     primary key would otherwise survive beside the new ones as duplicates.
     """
-    stored_version = stale_samples_version(results_path)
-    if stored_version is not None:
+    stored_version = CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    if stored_version is not None and stored_version != SCHEMA_VERSION:
         preserve_and_replace_samples(results_path, stored_version)
 
 

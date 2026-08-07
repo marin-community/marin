@@ -39,7 +39,6 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 from rigging.filesystem import prefix_join
 
-from finestore.reader import CompositeReader
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
 
@@ -425,11 +424,3 @@ class EvaluationStore:
 
     def __exit__(self, *exc) -> None:
         self.close()
-
-
-def stale_samples_version(out_path: str) -> int | None:
-    """The samples table's contract version when it predates :data:`SCHEMA_VERSION`, else ``None``."""
-    stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
-    if stored_version is None or stored_version == SCHEMA_VERSION:
-        return None
-    return stored_version

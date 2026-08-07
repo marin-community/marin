@@ -30,7 +30,6 @@ from finestore.eval import (
     SampleKind,
     base_metric,
     primary_metric,
-    stale_samples_version,
 )
 from finestore.layout import ARCHIVE_FILE, BLOBS_TABLE, SEALED_MARKER
 from finestore.reader import CompositeReader
@@ -356,8 +355,8 @@ def require_current_samples(out_path: str) -> None:
     ones a writer adds now rather than collapsing against them. Removing them is a migration's job,
     not a writer's.
     """
-    stored_version = stale_samples_version(out_path)
-    if stored_version is None:
+    stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    if stored_version is None or stored_version == SCHEMA_VERSION:
         return
     raise ValueError(
         f"{out_path} holds samples written under schema v{stored_version}; this writer is at "

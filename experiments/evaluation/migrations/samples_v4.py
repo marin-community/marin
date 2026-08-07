@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 
-from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind, stale_samples_version
+from finestore.eval import ARCHIVE_SAMPLES_TABLE, SCHEMA_VERSION, SampleKind
 from finestore.reader import CompositeReader
 from rigging.filesystem import factory, prefix_join
 
@@ -98,10 +98,11 @@ def replace_stale_samples(results_path: str) -> int | None:
     ``None`` means the table was already current and nothing was touched. Refuses a table holding
     agentic samples, which come from Harbor and no lm-eval source can regenerate.
     """
-    stored_version = stale_samples_version(results_path)
-    if stored_version is None:
+    reader = CompositeReader(results_path)
+    stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
+    if stored_version is None or stored_version == SCHEMA_VERSION:
         return None
-    stored = CompositeReader(results_path).scan(ARCHIVE_SAMPLES_TABLE, columns=["kind"])
+    stored = reader.scan(ARCHIVE_SAMPLES_TABLE, columns=["kind"])
     if stored is not None:
         agentic = sum(1 for kind in stored["kind"].to_pylist() if kind == SampleKind.AGENTIC)
         if agentic:
