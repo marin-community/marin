@@ -10,10 +10,20 @@ rebuilds every run's finestore sample archive from its kept ``samples_*.jsonl`` 
 
 from __future__ import annotations
 
+import json
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import click
-from finestore.eval import export_lm_eval_samples, preserved_sample_sources, rebuild_lm_eval_samples
+from finestore.eval import (
+    ARCHIVE_SAMPLES_TABLE,
+    SCHEMA_VERSION,
+    export_lm_eval_samples,
+    preserved_sample_sources,
+    rebuild_lm_eval_samples,
+)
+from finestore.reader import CompositeReader
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
@@ -33,6 +43,12 @@ from experiments.evaluation.launch import (
     prepare_evaluation_batch,
 )
 from experiments.evaluation.models import models
+
+logger = logging.getLogger(__name__)
+
+# One worker holds a run's whole sample file in memory while normalizing it, and the largest are a
+# few hundred megabytes, so this trades throughput against a bounded footprint on a CPU node.
+_DEFAULT_BACKFILL_WORKERS = 8
 
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
@@ -230,13 +246,55 @@ def launch(
     show_default=True,
     help="Object-store prefix(es) to scan for records; repeatable.",
 )
-def backfill_samples(prefixes: tuple[str, ...]) -> None:
-    """Rebuild every run's finestore sample archive from its kept ``samples_*.jsonl`` sources."""
+@click.option(
+    "--workers",
+    default=_DEFAULT_BACKFILL_WORKERS,
+    show_default=True,
+    help="Runs to export concurrently. Each holds one run's sample file in memory.",
+)
+def backfill_samples(prefixes: tuple[str, ...], workers: int) -> None:
+    """Bring every run's finestore sample archive up to the current ``finestore.eval`` contract.
+
+    Reads each run's kept ``samples_*.jsonl`` and rewrites its ``samples`` table. Runs already at the
+    current schema version are skipped, so an interrupted sweep resumes where it stopped; use
+    ``rebuild-samples`` to force a re-export of an archive that is already current.
+    """
     configure_coreweave_s3()
-    for prefix in prefixes:
-        for record in list_records(prefix):
-            written = export_lm_eval_samples(record.results_path)
-            click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
+    records = [record for prefix in prefixes for record in list_records(prefix)]
+    _run_backfill(records, workers)
+
+
+def _backfill_one(results_path: str) -> str:
+    """Export one run unless its archive already matches the current contract."""
+    if CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION:
+        return "current"
+    return f"{export_lm_eval_samples(results_path)} sample(s)"
+
+
+def _run_backfill(records: list, workers: int) -> None:
+    """Export many runs concurrently, reporting each outcome and a final tally."""
+    done = skipped = failed = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_backfill_one, record.results_path): record for record in records}
+        for future in as_completed(futures):
+            record = futures[future]
+            try:
+                outcome = future.result()
+            except Exception as exc:
+                failed += 1
+                # One unreadable run must not abandon the rest of a fleet-wide sweep; the tally and
+                # the non-zero exit below are what surface it.
+                logger.exception("backfill failed for %s", record.results_path)
+                click.echo(f"{record.run_id}  FAILED {type(exc).__name__}: {exc}  {record.results_path}")
+                continue
+            if outcome == "current":
+                skipped += 1
+            else:
+                done += 1
+            click.echo(f"{record.run_id}  {outcome}  {record.results_path}")
+    click.echo(json.dumps({"exported": done, "already_current": skipped, "failed": failed}, sort_keys=True))
+    if failed:
+        raise SystemExit(1)
 
 
 @cli.command("rebuild-samples")
@@ -248,21 +306,48 @@ def backfill_samples(prefixes: tuple[str, ...]) -> None:
     show_default=True,
     help="Object-store prefix(es) to scan for records; repeatable.",
 )
-def rebuild_samples(prefixes: tuple[str, ...]) -> None:
+@click.option(
+    "--workers",
+    default=_DEFAULT_BACKFILL_WORKERS,
+    show_default=True,
+    help="Runs to rebuild concurrently. Each holds one run's sample file in memory.",
+)
+def rebuild_samples(prefixes: tuple[str, ...], workers: int) -> None:
     """Rebuild sample archives from the sources preserved inside them, ignoring the results tree.
 
     Use this after a change to the contract in ``finestore.eval`` when a run's evaluator-native
-    files are no longer beside it. Runs whose archive predates source preservation are skipped and
-    still need ``backfill-samples``.
+    files are no longer beside it, or to force a re-export of an archive ``backfill-samples`` would
+    consider current. Runs whose archive predates source preservation are reported and skipped.
     """
     configure_coreweave_s3()
-    for prefix in prefixes:
-        for record in list_records(prefix):
-            if not preserved_sample_sources(record.results_path):
-                click.echo(f"{record.run_id}  no preserved sources  {record.results_path}")
+    records = [record for prefix in prefixes for record in list_records(prefix)]
+    done = skipped = failed = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_rebuild_one, record.results_path): record for record in records}
+        for future in as_completed(futures):
+            record = futures[future]
+            try:
+                outcome = future.result()
+            except Exception as exc:
+                failed += 1
+                logger.exception("rebuild failed for %s", record.results_path)
+                click.echo(f"{record.run_id}  FAILED {type(exc).__name__}: {exc}  {record.results_path}")
                 continue
-            written = rebuild_lm_eval_samples(record.results_path)
-            click.echo(f"{record.run_id}  {written} sample(s)  {record.results_path}")
+            if outcome == "no preserved sources":
+                skipped += 1
+            else:
+                done += 1
+            click.echo(f"{record.run_id}  {outcome}  {record.results_path}")
+    click.echo(json.dumps({"rebuilt": done, "no_sources": skipped, "failed": failed}, sort_keys=True))
+    if failed:
+        raise SystemExit(1)
+
+
+def _rebuild_one(results_path: str) -> str:
+    """Rebuild one run from its preserved sources, or report that it has none."""
+    if not preserved_sample_sources(results_path):
+        return "no preserved sources"
+    return f"{rebuild_lm_eval_samples(results_path)} sample(s)"
 
 
 def main() -> None:
