@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 import traceback
+import uuid
 from collections.abc import Callable, Hashable
 from contextlib import suppress
 
@@ -56,6 +57,19 @@ class ZephyrWorker:
         self._coordinator = coordinator_handle
         self._stage_runner_factory = stage_runner_factory
         self._shutdown_event = threading.Event()
+        # Identifies this worker PROCESS, and orders it against earlier ones. A worker
+        # reconstructed after preemption reuses its worker_id but mints a newer
+        # incarnation, which is what lets the coordinator requeue the dead process's
+        # in-flight tasks without touching a live worker's.
+        #
+        # The leading timestamp makes incarnations comparable, so the coordinator can
+        # ignore a registration that a newer process has already superseded -- a
+        # timed-out register_worker RPC from a dead process can still be delivered after
+        # its replacement has registered. Wall clock rather than monotonic, because the
+        # replacement is a different process (often on a different host); NTP skew is
+        # milliseconds while reconstruction takes seconds, and the uuid suffix keeps
+        # incarnations distinct if two ever share a nanosecond.
+        self._incarnation = f"{time.time_ns():020d}-{uuid.uuid4().hex[:8]}"
         self._counter_generation: int = 0
         self._last_reported_counters: dict[str, CounterEntry] = {}
         # Runners and sub-IDs for currently active slots — written by _stage_manager,
@@ -99,6 +113,32 @@ class ZephyrWorker:
         )
         self._poll_thread.start()
 
+    def _register_with_retry(self) -> bool:
+        """Register with the coordinator, retrying until it succeeds or we shut down.
+
+        Returns True once registered, False if shutdown was requested first. Reports the
+        same ``incarnation`` on every attempt, so a retry whose earlier attempt already
+        landed server-side is recognized as the same process and does not requeue the
+        tasks this worker is running.
+        """
+        backoff = ExponentialBackoff(initial=1.0, maximum=30.0)
+        attempt = 0
+        while not self._shutdown_event.is_set():
+            attempt += 1
+            try:
+                registrations = self._coordinator.register_worker.remote(
+                    self._worker_id, self._actor_handle, self._incarnation
+                ).result(timeout=30.0)
+                self._memory_store.restore(registrations)
+                if attempt > 1:
+                    logger.info("[%s] Registered with coordinator after %d attempts", self._worker_id, attempt)
+                return True
+            except Exception as e:
+                logger.warning("[%s] register_worker attempt %d failed (%s); retrying", self._worker_id, attempt, e)
+                self._shutdown_event.wait(timeout=backoff.next_interval())
+        logger.info("[%s] Shutdown requested before registration completed", self._worker_id)
+        return False
+
     def _poll_loop(self) -> None:
         """Single poll loop: requests tasks from the coordinator using current available resources.
 
@@ -107,16 +147,13 @@ class ZephyrWorker:
         At stage boundaries, the loop sleeps briefly and then polls again.
         """
         logger.info("[%s] Poll loop starting", self._worker_id)
-        try:
-            registrations = self._coordinator.register_worker.remote(self._worker_id, self._actor_handle).result(
-                timeout=30.0
-            )
-            self._memory_store.restore(registrations)
-        except Exception:
-            logger.error("[%s] Failed to register with coordinator", self._worker_id, exc_info=True)
-            self._shutdown_event.set()
-            if self._host_shutdown_event is not None:
-                self._host_shutdown_event.set()
+        # Registration must land before polling, because it carries the memory-table
+        # registrations tasks may need. So retry it instead of giving up: a large pool
+        # has every worker calling this at once, the coordinator serializes them under
+        # one lock, and a worker that exits on timeout is not replaced -- Iris records
+        # the clean exit as "succeeded". That silently eroded a 512-worker pool to zero
+        # while shards sat queued, with no failure surfacing anywhere.
+        if not self._register_with_retry():
             return
 
         backoff = ExponentialBackoff(initial=0.1, maximum=5.0)
