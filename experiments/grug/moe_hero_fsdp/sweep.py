@@ -46,14 +46,28 @@ COMBINED_ARGS = ["--small-param-sharding", "fsdp", "--interleave-before-gather"]
 CHUNKED_ARGS = [*COMBINED_ARGS, "--expert-chunks", "2"]
 # `_apply_hero_fsdp_runtime_defaults` leaves XLA_FLAGS alone once it already names
 # `--xla_gpu_enable_command_buffer`, so an arm can re-enable CUDA graphs without a code change.
-COMMAND_BUFFER_FLAGS = "--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL"
-_COMBINE_BYTES = 256 * 1024 * 1024
+COMMAND_BUFFER_FLAGS = "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL"
+# Arms that set XLA_FLAGS for another reason must restate the hero's own disable, or they would
+# silently enable CUDA graphs too and confound themselves with the `cudagraphs` arm.
+_COMMAND_BUFFER_DISABLED = "--xla_gpu_enable_command_buffer="
+# Already active on the EP hero (`experiments/grug/moe_hero_ep/train.py`), never on the FSDP one.
+EP_SCHEDULER_FLAGS = (
+    "--xla_gpu_enable_latency_hiding_scheduler=true " "--xla_gpu_experimental_parallel_collective_overlap_limit=4"
+)
+SOL_ESTIMATOR_FLAG = "--xla_gpu_enable_analytical_sol_latency_estimator=true"
+NCCL_MEMORY_FLAGS = "--xla_gpu_enable_nccl_comm_splitting=true --xla_gpu_enable_nccl_per_stream_comms=false"
+FUSION_FLAGS = (
+    "--xla_gpu_cudnn_gemm_fusion=true "
+    "--xla_gpu_enable_custom_fusions=true "
+    "--xla_gpu_enable_address_computation_fusion=true"
+)
+_COMBINE_BYTES = 512 * 1024 * 1024
 COMBINE_THRESHOLD_FLAGS = (
     " ".join(
         f"--xla_gpu_{collective}_combine_threshold_bytes={_COMBINE_BYTES}"
         for collective in ("all_gather", "all_reduce", "reduce_scatter")
     )
-    + f" {COMMAND_BUFFER_FLAGS.partition('=')[0]}="
+    + f" {_COMMAND_BUFFER_DISABLED}"
 )
 LOGDIR = pathlib.Path("scratch/hero_sweep")
 PEAK_FLOPS_PER_DEVICE = 2.5e15
@@ -187,10 +201,63 @@ WAVES = {
             note="the profile shows 1,009 uncombined collective launches at 52 GB/s",
         ),
         Arm(
-            "nchannels",
-            env={**COMBINED_ENV, "NCCL_MIN_NCHANNELS": "32"},
+            "epflags",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{EP_SCHEDULER_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
             args=CHUNKED_ARGS,
-            note="more channels for the small per-layer collectives",
+            note="the two scheduler flags the EP hero already runs in production",
+        ),
+    ],
+    # Wave 8: NVIDIA's JAX-Toolbox Blackwell guidance, none of which this repo sets today.
+    # `O1` is the interesting one: it bundles the latency-hiding scheduler, pipelined collectives,
+    # while-loop double buffering, and the analytical SOL latency estimator. That estimator is the
+    # direct substitute for PGLE, which has never produced a non-empty trace on this cluster, so
+    # the scheduler has been working from static cost estimates the whole time.
+    "w8": [
+        Arm("base", env=COMBINED_ENV, args=CHUNKED_ARGS, note="this wave's control"),
+        Arm(
+            "o1",
+            env={**COMBINED_ENV, "JAX_OPTIMIZATION_LEVEL": "O1"},
+            args=CHUNKED_ARGS,
+            note="the O1 optimization bundle, including the analytical SOL latency estimator",
+        ),
+        Arm(
+            "solonly",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{SOL_ESTIMATOR_FLAG} {_COMMAND_BUFFER_DISABLED}"},
+            args=CHUNKED_ARGS,
+            note="the SOL estimator alone, to separate it from the rest of O1",
+        ),
+        Arm(
+            "ncclmem",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{NCCL_MEMORY_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=CHUNKED_ARGS,
+            note="shrink NCCL's own footprint; freed HBM buys back rematerialization",
+        ),
+    ],
+    # Wave 9: zero-copy collectives, the B200 launch-mode workaround, and the fusion flags.
+    # `nccl_user_buffers` needs NCCL_NVLS_ENABLE=1, which the adopted configuration already sets.
+    "w9": [
+        Arm("base", env=COMBINED_ENV, args=CHUNKED_ARGS, note="this wave's control"),
+        Arm(
+            "userbuffers",
+            env={
+                **COMBINED_ENV,
+                "XLA_FLAGS": f"--xla_gpu_enable_nccl_user_buffers=true {_COMMAND_BUFFER_DISABLED}",
+                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": "2048",
+            },
+            args=CHUNKED_ARGS,
+            note="zero-copy collectives with a preallocated user-buffer pool",
+        ),
+        Arm(
+            "ncclgroup",
+            env={**COMBINED_ENV, "NCCL_LAUNCH_MODE": "GROUP"},
+            args=CHUNKED_ARGS,
+            note="B200 workaround for multi-device single-process gangs; this hero is 4 GPUs per process",
+        ),
+        Arm(
+            "fusions",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{FUSION_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=CHUNKED_ARGS,
+            note="cuDNN GEMM fusion and the custom fusions, against 5.00 s/step of memory-bound fusions",
         ),
     ],
 }
