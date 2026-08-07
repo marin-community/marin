@@ -82,9 +82,11 @@ const FORWARD_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Rows read from one namespace per batch. The hub durably acknowledges each outbound
 /// request, so a small row cap turns its one-second flush-coalescing interval into a
-/// throughput cap. Byte chunking still bounds each request and this read stays well
-/// below the store's million-row write limit.
-const FORWARD_BATCH_ROWS: i64 = 50_000;
+/// throughput cap. A live telemetry scan showed that reading 200,000 rows was faster
+/// than reading 50,000 because provider construction and planning dominate the bounded
+/// scan. Byte chunking still bounds each request, and this stays below the store's
+/// million-row write limit.
+const FORWARD_BATCH_ROWS: i64 = 200_000;
 
 /// Encoded bytes per outbound request. Keep one MiB below the receiving store's hard
 /// Arrow IPC limit. [`chunk_by_bytes`] verifies the resulting size and adjusts each
@@ -96,9 +98,9 @@ const FINELOG_ZSTD_LEVEL: i32 = 1;
 
 /// Non-log chunks from one read turn may wait for durability concurrently. The hub
 /// coalesces writes that arrive within its one-second flush window, so a telemetry-sized
-/// turn split across two Arrow messages needs one durable flush instead of two. Log
-/// chunks stay serial to preserve line order at the hub.
-const FORWARD_CHUNK_CONCURRENCY: usize = 4;
+/// turn split across several Arrow messages needs one durable flush instead of one per
+/// message. Log chunks stay serial to preserve line order at the hub.
+const FORWARD_CHUNK_CONCURRENCY: usize = 8;
 
 /// Emit one warning when a namespace's cursor trails this far behind. This is an
 /// observability threshold only: the backlog is still drained in full while its source

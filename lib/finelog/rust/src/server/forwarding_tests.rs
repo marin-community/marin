@@ -507,7 +507,7 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
 }
 
 #[test]
-fn one_telemetry_sized_read_turn_fits_two_write_requests() {
+fn one_telemetry_sized_read_turn_fits_one_parallel_wave() {
     let rows = FORWARD_BATCH_ROWS as usize;
     let row = "x".repeat(450);
     let batch = RecordBatch::try_new(
@@ -523,15 +523,15 @@ fn one_telemetry_sized_read_turn_fits_two_write_requests() {
 
     let chunks = chunk_by_bytes(&batch, &seqs, FORWARD_BATCH_BYTES).unwrap();
 
-    assert_eq!(
-        chunks.len(),
-        2,
+    assert!(
+        chunks.len() <= FORWARD_CHUNK_CONCURRENCY,
         "chunks: {:?}",
         chunks
             .iter()
             .map(|(ipc, seq)| (ipc.len(), seq))
             .collect::<Vec<_>>()
     );
+    assert!(chunks.len() > 1, "the fixture must exercise byte chunking");
     assert!(chunks
         .iter()
         .all(|(ipc, _)| ipc.len() <= FORWARD_BATCH_BYTES));
