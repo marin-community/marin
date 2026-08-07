@@ -36,7 +36,7 @@ from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.recovery.detection import DetectionConfig, recovery_xla_env
 from levanter.recovery.supervisor import GPUHangSupervisor
-from levanter.recovery.types import RunOutcome
+from levanter.recovery.types import AblationSpec, RunOutcome, RunResult
 from levanter.schedule import BatchSchedule
 from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
@@ -731,6 +731,79 @@ def _run_grug_supervised_local(config: GrugRunConfig) -> None:
 def run_grug_supervised(config: GrugRunConfig) -> None:
     """Dispatch grug training with one crash supervisor per GPU task."""
     _dispatch_grug(config, _run_grug_supervised_local, max_retries_failure=0)
+
+
+@dataclass(frozen=True)
+class GrugAblationSweepConfig:
+    """Several environment arms run back to back on one allocation.
+
+    ``arms`` and ``runs`` are parallel: arm *i* supplies the process-start environment
+    for run *i*, whose ``trainer.id`` names its own W&B run. Holding the allocation across
+    arms removes a scheduler round trip and a cold node per arm, which at 300B dominates
+    the arm itself.
+    """
+
+    run_id: str
+    arms: tuple[AblationSpec, ...]
+    runs: tuple[GrugRunConfig, ...]
+    resources: ResourceConfig
+    processes_per_task: int
+
+    def __post_init__(self):
+        if not self.arms:
+            raise ValueError("an ablation sweep needs at least one arm")
+        if len(self.arms) != len(self.runs):
+            raise ValueError(f"got {len(self.arms)} arms but {len(self.runs)} runs")
+
+
+def _sweep_summary(outcomes: list[tuple[AblationSpec, RunResult]]) -> str:
+    header = f"{'arm':<30} {'outcome':<14} {'faults':<28} {'final_step':>11} {'wall_s':>9}"
+    lines = [header, "-" * len(header)]
+    for arm, result in outcomes:
+        faults = ",".join(f"{f.fault_class.value}:{f.returncode}" for f in result.faults) or "-"
+        lines.append(
+            f"{arm.name:<30} {result.outcome.value:<14} {faults:<28} "
+            f"{result.final_step!s:>11} {result.total_wall_time:>9.1f}"
+        )
+    return "\n".join(lines)
+
+
+def _run_grug_sweep_local(config: GrugAblationSweepConfig) -> None:
+    """Run every arm under one supervisor, and never let one arm's fault end the sweep."""
+    outcomes: list[tuple[AblationSpec, RunResult]] = []
+    with GPUHangSupervisor(
+        detection=HERO_DETECTION_CONFIG,
+        deadman_timeout=HERO_SUPERVISOR_WALL_TIMEOUT,
+        startup_timeout=HERO_SUPERVISOR_WALL_TIMEOUT,
+        max_restarts_per_run=0,
+    ) as supervisor:
+        for arm, run in zip(config.arms, config.runs, strict=True):
+            logger.warning("=== hero ablation %s: %s (env=%s) ===", arm.name, arm.notes, dict(arm.env))
+            result = supervisor.run(_run_grug_local, run, label=run.trainer.trainer.id, env=arm.env)
+            outcomes.append((arm, result))
+            logger.warning(
+                "hero ablation %s -> outcome=%s attempts=%d faults=[%s]",
+                arm.name,
+                result.outcome.value,
+                result.attempts,
+                ", ".join(f"class={f.fault_class.value} rc={f.returncode} detail={f.detail!r}" for f in result.faults),
+            )
+
+    logger.warning("hero ablation sweep %s complete:\n%s", config.run_id, _sweep_summary(outcomes))
+
+
+def run_grug_ablation_sweep(config: GrugAblationSweepConfig) -> None:
+    """Dispatch the sweep; each task runs the arms in order under its own supervisor."""
+    # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
+    _apply_hero_fsdp_runtime_defaults()
+    dispatch_grug_training_run(
+        run_id=config.run_id,
+        config=config,
+        local_entrypoint=_run_grug_sweep_local,
+        resources=config.resources,
+        max_retries_failure=0,
+        processes_per_task=config.processes_per_task,
+    )
 
 
 __all__ = [

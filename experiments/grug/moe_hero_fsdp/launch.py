@@ -30,12 +30,15 @@ from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
 from experiments.grug.moe_hero_fsdp.train import (
+    GrugAblationSweepConfig,
     GrugRunConfig,
     GrugTrainerConfig,
     run_grug,
+    run_grug_ablation_sweep,
     run_grug_failsafe_control,
     run_grug_supervised,
 )
+from experiments.grug.recovery.ablation_catalog import environment_ablations, selected_ablations
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -70,6 +73,87 @@ class HeroThroughputResult(Artifact):
     """Metrics and resumable checkpoints from the rack-scale throughput hero run."""
 
 
+def _hero_run_config(
+    *,
+    ctx: StepContext,
+    run_id: str,
+    batch_size: int,
+    num_steps: int,
+    model,
+    optimizer,
+    grug_trainer: GrugTrainerConfig,
+    wandb_project: str,
+    slim: ArtifactStep[TokenizedCache],
+) -> GrugRunConfig:
+    """Assemble one hero trainer config; ``run_id`` names both the trainer and its W&B run."""
+    trainer = TrainerConfig(
+        id=run_id,
+        seed=0,
+        train_batch_size=batch_size,
+        num_train_steps=num_steps,
+        profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
+        mp=jmp.get_policy(HERO_MIXED_PRECISION),
+        tracker=(
+            WandbConfig(
+                entity="marin-community",
+                project=wandb_project,
+                tags=["grug", "moe", "hero", "fsdp", "gb200"],
+                group="moe-hero-fsdp",
+                name=run_id,
+                replicate_path=ctx.output_path,
+            ),
+            TelemetryConfig(),
+        ),
+        watch=WatchConfig(interval=20),
+        progress_watchdog=ProgressWatchdogConfig(
+            step_timeout=HERO_TRAIN_STEP_TIMEOUT,
+            process_timeout=HERO_PROCESS_STALL_TIMEOUT,
+            diagnostic_timeout=HERO_STALL_DIAGNOSTIC_TIMEOUT,
+        ),
+        use_explicit_mesh_axes=True,
+        require_accelerator=True,
+        allow_nondivisible_batch_size=False,
+        checkpointer=CheckpointerConfig(
+            base_path=prefix_join(ctx.output_path, "checkpoints"),
+            temporary_base_path=None,
+            save_interval=HERO_CHECKPOINT_INTERVAL,
+            keep=None,
+            append_run_id_to_base_path=False,
+            delete_old_temp_checkpoints=True,
+            keep_last_temporary_checkpoints=1,
+        ),
+    )
+    return GrugRunConfig(
+        model=model,
+        data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
+        resources=ctx.runtime_arg("train_resources"),
+        optimizer=optimizer,
+        trainer=dataclasses.replace(grug_trainer, trainer=trainer),
+        eval=None,
+        processes_per_task=HERO_PROCESSES_PER_TASK,
+    )
+
+
+def _hero_resources(dp_racks: int) -> ResourceConfig:
+    return ResourceConfig.with_gpu(
+        "GB200",
+        count=HERO_GPUS_PER_TASK,
+        cpu=120,
+        ram="850g",
+        disk="1t",
+        replicas=HERO_NODES_PER_RACK * dp_racks,
+    )
+
+
+def _validate_hero_args(run_id: str, dp_racks: int, num_steps: int) -> None:
+    if not run_id.strip():
+        raise ValueError("run_id must not be empty")
+    if dp_racks <= 0:
+        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
+    if num_steps <= 0:
+        raise ValueError(f"num_steps must be positive, got {num_steps}")
+
+
 def _build_hero_run(
     *,
     run_id: str,
@@ -85,12 +169,7 @@ def _build_hero_run(
     parameters and the offloaded optimizer state, about 2.7 TiB at the hero shape, which a run that
     only reports MFU does not need.
     """
-    if not run_id.strip():
-        raise ValueError("run_id must not be empty")
-    if dp_racks <= 0:
-        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
-    if num_steps <= 0:
-        raise ValueError(f"num_steps must be positive, got {num_steps}")
+    _validate_hero_args(run_id, dp_racks, num_steps)
 
     batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
@@ -106,64 +185,22 @@ def _build_hero_run(
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
-    train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=HERO_GPUS_PER_TASK,
-        cpu=120,
-        ram="850g",
-        disk="1t",
-        replicas=HERO_NODES_PER_RACK * dp_racks,
-    )
+    train_resources = _hero_resources(dp_racks)
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     slim = _slimpajama_6b_dataset()
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
-        trainer = TrainerConfig(
-            id=run_id,
-            seed=0,
-            train_batch_size=batch_size,
-            num_train_steps=num_steps,
-            profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
-            mp=jmp.get_policy(HERO_MIXED_PRECISION),
-            tracker=(
-                WandbConfig(
-                    entity="marin-community",
-                    project=wandb_project,
-                    tags=["grug", "moe", "hero", "fsdp", "gb200"],
-                    group="moe-hero-fsdp",
-                    name=run_id,
-                    replicate_path=ctx.output_path,
-                ),
-                TelemetryConfig(),
-            ),
-            watch=WatchConfig(interval=20),
-            progress_watchdog=ProgressWatchdogConfig(
-                step_timeout=HERO_TRAIN_STEP_TIMEOUT,
-                process_timeout=HERO_PROCESS_STALL_TIMEOUT,
-                diagnostic_timeout=HERO_STALL_DIAGNOSTIC_TIMEOUT,
-            ),
-            use_explicit_mesh_axes=True,
-            require_accelerator=True,
-            allow_nondivisible_batch_size=False,
-            checkpointer=CheckpointerConfig(
-                base_path=prefix_join(ctx.output_path, "checkpoints"),
-                temporary_base_path=None,
-                save_interval=HERO_CHECKPOINT_INTERVAL,
-                keep=None,
-                append_run_id_to_base_path=False,
-                delete_old_temp_checkpoints=True,
-                keep_last_temporary_checkpoints=1,
-            ),
-        )
-        return GrugRunConfig(
+        return _hero_run_config(
+            ctx=ctx,
+            run_id=run_id,
+            batch_size=batch_size,
+            num_steps=num_steps,
             model=model,
-            data=mixture(ctx, {slim: 1.0}, shuffle=_SLIMPAJAMA_SHUFFLE),
-            resources=ctx.runtime_arg("train_resources"),
             optimizer=optimizer,
-            trainer=dataclasses.replace(grug_trainer, trainer=trainer),
-            eval=None,
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            grug_trainer=grug_trainer,
+            wandb_project=wandb_project,
+            slim=slim,
         )
 
     return ArtifactStep(
@@ -202,6 +239,75 @@ def build_supervised_hero_run(
         save_checkpoints=save_checkpoints,
         run=run_grug_supervised,
         version=version,
+    )
+
+
+def build_ablation_sweep_hero_run(
+    *,
+    run_id: str,
+    dp_racks: int,
+    steps_per_arm: int,
+    ablation_names: tuple[str, ...],
+    version: str | None = None,
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build one allocation that runs the named environment arms back to back.
+
+    Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its
+    own W&B run named ``<run_id>-<arm>``. A sweep is a diagnostic, so it never checkpoints.
+    """
+    _validate_hero_args(run_id, dp_racks, steps_per_arm)
+    arms = tuple(selected_ablations(environment_ablations(num_steps=steps_per_arm), ablation_names))
+
+    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
+    model, optimizer = build_hero_configs(num_train_steps=steps_per_arm, batch_size=batch_size)
+    wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
+    grug_trainer = GrugTrainerConfig(
+        data_seed=None,
+        log_every=1,
+        ema_beta=None,
+        z_loss_weight=1e-4,
+        offload_opt_state=True,
+        save_checkpoints=False,
+        expert_axis_size=1,
+        replica_axis_size=dp_racks,
+        sharding_dump_path=None,
+    )
+    train_resources = _hero_resources(dp_racks)
+    name = f"grug/{run_id}"
+    version = resolve_version(name, version)
+    slim = _slimpajama_6b_dataset()
+
+    def build_config(ctx: StepContext) -> GrugAblationSweepConfig:
+        runs = tuple(
+            _hero_run_config(
+                ctx=ctx,
+                run_id=f"{run_id}-{arm.name}",
+                batch_size=batch_size,
+                num_steps=arm.num_steps or steps_per_arm,
+                model=model,
+                optimizer=optimizer,
+                grug_trainer=grug_trainer,
+                wandb_project=wandb_project,
+                slim=slim,
+            )
+            for arm in arms
+        )
+        return GrugAblationSweepConfig(
+            run_id=run_id,
+            arms=arms,
+            runs=runs,
+            resources=ctx.runtime_arg("train_resources"),
+            processes_per_task=HERO_PROCESSES_PER_TASK,
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(name, version),
+        version=version,
+        artifact_type=HeroThroughputResult,
+        run=run_grug_ablation_sweep,
+        build_config=build_config,
+        deps=(slim,),
+        runtime_args={"train_resources": train_resources},
     )
 
 

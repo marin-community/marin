@@ -40,6 +40,18 @@ def environment_ablations(*, num_steps: int) -> list[AblationSpec]:
             notes="disable the driver JIT/SASS cache",
         ),
         AblationSpec(
+            name="cuda-launch-blocking",
+            env={"CUDA_LAUNCH_BLOCKING": "1"},
+            num_steps=num_steps,
+            notes="serialize every launch; the one arm that has suppressed both outcomes, kept as a positive control",
+        ),
+        AblationSpec(
+            name="nccl-mnnvl-off",
+            env={"NCCL_MNNVL_ENABLE": "0"},
+            num_steps=num_steps,
+            notes="disable multi-node NVLink; the earlier negative lacked INFO transport provenance",
+        ),
+        AblationSpec(
             name="nccl-proto-no-ll128",
             env={NCCL_PROTO_ENV: "^LL128"},
             num_steps=num_steps,
