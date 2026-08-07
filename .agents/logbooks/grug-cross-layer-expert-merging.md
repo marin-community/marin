@@ -358,3 +358,21 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
   All smoke arms finished exactly 262,144,000 tokens with finite loss. Mid-run checks found all 256 experts active in every layer, no routing collapse, and no OOM or runtime error. Permanent step-500 checkpoint metadata and artifact markers exist for all three variants. Iris accepted full controller [`/dlwh/grug-xem-d768-full-20260806`](https://iris.oa.dev/#/job/%2Fdlwh%2Fgrug-xem-d768-full-20260806); all three child TPU jobs and W&B runs reached running state with zero initial failures or preemptions.
 - Interpretation: the d768 smoke passes the stability gate. At 500 steps, unscaled tying is +0.01581 Paloma and `1/sqrt(4)` is +0.02373 relative to the matched untied arm. These are startup signals; the 8,453-step result determines the scale comparison.
 - Next action: babysit all three full runs through permanent checkpoint and artifact commit, then compare tied-minus-untied Paloma gaps against d512.
+
+### 2026-08-06 23:20 - GRUG-XEM-004 d768 two-anchor full result
+
+- Hypothesis: Four middle layers sharing one routed-expert bank behind two input and two output anchors have a smaller tied-minus-untied Paloma gap at d768 than the matched d512 middle-four result.
+- Commit Hash: `85b3942f920e9c8f083891c5561ddd16d4b7ce59`.
+- Commands: `/dlwh/grug-xem-d768-full-20260806` ran the three fixed variants in `us-central1`; W&B API histories supplied aligned evaluation, routing, MFU, and last-100-step throughput; Iris summaries supplied terminal state and preemption counts; `gcloud storage ls` verified each permanent checkpoint and artifact marker.
+- Config: 8,453 steps and 4,431,806,464 tokens per arm. The tied arms use `(0,1,2,2,2,2,3,4)`, reducing unique routed-expert parameters by 37.5% across the model, with either unscaled or `1/sqrt(4)` shared-bank learning rate.
+- Result:
+
+  | Variant | Paloma macro | Delta | Last-100 tokens/s | Mean MFU | Routing entropy |
+  |---|---:|---:|---:|---:|---:|
+  | Untied | 3.255989 | — | 286,462 | 19.128% | 5.536646 |
+  | Middle-four unscaled | 3.284537 | +0.028548 | 291,657 (+1.81%) | 19.411% | 5.536528 |
+  | Middle-four `1/sqrt(4)` | 3.293547 | +0.037558 | 291,097 (+1.62%) | 19.373% | 5.537422 |
+
+  Every run reached its exact token target, finished in W&B, and committed `.artifact.json`, `manifest.ocdbt`, and `checkpoints/step-8453/metadata.json`. All 256 experts were active in every layer and capacity overflow was zero. The baseline child automatically recovered from one TPU preemption; both tied children had none. All children and the controller exited successfully. Iris did not expose peak accelerator memory, but no HBM or OOM signature appeared.
+- Interpretation: the d768 two-anchor architecture gate passes. Relative to d512, the tied-minus-untied gap fell from +0.038167 to +0.028548 for unscaled LR and from +0.045407 to +0.037558 for `1/sqrt(4)`. Unscaled MuonH remained better by 0.009010 Paloma, so the Jaggi scaling is not the default for the Grug follow-up. The tied arms were also about 1.6-1.8% faster over their final 100 training steps.
+- Next action: retain the unscaled two-anchor d768 topology as the tied-from-scratch reference. Keep the post-hoc surgery sequence at d512 until the one-pair conversion reaches its recovery gate; then repeat the successful conversion at d768 rather than opening a new tied-architecture sweep.
