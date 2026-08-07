@@ -94,11 +94,12 @@ object-store prefix and upserts the `eval_runs` and `eval_metrics` tables implem
 
 ## Evals in pipelines
 
-`pipeline.py` exposes the same run as an `ArtifactStep`: `eval_step("qwen3-1.7b", "smoke",
-version="2026.07.19")` is a lazy, versioned handle. The step submits the same CPU orchestrator used by
-the CLI and writes eval outputs to the launcher's shared `evals` root; its artifact path contains the
-pipeline cache record. The slice override is a runtime arg, so changing it does not change the artifact
-identity.
+`pipeline.py` exposes the same run as an `ArtifactStep`:
+`eval_step(CatalogEvaluationModel("qwen3-1.7b"), "smoke", version="2026.07.19")` is a lazy,
+versioned handle. The step submits the same CPU orchestrator used by the CLI and writes eval outputs
+to the launcher's shared `evals` root; its artifact path contains the pipeline cache record. The slice
+override is a runtime arg, so changing it does not change the artifact identity. Produced-model
+adapters such as `SkyRLEvaluationModel` use the same `eval_step` entry point.
 
 ## Evalchemy config files
 
