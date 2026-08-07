@@ -150,7 +150,7 @@ def build_train_dataset(
     )
 
 
-_BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
+BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
 
 
 def build_train_loader(
@@ -166,7 +166,7 @@ def build_train_loader(
         dataset,
         batch_schedule.schedule,
         mesh=mesh,
-        axis_resources={"__BATCH__": _BATCH_AXES},
+        axis_resources={"__BATCH__": BATCH_AXES},
         batch_axis_name="__BATCH__",
         allow_nondivisible_batch_size=False,
     )
@@ -192,9 +192,9 @@ def build_tagged_evaluator(
     tokenizer = data_config.the_tokenizer if eval_cfg.compute_bpb else None
     # `compact_grug_mesh` always carries (replica_dcn, data, expert, model); length-1 axes
     # are kept so we can name "expert" unconditionally.
-    eval_axis_mapping = {"batch": _BATCH_AXES}
+    eval_axis_mapping = {"batch": BATCH_AXES}
     eval_batch = Axis("batch", eval_cfg.eval_batch_size)
-    eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    eval_array_sharding = NamedSharding(mesh, P(BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
         if isinstance(batch, LmExample):
@@ -272,6 +272,19 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
         last_mixture_stage = stage
 
     return log_mixture_stage
+
+
+def log_device_memory(step_info) -> None:
+    """Log this process's local-device HBM peak, live bytes, and allocator limit in GiB."""
+    stats = jax.local_devices()[0].memory_stats()
+    levanter.tracker.log(
+        {
+            "memory/peak_gib": stats["peak_bytes_in_use"] / 1024**3,
+            "memory/in_use_gib": stats["bytes_in_use"] / 1024**3,
+            "memory/limit_gib": stats["bytes_limit"] / 1024**3,
+        },
+        step=step_info.step,
+    )
 
 
 @register_dataclass
@@ -564,6 +577,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 every=1,
             )
         state_callbacks.add_hook(_make_mixture_stage_callback(train_dataset, batch_schedule), every=1)
+        state_callbacks.add_hook(log_device_memory, every=1)
         if evaluator is not None and eval_cfg is not None:
             interval = eval_cfg.steps_per_eval
             eval_ema = eval_cfg.eval_ema and config.trainer.ema_beta is not None

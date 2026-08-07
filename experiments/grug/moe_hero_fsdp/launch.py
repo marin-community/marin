@@ -6,6 +6,7 @@
 import dataclasses
 import os
 from datetime import timedelta
+from typing import Any, get_args
 
 import click
 import jmp
@@ -28,6 +29,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
+from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, RematMode, SmallParamSharding
 from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.llama import llama3_tokenizer
 
@@ -69,6 +71,35 @@ class HeroThroughputResult(Artifact):
     """Metrics and resumable checkpoints from the rack-scale throughput hero run."""
 
 
+def apply_hero_overrides(
+    model: GrugModelConfig,
+    *,
+    expert_chunks: int | None = None,
+    small_param_sharding: SmallParamSharding | None = None,
+    interleave_before_gather: bool | None = None,
+    remat_mode: RematMode | None = None,
+    ce_b_block_size: int | None = None,
+) -> GrugModelConfig:
+    """Override the hero performance knobs; ``None`` keeps the hero value.
+
+    Iris ships the local worktree, so every rack in a parallel sweep runs one code state. Each
+    knob is therefore a launcher flag rather than an edit, and a sweep varies one per arm.
+    """
+    overrides: dict[str, Any] = {
+        field: value
+        for field, value in (
+            ("expert_chunks", expert_chunks),
+            ("small_param_sharding", small_param_sharding),
+            ("interleave_before_gather", interleave_before_gather),
+            ("remat_mode", remat_mode),
+        )
+        if value is not None
+    }
+    if ce_b_block_size is not None:
+        overrides["ce_block_sizes"] = dataclasses.replace(model.ce_block_sizes, b_block_size=ce_b_block_size)
+    return dataclasses.replace(model, **overrides) if overrides else model
+
+
 def build_hero_run(
     *,
     run_id: str,
@@ -78,6 +109,11 @@ def build_hero_run(
     watch_interval: int = HERO_WATCH_INTERVAL,
     profile_start_step: int | None = None,
     profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
+    expert_chunks: int | None = None,
+    small_param_sharding: SmallParamSharding | None = None,
+    interleave_before_gather: bool | None = None,
+    remat_mode: RematMode | None = None,
+    ce_b_block_size: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run.
@@ -89,6 +125,8 @@ def build_hero_run(
     ``profile_start_step`` captures an XPlane trace over ``profile_num_steps`` steps and uploads it
     to the temp-bucket XProf store. Start it well after PGLE's own profiling recompile so the
     capture covers the steady-state program.
+
+    The performance knobs are forwarded to :func:`apply_hero_overrides`.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -103,6 +141,14 @@ def build_hero_run(
 
     batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
+    model = apply_hero_overrides(
+        model,
+        expert_chunks=expert_chunks,
+        small_param_sharding=small_param_sharding,
+        interleave_before_gather=interleave_before_gather,
+        remat_mode=remat_mode,
+        ce_b_block_size=ce_b_block_size,
+    )
     wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
     grug_trainer = GrugTrainerConfig(
         data_seed=None,
@@ -228,6 +274,36 @@ def build_hero_run(
     show_default=True,
     help="Steps to capture once --profile-start-step is reached.",
 )
+@click.option(
+    "--expert-chunks",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Expert-bank chunks the sonic_cute MoE gathers separately. Unset keeps the hero value.",
+)
+@click.option(
+    "--small-param-sharding",
+    type=click.Choice(get_args(SmallParamSharding)),
+    default=None,
+    help="Layout of the router, attn_gate, and GatedNorm factors. Unset keeps the hero value.",
+)
+@click.option(
+    "--interleave-before-gather/--no-interleave-before-gather",
+    default=None,
+    help="Interleave the MoE gate/up weights on the local shard instead of the gathered chunk. "
+    "Unset keeps the hero value.",
+)
+@click.option(
+    "--remat-mode",
+    type=click.Choice(get_args(RematMode)),
+    default=None,
+    help="Per-block gradient checkpointing policy. Unset keeps the hero value.",
+)
+@click.option(
+    "--ce-b-block-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Token-axis tile for the fused cross-entropy. Unset keeps the hero value.",
+)
 @build_options
 def main(
     run_id: str,
@@ -237,6 +313,11 @@ def main(
     watch_interval: int,
     profile_start_step: int | None,
     profile_num_steps: int,
+    expert_chunks: int | None,
+    small_param_sharding: SmallParamSharding | None,
+    interleave_before_gather: bool | None,
+    remat_mode: RematMode | None,
+    ce_b_block_size: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -246,6 +327,11 @@ def main(
         watch_interval=watch_interval,
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
+        expert_chunks=expert_chunks,
+        small_param_sharding=small_param_sharding,
+        interleave_before_gather=interleave_before_gather,
+        remat_mode=remat_mode,
+        ce_b_block_size=ce_b_block_size,
     )
 
 

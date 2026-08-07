@@ -29,6 +29,7 @@ def _moe_mlp_local(
     num_experts: int,
     implementation: MoeImplementation,
     expert_chunks: int = 1,
+    interleave_before_gather: bool = False,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
     if implementation == "sonic_cute":
         if activation_fn is not jax.nn.silu:
@@ -52,6 +53,7 @@ def _moe_mlp_local(
                 num_experts=num_experts,
                 chunk_sizes=(experts_per_chunk,) * expert_chunks,
                 data_axis_name="data",
+                interleave_before_gather=interleave_before_gather,
             )
         return _moe_mlp_local_sonic_cute(
             x,
