@@ -6,7 +6,10 @@
 WHY THIS EXISTS: NCCL 2.28.9 on aarch64 wedges this cross-rack collective within
 seconds, while versions with the upstream proxy-slot fix should complete. No
 native NCCL timeout fires on an affected build (see the standalone repro's
-README). This launcher runs it as a supervised child so we can show that our framework's
+README). That is a property of this synthetic collective, not an explanation of
+the 300B hero wedge in #7344, which #8029 records wedging on 2.30.7 behind a
+verified provenance gate. Treat this as a detector test, not a root-cause test.
+This launcher runs it as a supervised child so we can show that our framework's
 primary detector — XLA's per-execution deadman, armed by the supervisor in the
 child's ``XLA_FLAGS`` — catches that wedge where nothing else does. Repeated
 ``--ablation`` options run environment arms sequentially on one allocation, with

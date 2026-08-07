@@ -5,6 +5,7 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from levanter.recovery.detection import recovery_xla_env
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_fsdp import launch, train
@@ -116,9 +117,18 @@ def test_failsafe_control_carries_the_recovery_flags(monkeypatch):
     )
 
 
-def test_hero_detection_clears_the_measured_first_execution():
-    """The deadman must exceed a cold first execution or it fires before step 1 every run."""
-    measured_first_execution = 261.0
-    assert train.HERO_DETECTION_CONFIG.execution_terminate_timeout_seconds > measured_first_execution
-    # Thunk reporting throws std::bad_alloc on a module this size, destroying the diagnostic.
-    assert train.HERO_DETECTION_CONFIG.progress_tracking == 0
+def test_hero_detection_emits_flags_that_survive_a_cold_first_execution():
+    """The flags XLA actually receives decide whether a run reaches step 1, so assert on those.
+
+    A cold first `jit_train_step` measured 261s at two racks; a deadman below that aborts every
+    run before step 1. Thunk reporting throws std::bad_alloc on a module this size, replacing the
+    abort diagnostic with an allocation error.
+    """
+    flags = recovery_xla_env(train.HERO_DETECTION_CONFIG, {"XLA_FLAGS": ""})["XLA_FLAGS"].split()
+    by_name = dict(flag.lstrip("-").split("=", 1) for flag in flags)
+
+    measured_cold_first_execution = 261.0
+    deadman = by_name["xla_gpu_execution_terminate_timeout"]
+    assert deadman.endswith("s"), f"XLA parses this as a duration string, got {deadman!r}"
+    assert float(deadman.removesuffix("s")) > measured_cold_first_execution
+    assert by_name["xla_gpu_execution_progress_tracking"] == "0"

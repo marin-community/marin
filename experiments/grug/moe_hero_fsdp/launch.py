@@ -6,6 +6,7 @@
 import dataclasses
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import timedelta
 
 import click
@@ -29,6 +30,8 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
+from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
+from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import (
     GrugAblationSweepConfig,
     GrugRunConfig,
@@ -80,8 +83,8 @@ def _hero_run_config(
     run_id: str,
     batch_size: int,
     num_steps: int,
-    model,
-    optimizer,
+    model: GrugModelConfig,
+    optimizer: GrugMoeMuonHConfig,
     grug_trainer: GrugTrainerConfig,
     wandb_project: str,
     slim: ArtifactStep[TokenizedCache],
@@ -158,6 +161,51 @@ def _validate_hero_args(run_id: str, dp_racks: int, num_steps: int) -> None:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
 
 
+@dataclass(frozen=True)
+class _HeroRunParts:
+    """The pieces every hero run shares, resolved once before the lazy `build_config` closure."""
+
+    batch_size: int
+    model: GrugModelConfig
+    optimizer: GrugMoeMuonHConfig
+    wandb_project: str
+    grug_trainer: GrugTrainerConfig
+    train_resources: ResourceConfig
+    name: str
+    version: str
+    slim: ArtifactStep[TokenizedCache]
+
+
+def _hero_run_parts(
+    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool, version: str | None
+) -> _HeroRunParts:
+    _validate_hero_args(run_id, dp_racks, num_steps)
+    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
+    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
+    name = f"grug/{run_id}"
+    return _HeroRunParts(
+        batch_size=batch_size,
+        model=model,
+        optimizer=optimizer,
+        wandb_project=os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT,
+        grug_trainer=GrugTrainerConfig(
+            data_seed=None,
+            log_every=1,
+            ema_beta=None,
+            z_loss_weight=1e-4,
+            offload_opt_state=True,
+            save_checkpoints=save_checkpoints,
+            expert_axis_size=1,
+            replica_axis_size=dp_racks,
+            sharding_dump_path=None,
+        ),
+        train_resources=_hero_resources(dp_racks),
+        name=name,
+        version=resolve_version(name, version),
+        slim=_slimpajama_6b_dataset(),
+    )
+
+
 def _build_hero_run(
     *,
     run_id: str,
@@ -173,26 +221,15 @@ def _build_hero_run(
     parameters and the offloaded optimizer state, about 2.7 TiB at the hero shape, which a run that
     only reports MFU does not need.
     """
-    _validate_hero_args(run_id, dp_racks, num_steps)
-
-    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
-    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
-    wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
-    grug_trainer = GrugTrainerConfig(
-        data_seed=None,
-        log_every=1,
-        ema_beta=None,
-        z_loss_weight=1e-4,
-        offload_opt_state=True,
-        save_checkpoints=save_checkpoints,
-        expert_axis_size=1,
-        replica_axis_size=dp_racks,
-        sharding_dump_path=None,
+    parts = _hero_run_parts(
+        run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, save_checkpoints=save_checkpoints, version=version
     )
-    train_resources = _hero_resources(dp_racks)
-    name = f"grug/{run_id}"
-    version = resolve_version(name, version)
-    slim = _slimpajama_6b_dataset()
+    batch_size = parts.batch_size
+    model, optimizer = parts.model, parts.optimizer
+    wandb_project = parts.wandb_project
+    grug_trainer = parts.grug_trainer
+    train_resources = parts.train_resources
+    name, version, slim = parts.name, parts.version, parts.slim
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         return _hero_run_config(
@@ -273,27 +310,16 @@ def build_ablation_sweep_hero_run(
     Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its
     own W&B run named ``<run_id>-<arm>``. A sweep is a diagnostic, so it never checkpoints.
     """
-    _validate_hero_args(run_id, dp_racks, steps_per_arm)
     arms = tuple(selected_ablations(environment_ablations(num_steps=steps_per_arm), ablation_names))
-
-    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
-    model, optimizer = build_hero_configs(num_train_steps=steps_per_arm, batch_size=batch_size)
-    wandb_project = os.environ.get("WANDB_PROJECT") or DEFAULT_WANDB_PROJECT
-    grug_trainer = GrugTrainerConfig(
-        data_seed=None,
-        log_every=1,
-        ema_beta=None,
-        z_loss_weight=1e-4,
-        offload_opt_state=True,
-        save_checkpoints=False,
-        expert_axis_size=1,
-        replica_axis_size=dp_racks,
-        sharding_dump_path=None,
+    parts = _hero_run_parts(
+        run_id=run_id, dp_racks=dp_racks, num_steps=steps_per_arm, save_checkpoints=False, version=version
     )
-    train_resources = _hero_resources(dp_racks)
-    name = f"grug/{run_id}"
-    version = resolve_version(name, version)
-    slim = _slimpajama_6b_dataset()
+    batch_size = parts.batch_size
+    model, optimizer = parts.model, parts.optimizer
+    wandb_project = parts.wandb_project
+    grug_trainer = parts.grug_trainer
+    train_resources = parts.train_resources
+    name, version, slim = parts.name, parts.version, parts.slim
 
     def build_config(ctx: StepContext) -> GrugAblationSweepConfig:
         runs = tuple(

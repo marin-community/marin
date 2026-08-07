@@ -47,6 +47,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, Transformer
+from experiments.grug.recovery.run_summary import format_run_summary
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -783,18 +784,6 @@ class GrugAblationSweepConfig:
             raise ValueError(f"got {len(self.arms)} arms but {len(self.runs)} runs")
 
 
-def _sweep_summary(outcomes: list[tuple[AblationSpec, RunResult]]) -> str:
-    header = f"{'arm':<30} {'outcome':<14} {'faults':<28} {'final_step':>11} {'wall_s':>9}"
-    lines = [header, "-" * len(header)]
-    for arm, result in outcomes:
-        faults = ",".join(f"{f.fault_class.value}:{f.returncode}" for f in result.faults) or "-"
-        lines.append(
-            f"{arm.name:<30} {result.outcome.value:<14} {faults:<28} "
-            f"{result.final_step!s:>11} {result.total_wall_time:>9.1f}"
-        )
-    return "\n".join(lines)
-
-
 def _run_grug_sweep_local(config: GrugAblationSweepConfig) -> None:
     """Run every arm under one supervisor, and never let one arm's fault end the sweep."""
     outcomes: list[tuple[AblationSpec, RunResult]] = []
@@ -816,7 +805,8 @@ def _run_grug_sweep_local(config: GrugAblationSweepConfig) -> None:
                 ", ".join(f"class={f.fault_class.value} rc={f.returncode} detail={f.detail!r}" for f in result.faults),
             )
 
-    logger.warning("hero ablation sweep %s complete:\n%s", config.run_id, _sweep_summary(outcomes))
+    summary = format_run_summary([(arm.name, result) for arm, result in outcomes])
+    logger.warning("hero ablation sweep %s complete:\n%s", config.run_id, summary)
 
 
 def run_grug_ablation_sweep(config: GrugAblationSweepConfig) -> None:
@@ -834,12 +824,15 @@ def run_grug_ablation_sweep(config: GrugAblationSweepConfig) -> None:
 
 
 __all__ = [
+    "GrugAblationSweepConfig",
     "GrugEvalConfig",
     "GrugRunConfig",
     "GrugTrainState",
     "GrugTrainerConfig",
     "initial_state",
     "run_grug",
+    "run_grug_ablation_sweep",
     "run_grug_failsafe_control",
+    "run_grug_stock_control",
     "run_grug_supervised",
 ]

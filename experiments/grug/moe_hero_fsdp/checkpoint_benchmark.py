@@ -15,7 +15,6 @@ from datetime import timedelta
 
 import click
 import jmp
-from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
@@ -34,12 +33,11 @@ from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_fsdp.launch import (
     _SLIMPAJAMA_SHUFFLE,
     HERO_FSDP_BATCH_SIZE,
-    HERO_GPUS_PER_TASK,
     HERO_MIXED_PRECISION,
-    HERO_NODES_PER_RACK,
     HERO_PROCESS_STALL_TIMEOUT,
     HERO_PROCESSES_PER_TASK,
     HERO_TRAIN_STEP_TIMEOUT,
+    _hero_resources,
     _slimpajama_6b_dataset,
 )
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
@@ -132,14 +130,7 @@ def build_checkpoint_benchmark_run(
         replica_axis_size=dp_racks,
         sharding_dump_path=None,
     )
-    train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=HERO_GPUS_PER_TASK,
-        cpu=120,
-        ram="850g",
-        disk="1t",
-        replicas=HERO_NODES_PER_RACK * dp_racks,
-    )
+    train_resources = _hero_resources(dp_racks)
     name = f"grug/checkpoint-benchmark/{run_id}"
     version = resolve_version(name, version)
     step_name = user_namespaced_name(name, version)
