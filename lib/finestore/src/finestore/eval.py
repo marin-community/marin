@@ -38,7 +38,7 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
 
-from finestore.layout import BLOBS_TABLE
+from finestore.layout import BLOBS_TABLE, WRITER_COLUMN
 from finestore.reader import CompositeReader
 from finestore.schema import arrow_schema
 from finestore.store import DataStore, drop_table
@@ -646,17 +646,16 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
     Returns the number of samples written. The source jsonl is kept as the mechanism's native
     artifact and is additionally preserved inside the archive, so the run can be rebuilt from the
     archive alone after a contract change. Re-running is idempotent: an unchanged source produces
-    identical rows, which collapse on the merge key without conflict.
+    identical rows, which collapse on the merge key without conflict. A run with no sample source is
+    left untouched.
     """
     root = StoragePath(out_path)
-    # A re-export reads every sample source under the run, so it produces the table's complete
-    # contents. Rows left by an older contract cannot collapse against the new ones (the widened
-    # merge key reads as null on their shards), so a version change replaces them; an export at the
-    # current version merges idempotently because identical rows share a digest.
-    stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
-    if stored_version is not None and stored_version != SCHEMA_VERSION:
-        logger.info("rebuilding %s samples written under schema v%s at v%s", out_path, stored_version, SCHEMA_VERSION)
-        drop_table(out_path, ARCHIVE_SAMPLES_TABLE)
+    sources = list(StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob())
+    if not sources:
+        # With no source there is nothing to write, and nothing that could stand in for what is
+        # already stored, so a run evaluated by another mechanism keeps the archive it has.
+        return 0
+    _replace_superseded_samples(out_path, writer_id)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:
@@ -664,7 +663,7 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
             store.add_source_artifact(path.relative_to(root), path.read_bytes(), content_type="application/json")
             # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
             store.flush()
-        for path in StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob():
+        for path in sources:
             payload = path.read_bytes()
             store.add_source_artifact(path.relative_to(root), payload, content_type="application/x-ndjson")
             store.flush()
@@ -673,6 +672,30 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
     finally:
         store.close()
     return count
+
+
+def _replace_superseded_samples(out_path: str, writer_id: str) -> None:
+    """Drop a samples table written under an older contract, refusing when it holds foreign rows.
+
+    A re-export reads every sample source under the run, so it reproduces the table's complete
+    contents -- but only the part this writer contributed. Rows an older contract left cannot
+    collapse against the new ones, because the widened merge key reads as null on their shards, so a
+    version change has to replace them wholesale. Rows from another mechanism would not come back,
+    so the export stops instead of dropping them.
+    """
+    reader = CompositeReader(out_path)
+    stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
+    if stored_version is None or stored_version == SCHEMA_VERSION:
+        return
+    stored = reader.scan(ARCHIVE_SAMPLES_TABLE, columns=[WRITER_COLUMN])
+    foreign = sorted({writer for writer in stored[WRITER_COLUMN].to_pylist() if writer != writer_id}) if stored else []
+    if foreign:
+        raise ValueError(
+            f"{out_path} holds schema v{stored_version} samples from {foreign}, which an lm-eval "
+            "export cannot regenerate; rebuild the archive from its preserved sources instead"
+        )
+    logger.info("rebuilding %s samples written under schema v%s at v%s", out_path, stored_version, SCHEMA_VERSION)
+    drop_table(out_path, ARCHIVE_SAMPLES_TABLE)
 
 
 def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> int:

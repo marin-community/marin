@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from collections import namedtuple
 
 import pytest
 from click.testing import CliRunner
@@ -26,6 +27,7 @@ from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
 from rigging.filesystem import StoragePath
 
+from experiments.evaluation.cli import SweepOutcome, _sweep_archives
 from experiments.evaluation.migrate_archive import (
     MigrationCounts,
     archive_sample_count,
@@ -241,13 +243,65 @@ def test_re_export_replaces_rows_written_under_an_older_contract(tmp_path):
         ],
     )
     export_lm_eval_samples(str(results))
-    schema_path = StoragePath(str(results) + "/samples/_schema.json")
-    meta = json.loads(schema_path.read_text())
-    meta["schema_version"] = 3
-    schema_path.write_text(json.dumps(meta))
+    _stamp_schema_version(results, 3)
 
     assert export_lm_eval_samples(str(results)) == 2
     assert CompositeReader(str(results)).scan("samples").num_rows == 2
+
+
+def _stamp_schema_version(results, version: int) -> None:
+    schema_path = StoragePath(str(results) + "/samples/_schema.json")
+    meta = json.loads(schema_path.read_text())
+    meta["schema_version"] = version
+    schema_path.write_text(json.dumps(meta))
+
+
+def _harbor_archive(results, version: int) -> None:
+    """Leave a samples table from a mechanism that writes no lm-eval jsonl."""
+    store = EvaluationStore.open(str(results), writer_id="harbor")
+    store.add_sample(_mcq("1", correct=True))
+    store.seal()
+    store.close()
+    _stamp_schema_version(results, version)
+
+
+def test_export_leaves_an_archive_it_has_no_source_for(tmp_path):
+    # A Harbor run's samples arrive through add_sample, not a jsonl on disk. A sweep that visits it
+    # must not read the stale schema version as licence to drop rows it cannot put back.
+    results = tmp_path / "run" / "results"
+    _harbor_archive(results, version=3)
+
+    assert export_lm_eval_samples(str(results)) == 0
+    assert CompositeReader(str(results)).scan("samples").num_rows == 1
+
+
+def test_export_refuses_to_replace_samples_from_another_mechanism(tmp_path):
+    # An archive holding both mechanisms cannot be brought forward by re-reading the jsonl, because
+    # that only reproduces the lm-eval half. Erroring keeps the other half.
+    results = tmp_path / "run" / "results"
+    _harbor_archive(results, version=3)
+    _write_jsonl(results, [_lm_eval_row(0, "flexible-extract", 1.0, "4")])
+
+    with pytest.raises(ValueError, match="harbor"):
+        export_lm_eval_samples(str(results))
+    assert CompositeReader(str(results)).scan("samples").num_rows == 1
+
+
+def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
+    # Several records can name one results tree. Two workers writing it at once make one compact
+    # shards the other is reading, so the sweep must group by path before it fans out.
+    record = namedtuple("record", "run_id results_path")
+    shared = str(tmp_path / "shared" / "results")
+    visited: list[str] = []
+
+    def work(path: str) -> SweepOutcome:
+        visited.append(path)
+        return SweepOutcome("exported", "0 sample(s)")
+
+    records = [record("run-a", shared), record("run-b", shared), record("run-c", str(tmp_path / "own" / "results"))]
+    _sweep_archives(records, 4, work)
+
+    assert sorted(visited) == sorted({shared, str(tmp_path / "own" / "results")})
 
 
 def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):

@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter, defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -49,6 +52,14 @@ logger = logging.getLogger(__name__)
 # One worker holds a run's whole sample file in memory while normalizing it, and the largest are a
 # few hundred megabytes, so this trades throughput against a bounded footprint on a CPU node.
 _DEFAULT_BACKFILL_WORKERS = 8
+
+
+@dataclass(frozen=True)
+class SweepOutcome:
+    """What a sweep did to one archive: ``category`` for the tally, ``detail`` for the reported line."""
+
+    category: str
+    detail: str
 
 
 def _resolve_eval_keys(evals_arg: str) -> tuple[str, ...]:
@@ -261,39 +272,45 @@ def backfill_samples(prefixes: tuple[str, ...], workers: int) -> None:
     """
     configure_coreweave_s3()
     records = [record for prefix in prefixes for record in list_records(prefix)]
-    _run_backfill(records, workers)
+    _sweep_archives(records, workers, _backfill_one)
 
 
-def _backfill_one(results_path: str) -> str:
-    """Export one run unless its archive already matches the current contract."""
+def _backfill_one(results_path: str) -> SweepOutcome:
+    """Export one archive unless it already matches the current contract."""
     if CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION:
-        return "current"
-    return f"{export_lm_eval_samples(results_path)} sample(s)"
+        return SweepOutcome("already_current", "current")
+    return SweepOutcome("exported", f"{export_lm_eval_samples(results_path)} sample(s)")
 
 
-def _run_backfill(records: list, workers: int) -> None:
-    """Export many runs concurrently, reporting each outcome and a final tally."""
-    done = skipped = failed = 0
+def _sweep_archives(records: list, workers: int, work: Callable[[str], SweepOutcome], /) -> None:
+    """Apply ``work`` once per distinct archive, reporting each outcome and a final tally.
+
+    Records are grouped by results path first. Several runs can be recorded against one results
+    tree, and letting two workers write the same archive concurrently makes one of them compact
+    shards the other is still reading.
+    """
+    runs_by_path: dict[str, list[str]] = defaultdict(list)
+    for record in records:
+        runs_by_path[record.results_path].append(record.run_id)
+    tally: Counter[str] = Counter()
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_backfill_one, record.results_path): record for record in records}
+        futures = {pool.submit(work, path): path for path in runs_by_path}
         for future in as_completed(futures):
-            record = futures[future]
+            path = futures[future]
+            runs = " ".join(sorted(runs_by_path[path]))
             try:
                 outcome = future.result()
             except Exception as exc:
-                failed += 1
-                # One unreadable run must not abandon the rest of a fleet-wide sweep; the tally and
-                # the non-zero exit below are what surface it.
-                logger.exception("backfill failed for %s", record.results_path)
-                click.echo(f"{record.run_id}  FAILED {type(exc).__name__}: {exc}  {record.results_path}")
+                tally["failed"] += 1
+                # One unreadable archive must not abandon the rest of a fleet-wide sweep; the tally
+                # and the non-zero exit below are what surface it.
+                logger.exception("sweep failed for %s", path)
+                click.echo(f"{runs}  FAILED {type(exc).__name__}: {exc}  {path}")
                 continue
-            if outcome == "current":
-                skipped += 1
-            else:
-                done += 1
-            click.echo(f"{record.run_id}  {outcome}  {record.results_path}")
-    click.echo(json.dumps({"exported": done, "already_current": skipped, "failed": failed}, sort_keys=True))
-    if failed:
+            tally[outcome.category] += 1
+            click.echo(f"{runs}  {outcome.detail}  {path}")
+    click.echo(json.dumps(tally, sort_keys=True))
+    if tally["failed"]:
         raise SystemExit(1)
 
 
@@ -321,33 +338,14 @@ def rebuild_samples(prefixes: tuple[str, ...], workers: int) -> None:
     """
     configure_coreweave_s3()
     records = [record for prefix in prefixes for record in list_records(prefix)]
-    done = skipped = failed = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_rebuild_one, record.results_path): record for record in records}
-        for future in as_completed(futures):
-            record = futures[future]
-            try:
-                outcome = future.result()
-            except Exception as exc:
-                failed += 1
-                logger.exception("rebuild failed for %s", record.results_path)
-                click.echo(f"{record.run_id}  FAILED {type(exc).__name__}: {exc}  {record.results_path}")
-                continue
-            if outcome == "no preserved sources":
-                skipped += 1
-            else:
-                done += 1
-            click.echo(f"{record.run_id}  {outcome}  {record.results_path}")
-    click.echo(json.dumps({"rebuilt": done, "no_sources": skipped, "failed": failed}, sort_keys=True))
-    if failed:
-        raise SystemExit(1)
+    _sweep_archives(records, workers, _rebuild_one)
 
 
-def _rebuild_one(results_path: str) -> str:
-    """Rebuild one run from its preserved sources, or report that it has none."""
+def _rebuild_one(results_path: str) -> SweepOutcome:
+    """Rebuild one archive from its preserved sources, or report that it has none."""
     if not preserved_sample_sources(results_path):
-        return "no preserved sources"
-    return f"{rebuild_lm_eval_samples(results_path)} sample(s)"
+        return SweepOutcome("no_sources", "no preserved sources")
+    return SweepOutcome("rebuilt", f"{rebuild_lm_eval_samples(results_path)} sample(s)")
 
 
 def main() -> None:
