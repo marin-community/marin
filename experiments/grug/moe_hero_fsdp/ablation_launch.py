@@ -43,7 +43,7 @@ from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
 from experiments.grug.moe.launch_datakit_moe_mix import _datakit_data_config, _val_component
 from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
+from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_fsdp.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -131,7 +131,9 @@ def num_steps_for(hidden_dim: int, batch_size: int) -> int:
     return max(1, round(tokens / (batch_size * SEQ_LEN)))
 
 
-def _build_model(hidden_dim: int, moe_implementation: str, expert_chunks: int) -> GrugModelConfig:
+def _build_model(
+    hidden_dim: int, moe_implementation: str, expert_chunks: int, qb_estimator: QbEstimator
+) -> GrugModelConfig:
     """The FSDP hero shape downsized to this width; depth from the even-round depth heuristic."""
     num_heads = hidden_dim // HEAD_DIM
     local_kv, global_kv = _kv_heads(num_heads)
@@ -161,6 +163,7 @@ def _build_model(hidden_dim: int, moe_implementation: str, expert_chunks: int) -
         attention_implementation="gpu_fa4_cute",
         moe_implementation=moe_implementation,
         expert_chunks=expert_chunks,
+        qb_estimator=qb_estimator,
         report_capacity_overflow=True,
         rope_fused=True,
     )
@@ -178,7 +181,14 @@ class AblationResult(Artifact):
 
 
 def build_ablation_run(
-    *, run_id: str, size: str, accelerator: str = "H100", expert_chunks: int = 1, version: str | None = None
+    *,
+    run_id: str,
+    size: str,
+    accelerator: str = "H100",
+    expert_chunks: int = 1,
+    qb_estimator: QbEstimator = QbEstimator.CHUNK_QUANTILE,
+    batch_size: int | None = None,
+    version: str | None = None,
 ) -> ArtifactStep[AblationResult]:
     if size not in WIDTHS:
         raise ValueError(f"size must be one of {sorted(WIDTHS)}, got {size!r}")
@@ -186,11 +196,13 @@ def build_ablation_run(
         raise ValueError(f"accelerator must be one of {sorted(ACCELERATORS)}, got {accelerator!r}")
     acc = ACCELERATORS[accelerator]
     gate = GATES[SIZE_GATE[size]]
-    batch = gate.batch_size
+    # ``batch_size`` overrides the gate default (QB ablations run a larger batch to hold the token
+    # budget fixed while cutting step count); token budget stays 60x so steps rescale with the batch.
+    batch = batch_size if batch_size is not None else gate.batch_size
     hidden_dim = WIDTHS[size]
     steps = num_steps_for(hidden_dim, batch)
 
-    model = _build_model(hidden_dim, acc.moe_implementation, expert_chunks)
+    model = _build_model(hidden_dim, acc.moe_implementation, expert_chunks, qb_estimator)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=steps, batch_size=batch, hidden_dim=hidden_dim, seq_len=SEQ_LEN
     )
@@ -231,6 +243,7 @@ def build_ablation_run(
                     SIZE_GATE[size],
                     f"shape-{size}",
                     f"chunks-{expert_chunks}",
+                    f"qb-{qb_estimator.value}",
                     accelerator.lower(),
                 ],
                 group="moe-hero-fsdp-abl",
@@ -314,9 +327,31 @@ def build_ablation_run(
     show_default=True,
     help="MoE expert-chunk count (only affects the sonic_cute / B200 path).",
 )
+@click.option(
+    "--qb-estimator",
+    type=click.Choice([e.value for e in QbEstimator]),
+    default=QbEstimator.CHUNK_QUANTILE.value,
+    show_default=True,
+    help="QB threshold estimator (bias-mechanism ablation #8033).",
+)
+@click.option(
+    "--batch-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Override the gate's batch size (token budget stays 60x, so step count rescales).",
+)
 @build_options
-def main(run_id: str, size: str, accelerator: str, expert_chunks: int) -> ArtifactStep[AblationResult]:
-    return build_ablation_run(run_id=run_id, size=size, accelerator=accelerator, expert_chunks=expert_chunks)
+def main(
+    run_id: str, size: str, accelerator: str, expert_chunks: int, qb_estimator: str, batch_size: int | None
+) -> ArtifactStep[AblationResult]:
+    return build_ablation_run(
+        run_id=run_id,
+        size=size,
+        accelerator=accelerator,
+        expert_chunks=expert_chunks,
+        qb_estimator=QbEstimator(qb_estimator),
+        batch_size=batch_size,
+    )
 
 
 if __name__ == "__main__":
