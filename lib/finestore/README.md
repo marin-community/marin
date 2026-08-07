@@ -208,17 +208,6 @@ each referenced trajectory into the `blobs` table (rewriting the sample's
 30-day storage. `--from-legacy-archive` reads those preserved Parquets to rebuild
 the archive at the original results path without moving the backup again.
 
-`experiments.evaluation.verify_archive` checks the result: a run's
-`results_*.json` states how many documents each leaf task scored and under which
-extraction filters, so the archive should hold `documents x filters` sample rows.
-It exits non-zero when a run holds fewer, which is what a silent fold looks like
-from the outside.
-
-```shell
-uv run python -m experiments.evaluation.verify_archive \
-  --records-prefix gs://marin-eval-metadata/evals --only-failures
-```
-
 ```shell
 uv run python -m experiments.evaluation.migrate_archive gs://bucket/run/results
 

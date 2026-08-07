@@ -36,7 +36,6 @@ from experiments.evaluation.migrate_archive import (
 from experiments.evaluation.migrate_archive import (
     main as migrate_archive_cli,
 )
-from experiments.evaluation.verify_archive import leaf_task_expectations
 from infra.evaldash.src.samples import fetch_artifact, fetch_samples, list_sample_tasks
 
 
@@ -377,30 +376,6 @@ def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
         assert not CompositeReader(root).is_sealed()
     finally:
         reopened.close()
-
-
-def test_expected_rows_count_documents_times_filters():
-    # The three shapes a results file mixes: a filtered leaf, a leaf whose benchmark applies no
-    # filter, and an aggregate group row that owns no samples of its own.
-    expectations = leaf_task_expectations(
-        {
-            "results": {
-                "gsm8k": {
-                    "alias": "gsm8k",
-                    "sample_len": 1319,
-                    "exact_match,strict-match": 0.3,
-                    "exact_match_stderr,strict-match": 0.01,
-                    "exact_match,flexible-extract": 0.7,
-                },
-                "MATH500": {"alias": "MATH500", "sample_len": 500, "accuracy": 0.6},
-                "mmlu": {"alias": "mmlu", "sample_len": 14042, "sample_count": 57, "acc,none": 0.5},
-            }
-        }
-    )
-
-    assert set(expectations) == {"gsm8k", "MATH500"}
-    assert expectations["gsm8k"].expected_rows == 1319 * 2
-    assert expectations["MATH500"].expected_rows == 500
 
 
 def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
