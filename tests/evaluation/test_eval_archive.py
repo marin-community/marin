@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import json
-from collections import namedtuple
 
 import pytest
 from click.testing import CliRunner
@@ -27,7 +26,7 @@ from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
 from rigging.filesystem import StoragePath
 
-from experiments.evaluation.cli import SweepOutcome, _sweep_archives
+from experiments.evaluation.cli import SweepOutcome, _sweep_archives, selected_archives
 from experiments.evaluation.migrate_archive import (
     MigrationCounts,
     archive_sample_count,
@@ -382,18 +381,23 @@ def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
 def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
     # Several records can name one results tree. Two workers writing it at once make one compact
     # shards the other is reading, so the sweep must group by path before it fans out.
-    record = namedtuple("record", "run_id results_path")
     shared = str(tmp_path / "shared" / "results")
+    own = str(tmp_path / "own" / "results")
     visited: list[str] = []
 
     def work(path: str) -> SweepOutcome:
         visited.append(path)
         return SweepOutcome("exported", "0 sample(s)")
 
-    records = [record("run-a", shared), record("run-b", shared), record("run-c", str(tmp_path / "own" / "results"))]
-    _sweep_archives(records, 4, work)
+    _sweep_archives({shared: ["run-a", "run-b"], own: ["run-c"]}, 4, work)
 
-    assert sorted(visited) == sorted({shared, str(tmp_path / "own" / "results")})
+    assert sorted(visited) == sorted([shared, own])
+
+
+def test_naming_an_archive_directly_does_not_pull_in_the_fleet(tmp_path):
+    # Targeting a handful of damaged archives must not re-sweep every recorded run beside them.
+    named = str(tmp_path / "one" / "results")
+    assert selected_archives((), (named + "/",)) == {named: []}
 
 
 def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):

@@ -250,30 +250,35 @@ def launch(
 
 
 @cli.command("backfill-samples")
+@click.argument("results_paths", nargs=-1)
 @click.option(
     "--prefix",
     "prefixes",
     multiple=True,
-    default=DEFAULT_SCAN_PREFIXES,
-    show_default=True,
-    help="Object-store prefix(es) to scan for records; repeatable.",
+    help=f"Object-store prefix(es) to scan for records; repeatable. Defaults to {DEFAULT_SCAN_PREFIXES}.",
 )
 @click.option(
     "--workers",
     default=_DEFAULT_BACKFILL_WORKERS,
     show_default=True,
-    help="Runs to export concurrently. Each holds one run's sample file in memory.",
+    help="Archives to export concurrently. Each holds one run's sample file in memory.",
 )
-def backfill_samples(prefixes: tuple[str, ...], workers: int) -> None:
-    """Bring every run's finestore sample archive up to the current ``finestore.eval`` contract.
+def backfill_samples(results_paths: tuple[str, ...], prefixes: tuple[str, ...], workers: int) -> None:
+    """Bring the named RESULTS_PATHS, or every recorded run, up to the current contract.
 
-    Reads each run's kept ``samples_*.jsonl`` and rewrites its ``samples`` table. Runs already at the
-    current schema version are skipped, so an interrupted sweep resumes where it stopped; use
-    ``rebuild-samples`` to force a re-export of an archive that is already current.
+    Reads each run's kept ``samples_*.jsonl`` and rewrites its ``samples`` table. An archive a
+    completed export already brought to the current version is skipped, so an interrupted sweep
+    resumes where it stopped; use ``rebuild-samples`` to force one that is already current.
     """
     configure_coreweave_s3()
-    records = [record for prefix in prefixes for record in list_records(prefix)]
-    _sweep_archives(records, workers, _backfill_one)
+    _sweep_archives(selected_archives(_resolve_prefixes(prefixes, results_paths), results_paths), workers, _backfill_one)
+
+
+def _resolve_prefixes(prefixes: tuple[str, ...], results_paths: tuple[str, ...]) -> tuple[str, ...]:
+    """Fall back to the whole fleet only when the caller named neither a prefix nor a path."""
+    if prefixes or results_paths:
+        return prefixes
+    return tuple(DEFAULT_SCAN_PREFIXES)
 
 
 def _backfill_one(results_path: str) -> SweepOutcome:
@@ -292,22 +297,31 @@ def _backfill_one(results_path: str) -> SweepOutcome:
     return SweepOutcome("exported", f"{written} sample(s)")
 
 
-def _sweep_archives(records: list, workers: int, work: Callable[[str], SweepOutcome], /) -> None:
-    """Apply ``work`` once per distinct archive, reporting each outcome and a final tally.
+def selected_archives(prefixes: tuple[str, ...], results_paths: tuple[str, ...]) -> dict[str, list[str]]:
+    """Group run ids by archive path, over explicit paths and every record under each prefix.
 
-    Records are grouped by results path first. Several runs can be recorded against one results
-    tree, and letting two workers write the same archive concurrently makes one of them compact
-    shards the other is still reading.
+    Grouping is what keeps a sweep correct: several runs can be recorded against one results tree,
+    and letting two workers write the same archive concurrently makes one of them compact shards the
+    other is still reading.
     """
     runs_by_path: dict[str, list[str]] = defaultdict(list)
-    for record in records:
-        runs_by_path[record.results_path].append(record.run_id)
+    for path in results_paths:
+        runs_by_path[path.rstrip("/")] = []
+    for prefix in prefixes:
+        for record in list_records(prefix):
+            runs_by_path[record.results_path.rstrip("/")].append(record.run_id)
+    return runs_by_path
+
+
+def _sweep_archives(runs_by_path: dict[str, list[str]], workers: int, work: Callable[[str], SweepOutcome], /) -> None:
+    """Apply ``work`` once per archive, reporting each outcome and a final tally."""
     tally: Counter[str] = Counter()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(work, path): path for path in runs_by_path}
         for future in as_completed(futures):
             path = futures[future]
-            runs = " ".join(sorted(runs_by_path[path]))
+            # A path named directly has no record to take a run id from; the tree names it well enough.
+            runs = " ".join(sorted(runs_by_path[path])) or path.rstrip("/").rsplit("/", 2)[-2]
             try:
                 outcome = future.result()
             except Exception as exc:
@@ -325,21 +339,20 @@ def _sweep_archives(records: list, workers: int, work: Callable[[str], SweepOutc
 
 
 @cli.command("rebuild-samples")
+@click.argument("results_paths", nargs=-1)
 @click.option(
     "--prefix",
     "prefixes",
     multiple=True,
-    default=DEFAULT_SCAN_PREFIXES,
-    show_default=True,
-    help="Object-store prefix(es) to scan for records; repeatable.",
+    help=f"Object-store prefix(es) to scan for records; repeatable. Defaults to {DEFAULT_SCAN_PREFIXES}.",
 )
 @click.option(
     "--workers",
     default=_DEFAULT_BACKFILL_WORKERS,
     show_default=True,
-    help="Runs to rebuild concurrently. Each holds one run's sample file in memory.",
+    help="Archives to rebuild concurrently. Each holds one run's sample file in memory.",
 )
-def rebuild_samples(prefixes: tuple[str, ...], workers: int) -> None:
+def rebuild_samples(results_paths: tuple[str, ...], prefixes: tuple[str, ...], workers: int) -> None:
     """Rebuild sample archives from the sources preserved inside them, ignoring the results tree.
 
     Use this after a change to the contract in ``finestore.eval`` when a run's evaluator-native
@@ -347,8 +360,7 @@ def rebuild_samples(prefixes: tuple[str, ...], workers: int) -> None:
     consider current. Runs whose archive predates source preservation are reported and skipped.
     """
     configure_coreweave_s3()
-    records = [record for prefix in prefixes for record in list_records(prefix)]
-    _sweep_archives(records, workers, _rebuild_one)
+    _sweep_archives(selected_archives(_resolve_prefixes(prefixes, results_paths), results_paths), workers, _rebuild_one)
 
 
 def _rebuild_one(results_path: str) -> SweepOutcome:
