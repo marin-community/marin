@@ -402,3 +402,21 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
   Every aligned checkpoint retained exact teacher router top-1 and top-k agreement and zero capacity overflow. At 50 million tokens spectral improved native MoE loss by 1.1% and layer-2 MoE NRMSE by 3.9%, while layer-3 NRMSE was effectively tied and its token-0 validation spike was 3.0% worse. This does not meet the 15% spectral initialization gate.
 - Interpretation: spectral matching does not clearly overtake native-only matching in the no-prefit arm. The initial native advantage is modest, and identity ultimately has the lowest local-distillation error, showing that Stage-A adaptation can reorder the initializations. Native remains the default initializer because the decision criterion prioritizes immediate conversion quality and does not justify the spectral machinery.
 - Next action: keep the committed Stage-A artifacts, stop identity and spectral before Stage B, and babysit native through the 200-million-token preservation stage. The separately owned spectral-plus-prefit controller remains outside this monitor.
+
+### 2026-08-07 15:30 - GRUG-XEM-002 native no-prefit recovery result
+
+- Hypothesis: End-to-end preservation recovery can close the native-assignment conversion gap while routers adapt without collapse.
+- Commit Hash: `31018a607f`.
+- Config: native-output assignment without prefit; layers 2-3 share one bank. Stage A trained only the shared bank for 50 million tokens. Stage B trained the shared bank and affected routers for 200 million tokens with cross-entropy, logit KL weight 0.1, and MoE preservation weight 1.0.
+- Result:
+
+  | Stage-B tokens | Validation delta | Paloma macro delta | MoE NRMSE L2 | MoE NRMSE L3 | Top-1 agreement L2/L3 |
+  |---:|---:|---:|---:|---:|---:|
+  | 0 | +0.067233 | +0.066467 | — | — | — |
+  | 25M | +0.043983 | +0.044288 | 0.305849 | 0.631412 | 0.9466 / 0.9455 |
+  | 100M | +0.034079 | +0.033993 | 0.320656 | 0.626005 | 0.9390 / 0.9255 |
+  | 200M | +0.028132 | +0.028137 | 0.332374 | 0.604745 | 0.9358 / 0.9034 |
+
+  Layer-2/layer-3 block NRMSE finished at 0.086370/0.221102. Routing entropy finished at 5.5314/5.5319, top-k teacher agreement at 0.9285/0.9099, and capacity overflow at zero. The controller succeeded without application failure or preemption. The output committed `.artifact.json` and a permanent step-1526 checkpoint with `manifest.ocdbt`, `merge_manifest.json`, and `metadata.json`.
+- Interpretation: recovery passes the final Paloma `+0.03` screening threshold at 200 million tokens but misses the stricter `+0.01` to `+0.02` validation-loss target and did not do so by the preferred 100-million-token horizon. Layer-3 MoE error continues downward, while layer-2 MoE error rises as its router adapts. The conversion is promising but does not pass the full single-pair surgery gate.
+- Next action: compare against the separately owned spectral-plus-prefit arm if it completes. Do not advance to two middle pairs until a recovery variant closes the remaining validation gap or the gate is explicitly revised.
