@@ -18,6 +18,7 @@ class PlateauRequirements:
     minimum_seconds: float
     minimum_generated_tokens: int
     required_request_ids: frozenset[str]
+    require_manifest_coverage: bool = True
 
     def __post_init__(self) -> None:
         if self.target_concurrency <= 0:
@@ -119,7 +120,10 @@ class PlateauWindow:
             in_flight == self.requirements.target_concurrency
             and now - self.opened_at >= self.requirements.minimum_seconds
             and generation_counter - self.generation_counter_start >= self.requirements.minimum_generated_tokens
-            and self.completed_request_ids == set(self.requirements.required_request_ids)
+            and (
+                not self.requirements.require_manifest_coverage
+                or self.completed_request_ids == set(self.requirements.required_request_ids)
+            )
             and self.failed_requests == 0
         )
 
@@ -167,6 +171,7 @@ class PlateauWindow:
                 "expected": len(self.requirements.required_request_ids),
                 "observed": len(self.completed_request_ids),
                 "passed": self.completed_request_ids == set(self.requirements.required_request_ids),
+                "required": self.requirements.require_manifest_coverage,
             },
             "discarded_windows": [*self.discarded],
         }

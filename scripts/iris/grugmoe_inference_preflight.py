@@ -23,6 +23,7 @@ import itertools
 import json
 import math
 import os
+import random
 import shlex
 import signal
 import socket
@@ -114,12 +115,19 @@ CALIBRATION_MAX_NUM_SEQS = 144
 ATTENTION_CANDIDATES = ("window1024-ep16", "window2048-ep16", "global-every4-ep16")
 ATTENTION_FINALISTS = ("exact-reference-ep16", *ATTENTION_CANDIDATES)
 ATTENTION_ORDERS = ("ab", "ba")
+ATTENTION_CAPACITY_CONCURRENCIES = (384, 768, 1152, 1536)
+ATTENTION_CAPACITY_MODES = ("scout", "confirm")
+ATTENTION_CAPACITY_VARIANTS = ("matched", "reference", "global-every4")
+ATTENTION_CAPACITY_DP_SIZE = CASES["exact-reference-ep16"].data_parallel_size
+ATTENTION_CAPACITY_SCOUT_MINIMUM_SECONDS = 30.0
+ATTENTION_CAPACITY_SCOUT_MINIMUM_GENERATED_TOKENS = 32_768
 MATRIX_PLANS = (
     "instrument-v1",
     "ep8-calibration",
     "topology-v1",
     "attention-pair-v1",
     "attention-finalist-v1",
+    "attention-capacity-v1",
 )
 HEALTH_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/inference-bench/grugmoe-architecture/experiment-0"
 TOPOLOGY_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin/users/romain/inference-bench/grugmoe-architecture/experiment-1"
@@ -2988,6 +2996,7 @@ def _run_rolling_health_arm(
     routing_regime: str = "canonical",
     route_audit_mode: str | None = None,
     metric_sample_seconds: float = 5.0,
+    require_manifest_coverage: bool = True,
 ) -> dict[str, Any]:
     if request_transport not in {"completion", "chat"}:
         raise ValueError(f"unknown request transport: {request_transport}")
@@ -3002,8 +3011,8 @@ def _run_rolling_health_arm(
     if metric_sample_seconds <= 0:
         raise ValueError("health metric sample interval must be positive")
     required_request_ids = frozenset(str(request["request_id"]) for request in workload["requests"])
-    if len(required_request_ids) != 144:
-        raise ValueError("health workload must contain 144 unique frozen branches")
+    if len(required_request_ids) != len(workload["requests"]):
+        raise ValueError("health workload request IDs must be unique")
     events.emit(
         "arm_started",
         arm_id=arm_id,
@@ -3075,6 +3084,7 @@ def _run_rolling_health_arm(
         minimum_seconds=minimum_seconds,
         minimum_generated_tokens=minimum_generated_tokens,
         required_request_ids=required_request_ids,
+        require_manifest_coverage=require_manifest_coverage,
     )
     plateau = PlateauWindow(requirements)
     gate = threading.Event()
@@ -3525,9 +3535,10 @@ def _run_rolling_health_arm(
             and plateau_result["in_flight"]["max"] <= target_concurrency
             and plateau_result["in_flight"]["at_close"] == target_concurrency
         ),
-        "manifest_coverage": branch_coverage == set(required_request_ids),
+        "manifest_coverage": not require_manifest_coverage or branch_coverage == set(required_request_ids),
         "final_prefix_provenance": (
-            {entry["manifest_request_id"] for entry in final_prefix_provenance} == set(required_request_ids)
+            not require_manifest_coverage
+            or {entry["manifest_request_id"] for entry in final_prefix_provenance} == set(required_request_ids)
         ),
         "sampled_token_logprobs": sampled_logprob_count == client_generated_tokens,
         "all_requests_succeeded": not failures and len(all_records) == engine_successes,
@@ -3559,6 +3570,7 @@ def _run_rolling_health_arm(
             "request_transport": request_transport,
             "routing_regime": routing_regime,
             "route_audit_mode": route_audit_mode,
+            "require_manifest_coverage": require_manifest_coverage,
             "queue_definition": (
                 "occupied frozen client slots; a completed response retains its slot until "
                 "the controller consumes it and submits the same-cohort successor"
@@ -3620,6 +3632,7 @@ def _run_rolling_health_arm(
                 "expected": len(required_request_ids),
                 "observed": len(branch_coverage),
                 "passed": branch_coverage == set(required_request_ids),
+                "required": require_manifest_coverage,
             },
             "cohort_plateau_completions": plateau_result["cohort_completions"],
             "final_prefix_provenance": final_prefix_provenance,
@@ -4403,6 +4416,86 @@ def _sha256_json(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _attention_capacity_workload(target_concurrency: int, *, seed: int = DUMMY_SEED) -> dict[str, Any]:
+    """Extend the frozen mixed workload for one listed capacity point."""
+    if target_concurrency == CALIBRATION_MAX_NUM_SEQS:
+        return deterministic_workload(seed=seed)
+    if target_concurrency not in ATTENTION_CAPACITY_CONCURRENCIES:
+        raise ValueError(
+            f"attention capacity must use one of {ATTENTION_CAPACITY_CONCURRENCIES}, got {target_concurrency}"
+        )
+    template = deterministic_workload(seed=seed)
+    branches_per_root = int(template["branches_per_root"])
+    root_count = target_concurrency // branches_per_root
+    roots_per_cohort = target_concurrency // 3 // branches_per_root
+    if roots_per_cohort % ATTENTION_CAPACITY_DP_SIZE:
+        raise AssertionError("capacity roots must be added in complete DP16 blocks per cohort")
+
+    rng = random.Random(seed)
+    roots: list[dict[str, Any]] = []
+    requests: list[dict[str, Any]] = []
+    cohorts = ("short", "medium", "long")
+    roots_by_cohort_rank = {(cohort, rank): 0 for cohort in cohorts for rank in range(ATTENTION_CAPACITY_DP_SIZE)}
+    frozen_cohorts = [str(root["cohort"]) for root in template["roots"]]
+    for root in range(root_count):
+        rank = root % ATTENTION_CAPACITY_DP_SIZE
+        if root < len(frozen_cohorts):
+            cohort = frozen_cohorts[root]
+        else:
+            minimum = min(roots_by_cohort_rank[(candidate, rank)] for candidate in cohorts)
+            cohort = next(
+                candidate for candidate in cohorts if roots_by_cohort_rank[(candidate, rank)] == minimum
+            )
+        roots_by_cohort_rank[(cohort, rank)] += 1
+        cohort_index = cohorts.index(cohort)
+        prefix_length = int(template["history_lengths"][cohort_index])
+        prefix = [1, *(rng.randrange(3, 255) for _ in range(prefix_length - 1))]
+        roots.append({"root": root, "cohort": cohort, "prefix_token_ids": prefix})
+        for branch in range(branches_per_root):
+            append_rng = random.Random((seed << 16) + root * branches_per_root + branch)
+            append = [
+                3 + ((root * 17 + branch * 29 + position + append_rng.randrange(251)) % 252)
+                for position in range(int(template["append_tokens"]))
+            ]
+            requests.append(
+                {
+                    "request_id": f"root-{root:02d}-branch-{branch:02d}",
+                    "root": root,
+                    "branch": branch,
+                    "cohort": cohort,
+                    "prefix_token_count": len(prefix),
+                    "append_token_count": len(append),
+                    "append_token_ids": append,
+                    "max_tokens": int(template["response_tokens"]),
+                    "final_token_count": len(prefix) + len(append) + int(template["response_tokens"]),
+                }
+            )
+
+    workload = {
+        "schema_version": int(template["schema_version"]),
+        "kind": "attention-capacity-rolling-mixed",
+        "seed": seed,
+        "root_count": len(roots),
+        "branches_per_root": branches_per_root,
+        "request_count": len(requests),
+        "history_lengths": list(template["history_lengths"]),
+        "append_tokens": int(template["append_tokens"]),
+        "response_tokens": int(template["response_tokens"]),
+        "final_lengths": list(template["final_lengths"]),
+        "roots": roots,
+        "requests": requests,
+    }
+    request_ids = {str(request["request_id"]) for request in requests}
+    prompt_hashes = {
+        hashlib.sha256(bytes(materialize_prompt(workload, request))).hexdigest() for request in requests
+    }
+    if len(request_ids) != target_concurrency or len(prompt_hashes) != target_concurrency:
+        raise AssertionError("every capacity request must have a unique request ID and full prompt")
+    if set(roots_by_cohort_rank.values()) != {roots_per_cohort // ATTENTION_CAPACITY_DP_SIZE}:
+        raise AssertionError("capacity roots are not balanced across all three cohorts and DP16 ranks")
+    return workload
+
+
 def _health_slot_schedule(workload: dict[str, Any], *, target_concurrency: int) -> list[dict[str, Any]]:
     schedule: list[dict[str, Any]] = []
     for slot in frozen_cohort_slots(workload["requests"], target_concurrency=target_concurrency):
@@ -4711,6 +4804,8 @@ def _matrix_artifact_prefix(plan: str, run_id: str) -> str:
         if root is None:
             raise ValueError("attention run ID must include its candidate or finalist case")
         return f"{root}/{plan}/{run_id}/"
+    if plan == "attention-capacity-v1":
+        return f"{GLOBAL_CADENCE_ARTIFACT_ROOT}/{plan}/{run_id}/"
     raise ValueError(f"unknown matrix plan: {plan}")
 
 
@@ -4842,6 +4937,104 @@ def _verified_topology_calibration_sources(
     }
 
 
+def _verified_attention_capacity_baseline(
+    filesystem: Any,
+    *,
+    ab_run_id: str,
+    ba_run_id: str,
+    task_image: str,
+) -> dict[str, Any]:
+    """Verify both accepted C144 global-cadence pairs and their frozen inputs."""
+
+    def verify(run_id: str, order: str) -> dict[str, Any]:
+        plan = "attention-pair-v1"
+        artifact_prefix = _matrix_artifact_prefix(plan, run_id)
+        manifest_bytes = filesystem.cat_file(_s3_key(f"{artifact_prefix}manifest.json"))
+        result_bytes = filesystem.cat_file(_s3_key(f"{artifact_prefix}result.json"))
+        receipt_uri = f"{_matrix_control_prefix(plan, run_id)}independent-readback.json"
+        receipt_bytes = filesystem.cat_file(_s3_key(receipt_uri))
+        manifest = json.loads(manifest_bytes)
+        result = json.loads(result_bytes)
+        receipt = json.loads(receipt_bytes)
+        analysis = result.get("analysis", {})
+        provenance = manifest.get("provenance", {})
+        reference_workload = manifest.get("workloads", {}).get("exact-reference-ep16:completion")
+        candidate_workload = manifest.get("workloads", {}).get("global-every4-ep16:completion")
+        arms = result.get("arms", [])
+        checks = {
+            "identity": (
+                manifest.get("plan") == result.get("plan") == receipt.get("plan") == plan
+                and manifest.get("run_id") == result.get("run_id") == receipt.get("run_id") == run_id
+            ),
+            "passed": (
+                result.get("passed") is True
+                and receipt.get("passed") is True
+                and receipt.get("benchmark_passed") is True
+            ),
+            "pair": (
+                analysis.get("candidate") == "global-every4-ep16"
+                and analysis.get("order") == order
+                and len(arms) == 2
+                and {arm.get("matrix", {}).get("case") for arm in arms}
+                == {"exact-reference-ep16", "global-every4-ep16"}
+                and all(
+                    arm.get("settings", {}).get("target_concurrency") == 144
+                    and arm.get("settings", {}).get("max_num_batched_tokens") == 8192
+                    and arm.get("settings", {}).get("max_num_seqs") == 144
+                    and arm.get("settings", {}).get("r3_enabled") is False
+                    for arm in arms
+                )
+            ),
+            "workload": (
+                isinstance(reference_workload, dict)
+                and reference_workload == candidate_workload
+                and len(reference_workload.get("slot_schedules", {}).get("144", [])) == 144
+            ),
+            "source_hashes": (
+                receipt.get("source_object_sha256", {}).get("manifest.json")
+                == hashlib.sha256(manifest_bytes).hexdigest()
+                and receipt.get("source_object_sha256", {}).get("result.json")
+                == hashlib.sha256(result_bytes).hexdigest()
+            ),
+            "provenance": (
+                provenance.get("vllm_commit") == VLLM_SHA
+                and provenance.get("task_image") == task_image
+                and receipt.get("task_image") == task_image
+            ),
+        }
+        failed = [name for name, passed in checks.items() if not passed]
+        if failed:
+            raise RuntimeError(f"accepted C144 {order} source {run_id} failed: {', '.join(failed)}")
+        return {
+            "plan": plan,
+            "run_id": run_id,
+            "order": order,
+            "artifact_prefix": artifact_prefix,
+            "independent_readback_uri": receipt_uri,
+            "frozen_inputs_sha256": reference_workload["frozen_inputs_sha256"],
+            "provenance": {
+                "marin_commit": provenance["marin_commit"],
+                "vllm_commit": provenance["vllm_commit"],
+                "task_image": provenance["task_image"],
+            },
+            "source_object_sha256": {
+                "manifest.json": hashlib.sha256(manifest_bytes).hexdigest(),
+                "result.json": hashlib.sha256(result_bytes).hexdigest(),
+                "independent-readback.json": hashlib.sha256(receipt_bytes).hexdigest(),
+            },
+        }
+
+    sources = {"ab": verify(ab_run_id, "ab"), "ba": verify(ba_run_id, "ba")}
+    local_c144 = _health_workload_manifest(
+        _attention_capacity_workload(144, seed=DUMMY_SEED),
+        concurrencies=[144],
+    )["frozen_inputs_sha256"]
+    hashes = {source["frozen_inputs_sha256"] for source in sources.values()}
+    if hashes != {local_c144}:
+        raise RuntimeError("accepted C144 workload hash does not match the current frozen generator")
+    return {"sources": sources, "local_c144_frozen_inputs_sha256": local_c144}
+
+
 def _calibration_selection(arms: list[dict[str, Any]], *, case_name: str) -> dict[str, Any]:
     """Apply the frozen 95%-of-best selection rule without a favorable reroll."""
     candidates = [
@@ -4923,6 +5116,8 @@ def _matrix_phase(
     homogeneous_slices: bool = False,
     trajectory_65k: bool = False,
     capacity_stress_131k: bool = False,
+    require_manifest_coverage: bool = True,
+    capacity_mode: str | None = None,
 ) -> dict[str, Any]:
     model_case = CASES[case]
     return {
@@ -4942,6 +5137,8 @@ def _matrix_phase(
         "homogeneous_slices": homogeneous_slices,
         "trajectory_65k": trajectory_65k,
         "capacity_stress_131k": capacity_stress_131k,
+        "require_manifest_coverage": require_manifest_coverage,
+        "capacity_mode": capacity_mode,
     }
 
 
@@ -5004,6 +5201,32 @@ def _matrix_initial_phases(args: argparse.Namespace) -> list[dict[str, Any]]:
                 capacity_stress_131k=True,
             )
             for position, base_case in enumerate(base_cases)
+        ]
+    if args.plan == "attention-capacity-v1":
+        if args.capacity_variant == "matched":
+            cases = ("exact-reference-ep16", "global-every4-ep16")
+            if args.attention_order == "ba":
+                cases = tuple(reversed(cases))
+        else:
+            cases = (
+                "exact-reference-ep16"
+                if args.capacity_variant == "reference"
+                else "global-every4-ep16",
+            )
+        return [
+            _matrix_phase(
+                f"capacity-{args.capacity_mode}-c{args.capacity_concurrency}-{position + 1}-{case}",
+                case=case,
+                role=f"attention-capacity-{args.capacity_mode}",
+                concurrencies=[args.capacity_concurrency],
+                max_num_batched_tokens=8192,
+                max_num_seqs=args.capacity_concurrency,
+                order=args.attention_order if args.capacity_variant == "matched" else None,
+                replicate=(1 if args.attention_order == "ab" else 2) if args.capacity_variant == "matched" else 1,
+                require_manifest_coverage=args.capacity_mode == "confirm",
+                capacity_mode=args.capacity_mode,
+            )
+            for position, case in enumerate(cases)
         ]
     if args.plan != "topology-v1":
         raise ValueError(f"unknown matrix plan: {args.plan}")
@@ -5358,6 +5581,113 @@ def _matrix_attention_pair_summary(arms: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+def _matrix_attention_capacity_summary(
+    arms: list[dict[str, Any]],
+    phase_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    planned = [phase.get("phase", {}) for phase in phase_results]
+    matched = any(phase.get("order") in ATTENTION_ORDERS for phase in planned)
+    expected = 2 if matched else 1
+    points = []
+    for arm in arms:
+        case = str(arm.get("matrix", {}).get("case"))
+        mode = str(arm.get("matrix", {}).get("capacity_mode"))
+        measured_pass = arm.get("passed") is True
+        points.append(
+            {
+                "case": case,
+                "variant": "reference" if case == "exact-reference-ep16" else "global-every4",
+                "arm_id": arm.get("arm_id"),
+                "mode": mode,
+                "qualification": (
+                    "stable"
+                    if mode == "confirm" and measured_pass
+                    else "provisional-pass"
+                    if measured_pass
+                    else "failed"
+                ),
+                "passed_applicable_gates": measured_pass,
+                "generation_tokens_per_second_per_gpu": arm.get("headline", {}).get(
+                    "generation_tokens_per_second_per_gpu"
+                ),
+                "preemptions": arm.get("preemptions"),
+                "gates": arm.get("gates", {}),
+            }
+        )
+    by_variant = {point["variant"]: point for point in points}
+    reference = by_variant.get("reference")
+    candidate = by_variant.get("global-every4")
+    candidate_over_reference = None
+    if reference is not None and candidate is not None:
+        reference_rate = float(reference["generation_tokens_per_second_per_gpu"])
+        candidate_rate = float(candidate["generation_tokens_per_second_per_gpu"])
+        candidate_over_reference = 100 * (candidate_rate / reference_rate - 1) if reference_rate else math.inf
+    evidence_complete = (
+        len(phase_results) == expected
+        and len(arms) == expected
+        and all(phase.get("evidence_complete") is True for phase in phase_results)
+    )
+    return {
+        "passed": evidence_complete,
+        "evidence_complete": evidence_complete,
+        "matched": matched,
+        "order": planned[0].get("order") if matched and planned else None,
+        "mode": planned[0].get("capacity_mode") if planned else None,
+        "target_concurrency": planned[0].get("concurrencies", [None])[0] if planned else None,
+        "points": points,
+        "candidate_over_reference_percent": candidate_over_reference,
+        "interpretation": (
+            "A scout pass is provisional. Only a confirm pass is stable; a failed arm brackets a cliff."
+        ),
+    }
+
+
+def _attention_capacity_curve(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute the frozen knee and maximum-safe definitions from qualified points."""
+    variants = ("reference", "global-every4")
+    summaries: dict[str, Any] = {}
+    for variant in variants:
+        points = sorted(
+            (dict(row) for row in rows if row.get("variant") == variant),
+            key=lambda row: int(row["concurrency"]),
+        )
+        stable = [row for row in points if row.get("qualification") == "stable"]
+        if not stable:
+            summaries[variant] = {
+                "best_stable_generation_tokens_per_second_per_gpu": None,
+                "throughput_knee": None,
+                "maximum_safe_concurrency": None,
+                "maximum_safe_is_lower_bound": False,
+                "first_failed_boundary": next(
+                    (int(row["concurrency"]) for row in points if row.get("qualification") == "failed"),
+                    None,
+                ),
+            }
+            continue
+        best = max(float(row["generation_tokens_per_second_per_gpu"]) for row in stable)
+        knee = min(
+            int(row["concurrency"])
+            for row in stable
+            if float(row["generation_tokens_per_second_per_gpu"]) >= 0.95 * best
+        )
+        maximum_safe = max(int(row["concurrency"]) for row in stable)
+        summaries[variant] = {
+            "best_stable_generation_tokens_per_second_per_gpu": best,
+            "throughput_knee": knee,
+            "maximum_safe_concurrency": maximum_safe,
+            "maximum_safe_is_lower_bound": maximum_safe == ATTENTION_CAPACITY_CONCURRENCIES[-1],
+            "first_failed_boundary": next(
+                (
+                    int(row["concurrency"])
+                    for row in points
+                    if row.get("qualification") == "failed" and int(row["concurrency"]) > maximum_safe
+                ),
+                None,
+            ),
+        }
+    return {"rows": rows, "variants": summaries}
+
+
 def _matrix_attention_finalist_summary(arms: list[dict[str, Any]]) -> dict[str, Any]:
     validation = [arm for arm in arms if arm.get("matrix", {}).get("role") == "attention-finalist-validation"]
     stretch: list[dict[str, Any]] = []
@@ -5478,6 +5808,12 @@ def _matrix_result(
             if phase.get("phase", {}).get("role") == "attention-finalist-validation"
         }
         expected_phase_count = 1 if finalist_cases == {"exact-reference-131k-ep16"} else 2
+    elif plan == "attention-capacity-v1":
+        analysis = _matrix_attention_capacity_summary(arms, phase_results)
+        expected_phase_count = 2 if analysis["matched"] else 1
+        phase_health = bool(phase_results) and all(
+            phase.get("evidence_complete") is True for phase in phase_results
+        )
     else:
         raise ValueError(f"unknown matrix plan: {plan}")
     passed = (
@@ -5589,6 +5925,25 @@ def _matrix_result_markdown(result: dict[str, Any]) -> str:
                 "{candidate_over_reference_percent:.3f}% | "
                 "{reference_slowdown_from_short_percent:.3f}% | "
                 "{candidate_slowdown_from_short_percent:.3f}% |".format(**point)
+            )
+    elif result["plan"] == "attention-capacity-v1":
+        lines.extend(
+            [
+                "## Capacity point",
+                "",
+                f"Mode: `{analysis.get('mode')}`; target concurrency: "
+                f"`{analysis.get('target_concurrency')}`; order: `{analysis.get('order') or 'single'}`.",
+                "",
+                "A scout pass is provisional. Only a confirm pass is stable; a failed arm brackets a cliff.",
+                "",
+                "| Variant | Qualification | gen tok/s/GPU | Preemptions |",
+                "|---|---|---:|---:|",
+            ]
+        )
+        for point in analysis.get("points", []):
+            lines.append(
+                f"| {point['variant']} | {point['qualification']} | "
+                f"{float(point['generation_tokens_per_second_per_gpu']):.3f} | {point['preemptions']} |"
             )
     elif result["plan"] == "attention-finalist-v1":
         lines.extend(
@@ -5946,6 +6301,11 @@ def _run_matrix_phase(
     phase_dir = local_root / f"phase-{phase_index:02d}-{phase_id}"
     phase_dir.mkdir(parents=True, exist_ok=True)
     write_case(phase_dir, case=case, run_id=f"{args.run_id}-{phase_id}", git_sha=args.marin_commit)
+    if args.plan == "attention-capacity-v1":
+        capacity_workload = _attention_capacity_workload(int(phase["concurrencies"][0]), seed=DUMMY_SEED)
+        (phase_dir / "workload.json").write_text(
+            json.dumps(capacity_workload, indent=2, sort_keys=True) + "\n"
+        )
     (phase_dir / "aws-config").write_text(AWS_CONFIG_CONTENT)
     phase_prefix = f"{_matrix_control_prefix(args.plan, args.run_id)}phases/{phase_index:02d}-{phase_id}/"
     stop_uri = f"{phase_prefix}stop.json"
@@ -6048,6 +6408,7 @@ def _run_matrix_phase(
                             request_transport=str(phase["request_transport"]),
                             routing_regime=str(phase["routing_regime"]),
                             route_audit_mode=phase["route_audit_mode"],
+                            require_manifest_coverage=bool(phase["require_manifest_coverage"]),
                         )
                         arm["settings"]["case"] = case.name
                         arm["matrix"] = {
@@ -6059,6 +6420,7 @@ def _run_matrix_phase(
                             "routing_regime": phase["routing_regime"],
                             "order": phase.get("order"),
                             "replicate": phase.get("replicate"),
+                            "capacity_mode": phase.get("capacity_mode"),
                             "fresh_server": True,
                             "same_iris_allocation": str(info.job_id),
                         }
@@ -6215,11 +6577,14 @@ def _run_matrix_phase(
             "ranks": rank_records,
             "upload_receipts": rank_receipts,
         }
-        phase_passed = (
+        phase_evidence_complete = (
             worker_error is None
             and placement.get("passed") is True
             and all_rank_health["passed"] is True
             and len(arms) == len(phase["concurrencies"])
+        )
+        phase_passed = (
+            phase_evidence_complete
             and all(arm.get("passed") is True for arm in arms)
         )
         phase_result = {
@@ -6229,6 +6594,7 @@ def _run_matrix_phase(
             "phase_id": phase_id,
             "model": model,
             "passed": phase_passed,
+            "evidence_complete": phase_evidence_complete,
             "arms": arms,
             "startup": startup_records,
             "placement": placement,
@@ -6243,6 +6609,7 @@ def _run_matrix_phase(
                 phase_index=phase_index,
                 phase_id=phase_id,
                 passed=phase_passed,
+                evidence_complete=phase_evidence_complete,
             )
     return _wait_for_s3_jsons(filesystem, [done_uri], timeout_seconds=300)[0]
 
@@ -6310,6 +6677,13 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
                     task_image=args.task_image,
                 )
             }
+        elif args.plan == "attention-capacity-v1":
+            calibration_sources = _verified_attention_capacity_baseline(
+                filesystem,
+                ab_run_id=args.capacity_c144_ab_run_id,
+                ba_run_id=args.capacity_c144_ba_run_id,
+                task_image=args.task_image,
+            )
         gpu_inventory = _local_gpu_inventory()
         if len(gpu_inventory) != LOCAL_DP_SIZE or not all("GB200" in gpu["name"] for gpu in gpu_inventory):
             raise RuntimeError(f"rank {rank} did not receive four GB200 GPUs: {gpu_inventory}")
@@ -6338,9 +6712,11 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
                     metrics_map=metrics_map,
                 )
                 phase_results.append(phase_result)
-                if phase_result.get("passed") is not True:
+                if phase_result.get("passed") is not True and args.plan != "attention-capacity-v1":
                     break
                 phase_index += 1
+                if args.plan == "attention-capacity-v1":
+                    continue
                 if args.plan == "instrument-v1" and phase_index == 2 and len(phases) == 2:
                     calibration_arms = [arm for result in phase_results for arm in result.get("arms", [])]
                     selection = _calibration_selection(calibration_arms, case_name="exact-reference-ep16")
@@ -6471,11 +6847,24 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
                 "capacity": "48 branches, 121856 cached + 1024 append + 8192 generation = 131072",
                 "stretch_262k": "run only without a new serving or sharding topology; otherwise extrapolate from 131K",
             },
+            "attention_capacity": {
+                "applicable": args.plan == "attention-capacity-v1",
+                "mode": args.capacity_mode if args.plan == "attention-capacity-v1" else None,
+                "target_concurrency": args.capacity_concurrency if args.plan == "attention-capacity-v1" else None,
+                "variant": args.capacity_variant if args.plan == "attention-capacity-v1" else None,
+                "order": args.attention_order if args.plan == "attention-capacity-v1" else None,
+                "listed_upper_ladder": list(ATTENTION_CAPACITY_CONCURRENCIES),
+                "max_num_batched_tokens": 8192 if args.plan == "attention-capacity-v1" else None,
+                "max_num_seqs": args.capacity_concurrency if args.plan == "attention-capacity-v1" else None,
+                "manifest_coverage_required": (
+                    args.capacity_mode == "confirm" if args.plan == "attention-capacity-v1" else None
+                ),
+            },
         },
         "phase_plan": executed_phases,
         "calibration_sources": calibration_sources,
         "model_configs": _matrix_model_configs(workload_cases),
-        "workloads": {
+        "workloads": {} if args.plan == "attention-capacity-v1" else {
             f"{name}:{request_transport}": _health_workload_manifest(
                 deterministic_workload(seed=DUMMY_SEED),
                 case=CASES[name],
@@ -6494,6 +6883,14 @@ def run_matrix_worker(args: argparse.Namespace) -> dict[str, Any]:
                 {phase["request_transport"] for phase in executed_phases if phase["case"] == name}
             )
         },
+        "attention_capacity_workload": (
+            _health_workload_manifest(
+                _attention_capacity_workload(args.capacity_concurrency, seed=DUMMY_SEED),
+                concurrencies=[args.capacity_concurrency],
+            )
+            if args.plan == "attention-capacity-v1"
+            else {}
+        ),
         "trajectory_workloads": (
             {
                 name: _trajectory_workload_manifest(
@@ -8372,6 +8769,7 @@ def _matrix_phase_evidence_contract(
 ) -> dict[str, Any]:
     """Reconstruct one phase's exact server commands from its frozen plan."""
     case = CASES[str(planned_phase["case"])]
+    capacity_phase = str(planned_phase.get("role", "")).startswith("attention-capacity-")
     rank_records = phase_result.get("all_rank_health", {}).get("ranks", [])
     records_by_rank = {int(record["rank"]): record for record in rank_records}
     endpoints = phase_result.get("placement", {}).get("endpoints", [])
@@ -8440,7 +8838,7 @@ def _matrix_phase_evidence_contract(
     }
     arms = phase_result.get("arms", [])
     arm_checks = [
-        arm.get("passed") is True
+        (arm.get("passed") is all(arm.get("gates", {}).values()) if capacity_phase else arm.get("passed") is True)
         and arm.get("matrix", {}).get("phase_id") == planned_phase["phase_id"]
         and arm.get("matrix", {}).get("case") == case.name
         and arm.get("matrix", {}).get("role") == planned_phase["role"]
@@ -8448,6 +8846,7 @@ def _matrix_phase_evidence_contract(
         and arm.get("matrix", {}).get("routing_regime") == planned_phase["routing_regime"]
         and arm.get("matrix", {}).get("order") == planned_phase.get("order")
         and arm.get("matrix", {}).get("replicate") == planned_phase.get("replicate")
+        and arm.get("matrix", {}).get("capacity_mode") == planned_phase.get("capacity_mode")
         and arm.get("matrix", {}).get("fresh_server") is True
         and arm.get("matrix", {}).get("same_iris_allocation") == provenance["iris_job_id"]
         and arm.get("settings", {}).get("target_concurrency") == concurrency
@@ -8457,6 +8856,8 @@ def _matrix_phase_evidence_contract(
         and arm.get("settings", {}).get("request_transport") == planned_phase["request_transport"]
         and arm.get("settings", {}).get("routing_regime") == planned_phase["routing_regime"]
         and arm.get("settings", {}).get("route_audit_mode") == planned_phase["route_audit_mode"]
+        and arm.get("settings", {}).get("require_manifest_coverage", True)
+        is planned_phase["require_manifest_coverage"]
         and arm.get("settings", {}).get("settings_drift") is False
         for arm, concurrency in zip(arms, planned_phase["concurrencies"], strict=False)
     ]
@@ -8464,7 +8865,11 @@ def _matrix_phase_evidence_contract(
         phase_result.get("phase") == planned_phase
         and phase_result.get("phase_id") == planned_phase["phase_id"]
         and phase_result.get("model") == case.name
-        and phase_result.get("passed") is True
+        and (
+            phase_result.get("evidence_complete") is True
+            if capacity_phase
+            else phase_result.get("passed") is True
+        )
         and phase_result.get("error") is None
         and phase_result.get("placement", {}).get("passed") is True
         and phase_result.get("all_rank_health", {}).get("passed") is True
@@ -8536,6 +8941,56 @@ def _matrix_matched_chat_pair_contract(
         "passed": passed,
         "off_phase_id": off_phase_id,
         "on_phase_id": on_phase_id,
+        "command_checks": command_checks,
+    }
+
+
+def _matrix_attention_capacity_runtime_contract(phase_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Prove matched capacity phases change only the model config and fresh path."""
+    if len(phase_results) == 1:
+        return {"applicable": False, "passed": True}
+    if len(phase_results) != 2:
+        return {"applicable": True, "passed": False, "error": "capacity pair is incomplete"}
+
+    def normalize(command: Any) -> list[str] | None:
+        if not isinstance(command, list) or "serve" not in command:
+            return None
+        normalized = list(command)
+        serve_index = normalized.index("serve")
+        if serve_index + 1 >= len(normalized):
+            return None
+        normalized[serve_index + 1] = "<fresh-model-directory>"
+        return normalized
+
+    left, right = phase_results
+    left_ranks = {
+        int(record["rank"]): record for record in left.get("all_rank_health", {}).get("ranks", []) if record["active"]
+    }
+    right_ranks = {
+        int(record["rank"]): record
+        for record in right.get("all_rank_health", {}).get("ranks", [])
+        if record["active"]
+    }
+    command_checks = {
+        str(rank): (
+            normalize(left_ranks[rank].get("vllm_command")) == normalize(right_ranks[rank].get("vllm_command"))
+            and left_ranks[rank].get("vllm_environment") == right_ranks[rank].get("vllm_environment")
+        )
+        for rank in sorted(set(left_ranks) & set(right_ranks))
+    }
+    left_plan = dict(left.get("phase", {}))
+    right_plan = dict(right.get("phase", {}))
+    for phase in (left_plan, right_plan):
+        phase.pop("phase_id", None)
+        phase.pop("case", None)
+    return {
+        "applicable": True,
+        "passed": (
+            left_plan == right_plan
+            and set(left_ranks) == set(right_ranks) == set(range(CASES["exact-reference-ep16"].node_count))
+            and bool(command_checks)
+            and all(command_checks.values())
+        ),
         "command_checks": command_checks,
     }
 
@@ -9010,6 +9465,7 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
     kv_sources = {path: read(path) for path in kv_source_paths}
     arm_checks: dict[str, Any] = {}
     for arm in result.get("arms", []):
+        capacity_arm = plan == "attention-capacity-v1"
         start_path = arm["metrics"]["boundary_start"]
         end_path = arm["metrics"]["boundary_end"]
         start = parsed_by_path.get(start_path, [])
@@ -9041,7 +9497,11 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         carrier = arm["moe_routing"]["carrier"]
         case = CASES[arm["matrix"]["case"]]
         request_transport = arm["settings"]["request_transport"]
-        workload = manifest["workloads"][f"{case.name}:{request_transport}"]
+        workload = (
+            manifest["attention_capacity_workload"]
+            if capacity_arm
+            else manifest["workloads"][f"{case.name}:{request_transport}"]
+        )
         request_by_id = {request["request_id"]: request for request in workload["requests"]}
         curve_contract = (
             _matrix_coarse_curve_contract(
@@ -9157,12 +9617,20 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
             and carrier["transport"] == "absent"
             and int(carrier["full_response_bytes"]) > 0
         )
+        arm_gate_status_valid = arm.get("passed") is all(arm.get("gates", {}).values())
+        preemption_valid = round(preemption_delta) == int(arm["preemptions"])
+        resident_preemption_valid = arm["resident_capacity"]["zero_preemptions"] is (
+            round(preemption_delta) == 0
+        )
         arm_checks[arm["arm_id"]] = {
             "passed": (
                 bool(start)
                 and bool(end)
-                and arm.get("passed") is True
-                and all(arm.get("gates", {}).values())
+                and (
+                    arm_gate_status_valid
+                    if capacity_arm
+                    else arm.get("passed") is True and all(arm.get("gates", {}).values())
+                )
                 and math.isclose(generation_delta, float(arm["plateau"]["generated_tokens"]), abs_tol=0.5)
                 and math.isclose(prompt_delta, float(arm["plateau"]["processed_prompt_tokens"]), abs_tol=0.5)
                 and math.isclose(
@@ -9171,8 +9639,9 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
                     rel_tol=1e-12,
                     abs_tol=1e-12,
                 )
-                and round(preemption_delta) == int(arm["preemptions"]) == 0
-                and arm["resident_capacity"]["zero_preemptions"] is True
+                and preemption_valid
+                and (capacity_arm or round(preemption_delta) == 0)
+                and resident_preemption_valid
                 and len(arm["resident_capacity"]["by_data_parallel_rank"]) == gpu_count
                 and audit_valid
                 and event_contract
@@ -9206,10 +9675,28 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
             concurrencies=[int(value) for value in workload["slot_schedules"]],
             request_transport=request_transport,
         )
-    checks["frozen_workloads"] = {
-        "passed": bool(regenerated_workloads) and manifest.get("workloads") == regenerated_workloads,
-        "contracts": sorted(regenerated_workloads),
-    }
+    if plan == "attention-capacity-v1":
+        stored_capacity_workload = manifest.get("attention_capacity_workload", {})
+        capacity_concurrency = int(result.get("analysis", {}).get("target_concurrency", 0))
+        regenerated_capacity_workload = _health_workload_manifest(
+            _attention_capacity_workload(
+                capacity_concurrency,
+                seed=int(stored_capacity_workload.get("generator_seed", DUMMY_SEED)),
+            ),
+            concurrencies=[capacity_concurrency],
+        )
+        checks["frozen_workloads"] = {
+            "passed": (
+                manifest.get("workloads") == {}
+                and stored_capacity_workload == regenerated_capacity_workload
+            ),
+            "contracts": [f"capacity:{capacity_concurrency}"],
+        }
+    else:
+        checks["frozen_workloads"] = {
+            "passed": bool(regenerated_workloads) and manifest.get("workloads") == regenerated_workloads,
+            "contracts": sorted(regenerated_workloads),
+        }
     regenerated_trajectory = {
         name: _trajectory_workload_manifest(
             deterministic_trajectory_workload(seed=int(workload["generator_seed"])),
@@ -9299,6 +9786,89 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         }
     else:
         checks["attention_pair_protocol"] = {"applicable": False, "passed": True}
+    if plan == "attention-capacity-v1":
+        planned_capacity = [
+            phase
+            for phase in manifest.get("phase_plan", [])
+            if str(phase.get("role", "")).startswith("attention-capacity-")
+        ]
+        capacity_protocol = manifest.get("protocol", {}).get("attention_capacity", {})
+        target = int(capacity_protocol.get("target_concurrency", 0))
+        mode = str(capacity_protocol.get("mode"))
+        variant = str(capacity_protocol.get("variant"))
+        order = capacity_protocol.get("order")
+        expected_cases = (
+            ["exact-reference-ep16", "global-every4-ep16"]
+            if variant == "matched" and order == "ab"
+            else (
+                ["global-every4-ep16", "exact-reference-ep16"]
+                if variant == "matched" and order == "ba"
+                else ["exact-reference-ep16"] if variant == "reference" else ["global-every4-ep16"]
+            )
+        )
+        normalized_phases = []
+        for phase in planned_capacity:
+            normalized = dict(phase)
+            normalized.pop("phase_id", None)
+            normalized.pop("case", None)
+            normalized_phases.append(normalized)
+        workload = manifest.get("attention_capacity_workload", {})
+        request_ids = [str(request.get("request_id")) for request in workload.get("requests", [])]
+        prompt_hashes = [str(request.get("prompt_token_ids_sha256")) for request in workload.get("requests", [])]
+        schedule = workload.get("slot_schedules", {}).get(str(target), [])
+        first_live_ids = [
+            str(slot.get("cyclic_request_ids", [None])[0]) for slot in schedule if slot.get("cyclic_request_ids")
+        ]
+        cohort_rank_counts = {
+            (cohort, rank): sum(
+                request.get("cohort") == cohort and int(request.get("data_parallel_rank", -1)) == rank
+                for request in workload.get("roots", [])
+            )
+            for cohort in ("short", "medium", "long")
+            for rank in range(ATTENTION_CAPACITY_DP_SIZE)
+        }
+        reference_config = dataclasses.asdict(CASES["exact-reference-ep16"])
+        candidate_config = dataclasses.asdict(CASES["global-every4-ep16"])
+        changed_properties = {
+            key for key, value in reference_config.items() if key != "name" and candidate_config[key] != value
+        }
+        checks["attention_capacity_protocol"] = {
+            "applicable": True,
+            "passed": (
+                target in ATTENTION_CAPACITY_CONCURRENCIES
+                and mode in ATTENTION_CAPACITY_MODES
+                and variant in ATTENTION_CAPACITY_VARIANTS
+                and [phase.get("case") for phase in planned_capacity] == expected_cases
+                and len(normalized_phases) == len(expected_cases)
+                and all(item == normalized_phases[0] for item in normalized_phases)
+                and all(
+                    phase.get("concurrencies") == [target]
+                    and phase.get("max_num_batched_tokens") == 8192
+                    and phase.get("max_num_seqs") == target
+                    and phase.get("r3_enabled") is False
+                    and phase.get("capacity_mode") == mode
+                    and phase.get("require_manifest_coverage") is (mode == "confirm")
+                    for phase in planned_capacity
+                )
+                and changed_properties == {"global_every"}
+                and len(request_ids) == len(set(request_ids)) == target
+                and len(prompt_hashes) == len(set(prompt_hashes)) == target
+                and len(first_live_ids) == len(set(first_live_ids)) == target
+                and set(first_live_ids) == set(request_ids)
+                and set(cohort_rank_counts.values()) == {target // 3 // 8 // ATTENTION_CAPACITY_DP_SIZE}
+            ),
+            "target_concurrency": target,
+            "mode": mode,
+            "variant": variant,
+            "order": order,
+            "changed_properties": sorted(changed_properties),
+            "unique_request_ids": len(set(request_ids)),
+            "unique_prompt_hashes": len(set(prompt_hashes)),
+            "unique_first_live_requests": len(set(first_live_ids)),
+            "cohort_rank_counts": {f"{cohort}:{rank}": count for (cohort, rank), count in cohort_rank_counts.items()},
+        }
+    else:
+        checks["attention_capacity_protocol"] = {"applicable": False, "passed": True}
     if plan == "attention-finalist-v1":
         planned_finalist = [
             phase for phase in manifest.get("phase_plan", []) if phase.get("role") == "attention-finalist-validation"
@@ -9390,6 +9960,7 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         "topology-v1": 10 + (2 if result.get("analysis", {}).get("ep8_is_targeted_chat_r3_finalist") else 0),
         "attention-pair-v1": 2,
         "attention-finalist-v1": len(manifest.get("phase_plan", [])),
+        "attention-capacity-v1": len(manifest.get("phase_plan", [])),
     }[plan]
     phase_job_ids = {
         rank_record.get("job_id")
@@ -9484,6 +10055,26 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
                 "passed": False,
                 "error": {"type": type(exc).__name__, "message": str(exc)},
             }
+    elif plan == "attention-capacity-v1":
+        try:
+            stored_sources = manifest["calibration_sources"]
+            verified_sources = _verified_attention_capacity_baseline(
+                filesystem,
+                ab_run_id=str(stored_sources["sources"]["ab"]["run_id"]),
+                ba_run_id=str(stored_sources["sources"]["ba"]["run_id"]),
+                task_image=str(provenance["task_image"]),
+            )
+            checks["calibration_sources"] = {
+                "applicable": True,
+                "passed": stored_sources == verified_sources,
+                "sources": verified_sources,
+            }
+        except Exception as exc:
+            checks["calibration_sources"] = {
+                "applicable": True,
+                "passed": False,
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }
     else:
         checks["calibration_sources"] = {
             "applicable": False,
@@ -9518,6 +10109,11 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
     else:
         chat_pair = {"applicable": False, "passed": True}
     checks["matched_chat_r3_only_route_return_differs"] = chat_pair
+    checks["attention_capacity_paired_runtime"] = (
+        _matrix_attention_capacity_runtime_contract(phase_results)
+        if plan == "attention-capacity-v1"
+        else {"applicable": False, "passed": True}
+    )
     inventory = [
         gpu
         for rank_record in result.get("all_rank_health", {}).get("ranks", [])
@@ -9527,7 +10123,12 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
         "passed": (
             phase_plan_matches
             and len(result.get("phases", [])) == expected_phases
-            and all(phase.get("passed") is True for phase in result.get("phases", []))
+            and all(
+                phase.get("evidence_complete") is True
+                if plan == "attention-capacity-v1"
+                else phase.get("passed") is True
+                for phase in result.get("phases", [])
+            )
             and phase_job_ids == {provenance.get("iris_job_id")}
             and placement.get("passed") is True
             and len(placement.get("distinct_advertise_hosts", [])) == int(provenance.get("iris_task_count", 0))
@@ -9551,7 +10152,11 @@ def readback_matrix_artifacts(filesystem: Any, *, plan: str, run_id: str) -> dic
     checks["events_and_markdown"] = {
         "passed": (
             len(completed_phases) == expected_phases
-            and all(record.get("passed") is True for record in completed_phases)
+            and (
+                all(record.get("evidence_complete") is True for record in completed_phases)
+                if plan == "attention-capacity-v1"
+                else all(record.get("passed") is True for record in completed_phases)
+            )
             and any(record.get("event") == "matrix_worker_completed" for record in event_records)
             and f"# GrugMoE {plan}" in result_md_bytes.decode()
             and "Status: **PASS**" in result_md_bytes.decode()
@@ -9783,16 +10388,76 @@ def _matrix_worker_argv(
                 args.ep16_instrument_run_id,
             ]
         )
+    elif args.plan == "attention-capacity-v1":
+        command.extend(
+            [
+                "--capacity-mode",
+                args.capacity_mode,
+                "--capacity-concurrency",
+                str(args.capacity_concurrency),
+                "--capacity-variant",
+                args.capacity_variant,
+                "--capacity-c144-ab-run-id",
+                args.capacity_c144_ab_run_id,
+                "--capacity-c144-ba-run-id",
+                args.capacity_c144_ba_run_id,
+            ]
+        )
+        if args.attention_order is not None:
+            command.extend(["--attention-order", args.attention_order])
     return command
 
 
 def _validate_matrix_args(args: argparse.Namespace) -> None:
+    if args.plan not in MATRIX_PLANS:
+        raise ValueError(f"unknown matrix plan: {args.plan}")
+    capacity_source_ids = (args.capacity_c144_ab_run_id, args.capacity_c144_ba_run_id)
+    if args.plan == "attention-capacity-v1":
+        if args.capacity_mode not in ATTENTION_CAPACITY_MODES:
+            raise ValueError("attention capacity requires scout or confirm mode")
+        if args.capacity_concurrency not in ATTENTION_CAPACITY_CONCURRENCIES:
+            raise ValueError("attention capacity requires one listed upper-ladder concurrency")
+        if args.capacity_variant not in ATTENTION_CAPACITY_VARIANTS:
+            raise ValueError("attention capacity requires a frozen variant selection")
+        if not all(capacity_source_ids):
+            raise ValueError("attention capacity requires both accepted C144 pair run IDs")
+        if any((args.ep8_calibration_run_id, args.ep16_instrument_run_id)):
+            raise ValueError("attention capacity takes the accepted C144 pairs, not calibration run IDs")
+        if args.attention_candidate is not None or args.attention_finalist is not None:
+            raise ValueError("attention capacity compares only the frozen global cadence variants")
+        if args.capacity_variant == "matched" and args.attention_order not in ATTENTION_ORDERS:
+            raise ValueError("a matched attention-capacity run requires A-to-B or B-to-A order")
+        if args.capacity_variant != "matched" and args.attention_order is not None:
+            raise ValueError("a single-variant attention-capacity run has no pair order")
+        if args.capacity_mode == "scout":
+            if (
+                args.minimum_seconds == HEALTH_MINIMUM_SECONDS
+                and args.minimum_generated_tokens == HEALTH_MINIMUM_GENERATED_TOKENS
+            ):
+                args.minimum_seconds = ATTENTION_CAPACITY_SCOUT_MINIMUM_SECONDS
+                args.minimum_generated_tokens = ATTENTION_CAPACITY_SCOUT_MINIMUM_GENERATED_TOKENS
+            if (
+                args.minimum_seconds != ATTENTION_CAPACITY_SCOUT_MINIMUM_SECONDS
+                or args.minimum_generated_tokens != ATTENTION_CAPACITY_SCOUT_MINIMUM_GENERATED_TOKENS
+            ):
+                raise ValueError("capacity scouts use the frozen provisional duration and token floors")
+        else:
+            validate_health_thresholds(
+                minimum_seconds=args.minimum_seconds,
+                minimum_generated_tokens=args.minimum_generated_tokens,
+            )
+        if args.run_id is not None and f"c{args.capacity_concurrency}" not in args.run_id:
+            raise ValueError("attention-capacity run ID must include its concurrency")
+        return
+
     validate_health_thresholds(
         minimum_seconds=args.minimum_seconds,
         minimum_generated_tokens=args.minimum_generated_tokens,
     )
-    if args.plan not in MATRIX_PLANS:
-        raise ValueError(f"unknown matrix plan: {args.plan}")
+    if any(capacity_source_ids) or any(
+        value is not None for value in (args.capacity_mode, args.capacity_concurrency, args.capacity_variant)
+    ):
+        raise ValueError("capacity settings are only valid for the attention-capacity plan")
     for topology in ("ep8", "ep16"):
         concurrency = int(getattr(args, f"{topology}_concurrency"))
         max_num_batched_tokens = int(getattr(args, f"{topology}_max_num_batched_tokens"))
@@ -9839,14 +10504,19 @@ def submit_matrix(args: argparse.Namespace) -> dict[str, Any]:
     priority = Priority(args.priority)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     run_id = args.run_id or (
-        f"exp{'3' if args.attention_candidate == 'global-every4-ep16' else '4'}-"
-        f"{args.attention_candidate}-{args.attention_order}-{timestamp}"
-        if args.plan == "attention-pair-v1"
+        f"capacity-{args.capacity_mode}-c{args.capacity_concurrency}-{args.capacity_variant}-"
+        f"{args.attention_order or 'single'}-{timestamp}"
+        if args.plan == "attention-capacity-v1"
         else (
-            f"exp{'3' if args.attention_finalist == 'global-every4-ep16' else '4'}-"
-            f"{args.attention_finalist}-validation-{timestamp}"
-            if args.plan == "attention-finalist-v1"
-            else timestamp
+            f"exp{'3' if args.attention_candidate == 'global-every4-ep16' else '4'}-"
+            f"{args.attention_candidate}-{args.attention_order}-{timestamp}"
+            if args.plan == "attention-pair-v1"
+            else (
+                f"exp{'3' if args.attention_finalist == 'global-every4-ep16' else '4'}-"
+                f"{args.attention_finalist}-validation-{timestamp}"
+                if args.plan == "attention-finalist-v1"
+                else timestamp
+            )
         )
     )
     replicas = 2 if args.plan == "ep8-calibration" else 4
@@ -9915,6 +10585,17 @@ def submit_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 "ep16_instrument_run_id": args.ep16_instrument_run_id,
                 "trajectory_65k": True,
                 "capacity_stress_131k": True,
+            }
+        elif args.plan == "attention-capacity-v1":
+            summary["attention_capacity"] = {
+                "mode": args.capacity_mode,
+                "concurrency": args.capacity_concurrency,
+                "variant": args.capacity_variant,
+                "order": args.attention_order,
+                "c144_source_run_ids": {
+                    "ab": args.capacity_c144_ab_run_id,
+                    "ba": args.capacity_c144_ba_run_id,
+                },
             }
         print(json.dumps(summary, indent=2, sort_keys=True), flush=True)
         if args.wait:
@@ -10111,6 +10792,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         command_parser.add_argument("--attention-candidate", choices=ATTENTION_CANDIDATES)
         command_parser.add_argument("--attention-order", choices=ATTENTION_ORDERS)
         command_parser.add_argument("--attention-finalist", choices=ATTENTION_FINALISTS)
+        command_parser.add_argument("--capacity-mode", choices=ATTENTION_CAPACITY_MODES)
+        command_parser.add_argument("--capacity-concurrency", type=int, choices=ATTENTION_CAPACITY_CONCURRENCIES)
+        command_parser.add_argument("--capacity-variant", choices=ATTENTION_CAPACITY_VARIANTS)
+        command_parser.add_argument("--capacity-c144-ab-run-id")
+        command_parser.add_argument("--capacity-c144-ba-run-id")
 
     submit_matrix_parser = subparsers.add_parser(
         "submit-matrix",

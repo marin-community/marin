@@ -1098,7 +1098,12 @@ def test_fake_rolling_arm_replenishes_slots_and_excludes_drain(
     assert arm["drain"]["excluded_from_plateau"]
     assert arm["plateau"]["discarded_windows"] == []
     assert arm["whole_run_token_reconciliation"]["passed"]
-    assert arm["requests"]["branch_coverage"] == {"expected": 144, "observed": 144, "passed": True}
+    assert arm["requests"]["branch_coverage"] == {
+        "expected": 144,
+        "observed": 144,
+        "passed": True,
+        "required": True,
+    }
     assert arm["metrics"]["rolling_start"] != arm["metrics"]["boundary_start"]
     boundary_start = next(
         float(entry["monotonic_seconds"]) for entry in metrics_map if entry["path"] == arm["metrics"]["boundary_start"]
@@ -2128,8 +2133,32 @@ def test_plateau_discards_a_load_dip_and_closes_only_after_all_floors() -> None:
     assert result["elapsed_seconds"] == 120
     assert result["generated_tokens"] == 250_000
     assert result["in_flight"]["at_close"] == 20
-    assert result["manifest"] == {"expected": 3, "observed": 3, "passed": True}
+    assert result["manifest"] == {"expected": 3, "observed": 3, "passed": True, "required": True}
     assert result["discarded_windows"][0]["reason"] == "in_flight_below_95_percent"
+
+
+def test_provisional_plateau_can_close_without_full_manifest_coverage() -> None:
+    plateau = PlateauWindow(
+        PlateauRequirements(
+            target_concurrency=3,
+            minimum_seconds=30,
+            minimum_generated_tokens=32_768,
+            required_request_ids=frozenset({"short", "medium", "long"}),
+            require_manifest_coverage=False,
+        )
+    )
+
+    assert plateau.observe_in_flight(
+        now=0,
+        in_flight=3,
+        generation_counter=1_000,
+        prompt_counter=2_000,
+    ) == "opened"
+    plateau.record_completion(request_id="short", cohort="short", completion_tokens=8_192, succeeded=True)
+    assert plateau.ready_to_close(now=30, in_flight=3, generation_counter=33_768)
+    result = plateau.close(now=30, in_flight=3, generation_counter=33_768, prompt_counter=4_000)
+
+    assert result["manifest"] == {"expected": 3, "observed": 1, "passed": False, "required": False}
 
 
 def test_load_arm_samples_live_counter_before_slow_request_completes(
@@ -2556,6 +2585,224 @@ def test_attention_finalist_plan_runs_65k_trajectory_and_131k_capacity_on_fresh_
     assert command[command.index("--attention-finalist") + 1] == "window1024-ep16"
     assert command[command.index("--ep16-instrument-run-id") + 1] == "instrument-run"
     assert command[command.index("--iris-priority") + 1] == "production"
+
+
+@pytest.mark.parametrize("target", grug_preflight.ATTENTION_CAPACITY_CONCURRENCIES)
+def test_attention_capacity_workload_has_unique_live_inputs_and_balanced_dp16_roots(target: int) -> None:
+    workload = grug_preflight._attention_capacity_workload(target)
+    frozen = grug_preflight.deterministic_workload(seed=grug_preflight.DUMMY_SEED)
+    schedule = grug_preflight._health_slot_schedule(workload, target_concurrency=target)
+    first_live_request_ids = [slot["cyclic_request_ids"][0] for slot in schedule]
+    requests = workload["requests"]
+    capacity_dp_size = CASES["exact-reference-ep16"].data_parallel_size
+    roots_per_cohort_per_rank = target // 3 // 8 // capacity_dp_size
+
+    assert workload["request_count"] == target
+    assert workload["roots"][: frozen["root_count"]] == frozen["roots"]
+    assert workload["requests"][: frozen["request_count"]] == frozen["requests"]
+    assert len(requests) == target
+    assert len({request["request_id"] for request in requests}) == target
+    assert len(
+        {
+            hashlib.sha256(bytes(grug_preflight.materialize_prompt(workload, request))).hexdigest()
+            for request in requests
+        }
+    ) == target
+    assert len(schedule) == target
+    assert len(set(first_live_request_ids)) == target
+    assert set(first_live_request_ids) == {request["request_id"] for request in requests}
+    assert {
+        sum(
+            root["cohort"] == cohort and int(root["root"]) % capacity_dp_size == rank
+            for root in workload["roots"]
+        )
+        for cohort in ("short", "medium", "long")
+        for rank in range(capacity_dp_size)
+    } == {roots_per_cohort_per_rank}
+
+
+def test_attention_capacity_c144_keeps_the_original_frozen_manifest_hash() -> None:
+    original = grug_preflight._health_workload_manifest(
+        grug_preflight.deterministic_workload(seed=grug_preflight.DUMMY_SEED),
+        concurrencies=[144],
+    )
+    capacity_compatible = grug_preflight._health_workload_manifest(
+        grug_preflight._attention_capacity_workload(144, seed=grug_preflight.DUMMY_SEED),
+        concurrencies=[144],
+    )
+
+    assert capacity_compatible == original
+    assert capacity_compatible["frozen_inputs_sha256"] == original["frozen_inputs_sha256"]
+
+
+def test_attention_capacity_scout_freezes_one_matched_point_and_relaxes_only_scout_floors() -> None:
+    args = parse_args(
+        [
+            "submit-matrix",
+            "--plan",
+            "attention-capacity-v1",
+            "--run-id",
+            "capacity-scout-c384-matched-ab-unit",
+            "--task-image",
+            "example.invalid/image@sha256:" + "a" * 64,
+            "--capacity-mode",
+            "scout",
+            "--capacity-concurrency",
+            "384",
+            "--capacity-variant",
+            "matched",
+            "--attention-order",
+            "ab",
+            "--capacity-c144-ab-run-id",
+            "global-every4-ep16-ab-source",
+            "--capacity-c144-ba-run-id",
+            "global-every4-ep16-ba-source",
+        ]
+    )
+
+    grug_preflight._validate_matrix_args(args)
+    phases = grug_preflight._matrix_initial_phases(args)
+    command = grug_preflight._matrix_worker_argv(
+        args,
+        run_id=args.run_id,
+        image=args.task_image,
+        marin_commit="b" * 40,
+    )
+
+    assert args.minimum_seconds == grug_preflight.ATTENTION_CAPACITY_SCOUT_MINIMUM_SECONDS
+    assert args.minimum_generated_tokens == grug_preflight.ATTENTION_CAPACITY_SCOUT_MINIMUM_GENERATED_TOKENS
+    assert [phase["case"] for phase in phases] == ["exact-reference-ep16", "global-every4-ep16"]
+    assert all(phase["concurrencies"] == [384] for phase in phases)
+    assert all(phase["max_num_batched_tokens"] == 8192 for phase in phases)
+    assert all(phase["max_num_seqs"] == 384 for phase in phases)
+    assert all(phase["require_manifest_coverage"] is False for phase in phases)
+    assert all(phase["r3_enabled"] is False for phase in phases)
+    assert command[command.index("--minimum-seconds") + 1] == "30.0"
+    assert command[command.index("--capacity-concurrency") + 1] == "384"
+
+
+def test_attention_capacity_confirmation_reverses_pair_and_single_continuation_has_no_order() -> None:
+    common = [
+        "--plan",
+        "attention-capacity-v1",
+        "--task-image",
+        "example.invalid/image@sha256:" + "a" * 64,
+        "--capacity-mode",
+        "confirm",
+        "--capacity-c144-ab-run-id",
+        "global-every4-ep16-ab-source",
+        "--capacity-c144-ba-run-id",
+        "global-every4-ep16-ba-source",
+    ]
+    matched = parse_args(
+        [
+            "matrix-worker",
+            *common,
+            "--run-id",
+            "capacity-confirm-c768-matched-ba-unit",
+            "--marin-commit",
+            "b" * 40,
+            "--iris-priority",
+            "interactive",
+            "--submitted-coscheduling",
+            "nvlink.domain",
+            "--capacity-concurrency",
+            "768",
+            "--capacity-variant",
+            "matched",
+            "--attention-order",
+            "ba",
+        ]
+    )
+    grug_preflight._validate_matrix_args(matched)
+    matched_phases = grug_preflight._matrix_initial_phases(matched)
+    assert [phase["case"] for phase in matched_phases] == [
+        "global-every4-ep16",
+        "exact-reference-ep16",
+    ]
+    assert all(phase["require_manifest_coverage"] is True for phase in matched_phases)
+
+    single = parse_args(
+        [
+            "matrix-worker",
+            *common,
+            "--run-id",
+            "capacity-confirm-c1536-reference-single-unit",
+            "--marin-commit",
+            "b" * 40,
+            "--iris-priority",
+            "interactive",
+            "--submitted-coscheduling",
+            "nvlink.domain",
+            "--capacity-concurrency",
+            "1536",
+            "--capacity-variant",
+            "reference",
+        ]
+    )
+    grug_preflight._validate_matrix_args(single)
+    single_phases = grug_preflight._matrix_initial_phases(single)
+    assert len(single_phases) == 1
+    assert single_phases[0]["case"] == "exact-reference-ep16"
+    assert single_phases[0]["order"] is None
+
+
+def test_attention_capacity_curve_uses_only_stable_points_for_knee_and_maximum_safe() -> None:
+    curve = grug_preflight._attention_capacity_curve(
+        [
+            {
+                "variant": "reference",
+                "concurrency": 144,
+                "qualification": "stable",
+                "generation_tokens_per_second_per_gpu": 300.0,
+            },
+            {
+                "variant": "reference",
+                "concurrency": 384,
+                "qualification": "stable",
+                "generation_tokens_per_second_per_gpu": 315.0,
+            },
+            {
+                "variant": "reference",
+                "concurrency": 1536,
+                "qualification": "stable",
+                "generation_tokens_per_second_per_gpu": 310.0,
+            },
+            {
+                "variant": "global-every4",
+                "concurrency": 144,
+                "qualification": "stable",
+                "generation_tokens_per_second_per_gpu": 280.0,
+            },
+            {
+                "variant": "global-every4",
+                "concurrency": 384,
+                "qualification": "provisional-pass",
+                "generation_tokens_per_second_per_gpu": 300.0,
+            },
+            {
+                "variant": "global-every4",
+                "concurrency": 768,
+                "qualification": "failed",
+                "generation_tokens_per_second_per_gpu": 250.0,
+            },
+        ]
+    )
+
+    assert curve["variants"]["reference"] == {
+        "best_stable_generation_tokens_per_second_per_gpu": 315.0,
+        "throughput_knee": 144,
+        "maximum_safe_concurrency": 1536,
+        "maximum_safe_is_lower_bound": True,
+        "first_failed_boundary": None,
+    }
+    assert curve["variants"]["global-every4"] == {
+        "best_stable_generation_tokens_per_second_per_gpu": 280.0,
+        "throughput_knee": 144,
+        "maximum_safe_concurrency": 144,
+        "maximum_safe_is_lower_bound": False,
+        "first_failed_boundary": 768,
+    }
 
 
 def test_homogeneous_slice_uses_all_branches_and_keeps_each_root_on_one_dp_rank() -> None:
