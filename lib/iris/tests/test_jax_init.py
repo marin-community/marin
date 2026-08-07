@@ -428,13 +428,13 @@ def _isolated_jax_cache_config():
 
 @contextmanager
 def _gpu_task(tmp_path):
-    """Present this process as an Iris GPU task with the XLA cache mount in place."""
-    xla_cache_dir = tmp_path / "xla-cache"
-    xla_cache_dir.mkdir()
+    """Present this process as an Iris GPU task with the scratch cache mount in place."""
+    scratch_cache_dir = tmp_path / "scratch-cache"
+    scratch_cache_dir.mkdir()
     os.environ["IRIS_TASK_RESOURCES"] = '{"device": {"gpu": {"count": 4, "variant": "GB200"}}}'
     _read_iris_resource_proto.cache_clear()
-    with patch.object(jax_init_module, "XLA_CACHE_PATH", str(xla_cache_dir)):
-        yield xla_cache_dir
+    with patch.object(jax_init_module, "SCRATCH_CACHE_PATH", str(scratch_cache_dir)):
+        yield scratch_cache_dir
 
 
 def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
@@ -513,12 +513,12 @@ def test_configure_compilation_cache_keeps_explicit_xla_autotune_setting() -> No
 
 def test_remote_cache_points_xla_autotune_at_the_node_mount(tmp_path) -> None:
     """A GPU task with a remote JAX cache autotunes into the node-local mount."""
-    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as xla_cache_dir:
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ["XLA_FLAGS"] = "--xla_gpu_enable_command_buffer="
         with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
             configure_jax_compilation_cache()
 
-        autotune_dir = f"{xla_cache_dir}/per-fusion-autotune"
+        autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
         assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in os.environ["XLA_FLAGS"].split()
         # The pre-existing flag survives; XLA_FLAGS is additive, not replaced.
         assert "--xla_gpu_enable_command_buffer=" in os.environ["XLA_FLAGS"].split()
@@ -555,13 +555,17 @@ def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:
     """
     from jax._src import compiler as jax_compiler  # noqa: PLC0415
 
-    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as xla_cache_dir:
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
         os.environ["JAX_COMPILATION_CACHE_DIR"] = "s3://explicit/cache"
         configure_jax_compilation_cache()
 
         options = jax_compiler.get_compile_options(num_replicas=1, num_partitions=1)
-        assert options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir == ""
-        assert f"--xla_gpu_per_fusion_autotune_cache_dir={xla_cache_dir}/per-fusion-autotune" in os.environ["XLA_FLAGS"]
+        # Not `== ""`: jaxlib folds XLA_FLAGS into the same field, and whether it
+        # has already parsed them depends on what ran earlier in the process. The
+        # invariant is that XLA is never handed a URL.
+        assert "://" not in options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir
+        autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+        assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in os.environ["XLA_FLAGS"]
 
 
 def test_xla_autotune_flag_is_excluded_from_the_compilation_cache_key() -> None:

@@ -75,17 +75,12 @@ def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
 def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
     """Return ``cutlass.jax.cutlass_call(launcher, **kwargs)``, memoized on its arguments.
 
-    ``cutlass_call`` builds its JAX entry point as a fresh ``@jax.jit`` closure per
-    invocation, and JAX's tracing cache is keyed on function identity, so a call
-    site that rebuilds it per use is re-traced and lowered as its own nested
-    ``pjit`` every time. Lowering then scales with call-site count rather than with
-    distinct kernels. Reusing one wrapper per distinct kernel collapses that:
-    launchers from :func:`cute_launcher_factory` are singletons, ``TensorSpec`` is
-    a frozen dataclass, and ``ShapeDtypeStruct`` is hashable, so every argument
-    that identifies a kernel can key the memo.
+    ``cutlass_call`` builds its JAX entry point as a fresh ``@jax.jit`` closure, and
+    JAX's tracing cache is keyed on function identity, so rebuilding it per call
+    site re-traces and re-lowers the same kernel as its own nested ``pjit``.
 
-    Keyword arguments must be passed in a consistent order — ``lru_cache`` does
-    not sort them, so a reordered call misses rather than hits.
+    Keyword arguments must be passed in a consistent order: ``lru_cache`` does not
+    sort them, so a reordered call misses rather than hits.
     """
     cjax = importlib.import_module("cutlass.jax")
     return cjax.cutlass_call(launcher, **kwargs)

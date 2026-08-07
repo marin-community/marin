@@ -23,7 +23,7 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.runtime.env import XLA_CACHE_PATH
+from iris.cluster.runtime.env import SCRATCH_CACHE_PATH
 from iris.env_resources import TaskResources
 from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
@@ -34,7 +34,7 @@ from iris.hooks.multigpu import (
 logger = logging.getLogger(__name__)
 
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
-_XLA_AUTOTUNE_CACHE_SUBDIR = "per-fusion-autotune"
+_XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
 # JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
 # preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
@@ -126,15 +126,15 @@ def _enable_node_local_xla_autotune_cache() -> None:
     if TaskResources.from_environment().gpu_count == 0:
         return
 
-    if not os.path.isdir(XLA_CACHE_PATH):
-        logger.info("XLA autotune cache disabled: %s is not mounted", XLA_CACHE_PATH)
+    if not os.path.isdir(SCRATCH_CACHE_PATH):
+        logger.info("XLA autotune cache disabled: %s is not mounted", SCRATCH_CACHE_PATH)
         return
 
     xla_flags = os.environ.get("XLA_FLAGS", "")
     if any(flag.partition("=")[0] == _XLA_AUTOTUNE_CACHE_DIR_FLAG for flag in xla_flags.split()):
         return
 
-    autotune_dir = f"{XLA_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
+    autotune_dir = f"{SCRATCH_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
     os.makedirs(autotune_dir, exist_ok=True)
     os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
     logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
