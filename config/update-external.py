@@ -496,15 +496,17 @@ def main() -> None:
     if args.summary_file is not None:
         updates = dependency_updates(previous_dependencies, dependencies)
         args.summary_file.write_text(render_summary(dependencies, updates))
-    vllm_repository, vllm_commit = locked_git_source(ROOT / "uv.lock", "vllm")
-    tpu_inference_repository, tpu_inference_commit = locked_git_source(ROOT / "uv.lock", "tpu-inference")
+    vllm_source = locked_git_source(ROOT / "uv.lock", "vllm")
+    tpu_inference_source = locked_git_source(ROOT / "uv.lock", "tpu-inference")
     pins_match = synchronize_file(
         GENERATED_PINS,
         render_pins(
             dependencies,
             vllm_gpu_release=vllm_gpu_release,
-            vllm_fork_requirement=f"vllm @ git+{vllm_repository}@{vllm_commit}",
-            tpu_inference_fork_requirement=(f"tpu-inference @ git+{tpu_inference_repository}@{tpu_inference_commit}"),
+            vllm_fork_requirement=f"vllm @ git+{vllm_source.repository}@{vllm_source.commit}",
+            tpu_inference_fork_requirement=(
+                f"tpu-inference @ git+{tpu_inference_source.repository}@{tpu_inference_source.commit}"
+            ),
         ),
         check=args.check,
     )

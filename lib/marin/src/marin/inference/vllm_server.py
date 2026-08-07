@@ -80,6 +80,13 @@ os.environ["CUDA_HOME"] = str(cuda_home)
 os.environ["PATH"] = os.pathsep.join((str(nvcc.parent), os.environ["PATH"]))
 os.execvp(sys.argv[1], sys.argv[1:])
 """
+_PYTHON_FILE_BOOTSTRAP = """\
+import runpy
+import sys
+
+entrypoint = sys.argv.pop(1)
+runpy.run_path(entrypoint, run_name="__main__")
+"""
 _AWS_CONFIG_FILE_ENV_VAR = "AWS_CONFIG_FILE"
 # libstreamer's read-fault text: startup is retried on this, and permanently failed on anything else.
 _RUNAI_STREAMER_READ_MARKER = "could not receive runai_response"
@@ -191,7 +198,12 @@ class IsolatedCudaVllm:
                 requirement=vllm_gpu_wheel_requirement(wheel),
                 torch_backend=VLLM_GPU_RELEASE.torch_backend,
                 executable="python",
-                executable_args=(str(Path(__file__).with_name("vllm_wheel_entrypoint.py")), provenance),
+                executable_args=(
+                    "-c",
+                    _PYTHON_FILE_BOOTSTRAP,
+                    str(Path(__file__).with_name("vllm_wheel_entrypoint.py")),
+                    provenance,
+                ),
             )
         return _CudaVllmInstall(
             requirement=f"vllm[runai]=={self.version}",

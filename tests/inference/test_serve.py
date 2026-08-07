@@ -221,9 +221,10 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     bootstrap_index = cmd.index("-c")
     wrapped_command = cmd[bootstrap_index + 2 :]
     assert wrapped_command[0] == "python"
-    assert Path(wrapped_command[1]).name == "vllm_wheel_entrypoint.py"
+    assert wrapped_command[1] == "-c"
+    assert Path(wrapped_command[3]).name == "vllm_wheel_entrypoint.py"
     expected_provenance = json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
-    assert json.loads(wrapped_command[2]) == expected_provenance
+    assert json.loads(wrapped_command[4]) == expected_provenance
     env = launcher.env()
     assert "VLLM_USE_PRECOMPILED" not in env
     assert "VLLM_USE_FLASHINFER_SAMPLER" not in env
