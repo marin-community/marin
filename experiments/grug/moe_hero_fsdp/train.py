@@ -720,6 +720,17 @@ def run_grug_failsafe_control(config: GrugRunConfig) -> None:
     _dispatch_grug(config, _run_grug_local, max_retries_failure=0)
 
 
+def run_grug_stock_control(config: GrugRunConfig) -> None:
+    """Dispatch with no recovery instrumentation at all: no supervisor, no XLA failsafe flags.
+
+    The third leg of the instrumentation comparison, against `run_grug_supervised` (supervisor
+    and flags) and `run_grug_failsafe_control` (flags only). `run_grug` is not a substitute
+    because it retries three times on failure, and a retry restarts the exposure a wedge trial
+    is accumulating.
+    """
+    _dispatch_grug(config, _run_grug_local, max_retries_failure=0)
+
+
 def _run_grug_supervised_local(config: GrugRunConfig) -> None:
     """Run one local trainer under the XLA hang-deadman subprocess supervisor."""
     run_id = config.trainer.trainer.id

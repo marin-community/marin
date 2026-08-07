@@ -36,6 +36,7 @@ from experiments.grug.moe_hero_fsdp.train import (
     run_grug,
     run_grug_ablation_sweep,
     run_grug_failsafe_control,
+    run_grug_stock_control,
     run_grug_supervised,
 )
 from experiments.grug.recovery.ablation_catalog import environment_ablations, selected_ablations
@@ -241,6 +242,20 @@ def build_supervised_hero_run(
         num_steps=num_steps,
         save_checkpoints=save_checkpoints,
         run=run_grug_supervised,
+        version=version,
+    )
+
+
+def build_stock_control_hero_run(
+    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build the hero run with no recovery instrumentation, for measuring what it costs the hazard."""
+    return _build_hero_run(
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        save_checkpoints=save_checkpoints,
+        run=run_grug_stock_control,
         version=version,
     )
 

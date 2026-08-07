@@ -80,6 +80,42 @@ def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypa
         assert os.environ["XLA_FLAGS"] == explicit_flags
 
 
+def test_stock_control_carries_no_recovery_flags_and_no_retries(monkeypatch):
+    """The instrumentation comparison needs one leg carrying none of it, and a retry restarts exposure."""
+    monkeypatch.setenv("XLA_FLAGS", "")
+    config = SimpleNamespace(
+        trainer=SimpleNamespace(trainer=SimpleNamespace(id="stock")),
+        resources=object(),
+        processes_per_task=4,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run") as dispatch:
+        train.run_grug_stock_control(config)
+
+    assert dispatch.call_args.kwargs["max_retries_failure"] == 0
+    assert "xla_gpu_execution_terminate_timeout" not in os.environ["XLA_FLAGS"]
+    assert "xla_gpu_nccl_termination_timeout_seconds" not in os.environ["XLA_FLAGS"]
+
+
+def test_failsafe_control_carries_the_recovery_flags(monkeypatch):
+    """The middle leg isolates the XLA flags from the supervisor parent, so it must still set them."""
+    monkeypatch.setenv("XLA_FLAGS", "")
+    config = SimpleNamespace(
+        trainer=SimpleNamespace(trainer=SimpleNamespace(id="failsafe")),
+        resources=object(),
+        processes_per_task=4,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run") as dispatch:
+        train.run_grug_failsafe_control(config)
+
+    assert dispatch.call_args.kwargs["max_retries_failure"] == 0
+    assert (
+        f"--xla_gpu_execution_terminate_timeout={int(train.HERO_EXECUTION_TERMINATE_TIMEOUT)}s"
+        in os.environ["XLA_FLAGS"]
+    )
+
+
 def test_hero_detection_clears_the_measured_first_execution():
     """The deadman must exceed a cold first execution or it fires before step 1 every run."""
     measured_first_execution = 261.0
