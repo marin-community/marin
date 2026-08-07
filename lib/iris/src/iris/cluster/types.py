@@ -28,6 +28,7 @@ import humanfriendly
 from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Timestamp
 
+from iris.cluster.redaction import redact_launch_provenance
 from iris.cluster.setup_scripts import (
     cuda_toolchain_setup_script,
     default_setup_script,
@@ -757,7 +758,7 @@ class EnvironmentSpec:
             # Launch provenance: a task running from a git-less bundle inherits the
             # submitter's identity via Provenance.capture(); transitive, since a task
             # re-submitting captures this same env value.
-            LAUNCH_PROVENANCE_ENV: launch_provenance().to_json(),
+            LAUNCH_PROVENANCE_ENV: redact_launch_provenance(launch_provenance()).to_json(),
         }
 
         merged_env_vars = {k: v for k, v in {**default_env_vars, **(self.env_vars or {})}.items() if v is not None}

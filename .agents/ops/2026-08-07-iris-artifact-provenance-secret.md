@@ -2,7 +2,7 @@
 date: 2026-08-07
 system: iris
 severity: near-miss
-resolution: mitigated
+resolution: fixed
 pr: none
 issue: none
 ---
@@ -13,7 +13,7 @@ issue: none
 - Seven completed `.artifact.json` records copied that unredacted argument into `provenance.command_line`; no credential value is reproduced here.
 - Iris API responses redacted both job environment values and `submit_argv`, and all 18 executor metadata/status sidecars were clear.
 - Further launches with explicit secret arguments were stopped. Iris already auto-injects `WANDB_API_KEY` from the submitter environment, so the safe immediate path is to omit the `-e` pair.
-- Artifact provenance still needs a code fix: `MARIN_PROVENANCE` captures raw `sys.argv` independently of Iris's redacted `submit_argv`.
+- Artifact provenance now applies the Iris command-line redactor before serializing `MARIN_PROVENANCE`.
 
 # Original problem report
 
@@ -50,7 +50,7 @@ The existing redaction tests cover controller request shapes, not the `MARIN_PRO
 
 The operational mitigation is to leave `WANDB_API_KEY` in the submitter environment and omit the explicit `-e WANDB_API_KEY ...` pair. Iris auto-injects the variable into the job environment without placing its value in `sys.argv`. No affected GCS record was modified or deleted.
 
-A durable code fix should construct `MARIN_PROVENANCE.command_line` from the already-redacted `submit_argv`, or apply an equivalent redactor before serializing provenance. Add an end-to-end regression that submits `-e WANDB_API_KEY <sentinel>` and asserts that neither the returned request nor inherited `MARIN_PROVENANCE` contains the sentinel.
+The durable fix applies `redact_submit_argv()` to the captured provenance command line before `EnvironmentSpec.to_proto()` serializes it into `MARIN_PROVENANCE`. A controller boundary regression submits a sentinel through `-e WANDB_API_KEY` and verifies that the sentinel is absent from both the returned request and inherited provenance.
 
 # How OPS.md could have shortened this
 

@@ -9,6 +9,7 @@ State changes are verified via RPC calls rather than internal state inspection.
 
 import concurrent.futures
 import logging
+import sys
 import time
 from datetime import date, timedelta
 from unittest.mock import Mock
@@ -44,9 +45,10 @@ from iris.cluster.controller.service import (
     _job_status_counts,
     _live_user_stats,
 )
-from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
-from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, WorkerId, tpu_device
+from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars, redact_submit_argv
+from iris.cluster.types import DEFAULT_BACKEND_ID, EnvironmentSpec, JobName, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, Provenance, _capture_once
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
 from sqlalchemy import func
@@ -69,6 +71,13 @@ from .conftest import (
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+@pytest.fixture
+def fresh_launch_provenance():
+    _capture_once.cache_clear()
+    yield
+    _capture_once.cache_clear()
 
 
 def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
@@ -778,6 +787,38 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
     assert env["DB_PASSWORD"] == REDACTED_VALUE
     assert env["SAFE_VAR"] == "visible"
     assert env["NUM_WORKERS"] == "4"
+
+
+def test_sensitive_cli_env_value_absent_from_status_and_launch_provenance(
+    service,
+    monkeypatch,
+    fresh_launch_provenance,
+):
+    sentinel = "sentinel-wandb-value"
+    argv = ["iris", "job", "run", "-e", "WANDB_API_KEY", sentinel, "--", "python", "train.py"]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.delenv(LAUNCH_PROVENANCE_ENV, raising=False)
+    job_name = JobName.root("test-user", "provenance-redaction-test")
+    launch_req = controller_pb2.Controller.LaunchJobRequest(
+        name=job_name.to_wire(),
+        entrypoint=make_test_entrypoint(),
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+        environment=EnvironmentSpec(env_vars={"WANDB_API_KEY": sentinel}).to_proto(),
+        submit_argv=redact_submit_argv(argv),
+    )
+
+    service.launch_job(launch_req, None)
+    response = service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=job_name.to_wire()),
+        None,
+    )
+
+    returned = response.request
+    assert sentinel.encode() not in returned.SerializeToString()
+    assert returned.environment.env_vars["WANDB_API_KEY"] == REDACTED_VALUE
+    assert list(returned.submit_argv)[5] == REDACTED_VALUE
+    inherited = Provenance.from_json(returned.environment.env_vars[LAUNCH_PROVENANCE_ENV])
+    assert inherited.command_line[5] == REDACTED_VALUE
 
 
 def test_get_job_status_omits_per_task_detail(service):

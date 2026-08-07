@@ -8,6 +8,9 @@ adapts iris-specific shapes (the ``LaunchJobRequest`` proto and Click argv
 for ``iris job run``) into a form the shared redactor can consume.
 """
 
+import dataclasses
+
+from rigging.provenance import Provenance
 from rigging.redaction import REDACTED_VALUE, is_sensitive_key_name, redact_string, redact_value
 
 from iris.rpc import controller_pb2
@@ -91,3 +94,11 @@ def redact_submit_argv(argv: list[str]) -> list[str]:
         out[val_idx] = REDACTED_VALUE if is_sensitive_key_name(key) else redact_string(value)
         i = val_idx + 1
     return out
+
+
+def redact_launch_provenance(provenance: Provenance) -> Provenance:
+    """Return launch provenance whose captured Iris arguments are safe to persist."""
+    return dataclasses.replace(
+        provenance,
+        command_line=tuple(redact_submit_argv(list(provenance.command_line))),
+    )
