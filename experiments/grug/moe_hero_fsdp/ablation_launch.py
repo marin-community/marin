@@ -37,6 +37,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
+from rigging.filesystem import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -54,7 +55,7 @@ GLOBAL_EVERY = 4
 NUM_EXPERTS = 128
 NUM_EXPERTS_PER_TOKEN = 4
 NUM_SHARED_EXPERTS = 2
-TOKENS_PER_ACTIVE_PARAM = 60  # 60x token budget
+TOKENS_PER_ACTIVE_PARAM = 60
 EVAL_BATCH_SIZE = 256
 CHECKPOINT_INTERVAL = datetime.timedelta(minutes=30)
 
@@ -110,18 +111,18 @@ def _num_global_layers(num_layers: int) -> int:
 
 def _active_params(hidden_dim: int) -> int:
     """Per-token params excluding embed/lm_head: attention, router, top-k routed + shared experts."""
-    ell = round(hidden_dim / (64 + 4 * math.log2(hidden_dim) - 9))
-    ell += ell % 2  # aspect-ratio depth, rounded up to nearest even
+    num_layers = round(hidden_dim / (64 + 4 * math.log2(hidden_dim) - 9))
+    num_layers += num_layers % 2  # aspect-ratio depth, rounded up to nearest even
     inter = hidden_dim // 2
     num_heads = hidden_dim // HEAD_DIM
     local_kv, global_kv = _kv_heads(num_heads)
-    num_global = _num_global_layers(ell)
-    num_local = ell - num_global
-    qo = ell * 2 * hidden_dim * hidden_dim
+    num_global = _num_global_layers(num_layers)
+    num_local = num_layers - num_global
+    qo = num_layers * 2 * hidden_dim * hidden_dim
     kv = num_local * (2 * hidden_dim * local_kv * HEAD_DIM) + num_global * (2 * hidden_dim * global_kv * HEAD_DIM)
-    router = ell * hidden_dim * NUM_EXPERTS
-    routed = ell * NUM_EXPERTS_PER_TOKEN * 3 * hidden_dim * inter
-    shared = ell * NUM_SHARED_EXPERTS * 3 * hidden_dim * inter
+    router = num_layers * hidden_dim * NUM_EXPERTS
+    routed = num_layers * NUM_EXPERTS_PER_TOKEN * 3 * hidden_dim * inter
+    shared = num_layers * NUM_SHARED_EXPERTS * 3 * hidden_dim * inter
     return qo + kv + router + routed + shared
 
 
@@ -238,8 +239,8 @@ def build_ablation_run(
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
             checkpointer=CheckpointerConfig(
-                base_path=f"{ctx.output_path}/checkpoints",
-                temporary_base_path=f"{ctx.output_path}/checkpoints",
+                base_path=prefix_join(ctx.output_path, "checkpoints"),
+                temporary_base_path=prefix_join(ctx.output_path, "checkpoints"),
                 save_interval=CHECKPOINT_INTERVAL,
                 keep=None,
                 append_run_id_to_base_path=False,

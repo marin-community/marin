@@ -17,7 +17,6 @@ warmup) to reach peak LR within the run.
 
 import dataclasses
 import os
-from dataclasses import dataclass
 
 import click
 import jmp
@@ -27,7 +26,6 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent
-from levanter.optim.config import OptimizerConfig
 from levanter.tracker.telemetry import TelemetryConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -52,33 +50,11 @@ from experiments.grug.moe_hero_fsdp.launch import (
     HERO_TRAIN_STEP_TIMEOUT,
     HeroThroughputResult,
 )
-from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
 
 SHORT_STEPS = 2000
 SCHEDULE_TOKENS = 1_000_000_000_000  # 1T: LR-schedule horizon, decoupled from the 2k-step run
-SEQ_LEN = 4096  # hero max_seq_len
-
-
-@dataclass(frozen=True)
-@OptimizerConfig.register_subclass("grug_moe_hero_fsdp_muonh_fixed_sched_v1")
-class FixedScheduleMuonHConfig(GrugMoeMuonHConfig):
-    """MuonH whose LR-schedule length is pinned, ignoring the trainer's ``num_train_steps``.
-
-    ``run_grug`` builds the schedule via ``optimizer.build(trainer.num_train_steps)``; this override
-    substitutes ``schedule_num_train_steps`` so a short run executes the early portion of a long
-    (1T-token) schedule rather than one compressed into the run length.
-    """
-
-    schedule_num_train_steps: int = 1
-
-    def build(self, num_train_steps):
-        return super().build(self.schedule_num_train_steps)
-
-
-def _pin_schedule(optimizer: GrugMoeMuonHConfig, schedule_num_train_steps: int) -> FixedScheduleMuonHConfig:
-    fields = {f.name: getattr(optimizer, f.name) for f in dataclasses.fields(optimizer)}
-    return FixedScheduleMuonHConfig(**fields, schedule_num_train_steps=schedule_num_train_steps)
+SEQ_LEN = 4096  # hero max_seq_len (asserted against the built model below)
 
 
 def _root_component(component: DatasetComponent | ConcatDatasetComponent) -> DatasetComponent | ConcatDatasetComponent:
@@ -102,7 +78,9 @@ def build_hero_short_run(
     # LR magnitude (heuristic tokens = schedule_steps * batch * seq ~= 1e12) and schedule length both
     # come from the 1T horizon; the trainer below runs only SHORT_STEPS of it.
     model, base_optimizer = build_hero_configs(num_train_steps=schedule_steps, batch_size=batch_size)
-    optimizer = _pin_schedule(base_optimizer, schedule_steps)
+    assert model.max_seq_len == SEQ_LEN, f"SEQ_LEN {SEQ_LEN} != hero max_seq_len {model.max_seq_len}"
+    # Pin the LR schedule to the 1T horizon; run_grug otherwise builds it over trainer.num_train_steps.
+    optimizer = dataclasses.replace(base_optimizer, schedule_num_train_steps_override=schedule_steps)
 
     grug_trainer = GrugTrainerConfig(
         data_seed=None,

@@ -138,10 +138,15 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     use_syrk: bool = True
+    schedule_num_train_steps_override: int | None = None
+    """When set, the LR schedule (warmup + decay span + min_lr_ratio anchor) is parameterized by this
+    value instead of the trainer's ``num_train_steps``, so a short run can follow the early portion of a
+    longer schedule. ``None`` tracks the trainer."""
 
     def build(self, num_train_steps):
-        learning_rate_schedule = self.lr_scheduler(num_train_steps)
-        adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
+        n = self.schedule_num_train_steps_override or num_train_steps
+        learning_rate_schedule = self.lr_scheduler(n)
+        adam_lr_schedule = self.lr_scheduler(n, override_lr=self.adam_lr)
 
         def optimizer(learning_rate, adam_lr):
             def muonh_transform():
