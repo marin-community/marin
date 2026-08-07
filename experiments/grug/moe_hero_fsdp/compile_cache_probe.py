@@ -34,13 +34,13 @@ import math
 
 import click
 import jmp
+from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.tracker.telemetry import TelemetryConfig
 from levanter.trainer import TrainerConfig
-from fray.cluster import ResourceConfig
 from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
