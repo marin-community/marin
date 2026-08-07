@@ -18,6 +18,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Bool, Float, Int
 
+from levanter.cutlass_kernel_cache import cute_launcher_factory
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute import _gpu_compute_arch
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
@@ -281,7 +282,7 @@ def _window_size_arguments(sliding_window: int | None) -> tuple[int | None, int 
     return sliding_window - 1, 0
 
 
-@functools.lru_cache(maxsize=None)
+@cute_launcher_factory
 def _upstream_fa4_thd_forward_launcher(
     modules: _UpstreamFa4CuteModules,
     *,
@@ -370,7 +371,7 @@ def _upstream_fa4_thd_forward_launcher(
     return _launch_upstream_fa4_thd_forward
 
 
-@functools.lru_cache(maxsize=None)
+@cute_launcher_factory
 def _upstream_fa4_thd_backward_launcher(
     modules: _UpstreamFa4CuteModules,
     *,

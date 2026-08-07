@@ -14,8 +14,6 @@ A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
 """
 from __future__ import annotations
 
-import functools
-
 import jax
 import jax.numpy as jnp
 
@@ -25,6 +23,7 @@ import cutlass.jax as cjax
 from quack.gemm_act import GemmActMixin, GemmGatedSm100, act_fn_map, gate_fn_map
 from quack.gemm_act import get_max_active_clusters
 from quack.gemm_default_epi import GemmDefaultEpiMixin, GemmDefaultSm100
+from levanter.cutlass_kernel_cache import cute_launcher_factory
 from quack.gemm_tvm_ffi_utils import make_scheduler_args, make_varlen_args
 
 _ACC = cutlass.Float32
@@ -40,14 +39,9 @@ def _cute_dtype(dt):
     return _JAX_TO_CUTE[jnp.dtype(dt)]
 
 
-@functools.lru_cache(maxsize=None)
+@cute_launcher_factory
 def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle):
     """Return a ``@cute.jit`` launcher with the cutlass_call signature.
-
-    Memoized on the kernel configuration because ``cutlass.jax`` keys its compile
-    cache on launcher identity: a fresh launcher object forces a fresh CuTeDSL
-    compile even when the resulting kernel is byte-identical. One launcher per
-    configuration lets every expert chunk and every scanned layer share one compile.
 
     Signature: (stream, mA, mB, mCuSeqlens, mD, mPostAct)
       mA:[M,K] tokens (k-major)  mB:[E,K,2N] weights  mCuSeqlens:[E+1] int32
@@ -134,9 +128,9 @@ def quack_gated_grouped_gemm(
     return (preact, postact) if return_preact else postact
 
 
-@functools.lru_cache(maxsize=None)
+@cute_launcher_factory
 def _build_plain_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
-    """Return a ``@cute.jit`` plain grouped-GEMM launcher. Memoized as in ``_build_launcher``."""
+    """Return a ``@cute.jit`` plain grouped-GEMM launcher."""
 
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD):

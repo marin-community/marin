@@ -57,6 +57,7 @@ from experiments.grug.moe_hero_fsdp.launch import (
     HERO_PROCESSES_PER_TASK,
     HERO_TRAIN_STEP_TIMEOUT,
     _slimpajama_6b_dataset,
+    hero_cutlass_kernel_cache_dir,
     hero_gb200_nodes,
 )
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
@@ -125,9 +126,14 @@ def build_compile_cache_probe_run(
     run_id: str,
     nodes: int,
     num_steps: int,
+    kernel_cache_dir: str | None = None,
     version: str | None = None,
 ) -> ArtifactStep[CompileCacheProbeResult]:
-    """Build the multi-node compilation-cache probe."""
+    """Build the multi-node compilation-cache probe.
+
+    ``kernel_cache_dir`` defaults to the shared hero kernel store. Point it at a
+    fresh prefix to measure a cold CuTeDSL compile.
+    """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if nodes < 2:
@@ -165,6 +171,7 @@ def build_compile_cache_probe_run(
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            cutlass_kernel_cache_dir=kernel_cache_dir or hero_cutlass_kernel_cache_dir(),
             tracker=TelemetryConfig(),
             watch=WatchConfig(interval=20),
             progress_watchdog=ProgressWatchdogConfig(
@@ -220,9 +227,16 @@ def build_compile_cache_probe_run(
     show_default=True,
     help="Number of training steps.",
 )
+@click.option(
+    "--kernel-cache-dir",
+    default=None,
+    help="CuTeDSL kernel store. Defaults to the shared hero store; a fresh prefix forces a cold compile.",
+)
 @build_options
-def main(run_id: str, nodes: int, num_steps: int) -> ArtifactStep[CompileCacheProbeResult]:
-    return build_compile_cache_probe_run(run_id=run_id, nodes=nodes, num_steps=num_steps)
+def main(run_id: str, nodes: int, num_steps: int, kernel_cache_dir: str | None) -> ArtifactStep[CompileCacheProbeResult]:
+    return build_compile_cache_probe_run(
+        run_id=run_id, nodes=nodes, num_steps=num_steps, kernel_cache_dir=kernel_cache_dir
+    )
 
 
 if __name__ == "__main__":

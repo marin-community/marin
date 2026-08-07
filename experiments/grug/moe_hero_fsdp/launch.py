@@ -25,7 +25,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
-from rigging.filesystem import prefix_join
+from rigging.filesystem import marin_temp_bucket, prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
 from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
@@ -38,6 +38,7 @@ HERO_NODES_PER_RACK = 16
 HERO_PROCESSES_PER_TASK = 1
 HERO_GPUS_PER_NODE = 4
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
+HERO_KERNEL_CACHE_TTL_DAYS = 30
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
 # This must exceed XLA's 10-minute collective timeout.
 HERO_TRAIN_STEP_TIMEOUT = timedelta(minutes=15)
@@ -59,6 +60,18 @@ def hero_gb200_nodes(replicas: int) -> ResourceConfig:
         disk="1t",
         replicas=replicas,
     )
+
+
+def hero_cutlass_kernel_cache_dir() -> str:
+    """Shared store for compiled QuACK and FA4 kernels.
+
+    Those compile during MLIR lowering, before JAX's compilation cache is
+    consulted, so this is the only cache that recovers them on a restart. Entries
+    are content-addressed on the kernel configuration, source, argument
+    specification, device architecture, and package versions, so every run that
+    uses the same kernels shares them.
+    """
+    return marin_temp_bucket(ttl_days=HERO_KERNEL_CACHE_TTL_DAYS, prefix="cutlass-kernel-cache")
 
 
 def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
@@ -118,6 +131,7 @@ def build_hero_run(
             num_train_steps=num_steps,
             profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
+            cutlass_kernel_cache_dir=hero_cutlass_kernel_cache_dir(),
             tracker=(
                 WandbConfig(
                     entity="marin-community",

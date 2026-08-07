@@ -67,6 +67,8 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
+from levanter.cutlass_kernel_cache import CutlassKernelCache
+from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
@@ -926,6 +928,14 @@ class TrainerConfig:
     )  # config to pass to jax.config.update
     jax_compilation_cache_dir: Optional[str] = None
 
+    cutlass_kernel_cache_dir: Optional[str] = None
+    """Store for compiled CuTeDSL kernel object code, local or an fsspec URL.
+
+    Only useful on GPU runs that use the QuACK or FA4 CuTe kernels. Those compile
+    during MLIR lowering, before the JAX compilation cache is consulted, so they
+    are the one part of startup that cache cannot recover. Nodes change between
+    allocations, so an object-store URL is what makes the cache survive."""
+
     distributed: DistributedConfig = DistributedConfig()
 
     # whether or not to require an accelerator (e.g. TPU or GPU).
@@ -1074,6 +1084,9 @@ class TrainerConfig:
 
         if self.jax_compilation_cache_dir is not None:
             jax.config.update("jax_compilation_cache_dir", self.jax_compilation_cache_dir)
+
+        if self.cutlass_kernel_cache_dir is not None:
+            install_cutlass_kernel_cache(CutlassKernelCache(directory=self.cutlass_kernel_cache_dir))
 
     def _maybe_set_id(self):
         # always do this so we don't get weird hangs if the id isn't set right
