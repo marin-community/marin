@@ -30,14 +30,21 @@ enum ColumnType {
   COLUMN_TYPE_MAP = 8;          // pa.map_(pa.string(), pa.string())
 }
 
-// Secondary indexes a column carries to accelerate queries. Extensible: each
-// index type is its own field, so adding one is additive. All-unset means the
-// column is not indexed.
+// User-facing column index policy. The server compiles these declarations and
+// named projections into its closed planner-facing index-method family.
 message ColumnIndex {
-  // Per-row-group trigram (substring) index, stored in each segment's `.tgm`
-  // sidecar so `contains(col, …)` and `col LIKE '%…%'` queries prune row groups
+  // Span-granular trigram index stored in each segment's `.fidx` bundle, so
+  // `contains(col, …)` and `col LIKE '%…%'` queries prune row spans
   // instead of full-scanning. Only meaningful for STRING columns.
   bool trigram = 1;
+
+  // Exact string values stored as postings in each segment's `.fidx` bundle.
+  repeated string exact_values = 2;
+
+  // Persist exact per-value row counts in each segment's `.fidx` bundle.
+  // Finelog can answer GROUP BY column + COUNT(*)/COUNT(column) from these
+  // summaries when every visible segment is covered.
+  bool value_counts = 3;
 }
 
 message Column {
@@ -45,6 +52,27 @@ message Column {
   ColumnType type = 2;
   bool nullable = 3;
   ColumnIndex index = 4;
+}
+
+// A named, predicate-scoped Parquet projection maintained beside each segment.
+// The projection contains complete rows matching `predicate_values`, but only
+// the declared `columns`. The planner substitutes it only when both the query
+// predicate and required columns are covered; otherwise it scans the source.
+message CoveringProjection {
+  string name = 1;
+  string predicate_column = 2;
+  repeated string predicate_values = 3;
+  repeated string columns = 4;
+}
+
+// An exact, bounded per-segment rollup for a filtered JSON-derived dimension.
+// The section is omitted when its group cardinality exceeds the server's
+// adaptive budget; queries then scan only those uncovered segments.
+message GroupedExtrema {
+  string filter_column = 1;
+  string group_json_column = 2;
+  string group_json_key = 3;
+  string extrema_column = 4;
 }
 
 message Schema {
@@ -55,6 +83,15 @@ message Schema {
   // named "timestamp_ms" of type INT64 or TIMESTAMP_MS and uses it
   // implicitly. A schema with neither is rejected at register time.
   string key_column = 2;
+
+  // Independent named projections. Adding one is monotonic on re-register;
+  // changing an existing name's definition is a schema conflict.
+  repeated CoveringProjection projections = 3;
+
+  // Independent grouped-extrema rollups. Adding one is monotonic on
+  // re-register. Finelog interprets only the declared column roles; producers
+  // own their semantic meaning.
+  repeated GroupedExtrema grouped_extrema = 4;
 }
 
 // Write batches are Arrow IPC RecordBatches on the wire — columnar, with

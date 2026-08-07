@@ -804,13 +804,7 @@ def test_cache_env_points_at_mounted_cache_volumes():
 
 
 @pytest.mark.parametrize("device", ["gpu", "tpu", None])
-def test_shm_is_raised_above_the_docker_default_only_for_accelerators(device):
-    """Accelerator pods get a raised /dev/shm; plain CPU pods keep the default.
-
-    Multi-process NCCL and TPU runtimes exchange buffers through /dev/shm and
-    fail on the container default (64MB), so the limit tracks the accelerator,
-    not the exact ceiling.
-    """
+def test_shm_limit_matches_memory_request(device):
     req = make_run_req("/test-job/0")
     if device == "gpu":
         req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
@@ -824,11 +818,21 @@ def test_shm_is_raised_above_the_docker_default_only_for_accelerators(device):
 
     # Memory-backed: /dev/shm on disk would silently gut collective throughput.
     assert empty_dir["medium"] == "Memory"
+    assert parse_k8s_quantity(empty_dir["sizeLimit"]) == req.resources.memory_bytes
 
-    if device is None:
-        assert "sizeLimit" not in empty_dir
+
+@pytest.mark.parametrize("device", ["gpu", "tpu"])
+def test_accelerator_shm_keeps_fallback_without_memory_request(device):
+    req = make_run_req("/test-job/0")
+    req.resources.memory_bytes = 0
+    if device == "gpu":
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="A100", count=4))
     else:
-        assert parse_k8s_quantity(empty_dir["sizeLimit"]) > 64 * 1024**2
+        req.resources.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+
+    manifest = _build_pod_manifest(req, pod_config())
+    dshm_volume = next(volume for volume in manifest["spec"]["volumes"] if volume["name"] == "dshm")
+    assert parse_k8s_quantity(dshm_volume["emptyDir"]["sizeLimit"]) == 100 * 1024**3
 
 
 def test_tpu_adds_sys_resource_capability():

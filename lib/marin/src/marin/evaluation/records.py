@@ -45,13 +45,13 @@ _MAX_RECORD_READERS = 16
 class RunStatus(StrEnum):
     """Terminal outcome of an eval run.
 
-    ``INFRA_FAILED`` (endpoint never came up, job submission died) is distinct from ``FAILED`` (the
-    eval itself ran and reported a bad result) so the dashboard can separate flaky infrastructure from
-    genuine model regressions.
+    ``FAILED`` means the evaluator failed, ``ARTIFACT_FAILED`` means it completed but its durable
+    output could not be read or exported, and ``INFRA_FAILED`` means serving or orchestration failed.
     """
 
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    ARTIFACT_FAILED = "artifact_failed"
     INFRA_FAILED = "infra_failed"
 
 
@@ -269,7 +269,7 @@ class EvalRunRecord(BaseModel):
 
     ``metrics`` is ``{task: {metric: value}}`` as produced by
     :meth:`~marin.evaluation.evalchemy.result.EvalchemyResult.task_metrics`; it is empty when the run did
-    not reach the metric-reading stage (an infra failure). The ``evaluation`` field serializes as
+    not reach the metric-reading stage. The ``evaluation`` field serializes as
     ``eval`` (a reserved-looking but unambiguous JSON key); use ``model_dump(mode="json",
     by_alias=True)`` or ``model_dump_json(by_alias=True)`` to produce it.
     """

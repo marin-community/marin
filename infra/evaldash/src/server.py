@@ -657,11 +657,14 @@ def _status_payload(store: RecordStore, ingestor: Ingestor) -> dict:
 
 
 def _status_rollup(statuses: set[str]) -> str:
-    """Collapse a launch's per-eval statuses into one: all-succeeded, a single shared failure, or mixed."""
+    """Collapse a launch's per-eval statuses without inventing an evaluator failure."""
     if statuses == {"succeeded"}:
         return "succeeded"
     if "succeeded" not in statuses:
-        return next(iter(statuses)) if len(statuses) == 1 else "failed"
+        if len(statuses) == 1:
+            return next(iter(statuses))
+        if "failed" in statuses:
+            return "failed"
     return "mixed"
 
 

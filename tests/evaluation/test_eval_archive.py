@@ -7,20 +7,31 @@ from __future__ import annotations
 
 import json
 
-from finestore.reader import CompositeReader
-from fsspec.core import url_to_fs
-from marin.evaluation.samples import (
+from click.testing import CliRunner
+from finestore.eval import (
     Choice,
     EvalSample,
     EvaluationStore,
     Grading,
     SampleKind,
+    export_lm_eval_samples,
     sample_from_archive_row,
     sample_to_archive_row,
     write_sample_parquet,
 )
+from finestore.reader import CompositeReader
+from fsspec.core import url_to_fs
+from rigging.filesystem import StoragePath
 
-from experiments.evaluation.migrate_archive import MigrationCounts, archive_sample_count, migrate_run
+from experiments.evaluation.migrate_archive import (
+    MigrationCounts,
+    archive_sample_count,
+    legacy_archive_prefix,
+    migrate_run,
+)
+from experiments.evaluation.migrate_archive import (
+    main as migrate_archive_cli,
+)
 from infra.evaldash.src.samples import fetch_artifact, fetch_samples, list_sample_tasks
 
 
@@ -99,6 +110,33 @@ def test_ungraded_sample_reads_back_with_empty_metrics(tmp_path):
     assert page.rows[0].correct is None
 
 
+def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
+    results = tmp_path / "run" / "results"
+    sample_path = results / "gsm8k_5shot" / "model" / "samples_gsm8k_20260807.jsonl"
+    sample_path.parent.mkdir(parents=True)
+    content = "How many?\u2028Show your work."
+    prompt = json.dumps([{"role": "user", "content": content}], ensure_ascii=False)
+    raw = {
+        "doc_id": 604,
+        "doc": {"question": content},
+        "target": "4",
+        "arguments": [[prompt]],
+        "resps": [["4"]],
+        "filtered_resps": ["4"],
+        "exact_match,flexible-extract": 1.0,
+    }
+    sample_path.write_text(json.dumps(raw, ensure_ascii=False) + "\n")
+
+    assert export_lm_eval_samples(str(results)) == 1
+
+    table = CompositeReader(str(results)).scan("samples")
+    assert table is not None
+    [row] = table.to_pylist(maps_as_pydicts="strict")
+    sample = sample_from_archive_row(row)
+    assert sample.prompt_messages is not None
+    assert sample.prompt_messages[0].content == content
+
+
 def test_migrate_legacy_run_into_archive(tmp_path):
     results = str(tmp_path / "run" / "results")
     fs, _ = url_to_fs(results)
@@ -145,6 +183,25 @@ def test_migrate_legacy_run_into_archive(tmp_path):
 
     # evaldash surfaces both migrated tasks.
     assert {task.task for task in list_sample_tasks(results).tasks} == {"arc", "aime"}
+
+
+def test_migration_cli_reads_archived_legacy_shards(tmp_path):
+    results = (tmp_path / "run" / "results").as_uri()
+    missing_results = (tmp_path / "run-without-backup" / "results").as_uri()
+    archive = legacy_archive_prefix(results)
+    legacy_file = StoragePath(archive) / "arc/model/samples_arc_20260101.parquet"
+    legacy_file.parent.mkdirs()
+    fs, legacy_path = url_to_fs(str(legacy_file))
+    write_sample_parquet(fs, legacy_path, [_mcq("1", correct=True)])
+
+    result = CliRunner().invoke(migrate_archive_cli, [results, missing_results, "--from-legacy-archive"])
+
+    assert result.exit_code == 0, result.output
+    assert archive_sample_count(results) == 1
+    assert legacy_file.exists()
+    summary = json.loads(result.output.splitlines()[-1])
+    assert summary["migrated_runs"] == 1
+    assert summary["skipped_runs"] == 1
 
 
 def test_fetch_artifact_keys_cache_by_run(tmp_path):

@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from finestore.eval import export_lm_eval_samples
 from iris.client import Job, JobFailedError, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from rigging.filesystem import StoragePath, prefix_join
@@ -28,7 +29,6 @@ from marin.evaluation.evalchemy.runtime import (
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.records import RunStatus
 from marin.evaluation.runner import EvaluationError, EvaluationOutcome
-from marin.evaluation.samples import export_lm_eval_samples
 from marin.inference.iris import RemoteInferenceSession
 from marin.inference.types import RunningModel
 
@@ -287,7 +287,7 @@ class EvalchemyExecutor:
         try:
             outcome = run_evalchemy(session.model, self.config, output_dir, env_vars=env_vars)
         except EvalPipelineError as exc:
-            status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.INFRA_FAILED
+            status = RunStatus.FAILED if exc.stage is PipelineStage.EVAL else RunStatus.ARTIFACT_FAILED
             raise EvaluationError(
                 str(exc),
                 status=status,
@@ -298,7 +298,7 @@ class EvalchemyExecutor:
         if not metrics:
             raise EvaluationError(
                 f"eval finished but no task metrics were readable under {output_dir!r}",
-                status=RunStatus.INFRA_FAILED,
+                status=RunStatus.ARTIFACT_FAILED,
                 jobs=outcome.jobs,
             )
         return EvaluationOutcome(metrics=metrics, jobs=outcome.jobs)

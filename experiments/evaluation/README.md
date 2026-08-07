@@ -63,7 +63,7 @@ math500): one model boot, eleven evals against the shared endpoint, eleven recor
 shows the full model x task grid of runs.
 
 `backfill-samples` rewrites every run's per-sample parquets from its kept `samples_*.jsonl` sources --
-useful after a change to the contract in `marin.evaluation.samples` (the parquet files are
+useful after a change to the contract in `finestore.eval` (the parquet files are
 regenerated in place; the source jsonl is untouched):
 
 ```bash
@@ -74,7 +74,8 @@ uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
 is the source of truth: normalized model configuration, hardware, status (`succeeded` / `failed` /
-`infra_failed`), the per-task metrics, provenance, normalized evaluator configuration, the `group_id`
+`artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
+the `group_id`
 shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
 orchestrator, the shared inference child, this eval's child). The orchestrator writes it on success
 and on failure, so a failed run is still accounted for -- and a failure carries the failed child's
@@ -83,7 +84,7 @@ dashboard) without cluster access.
 
 Alongside the results tree, each task's individually-scored questions are exported as parquet:
 lm-eval runs with `--log_samples`, and the orchestrator converts every `samples_*.jsonl` into a
-parquet sibling (`marin.evaluation.samples`, the per-sample contract -- `EvalSample`, normalized from
+parquet sibling (`finestore.eval`, the per-sample contract -- `EvalSample`, normalized from
 lm-eval's native row shape, with the parquet schema *being* the Pydantic model) -- load them with
 pandas/duckdb, or read them back with `EvalSample.model_validate`, to zoom into any run.
 

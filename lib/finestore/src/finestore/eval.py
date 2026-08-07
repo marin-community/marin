@@ -34,10 +34,11 @@ from enum import StrEnum
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pydantic import BaseModel
+from rigging.filesystem import StoragePath, prefix_join
+
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
-from fsspec.core import url_to_fs
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -560,20 +561,15 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
     Returns the number of samples written. The source jsonl is kept as the mechanism's native
     artifact. Re-running is idempotent: samples dedupe on ``(task, doc_id, trial_id)``.
     """
-    fs, root = url_to_fs(out_path)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:
-        for path in fs.find(root):
-            name = path.rsplit("/", 1)[-1]
-            if not (name.startswith(SAMPLES_PREFIX) and name.endswith(".jsonl")):
-                continue
-            with fs.open(path, "r") as handle:
-                rows = [json.loads(line) for line in handle if line.strip()]
+        for path in StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob():
+            rows = [json.loads(line) for line in path.read_text().split("\n") if line.strip()]
             if not rows:
                 logger.warning("samples file %s is empty; skipping archive export", path)
                 continue
-            task = _task_from_filename(name, ".jsonl")
+            task = _task_from_filename(path.name, ".jsonl")
             for raw in rows:
                 store.add_sample(sample_from_lm_eval(task, raw))
                 count += 1

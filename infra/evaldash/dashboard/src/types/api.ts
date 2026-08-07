@@ -1,6 +1,15 @@
 // Shapes returned by the evaldash server (src/server.py). Kept in sync with the
 // dict shapes that RecordStore, cluster.py, and samples.py produce.
 
+export const RUN_STATUS = {
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  ARTIFACT_FAILED: 'artifact_failed',
+  INFRA_FAILED: 'infra_failed',
+} as const
+
+export type RunStatus = (typeof RUN_STATUS)[keyof typeof RUN_STATUS]
+
 export interface RunRow {
   run_id: string
   group_id: string | null
@@ -210,7 +219,7 @@ export interface LogsResponse {
   entries: LogEntry[]
 }
 
-// --- Per-sample browser (samples.py, mirroring marin.evaluation.samples.EvalSample) ---
+// --- Per-sample browser (samples.py, mirroring finestore.eval.EvalSample) ---
 
 export interface SampleTasksResponse {
   available: boolean
@@ -232,7 +241,7 @@ export interface SampleChoice {
   is_greedy: boolean | null
 }
 
-// How one prediction was scored (marin.evaluation.samples.Grading). `method` names the grader
+// How one prediction was scored (finestore.eval.Grading). `method` names the grader
 // (`lm-eval:<metric>`, `harbor:<verifier>`, `judge:<model>`); `detail` is the grader's raw output
 // as a JSON string, the escape hatch for anything the typed fields do not carry.
 export interface SampleGrading {
@@ -460,7 +469,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: 'succeeded' | 'failed' | 'infra_failed' | 'mixed'
+  status: RunStatus | 'mixed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]
