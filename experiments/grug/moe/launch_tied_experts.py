@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Matched d512 architecture gate for cross-layer routed-expert tying.
+"""Matched d512 and d768 architecture gates for cross-layer routed-expert tying.
 
-Set ``GRUG_TIED_PHASE=smoke`` (default) for the seven-run 500-step matrix or
-``GRUG_TIED_PHASE=full`` for the contemporaneous full-schedule baseline,
-pairwise, and middle-four runs.
+Set ``GRUG_TIED_MODEL=d512`` (default) for the original LR/topology matrix or
+``GRUG_TIED_MODEL=d768`` for the contemporaneous untied and two-anchor middle-four
+comparison with unscaled and ``1/sqrt(g)`` expert learning rates.
+``GRUG_TIED_PHASE=smoke`` (default) runs 500 steps; ``full`` uses the model's
+compute-optimal schedule.
 """
 
 import dataclasses
@@ -35,9 +37,6 @@ from experiments.grug.moe.optimizer import TiedExpertLrScale
 from experiments.grug.moe.train import GrugEvalConfig, GrugTrainerConfig
 
 _EXPERIMENT_PREFIX = "GRUG-XEM"
-_BUDGET = 3.82e17
-_HIDDEN_DIM = 512
-_MODEL_LABEL = f"d{_HIDDEN_DIM}"
 _SEQUENCE_LENGTH = 4096
 _TARGET_STEPS = 2**14
 _SMOKE_STEPS = 500
@@ -45,14 +44,21 @@ _EXPERIMENT_REGION = "us-central1"
 _TRAIN_RESOURCES = ResourceConfig.with_tpu("v5p-8", regions=[_EXPERIMENT_REGION])
 _TRAIN_RESOURCES_KEY = "train_resources"
 
-_BASELINE_TOPOLOGY = (0, 1, 2, 3, 4, 5)
-_PAIRWISE_TOPOLOGY = (0, 1, 1, 2, 2, 3)
-_MIDDLE_FOUR_TOPOLOGY = (0, 1, 1, 1, 1, 2)
+_D512_BASELINE_TOPOLOGY = (0, 1, 2, 3, 4, 5)
+_D512_PAIRWISE_TOPOLOGY = (0, 1, 1, 2, 2, 3)
+_D512_MIDDLE_FOUR_TOPOLOGY = (0, 1, 1, 1, 1, 2)
+_D768_BASELINE_TOPOLOGY = (0, 1, 2, 3, 4, 5, 6, 7)
+_D768_TWO_ANCHOR_MIDDLE_FOUR_TOPOLOGY = (0, 1, 2, 2, 2, 2, 3, 4)
 
 
 class TiedExpertPhase(StrEnum):
     SMOKE = "smoke"
     FULL = "full"
+
+
+class TiedExpertModelSize(StrEnum):
+    D512 = "d512"
+    D768 = "d768"
 
 
 @dataclass(frozen=True)
@@ -62,22 +68,53 @@ class TiedExpertVariant:
     lr_scale: TiedExpertLrScale
 
 
+@dataclass(frozen=True)
+class TiedExpertModelSpec:
+    budget: float
+    hidden_dim: int
+    num_layers: int
+
+
+_MODEL_SPECS = {
+    TiedExpertModelSize.D512: TiedExpertModelSpec(budget=3.82e17, hidden_dim=512, num_layers=6),
+    TiedExpertModelSize.D768: TiedExpertModelSpec(budget=2.81e18, hidden_dim=768, num_layers=8),
+}
+
+
 def _run_id(
+    model_size: TiedExpertModelSize,
     phase: TiedExpertPhase,
     variant: str,
     *,
     run_id_prefix: str | None,
     ferry_date: str | None,
 ) -> str:
-    default = f"grug_xem_{_MODEL_LABEL}_{phase.value}_{variant}"
+    default = f"grug_xem_{model_size.value}_{phase.value}_{variant}"
     run_id = default if run_id_prefix is None else f"{run_id_prefix}_{variant}"
     return run_id if ferry_date is None else f"{run_id}-{ferry_date}"
 
 
-def _matrix(phase: TiedExpertPhase) -> Sequence[TiedExpertVariant]:
+def _matrix(model_size: TiedExpertModelSize, phase: TiedExpertPhase) -> Sequence[TiedExpertVariant]:
+    if model_size is TiedExpertModelSize.D768:
+        return [
+            TiedExpertVariant("baseline", _D768_BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
+            TiedExpertVariant(
+                "middle4_two_anchor_unscaled",
+                _D768_TWO_ANCHOR_MIDDLE_FOUR_TOPOLOGY,
+                TiedExpertLrScale.UNSCALED,
+            ),
+            TiedExpertVariant(
+                "middle4_two_anchor_sqrt",
+                _D768_TWO_ANCHOR_MIDDLE_FOUR_TOPOLOGY,
+                TiedExpertLrScale.SQRT,
+            ),
+        ]
     if phase is TiedExpertPhase.SMOKE:
-        variants = [TiedExpertVariant("baseline", _BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED)]
-        for topology_name, topology in (("pairwise", _PAIRWISE_TOPOLOGY), ("middle4", _MIDDLE_FOUR_TOPOLOGY)):
+        variants = [TiedExpertVariant("baseline", _D512_BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED)]
+        for topology_name, topology in (
+            ("pairwise", _D512_PAIRWISE_TOPOLOGY),
+            ("middle4", _D512_MIDDLE_FOUR_TOPOLOGY),
+        ):
             for scale in (
                 TiedExpertLrScale.UNSCALED,
                 TiedExpertLrScale.SQRT,
@@ -87,11 +124,11 @@ def _matrix(phase: TiedExpertPhase) -> Sequence[TiedExpertVariant]:
         return variants
     if phase is TiedExpertPhase.FULL:
         return [
-            TiedExpertVariant("baseline", _BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
-            TiedExpertVariant("pairwise_unscaled", _PAIRWISE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
-            TiedExpertVariant("pairwise_sqrt", _PAIRWISE_TOPOLOGY, TiedExpertLrScale.SQRT),
-            TiedExpertVariant("middle4_unscaled", _MIDDLE_FOUR_TOPOLOGY, TiedExpertLrScale.UNSCALED),
-            TiedExpertVariant("middle4_sqrt", _MIDDLE_FOUR_TOPOLOGY, TiedExpertLrScale.SQRT),
+            TiedExpertVariant("baseline", _D512_BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
+            TiedExpertVariant("pairwise_unscaled", _D512_PAIRWISE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
+            TiedExpertVariant("pairwise_sqrt", _D512_PAIRWISE_TOPOLOGY, TiedExpertLrScale.SQRT),
+            TiedExpertVariant("middle4_unscaled", _D512_MIDDLE_FOUR_TOPOLOGY, TiedExpertLrScale.UNSCALED),
+            TiedExpertVariant("middle4_sqrt", _D512_MIDDLE_FOUR_TOPOLOGY, TiedExpertLrScale.SQRT),
         ]
     raise ValueError(f"unknown tied-expert phase: {phase}")
 
@@ -99,11 +136,14 @@ def _matrix(phase: TiedExpertPhase) -> Sequence[TiedExpertVariant]:
 def tied_expert_runs(
     *,
     version: str | None = None,
+    model_size: TiedExpertModelSize | None = None,
     phase: TiedExpertPhase | None = None,
     run_id_prefix: str | None = None,
     ferry_date: str | None = None,
     variant_names: Sequence[str] | None = None,
 ) -> list[ArtifactStep[LevanterCheckpoint]]:
+    if model_size is None:
+        model_size = TiedExpertModelSize(os.environ.get("GRUG_TIED_MODEL", TiedExpertModelSize.D512).lower())
     if phase is None:
         phase = TiedExpertPhase(os.environ.get("GRUG_TIED_PHASE", TiedExpertPhase.SMOKE).lower())
     if run_id_prefix is None:
@@ -112,22 +152,24 @@ def tied_expert_runs(
         ferry_date = os.environ.get("FERRY_DATE")
     if variant_names is None and (requested := os.environ.get("GRUG_TIED_VARIANTS")):
         variant_names = tuple(name.strip() for name in requested.split(",") if name.strip())
+    model_spec = _MODEL_SPECS[model_size]
     base_model, base_optimizer, batch_size, full_steps = build_from_heuristic(
-        budget=_BUDGET,
-        hidden_dim=_HIDDEN_DIM,
+        budget=model_spec.budget,
+        hidden_dim=model_spec.hidden_dim,
         target_steps=_TARGET_STEPS,
         seq_len=_SEQUENCE_LENGTH,
     )
-    if base_model.num_layers != 6:
+    if base_model.num_layers != model_spec.num_layers:
         raise ValueError(
-            f"{_MODEL_LABEL} tied-expert matrix requires 6 layers, heuristic produced {base_model.num_layers}"
+            f"{model_size.value} tied-expert matrix requires {model_spec.num_layers} layers, "
+            f"heuristic produced {base_model.num_layers}"
         )
     steps = _SMOKE_STEPS if phase is TiedExpertPhase.SMOKE else full_steps
 
     train = grug_moe_training_datasets()
     validation = grug_moe_validation_datasets()
 
-    variants = list(_matrix(phase))
+    variants = list(_matrix(model_size, phase))
     if variant_names is not None:
         if len(set(variant_names)) != len(variant_names):
             raise ValueError(f"GRUG_TIED_VARIANTS contains duplicates: {variant_names}")
@@ -142,7 +184,7 @@ def tied_expert_runs(
 
     runs: list[ArtifactStep[LevanterCheckpoint]] = []
     for variant in variants:
-        name = f"grug/tied_experts/{_MODEL_LABEL}/{phase.value}/{variant.name}"
+        name = f"grug/tied_experts/{model_size.value}/{phase.value}/{variant.name}"
         resolved_version = resolve_version(name, version)
         model = dataclasses.replace(base_model, expert_bank_for_layer=variant.topology)
         optimizer = dataclasses.replace(
@@ -152,6 +194,7 @@ def tied_expert_runs(
             schedule_horizon_steps=full_steps,
         )
         run_id = _run_id(
+            model_size,
             phase,
             variant.name,
             run_id_prefix=run_id_prefix,
@@ -177,7 +220,7 @@ def tied_expert_runs(
                 mp="params=float32,compute=bfloat16,output=bfloat16",
                 tracker=WandbConfig(
                     project="marin_moe",
-                    tags=[_EXPERIMENT_PREFIX, "tied-experts", _MODEL_LABEL, phase.value],
+                    tags=[_EXPERIMENT_PREFIX, "tied-experts", model_size.value, phase.value],
                     group="grug-xem-architecture",
                     name=None,
                 ),

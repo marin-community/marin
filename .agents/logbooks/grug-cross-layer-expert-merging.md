@@ -19,7 +19,8 @@ author: dlwh
 - `GRUG-XEM-001` passed the d512 architecture gate on matched 1.44B-token runs in `us-central1`. Pairwise unscaled and `1/sqrt(g)` tying finished +0.02050 and +0.02203 Paloma macro loss above the 3.58622 untied control; middle-four variants finished +0.03817 and +0.04541, all inside their screening thresholds. Routing remained healthy and middle-four tying removed 50% of unique routed-expert parameters.
 - `GRUG-XEM-002` is running the layers 2-3 spectral-plus-prefit conversion in `us-central1` from the matched untied checkpoint. Calibration is committed; the current retry is in matching after two fixed sharding failures. No downstream artifact is being launched until matching commits.
 - `GRUG-XEM-003` ports explicit expert banks and legacy-checkpoint migration into the array-stacked June 67B-A2B implementation. The selected no-copy teacher, data caches, eval caches, output bucket, and TPU resources are all in `us-central2`; no checkpoint payload has been read outside that region.
-- The isolated branch is `research/grug-cross-layer-expert-merging` in `/tmp/marin-grug-xem`. It has not been pushed, and no issue or PR exists.
+- `GRUG-XEM-004` is the d768 scale comparison tracked in issue #8032. Its matched untied, two-anchor unscaled, and two-anchor `1/sqrt(g)` smoke configurations are ready on central1-only data and outputs.
+- The isolated branch is `research/grug-cross-layer-expert-merging` in `/tmp/marin-grug-xem`. It has not been pushed, and no PR exists.
 
 ## Baseline
 
@@ -322,3 +323,13 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Result: 56 tests passed and one unrelated variant-contract case skipped. Focused lint and Pyrefly passed. The trace path is one ordinary full-layer scan and matches the normal stacked forward path on a data-sharded mesh. The exploded evaluator uses direct chunked SwiGLU matmuls and supports model-axis sharding. Weighted covariance estimation uses deterministic randomized rank-32 SVD without forming a 2560-by-2560 covariance. CPU probe preparation is divided across matching hosts, gathered once, then finalized through synchronized TPU JVPs. The matching worker loads only the legacy routed-expert subtree, not attention or optimizer state. Every checkpoint, dataset cache, artifact, and TPU resource remains in `us-central2`.
 - Interpretation: the invalid model-axis attention geometry, EP256 capacity clipping, EP-sharded 128-sample evaluator, duplicated dense eigendecomposition, and source-config mismatch found in review are removed. Calibration still all-gathers the sampled trace across 32 workers, but only process zero retains the roughly 10.7 GB float32 reservoirs; the v4-256 topology reduces replicated host traffic eightfold from the rejected v4-2048 design.
 - Next action: snapshot this implementation, but keep the `us-central2` calibration unlaunched until the d512 one-pair surgery passes its recovery gate. Then babysit compile, HBM, strict checkpoint coverage, zero overflow, and artifact commit before launching expert-only matching.
+
+### 2026-08-06 18:15 - GRUG-XEM-004 d768 two-anchor launch gate
+
+- Hypothesis: Four-layer middle-bank tying behind two input and two output anchors has a smaller tied-minus-untied loss gap at d768 than the matched d512 middle-four gaps of +0.03817 unscaled and +0.04541 with `1/sqrt(g)`.
+- Commit Hash: `61e4d3b66f` plus the uncommitted d768 launch diff.
+- Coordinating issue: https://github.com/marin-community/marin/issues/8032, registered as a sub-issue of #4281.
+- Config: budget `2.81e18` FLOPs, d768, eight layers, sequence length 4096, batch 128, 500 smoke steps, and an 8,453-step full-schedule horizon totaling 4,431,806,464 tokens. The matrix contains untied `(0,1,2,3,4,5,6,7)` and two `(0,1,2,2,2,2,3,4)` arms with unscaled and `1/sqrt(4)` shared-bank learning rates.
+- Result: the no-run graph emitted exactly three configs. Twenty-one focused launch/compatibility tests passed and one contract case skipped; lint, Pyrefly, and diff checks passed. All nine training caches, 16 Paloma caches, seven Uncheatable caches, v5p-8 resources, output roots, permanent checkpoints, and temporary checkpoints resolve in `us-central1`.
+- Interpretation: both tied-LR treatments are required because unscaled MuonH was slightly better at d512. The contemporaneous untied run avoids comparison against the published d768 result measured under earlier attention and loss defaults.
+- Next action: snapshot and push the launch code, submit the three-run d768 smoke in `us-central1`, and assign one babysitter. Launch the three full runs only after all smoke arms show finite loss, healthy routing, and zero capacity overflow.
