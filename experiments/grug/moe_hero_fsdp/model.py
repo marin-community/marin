@@ -136,17 +136,11 @@ class QbEstimator(StrEnum):
     ``*_after_sigmoid`` variants.
     """
 
-    CHUNK_QUANTILE = "chunk_quantile"  # logit domain, per-device top-k, pmean (default)
+    CHUNK_QUANTILE = "chunk_quantile"  # logit domain, per-device top-k, pmean (grug default)
     PER_SEQUENCE = "per_sequence"  # logit domain, per-sequence top-k, averaged over sequences
     AFTER_SIGMOID = "after_sigmoid"  # sigmoid domain, per-device top-k, pmean
-    HIST_AFTER_SIGMOID = "hist_after_sigmoid"  # sigmoid domain, global histogram over [-1, 1]
-    HIST_LOGIT = "hist_logit"  # logit domain, global histogram over [-8, 8]
-    HIST_DYNAMIC = "hist_dynamic"  # logit domain, global histogram over 2x the observed [min, max]
-
-
-_QB_HIST_BINS = 1000
-_QB_HIST_LOGIT_RANGE = (-8.0, 8.0)
-_QB_HIST_SIGMOID_RANGE = (-1.0, 1.0)
+    LOGIT_HIST = "logit_hist"  # logit domain, global bincount histogram of margins over fixed [-R, R]
+    K3_HIST = "k3_hist"  # Kimi-K3: sigmoid domain, global bincount histogram of required bias, adaptive range
 
 
 @dataclass(frozen=True)
@@ -184,6 +178,8 @@ class GrugModelConfig:
     expert_chunks: int = 1
     report_capacity_overflow: bool = False
     qb_estimator: QbEstimator = QbEstimator.CHUNK_QUANTILE
+    qb_hist_bins: int = 1000  # histogram bins for the logit_hist / k3_hist estimators
+    qb_hist_range: float = 8.0  # fixed half-range [-R, R] for logit_hist (k3_hist derives its own range)
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
     backward (lowest memory); "save_moe" keeps the tagged MoE dispatch tensors so
@@ -730,34 +726,7 @@ def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     )
 
 
-def _histogram_quantile_beta(
-    s_ma_local: jax.Array, lo: jax.Array | float, hi: jax.Array | float, target: int, nbins: int
-) -> jax.Array:
-    """Per-expert upper quantile of ``s`` via a fixed-grid histogram (counts are additive over devices).
-
-    ``s_ma_local`` is the local ``score - alpha`` block, shape ``[tokens, experts]``. Returns beta[e],
-    the value whose global count of ``s_e >= beta`` equals ``target`` (linearly interpolated within the
-    straddling bin). The per-column histograms are ``psum``'d over ``_BATCH_AXES`` so the quantile is
-    globally exact, unlike the per-device top-k estimator's mean-of-order-statistics approximation.
-    """
-    width = (hi - lo) / nbins
-
-    def _col_hist(col: jax.Array) -> jax.Array:
-        idx = jnp.clip(((col - lo) / width).astype(jnp.int32), 0, nbins - 1)
-        return jnp.zeros(nbins, jnp.float32).at[idx].add(1.0)
-
-    hist = jax.vmap(_col_hist, in_axes=1)(s_ma_local)  # [experts, nbins]
-    hist = jax.lax.psum(hist, axis_name=_BATCH_AXES)
-    # cum_above[e, b] = number of tokens with s_e >= left edge of bin b (non-increasing in b).
-    cum_above = jnp.cumsum(hist[:, ::-1], axis=-1)[:, ::-1]
-    bstar = jnp.clip(jnp.sum(cum_above >= target, axis=-1) - 1, 0, nbins - 1)  # [experts]
-    cum_at = jnp.take_along_axis(cum_above, bstar[:, None], axis=-1)[:, 0]
-    hist_at = jnp.take_along_axis(hist, bstar[:, None], axis=-1)[:, 0]
-    frac = jnp.clip((cum_at - target) / (hist_at + 1e-9), 0.0, 1.0)
-    return lo + (bstar.astype(jnp.float32) + frac) * width
-
-
-def _qb_beta(
+def _qb_beta_topk(
     s_ma: jax.Array,
     estimator: QbEstimator,
     mesh: jax.sharding.AbstractMesh,
@@ -766,11 +735,11 @@ def _qb_beta(
     num_experts: int,
     seq_len: int,
 ) -> jax.Array:
-    """QB threshold beta[e] from ``s_ma = score - alpha`` (batch-sharded ``[tokens, experts]``).
+    """Per-device (1-k/n)-quantile of ``s_ma = score - alpha`` via top-k, then pmean.
 
-    Dispatches on ``estimator``; every branch returns a replicated ``[experts]`` beta. The histogram
-    branches ``psum`` global counts (see :func:`_histogram_quantile_beta`); the top-k branches take a
-    per-device order statistic and ``pmean`` it.
+    ``chunk_quantile``/``after_sigmoid`` pool all local tokens; ``per_sequence`` takes the quantile per
+    sequence and averages over sequences before the cross-device pmean. Returns a replicated ``[experts]``
+    beta; train applies ``new_bias = -qb_beta`` (mean-centered).
     """
     num_devices = 1
     for axis in _BATCH_AXES:
@@ -787,38 +756,90 @@ def _qb_beta(
             topk_vals, _ = jax.lax.top_k(per_seq, qb_count_seq)
             return jax.lax.pmean(jnp.mean(topk_vals[..., -1], axis=0), axis_name=_BATCH_AXES)
 
-    elif estimator in (QbEstimator.CHUNK_QUANTILE, QbEstimator.AFTER_SIGMOID):
+    else:  # CHUNK_QUANTILE, AFTER_SIGMOID
 
         def _fn(s_local: jax.Array) -> jax.Array:
             topk_vals, _ = jax.lax.top_k(s_local.T, qb_count)
             return jax.lax.pmean(topk_vals[:, -1], axis_name=_BATCH_AXES)
 
-    else:
-        target = qb_count * num_devices  # global rank of the target order statistic
+    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P())(s_ma)
 
-        if estimator == QbEstimator.HIST_LOGIT:
-            lo, hi = _QB_HIST_LOGIT_RANGE
 
-            def _fn(s_local: jax.Array) -> jax.Array:
-                return _histogram_quantile_beta(s_local, lo, hi, target, _QB_HIST_BINS)
+def _qb_beta_logit_hist(
+    s_ma: jax.Array,
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    num_experts_per_token: int,
+    num_experts: int,
+    n_bins: int,
+    hist_range: float,
+) -> jax.Array:
+    """Global (1-k/n)-quantile of the logit margins ``s - alpha`` from one pooled bincount histogram.
 
-        elif estimator == QbEstimator.HIST_AFTER_SIGMOID:
-            lo, hi = _QB_HIST_SIGMOID_RANGE
+    ``s_ma`` is the batch-sharded ``logit - alpha`` block. A single fused ``jnp.bincount`` over an
+    expert-major flat index (``expert*n_bins + bin``) builds the per-expert histogram over the fixed range
+    ``[-hist_range, hist_range]`` (clip-to-edge) with one integer ``psum``; the quantile is read from the
+    top-cumulative counts (interpolated in the crossing bin) and mean-centered. No per-expert scatter, so
+    it stays cheap at ~1M tokens/device.
+    """
+    target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
+    bin_width = 2.0 * hist_range / n_bins
 
-            def _fn(s_local: jax.Array) -> jax.Array:
-                return _histogram_quantile_beta(s_local, lo, hi, target, _QB_HIST_BINS)
-
-        elif estimator == QbEstimator.HIST_DYNAMIC:
-
-            def _fn(s_local: jax.Array) -> jax.Array:
-                lo = 2.0 * jax.lax.pmin(jnp.min(s_local), axis_name=_BATCH_AXES)
-                hi = 2.0 * jax.lax.pmax(jnp.max(s_local), axis_name=_BATCH_AXES) + 1e-6
-                return _histogram_quantile_beta(s_local, lo, hi, target, _QB_HIST_BINS)
-
-        else:
-            raise ValueError(f"unhandled qb_estimator {estimator!r}")
+    def _fn(s_local: jax.Array) -> jax.Array:  # [local_tokens, experts]
+        expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
+        idx = jnp.clip(((s_local + hist_range) / bin_width).astype(jnp.int32), 0, n_bins - 1)
+        flat = (expert_ids * n_bins + idx).reshape(-1)
+        local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
+        counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
+        cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
+        bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
+        ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
+        h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
+        lower_edge = -hist_range + bstar.astype(jnp.float32) * bin_width
+        beta = lower_edge + bin_width * (ct_b - target_rank) / jnp.maximum(h_b, 1.0)
+        return beta - jnp.mean(beta)
 
     return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P())(s_ma)
+
+
+def _qb_beta_k3_hist(
+    required_bias: jax.Array,
+    router_bias: jax.Array,
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    num_experts_per_token: int,
+    num_experts: int,
+    n_bins: int,
+) -> jax.Array:
+    """Kimi-K3 quantile balancing: (k/n)-quantile of the required bias ``r = alpha - s``.
+
+    ``required_bias`` is the batch-sharded ``alpha - sigmoid(logit)`` block; since ``s in (0,1)`` and
+    ``alpha`` is a biased score, ``r`` is bounded by ``[min(bias)-1, max(bias)+1]``, the histogram range.
+    One fused bincount + integer ``psum`` gives the global per-expert histogram; the (k/n)-quantile of
+    ``r`` (interpolated) is the required bias, returned negated + mean-centered so train's
+    ``new_bias = -qb_beta`` restores that required bias.
+    """
+    target_rank = float(required_bias.shape[0]) * num_experts_per_token / num_experts  # q = m*k/n over the step
+    bias_lo = jnp.min(router_bias) - 1.0
+    bin_width = (jnp.max(router_bias) - jnp.min(router_bias) + 2.0) / n_bins
+
+    def _fn(r_local: jax.Array, lo: jax.Array, width: jax.Array) -> jax.Array:  # r_local: [local_tokens, experts]
+        expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
+        idx = jnp.clip(((r_local - lo) / width).astype(jnp.int32), 0, n_bins - 1)
+        flat = (expert_ids * n_bins + idx).reshape(-1)
+        local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
+        counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
+        cum = jnp.cumsum(counts, axis=-1)  # cumulative from the low bin
+        bstar = jnp.argmax((cum >= jnp.ceil(target_rank)).astype(jnp.int32), axis=-1)
+        cum_b = jnp.take_along_axis(cum, bstar[:, None], axis=-1)[:, 0]
+        h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
+        frac = jnp.clip((target_rank - (cum_b - h_b)) / jnp.maximum(h_b, 1.0), 0.0, 1.0)
+        beta_hat = lo + (bstar.astype(jnp.float32) + frac) * width
+        return -(beta_hat - jnp.mean(beta_hat))
+
+    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None), P(), P()), out_specs=P())(
+        required_bias, bias_lo, bin_width
+    )
 
 
 class MoEMLP(eqx.Module):
@@ -865,9 +886,9 @@ class MoEMLP(eqx.Module):
         x_flat = rearrange(x, "b s d -> (b s) d")
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
-        # QB selection and threshold live in logit space by default, or in sigmoid-score space for the
-        # ``*_after_sigmoid`` ablation variants (the bias is then added to the sigmoid score).
-        after_sigmoid = self.cfg.qb_estimator in (QbEstimator.AFTER_SIGMOID, QbEstimator.HIST_AFTER_SIGMOID)
+        # QB selection and threshold live in logit space by default, or in bounded sigmoid-score space for
+        # after_sigmoid / k3_hist (the bias is then added to the sigmoid score, s in (0,1)).
+        after_sigmoid = self.cfg.qb_estimator in (QbEstimator.AFTER_SIGMOID, QbEstimator.K3_HIST)
         router_score = jax.nn.sigmoid(router_logits) if after_sigmoid else router_logits
         biased_score = router_score + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
@@ -889,17 +910,39 @@ class MoEMLP(eqx.Module):
             num_experts=self.cfg.num_experts,
             num_experts_per_token=self.cfg.num_experts_per_token,
         )
-        # Sharded QB: threshold beta_e = upper (K/E)-quantile of ``score_e - alpha`` per expert.
+        # Sharded QB: per-expert threshold beta. Histogram estimators pool one global bincount (psum);
+        # the top-k estimators take a per-device order statistic and pmean it.
         mesh = get_abstract_mesh()
-        s_minus_alpha = reshard(router_score - qb_alpha, P(_BATCH_AXES, None))
-        router_stats["qb_beta"] = _qb_beta(
-            s_minus_alpha,
-            self.cfg.qb_estimator,
-            mesh,
-            num_experts_per_token=self.cfg.num_experts_per_token,
-            num_experts=self.cfg.num_experts,
-            seq_len=s,
-        )
+        if self.cfg.qb_estimator == QbEstimator.K3_HIST:
+            required_bias = reshard(qb_alpha - router_score, P(_BATCH_AXES, None))
+            router_stats["qb_beta"] = _qb_beta_k3_hist(
+                required_bias,
+                self.router_bias,
+                mesh,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+                num_experts=self.cfg.num_experts,
+                n_bins=self.cfg.qb_hist_bins,
+            )
+        elif self.cfg.qb_estimator == QbEstimator.LOGIT_HIST:
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            router_stats["qb_beta"] = _qb_beta_logit_hist(
+                s_minus_alpha,
+                mesh,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+                num_experts=self.cfg.num_experts,
+                n_bins=self.cfg.qb_hist_bins,
+                hist_range=self.cfg.qb_hist_range,
+            )
+        else:
+            s_minus_alpha = reshard(router_score - qb_alpha, P(_BATCH_AXES, None))
+            router_stats["qb_beta"] = _qb_beta_topk(
+                s_minus_alpha,
+                self.cfg.qb_estimator,
+                mesh,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+                num_experts=self.cfg.num_experts,
+                seq_len=s,
+            )
 
         moe_out = self.expert_mlp(
             x_flat,
