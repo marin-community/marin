@@ -174,8 +174,29 @@ author: power
 - Detection: None in-process. No supervisor parent, no XLA execution deadman, no thunk reporting, no retries. `--xla_gpu_nccl_termination_timeout_seconds=600` remains because `marin.training.training` sets it independently of the recovery framework.
 - Purpose: Restore the historical stock configuration to test whether the recovery instrumentation, not chance, explains the clean supervised run.
 - Caveat: Differs from `mhf-8rack-1ppg-sup-base-20260807` in two variables, not one — instrumentation and watch state. Watch is off here per operator direction. Watch-on is the follow-up arm if this runs clean.
+- Outcome: No wedge. Stopped by operator at step 205 after 1:11, 18.8 s/it, loss 2.87. Cleared the whole documented 17-200 span.
+
+### 2026-08-07 08:07 UTC - mhf-12rack-1ppg-stock-20260807
+
+- Command: `... --job-name mhf-12rack-1ppg-stock-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch_stock_control --run-id mhf-12rack-1ppg-stock-20260807 --dp-racks 12 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/mhf-12rack-1ppg-stock-20260807-coord`.
+- Git SHA: `e9c27d3bc6`; clean tree, pushed before submission.
+- Hardware: 192 Iris tasks, 768 GPUs across twelve NVL72 racks on `cw-us-east-08a`.
+- Detection: None in-process; monitor plus a 240s stall tripwire drive capture externally.
+- Purpose: Escalate scale after two clean 8-rack arms.
+- Caveat: #8029 records no 12-rack stock wedge. The only 12-rack data point is `CUDA_LAUNCH_BLOCKING` clean through 2,580 steps, so this is an untested scale rather than a known-higher-hazard one.
 
 ## Event Log
+
+### 2026-08-07 08:06 UTC - Reproduction failed twice at 8 racks; instrumentation is not the suppressor
+
+- Supervised (deadman + supervisor parent): clean to step 305, 18.9 s/it.
+- Stock control (no instrumentation, provenance verified from `/proc` on every trainer process): clean to step 205, 18.8 s/it.
+- Five recorded 8-rack FSDP wedges all sit at or below step 152. Two independent clean runs totalling about 506 steps is evidence the hazard rate has changed, not that two draws missed.
+- The instrumentation hypothesis from the previous update is dead: removing it did not restore the wedge.
+- Throughput is identical with and without the instrumentation (18.8 vs 18.9 s/it), so the deadman is free if it ever does prove protective.
+- Ruled out: driver/VBIOS drift; the FSDP hero running the EP64 mesh (`expert_axis_size=1`, `replica_axis_size=8`, so the 17-200 reference applies rather than EP64's ~1,290); `5a7aa95fc9` reduced RAS collection, which predates reproductions still recorded on 08-06.
+- Not yet explained: what changed between the historical wedges and now. Node-set specificity is untested — RAS at `--detail stall` carries no host identity, so it would need per-task capture and a wedging run to compare against.
 
 ### 2026-08-07 06:50 UTC - Stock control flag provenance verified
 
