@@ -47,6 +47,8 @@ pub struct RequestStats {
 }
 
 impl RequestStats {
+    /// Record a POST entering the test server. `true` means the caller must invoke
+    /// [`Self::finish`] after the response completes.
     fn begin(&self, request: &axum::extract::Request) -> bool {
         if request.method() != axum::http::Method::POST {
             return false;
