@@ -63,8 +63,8 @@ def _inline_env_block(cfg: FinelogConfig) -> str:
     entries = []
     if cfg.query_metadata_cache_mb is not None:
         entries.append(_env_entry("FINELOG_QUERY_METADATA_CACHE_MB", str(cfg.query_metadata_cache_mb)))
-    if cfg.query_sidecar_cache_mb is not None:
-        entries.append(_env_entry("FINELOG_SIDECAR_CACHE_MB", str(cfg.query_sidecar_cache_mb)))
+    if cfg.query_index_cache_mb is not None:
+        entries.append(_env_entry("FINELOG_INDEX_CACHE_MB", str(cfg.query_index_cache_mb)))
     if cfg.auth:
         entries.append(_env_entry("FINELOG_AUTH_POLICY", auth_policy_json(cfg.auth)))
     if cfg.forwarding:

@@ -1020,11 +1020,6 @@ class TrainerConfig:
         """number of nodes"""
         return max(getattr(device, "slice_index", 0) for device in jax.devices()) + 1
 
-    @property
-    def num_devices_per_slice(self):
-        """number of devices within a slice"""
-        return jax.device_count() // self.num_slices
-
     @cached_property
     def mesh_axis_specs(self) -> List[str]:
         """Materialized mesh axis names; validates mesh config."""

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -172,12 +173,101 @@ async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
 }
 
 #[tokio::test]
+async fn router_registers_index_policy_before_first_telemetry_request() {
+    let store = disk_store("telemetry-startup-registration");
+    let _router = super::telemetry::router(
+        Arc::clone(&store),
+        Arc::new(AuthPolicy::allow_localhost()),
+        1,
+        1,
+    );
+
+    let schema = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(schema) = store.get_table_schema("telemetry_v1") {
+                break schema;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("startup registration did not complete");
+
+    for name in ["service", "kind", "name"] {
+        let column = schema
+            .columns
+            .iter()
+            .find(|column| column.name == name)
+            .unwrap();
+        assert!(column.index.value_counts);
+    }
+    let name = schema
+        .columns
+        .iter()
+        .find(|column| column.name == "name")
+        .unwrap();
+    assert!(name.index.trigram);
+    assert_eq!(
+        name.index.exact_values,
+        [
+            "global_step",
+            "gpu_memory_used_bytes",
+            "gpu_pcie_replay_errors",
+            "gpu_power_watts",
+            "gpu_row_remap_failures",
+            "gpu_temperature_celsius",
+            "gpu_tensor_active_ratio",
+            "gpu_utilization_percent",
+            "gpu_xid_error_code",
+            "hardware_inventory",
+            "phase",
+            "progress_time_seconds",
+            "step",
+        ]
+    );
+    let projections: BTreeMap<_, _> = schema
+        .projections
+        .iter()
+        .map(|projection| (projection.name.as_str(), projection))
+        .collect();
+    assert_eq!(
+        projections.keys().copied().collect::<Vec<_>>(),
+        [
+            "accelerator-faults",
+            "accelerator-inventory",
+            "accelerator-memory",
+            "accelerator-power",
+            "accelerator-temperature",
+            "accelerator-tensor-activity",
+            "accelerator-utilization",
+            "training-run-attribution",
+            "training-status",
+        ]
+    );
+    let power = projections["accelerator-power"];
+    assert_eq!(power.predicate_column, "name");
+    assert_eq!(power.predicate_values, ["gpu_power_watts"]);
+    assert!(power.columns.iter().any(|column| column == "value"));
+    assert!(power
+        .columns
+        .iter()
+        .any(|column| column == "attributes_json"));
+    assert_eq!(schema.grouped_extrema.len(), 1);
+    let grouped = &schema.grouped_extrema[0];
+    assert_eq!(grouped.filter_column, "service");
+    assert_eq!(grouped.json_column, "resource_attributes_json");
+    assert_eq!(grouped.json_key, "job_id");
+    assert_eq!(grouped.extrema_column, "timestamp_ms");
+}
+
+#[tokio::test]
 async fn accepted_batch_is_queryable_through_normal_store_rows() {
     let remote_dir = unique_dir("telemetry-query-remote");
     let store = Arc::new(
         Store::new(
             Some(unique_dir("telemetry-query")),
             remote_dir.to_string_lossy().into_owned(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
         )
         .unwrap(),
     );

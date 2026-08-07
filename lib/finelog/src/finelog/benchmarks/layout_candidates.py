@@ -480,7 +480,7 @@ def _create_mirror(
         server.stop()
 
 
-def _table_digest(table: pa.Table) -> str:
+def table_digest(table: pa.Table) -> str:
     def normalize(value: object) -> object:
         if isinstance(value, float):
             return round(value, 9)
@@ -505,7 +505,7 @@ def _table_digest(table: pa.Table) -> str:
 def _query_digest(log_dir: Path, workload: Workload) -> str:
     server = require_embedded_server()(log_dir=str(log_dir))
     try:
-        return _table_digest(query_table(stats_client(server.address), workload.sql))
+        return table_digest(query_table(stats_client(server.address), workload.sql))
     finally:
         server.stop()
 

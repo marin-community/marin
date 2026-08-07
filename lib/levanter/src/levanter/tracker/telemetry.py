@@ -157,13 +157,16 @@ class TelemetryTracker(Tracker):
 
     name: str = "telemetry"
 
-    def __init__(self) -> None:
+    def __init__(self, *, publish_tracker_metrics: bool = True) -> None:
+        self._publish_tracker_metrics = publish_tracker_metrics
         self._nccl_ras_probe = _start_nccl_ras_probe()
         _set("progress_time_seconds", 0)
         set_training_phase(TrainingPhase.INITIALIZING)
         _HEARTBEAT.start()
 
     def _publish(self, metrics: Mapping[str, object]) -> None:
+        if not self._publish_tracker_metrics:
+            return
         for key, value in metrics.items():
             if isinstance(value, SummaryStats):
                 self._publish_summary(key, value)
@@ -241,4 +244,4 @@ class TelemetryConfig(TrackerConfig):
             root_run_uid=run_id,
             process_index=process_index,
         )
-        return TelemetryTracker()
+        return TelemetryTracker(publish_tracker_metrics=process_index == 0)

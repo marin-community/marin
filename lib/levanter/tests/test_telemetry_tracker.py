@@ -19,7 +19,7 @@ from levanter.callbacks import ProgressEvent
 from levanter.callbacks.progress_watchdog import ProgressTimeout
 from levanter.tracker import BackgroundTracker, current_tracker, telemetry as tracker_telemetry
 from levanter.tracker.histogram import SummaryStats
-from levanter.tracker.telemetry import TelemetryTracker, TrainingPhase
+from levanter.tracker.telemetry import TelemetryConfig, TelemetryTracker, TrainingPhase
 
 
 @pytest.fixture
@@ -113,6 +113,22 @@ def test_training_progress_and_phase_are_current_snapshots(exported, monkeypatch
     values = _values(exported.wait_for(7))
     assert values["progress_time_seconds"] == 1234.5
     assert values["phase"] == TrainingPhase.FINISHED
+
+
+def test_nonprimary_process_publishes_progress_but_not_replicated_tracker_metrics(exported, monkeypatch):
+    monkeypatch.setattr(tracker_telemetry.jax, "process_index", lambda: 1)
+    monkeypatch.setattr(tracker_telemetry.runtime_telemetry, "configure", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("levanter.tracker.telemetry.time", lambda: 1234.5)
+    tracker = TelemetryConfig().init("run-42")
+
+    tracker.log({"train/loss": 1.25, "throughput": 7.0}, step=3)
+    telemetry.shutdown()
+
+    values = _values(exported.records)
+    assert values["step"] == 3.0
+    assert values["progress_time_seconds"] == 1234.5
+    assert "train_loss" not in values
+    assert "throughput" not in values
 
 
 @pytest.fixture

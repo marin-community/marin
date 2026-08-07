@@ -53,9 +53,6 @@ CONSOLIDATE_DATA_SIZE_WORKERS = 32
 CACHE_LAYOUT_CONSOLIDATED = "consolidated"
 CACHE_LAYOUT_SHARDED = "sharded"
 
-DEFAULT_LOG_LEVEL = pylogging.INFO
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
-
 
 @dataclass(frozen=True)
 class ShardedCacheLayout:
@@ -625,19 +622,6 @@ class CacheLedger:
     field_counts_by_shard: Dict[str, Dict[str, int]] = dataclasses.field(default_factory=dict)
     layout: str = CACHE_LAYOUT_CONSOLIDATED
     metadata: "CacheMetadata" = dataclasses.field(default_factory=lambda: CacheMetadata({}))
-
-    @staticmethod
-    def load_or_initialize(cache_dir: str, source: ShardedDataSource, processor: BatchProcessor):
-        metadata = CacheMetadata(preprocessor_metadata=processor.metadata)
-        try:
-            return CacheLedger.load(cache_dir, metadata)
-        except FileNotFoundError:
-            return CacheLedger(
-                total_num_rows=0,
-                shard_rows={shard: 0 for shard in source.shard_names},
-                is_finished=False,
-                metadata=metadata,
-            )
 
     @staticmethod
     def load(cache_dir: str, metadata: Optional["CacheMetadata"] = None) -> "CacheLedger":

@@ -31,13 +31,30 @@ from iris.cluster.config import (
     make_local_config,
 )
 from iris.cluster.controller.auth import NativeProxyAuthConfig, NativeProxyAuthMode
-from iris.cluster.types import AcceleratorType, CapacityType
+from iris.cluster.types import AcceleratorType, CapacityType, JobName
 from iris.managed_thread import thread_container_scope
 from iris.test_util import SentinelFile
 from rigging.timing import Duration, ExponentialBackoff
 
 IRIS_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = IRIS_ROOT / "config" / "ci-test.yaml"
+
+
+@pytest.fixture
+def recorded_job_submissions(monkeypatch):
+    """Record submissions made by the public ``iris job run`` command."""
+    submissions: list[dict[str, object]] = []
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/test-job")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            submissions.append(kwargs)
+            return FakeJob()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", lambda *args, **kwargs: FakeClient())
+    return submissions
 
 
 @pytest.fixture
