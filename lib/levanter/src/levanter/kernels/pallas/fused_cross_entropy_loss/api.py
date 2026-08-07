@@ -4,7 +4,9 @@
 from collections.abc import Callable, Sequence
 from functools import lru_cache
 import hashlib
+import json
 import logging
+import os
 import threading
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
@@ -13,9 +15,10 @@ import warnings
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
+from rigging.cache import PersistentKvCache
 from rigging.filesystem import marin_prefix
 
-from levanter.kernels.pallas import autotune_cache_utils, autotune_utils
+from levanter.kernels.pallas import autotune_utils
 
 from .config import BlockSizes
 from .tuned_block_sizes import (
@@ -53,9 +56,11 @@ _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
+_AUTOTUNE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 _AUTOTUNE_CACHE_SUBDIR = "levanter_kernel_autotune"
 _AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
-_AUTOTUNE_CACHE_FILENAME = "block_sizes_v1.json"
+_AUTOTUNE_CACHE_DIRNAME = "block_sizes_v2"
+_AUTOTUNE_ENTRY_SUFFIX = ".json"
 
 
 class _NoViableCandidate:
@@ -91,58 +96,73 @@ def _decode_autotune_entry(entry: dict) -> _AutotuneCacheEntry | None:
     return None
 
 
-def _autotune_cache_url() -> str:
-    """Region-local JSON file holding this kernel's tuned block sizes."""
+def _autotune_cache_dir() -> str:
+    """Region-local directory holding this kernel's tuned block sizes, one object per key."""
     root = marin_prefix().rstrip("/")
-    return f"{root}/{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_FILENAME}"
+    return f"{root}/{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_DIRNAME}"
+
+
+def _autotune_entry_name(key: str) -> str:
+    """A path-safe object name for an opaque autotune key."""
+    return hashlib.sha256(key.encode()).hexdigest()
 
 
 class AutotuneBlockSizeCache:
-    """Tuned block sizes keyed by an opaque string, persisted to a JSON file."""
+    """Tuned block sizes keyed by an opaque string, one object per key.
 
-    def __init__(self, url_fn: Callable[[], str | None] = _autotune_cache_url) -> None:
-        self._url_fn = url_fn
+    Each key is its own object, so two processes tuning distinct keys at once
+    both persist rather than racing to rewrite one shared file. A per-process memo
+    keeps a key read at most once from storage.
+    """
+
+    def __init__(self, directory_fn: Callable[[], str | None] = _autotune_cache_dir) -> None:
+        self._directory_fn = directory_fn
         self._lock = threading.Lock()
-        self._entries: dict[str, _AutotuneCacheEntry] | None = None
+        self._memo: dict[str, _AutotuneCacheEntry] = {}
+        self._cache: PersistentKvCache | None = None
+        self._resolved = False
 
     def get(self, key: str) -> _AutotuneCacheEntry | None:
         with self._lock:
-            return self._loaded_entries().get(key)
+            if key in self._memo:
+                return self._memo[key]
+            cache = self._backing_store()
+            if cache is None:
+                return None
+            entry = self._load(cache, key)
+            if entry is not None:
+                self._memo[key] = entry
+            return entry
 
     def put(self, key: str, value: _AutotuneCacheEntry) -> None:
         with self._lock:
-            entries = self._loaded_entries()
-            entries[key] = value
-            self._write(entries)
+            self._memo[key] = value
+            cache = self._backing_store()
+            if cache is None:
+                return
+            payload = json.dumps(_encode_autotune_entry(value), sort_keys=True).encode()
+            try:
+                cache.store(_autotune_entry_name(key), payload)
+            except Exception as exc:
+                logger.warning("Unable to persist fused CE autotune cache to %s: %s", cache.directory, exc)
 
-    def _loaded_entries(self) -> dict[str, _AutotuneCacheEntry]:
-        if self._entries is not None:
-            return self._entries
-        self._entries = {}
-        url = self._url_fn()
-        if url is None:
-            return self._entries
-        try:
-            payload = autotune_cache_utils.load_json(url)
-        except Exception as exc:
-            logger.warning("Unable to load fused CE autotune cache from %s: %s", url, exc)
-            return self._entries
-        for key, raw in payload.items():
-            if isinstance(key, str) and isinstance(raw, dict):
-                entry = _decode_autotune_entry(raw)
-                if entry is not None:
-                    self._entries[key] = entry
-        return self._entries
+    def _backing_store(self) -> PersistentKvCache | None:
+        if not self._resolved:
+            directory = self._directory_fn()
+            self._cache = PersistentKvCache(directory=directory, suffix=_AUTOTUNE_ENTRY_SUFFIX) if directory else None
+            self._resolved = True
+        return self._cache
 
-    def _write(self, entries: dict[str, _AutotuneCacheEntry]) -> None:
-        url = self._url_fn()
-        if url is None:
-            return
-        payload = {key: _encode_autotune_entry(value) for key, value in entries.items()}
+    def _load(self, cache: PersistentKvCache, key: str) -> _AutotuneCacheEntry | None:
         try:
-            autotune_cache_utils.write_json(url, payload)
+            raw = cache.load(_autotune_entry_name(key))
         except Exception as exc:
-            logger.warning("Unable to persist fused CE autotune cache to %s: %s", url, exc)
+            logger.warning("Unable to load fused CE autotune cache from %s: %s", cache.directory, exc)
+            return None
+        if raw is None:
+            return None
+        payload = json.loads(raw)
+        return _decode_autotune_entry(payload) if isinstance(payload, dict) else None
 
 
 _CANONICAL_BACKEND_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}
@@ -229,7 +249,10 @@ def _implementation_matches_current_backend(impl_name: str, *, fn: ArrayImpl | N
 
 
 def _autotune_enabled() -> bool:
-    return autotune_cache_utils.is_enabled_from_env(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
+    value = os.environ.get(_AUTOTUNE_ON_MISS_ENV_VAR)
+    if value is None:
+        return True
+    return value.lower() in _AUTOTUNE_TRUTHY_VALUES
 
 
 _AUTOTUNE_CACHE = AutotuneBlockSizeCache()

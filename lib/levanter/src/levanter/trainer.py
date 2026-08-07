@@ -68,7 +68,7 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
-from levanter.cutlass_kernel_cache import CutlassKernelCache
+from levanter.cutlass_kernel_cache import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
@@ -857,7 +857,7 @@ def _install_cutlass_kernel_cache() -> None:
     if not cache_dir or importlib.util.find_spec("cutlass") is None:
         return
 
-    install_cutlass_kernel_cache(CutlassKernelCache(directory=prefix_join(cache_dir, _CUTLASS_KERNEL_CACHE_SUBDIR)))
+    install_cutlass_kernel_cache(cutlass_kernel_cache(prefix_join(cache_dir, _CUTLASS_KERNEL_CACHE_SUBDIR)))
 
 
 @dataclass

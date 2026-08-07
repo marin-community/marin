@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from levanter.cutlass_kernel_cache import CutlassKernelCache, cute_launcher_factory, install
+from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_kernel_cache, install
 
 
 @dataclasses.dataclass(frozen=True)
@@ -82,7 +82,7 @@ def build_launcher(modules, *, tile: int, dtype: str = "bf16") -> Any:
 
 
 def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_cutlass, tmp_path):
-    cache = CutlassKernelCache(directory=str(tmp_path))
+    cache = cutlass_kernel_cache(str(tmp_path))
     spec = FakeFunctionSpec(shape=(8, 16))
 
     install(cache)
@@ -99,7 +99,7 @@ def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_c
 
 
 def test_configuration_and_specification_both_discriminate_stored_kernels(fake_cutlass, tmp_path):
-    cache = CutlassKernelCache(directory=str(tmp_path))
+    cache = cutlass_kernel_cache(str(tmp_path))
     install(cache)
 
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
@@ -135,7 +135,7 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
     module_dir = tmp_path / "src"
     module_dir.mkdir()
     monkeypatch.syspath_prepend(str(module_dir))
-    cache = CutlassKernelCache(directory=str(tmp_path / "store"))
+    cache = cutlass_kernel_cache(str(tmp_path / "store"))
     install(cache)
 
     compiled_per_revision = []
@@ -152,7 +152,7 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
 
 
 def test_a_launcher_without_an_identity_is_compiled_but_not_stored(fake_cutlass, tmp_path):
-    cache = CutlassKernelCache(directory=str(tmp_path))
+    cache = cutlass_kernel_cache(str(tmp_path))
     install(cache)
 
     def untagged(stream):
@@ -168,7 +168,7 @@ def test_a_launcher_without_an_identity_is_compiled_but_not_stored(fake_cutlass,
 
 def test_a_specification_that_reprs_an_address_is_not_stored(fake_cutlass, tmp_path):
     """Such a key would change every process, so it would miss forever and litter the store."""
-    cache = CutlassKernelCache(directory=str(tmp_path))
+    cache = cutlass_kernel_cache(str(tmp_path))
     install(cache)
 
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), object())

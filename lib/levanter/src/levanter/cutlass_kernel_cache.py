@@ -19,7 +19,6 @@ a stored blob reconstructs a compile with nothing else.
 Launchers opt in through :func:`cute_launcher_factory`.
 """
 
-import dataclasses
 import functools
 import hashlib
 import importlib
@@ -28,7 +27,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Callable
 
 import jax
-from rigging.filesystem import StoragePath, atomic_rename
+from rigging.cache import PersistentKvCache
 
 logger = logging.getLogger(__name__)
 
@@ -98,39 +97,12 @@ def _source_digest(build: Callable[..., Any]) -> str:
         return hashlib.sha256(handle.read()).hexdigest()[:16]
 
 
-@dataclasses.dataclass(frozen=True)
-class CutlassKernelCache:
-    """Content-addressed store of compiled CuTeDSL kernel object code.
-
-    Args:
-        directory: Store location, local or any fsspec URL.
-    """
-
-    directory: str
-
-    def load(self, key: str) -> bytes | None:
-        path = self._object(key)
-        return path.read_bytes() if path.exists() else None
-
-    def store(self, key: str, module: bytes) -> None:
-        # Every process compiles the same kernels at once, so stage and rename
-        # rather than let a reader see a half-written object.
-        path = str(self._object(key))
-        with atomic_rename(path) as staged:
-            StoragePath(staged).write_bytes(module)
-
-    def _object(self, key: str) -> StoragePath:
-        return _root(self.directory) / f"{key}{_OBJECT_SUFFIX}"
+def cutlass_kernel_cache(directory: str) -> PersistentKvCache:
+    """A store of compiled CuTeDSL kernel object code at ``directory``, one ``.o`` object per key."""
+    return PersistentKvCache(directory=directory, suffix=_OBJECT_SUFFIX)
 
 
-@functools.lru_cache(maxsize=None)
-def _root(directory: str) -> StoragePath:
-    path = StoragePath(directory)
-    path.mkdirs()
-    return path
-
-
-def install(cache: CutlassKernelCache) -> None:
+def install(cache: PersistentKvCache) -> None:
     """Route ``cutlass.jax`` kernel compiles through ``cache``.
 
     Patches ``cutlass.jax.primitive``, which binds ``get_or_compile_kernel`` at
