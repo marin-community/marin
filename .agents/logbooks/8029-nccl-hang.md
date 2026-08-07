@@ -82,3 +82,10 @@ author: power
 - Evidence: Iris accepted the 9.8 MB bundle from the clean source commit.
 - Decision: Keep the single two-rack request; do not submit the four-rack gate until this run is terminal.
 - Next: Verify the resolved plan, W&B identity, NCCL provenance, and first training step.
+
+### 2026-08-07 02:45 UTC - Two-rack 300B gate wedged before step zero
+
+- Status: The real 300B FSDP model wedged on its first `jit_train_step` execution with NCCL 2.30.7; no training step completed.
+- Evidence: Worker 1 reported a 128-device clique initialization stuck at 02:43:57, XLA's hang watchdog reported `jit_train_step` unfinished after one minute at 02:44:47, and the child aborted at 02:44:57. The supervisor classified `crash returncode=-6 last_step=None`, exhausted its zero-restart budget, and Iris coscheduled the other 31 workers down.
+- Decision: Stop rack-count promotion and retry the environment-variable matrix at the failing two-rack scale, ordered by low expected steady-state cost and relevance to communicator initialization.
+- Next: Start with `NCCL_RUNTIME_CONNECT=0`, then promote a clean arm through 1000 steps before resuming the 4/8/12-rack matrix; continue through the catalog if it wedges.

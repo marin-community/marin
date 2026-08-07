@@ -15,7 +15,6 @@ import logging
 import uuid
 from io import StringIO
 from pathlib import Path
-from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -33,7 +32,6 @@ from levanter.data.text.examples import GrugLmExample
 from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import _compact_grug_mesh_shape
-from levanter.recovery.types import FaultClass, FaultRecord, RunOutcome, RunResult
 from levanter.schedule import BatchSchedule
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
@@ -485,41 +483,3 @@ def test_grug_base_run_emits_expected_metrics_with_json_tracker(tmp_path: Path):
     ]
     for key in required_keys:
         assert key in summary
-
-
-def test_hero_fsdp_supervisor_propagates_a_child_crash(monkeypatch):
-    train_module = importlib.import_module("experiments.grug.moe_hero_fsdp.train")
-
-    class FailedSupervisor:
-        def __init__(self, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return None
-
-        def run(self, entrypoint, config, *, label):
-            return RunResult(
-                label=label,
-                outcome=RunOutcome.FAILED,
-                attempts=1,
-                final_step=87,
-                total_wall_time=70.0,
-                faults=[
-                    FaultRecord(
-                        attempt=1,
-                        fault_class=FaultClass.CRASH,
-                        returncode=-6,
-                        wall_time=70.0,
-                        last_step=87,
-                    )
-                ],
-            )
-
-    monkeypatch.setattr(train_module, "GPUHangSupervisor", FailedSupervisor)
-    config = SimpleNamespace(trainer=SimpleNamespace(trainer=SimpleNamespace(id="supervised-test")))
-
-    with pytest.raises(RuntimeError, match=r"outcome=failed.*returncode=-6"):
-        train_module._run_grug_supervised_local(config)

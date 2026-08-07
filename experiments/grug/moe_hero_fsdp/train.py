@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import equinox as eqx
@@ -62,7 +63,7 @@ HERO_FSDP_RUNTIME_ENV = {
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 HERO_EXECUTION_TERMINATE_TIMEOUT = 60.0
-HERO_SUPERVISOR_STARTUP_TIMEOUT = 12 * 60 * 60.0
+HERO_SUPERVISOR_WALL_TIMEOUT = 12 * 60 * 60.0
 
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
@@ -666,8 +667,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     levanter.tracker.current_tracker().finish()
 
 
-def run_grug(config: GrugRunConfig) -> None:
-    """Dispatch grug training through Fray jobs."""
+def _dispatch_grug(
+    config: GrugRunConfig,
+    local_entrypoint: Callable[[GrugRunConfig], None],
+    *,
+    max_retries_failure: int,
+) -> None:
     trainer = config.trainer.trainer
     if trainer.id is None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
@@ -677,10 +682,16 @@ def run_grug(config: GrugRunConfig) -> None:
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,
-        local_entrypoint=_run_grug_local,
+        local_entrypoint=local_entrypoint,
         resources=config.resources,
+        max_retries_failure=max_retries_failure,
         processes_per_task=config.processes_per_task,
     )
+
+
+def run_grug(config: GrugRunConfig) -> None:
+    """Dispatch grug training through Fray jobs."""
+    _dispatch_grug(config, _run_grug_local, max_retries_failure=3)
 
 
 def _run_grug_supervised_local(config: GrugRunConfig) -> None:
@@ -697,8 +708,8 @@ def _run_grug_supervised_local(config: GrugRunConfig) -> None:
         # The production loop does not yet emit the recovery heartbeat. Keep the
         # host watchdog outside the coordinator's 12-hour deadline; XLA's
         # per-execution deadman and ProgressWatchdog remain active in the child.
-        deadman_timeout=HERO_SUPERVISOR_STARTUP_TIMEOUT,
-        startup_timeout=HERO_SUPERVISOR_STARTUP_TIMEOUT,
+        deadman_timeout=HERO_SUPERVISOR_WALL_TIMEOUT,
+        startup_timeout=HERO_SUPERVISOR_WALL_TIMEOUT,
         max_restarts_per_run=0,
     ) as supervisor:
         result = supervisor.run(_run_grug_local, config, label=run_id)
@@ -712,19 +723,7 @@ def _run_grug_supervised_local(config: GrugRunConfig) -> None:
 
 def run_grug_supervised(config: GrugRunConfig) -> None:
     """Dispatch grug training with one crash supervisor per GPU task."""
-    trainer = config.trainer.trainer
-    if trainer.id is None:
-        raise ValueError("trainer.id must be set before dispatching grug training.")
-
-    _apply_hero_fsdp_runtime_defaults()
-    dispatch_grug_training_run(
-        run_id=trainer.id,
-        config=config,
-        local_entrypoint=_run_grug_supervised_local,
-        resources=config.resources,
-        max_retries_failure=0,
-        processes_per_task=config.processes_per_task,
-    )
+    _dispatch_grug(config, _run_grug_supervised_local, max_retries_failure=0)
 
 
 __all__ = [

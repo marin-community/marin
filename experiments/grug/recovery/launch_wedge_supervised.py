@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import click
 from fray.cluster import ResourceConfig
@@ -55,10 +56,12 @@ HERO_NODES_PER_RACK = 16  # matches moe_hero_fsdp / minrepro_launch
 # fires on the wedge, and well below the reproducer's time-to-wedge budget so
 # detection is sub-minute.
 DEFAULT_EXECUTION_TERMINATE_TIMEOUT = 60.0
-WEDGE_PROVENANCE_ENV = {
-    "NCCL_DEBUG": "INFO",
-    "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
-}
+WEDGE_PROVENANCE_ENV = MappingProxyType(
+    {
+        "NCCL_DEBUG": "INFO",
+        "NCCL_DEBUG_SUBSYS": "INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS",
+    }
+)
 
 
 @dataclass(frozen=True)
