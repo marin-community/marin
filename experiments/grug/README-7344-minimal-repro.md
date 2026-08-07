@@ -122,57 +122,37 @@ ncclLocalOpAppend <- SaveProxy <- ncclProxySaveOp <- uploadProxyOps
 i.e. the rank cannot **launch** its next collective -- it spins on `sched_yield` because the
 proxy op queue is full.
 
-### Why the queue never drains
+### Why the queue never drains -- root cause
 
-Walking `ncclProxyProgressState->active` with lldb (the build carries debug symbols), every
-stalled op on every proxy thread reads, frozen and identical across samples 30 s apart:
+*(This section supersedes an earlier draft that attributed the stall to the GPUDirect-RDMA
+flush. `NCCL_NET_GDR_LEVEL=0` -- verified effective via `via NET/IB/N` connection lines with
+no `/GDRDMA` suffix -- still wedged at step 163, killing that hypothesis. The `flushed=0`
+reading was where a victim pipeline froze, not the cause.)*
 
-```
-peer=17/18/19  channelId=0  nsteps=2  nbytes=524288
-posted=2   received=2   flushed=0   transmitted=0   done=0
-```
+NCCL 2.28.9 leaks proxy-op slots on aarch64. The slot-return path in
+`ncclProxyGetPostedOps` (proxy.cc:845-852) publishes freed slots with a weak
+`__atomic_compare_exchange_n` whose retry condition checks the observed value
+(`while (swap != oldFree)`) instead of the CAS result. A weak CAS may fail spuriously --
+return false with the value unchanged -- and that case exits the loop without storing,
+orphaning the whole batch of freed slots. On aarch64 the compiled sequence is ldaxr/stlxr
+with the stlxr success flag never tested; the starved producer's
+`__atomic_exchange_n(&freeOps[i], -1)` spin bounces the cache line and breaks the
+reservation while leaving the value equal, so leaks concentrate at backpressure episodes.
+x86 `lock cmpxchg` cannot fail spuriously, which is why only GB200 (Grace) sees this.
 
-NCCL's receive path advances `posted -> received -> flushed -> transmitted -> done`.
-`received=2, flushed=0` means **the data arrived but the GPUDirect-RDMA flush never
-completed**. The flush is a small RDMA *read* issued after the incoming writes to guarantee
-they are visible to the GPU before the receive is signalled. It is an ordinary RDMA operation
-that simply never returns a completion -- which is exactly why nothing errors, nothing times
-out, and no counter increments anywhere.
+Measured on a live wedge (see `wedge_forensics/`): the lagging rank's 2048-slot partition
+was fully leaked (freeOps=-1, producer cache empty, nothing posted, consumer idle in
+`pthread_cond_wait` with `active=NULL`), and the three healthy local ranks showed deficits
+of 830/446/702 slots -- the leak runs continuously everywhere and the first rank to hit
+zero wedges the job: its launcher spins in `ncclLocalOpAppend` forever, every peer blocks
+in the collective, and nothing errors or times out.
 
-The backpressure chain: flush never completes -> op never reaches `done` -> proxy queue never
-drains -> `ncclLocalOpAppend` spins -> the rank cannot launch -> RAS shows it behind -> the
-other 127 ranks block on the collective.
+NVIDIA fixed exactly this loop in NCCL v2.29.3-1 (commit 25368a7f78ba, loop rewritten to
+retry on the CAS return value). Causal A/B on this reproducer: `nvidia-nccl-cu13==2.28.9`
+wedged 7/7 trials by step 347; overriding to `2.30.7` (one uv.lock line, see the pin commit
+on this branch) ran clean -- see the issue thread for the final step count.
 
-Three *different* peers (17, 18, 19) are stuck at flush simultaneously on the same node, which
-argues against a single broken peer link and for something local to that node's NIC/PCIe/GPU
-path.
-
-The stalled collectives are always **large** AllReduces (37,748,736 bf16 elements = 75.5 MB,
-`pattern=10` NvlsTree, `protocol=2` SIMPLE, chunked into 512 KB steps). The healthy ranks sail
-past to a `count=1` fp32 op -- the loss scalar. Small collectives are not implicated.
-
-## Open questions -- please read before drawing conclusions
-
-1. **Reproducible solo, but not on an idle cluster.** 6/6 trials wedged. Five ran alongside
-   3-4 concurrent 128-GPU jobs of ours; the sixth ran with no other job of ours anywhere and
-   still wedged, at step 211 after ~14 s. That removes our own concurrency as the cause. Other
-   tenants' jobs still shared the fabric, so "solo" means solo-for-us, not a quiet cluster.
-2. **Whether this is the same bug as the production wedge is not settled.** It matches on the
-   four-part signature, but differs in three ways: the production job lags a *whole
-   64-rank rack* where this lags a *single rank*; production py-spy showed lagging and healthy
-   ranks on the *same* line where this splits 389/392; and time-to-wedge differs ~100x. We have
-   never inspected proxy state on a production wedge -- the `flushed=0` finding comes only from
-   this reproducer.
-3. **`NCCL_DEBUG=INFO` perturbs timing** -- the run with it enabled wedged at step 0 rather
-   than 18-347. Do not read significance into that.
-4. **`flushed` semantics** are read from NCCL's receive state machine, not verified against
-   the 2.28.9 source.
-
-## Suggested next test
-
-`NCCL_NET_GDR_LEVEL=0` disables GPUDirect RDMA, so receives stage through host memory and no
-flush is required. If the wedge disappears, the GDR flush path is confirmed. At ~20 s to
-wedge this is a few minutes of cluster time.
-
-(Disabling only the flush is the sharper test but removes a correctness barrier and risks
-silent data corruption -- acceptable as a diagnostic, never as a fix.)
+Caveat: `moe-hero-fsdp-10rack-t1nccl-20260805` (1-layer hero, 10 racks) wedged with 2.30.7
+verifiably loaded, so a second mechanism may exist at hero scale. The forensics in
+`wedge_forensics/` distinguish the slot-leak deadlock from anything else in ~15 minutes on
+a live wedge; run them before theorizing about any future wedge.
