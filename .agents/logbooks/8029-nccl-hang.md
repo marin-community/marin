@@ -163,8 +163,37 @@ author: power
 - Hardware: 128 Iris tasks, 512 GPUs across eight NVL72 racks on `cw-us-east-08a`.
 - Detection: In-code defaults — 600s XLA execution deadman, thunk reporting off, no restart budget.
 - Purpose: Reproduce the #7344 wedge at the scale where it is documented (steps 17-200).
+- Outcome: No wedge. Stopped by operator at step 301 after 1:49:07, 18.9 s/it, loss 2.68 from 8.82 at step 9. No OOM, no fatal, no RAS capture triggered. Watch stats were enabled at interval 20 and cleared every watch step.
+
+### 2026-08-07 06:43 UTC - mhf-8rack-1ppg-stock-20260807
+
+- Command: `... --job-name mhf-8rack-1ppg-stock-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch_stock_control --run-id mhf-8rack-1ppg-stock-20260807 --dp-racks 8 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/mhf-8rack-1ppg-stock-20260807-coord`.
+- Git SHA: `99333900c9`; clean tree, pushed before submission.
+- Hardware: 128 Iris tasks, 512 GPUs across eight NVL72 racks on `cw-us-east-08a`.
+- Detection: None in-process. No supervisor parent, no XLA execution deadman, no thunk reporting, no retries. `--xla_gpu_nccl_termination_timeout_seconds=600` remains because `marin.training.training` sets it independently of the recovery framework.
+- Purpose: Restore the historical stock configuration to test whether the recovery instrumentation, not chance, explains the clean supervised run.
+- Caveat: Differs from `mhf-8rack-1ppg-sup-base-20260807` in two variables, not one — instrumentation and watch state. Watch is off here per operator direction. Watch-on is the follow-up arm if this runs clean.
 
 ## Event Log
+
+### 2026-08-07 06:40 UTC - Driver and VBIOS unchanged since the historical wedges
+
+- `nvidia-smi` on the live eight-rack job reports driver `595.71.05` and VBIOS `97.00.B9.00.99` on every GB200 sampled.
+- The driver matches the fleet-wide constant recorded in #8029, so a fleet update does not explain non-reproduction. VBIOS is recorded here for the first time.
+
+### 2026-08-07 06:20 UTC - Two monitor hang patterns matched strings the deployed binary cannot print
+
+- `avoid infinite hangs` and `hang_watchdog` appear nowhere in the deployed jaxlib 0.11.0. The monitor was greping for text that cannot occur.
+- Detection was never at risk: the progress-stall check and the 240s tripwire catch a wedge structurally, and a deadman kill takes the job terminal. Classification was — a real wedge would have been recorded as `failed` rather than `hang_signal`.
+- Replaced with a match on the absl FATAL severity prefix (`F20260807 ...`), which `LOG(FATAL)` always emits regardless of wording.
+- Open: whether arming the per-execution deadman inserts a host-device sync. The abort message is not a literal in the binary, so it could not be traced that way. If it does, every supervised arm is confounded against the unsupervised historical control.
+
+### 2026-08-07 05:15 UTC - The recurring two-rack OOM is the watch-stats program
+
+- Two attempts of one config died on the byte-identical 117.02 GiB allocation inside `jit_train_step` at step 80 and step 20, both exact multiples of the 20-step watch interval.
+- Pool fragmentation decides which watch step it lands on, which is why the step differed. Eight racks cleared every watch step, so it is fragmentation-dependent rather than a hard sizing failure.
+- Watch stats are off for hero runs from `eb6a320a18`. This was a competing risk censoring wedge trials at 2 racks.
 
 ### 2026-08-07 04:49 UTC - Eight-rack baseline flag provenance verified
 
