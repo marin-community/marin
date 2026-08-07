@@ -166,6 +166,13 @@ author: power
 
 ## Event Log
 
+### 2026-08-07 04:49 UTC - Eight-rack baseline flag provenance verified
+
+- Read from the trainer grandchildren (`python -m levanter.recovery.child`, pids 1353-1356) via `/proc/<pid>/environ`, not the supervisor parents, which carry no deadman flags by design.
+- `XLA_FLAGS = --xla_gpu_enable_command_buffer= --xla_gpu_nccl_termination_timeout_seconds=600 --xla_gpu_execution_terminate_timeout=600s --xla_gpu_execution_progress_tracking=0`.
+- `NCCL_DEBUG=WARN`, `JAX_ENABLE_PGLE=1`, `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`, NCCL 2.30.7+cuda13.3, 128 tasks x 4 processes = 512 ranks.
+- The NCCL clique timeout is 600s, not the recovery default of 120s: `marin.training.training` sets it first and `_merge_xla_flag` preserves the existing value. Clique acquisition therefore cannot trip the abort ahead of the execution deadman.
+
 ### 2026-08-07 04:38 UTC - Recovery instrumentation, not the model, caused every pre-step-0 failure
 
 - Finding: `--xla_gpu_execution_progress_tracking=8` is "number of thunks to report in progress tracking on execution timeout". It runs only when the deadman fires, and on a module this size it throws `std::bad_alloc` / `std::length_error`, replacing the abort diagnostic with an allocation error.
