@@ -266,10 +266,12 @@ kubectl --kubeconfig <kubeconfig> --context <context> -n iris \
   rg 'finelog forwarder'
 ```
 
-Warnings name the affected namespace. `backlog exceeds the lag cap` or `rows
-evicted before they were forwarded` means that namespace skipped source sequence
-positions; the cumulative `skipped_seqs` progress counter alone does not prove
-that `log` rows were dropped.
+Warnings name the affected namespace. `backlog exceeds the warning threshold`
+reports pressure but does not change the forwarding cursor; the sender continues
+draining every locally retained row. `rows evicted before they were forwarded`
+means that local retention has already made source sequence positions unreadable.
+The cumulative `skipped_seqs` progress counter also includes permanently rejected
+malformed batches and does not by itself prove that `log` rows were dropped.
 
 To rotate a key, add the new Secret Manager version, add its public key alongside
 the old one under the same `keys[].cluster` (the hub accepts either), roll the

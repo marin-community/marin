@@ -185,6 +185,11 @@ async fn push(client: &LogServiceClient<TestTransport>, key: &str, lines: &[&str
 
 /// Register a generic string-keyed table and write `rows` durable rows into it.
 async fn write_id_rows(store: &Store, namespace: &str, rows: usize) {
+    let ids: Vec<String> = (0..rows).map(|row| row.to_string()).collect();
+    write_string_rows(store, namespace, ids).await;
+}
+
+async fn write_string_rows(store: &Store, namespace: &str, ids: Vec<String>) {
     let schema = Schema::new(
         vec![Column::new("id", ColumnType::COLUMN_TYPE_STRING, false)],
         "id",
@@ -192,18 +197,23 @@ async fn write_id_rows(store: &Store, namespace: &str, rows: usize) {
     store
         .register_table(namespace, schema, StoragePolicy::default())
         .unwrap();
-    let ids: Vec<String> = (0..rows).map(|row| row.to_string()).collect();
-    let batch = RecordBatch::try_new(
-        Arc::new(ArrowSchema::new(vec![Field::new(
-            "id",
-            DataType::Utf8,
-            false,
-        )])),
-        vec![Arc::new(StringArray::from(ids))],
-    )
-    .unwrap();
-    let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
-    let (_, last_seq) = store.write_rows(namespace, &ipc, None).unwrap();
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "id",
+        DataType::Utf8,
+        false,
+    )]));
+    let mut last_seq = -1;
+    for chunk in ids.chunks(20_000) {
+        let batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![Arc::new(StringArray::from(
+                chunk.iter().map(String::as_str).collect::<Vec<_>>(),
+            ))],
+        )
+        .unwrap();
+        let ipc = encode_ipc(&batch.schema(), &[batch]).unwrap();
+        (_, last_seq) = store.write_rows(namespace, &ipc, None).unwrap();
+    }
     store
         .await_persisted(namespace, last_seq, Duration::from_secs(5))
         .await
@@ -719,9 +729,7 @@ async fn a_watermark_ahead_of_the_store_reseeds_at_the_tip() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_backlog_beyond_the_lag_cap_is_skipped_rather_than_drained() {
-    // The store keeps every row; the hub copy is best effort. A forwarder too far behind
-    // abandons the oldest part of the backlog and keeps the freshest `max_lag_seqs`.
+async fn a_backlog_beyond_the_warning_threshold_is_drained_without_loss() {
     let fx = Fixture::new("cap").await;
     push(
         &fx.source_client,
@@ -732,7 +740,7 @@ async fn a_backlog_beyond_the_lag_cap_is_skipped_rather_than_drained() {
     fx.forward_from_start(LOG_NAMESPACE_NAME);
 
     let mut forwarder = fx.forwarder(PRIV_A);
-    forwarder.max_lag_seqs = 2;
+    forwarder.lag_warning_seqs = 2;
     forward_until(
         forwarder,
         &fx.source,
@@ -745,10 +753,11 @@ async fn a_backlog_beyond_the_lag_cap_is_skipped_rather_than_drained() {
     assert_eq!(
         fx.hub_log_rows().await,
         vec![
+            ("/user/job/t".to_string(), "one".to_string()),
+            ("/user/job/t".to_string(), "two".to_string()),
             ("/user/job/t".to_string(), "three".to_string()),
             ("/user/job/t".to_string(), "four".to_string()),
-        ],
-        "the two oldest rows are dropped; the freshest two still ship"
+        ]
     );
 }
 
@@ -798,6 +807,31 @@ async fn a_dense_backlog_is_forwarded_in_one_read_batch() {
         fx.zstd_requests() - zstd_before,
         1,
         "the large WriteRows body is zstd encoded while the small registration stays identity"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
+    let fx = Fixture::new("concurrent-chunks").await;
+    write_string_rows(
+        &fx.source,
+        "telemetry",
+        vec!["x".repeat(450); FORWARD_BATCH_ROWS as usize],
+    )
+    .await;
+    fx.forward_from_start("telemetry");
+
+    fx.drain(PRIV_A, "telemetry").await;
+
+    let stats = fx.target_store().list_namespaces_with_stats().unwrap();
+    let telemetry = stats
+        .iter()
+        .find(|(name, _, _, _)| name == "telemetry")
+        .expect("the hub registered the telemetry namespace");
+    assert_eq!(telemetry.2.row_count, FORWARD_BATCH_ROWS);
+    assert!(
+        fx.target_requests.max_in_flight() >= 2,
+        "the two telemetry chunks must overlap at the hub's durable-ack boundary"
     );
 }
 
