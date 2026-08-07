@@ -27,6 +27,7 @@ from experiments.grug.moe.expert_merge import (
     ExpertCostMatrix,
     ExpertProbeSet,
     ExpertReservoirCollection,
+    MoeLayerTrace,
     SpectralProbeConfig,
 )
 from experiments.grug.moe.expert_prefit import PrefitConfig
@@ -46,6 +47,7 @@ from experiments.grug.moe.merge_jobs import (
 from experiments.grug.moe.merge_recovery import RecoveryStage
 from experiments.grug.moe.merge_recovery_runtime import (
     PrefitRuntimeState,
+    evaluate_prefit_checkpoint_local,
     run_conversion_local,
     run_prefit_local,
     run_recovery_local,
@@ -114,6 +116,7 @@ def _runtime_inputs(tmp_path: Path) -> _RuntimeInputs:
 
     calibration_path = tmp_path / "calibration"
     reservoirs = {}
+    traces = {}
     for layer in (1, 2):
         reservoir = ExpertReservoirCollection(
             num_experts=2,
@@ -127,6 +130,20 @@ def _runtime_inputs(tmp_path: Path) -> _RuntimeInputs:
         selected = np.arange(256, dtype=np.int32).reshape(-1, 1) % 2
         reservoir.add_routes(states, selected, np.ones_like(selected, dtype=np.float32))
         reservoirs[layer] = reservoir
+        trace_inputs = states[:8]
+        trace_selected = selected[:8]
+        trace_combine = np.linspace(0.25, 1.0, 8, dtype=np.float32).reshape(-1, 1)
+        expert_bank = teacher.expert_banks[teacher.blocks[layer].expert_bank_index]
+        with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+            routed_output = expert_bank(trace_inputs, trace_selected, trace_combine)
+        if isinstance(routed_output, tuple):
+            routed_output = routed_output[0]
+        traces[layer] = MoeLayerTrace(
+            mlp_input=trace_inputs,
+            selected_experts=trace_selected,
+            combine_weights=trace_combine,
+            routed_output=routed_output,
+        )
     write_calibration_artifact(
         str(calibration_path),
         reservoirs,
@@ -139,7 +156,9 @@ def _runtime_inputs(tmp_path: Path) -> _RuntimeInputs:
             capacity_per_expert=16,
             heldout_fraction=0.5,
             calibration_tokens=256,
+            trace_capacity=8,
         ),
+        traces_by_layer=traces,
     )
 
     matching_path = tmp_path / "matching"
@@ -171,7 +190,7 @@ def _runtime_inputs(tmp_path: Path) -> _RuntimeInputs:
     )
 
 
-def test_merge_mesh_supports_closed_expert_weights_on_multi_device() -> None:
+def test_merge_mesh_supports_closed_expert_weights_and_aggregate_nrmse_on_multi_device() -> None:
     script = """
 import jax
 import jax.numpy as jnp
@@ -179,11 +198,13 @@ import numpy as np
 from haliax.partitioning import set_mesh
 from levanter.grug.grug_moe import MoEExpertMlp
 from experiments.grug.moe.expert_merge import (
+    MoeLayerTrace,
     ReservoirSample,
     SpectralProbeConfig,
     build_spectral_probe_set,
     eval_expert,
 )
+from experiments.grug.moe.expert_prefit import aggregate_routed_moe_nrmse
 from experiments.grug.moe.merge_recovery_runtime import compact_merge_mesh
 
 mesh = compact_merge_mesh()
@@ -225,7 +246,71 @@ with set_mesh(mesh):
         ),
     )
     expert_output = eval_expert(bank, 0, states[:4])
+
+    teacher = jax.jit(
+        lambda key: MoEExpertMlp.init(
+            num_experts=4,
+            hidden_dim=16,
+            intermediate_dim=8,
+            initializer_std=0.02,
+            key=key,
+            implementation="scatter",
+        )
+    )(jax.random.key(1))
+    routed_inputs = np.random.default_rng(2).normal(size=(8, 16)).astype(np.float32)
+    routed_experts = np.asarray(
+        [[0, 1], [1, 3], [2, 0], [3, 2], [0, 3], [2, 1], [1, 0], [3, 1]],
+        dtype=np.int32,
+    )
+    routed_weights = np.asarray(
+        [
+            [0.8, 0.2],
+            [0.6, 0.4],
+            [0.3, 0.7],
+            [0.55, 0.45],
+            [0.9, 0.1],
+            [0.25, 0.75],
+            [0.4, 0.6],
+            [0.65, 0.35],
+        ],
+        dtype=np.float32,
+    )
+    assignment = (2, 0, 3, 1)
+    teacher_weights = tuple(
+        np.asarray(jax.device_get(weight)) for weight in (teacher.w_gate, teacher.w_up, teacher.w_down)
+    )
+    shared_weights = tuple(
+        np.asarray(jax.device_get(weight)) for weight in (bank.w_gate, bank.w_up, bank.w_down)
+    )
+
+    def explicit_expert(current_weights, expert, x):
+        w_gate, w_up, w_down = current_weights
+        gate = x @ w_gate[expert]
+        up = x @ w_up[expert]
+        return (np.asarray(jax.nn.silu(gate)) * up) @ w_down[expert]
+
+    teacher_output = np.zeros_like(routed_inputs)
+    shared_output = np.zeros_like(routed_inputs)
+    for token in range(routed_inputs.shape[0]):
+        for route in range(routed_experts.shape[1]):
+            source_expert = int(routed_experts[token, route])
+            weight = routed_weights[token, route]
+            teacher_output[token] += weight * explicit_expert(teacher_weights, source_expert, routed_inputs[token])
+            shared_output[token] += weight * explicit_expert(
+                shared_weights, assignment[source_expert], routed_inputs[token]
+            )
+    trace = MoeLayerTrace(
+        mlp_input=routed_inputs,
+        selected_experts=routed_experts,
+        combine_weights=routed_weights,
+        routed_output=teacher_output,
+    )
+    aggregate_nrmse = aggregate_routed_moe_nrmse(bank, trace, assignment)
+    expected_nrmse = np.sqrt(
+        np.sum(np.square(shared_output - teacher_output)) / np.sum(np.square(teacher_output))
+    )
 np.testing.assert_allclose(closed, explicit, rtol=1e-5, atol=1e-5)
+np.testing.assert_allclose(aggregate_nrmse, expected_nrmse, rtol=5e-3, atol=1e-6)
 assert probes.spectral_pairs.shape == (8, 2, 16)
 assert expert_output.shape == (4, 16)
 """
@@ -321,12 +406,18 @@ def test_prefit_worker_persists_best_bank_and_balanced_layer_metrics(tmp_path: P
         ),
     )
     run_prefit_local(config)
+    posthoc_routed_nrmse = evaluate_prefit_checkpoint_local(config)
 
     checkpoint = latest_checkpoint_path(str(output_path / "checkpoints"))
     manifest = json.loads((Path(checkpoint) / "prefit_manifest.json").read_text())
     assert manifest["step"] == 1
     assert len(manifest["nrmse_by_source"]) == 4
     assert set(manifest["merge/expert_holdout_nrmse_by_cluster"]) == {"shared_0000", "shared_0001"}
+    routed_nrmse = manifest["merge/prefit_routed_moe_nrmse_by_layer"]
+    assert set(routed_nrmse) == {"layer_1", "layer_2"}
+    assert all(np.isfinite(value) for value in routed_nrmse.values())
+    assert posthoc_routed_nrmse == {1: routed_nrmse["layer_1"], 2: routed_nrmse["layer_2"]}
+    assert len(tuple((output_path / "checkpoints").glob("step-*"))) == 1
 
     representative_bank = inputs.teacher.expert_banks[inputs.teacher.blocks[1].expert_bank_index]
     template_optimizer = optax.adamw(1e-3, weight_decay=0.0)

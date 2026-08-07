@@ -31,6 +31,7 @@ from experiments.grug.moe.expert_prefit import (
     PrefitBatch,
     PrefitDataset,
     PrefitSplit,
+    aggregate_routed_moe_nrmse,
     prefit_loss,
     sample_prefit_batch,
 )
@@ -39,6 +40,7 @@ from experiments.grug.moe.merge_artifacts import (
     read_calibration_manifest,
     read_expert_calibration,
     read_expert_probe,
+    read_layer_calibration_trace,
     read_matching_manifest,
 )
 from experiments.grug.moe.merge_checkpoint import (
@@ -422,6 +424,73 @@ def _evaluate_prefit(
     return state, loss_value, np.asarray(jax.device_get(nrmse))
 
 
+def evaluate_prefit_routed_nrmse(
+    bank: MoEExpertMlp,
+    config: PrefitJobConfig,
+    matching: MatchingArtifactManifest,
+) -> dict[int, float]:
+    """Evaluate aggregate persisted calibration traces for both merged layers."""
+    assignment = tuple(int(index) for index in matching.assignments[AssignmentMode.SPECTRAL])
+    identity = tuple(range(matching.num_experts))
+    assignments = {
+        config.representative_layer: identity,
+        config.source_layer: assignment,
+    }
+    metrics = {}
+    for layer, source_to_shared in assignments.items():
+        trace = read_layer_calibration_trace(config.calibration_path, layer)
+        nrmse = aggregate_routed_moe_nrmse(
+            bank,
+            trace,
+            source_to_shared,
+            epsilon=config.config.epsilon,
+        )
+        metrics[layer] = float(jax.device_get(nrmse))
+    return metrics
+
+
+def evaluate_prefit_checkpoint_local(config: PrefitJobConfig) -> dict[int, float]:
+    """Score a saved prefit bank from persisted traces without resuming training."""
+    _validate_runtime_paths(
+        config,
+        {
+            "teacher_checkpoint": config.source.checkpoint_dir,
+            "calibration": config.calibration_path,
+            "matching": config.matching_path,
+            "prefit_output": _checkpoint_root(config.output_path),
+        },
+    )
+    initialize_merge_worker()
+    mesh = compact_merge_mesh(
+        expert_axis_size=config.expert_axis_size,
+        replica_axis_size=config.replica_axis_size,
+    )
+    with set_mesh(mesh):
+        source_state, source_checkpoint = _source_state(config.source, key=jax.random.key(config.seed), mesh=mesh)
+        matching = _matching_manifest(
+            config.matching_path,
+            representative_layer=config.representative_layer,
+            source_layer=config.source_layer,
+            num_experts=config.source.model.num_experts,
+        )
+        _validate_matching_calibration(matching, config.calibration_path)
+        checkpoint = discover_latest_checkpoint(_checkpoint_root(config.output_path))
+        if checkpoint is None:
+            raise ValueError(f"no prefit checkpoint exists under {_checkpoint_root(config.output_path)}")
+        _validate_prefit_provenance(config, checkpoint=checkpoint, source_checkpoint=source_checkpoint)
+        initial_bank = source_state.params.expert_banks[
+            source_state.params.blocks[config.representative_layer].expert_bank_index
+        ]
+        state = load_checkpoint(_initial_prefit_state(initial_bank, config), checkpoint, mesh=mesh)
+        metrics = evaluate_prefit_routed_nrmse(state.best_bank, config, matching)
+        logger.info(
+            "Prefit checkpoint %s aggregate routed-MoE NRMSE by layer: %s",
+            checkpoint,
+            metrics,
+        )
+        return metrics
+
+
 def _prefit_manifest(
     config: PrefitJobConfig,
     *,
@@ -430,6 +499,7 @@ def _prefit_manifest(
     best_loss: float,
     stopped_early: bool,
     nrmse_by_source: np.ndarray,
+    routed_nrmse_by_layer: dict[int, float],
     datasets: tuple[PrefitDataset, ...],
 ) -> dict[str, Any]:
     nrmse_by_cluster: dict[str, list[dict[str, int | float]]] = {}
@@ -454,6 +524,9 @@ def _prefit_manifest(
         "stopped_early": stopped_early,
         "nrmse_by_source": nrmse_by_source.tolist(),
         "merge/expert_holdout_nrmse_by_cluster": nrmse_by_cluster,
+        "merge/prefit_routed_moe_nrmse_by_layer": {
+            f"layer_{layer}": value for layer, value in routed_nrmse_by_layer.items()
+        },
         "probe_config": json.loads(json.dumps(dataclasses.asdict(config.probe))),
         "prefit_config": json.loads(json.dumps(dataclasses.asdict(config.config))),
     }
@@ -511,7 +584,6 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
             num_experts=config.source.model.num_experts,
         )
         _validate_matching_calibration(matching, config.calibration_path)
-        datasets = _prefit_datasets(source_state.params, config, matching)
         initial_bank = source_state.params.expert_banks[
             source_state.params.blocks[config.representative_layer].expert_bank_index
         ]
@@ -526,7 +598,19 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
                 source_checkpoint=source_checkpoint,
             )
             state = load_checkpoint(state, own_checkpoint, mesh=mesh)
+            if (
+                int(state.step) >= config.config.steps
+                or int(state.stale_evaluations) >= config.config.early_stopping_patience
+            ):
+                routed_nrmse_by_layer = evaluate_prefit_routed_nrmse(state.best_bank, config, matching)
+                logger.info(
+                    "Loaded completed prefit output at step %d; aggregate routed-MoE NRMSE by layer: %s",
+                    int(state.step),
+                    routed_nrmse_by_layer,
+                )
+                return
 
+        datasets = _prefit_datasets(source_state.params, config, matching)
         heldout_batch = sample_prefit_batch(
             datasets,
             examples_per_source=config.config.heldout_examples_per_source,
@@ -555,6 +639,7 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
                 heldout_batch,
                 epsilon=config.config.epsilon,
             )
+            routed_nrmse_by_layer = evaluate_prefit_routed_nrmse(state.best_bank, config, matching)
             stopped_early = int(state.stale_evaluations) >= config.config.early_stopping_patience
             manifest = _prefit_manifest(
                 config,
@@ -563,6 +648,7 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
                 best_loss=float(jax.device_get(state.best_loss)),
                 stopped_early=stopped_early,
                 nrmse_by_source=last_nrmse,
+                routed_nrmse_by_layer=routed_nrmse_by_layer,
                 datasets=datasets,
             )
             _save_permanent_checkpoint(
@@ -574,16 +660,15 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
             )
             if jax.process_index() == 0:
                 logger.info(
-                    "prefit step=%d train_loss=%g heldout_loss=%g best_loss=%g stale=%d",
+                    "prefit step=%d train_loss=%g heldout_loss=%g best_loss=%g stale=%d "
+                    "aggregate_routed_moe_nrmse=%s",
                     int(state.step),
                     float(jax.device_get(loss)),
                     heldout_loss,
                     float(jax.device_get(state.best_loss)),
                     int(state.stale_evaluations),
+                    routed_nrmse_by_layer,
                 )
-
-        if own_checkpoint is not None and int(state.step) >= config.config.steps:
-            logger.info("Prefit output already complete at step %d", int(state.step))
 
 
 def _load_prefitted_bank(

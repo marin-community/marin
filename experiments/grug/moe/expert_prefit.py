@@ -15,7 +15,7 @@ from jax.sharding import get_abstract_mesh
 from jax.tree_util import register_dataclass
 from levanter.grug.grug_moe import MoEExpertMlp
 
-from experiments.grug.moe.expert_merge import eval_expert
+from experiments.grug.moe.expert_merge import MoeLayerTrace, eval_expert
 
 _DEFAULT_NORMALIZATION_EPSILON = 1e-8
 
@@ -93,6 +93,47 @@ class PrefitResult:
     bank: MoEExpertMlp
     evaluations: tuple[PrefitEvaluation, ...]
     stopped_early: bool
+
+
+def aggregate_routed_moe_nrmse(
+    shared_bank: MoEExpertMlp,
+    trace: MoeLayerTrace,
+    source_to_shared: tuple[int, ...] | np.ndarray,
+    *,
+    epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
+) -> jax.Array:
+    """Compare a shared bank with one teacher layer under frozen routing.
+
+    ``source_to_shared[i]`` is the shared-bank slot assigned to source expert
+    ``i``. The trace's combine weights and teacher routed output are used
+    directly, so this excludes the block's always-on dense MLP.
+    """
+    assignment = np.asarray(source_to_shared, dtype=np.int32)
+    num_experts = shared_bank.w_gate.shape[0]
+    if assignment.shape != (num_experts,) or not np.array_equal(np.sort(assignment), np.arange(num_experts)):
+        raise ValueError(f"source_to_shared must be a bijection over {num_experts} experts")
+    if trace.mlp_input.ndim != 2 or trace.routed_output.shape != trace.mlp_input.shape:
+        raise ValueError("trace inputs and routed outputs must have matching [T, D] shapes")
+    if trace.selected_experts.shape != trace.combine_weights.shape or trace.selected_experts.ndim != 2:
+        raise ValueError("trace expert IDs and combine weights must have matching [T, K] shapes")
+    if trace.selected_experts.shape[0] != trace.mlp_input.shape[0]:
+        raise ValueError("trace routing and input token counts must match")
+
+    selected_experts = np.asarray(trace.selected_experts, dtype=np.int32)
+    if np.any(selected_experts < 0) or np.any(selected_experts >= num_experts):
+        raise ValueError("trace contains an out-of-range source expert ID")
+    mapped_experts = jnp.asarray(assignment[selected_experts])
+    shared_output = shared_bank(
+        jnp.asarray(trace.mlp_input),
+        mapped_experts,
+        jnp.asarray(trace.combine_weights),
+    )
+    if isinstance(shared_output, tuple):
+        shared_output = shared_output[0]
+    teacher_output = jnp.asarray(trace.routed_output, dtype=jnp.float32)
+    error = jnp.sum(jnp.square(shared_output.astype(jnp.float32) - teacher_output))
+    teacher_power = jnp.sum(jnp.square(teacher_output))
+    return jnp.sqrt(error / (teacher_power + epsilon))
 
 
 def make_prefit_dataset(
