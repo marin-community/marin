@@ -14,8 +14,7 @@ import warnings
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
-from rigging.cache import PersistentKvCache
-from rigging.filesystem import marin_prefix, prefix_join
+from rigging.cache import PersistentKvCache, marin_kv_cache
 
 from levanter.kernels.pallas import autotune_utils
 
@@ -58,6 +57,7 @@ _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
 _AUTOTUNE_CACHE_SUBDIR = "levanter_kernel_autotune"
 _AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
 _AUTOTUNE_CACHE_DIRNAME = "block_sizes_v2"
+_AUTOTUNE_BLOCK_SIZE_PREFIX = f"{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_DIRNAME}"
 _AUTOTUNE_ENTRY_SUFFIX = ".json"
 
 
@@ -94,12 +94,6 @@ def _decode_autotune_entry(entry: dict) -> _AutotuneCacheEntry | None:
     return None
 
 
-def _autotune_cache_dir() -> str:
-    """Region-local directory holding this kernel's tuned block sizes, one object per key."""
-    relative = f"{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_DIRNAME}"
-    return prefix_join(marin_prefix(), relative)
-
-
 def _autotune_entry_name(key: str) -> str:
     """A path-safe object name for an opaque autotune key."""
     return hashlib.sha256(key.encode()).hexdigest()
@@ -109,24 +103,22 @@ class AutotuneBlockSizeCache:
     """Tuned block sizes keyed by an opaque string, persisted one object per key.
 
     Concurrent writers of distinct keys each persist; a per-process memo answers a
-    repeated key without a second read.
+    repeated key without a second read. Passing ``None`` keeps the results in the
+    memo only, which the tests use to stay off shared storage.
     """
 
-    def __init__(self, directory_fn: Callable[[], str | None] = _autotune_cache_dir) -> None:
-        self._directory_fn = directory_fn
+    def __init__(self, cache: PersistentKvCache | None) -> None:
+        self._cache = cache
         self._lock = threading.Lock()
         self._memo: dict[str, _AutotuneCacheEntry] = {}
-        self._cache: PersistentKvCache | None = None
-        self._resolved = False
 
     def get(self, key: str) -> _AutotuneCacheEntry | None:
         with self._lock:
             if key in self._memo:
                 return self._memo[key]
-            cache = self._backing_store()
-            if cache is None:
+            if self._cache is None:
                 return None
-            entry = self._load(cache, key)
+            entry = self._load(self._cache, key)
             if entry is not None:
                 self._memo[key] = entry
             return entry
@@ -134,27 +126,19 @@ class AutotuneBlockSizeCache:
     def put(self, key: str, value: _AutotuneCacheEntry) -> None:
         with self._lock:
             self._memo[key] = value
-            cache = self._backing_store()
-            if cache is None:
+            if self._cache is None:
                 return
             payload = json.dumps(_encode_autotune_entry(value), sort_keys=True).encode()
             try:
-                cache.store(_autotune_entry_name(key), payload)
+                self._cache.store(_autotune_entry_name(key), payload)
             except Exception as exc:
-                logger.warning("Unable to persist fused CE autotune cache to %s: %s", cache.directory, exc)
-
-    def _backing_store(self) -> PersistentKvCache | None:
-        if not self._resolved:
-            directory = self._directory_fn()
-            self._cache = PersistentKvCache(directory=directory, suffix=_AUTOTUNE_ENTRY_SUFFIX) if directory else None
-            self._resolved = True
-        return self._cache
+                logger.warning("Unable to persist fused CE autotune cache: %s", exc)
 
     def _load(self, cache: PersistentKvCache, key: str) -> _AutotuneCacheEntry | None:
         try:
             raw = cache.load(_autotune_entry_name(key))
         except Exception as exc:
-            logger.warning("Unable to load fused CE autotune cache from %s: %s", cache.directory, exc)
+            logger.warning("Unable to load fused CE autotune cache: %s", exc)
             return None
         if raw is None:
             return None
@@ -249,7 +233,7 @@ def _autotune_enabled() -> bool:
     return autotune_utils.env_flag(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
 
-_AUTOTUNE_CACHE = AutotuneBlockSizeCache()
+_AUTOTUNE_CACHE = AutotuneBlockSizeCache(marin_kv_cache(_AUTOTUNE_BLOCK_SIZE_PREFIX, suffix=_AUTOTUNE_ENTRY_SUFFIX))
 
 
 def _autotune_jaxpr_hash(

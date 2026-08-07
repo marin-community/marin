@@ -99,7 +99,7 @@ def _source_digest(build: Callable[..., Any]) -> str:
 
 def cutlass_kernel_cache(directory: str) -> PersistentKvCache:
     """A store of compiled CuTeDSL kernel object code at ``directory``, one ``.o`` object per key."""
-    return PersistentKvCache(directory=directory, suffix=_OBJECT_SUFFIX)
+    return PersistentKvCache.at(directory, suffix=_OBJECT_SUFFIX)
 
 
 def install(cache: PersistentKvCache) -> None:
@@ -141,7 +141,7 @@ def install(cache: PersistentKvCache) -> None:
 
     get_or_compile_kernel._levanter_kernel_cache = cache
     primitive.get_or_compile_kernel = get_or_compile_kernel
-    logger.info("CuTeDSL kernel cache installed at %s", cache.directory)
+    logger.info("CuTeDSL kernel cache installed at %s", cache.location())
 
 
 def _kernel_key(fn: Any, spec: Any) -> str | None:
