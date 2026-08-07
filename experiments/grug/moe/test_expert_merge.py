@@ -27,6 +27,8 @@ from experiments.grug.moe.expert_merge import (
     convert_one_expert_pair,
     estimate_input_manifold,
     eval_all_experts,
+    eval_expert,
+    expert_costs,
     finalize_spectral_probe_set,
     forward_with_moe_traces,
     functional_cost_matrix,
@@ -198,6 +200,65 @@ def test_functional_native_cost_recovers_exact_expert_permutation():
 
     np.testing.assert_array_equal(assignment, permutation)
     np.testing.assert_allclose(costs.native[np.arange(4), permutation], 0.0, atol=1e-12)
+
+
+@pytest.mark.parametrize("num_spectral_pairs", [0, 3])
+def test_compiled_expert_costs_match_exploded_reference_for_partial_final_chunk(num_spectral_pairs):
+    source = _bank(num_experts=3, hidden_dim=4, intermediate_dim=3, seed=20)
+    candidate = _bank(num_experts=3, hidden_dim=4, intermediate_dim=3, seed=21)
+    ordinary_inputs = np.asarray(jax.random.normal(jax.random.key(22), (5, 4)))
+    ordinary_weights = np.linspace(0.25, 1.25, 5, dtype=np.float32)
+    spectral_pairs = np.asarray(jax.random.normal(jax.random.key(23), (num_spectral_pairs, 2, 4)))
+    probes = ExpertProbeSet(
+        ordinary_inputs=ordinary_inputs,
+        ordinary_weights=ordinary_weights,
+        centers=np.empty((0, 4), dtype=np.float32),
+        spectral_pairs=spectral_pairs,
+        input_directions=np.empty((4, 0), dtype=np.float32),
+        sensitivity_eigenvalues=np.empty((0,), dtype=np.float32),
+    )
+    eta = 0.7
+    epsilon = 1e-6
+
+    actual = expert_costs(
+        source,
+        1,
+        candidate,
+        probes,
+        eta=eta,
+        epsilon=epsilon,
+        expert_chunk_size=2,
+    )
+
+    source_native = np.asarray(eval_expert(source, 1, ordinary_inputs), dtype=np.float32)
+    candidate_native = np.asarray(
+        eval_all_experts(candidate, ordinary_inputs, expert_chunk_size=2),
+        dtype=np.float32,
+    )
+    native = np.sum(
+        ordinary_weights[:, None, None] * np.square(candidate_native - source_native[:, None, :]),
+        axis=(0, 2),
+    ) / (np.sum(ordinary_weights[:, None] * np.square(source_native)) + epsilon)
+    if num_spectral_pairs == 0:
+        tangent = np.zeros_like(native)
+    else:
+        flattened_pairs = spectral_pairs.reshape(-1, 4)
+        source_spectral = np.asarray(eval_expert(source, 1, flattened_pairs), dtype=np.float32).reshape(
+            num_spectral_pairs, 2, 4
+        )
+        candidate_spectral = np.asarray(
+            eval_all_experts(candidate, flattened_pairs, expert_chunk_size=2),
+            dtype=np.float32,
+        ).reshape(num_spectral_pairs, 2, 3, 4)
+        source_delta = source_spectral[:, 1] - source_spectral[:, 0]
+        candidate_delta = candidate_spectral[:, 1] - candidate_spectral[:, 0]
+        tangent = np.sum(np.square(candidate_delta - source_delta[:, None, :]), axis=(0, 2)) / (
+            np.sum(np.square(source_delta)) + epsilon
+        )
+
+    np.testing.assert_allclose(actual.native, native, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(actual.tangent, tangent, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(actual.total, native + eta * tangent, rtol=1e-6, atol=1e-6)
 
 
 def test_weighted_reservoir_uses_squared_route_weights():

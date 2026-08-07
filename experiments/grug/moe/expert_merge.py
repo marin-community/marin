@@ -4,8 +4,10 @@
 """Offline functional matching and one-pair expert-bank conversion for Grug MoE."""
 
 import dataclasses
+import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import partial
 
 import equinox as eqx
 import jax
@@ -19,6 +21,8 @@ from levanter.utils.activation import ActivationFunctionEnum
 from scipy.optimize import linear_sum_assignment
 
 from experiments.grug.moe.model import MoEMLP, Transformer
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_MAHALANOBIS_QUANTILE = 0.995
 _DEFAULT_COVARIANCE_EPSILON = 1e-6
@@ -475,9 +479,7 @@ def eval_all_experts(
     return jnp.concatenate(probe_outputs, axis=0)
 
 
-def eval_expert(bank: MoEExpertMlp, expert_index: int, x: np.ndarray | jax.Array) -> jax.Array:
-    if not 0 <= expert_index < bank.w_gate.shape[0]:
-        raise IndexError(f"expert_index must be in [0, {bank.w_gate.shape[0]}), got {expert_index}")
+def _eval_expert(bank: MoEExpertMlp, expert_index: int | jax.Array, x: np.ndarray | jax.Array) -> jax.Array:
     inputs = jnp.asarray(x, dtype=bank.w_gate.dtype)
     mesh = get_abstract_mesh()
     gate_weight_sharding = None if mesh.empty else P("data", "model")
@@ -497,6 +499,45 @@ def eval_expert(bank: MoEExpertMlp, expert_index: int, x: np.ndarray | jax.Array
     up = jnp.einsum("pd,di->pi", inputs, w_up, out_sharding=hidden_sharding)
     return jnp.einsum(
         "pi,id->pd",
+        activation_fn(gate) * up,
+        w_down,
+        out_sharding=output_sharding,
+    )
+
+
+def eval_expert(bank: MoEExpertMlp, expert_index: int, x: np.ndarray | jax.Array) -> jax.Array:
+    if not 0 <= expert_index < bank.w_gate.shape[0]:
+        raise IndexError(f"expert_index must be in [0, {bank.w_gate.shape[0]}), got {expert_index}")
+    return _eval_expert(bank, expert_index, x)
+
+
+def _eval_expert_chunk(
+    bank: MoEExpertMlp,
+    inputs: jax.Array,
+    *,
+    expert_start: int,
+    expert_stop: int,
+) -> jax.Array:
+    """Evaluate a static expert slice, retaining only that slice's outputs."""
+    mesh = get_abstract_mesh()
+    activation_fn = (
+        bank.activation.to_jax_fn() if isinstance(bank.activation, ActivationFunctionEnum) else bank.activation
+    )
+    input_sharding = None if mesh.empty else P(None, "data")
+    hidden_sharding = None if mesh.empty else P(None, None, "model")
+    output_sharding = None if mesh.empty else P(None, None, "data")
+    gate_weight_sharding = None if mesh.empty else P(None, "data", "model")
+    down_weight_sharding = None if mesh.empty else P(None, "model", "data")
+    inputs = jnp.asarray(inputs, dtype=bank.w_gate.dtype)
+    if input_sharding is not None:
+        inputs = jax.sharding.reshard(inputs, input_sharding)
+    w_gate = bank.w_gate.at[expert_start:expert_stop].get(out_sharding=gate_weight_sharding)
+    w_up = bank.w_up.at[expert_start:expert_stop].get(out_sharding=gate_weight_sharding)
+    w_down = bank.w_down.at[expert_start:expert_stop].get(out_sharding=down_weight_sharding)
+    gate = jnp.einsum("pd,edi->pei", inputs, w_gate, out_sharding=hidden_sharding)
+    up = jnp.einsum("pd,edi->pei", inputs, w_up, out_sharding=hidden_sharding)
+    return jnp.einsum(
+        "pei,eid->ped",
         activation_fn(gate) * up,
         w_down,
         out_sharding=output_sharding,
@@ -732,6 +773,73 @@ def build_spectral_probe_set(
     return finalize_spectral_probe_set(bank, expert_index, preparation)
 
 
+@partial(jax.jit, static_argnames=("expert_chunk_size",))
+def _compiled_expert_costs(
+    source_bank: MoEExpertMlp,
+    source_expert: jax.Array,
+    candidate_bank: MoEExpertMlp,
+    ordinary_inputs: jax.Array,
+    ordinary_weights: jax.Array,
+    spectral_pairs: jax.Array,
+    eta: jax.Array,
+    epsilon: jax.Array,
+    *,
+    expert_chunk_size: int,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Compute one cost row in one dispatch while bounding candidate activations by expert chunk."""
+    source_native = _eval_expert(source_bank, source_expert, ordinary_inputs).astype(jnp.float32)
+    native_denominator = jnp.sum(ordinary_weights[:, None] * jnp.square(source_native)) + epsilon
+
+    has_spectral_pairs = spectral_pairs.shape[0] > 0
+    if has_spectral_pairs:
+        spectral_inputs = spectral_pairs.reshape(-1, spectral_pairs.shape[-1])
+        source_spectral = _eval_expert(source_bank, source_expert, spectral_inputs).astype(jnp.float32)
+        source_spectral = source_spectral.reshape(spectral_pairs.shape[0], 2, -1)
+        source_delta = source_spectral[:, 1] - source_spectral[:, 0]
+        tangent_denominator = jnp.sum(jnp.square(source_delta)) + epsilon
+
+    native_cost_chunks = []
+    tangent_cost_chunks = []
+    num_candidates = int(candidate_bank.w_gate.shape[0])
+    for expert_start in range(0, num_candidates, expert_chunk_size):
+        expert_stop = min(expert_start + expert_chunk_size, num_candidates)
+        candidate_native = _eval_expert_chunk(
+            candidate_bank,
+            ordinary_inputs,
+            expert_start=expert_start,
+            expert_stop=expert_stop,
+        ).astype(jnp.float32)
+        native_numerator = jnp.sum(
+            ordinary_weights[:, None, None] * jnp.square(candidate_native - source_native[:, None, :]),
+            axis=(0, 2),
+        )
+        native_cost_chunks.append(native_numerator / native_denominator)
+
+        if has_spectral_pairs:
+            candidate_spectral = _eval_expert_chunk(
+                candidate_bank,
+                spectral_inputs,
+                expert_start=expert_start,
+                expert_stop=expert_stop,
+            ).astype(jnp.float32)
+            candidate_spectral = candidate_spectral.reshape(
+                spectral_pairs.shape[0],
+                2,
+                expert_stop - expert_start,
+                -1,
+            )
+            candidate_delta = candidate_spectral[:, 1] - candidate_spectral[:, 0]
+            tangent_numerator = jnp.sum(
+                jnp.square(candidate_delta - source_delta[:, None, :]),
+                axis=(0, 2),
+            )
+            tangent_cost_chunks.append(tangent_numerator / tangent_denominator)
+
+    native_cost = jnp.concatenate(native_cost_chunks)
+    tangent_cost = jnp.concatenate(tangent_cost_chunks) if has_spectral_pairs else jnp.zeros_like(native_cost)
+    return native_cost, tangent_cost, native_cost + eta * tangent_cost
+
+
 def expert_costs(
     source_bank: MoEExpertMlp,
     source_expert: int,
@@ -742,49 +850,28 @@ def expert_costs(
     epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
     expert_chunk_size: int | None = None,
 ) -> ExpertCostRow:
-    native_inputs = jnp.asarray(probes.ordinary_inputs)
-    native_weights = jnp.asarray(probes.ordinary_weights, dtype=jnp.float32)
-    source_native = eval_expert(source_bank, source_expert, native_inputs).astype(jnp.float32)
-    candidate_native = eval_all_experts(
-        candidate_bank,
-        native_inputs,
-        expert_chunk_size=expert_chunk_size,
-    ).astype(jnp.float32)
-    native_numerator = jnp.sum(
-        native_weights[:, None, None] * jnp.square(candidate_native - source_native[:, None, :]),
-        axis=(0, 2),
-    )
-    native_denominator = jnp.sum(native_weights[:, None] * jnp.square(source_native)) + epsilon
-    native_cost = native_numerator / native_denominator
-
-    if probes.spectral_pairs.shape[0] == 0:
-        tangent_cost = jnp.zeros_like(native_cost)
-    else:
-        spectral_inputs = jnp.asarray(probes.spectral_pairs).reshape(-1, probes.spectral_pairs.shape[-1])
-        source_spectral = eval_expert(source_bank, source_expert, spectral_inputs).astype(jnp.float32)
-        source_spectral = source_spectral.reshape(probes.spectral_pairs.shape[0], 2, -1)
-        source_delta = source_spectral[:, 1] - source_spectral[:, 0]
-        candidate_spectral = eval_all_experts(
+    if not 0 <= source_expert < source_bank.w_gate.shape[0]:
+        raise IndexError(f"source_expert must be in [0, {source_bank.w_gate.shape[0]}), got {source_expert}")
+    resolved_expert_chunk_size = int(candidate_bank.w_gate.shape[0]) if expert_chunk_size is None else expert_chunk_size
+    if resolved_expert_chunk_size <= 0:
+        raise ValueError(f"expert_chunk_size must be positive, got {resolved_expert_chunk_size}")
+    native_cost, tangent_cost, total_cost = jax.device_get(
+        _compiled_expert_costs(
+            source_bank,
+            jnp.asarray(source_expert, dtype=jnp.int32),
             candidate_bank,
-            spectral_inputs,
-            expert_chunk_size=expert_chunk_size,
-        ).astype(jnp.float32)
-        candidate_spectral = candidate_spectral.reshape(
-            probes.spectral_pairs.shape[0],
-            2,
-            candidate_bank.w_gate.shape[0],
-            -1,
+            jnp.asarray(probes.ordinary_inputs),
+            jnp.asarray(probes.ordinary_weights, dtype=jnp.float32),
+            jnp.asarray(probes.spectral_pairs),
+            jnp.asarray(eta, dtype=jnp.float32),
+            jnp.asarray(epsilon, dtype=jnp.float32),
+            expert_chunk_size=resolved_expert_chunk_size,
         )
-        candidate_delta = candidate_spectral[:, 1] - candidate_spectral[:, 0]
-        tangent_numerator = jnp.sum(jnp.square(candidate_delta - source_delta[:, None, :]), axis=(0, 2))
-        tangent_denominator = jnp.sum(jnp.square(source_delta)) + epsilon
-        tangent_cost = tangent_numerator / tangent_denominator
-
-    total_cost = native_cost + eta * tangent_cost
+    )
     return ExpertCostRow(
-        native=np.asarray(jax.device_get(native_cost), dtype=np.float64),
-        tangent=np.asarray(jax.device_get(tangent_cost), dtype=np.float64),
-        total=np.asarray(jax.device_get(total_cost), dtype=np.float64),
+        native=np.asarray(native_cost, dtype=np.float64),
+        tangent=np.asarray(tangent_cost, dtype=np.float64),
+        total=np.asarray(total_cost, dtype=np.float64),
     )
 
 
@@ -804,18 +891,21 @@ def functional_cost_matrix(
         )
     if candidate_bank.w_gate.shape[0] != num_source_experts:
         raise ValueError("the initial conversion requires equal-size source and candidate banks")
-    rows = [
-        expert_costs(
-            source_bank,
-            source_expert,
-            candidate_bank,
-            probes_by_source_expert[source_expert],
-            eta=eta,
-            epsilon=epsilon,
-            expert_chunk_size=expert_chunk_size,
+    rows = []
+    for source_expert in range(num_source_experts):
+        rows.append(
+            expert_costs(
+                source_bank,
+                source_expert,
+                candidate_bank,
+                probes_by_source_expert[source_expert],
+                eta=eta,
+                epsilon=epsilon,
+                expert_chunk_size=expert_chunk_size,
+            )
         )
-        for source_expert in range(num_source_experts)
-    ]
+        if jax.process_index() == 0:
+            logger.info("Computed functional expert matching cost row %d/%d", source_expert + 1, num_source_experts)
     return ExpertCostMatrix(
         native=np.stack([row.native for row in rows]),
         tangent=np.stack([row.tangent for row in rows]),
