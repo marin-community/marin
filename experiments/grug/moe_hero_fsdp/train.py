@@ -61,7 +61,10 @@ XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
-    os.environ.update(HERO_FSDP_RUNTIME_ENV)
+    # setdefault, so a value the launcher forwarded (`iris job run -e JAX_ENABLE_PGLE 0`)
+    # survives. PGLE and an external CUPTI client such as nsys cannot coexist.
+    for name, value in HERO_FSDP_RUNTIME_ENV.items():
+        os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "")
     command_buffer_flag_name = XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG.partition("=")[0]
     if any(flag.partition("=")[0] == command_buffer_flag_name for flag in xla_flags.split()):
