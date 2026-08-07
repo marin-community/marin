@@ -20,9 +20,12 @@ XLA's on-disk caches — is a different shape (a mirrored tree, not a keyed valu
 and belongs behind a separate directory-sync primitive rather than this one.
 """
 
+import logging
 from collections.abc import Callable
 
 from rigging.filesystem import StoragePath, atomic_rename, marin_prefix, prefix_join
+
+logger = logging.getLogger(__name__)
 
 
 class PersistentKvCache:
@@ -32,6 +35,10 @@ class PersistentKvCache:
     reader sees either the previous value or the new one and never a partial write.
     When several processes store the same key at once the last writer wins, which
     is correct for a content-addressed key because the bytes are identical.
+
+    An unreachable directory — a mount that has not arrived, a location the task
+    cannot write — degrades to a miss with a warning rather than failing the
+    caller, so a best-effort cache never aborts the work it was meant to speed up.
 
     The key must be a path-safe token; a caller that keys on free-form text hashes
     it first. ``suffix`` is appended to each object's name, e.g. ``".o"``.
@@ -52,14 +59,21 @@ class PersistentKvCache:
         return self._resolve_directory()
 
     def load(self, key: str) -> bytes | None:
-        """Return the stored value for ``key``, or ``None`` when it is absent."""
-        path = self._object(key)
-        return path.read_bytes() if path.exists() else None
+        """Return the stored value for ``key``, or ``None`` when it is absent or unreadable."""
+        try:
+            path = self._object(key)
+            return path.read_bytes() if path.exists() else None
+        except OSError as exc:
+            logger.warning("persistent cache unreadable, treating as a miss: %s", exc)
+            return None
 
     def store(self, key: str, value: bytes) -> None:
         """Persist ``value`` under ``key``; a reader never sees a partial write."""
-        with atomic_rename(str(self._object(key))) as staged:
-            StoragePath(staged).write_bytes(value)
+        try:
+            with atomic_rename(str(self._object(key))) as staged:
+                StoragePath(staged).write_bytes(value)
+        except OSError as exc:
+            logger.warning("persistent cache unwritable, not storing %s: %s", key, exc)
 
     def _object(self, key: str) -> StoragePath:
         if self._root is None:

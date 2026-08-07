@@ -129,17 +129,10 @@ class AutotuneBlockSizeCache:
             if self._cache is None:
                 return
             payload = json.dumps(_encode_autotune_entry(value), sort_keys=True).encode()
-            try:
-                self._cache.store(_autotune_entry_name(key), payload)
-            except Exception as exc:
-                logger.warning("Unable to persist fused CE autotune cache: %s", exc)
+            self._cache.store(_autotune_entry_name(key), payload)
 
     def _load(self, cache: PersistentKvCache, key: str) -> _AutotuneCacheEntry | None:
-        try:
-            raw = cache.load(_autotune_entry_name(key))
-        except Exception as exc:
-            logger.warning("Unable to load fused CE autotune cache: %s", exc)
-            return None
+        raw = cache.load(_autotune_entry_name(key))
         if raw is None:
             return None
         payload = json.loads(raw)

@@ -50,3 +50,22 @@ def test_alert_delivery_without_a_slack_destination_fails_fast(monkeypatch):
 
     with pytest.raises(ValueError, match="SLACK_ALERTS_BOT_TOKEN"):
         BridgeConfig.from_environment()
+
+
+def test_a_secret_payload_with_a_trailing_newline_is_usable(monkeypatch):
+    """Secret Manager serves whatever bytes it was given, and a payload created
+    from a shell pipeline usually ends in a newline. Unstripped, the token reaches
+    an Authorization header and the channel reaches a request body."""
+    for name in LOOM_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LOOM_ALERT_URL", "https://loom.example.com")
+    monkeypatch.setenv("LOOM_ALERT_PROFILE", "ops")
+    monkeypatch.setenv("LOOM_ALERT_REPOSITORY", "marin-community/marin")
+    monkeypatch.setenv("SLACK_ALERTS_BOT_TOKEN", "xoxb-test\n")
+    monkeypatch.setenv("SLACK_ALERTS_CHANNEL", "C0123ABCD\n")
+
+    config = BridgeConfig.from_environment()
+
+    assert config.loom_alerts is not None
+    assert config.loom_alerts.slack.bot_token == "xoxb-test"
+    assert config.loom_alerts.slack.channel == "C0123ABCD"

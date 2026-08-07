@@ -111,6 +111,7 @@ class EvaluationBatch:
     api_model: str | None
     evaluations: tuple[Evaluation, ...]
     provenance: LaunchProvenance
+    submission_cluster: str
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
 
 
@@ -359,7 +360,7 @@ def run_evaluation_batch(batch: EvaluationBatch) -> list[str]:
 def submit_evaluation_batch(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluationBatch:
     """Submit a resolved batch to one CPU orchestrator."""
     constraints = None
-    if batch.accelerator.target_cluster:
+    if batch.accelerator.target_cluster and batch.accelerator.target_cluster != batch.submission_cluster:
         constraints = [
             Constraint.create(
                 key=CLUSTER_CONSTRAINT_KEY,

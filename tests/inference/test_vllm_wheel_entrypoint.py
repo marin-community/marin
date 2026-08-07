@@ -88,7 +88,9 @@ def _run_entrypoint(
         direct_url_hashes=direct_url_hashes,
         compute_capability=compute_capability,
     )
-    entrypoint = Path(vllm_server.__file__).with_name("vllm_wheel_entrypoint.py")
+    command = vllm_server.IsolatedCudaVllm(source=vllm_server.VllmType.MARIN_FORK).command()
+    bootstrap_index = command.index("-c")
+    wrapped_command = command[bootstrap_index + 2 :]
     marker = tmp_path / "cli.json"
     environment = dict(os.environ)
     environment.update(
@@ -99,7 +101,13 @@ def _run_entrypoint(
     )
     return (
         subprocess.run(
-            [sys.executable, str(entrypoint), json.dumps(_provenance()), "serve", "test/model"],
+            [
+                sys.executable,
+                *wrapped_command[1:4],
+                json.dumps(_provenance()),
+                "serve",
+                "test/model",
+            ],
             capture_output=True,
             text=True,
             env=environment,

@@ -282,14 +282,21 @@ silently, and critical alerts still reach Slack and Loom. After changing contact
 points or their credentials, send a test notification to all receivers (Alerting
 → Contact points → Test) rather than trusting config presence.
 
-Slack is deliberately *not* a Grafana receiver on `ops-critical`. A Slack
-incoming webhook answers with a bare `ok` and never reveals the message
-timestamp, so an alert Grafana posts cannot be joined by anything else — and the
-timestamp is exactly what Loom needs to route the thread to the triage session.
-The bridge posts instead, which also means one message per alert rather than two
-side by side. `ops-slack`, the fallback for malformed or unlabeled alerts, has no
-Loom leg and keeps Grafana's own Slack rendering through
-`$SLACK_ALERTS_WEBHOOK`.
+Slack is deliberately *not* a Grafana receiver at all. A Slack incoming webhook
+answers with a bare `ok` and never reveals the message timestamp, so an alert
+Grafana posts cannot be joined by anything else — and the timestamp is exactly
+what Loom needs to route the thread to the triage session. The bridge posts
+instead, which also means one message per alert rather than two side by side.
+
+Both receivers post through the bridge, so every alert lands in one channel with
+one credential and one rendering, and alert text is escaped the same way either
+way. They differ only in what follows: `ops-critical` opens a Loom triage run on
+the thread it announced, while `ops-slack` — the fallback for malformed or
+unlabeled alerts — announces and stops, because an alert carrying no severity to
+route on carries no incident to triage. The tradeoff is that a fallback
+notification does not reach Slack while the bridge is down; email remains an
+independent path for critical alerts, and the fallback sees almost no traffic
+because every alert rule sets a severity.
 
 The Loom receiver posts to the bridge on `127.0.0.1`; it is not exposed through
 Grafana or IAP. For each firing group the bridge first posts the alert to
@@ -298,7 +305,7 @@ timestamp. It then asks the Cloud Run metadata server for a Google-signed
 identity token for `https://loom.oa.dev`, exchanges it for a short-lived `ops`
 Loom token, and creates an idempotent run for `marin-community/marin` on the
 `operator` channel, naming that thread. Loom routes the thread to the triage
-session, so the session answers in the thread and an `@marinbot` reply there
+session, so the session answers in the thread and an `@russbot` reply there
 reaches it instead of launching a second session — see [Loom's
 slack-trigger docs](https://github.com/marin-community/loom/blob/main/docs/slack-trigger.md).
 The session link is threaded under the announcement.
@@ -328,24 +335,23 @@ the caller and verifier cannot drift through duplicated configuration.
 All secrets live in Secret Manager, hand-placed, and reach the container as env
 vars via the `CloudRunService` `secrets` field; the values never enter Pulumi or
 git. The deploy account is fail-closed on secret creation, so the program only
-references secrets — each must exist and be listed in the `infra/permissions`
-allowlist for the deploy account to bind IAM on it.
+references secrets — each must exist and be declared in
+`infra/pulumi/src/iac/gcp/iam_data.yaml` for the deploy account to bind IAM on it.
 
-Loom alert delivery does not add a secret. The bridge authenticates with the
-Cloud Run service account and short-lived Google/Loom tokens, while Pulumi owns
-the identity-to-profile binding.
+Loom itself needs no secret: the bridge authenticates with the Cloud Run service
+account and short-lived Google/Loom tokens, and Pulumi owns the
+identity-to-profile binding. The Slack bot token is the one alerting credential.
 
 | Env var | Secret | Feeds |
 |---|---|---|
 | `GITHUB_APP_PRIVATE_KEY` | `marin-grafana-github-app-private-key` | ferry/build/nightly panels |
 | `GF_DATABASE_PASSWORD` | `cloudsql-grafana-password` | Grafana's Postgres state (see Deploy) |
 | `CW_READ_TOKEN` | `marin-grafana-cw-read-token` | k8s source (all CW clusters) |
-| `SLACK_ALERTS_WEBHOOK` | `marin-grafana-slack-webhook` | the `ops-slack` fallback contact point |
 | `SLACK_ALERTS_BOT_TOKEN` | `marin-grafana-slack-bot-token` | the bridge's alert announcements |
 | `GF_SMTP_PASSWORD` | `marin-grafana-smtp-credentials` | Grafana SMTP (email alerts, optional) |
 
-`GF_DATABASE_PASSWORD`, `CW_READ_TOKEN`, `SLACK_ALERTS_WEBHOOK`, and
-`SLACK_ALERTS_BOT_TOKEN` must exist before a deploy — Cloud Run fails to start a revision that references a missing
+`GF_DATABASE_PASSWORD`, `CW_READ_TOKEN`, and `SLACK_ALERTS_BOT_TOKEN` must exist
+before a deploy — Cloud Run fails to start a revision that references a missing
 secret. `GF_SMTP_PASSWORD` and `GITHUB_APP_PRIVATE_KEY` are optional: `__main__.py`
 probes for each and wires it only when the secret exists (the GitHub App also
 needs its `github_app_client_id` config). Unset, the GitHub panels deploy
@@ -375,33 +381,34 @@ Rotation is overlap-safe:
 5. Remove the old username from the three configs and update the stacks again.
    Then disable the old secret version and revoke the old CoreWeave token.
 
-The same Secret Manager overlap pattern applies to the Slack webhook and SMTP
-password: add a version, redeploy, then retire the old credential.
+The same Secret Manager overlap pattern applies to the Slack bot token and SMTP
+password: add a version, redeploy, then retire the old credential. Write the
+payload with `printf '%s'`, not `echo` — a trailing newline reaches the
+`Authorization` header, though the bridge strips it defensively.
 
 Creating the secrets:
 
 1. CoreWeave console → API access → new token (e.g. `grafana-observer`) with only the
    `read` role, then
    `echo -n "<token>" | gcloud secrets create marin-grafana-cw-read-token --project=hai-gcp-models --data-file=-`
-2. Slack → incoming webhook for `#marin-eng`, then
-   `echo -n "https://hooks.slack.com/..." | gcloud secrets create marin-grafana-slack-webhook --project=hai-gcp-models --data-file=-`
-3. The `@marinbot` bot-user token (`xoxb-…`) the bridge announces alerts with —
+2. The `@russbot` bot-user token (`xoxb-…`) the bridge announces alerts with —
    the same Slack app Loom posts as, so the announcement and Loom's replies come
    from one identity. Reuse the token from Loom's `LOOM_DOTENV`
    (`LOOM_SLACK_BOT_TOKEN`; see `infra/loom`), then
-   `echo -n "xoxb-..." | gcloud secrets create marin-grafana-slack-bot-token --project=hai-gcp-models --data-file=-`
-4. Apply the `marin` GCP stack, which grants the deploy account IAM management on
+   `printf '%s' "xoxb-..." | gcloud secrets create marin-grafana-slack-bot-token --project=hai-gcp-models --data-file=-`
+3. Apply the `marin` GCP stack, which grants the deploy account IAM management on
    that secret and the runtime account access to it (declared in
    `infra/pulumi/src/iac/gcp/iam_data.yaml`). Without it the grafana deploy fails
    granting the runtime account access, even once the value exists.
-5. Point the bridge at the channel and make sure the bot is in it:
-   `pulumi config set marin-grafana:slack_alerts_channel <id>` using the channel
-   id from `#marin-eng` → Copy link (`C…`), and `/invite @marinbot` there.
-   `pulumi up` fails naming the missing key if this is skipped.
-6. (optional, enables email) Gmail app password for grafana@openathena.ai, then
-   `echo -n "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
-7. Send a test notification to `ops-critical` and confirm email arrives, one alert
-   message lands in the channel, and its thread gains a triage-session link.
+4. Confirm `slack_alerts_channel` names the channel you want and that `@russbot`
+   is in it. It is `#marin-alerts` (`C0BN20081CH`); to move it, take the id from
+   the channel's Copy link and `/invite @russbot` there. `pulumi up` fails naming
+   the key if it is ever unset.
+5. (optional, enables email) Gmail app password for grafana@openathena.ai, then
+   `printf '%s' "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
+6. Send a test notification to `ops-critical` and confirm email arrives, one alert
+   message lands in the channel, and its thread gains a triage-session link. Test
+   `ops-slack` too: it should post one message and no session link.
 
 ## Develop
 
@@ -411,12 +418,13 @@ cd marin-infra-panel
 npm ci
 npm run typecheck && npm run lint && npm run test:ci && npm run build
 docker build -t marin-grafana .
-docker run --rm -p 3000:8080 -e PORT=8080 -e SLACK_ALERTS_WEBHOOK=https://example.invalid marin-grafana
+docker run --rm -p 3000:8080 -e PORT=8080 marin-grafana
 # → http://localhost:3000 (without an IAP identity header, anonymous Viewer; panels need VPC access to finelog)
 ```
 
-`SLACK_ALERTS_WEBHOOK` has to be set to something: the provisioned contact point
-declares a Slack receiver, and Grafana refuses to start when its URL is empty.
+No alerting credentials are needed to start: both contact points are loopback
+webhooks, so Grafana boots without them and the bridge answers 503 on the alert
+routes until `LOOM_ALERT_URL` and the Slack settings are present.
 
 Panels only render against the real VPC: querying needs credentials that list the
 finelog VMs and a network path to them. Locally you get Grafana, the provisioned
@@ -522,8 +530,7 @@ so the merge-triggered deploy never blocks. The client id is already set, so
 enabling auth is one step (plus its permissions grant):
 
 ```bash
-# Its grants are already declared in infra/pulumi/src/iac/gcp/iam_data.yaml
-# (infra/permissions, which this used to name, is retired), so:
+# Its grants are declared in infra/pulumi/src/iac/gcp/iam_data.yaml, so:
 gcloud secrets create marin-grafana-github-app-private-key \
   --project=hai-gcp-models --data-file=key.pem
 ```

@@ -98,7 +98,12 @@ def _source_digest(build: Callable[..., Any]) -> str:
 
 
 def cutlass_kernel_cache(directory: str) -> PersistentKvCache:
-    """A store of compiled CuTeDSL kernel object code at ``directory``, one ``.o`` object per key."""
+    """A store of compiled CuTeDSL kernel object code at ``directory``, one ``.o`` object per key.
+
+    Reads and writes degrade to a compile when the directory is unreachable — a task
+    may land on a worker whose compilation-cache mount has not arrived yet — which
+    :class:`PersistentKvCache` handles by treating an ``OSError`` as a miss.
+    """
     return PersistentKvCache.at(directory, suffix=_OBJECT_SUFFIX)
 
 
@@ -106,10 +111,17 @@ def install(cache: PersistentKvCache) -> None:
     """Route ``cutlass.jax`` kernel compiles through ``cache``.
 
     Patches ``cutlass.jax.primitive``, which binds ``get_or_compile_kernel`` at
-    import time, rather than the function's defining module. Idempotent.
+    import time, rather than the function's defining module. Idempotent, and a
+    no-op when ``cutlass.jax`` will not import: a CPU task on the GPU image has
+    the package but not the CUDA bindings it pulls in.
     """
-    primitive = importlib.import_module("cutlass.jax.primitive")
-    compile_module = importlib.import_module("cutlass.jax.compile")
+    try:
+        primitive = importlib.import_module("cutlass.jax.primitive")
+        compile_module = importlib.import_module("cutlass.jax.compile")
+    except ImportError as exc:
+        logger.info("CuTeDSL kernel cache skipped, cutlass.jax unavailable: %s", exc)
+        return
+
     if getattr(primitive.get_or_compile_kernel, "_levanter_kernel_cache", None) is not None:
         logger.info("CuTeDSL kernel cache already installed")
         return
