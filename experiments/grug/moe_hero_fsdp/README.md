@@ -30,6 +30,10 @@ Each GPU task then runs training in a child process with XLA's 60-second per-exe
 no in-pod restart. A deadman abort or another child failure fails the task immediately; the existing
 15-minute progress watchdog remains the fallback.
 
+`experiments.grug.moe_hero_fsdp.launch_failsafe_control` is the diagnostic control for the supervisor
+itself: it keeps the same XLA deadman, progress tracking, and NCCL initialization timeout but runs the
+trainer directly with no recovery parent and no task retry.
+
 Checkpoint staging benchmark:
 
 ```bash

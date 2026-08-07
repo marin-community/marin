@@ -128,3 +128,10 @@ author: power
 - Evidence: The 128-device clique initially warned at 10 seconds, completed after 14.5 seconds, and the first `jit_train_step` then aborted on `std::bad_alloc` at 02:55:24. The supervisor classified `crash returncode=-6 last_step=None`; 31 sibling tasks were coscheduled down.
 - Decision: Reject this arm because it does not reach a training step and continue in low-impact order.
 - Next: Run `CUDA_MODULE_LOADING=EAGER` at the same two-rack shape.
+
+### 2026-08-07 03:02 UTC - Eager-module arm failed before step zero
+
+- Status: `CUDA_MODULE_LOADING=EAGER` also completed clique initialization and then aborted on `std::bad_alloc` before a training step.
+- Evidence: The clique completed after 10.95 seconds at 03:01:45; `std::bad_alloc` followed nine seconds later, and the supervisor classified `crash returncode=-6 last_step=None`.
+- Decision: Pause environment arms because `std::bad_alloc` is new relative to the historical unsupervised 300B runs. Split the supervisor parent from its XLA failsafe flags before interpreting further ablations.
+- Next: Run the identical two-rack model directly with the same XLA flags and zero task retries, capture cgroup/GPU memory, and attach the Iris native profiler around first execution.

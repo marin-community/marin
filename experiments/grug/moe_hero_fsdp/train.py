@@ -34,7 +34,7 @@ from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
-from levanter.recovery.detection import DetectionConfig
+from levanter.recovery.detection import DetectionConfig, recovery_xla_env
 from levanter.recovery.supervisor import GPUHangSupervisor
 from levanter.recovery.types import RunOutcome
 from levanter.schedule import BatchSchedule
@@ -64,6 +64,10 @@ HERO_FSDP_RUNTIME_ENV = {
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 HERO_EXECUTION_TERMINATE_TIMEOUT = 60.0
 HERO_SUPERVISOR_WALL_TIMEOUT = 12 * 60 * 60.0
+HERO_DETECTION_CONFIG = DetectionConfig(
+    execution_terminate_timeout_seconds=HERO_EXECUTION_TERMINATE_TIMEOUT,
+    enable_recoverability=False,
+)
 
 
 def _apply_hero_fsdp_runtime_defaults() -> None:
@@ -694,6 +698,12 @@ def run_grug(config: GrugRunConfig) -> None:
     _dispatch_grug(config, _run_grug_local, max_retries_failure=3)
 
 
+def run_grug_failsafe_control(config: GrugRunConfig) -> None:
+    """Dispatch without the supervisor parent but retain its XLA failsafe flags."""
+    os.environ.update(recovery_xla_env(HERO_DETECTION_CONFIG, os.environ))
+    _dispatch_grug(config, _run_grug_local, max_retries_failure=0)
+
+
 def _run_grug_supervised_local(config: GrugRunConfig) -> None:
     """Run one local trainer under the XLA hang-deadman subprocess supervisor."""
     run_id = config.trainer.trainer.id
@@ -701,10 +711,7 @@ def _run_grug_supervised_local(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id must be set before supervised training")
 
     with GPUHangSupervisor(
-        detection=DetectionConfig(
-            execution_terminate_timeout_seconds=HERO_EXECUTION_TERMINATE_TIMEOUT,
-            enable_recoverability=False,
-        ),
+        detection=HERO_DETECTION_CONFIG,
         # The production loop does not yet emit the recovery heartbeat. Keep the
         # host watchdog outside the coordinator's 12-hour deadline; XLA's
         # per-execution deadman and ProgressWatchdog remain active in the child.
@@ -733,5 +740,6 @@ __all__ = [
     "GrugTrainerConfig",
     "initial_state",
     "run_grug",
+    "run_grug_failsafe_control",
     "run_grug_supervised",
 ]

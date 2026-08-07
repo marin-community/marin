@@ -29,7 +29,13 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
-from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug, run_grug_supervised
+from experiments.grug.moe_hero_fsdp.train import (
+    GrugRunConfig,
+    GrugTrainerConfig,
+    run_grug,
+    run_grug_failsafe_control,
+    run_grug_supervised,
+)
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -194,6 +200,20 @@ def build_supervised_hero_run(
         num_steps=num_steps,
         save_checkpoints=save_checkpoints,
         run=run_grug_supervised,
+        version=version,
+    )
+
+
+def build_failsafe_control_hero_run(
+    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
+) -> ArtifactStep[HeroThroughputResult]:
+    """Build the hero run with XLA failsafes but no recovery supervisor parent."""
+    return _build_hero_run(
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        save_checkpoints=save_checkpoints,
+        run=run_grug_failsafe_control,
         version=version,
     )
 
