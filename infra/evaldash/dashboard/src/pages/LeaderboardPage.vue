@@ -64,6 +64,12 @@ function deltaBest(entry: LeaderboardEntry): number | null {
   return entry.score - topScore.value
 }
 
+function failureLabel(status: string): string {
+  if (status === 'infra_failed') return 'infra'
+  if (status === 'artifact_failed') return 'artifact'
+  return 'failed'
+}
+
 // --- Archived models sort last ---
 const rankedLeaderboard = computed<LeaderboardEntry[]>(() =>
   [...(data.value?.leaderboard ?? [])].sort((a, b) => Number(a.archived) - Number(b.archived)),
@@ -441,11 +447,11 @@ function goToModel(model: string) {
                     <button
                       v-else
                       class="w-full rounded px-2 py-1.5 text-[11px] font-mono font-semibold leading-tight cursor-pointer"
-                      :class="cellFor(row, task)!.status === 'infra_failed' ? 'text-status-warning bg-status-warning-bg' : 'text-status-danger bg-status-danger-bg'"
+                      :class="cellFor(row, task)!.status === 'failed' ? 'text-status-danger bg-status-danger-bg' : 'text-status-warning bg-status-warning-bg'"
                       :title="`${cellFor(row, task)!.status} — open run ${cellFor(row, task)!.run_id}`"
                       @click="goToRun(cellFor(row, task)!.run_id)"
                     >
-                      {{ cellFor(row, task)!.status === 'infra_failed' ? 'infra' : 'failed' }}
+                      {{ failureLabel(cellFor(row, task)!.status) }}
                     </button>
                   </template>
                   <span v-else class="text-text-muted">—</span>

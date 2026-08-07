@@ -15,6 +15,8 @@ import pytest
 from click.testing import CliRunner
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.rpc import job_pb2
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor, EvalchemyRunConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import HARBOR_RUNTIME, HarborDatasetKind, ValidatedHarborConfig
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.model_config import ModelConfig, ResourceHint
@@ -177,6 +179,39 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
     assert succeeded.model.config is not None
     assert succeeded.model.config.model_dump(mode="json") == json.loads(json.dumps(asdict(batch.model)))
     assert (tmp_path / "success" / "endpoint.txt").read_text() == endpoint
+
+
+def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypatch):
+    output_dir = f"memory://evalchemy-export-failure/{tmp_path.name}"
+    model_dir = StoragePath(output_dir) / "gsm8k_5shot" / "model"
+    model_dir.mkdirs()
+    (model_dir / "results_20260807.json").write_text(
+        json.dumps({"results": {"gsm8k": {"exact_match,flexible-extract": 0.75}}})
+    )
+    (model_dir / "samples_gsm8k_20260807.jsonl").write_text('{"unterminated": "sample\n')
+    monkeypatch.setattr(
+        "marin.evaluation.evalchemy.runner._run_evalchemy_child",
+        lambda _model, _config, _output_dir, _env_vars: "/eval/completed",
+    )
+    session = RemoteInferenceSession(
+        model=RunningModel(
+            endpoint=OpenAIEndpoint(base_url="https://inference.example/v1", model="model"),
+            tokenizer="tokenizer",
+        ),
+        jobs=(),
+        endpoint_name="/serve/test",
+        endpoint_health_timeout_seconds=1800.0,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+    )
+    executor = EvalchemyExecutor(EvalchemyRunConfig(name="gsm8k", tasks=(EvalTaskConfig(name="gsm8k", num_fewshot=5),)))
+
+    with pytest.raises(EvaluationError) as exc_info:
+        executor(session, output_dir, {})
+
+    assert exc_info.value.status is RunStatus.ARTIFACT_FAILED
+    assert exc_info.value.jobs == {"eval": "/eval/completed"}
 
 
 def test_submit_evaluation_batch_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):

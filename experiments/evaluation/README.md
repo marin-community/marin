@@ -74,7 +74,8 @@ uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record
 is the source of truth: normalized model configuration, hardware, status (`succeeded` / `failed` /
-`infra_failed`), the per-task metrics, provenance, normalized evaluator configuration, the `group_id`
+`artifact_failed` / `infra_failed`), the per-task metrics, provenance, normalized evaluator configuration,
+the `group_id`
 shared by every eval from the same serve, and the iris job paths of every job behind the run (`jobs`:
 orchestrator, the shared inference child, this eval's child). The orchestrator writes it on success
 and on failure, so a failed run is still accounted for -- and a failure carries the failed child's

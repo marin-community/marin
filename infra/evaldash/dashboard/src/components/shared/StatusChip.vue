@@ -5,11 +5,11 @@ const props = defineProps<{
   status: string
 }>()
 
-// infra_failed is deliberately a distinct colour from failed: an infrastructure
-// fault (preemption, OOM, host loss) is not a model/eval regression.
+// Artifact and infrastructure failures are warnings: neither is a model/eval regression.
 const STYLES: Record<string, string> = {
   succeeded: 'bg-status-success-bg text-status-success border-status-success-border',
   failed: 'bg-status-danger-bg text-status-danger border-status-danger-border',
+  artifact_failed: 'bg-status-warning-bg text-status-warning border-status-warning-border',
   infra_failed: 'bg-status-warning-bg text-status-warning border-status-warning-border',
 }
 

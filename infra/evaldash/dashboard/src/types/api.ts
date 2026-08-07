@@ -460,7 +460,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: 'succeeded' | 'failed' | 'infra_failed' | 'mixed'
+  status: 'succeeded' | 'failed' | 'artifact_failed' | 'infra_failed' | 'mixed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]
