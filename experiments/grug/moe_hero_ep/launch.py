@@ -93,11 +93,11 @@ def _slimpajama_6b_dataset() -> ArtifactStep[TokenizedCache]:
 
 
 class HeroThroughputResult(Artifact):
-    """Metrics-only result of the rack-scale throughput hero run.
+    """Result of the rack-scale throughput hero run.
 
-    The run intentionally writes no checkpoint; it only mirrors its tracker metrics to the output
-    path. This artifact is a plain path ref to those metrics, so the step does not promise a
-    checkpoint it never produces.
+    The run mirrors its tracker metrics to the output path. It writes no checkpoint by default, so
+    this artifact is a plain path ref to those metrics rather than a promise of one; pass
+    ``--save-checkpoints`` for a run long enough that restarting from step 0 is not acceptable.
     """
 
 
@@ -105,6 +105,7 @@ def build_hero_run(
     *,
     run_id: str,
     num_steps: int,
+    schedule_steps: int | None = None,
     batch_size: int = HERO_EP_BATCH_SIZE,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
@@ -113,6 +114,7 @@ def build_hero_run(
     latent_dim: int | None = None,
     flavor: str = "ep",
     eval_every: int = 0,
+    save_checkpoints: bool = False,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -135,7 +137,18 @@ def build_hero_run(
     if capacity_factor is not None and sharding.moe_implementation == "scatter":
         raise ValueError(f"flavor {flavor!r} never drops, so --capacity-factor has no effect")
 
-    model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
+    # The optimizer heuristic scales learning rate, adam_lr, and epsilon from a token budget
+    # (`num_train_steps * batch * seq`), so `schedule_steps` sets the budget the schedule is built
+    # for while `num_steps` sets how far the run actually goes. Passing the step count for a 1T-token
+    # budget and stopping after a few thousand steps trains the head of that schedule at the peak
+    # learning rate a 1T run would use, instead of the much larger rate a few-thousand-step budget
+    # would pick. Default keeps the two equal, which is the previous behavior.
+    if schedule_steps is not None and schedule_steps <= 0:
+        raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
+    model, optimizer = build_hero_configs(
+        num_train_steps=schedule_steps if schedule_steps is not None else num_steps,
+        batch_size=batch_size,
+    )
     overrides = {
         name: value
         for name, value in (
@@ -172,6 +185,11 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
+        # A 25-step throughput gate does not need checkpoints, and writing the offloaded optimizer
+        # state costs more than the gate itself. A multi-thousand-step run on a contended rack does:
+        # without this, every preemption restarts from step 0, so a run longer than the mean time
+        # between evictions never finishes.
+        save_checkpoints=save_checkpoints,
         expert_axis_size=sharding.expert_axis_size,
         replica_axis_size=1,
         sharding_dump_path=None,
@@ -264,6 +282,16 @@ def build_hero_run(
     help="Number of training steps.",
 )
 @click.option(
+    "--schedule-steps",
+    type=click.IntRange(min=1),
+    default=None,
+    help=(
+        "Build the learning-rate schedule for this many steps instead of --num-steps. The optimizer "
+        "heuristic scales its rates from the implied token budget, so this trains the head of a long "
+        "run's schedule. Defaults to --num-steps."
+    ),
+)
+@click.option(
     "--num-experts",
     type=click.IntRange(min=1),
     default=None,
@@ -302,6 +330,16 @@ def build_hero_run(
     help="MoE sharding: expert-parallel with routing capacity, or FSDP that never drops.",
 )
 @click.option(
+    "--save-checkpoints/--no-save-checkpoints",
+    default=False,
+    show_default=True,
+    help=(
+        "Write resumable checkpoints. Off by default because a short throughput gate does not need "
+        "them. Turn it on for long runs on a contended rack: without checkpoints a preemption "
+        "restarts from step 0."
+    ),
+)
+@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -332,6 +370,7 @@ def build_hero_run(
 def main(
     run_id: str,
     num_steps: int,
+    schedule_steps: int | None,
     batch_size: int,
     num_experts: int | None,
     num_experts_per_token: int | None,
@@ -339,6 +378,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     flavor: str,
+    save_checkpoints: bool,
     eval_every: int,
     profile_steps: int,
     profile_start_step: int,
@@ -346,6 +386,7 @@ def main(
     return build_hero_run(
         run_id=run_id,
         num_steps=num_steps,
+        schedule_steps=schedule_steps,
         batch_size=batch_size,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,
@@ -353,6 +394,7 @@ def main(
         capacity_factor=capacity_factor,
         latent_dim=latent_dim,
         flavor=flavor,
+        save_checkpoints=save_checkpoints,
         eval_every=eval_every,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
