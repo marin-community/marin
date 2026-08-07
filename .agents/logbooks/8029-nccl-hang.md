@@ -53,3 +53,10 @@ author: power
 - Evidence: Iris resolved the expected output root and submitted the child from the clean source commit.
 - Decision: Keep the single production-priority request and wait for full-gang admission.
 - Next: Verify NCCL provenance and step progress immediately after admission.
+
+### 2026-08-07 02:31 UTC - Eight-rack minimal gate passed
+
+- Status: All 128 tasks completed successfully in 2 minutes 32 seconds with no deadman abort.
+- Evidence: Task 0 reported 512 devices, mesh `(8, 64, 1, 1)`, driver 595.71.05, NCCL 2.30.7+cuda13.3, and `no wedge reproduced for ablation baseline through 1000 steps`.
+- Decision: Close the minimal-repro ablation ledger and start the 300B FSDP matrix sequentially at two racks.
+- Next: Run 1000 supervised steps at two racks; promote to four racks only after a clean terminal result.
