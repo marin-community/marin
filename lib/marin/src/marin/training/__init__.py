@@ -7,6 +7,7 @@ from typing import Any
 _TRAINING_EXPORTS = {
     "TrainDpoOnPodConfig",
     "TrainLmOnPodConfig",
+    "run_levanter_distill_lm",
     "run_levanter_train_dpo",
     "run_levanter_train_lm",
 }

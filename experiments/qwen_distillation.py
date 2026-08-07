@@ -1,0 +1,636 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Qwen3 32B to 0.6B fixed-budget distillation study.
+
+Run a one-arm systems smoke before the screen:
+
+    python -m experiments.qwen_distillation --version dev --stage smoke --run
+
+Launch the two-seed screen from ``cw-us-east-08a`` at batch priority:
+
+    python -m experiments.qwen_distillation --version dev --stage screen --run --max-concurrent 18
+
+Retry only screen arms that failed before training:
+
+    python -m experiments.qwen_distillation --version dev --stage screen-retry --run --max-concurrent 6
+
+Retry the hard-label controls with materialized training loss:
+
+    python -m experiments.qwen_distillation --version dev --stage screen-ce-retry --run --max-concurrent 4
+
+Resume extended hard-label controls after a systems failure:
+
+    python -m experiments.qwen_distillation --version dev --stage extended-ce-retry --run --max-concurrent 4
+
+Smoke one terminal checkpoint through the zero-shot evaluation path:
+
+    python -m experiments.qwen_distillation --version dev --stage screen-eval-smoke --run
+
+Launch the promoted treatment and four controls to the 1.8B-token endpoint:
+
+    python -m experiments.qwen_distillation --version dev --stage extended --run --max-concurrent 10
+
+Evaluate all terminal extended checkpoints:
+
+    python -m experiments.qwen_distillation --version dev --stage extended-eval --run --max-concurrent 10
+"""
+
+import json
+import math
+from dataclasses import dataclass
+from datetime import timedelta
+from enum import StrEnum
+
+import click
+import jmp
+from fray.types import GpuConfig, ResourceConfig
+from haliax.partitioning import ResourceAxis
+from levanter.checkpoint import CheckpointerConfig
+from levanter.data.text.formats import TextLmDatasetFormat
+from levanter.distillation import DistillationObjective
+from levanter.distillation_initialization import TeacherInitialization
+from levanter.eval import LmEvalLossImplementation
+from levanter.eval_harness import EvalHarnessMainConfig, LmEvalHarnessConfig, TaskConfig, run_eval_harness_main
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
+from levanter.main.distill_lm import TrainLmDistillationConfig
+from levanter.main.train_lm import TrainLmConfig
+from levanter.models.qwen import Qwen3Config
+from levanter.optim.config import AdamConfig
+from levanter.tokenizers import TokenizerBackend
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
+from marin.execution.artifact import Artifact
+from marin.execution.build_context import resolve_version
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.remote import remote
+from marin.experiment.cli import build_options
+from marin.experiment.data import mixture
+from marin.experiment.namespacing import user_namespaced_name
+from marin.processing.tokenize.tokenize import TokenizeConfig, TokenizedCache, tokenize
+from marin.training.training import (
+    LevanterCheckpoint,
+    TrainLmOnPodConfig,
+    resolve_training_env,
+    run_levanter_distill_lm,
+    run_levanter_train_lm,
+)
+from rigging.filesystem import StoragePath
+
+from experiments.models import qwen3_0_6b_base, qwen3_4b, qwen3_32b
+
+SERIES = "QD"
+WANDB_GROUP = "QD-qwen32b-to-0p6b"
+SEQ_LEN = 2048
+BATCH_SIZE = 8
+MICROBATCH_SIZE = 4
+SCREEN_TOKENS = 100_000_000
+SCREEN_STEPS = math.ceil(SCREEN_TOKENS / (SEQ_LEN * BATCH_SIZE))
+EXTENDED_TOKENS = 1_800_000_000
+EXTENDED_STEPS = math.ceil(EXTENDED_TOKENS / (SEQ_LEN * BATCH_SIZE))
+SMOKE_STEPS = 12
+SCREEN_SEEDS = (0, 1)
+FULL_DATA_VERSION = "2026.07.26.2"
+SMOKE_DATA_VERSION = "2026.07.26.4"
+EXTENDED_DATA_VERSION = "2026.07.26.11"
+SMOKE_DATA_DOCUMENTS = 1_000
+EXTENDED_DATA_DOCUMENTS_PER_SHARD = 15_000
+SCREEN_EVAL_VERSION = "2026.07.26.16"
+EXTENDED_ARTIFACT_VERSION = "2026.07.26.17"
+EXTENDED_EVAL_VERSION = "2026.07.26.18"
+ALL_STUDENT_ANCHORS = tuple(range(28))
+ALL_TEACHER_ANCHORS = tuple(round((index + 1) * 64 / 28) - 1 for index in ALL_STUDENT_ANCHORS)
+
+SAMPLE_0P1B = ArtifactStep.adopt(
+    "qwen-distillation/raw/datakit-0p1b",
+    "2026.07.26",
+    "s3://marin-us-east-02a/marin/datakit/sample_0.1b_7d7d8fd7",
+    kind=Artifact,
+)
+
+SAMPLE_100B = ArtifactStep.adopt(
+    "qwen-distillation/raw/datakit-100b",
+    "2026.07.26",
+    "s3://marin-us-east-02a/marin/datakit/sample_100b_8ae7a94f",
+    kind=Artifact,
+)
+
+_VALIDATION_SOURCE = "cp/wikiteam"
+_TRAIN_SOURCES = (
+    "cp/arxiv_abstracts",
+    "starcoder2/ir_python",
+    "numinamath-1.5",
+    "finepdfs/spa_Latn",
+    "nemotron_cc_v2/medium_quality",
+    "nemotron_sft/sft_general",
+    "hplt_v3",
+    "swe-rebench-openhands",
+)
+
+TOKENIZE_RESOURCES = ResourceConfig.with_cpu(cpu=8, ram="32g", disk="64g")
+TRAIN_RESOURCES = ResourceConfig.with_gpu(
+    "GB200",
+    count=4,
+    cpu=64,
+    ram="512g",
+    disk="1t",
+)
+
+_TOKEN_AXES = (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA)
+
+
+class Arm(StrEnum):
+    CE_SCRATCH = "QD-C0"
+    KL_SCRATCH = "QD-C1"
+    CE_BASE = "QD-C2"
+    KL_BASE = "QD-C3"
+    HIDDEN = "QD-001"
+    FACTORIZED = "QD-002"
+    TAID = "QD-003"
+    STRUCTURED = "QD-004"
+    FOUR_B_TEACHER = "QD-005"
+
+
+SCREEN_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE, Arm.TAID)
+SCREEN_CE_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE)
+EXTENDED_CE_RETRY_ARMS = (Arm.CE_SCRATCH, Arm.CE_BASE)
+EXTENDED_ARMS = (
+    Arm.CE_SCRATCH,
+    Arm.KL_SCRATCH,
+    Arm.CE_BASE,
+    Arm.KL_BASE,
+    Arm.FACTORIZED,
+)
+
+
+@dataclass(frozen=True)
+class ArmConfig:
+    objective: DistillationObjective | None
+    student_base: bool = False
+    initialization: TeacherInitialization | None = None
+    teacher_4b: bool = False
+
+
+ARMS = {
+    Arm.CE_SCRATCH: ArmConfig(objective=None),
+    Arm.KL_SCRATCH: ArmConfig(objective=DistillationObjective.FORWARD_KL),
+    Arm.CE_BASE: ArmConfig(objective=None, student_base=True),
+    Arm.KL_BASE: ArmConfig(objective=DistillationObjective.FORWARD_KL, student_base=True),
+    Arm.HIDDEN: ArmConfig(objective=DistillationObjective.PROJECTED_HIDDEN),
+    Arm.FACTORIZED: ArmConfig(
+        objective=DistillationObjective.FORWARD_KL,
+        initialization=TeacherInitialization.FACTORIZED,
+    ),
+    Arm.TAID: ArmConfig(objective=DistillationObjective.TAID),
+    Arm.STRUCTURED: ArmConfig(
+        objective=DistillationObjective.FORWARD_KL,
+        initialization=TeacherInitialization.STRUCTURED,
+    ),
+    Arm.FOUR_B_TEACHER: ArmConfig(
+        objective=DistillationObjective.FORWARD_KL,
+        teacher_4b=True,
+    ),
+}
+
+SCREEN_ARTIFACT_VERSIONS = {
+    Arm.CE_SCRATCH: "2026.07.26.10",
+    Arm.KL_SCRATCH: "2026.07.26.8",
+    Arm.CE_BASE: "2026.07.26.10",
+    Arm.KL_BASE: "2026.07.26.8",
+    Arm.HIDDEN: "2026.07.26.8",
+    Arm.FACTORIZED: "2026.07.26.8",
+    Arm.TAID: "2026.07.26.9",
+    Arm.STRUCTURED: "2026.07.26.8",
+    Arm.FOUR_B_TEACHER: "2026.07.26.8",
+}
+
+ZERO_SHOT_TASKS = (
+    TaskConfig(task="arc_easy", num_fewshot=0),
+    TaskConfig(task="hellaswag", num_fewshot=0),
+    TaskConfig(task="piqa", num_fewshot=0),
+    TaskConfig(task="winogrande", dataset_path="allenai/winogrande", num_fewshot=0),
+)
+
+# Approximately two worst-case binomial standard errors at each task's sample count.
+ZERO_SHOT_ACCURACY_TOLERANCES = {
+    "arc_easy": 0.021,
+    "hellaswag": 0.010,
+    "piqa": 0.024,
+    "winogrande": 0.029,
+}
+
+
+@dataclass(frozen=True)
+class EvaluationOnPodConfig:
+    eval_config: EvalHarnessMainConfig
+    resources: ResourceConfig
+    output_path: str
+
+
+def qwen3_0p6b_config(*, reference_checkpoint: str) -> Qwen3Config:
+    return Qwen3Config(
+        max_seq_len=32_768,
+        hidden_dim=1024,
+        intermediate_dim=3072,
+        num_layers=28,
+        num_heads=16,
+        num_kv_heads=8,
+        head_dim=128,
+        layer_norm_epsilon=1e-6,
+        tie_word_embeddings=True,
+        rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000),
+        use_sliding_window=False,
+        reference_checkpoint=reference_checkpoint,
+    )
+
+
+def _mesh() -> MeshConfig:
+    return MeshConfig(
+        axes={"replica": 1, "data": 1, "model": 4},
+        shared_mapping={"vocab": "model"},
+        compute_mapping={"token": _TOKEN_AXES, "token_repeat": _TOKEN_AXES},
+    )
+
+
+def qwen_datakit_cache(*, smoke: bool = False, extended: bool = False) -> ArtifactStep[TokenizedCache]:
+    if smoke and extended:
+        raise ValueError("A tokenizer cache cannot be both smoke and extended")
+    if smoke:
+        name = "qwen-distillation/data/datakit-0p1b-qwen3-smoke"
+        version = SMOKE_DATA_VERSION
+        raw_data = SAMPLE_0P1B
+        sample_count = SMOKE_DATA_DOCUMENTS
+    elif extended:
+        name = "qwen-distillation/data/datakit-100b-qwen3"
+        version = EXTENDED_DATA_VERSION
+        raw_data = SAMPLE_100B
+        sample_count = EXTENDED_DATA_DOCUMENTS_PER_SHARD
+    else:
+        name = "qwen-distillation/data/datakit-0p1b-qwen3"
+        version = FULL_DATA_VERSION
+        raw_data = SAMPLE_0P1B
+        sample_count = None
+
+    def build_config(ctx: StepContext) -> TokenizeConfig:
+        root = ctx.artifact_path(raw_data)
+        return TokenizeConfig(
+            train_paths=[f"{root}/{source}/**/*.parquet" for source in _TRAIN_SOURCES],
+            validation_paths=[f"{root}/{_VALIDATION_SOURCE}/**/*.parquet"],
+            cache_path=ctx.output_path,
+            tokenizer=ctx.artifact_path(qwen3_0_6b_base),
+            tokenizer_backend=TokenizerBackend.HF,
+            format=TextLmDatasetFormat(text_key="text"),
+            sample_count=sample_count,
+            max_workers=256,
+            worker_resources=ResourceConfig.with_cpu(cpu=2, ram="12g", disk="16g"),
+            tags=["datakit", "qwen-distillation"],
+        )
+
+    return ArtifactStep(
+        name=name,
+        version=version,
+        artifact_type=TokenizedCache,
+        run=remote(tokenize, resources=TOKENIZE_RESOURCES),
+        build_config=build_config,
+        deps=(raw_data, qwen3_0_6b_base),
+    )
+
+
+def _optimizer() -> AdamConfig:
+    return AdamConfig(
+        learning_rate=3e-4,
+        weight_decay=0.1,
+        warmup=0.05,
+        decay=0.1,
+    )
+
+
+def _trainer(
+    *,
+    run_id: str,
+    arm: Arm,
+    seed: int,
+    num_train_steps: int,
+    output_path: str,
+    label: str,
+) -> TrainerConfig:
+    eval_interval = max(1, math.ceil(num_train_steps / 8))
+    return TrainerConfig(
+        id=run_id,
+        seed=seed,
+        tracker=WandbConfig(
+            project="marin",
+            name=run_id,
+            group=WANDB_GROUP,
+            tags=[SERIES, "issue-7656", label, arm.value, f"seed-{seed}"],
+            replicate_path=output_path,
+        ),
+        mp=jmp.get_policy("p=f32,c=bfloat16"),
+        train_batch_size=BATCH_SIZE,
+        per_device_parallelism=-1 if arm == Arm.TAID else MICROBATCH_SIZE,
+        num_train_steps=num_train_steps,
+        steps_per_eval=eval_interval,
+        max_eval_batches=16,
+        checkpointer=CheckpointerConfig(
+            save_interval=timedelta(minutes=10),
+            keep=[],
+        ),
+        mesh=_mesh(),
+        per_device_eval_parallelism=-1,
+        allow_nondivisible_batch_size=True,
+    )
+
+
+def _training_job(config: TrainLmOnPodConfig) -> None:
+    env_vars = (
+        resolve_training_env(config.env_vars, config.resources) if isinstance(config.resources.device, GpuConfig) else {}
+    )
+    entrypoint = run_levanter_train_lm if isinstance(config.train_config, TrainLmConfig) else run_levanter_distill_lm
+    remote(entrypoint, resources=config.resources, env_vars=env_vars)(config)
+
+
+def _run_checkpoint_evaluation(config: EvalHarnessMainConfig, output_path: str) -> None:
+    results = run_eval_harness_main(config)
+    (StoragePath(output_path) / "results.json").write_text(json.dumps(results, indent=2))
+
+
+def _evaluation_job(config: EvaluationOnPodConfig) -> None:
+    env_vars = resolve_training_env(None, config.resources)
+    remote(
+        _run_checkpoint_evaluation,
+        resources=config.resources,
+        env_vars=env_vars,
+        pip_dependency_groups=["gpu", "lm_eval"],
+    )(config.eval_config, config.output_path)
+
+
+def screen_checkpoint(arm: Arm, seed: int) -> ArtifactStep[LevanterCheckpoint]:
+    version = SCREEN_ARTIFACT_VERSIONS[arm]
+    name = f"qwen-distillation/screen/{arm.value.lower()}-seed-{seed}"
+    path = f"s3://marin-us-east-02a/marin/{name}/{version}"
+    return ArtifactStep.adopt(name, version, path, kind=LevanterCheckpoint)
+
+
+def extended_checkpoint(arm: Arm, seed: int) -> ArtifactStep[LevanterCheckpoint]:
+    name = f"qwen-distillation/extended/{arm.value.lower()}-seed-{seed}"
+    path = f"s3://marin-us-east-02a/marin/{name}/{EXTENDED_ARTIFACT_VERSION}"
+    return ArtifactStep.adopt(name, EXTENDED_ARTIFACT_VERSION, path, kind=LevanterCheckpoint)
+
+
+def screen_checkpoint_subpath(arm: Arm) -> str:
+    return "model" if ARMS[arm].objective is None else "model/student"
+
+
+def evaluation_step(
+    checkpoint: ArtifactStep[LevanterCheckpoint],
+    arm: Arm,
+    *,
+    seed: int,
+    label: str = "screen",
+    version: str = SCREEN_EVAL_VERSION,
+) -> ArtifactStep[Artifact]:
+    name = f"qwen-distillation/{label}-eval/{arm.value.lower()}-seed-{seed}"
+
+    def build_config(ctx: StepContext) -> EvaluationOnPodConfig:
+        checkpoint_path = LevanterCheckpoint(path=ctx.artifact_path(checkpoint)).checkpoint_dir
+        tokenizer_path = ctx.artifact_path(qwen3_0_6b_base)
+        run_id = f"{arm.value}-{label}-eval-seed-{seed}"
+        return EvaluationOnPodConfig(
+            eval_config=EvalHarnessMainConfig(
+                eval_harness=LmEvalHarnessConfig(
+                    task_spec=list(ZERO_SHOT_TASKS),
+                    max_length=SEQ_LEN,
+                    bootstrap_iters=0,
+                ),
+                tokenizer=tokenizer_path,
+                checkpoint_path=checkpoint_path,
+                checkpoint_subpath=screen_checkpoint_subpath(arm),
+                pad_tokenizer_to_match_model=True,
+                trainer=TrainerConfig(
+                    id=run_id,
+                    seed=seed,
+                    tracker=WandbConfig(
+                        project="marin",
+                        name=run_id,
+                        group=WANDB_GROUP,
+                        tags=[SERIES, "issue-7656", f"{label}-eval", arm.value, f"seed-{seed}"],
+                        replicate_path=ctx.output_path,
+                    ),
+                    mp=jmp.get_policy("p=f32,c=bfloat16"),
+                    train_batch_size=BATCH_SIZE,
+                    mesh=_mesh(),
+                    per_device_eval_parallelism=-1,
+                    allow_nondivisible_batch_size=True,
+                ),
+                model=qwen3_0p6b_config(reference_checkpoint=tokenizer_path),
+            ),
+            resources=ctx.runtime_arg("eval_resources"),
+            output_path=ctx.output_path,
+        )
+
+    return ArtifactStep(
+        name=name,
+        version=version,
+        artifact_type=Artifact,
+        run=_evaluation_job,
+        build_config=build_config,
+        deps=(checkpoint, qwen3_0_6b_base),
+        runtime_args={"eval_resources": TRAIN_RESOURCES},
+    )
+
+
+def training_step(
+    arm: Arm,
+    *,
+    seed: int,
+    num_train_steps: int,
+    label: str,
+    data: ArtifactStep[TokenizedCache],
+) -> ArtifactStep[LevanterCheckpoint]:
+    name = f"qwen-distillation/{label}/{arm.value.lower()}-seed-{seed}"
+    version = resolve_version(name, None)
+    arm_config = ARMS[arm]
+    teacher_checkpoint = qwen3_4b if arm_config.teacher_4b else qwen3_32b
+
+    def build_config(ctx: StepContext) -> TrainLmOnPodConfig:
+        data_config = mixture(ctx, {data: 1.0}, shuffle=True)
+        student_checkpoint = ctx.artifact_path(qwen3_0_6b_base)
+        run_id = f"{arm.value}-{label}-seed-{seed}"
+        trainer = _trainer(
+            run_id=run_id,
+            arm=arm,
+            seed=seed,
+            num_train_steps=num_train_steps,
+            output_path=ctx.output_path,
+            label=label,
+        )
+
+        if arm_config.objective is None:
+            inner = TrainLmConfig(
+                data=data_config,
+                trainer=trainer,
+                model=qwen3_0p6b_config(reference_checkpoint=student_checkpoint),
+                optimizer=_optimizer(),
+                train_seq_len=SEQ_LEN,
+                initialize_from_hf=student_checkpoint if arm_config.student_base else False,
+                use_hf_model_config=arm_config.student_base,
+                pad_tokenizer_to_match_model=True,
+                train_loss_implementation=LmEvalLossImplementation.MATERIALIZED,
+                eval_loss_implementation=LmEvalLossImplementation.MATERIALIZED,
+                hf_save_steps=None,
+            )
+        else:
+            teacher_path = ctx.artifact_path(teacher_checkpoint)
+            inner = TrainLmDistillationConfig(
+                data=data_config,
+                trainer=trainer,
+                student_model=qwen3_0p6b_config(reference_checkpoint=student_checkpoint),
+                teacher_model=Qwen3Config(reference_checkpoint=teacher_path),
+                optimizer=_optimizer(),
+                train_seq_len=SEQ_LEN,
+                objective=arm_config.objective,
+                student_initialize_from_hf=student_checkpoint if arm_config.student_base else False,
+                student_use_hf_model_config=arm_config.student_base,
+                teacher_initialize_from_hf=teacher_path,
+                teacher_use_hf_model_config=True,
+                teacher_initialization=arm_config.initialization,
+                student_anchor_indices=(
+                    ALL_STUDENT_ANCHORS
+                    if arm_config.objective == DistillationObjective.PROJECTED_HIDDEN
+                    else (6, 13, 20, 27)
+                ),
+                teacher_anchor_indices=(
+                    ALL_TEACHER_ANCHORS
+                    if arm_config.objective == DistillationObjective.PROJECTED_HIDDEN
+                    else (15, 31, 47, 63)
+                ),
+            )
+
+        return TrainLmOnPodConfig(
+            train_config=inner,
+            resources=ctx.runtime_arg("train_resources"),
+            output_path=ctx.output_path,
+        )
+
+    model_deps = (qwen3_0_6b_base,)
+    if arm_config.objective is not None:
+        model_deps = (*model_deps, teacher_checkpoint)
+    return ArtifactStep(
+        name=user_namespaced_name(name, version),
+        version=version,
+        artifact_type=LevanterCheckpoint,
+        run=_training_job,
+        build_config=build_config,
+        deps=(data, *model_deps),
+        runtime_args={"train_resources": TRAIN_RESOURCES},
+    )
+
+
+def build(stage: str) -> list[ArtifactStep]:
+    if stage == "data":
+        return [qwen_datakit_cache()]
+    if stage == "data-extended":
+        return [qwen_datakit_cache(extended=True)]
+    if stage == "screen-eval":
+        return [evaluation_step(screen_checkpoint(arm, seed), arm, seed=seed) for arm in Arm for seed in SCREEN_SEEDS]
+    if stage == "screen-eval-smoke":
+        return [evaluation_step(screen_checkpoint(Arm.FOUR_B_TEACHER, 0), Arm.FOUR_B_TEACHER, seed=0)]
+    if stage == "extended-eval":
+        return [
+            evaluation_step(
+                extended_checkpoint(arm, seed),
+                arm,
+                seed=seed,
+                label="extended",
+                version=EXTENDED_EVAL_VERSION,
+            )
+            for arm in EXTENDED_ARMS
+            for seed in SCREEN_SEEDS
+        ]
+    if stage == "extended":
+        data = qwen_datakit_cache(extended=True)
+        return [
+            training_step(
+                arm,
+                seed=seed,
+                num_train_steps=EXTENDED_STEPS,
+                label="extended",
+                data=data,
+            )
+            for arm in EXTENDED_ARMS
+            for seed in SCREEN_SEEDS
+        ]
+    if stage == "extended-ce-retry":
+        data = qwen_datakit_cache(extended=True)
+        return [
+            training_step(
+                arm,
+                seed=seed,
+                num_train_steps=EXTENDED_STEPS,
+                label="extended",
+                data=data,
+            )
+            for arm in EXTENDED_CE_RETRY_ARMS
+            for seed in SCREEN_SEEDS
+        ]
+    if stage == "smoke":
+        data = qwen_datakit_cache(smoke=True)
+        return [
+            training_step(
+                Arm.KL_SCRATCH,
+                seed=0,
+                num_train_steps=SMOKE_STEPS,
+                label="smoke",
+                data=data,
+            )
+        ]
+    if stage in ("screen", "screen-retry", "screen-ce-retry"):
+        data = qwen_datakit_cache()
+        if stage == "screen":
+            arms = Arm
+        elif stage == "screen-retry":
+            arms = SCREEN_RETRY_ARMS
+        else:
+            arms = SCREEN_CE_RETRY_ARMS
+        return [
+            training_step(
+                arm,
+                seed=seed,
+                num_train_steps=SCREEN_STEPS,
+                label="screen",
+                data=data,
+            )
+            for arm in arms
+            for seed in SCREEN_SEEDS
+        ]
+    raise ValueError(f"Unsupported stage: {stage}")
+
+
+@click.command()
+@click.option(
+    "--stage",
+    type=click.Choice(
+        [
+            "data",
+            "data-extended",
+            "smoke",
+            "screen",
+            "screen-retry",
+            "screen-ce-retry",
+            "screen-eval-smoke",
+            "screen-eval",
+            "extended",
+            "extended-eval",
+            "extended-ce-retry",
+        ]
+    ),
+    required=True,
+)
+@build_options
+def main(stage: str):
+    return build(stage)
+
+
+if __name__ == "__main__":
+    main()

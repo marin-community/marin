@@ -766,6 +766,7 @@ def test_greedy_pack_prompt_completions_simple():
     results = list(greedy_pack_prompt_completions(Pos, sequences, pad_token, max_segments_per_example))
 
     assert len(results) == 2  # Expect two packed LmExamples
+    assert {device.platform for device in results[0].tokens.array.devices()} == {"cpu"}
 
     # Check the first packed example
     packed_1 = results[0]

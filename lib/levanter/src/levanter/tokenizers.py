@@ -16,6 +16,7 @@ Usage:
 
 import contextlib
 import dataclasses
+import fnmatch
 import functools
 import json
 import logging
@@ -34,7 +35,7 @@ import jinja2.sandbox
 from huggingface_hub import __version__ as _hf_hub_version
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
-from rigging.filesystem import fetch_file_atomic, filesystem, open_url
+from rigging.filesystem import fetch_file_atomic, filesystem, is_remote_path, open_url, url_to_fs
 from tokenizers import Encoding as HfEncoding
 from tokenizers import Tokenizer as HfBaseTokenizer
 
@@ -854,6 +855,19 @@ def _stage_from_mirror(name_or_path: str, local_dir: str) -> bool:
     return copied
 
 
+def _stage_from_remote_directory(name_or_path: str, local_dir: str) -> bool:
+    """Copy tokenizer files from a remote model directory into ``local_dir``."""
+    remote_fs, remote_dir = url_to_fs(name_or_path)
+    copied = False
+    for entry in remote_fs.ls(remote_dir, detail=False):
+        filename = os.path.basename(entry.rstrip("/"))
+        if not any(fnmatch.fnmatch(filename, pattern) for pattern in _TOKENIZER_ALLOW_PATTERNS):
+            continue
+        if fetch_file_atomic(f"{name_or_path.rstrip('/')}/{filename}", os.path.join(local_dir, filename)):
+            copied = True
+    return copied
+
+
 def _stage_from_hf(name_or_path: str, local_dir: str) -> None:
     """Download tokenizer files from HF Hub and populate the mirror.
 
@@ -897,9 +911,10 @@ def _stage_tokenizer(name_or_path: str) -> str:
     success gate — no hardcoded file-list checks.  Resolution order:
 
       1. Local cache — a prior call already staged this tokenizer on disk.
-      2. mirror://tokenizers/{org}/{model}/hf-hub-{ver}/ — discovered via ``ls()``, fetches
+      2. A remote model directory supplied directly as ``gs://`` or ``s3://``.
+      3. mirror://tokenizers/{org}/{model}/hf-hub-{ver}/ — discovered via ``ls()``, fetches
          whatever files a previous worker populated (any shape).
-      3. HF Hub via ``snapshot_download`` — fetches every tokenizer-relevant
+      4. HF Hub via ``snapshot_download`` — fetches every tokenizer-relevant
          file the repo ships, then populates the mirror for future workers.
 
     The local cache directory is keyed by the ``huggingface_hub`` library
@@ -926,11 +941,17 @@ def _stage_tokenizer(name_or_path: str) -> str:
         if _try_load_tokenizer_from_dir(local_dir):
             return local_dir
 
-        # 2. Mirror: copy whatever files are present, then try loading.
+        # 2. Explicit remote directory: never reinterpret a storage URL as an HF repo id.
+        if is_remote_path(name_or_path):
+            if _stage_from_remote_directory(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
+                return local_dir
+            raise FileNotFoundError(f"Could not load a tokenizer from remote directory: {name_or_path}")
+
+        # 3. Mirror: copy whatever files are present, then try loading.
         if _stage_from_mirror(name_or_path, local_dir) and _try_load_tokenizer_from_dir(local_dir):
             return local_dir
 
-        # 3. HF Hub: full download, populate mirror as side-effect.
+        # 4. HF Hub: full download, populate mirror as side-effect.
         _stage_from_hf(name_or_path, local_dir)
         return local_dir
 

@@ -8,6 +8,7 @@ import logging
 import os
 import warnings
 from collections import defaultdict
+from enum import StrEnum
 from typing import Callable, Generic, Optional, Sequence, TypeVar
 
 import equinox as eqx
@@ -35,6 +36,7 @@ from levanter.data.text.examples import (
     named_lm_example_from_labeled,
 )
 from levanter.models.lm_model import LmExample, LmHeadModel
+from levanter.models.loss import materialized_next_token_nll
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.hf_utils import byte_length_of_token
 from levanter.utils.jax_utils import axis_resource_is_explicit
@@ -54,6 +56,11 @@ LossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 LabeledLossFnOutput = tuple[jax.Array, jax.Array, jax.Array]
 TagArray = Int[Array, "tag"]
 BatchedTagArray = Int[Array, "... tag"]
+
+
+class LmEvalLossImplementation(StrEnum):
+    FUSED = "fused"
+    MATERIALIZED = "materialized"
 
 
 @dataclasses.dataclass
@@ -226,12 +233,22 @@ def _default_lm_eval_loss_fn(
     *,
     EvalBatch: hax.Axis,
     mp: jmp.Policy | None,
+    implementation: LmEvalLossImplementation,
 ) -> LossFnOutput:
     model = inference_mode(model, True)
     named_batch = _ensure_named_lm_example(batch, EvalBatch=EvalBatch, model_pos=model.Pos)
     if mp is not None:
         model = mp.cast_to_compute(model)
-    per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    if implementation == LmEvalLossImplementation.FUSED:
+        per_pos_loss = model.compute_next_token_loss(named_batch, reduction=None, reduction_axis=()).array
+    else:
+        logits = model(named_batch.tokens, named_batch.attn_mask)
+        per_pos_loss = materialized_next_token_nll(
+            logits,
+            named_batch.tokens,
+            Vocab=model.Vocab,
+            Pos=model.Pos,
+        ).array
     per_pos_weight = named_batch.loss_weight.array
     per_pos_token_id = jnp.roll(named_batch.tokens.array, -1, axis=-1)
     return per_pos_loss, per_pos_weight, per_pos_token_id
@@ -289,6 +306,7 @@ def cb_tagged_lm_evaluate(
     mp: jmp.Policy | None = None,
     checkpoint_path: Optional[str] = None,
     loss_fn: Callable[[LmHeadModel, LmEvalExample], LossFnOutput] | None = None,
+    loss_implementation: LmEvalLossImplementation = LmEvalLossImplementation.FUSED,
 ) -> Callable[[StepInfo], None]:
     """
     Evaluates multiple tagged datasets using a given evaluation function.
@@ -319,7 +337,13 @@ def cb_tagged_lm_evaluate(
     if loss_fn is None:
 
         def loss_fn(model: LmHeadModel, batch: LmEvalExample) -> LossFnOutput:
-            return _default_lm_eval_loss_fn(model, batch, EvalBatch=EvalBatch, mp=mp)
+            return _default_lm_eval_loss_fn(
+                model,
+                batch,
+                EvalBatch=EvalBatch,
+                mp=mp,
+                implementation=loss_implementation,
+            )
 
     evaluator = TaggedEvaluator(
         EvalBatch=EvalBatch,
@@ -542,7 +566,7 @@ class TaggedEvaluator(Generic[Ex, M]):
         @hax.named_jit(axis_resources=self.axis_mapping)
         def accum_for_batch(model: M, state: _EvalRunningMeans, batch: Ex, tags: BatchedTagArray):
             losses, weights, token_ids = self.loss_fn(model, batch)
-            weighted_loss = losses * weights  # b t
+            weighted_loss = jnp.where(weights != 0, losses, 0.0) * weights  # b t
             this_loss = jnp.sum(weighted_loss)  # scalar
             this_weights = jnp.sum(weights)  # scalar
 
@@ -755,7 +779,14 @@ class LabeledEvaluator(Generic[Ex, M]):
             label_matches = labels[:, None, None, :] == aggregate_label_ids[None, :, :, None]
             label_matches = jnp.logical_and(label_matches, valid_label_ids[None, :, :, None])
             weights_per_aggregate = jnp.any(label_matches, axis=2).astype(losses.dtype)
-            weighted_losses = losses[:, None, :] * weights_per_aggregate
+            weighted_losses = (
+                jnp.where(
+                    weights_per_aggregate != 0,
+                    losses[:, None, :],
+                    0.0,
+                )
+                * weights_per_aggregate
+            )
 
             this_loss_per_label = jnp.sum(weighted_losses, axis=(0, 2))
             this_tokens_per_label = jnp.sum(weights_per_aggregate, axis=(0, 2))

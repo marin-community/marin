@@ -6,6 +6,7 @@ import json
 import math
 import os
 import tempfile
+from types import SimpleNamespace
 
 import equinox as eqx
 import jax
@@ -307,3 +308,17 @@ def test_train_lm_rejects_weights_only_init_with_trainer_initialize_from():
         )
         with pytest.raises(ValueError, match="trainer.initialize_from"):
             train_lm.main(config)
+
+
+def test_model_vocab_size_includes_checkpoint_padding():
+    tokenizer = [None] * 12
+    converter = SimpleNamespace(default_hf_config=SimpleNamespace(vocab_size=16))
+
+    assert train_lm._model_vocab_size(tokenizer, converter, True) == 16
+
+
+def test_model_vocab_size_does_not_shrink_larger_tokenizer():
+    tokenizer = [None] * 20
+    converter = SimpleNamespace(default_hf_config=SimpleNamespace(vocab_size=16))
+
+    assert train_lm._model_vocab_size(tokenizer, converter, True) == 20

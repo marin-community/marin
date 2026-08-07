@@ -63,6 +63,10 @@ One-off analysis pages published to durable public hosting (see
 
 ## Modeling
 
+- Distilling Qwen3 32B into 0.6B [![#7656](https://img.shields.io/github/issues/detail/state/marin-community/marin/7656)](https://github.com/marin-community/marin/issues/7656)
+    - [Experiment report](./qwen-32b-to-0p6b-distillation.md)
+    - [W&B group](https://wandb.ai/marin-community/marin/groups/QD-qwen32b-to-0p6b)
+    - Conclusion: official Base initialization plus forward KL was strongest; factorized teacher initialization improved early loss but not the 1.8 billion-token endpoint.
 - Pick Tokenizer type [![#524](https://img.shields.io/github/issues/detail/state/marin-community/marin/524)](https://github.com/marin-community/marin/issues/524)
     - [GitHub Issue #524](https://github.com/marin-community/marin/issues/524)
     - [WandB Report](https://wandb.ai/marin-community/marin/reports/Tokenizer-Comparison--VmlldzoxMDI0Njg3Nw)

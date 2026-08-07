@@ -1,0 +1,240 @@
+# Qwen distillation: first-step device OOM
+
+Validate an online Qwen3-32B to Qwen3-0.6B distillation step at sequence
+length 2,048 and effective batch size 8 on one `GB200x4` node.
+
+## Initial status
+
+The 12-step `QD-C1` smoke staged both models, initialized four GB200 devices,
+loaded the regional token cache, loaded all 17 teacher weight shards, traced
+the train step, and lowered it to HLO. The first device execution failed on all
+four devices while allocating 3.91 GiB. The run did not complete a step or
+write a checkpoint.
+
+- Job: `/power/qwen-distill-smoke-651629`
+- Task: `run_levanter_distill_lm-6bf6582f`
+- W&B: `QD-C1-smoke-seed-0`
+- Failure: `RESOURCE_EXHAUSTED: Out of memory while trying to allocate 3.91GiB`
+
+## Hypothesis 1
+
+The un-microbatched teacher and student forward pass, exact float32
+full-vocabulary KL, and student backward pass exceed the device peak despite
+the four-way model and vocabulary sharding. The failure occurs during the
+compiled step rather than model staging or HLO lowering.
+
+## Changes to make
+
+Keep the effective batch size and sequence length fixed, but accumulate two
+microbatches of four examples. This preserves the objective and stopping
+condition while reducing activation and logit peak memory.
+
+## Results
+
+The `microbatch_size=4` smoke failed on the same 3.91 GiB allocation. The
+allocation size and timing were unchanged, ruling out batch-dependent
+activations as the primary cause.
+
+## Hypothesis 2
+
+The entry point constructs a concrete random 32B teacher before calling
+`Trainer.initial_state`. The trainer wraps that object in a model factory, but
+the original `initial_model` local remains live after the trainer creates its
+mixed-precision state. Loading the checkpoint teacher therefore retains an
+unneeded third teacher representation until training exits.
+
+## Changes to make
+
+Pass a lazy model factory to `Trainer.initial_state` and derive the trainable
+filter from its shape. The factory closes over configurations and keys, not
+concrete arrays, so replacing the random state teacher can release it before
+the first compiled step.
+
+## Results
+
+The lazy-initialization smoke completed all 12 steps on one `GB200x4` node,
+saved `checkpoints/step-11`, and exited successfully. The first training step
+took 15.7 seconds including compilation. Subsequent training loss was finite.
+
+- Job: `/power/qwen-distill-smoke-f8672e`
+- Task: `run_levanter_distill_lm-25bf5d8d`
+- Commit: `f8672e5abd`
+- Checkpoint:
+  `s3://marin-us-east-02a/marin/qwen-distillation/smoke/qd-c1-seed-0/2026.07.26.5/checkpoints/step-11`
+
+This confirms that retaining the random 32B initialization, rather than the
+online objective itself, caused the first-step OOM.
+
+## Hypothesis 3
+
+Training loss remained finite, but all validation metrics were `NaN`.
+Validation batches contain padded positions whose loss weight is zero. The
+evaluator multiplied per-position loss by its weight, so a nonfinite loss on a
+padded position propagated through `NaN * 0`.
+
+## Changes to make
+
+Use an explicit zero-weight mask before accumulating tagged and labeled
+evaluation losses. Add regression tests whose ignored positions contain
+nonfinite losses, then repeat the smoke and require finite validation metrics.
+
+## Results
+
+The explicit evaluator mask passed its regression tests but the device smoke
+still reported nonfinite validation loss. W&B retained finite student
+parameter norms, finite student gradient norms, and a finite distillation loss
+through step 11 (`9.1567`). This rules out student corruption and zero-weight
+aggregation as the primary cause.
+
+- Job: `/power/qwen-distill-smoke-c39033`
+- Commit: `c3903335cb`
+- Training throughput at step 11: 27,515 tokens/s
+- Validation path: unreduced fused linear cross-entropy
+
+## Hypothesis 4
+
+The GPU fused cross-entropy path is nonfinite when asked for unreduced
+per-position Qwen losses in this shape, while the independently computed
+full-logit KL remains finite.
+
+## Changes to make
+
+Compute validation NLL from materialized float32 logits as
+`logsumexp(logits) - logits[target]`. The online KL already materializes this
+logit shape successfully, and the student-only evaluation has lower peak
+memory than the training step. Keep explicit masking in the evaluator as a
+separate correctness fix.
+
+## Results
+
+The stable validation path completed on device. NLL was finite at every
+evaluation and decreased from `11.210` after the first update to `8.679` at
+step 11. The run saved and committed its final checkpoint.
+
+- Job: `/power/qwen-distill-smoke-8dd74b`
+- Commit: `8dd74b043b`
+- Checkpoint:
+  `s3://marin-us-east-02a/marin/qwen-distillation/smoke/qd-c1-seed-0/2026.07.26.7/checkpoints/step-11`
+
+The full experiment matrix uses the materialized validation NLL for both
+hard-label controls as well, preserving a common evaluation implementation.
+
+## Future work
+
+- [ ] Record steady-state step throughput after the corrected evaluation
+  smoke.
+- [ ] Inspect whether excluding frozen teacher leaves from the differentiated
+  model reduces compiler memory further.
+
+## Screen startup failures
+
+The 18-cell screen launched as `/power/qwen-distill-screen-792acc`. Twelve
+online-distillation cells entered training. Six cells failed before step 0:
+
+- `QD-C0` and `QD-C2`, both seeds, passed a regional `s3://` tokenizer
+  directory through `as_hf_tokenizer()` while reconciling checkpoint-only
+  vocabulary padding rows. Hugging Face interpreted the path as a repository
+  ID.
+- `QD-003`, both seeds, rejected `microbatch_size=4`. TAID updates its
+  controller from the full training loss and explicitly requires an
+  unaccumulated batch.
+
+The standard trainer now sizes the model vocabulary from the checkpoint
+configuration without mutating or restaging the tokenizer. TAID alone uses a
+full batch; the other online objectives retain microbatches of four. A
+`screen-retry` stage selects only these six missing cells under artifact
+version `2026.07.26.9`.
+
+The local Weaver endpoint stopped responding while this recovery was being
+recorded. This does not affect Iris or the running jobs; status updates must be
+replayed when the endpoint returns.
+
+The targeted retry cleared both original boundaries. TAID completed a
+full-batch first step without an allocation failure. All four hard-label
+controls then failed their first optimizer update with `Loss is NaN`. Their
+student-only training path still used fused linear cross-entropy, the same
+kernel family already isolated during validation. The standard trainer now
+supports the materialized float32 loss for training as well as evaluation. A
+`screen-ce-retry` stage selects only the four affected controls under artifact
+version `2026.07.26.10`.
+
+## Extended hard-label export failure
+
+The four hard-label extension cells trained normally until step 10,000, saved
+native Levanter checkpoints, and then failed in the scheduled Hugging Face
+export hook. Marin assigns every training run an `<output_path>/hf` export
+directory. The hook attempted to reconstruct a Hugging Face tokenizer from the
+regional `s3://` model directory, which Transformers rejected as an invalid
+repository ID.
+
+The online-distillation entry point does not currently install this export
+hook, so its six cells continued without interruption. The hard-label runs do
+not need intermediate Hugging Face exports: final comparisons and recovery
+use native checkpoints. `TrainLmConfig.hf_save_steps` now accepts `None`, and
+the Qwen experiment disables the hook for hard-label cells. The
+`extended-ce-retry` stage targets the four failed artifacts at their original
+`2026.07.26.17` paths so Levanter can resume from step 10,000.
+
+- Parent job: `/power/qwen-distill-extended-1db30a`
+- Failure boundary: step 10,000
+- Affected arms: `QD-C0` and `QD-C2`, both seeds
+- Unaffected arms: `QD-C1`, `QD-C3`, and `QD-002`, both seeds
+
+All four retries subsequently reached terminal step 109,863. Logs confirm that
+each terminal native checkpoint committed to the regional artifact path. Iris
+marked the `QD-C2` seed-1 child failed after training because its pod
+disappeared during controller reconciliation, despite process exit zero,
+successful checkpoint serialization, final evaluation, and clean W&B
+shutdown. The adopted-checkpoint evaluation path does not depend on the parent
+step's success marker; restoring this checkpoint is the remaining durability
+check.
+
+## Extended W&B uploader failure
+
+At step 80,221, W&B marked `QD-C3` seed 0 crashed after its uploader reported a
+fatal network error. The training process did not fail: Iris continued to
+report the child running with zero failures and zero preemptions, training logs
+advanced beyond step 81,000, and temporary checkpoint 80,843 committed.
+
+This cell is monitored from Iris logs and checkpoint commits for the remainder
+of training. Any held-out evaluations missing from W&B are recoverable from
+durable finelog, and the terminal zero-shot evaluation is a separate run. Do
+not restart this cell solely to repair experiment tracking.
+
+The same uploader-only failure occurred for `QD-002` seed 0 near step 107,500.
+Iris continued to report the child running with zero failures and
+preemptions, and checkpoint 107,921 committed after W&B changed the run state
+to `crashed`. Apply the same recovery: keep training and use Iris for terminal
+NLL and checkpoint verification.
+
+Both affected Iris children subsequently succeeded. `QD-C3` seed 0 committed
+step 109,863 with terminal NLL `2.57177`; `QD-002` seed 0 committed step
+109,863 with terminal NLL `2.6542`.
+
+## Extended parent cleanup failure
+
+After every online child reached terminal checkpoint commit, the aggregate
+`/power/qwen-distill-extended-1db30a` job changed to `failed`. Its reported
+errors are post-exit XLA coordination and pod-reconciliation failures during
+cleanup, including a controller message that a pod no longer existed. The
+individual online training children used for the missing W&B records are
+`succeeded`, and all ten experiment cells have terminal checkpoint commit
+records.
+
+This is an orchestration cleanup incident, not a model-training retry
+condition. The terminal evaluation runs as a separate Marin stage that adopts
+the checkpoint paths directly. Do not restart Iris or repeat the 1.8
+billion-token cells. Treat successful restoration of all ten checkpoints as
+the artifact integrity check.
+
+The adopted evaluation job
+`/power/qwen-distill-extended-eval-dc9a89` restored all ten terminal
+checkpoints successfully. Every evaluation child reached `succeeded`,
+including `QD-C2` seed 1. The artifact-integrity check therefore passes.
+
+Several evaluation workers logged a `MailboxClosedError` while uploading the
+optional W&B results artifact during shutdown. The background tracker dropped
+only that artifact update; task metrics had already been logged and mirrored
+to finelog. One W&B run remained in a stale `running` state, and its four raw
+accuracies were recovered from the durable task log. No evaluation retry is
+needed.
