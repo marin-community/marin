@@ -539,7 +539,11 @@ def test_dashboard_constraints(smoke_cluster, smoke_page, smoke_screenshot):
     # the test only checks that constraint chips render on the dashboard.
     constraints = [
         Constraint.create(key="region", op=ConstraintOp.EQ, value="local", mode=job_pb2.CONSTRAINT_MODE_PREFERRED),
-        Constraint.create(key="env-tag", op=ConstraintOp.EXISTS),
+        Constraint.create(
+            key="env-tag",
+            op=ConstraintOp.EXISTS,
+            mode=job_pb2.CONSTRAINT_MODE_PREFERRED,
+        ),
         Constraint.create(
             key="device-variant",
             op=ConstraintOp.IN,
