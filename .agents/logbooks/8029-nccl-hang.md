@@ -23,7 +23,20 @@ author: power
 
 ## Launched Instances
 
-No instances launched from the clean run commit yet.
+### 2026-08-07 02:27 UTC - wedge-sup-nccl2307-8rack-20260807
+
+- Command: `uv run --frozen iris --cluster=marin job run --target-cluster cw-us-east-08a --priority production --no-wait --timeout 43200 --max-retries 0 --job-name wedge-sup-nccl2307-8rack-20260807-coord -- python -m experiments.grug.recovery.launch_wedge_supervised --run-id wedge-sup-nccl2307-8rack-20260807 --dp-racks 8 --num-steps 1000 --version 2026.08.07 --run`.
+- Job: `/power/wedge-sup-nccl2307-8rack-20260807-coord`; child `/power/wedge-sup-nccl2307-8rack-20260807-coord/grug-train-wedge-sup-nccl2307-8rack-20260807`.
+- Git SHA: `40a504c48f70aabc12084ecc703b53afe1846a5f`.
+- Dirty tree: No; the commit was pushed to `origin/weaver/infra-debug-nccl-hang` before submission.
+- Source bundle: Iris workspace bundle, 9.8 MB; no content ID was reported.
+- Hardware: 128 workers, four GB200 GPUs each, eight NVL72 racks on `cw-us-east-08a`.
+- W&B: None; this is a synthetic minimal reproducer.
+- Output root: `s3://marin-us-east-02a/marin/grug/wedge-sup-nccl2307-8rack-20260807/2026.08.07`.
+- Initialization: None.
+- Final step: 1000.
+- Checkpoint policy: None.
+- Babysitter: Codex, two-minute cadence through first progress and terminal state.
 
 ## Event Log
 
@@ -33,3 +46,10 @@ No instances launched from the clean run commit yet.
 - Evidence: `/power/wedge-sup-nccl2307-nvls-2rack-coord` reported NCCL 2.30.7 on all 32 tasks; both arms reached step 999 without a watchdog abort.
 - Decision: Prepare a clean, supervised eight-rack minimal gate before launching the 300B matrix.
 - Next: Commit and push the run implementation and contract.
+
+### 2026-08-07 02:28 UTC - Eight-rack gate queued
+
+- Status: The coordinator is running and all 128 GPU tasks are in the gang scheduler's build gate with zero failures or preemptions.
+- Evidence: Iris resolved the expected output root and submitted the child from the clean source commit.
+- Decision: Keep the single production-priority request and wait for full-gang admission.
+- Next: Verify NCCL provenance and step progress immediately after admission.
