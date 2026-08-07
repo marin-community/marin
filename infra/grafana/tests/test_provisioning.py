@@ -205,10 +205,15 @@ def test_warning_alerts_remain_visible_without_notifications():
     ]
 
 
-def test_critical_contact_point_reaches_email_slack_and_loom():
+def test_critical_contact_point_reaches_email_and_the_bridge_but_not_slack_directly():
+    """The bridge posts the Slack announcement, not Grafana: an incoming webhook
+    never reveals the message ts that Loom needs to route the thread to the triage
+    session. Two Slack receivers would also mean two messages per alert."""
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
     critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack", "webhook"}
+    assert critical_types == {"email", "webhook"}
+    # The unlabeled-alert fallback has no Loom leg, so it keeps Grafana's own Slack rendering.
+    assert {receiver["type"] for receiver in points["ops-slack"]["receivers"]} == {"slack"}
     for point in points.values():
         for receiver in point["receivers"]:
             if receiver["type"] == "slack":
