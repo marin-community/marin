@@ -42,6 +42,19 @@ PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 # moved ahead of its all-gather, and NVLink SHARP for collectives.
 COMBINED_ENV = {"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"}
 COMBINED_ARGS = ["--small-param-sharding", "fsdp", "--interleave-before-gather"]
+# Wave 5 put the expert-chunk optimum one step below the hero's 4.
+CHUNKED_ARGS = [*COMBINED_ARGS, "--expert-chunks", "2"]
+# `_apply_hero_fsdp_runtime_defaults` leaves XLA_FLAGS alone once it already names
+# `--xla_gpu_enable_command_buffer`, so an arm can re-enable CUDA graphs without a code change.
+COMMAND_BUFFER_FLAGS = "--xla_gpu_enable_command_buffer=FUSION,CUBLAS,CUSTOM_CALL"
+_COMBINE_BYTES = 256 * 1024 * 1024
+COMBINE_THRESHOLD_FLAGS = (
+    " ".join(
+        f"--xla_gpu_{collective}_combine_threshold_bytes={_COMBINE_BYTES}"
+        for collective in ("all_gather", "all_reduce", "reduce_scatter")
+    )
+    + f" {COMMAND_BUFFER_FLAGS.partition('=')[0]}="
+)
 LOGDIR = pathlib.Path("scratch/hero_sweep")
 PEAK_FLOPS_PER_DEVICE = 2.5e15
 NUM_DEVICES = 64
@@ -154,6 +167,30 @@ WAVES = {
             env={**COMBINED_ENV, "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS": "1"},
             args=COMBINED_ARGS,
             note="tune cross-entropy block sizes for this shape instead of using the bucket default",
+        ),
+    ],
+    # Wave 7: XLA and NCCL flags, on top of the adopted configuration plus `expert_chunks=2`.
+    # 128 experts only divide into powers of two, so 2 is the single step below the hero's 4 and
+    # the chunk count is settled once wave 5 confirms it.
+    "w7": [
+        Arm("base", env=COMBINED_ENV, args=CHUNKED_ARGS, note="this wave's control"),
+        Arm(
+            "cudagraphs",
+            env={**COMBINED_ENV, "XLA_FLAGS": COMMAND_BUFFER_FLAGS},
+            args=CHUNKED_ARGS,
+            note="cross-entropy alone dispatches 43.7k kernels per step averaging 17.5 us",
+        ),
+        Arm(
+            "combinethresh",
+            env={**COMBINED_ENV, "XLA_FLAGS": COMBINE_THRESHOLD_FLAGS},
+            args=CHUNKED_ARGS,
+            note="the profile shows 1,009 uncombined collective launches at 52 GB/s",
+        ),
+        Arm(
+            "nchannels",
+            env={**COMBINED_ENV, "NCCL_MIN_NCHANNELS": "32"},
+            args=CHUNKED_ARGS,
+            note="more channels for the small per-layer collectives",
         ),
     ],
 }
