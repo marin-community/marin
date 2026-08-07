@@ -188,6 +188,13 @@ author: power
 
 ## Event Log
 
+### 2026-08-07 08:20 UTC - The NCCL pin does not explain non-reproduction
+
+- The canonical incident ([wiki:85](https://echo.oa.dev/wiki/85), `moe-hero-fsdp-8rack-repro-v3-20260803`, wedged at step 183, source `5e496b051`) ran NCCL `2.28.9+cuda13.0`. At that SHA `pyproject.toml` carried no NCCL pin, so the run took the image default.
+- `40a504c48f` later pinned `nvidia-nccl-cu13==2.30.7` citing "#7344: NCCL >=2.29.3 fixes the aarch64 proxy freeOps CAS leak", which on an aarch64 Grace host is the right shape of fault for a silent progressive collective stall.
+- The lead does not hold. #8029 records the NVIDIA JAX 26.07 image with CUDA 13.3 and NCCL 2.30.7 wedging near step 115 behind a verified provenance gate. The current arms run that same stack — RAS reports `nccl_version 2.30.7`, `cuda_runtime_version 13030`, `cuda_driver_version 13020`, jax 0.11.0 — and do not wedge.
+- The library version is therefore not the differentiator, and the remaining candidates are cluster and node state rather than the software stack.
+
 ### 2026-08-07 08:06 UTC - Reproduction failed twice at 8 racks; instrumentation is not the suppressor
 
 - Supervised (deadman + supervisor parent): clean to step 305, 18.9 s/it.
