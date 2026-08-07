@@ -194,6 +194,9 @@ def test_a_webhook_retry_reuses_the_thread_without_announcing_again():
 
     assert len(slack.roots) == 1, "a retry must not announce again"
     assert "Still firing." not in slack.reply_texts
+    # Every notification creates a run and Loom dedupes them to one session, so
+    # linking on each would repeat the line per retry and per 4h re-notification.
+    assert slack.reply_texts.count("Triage session: https://loom.example.com/s/session-1") == 1
     # Both deliveries name the same thread, so both reach the same conversation.
     assert runs[1]["slack"] == runs[0]["slack"]
 
@@ -211,6 +214,7 @@ def test_a_still_firing_alert_is_noted_once_the_thread_has_gone_quiet(monkeypatc
 
     assert len(slack.roots) == 1, "still one announcement"
     assert slack.reply_texts.count("Still firing.") == 1
+    assert slack.reply_texts.count("Triage session: https://loom.example.com/s/session-1") == 1
 
 
 def test_a_resolution_is_noted_on_the_alert_thread_and_creates_no_run():

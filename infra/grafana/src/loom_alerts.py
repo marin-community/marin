@@ -75,6 +75,10 @@ class _Tracked:
     # When this thread last received a post, which separates a webhook retry
     # seconds later from a genuine re-notification hours later.
     posted_at: float
+    # The session already linked in this thread. Every notification for a firing
+    # alert creates a run, and Loom dedupes them to one session, so linking on
+    # each would repeat the same line per retry and per re-notification.
+    linked_session: str | None = None
 
 
 class ThreadLog:
@@ -112,6 +116,11 @@ class ThreadLog:
         tracked = self._threads.get(key)
         if tracked is not None:
             tracked.posted_at = time.monotonic()
+
+    def mark_linked(self, key: str, session_id: str) -> None:
+        tracked = self._threads.get(key)
+        if tracked is not None:
+            tracked.linked_session = session_id
 
     def discard(self, key: str) -> None:
         self._threads.pop(key, None)
@@ -157,6 +166,21 @@ class SlackAnnouncer:
         if thread is not None:
             self._threads.put(thread_key, thread)
         return thread
+
+    async def link_session_once(
+        self,
+        client: httpx.AsyncClient,
+        thread_key: str,
+        thread: SlackThread,
+        loom_url: str,
+        session_id: str,
+    ) -> None:
+        """Post the triage session's link, unless this thread already carries it."""
+        tracked = self._threads.peek(thread_key)
+        if tracked is not None and tracked.linked_session == session_id:
+            return
+        await self.post(client, f"Triage session: {loom_url}/s/{session_id}", thread=thread)
+        self._threads.mark_linked(thread_key, session_id)
 
     async def announce_resolution(
         self,
@@ -281,7 +305,7 @@ class LoomAlertClient:
                 await self._announcer.announce_resolution(client, payload, thread_key)
                 return None
             thread = await self._announcer.announce(client, payload, firing, thread_key)
-            return await self._create_run(client, payload, firing, thread)
+            return await self._create_run(client, payload, firing, thread, thread_key)
 
     async def _create_run(
         self,
@@ -289,6 +313,7 @@ class LoomAlertClient:
         payload: object,
         firing: list[Mapping[str, object]],
         thread: SlackThread | None,
+        thread_key: str,
     ) -> dict[str, Any]:
         request: dict[str, Any] = {
             "profile": self._config.profile,
@@ -350,7 +375,7 @@ class LoomAlertClient:
                 thread,
                 LoomAlertDeliveryError("Loom returned an invalid JSON response"),
             ) from err
-        await self._link_session(client, thread, response)
+        await self._link_session(client, thread, thread_key, response)
         return response
 
     async def _report_delivery_failure(
@@ -373,13 +398,14 @@ class LoomAlertClient:
         self,
         client: httpx.AsyncClient,
         thread: SlackThread | None,
+        thread_key: str,
         run: Mapping[str, Any],
     ) -> None:
-        """Append the triage session's link to the announcement."""
+        """Append the triage session's link to the announcement, at most once."""
         session_id = run.get("session_id")
         if thread is None or not isinstance(session_id, str) or not session_id:
             return
-        await self._announcer.post(client, f"Triage session: {self._config.url}/s/{session_id}", thread=thread)
+        await self._announcer.link_session_once(client, thread_key, thread, self._config.url, session_id)
 
 
 def _all_alerts(payload: object) -> list[Mapping[str, object]]:
