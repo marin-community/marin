@@ -94,6 +94,22 @@ const cache = computed<Field[]>(() => {
   ]
 })
 
+const indexCache = computed<Field[]>(() => {
+  const c = info.value?.indexCache
+  if (!c) return []
+  const corrupt = c.corruptBundles + c.corruptSections
+  const fallbacks = c.exactAggregateFallbacks
+  return [
+    { label: 'Corrupt bundles', value: formatNumber(c.corruptBundles) },
+    { label: 'Corrupt sections', value: formatNumber(c.corruptSections) },
+    { label: 'Indexed aggregates', value: formatNumber(c.exactAggregateFull) },
+    { label: 'Partial aggregates', value: formatNumber(c.exactAggregatePartial) },
+    { label: 'Declined aggregates', value: formatNumber(c.exactAggregateDeclined) },
+    { label: 'Aggregate fallbacks', value: formatNumber(c.exactAggregateFallbacks) },
+    { label: 'Fallback status', value: corrupt || fallbacks ? 'source fallback observed' : 'healthy' },
+  ]
+})
+
 const format = computed<Field[]>(() => {
   const f = info.value?.format
   if (!f) return []
@@ -136,6 +152,7 @@ onMounted(load)
           { title: 'Process', fields: process },
           { title: 'Store', fields: store },
           { title: 'Query cache', fields: cache },
+          { title: 'Index cache', fields: indexCache },
           { title: 'Storage format', fields: format },
         ]"
         :key="card.title"

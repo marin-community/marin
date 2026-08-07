@@ -581,8 +581,9 @@ where
         let resume_at = resume_after_eviction(cursor, snapshot.min_seq);
         let read_from = resume_at.unwrap_or(cursor);
 
-        let provider = NamespaceProvider::build(snapshot.schema, &snapshot.paths)
-            .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?;
+        let provider =
+            NamespaceProvider::build(snapshot.schema, &snapshot.paths, snapshot.index_cache)
+                .map_err(|e| StatsError::Internal(format!("build provider {name:?}: {e}")))?;
 
         let table = quote_ident(name);
         let mut sql =

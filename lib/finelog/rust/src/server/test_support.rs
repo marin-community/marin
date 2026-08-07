@@ -71,7 +71,14 @@ impl RequestStats {
 /// A disk-backed store with its flush/maintenance tasks running, so a push becomes
 /// query-visible exactly as it does in production.
 pub fn disk_store(tag: &str) -> Arc<Store> {
-    let store = Arc::new(Store::new(Some(unique_dir(tag)), String::new()).unwrap());
+    let store = Arc::new(
+        Store::new(
+            Some(unique_dir(tag)),
+            String::new(),
+            crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+        )
+        .unwrap(),
+    );
     store.bootstrap_maintenance();
     store
 }

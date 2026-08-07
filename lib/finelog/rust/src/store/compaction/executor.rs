@@ -37,6 +37,7 @@ use crate::store::compaction::merge::{
 };
 use crate::store::compaction::planner::aggregate_key_bounds;
 use crate::store::segment::{segment_bounds, segment_writer_properties};
+use crate::store::segment_index::{write_segment_index, SegmentIndexConfig};
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
 
 fn now_ms() -> i64 {
@@ -79,17 +80,15 @@ pub struct PlannedSwap {
 /// read in order and the merge takes the longest prefix that fits, leaving the
 /// rest of the run for the next tick.
 ///
-/// `inputs_by_path` lets the caller supply the typed in-memory key bounds for
-/// each input (the catalog round-trip stringifies them, losing numeric
-/// ordering): a closure mapping an input path to its `(min_key, max_key)`. For a
-/// bump that is the single input's bounds; for a merge it folds them via
-/// `aggregate_key_bounds`.
+/// `input_key_bounds` supplies typed in-memory key bounds for each input (the
+/// catalog round-trip stringifies them, losing numeric ordering). A bump carries
+/// the single input's bounds; a merge folds them via `aggregate_key_bounds`.
 pub fn run_job(
     job: &CompactionJob,
     dir: &Path,
     arrow_schema: &SchemaRef,
     key_column: Option<&str>,
-    indexed_columns: &[&str],
+    index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
     input_key_bounds: impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
@@ -101,7 +100,7 @@ pub fn run_job(
             dir,
             arrow_schema,
             key_column,
-            indexed_columns,
+            index_config,
             max_merge_arrow_bytes,
             &input_key_bounds,
         )
@@ -189,7 +188,7 @@ fn apply_merge(
     dir: &Path,
     arrow_schema: &SchemaRef,
     key_column: Option<&str>,
-    indexed_columns: &[&str],
+    index_config: &SegmentIndexConfig,
     max_merge_arrow_bytes: i64,
     input_key_bounds: &impl Fn(&str) -> (Option<i64>, Option<i64>),
 ) -> Result<PlannedSwap, StatsError> {
@@ -285,7 +284,7 @@ fn apply_merge(
     let merged = kway_merge(&projected, &sort_cols)
         .map_err(|e| StatsError::Internal(format!("k-way merge: {e}")))?;
     // `kway_merge` copied the rows it needs into `merged`; free the sorted inputs
-    // now so the segment isn't held in RAM twice through the parquet + sidecar
+    // now so the segment isn't held in RAM twice through the Parquet + index
     // writes below (each input plus the output is a fully materialized,
     // uncompressed copy of the segment).
     drop(projected);
@@ -298,25 +297,19 @@ fn apply_merge(
         ))
     })?;
 
-    // Build the trigram substring-index sidecar next to the merged output, one
-    // bloom set per `indexed_columns` entry (a no-op for namespaces with no
-    // indexed columns). Best-effort: the index is optional, so a missing sidecar
-    // only disables row-group pruning for this segment, never correctness.
-    // Sidecars are built here, at the L0->L1+ merge (where the bulk of queryable
-    // data lands), and carried forward verbatim by single-input level bumps; L0
-    // is intentionally left unindexed.
+    // Build the complete segment-index bundle next to the merged output. The
+    // derived data is optional, so a missing bundle only disables acceleration
+    // for this segment, never correctness. Bundles are carried forward by
+    // single-input level bumps; L0 flushes omit only trigram sections.
     //
     // The parquet rename above already committed the segment, so a crash in the
-    // gap before this write leaves the segment without a sidecar. That is the
-    // same correct-but-unpruned state as any missing sidecar; a later compaction
+    // gap before this write leaves the segment without a bundle. That is the
+    // same correct-but-unaccelerated state as any missing bundle; a later compaction
     // consuming this segment rebuilds it. A terminal-level segment that is never
-    // re-merged (or one written before sidecars existed) stays unindexed until
-    // the maintenance backfill (`Namespace::backfill_missing_sidecars`) rebuilds
-    // it a few segments per tick.
-    if let Err(e) =
-        crate::store::trigram::write_sidecar(&merged_path, &merged, indexed_columns, key_column)
-    {
-        tracing::warn!(path = %merged_path.display(), error = %e, "trigram sidecar write failed");
+    // re-merged (or one written before bundles existed) stays unindexed until
+    // maintenance backfills it a few segments per tick.
+    if let Err(error) = write_segment_index(&merged_path, &merged, index_config) {
+        tracing::warn!(path = %merged_path.display(), %error, "segment index bundle write failed");
     }
 
     let size = std::fs::metadata(&merged_path)
@@ -430,7 +423,11 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 
     use super::*;
+    use crate::store::exact::ExactIndexConfig;
+    use crate::store::index_bundle::{self, SectionKind};
+    use crate::store::schema::CoveringProjection;
     use crate::store::segment::{read_segment_footer, write_segment_to_dir};
+    use crate::store::segment_index::{parse_projection_reference, read_exact_section};
     use crate::store::types::{seg_filename, SegmentRow};
 
     fn tempdir(tag: &str) -> PathBuf {
@@ -470,7 +467,7 @@ mod tests {
 
     #[test]
     fn projected_read_keeps_row_order_and_drops_other_columns() {
-        // The sidecar backfill indexes a projection of the segment, so the
+        // The index backfill reads a projection of the segment, so the
         // projected read must preserve row order and count exactly — the index
         // chunks values by global row position to stay aligned with row groups.
         let dir = tempdir("projected");
@@ -557,7 +554,32 @@ mod tests {
                 _ => (None, None),
             }
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
+        let exact = ExactIndexConfig {
+            column: "worker_id".to_string(),
+            exact_values: vec!["c".to_string()],
+            value_counts: true,
+        };
+        let projections = vec![CoveringProjection::new(
+            "worker-c",
+            "worker_id",
+            ["c"],
+            ["seq", "key", "worker_id"],
+        )];
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                std::slice::from_ref(&exact),
+                &projections,
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            bounds,
+        )
+        .unwrap();
         assert!(swap.bump_rename.is_none());
         assert!(swap.unlink_removed);
         assert_eq!(swap.removed.len(), 3);
@@ -588,6 +610,18 @@ mod tests {
         let mut sorted = keyed.clone();
         sorted.sort();
         assert_eq!(keyed, sorted, "globally sorted by (key, seq)");
+        let bundle = index_bundle::bundle_path(&out);
+        let header = index_bundle::read_header(&bundle).unwrap();
+        let exact = read_exact_section(&bundle, &header, SectionKind::ValueCounts).unwrap();
+        assert_eq!(
+            exact.columns["worker_id"].counts.as_ref().unwrap()[&Some("c".to_string())],
+            1
+        );
+        let reference =
+            parse_projection_reference(&header.section("projection:worker-c").unwrap().coverage)
+                .unwrap();
+        assert_eq!(reference.descriptor.row_count, 1);
+        assert!(crate::store::segment_index::projection_path(&out, &reference).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -655,9 +689,20 @@ mod tests {
         };
 
         // A ceiling holding two of the three segments.
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], one * 2 + 1, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            one * 2 + 1,
+            |_| (None, None),
+        )
         .unwrap();
         assert_eq!(swap.removed.len(), 2, "only the fitting prefix is consumed");
         assert_eq!(
@@ -676,9 +721,20 @@ mod tests {
         );
 
         // A ceiling over the whole job merges it whole, as if uncapped.
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            |_| (None, None),
+        )
         .unwrap();
         assert_eq!(swap.removed.len(), 3);
         assert_eq!(added_seg(&swap).max_seq, max2);
@@ -705,9 +761,20 @@ mod tests {
             output_level: 1,
             output_min_seq: min_bad,
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            |_| (None, None),
+        )
         .expect("an unreadable input must not fail the tick");
         assert!(
             swap.bump_rename.is_some(),
@@ -745,9 +812,20 @@ mod tests {
             output_level: 1,
             output_min_seq: min_gone,
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            |_| (None, None),
+        )
         .expect("a missing input must not fail the tick");
         assert!(
             swap.added.is_none(),
@@ -793,9 +871,20 @@ mod tests {
             output_level: 3,
             output_min_seq: min_gone,
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            |_| (None, None),
+        )
         .expect("a missing single input must not fail the tick");
         assert!(swap.added.is_none(), "a missing input produces no output");
         assert!(
@@ -823,7 +912,21 @@ mod tests {
             output_level: 1,
             output_min_seq: min0,
         };
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], 1, |_| (None, None)).unwrap();
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            1,
+            |_| (None, None),
+        )
+        .unwrap();
         assert!(swap.bump_rename.is_some(), "must degenerate to a rename");
         assert!(!swap.unlink_removed, "a rename leaves nothing to unlink");
         assert_eq!(swap.removed, vec![p0.to_string_lossy().to_string()]);
@@ -871,7 +974,21 @@ mod tests {
             output_min_seq: 1,
         };
         let bounds = |_: &str| (Some(1), Some(n));
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            bounds,
+        )
+        .unwrap();
 
         assert_eq!(added_seg(&swap).row_count, n + 1, "no row loss");
         let out = PathBuf::from(&added_seg(&swap).path);
@@ -906,7 +1023,21 @@ mod tests {
             output_min_seq: 1,
         };
         let bounds = |_: &str| (Some(10), Some(20));
-        let swap = run_job(&job, &dir, &schema(), Some("key"), &[], i64::MAX, bounds).unwrap();
+        let swap = run_job(
+            &job,
+            &dir,
+            &schema(),
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            bounds,
+        )
+        .unwrap();
 
         // It's a bump: a deferred rename, not a rewrite.
         let (from, to) = swap.bump_rename.clone().unwrap();
@@ -939,9 +1070,8 @@ mod tests {
     }
 
     #[test]
-    fn merge_writes_trigram_sidecar_for_data_column() {
-        use crate::store::trigram::{read_column_from_bytes, sidecar_path};
-        let dir = tempdir("tgm_sidecar");
+    fn merge_writes_trigram_bundle_section_for_data_column() {
+        let dir = tempdir("trigram_bundle");
         // Log-form schema with a `data` column (the indexed column).
         let log: SchemaRef = Arc::new(ArrowSchema::new(vec![
             Field::new("seq", DataType::Int64, false),
@@ -963,8 +1093,8 @@ mod tests {
         let (p1, _) =
             write_segment_to_dir(&dir, 0, 1, &mk(1, &["Bootstrap completed for TPU"])).unwrap();
         let (p2, _) = write_segment_to_dir(&dir, 0, 2, &mk(2, &["unrelated heartbeat"])).unwrap();
-        // L0 inputs have no sidecars (intentionally unindexed).
-        assert!(!sidecar_path(&p1).exists());
+        // These direct test fixtures have no derived bundle.
+        assert!(!index_bundle::bundle_path(&p1).exists());
 
         let job = CompactionJob {
             inputs: vec![
@@ -974,16 +1104,30 @@ mod tests {
             output_level: 1,
             output_min_seq: 1,
         };
-        let swap = run_job(&job, &dir, &log, Some("key"), &["data"], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &log,
+            Some("key"),
+            &SegmentIndexConfig::from_policies(["data"], &[], &[], Some("key".to_string())),
+            i64::MAX,
+            |_| (None, None),
+        )
         .unwrap();
 
-        // The merged output carries a sidecar whose mask prunes correctly.
+        // The merged output carries a trigram section whose mask prunes correctly.
         let out = PathBuf::from(&added_seg(&swap).path);
-        let sc = sidecar_path(&out);
-        assert!(sc.exists(), "merge output must have a trigram sidecar");
-        let index = read_column_from_bytes(&std::fs::read(&sc).unwrap(), "data").unwrap();
+        let bundle = index_bundle::bundle_path(&out);
+        assert!(bundle.exists(), "merge output must have an index bundle");
+        let header = index_bundle::read_header(&bundle).unwrap();
+        let section = header.section("trigram:data").unwrap();
+        let coverage =
+            crate::store::segment_index::parse_trigram_coverage(&section.coverage).unwrap();
+        let index = crate::store::trigram::parse_column(
+            &index_bundle::read_section(&bundle, &header, "trigram:data").unwrap(),
+            coverage.span_count,
+        )
+        .unwrap();
         assert_eq!(index.len(), 1, "one row group");
         assert_eq!(
             index.keep_mask("Bootstrap completed for TPU").unwrap(),
@@ -997,8 +1141,8 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_spans_cover_the_written_rows_across_batch_boundaries() {
-        // The prune contract is that the sidecar's spans account for exactly the
+    fn trigram_spans_cover_the_written_rows_across_batch_boundaries() {
+        // The prune contract is that the section's spans account for exactly the
         // segment's rows: the mask is then mapped onto whatever row groups the
         // writer chose. Both sides chunk independently of how the written batches
         // are split, so lock that with input batches whose boundaries straddle a
@@ -1043,7 +1187,7 @@ mod tests {
         assert_eq!(
             index.len(),
             total.div_ceil(SIDECAR_SPAN_ROWS),
-            "the sidecar must carry one Bloom per span of the written rows"
+            "the section must carry one Bloom per span of the written rows"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1082,9 +1226,20 @@ mod tests {
             output_level: 1,
             output_min_seq: 1,
         };
-        let swap = run_job(&job, &dir, &wide, Some("key"), &[], i64::MAX, |_| {
-            (None, None)
-        })
+        let swap = run_job(
+            &job,
+            &dir,
+            &wide,
+            Some("key"),
+            &SegmentIndexConfig::from_policies(
+                Vec::<String>::new(),
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+            i64::MAX,
+            |_| (None, None),
+        )
         .unwrap();
         let batches = read_segment_batches(Path::new(&added_seg(&swap).path)).unwrap();
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();

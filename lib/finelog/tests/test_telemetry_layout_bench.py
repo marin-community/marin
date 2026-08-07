@@ -9,9 +9,9 @@ from finelog.benchmarks.layout_candidates import (
     _aggregate_rollup_batch,
     _merge_rollup_states,
     _rollup_difference_count,
-    _table_digest,
     select_manifest_entries,
     select_partitioned_entries,
+    table_digest,
 )
 from finelog.benchmarks.query_measurement import parse_explain_metrics
 from finelog.benchmarks.telemetry_workload_corpus import (
@@ -205,4 +205,4 @@ def test_result_digest_ignores_insignificant_float_aggregation_order() -> None:
     left = pa.table({"key": ["a"], "value": [1.00000000001]})
     right = pa.table({"key": ["a"], "value": [1.00000000002]})
 
-    assert _table_digest(left) == _table_digest(right)
+    assert table_digest(left) == table_digest(right)

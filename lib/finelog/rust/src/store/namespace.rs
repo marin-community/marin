@@ -20,6 +20,7 @@
 //! persisted: it stamps into a RAM buffer, advances `persisted_seq` to the
 //! freshly allocated seq under the lock, and never writes parquet.
 
+use std::cmp::Reverse;
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,11 +33,12 @@ use tokio::sync::{watch, Notify, RwLock};
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
-use crate::query::sidecar::{read_header, SidecarManager};
+use crate::query::index_cache::IndexCache;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{read_segment_projected, run_job, PlannedSwap};
 use crate::store::compaction::planner::plan;
+use crate::store::exact::{ExactIndexConfig, NAMED_PROJECTION_MARKER};
 use crate::store::policy::StoragePolicy;
 use crate::store::ram_buffer::{stamp_seq_and_build, RamBuffers, SealedBuffer};
 use crate::store::reconcile::reconcile_remote_segments;
@@ -46,18 +48,64 @@ use crate::store::segment::{
     discover_segments, read_segment_footer, segment_layout_is_current, stage_rewritten_segment,
     write_segment_to_dir,
 };
-use crate::store::trigram::{sidecar_path, write_sidecar};
+use crate::store::segment_index::{
+    covering_projection_paths, covering_projection_staging_paths, legacy_artifact_paths,
+    needs_rebuild as segment_index_needs_rebuild, remove_if_exists, write_segment_index,
+    SegmentIndexConfig, SegmentIndexWrite,
+};
 use crate::store::types::{basename, LocalSegment, NamespaceStats, SegmentLocation, SegmentRow};
 
-/// Best-effort removal of a segment's trigram sidecar (`<path>.tgm`), co-located
-/// with every parquet unlink. A missing sidecar (an L0 / unindexed-namespace
-/// segment never had one) is not an error.
-fn remove_sidecar(parquet_path: &str) {
-    let s = sidecar_path(Path::new(parquet_path));
-    if let Err(e) = std::fs::remove_file(&s) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(path = %s.display(), error = %e, "failed to remove trigram sidecar");
+/// Best-effort removal of a segment's derived index files, co-located with every
+/// parquet unlink. Missing artifacts are not errors.
+fn remove_index_artifacts(parquet_path: &str) {
+    let parquet = Path::new(parquet_path);
+    let mut artifacts = vec![
+        (
+            crate::store::index_bundle::bundle_path(parquet),
+            "index bundle",
+        ),
+        (
+            crate::store::index_bundle::staging_path(parquet),
+            "staged index bundle",
+        ),
+    ];
+    artifacts.extend(
+        legacy_artifact_paths(parquet)
+            .into_iter()
+            .map(|path| (path, "legacy index")),
+    );
+    match covering_projection_paths(parquet) {
+        Ok(paths) => artifacts.extend(paths.into_iter().map(|path| (path, "covering projection"))),
+        Err(error) => {
+            tracing::warn!(path = %parquet.display(), %error, "failed to enumerate segment index artifacts");
         }
+    }
+    match covering_projection_staging_paths(parquet) {
+        Ok(paths) => artifacts.extend(
+            paths
+                .into_iter()
+                .map(|path| (path, "staged covering projection")),
+        ),
+        Err(error) => {
+            tracing::warn!(path = %parquet.display(), %error, "failed to enumerate staged segment index artifacts");
+        }
+    }
+    for (path, kind) in artifacts {
+        if let Err(error) = remove_if_exists(&path) {
+            tracing::warn!(path = %path.display(), %error, index_artifact = kind, "failed to remove segment index artifact");
+        }
+    }
+}
+
+fn remove_orphaned_index_artifact(namespace: &str, path: &Path, kind: &str) {
+    if let Err(error) = remove_if_exists(path) {
+        tracing::warn!(
+            namespace,
+            path = %path.display(),
+            index_artifact = kind,
+            %error,
+            "failed to remove orphaned segment index artifact"
+        );
     }
 }
 
@@ -79,28 +127,14 @@ pub const MIN_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 /// Default durability-await budget when the RPC carries no deadline.
 pub const DEFAULT_PERSIST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Whether `segment`'s trigram sidecar is absent or predates one of `indexed`.
-///
-/// Reads only the sidecar's header, so this stays cheap enough to run over every
-/// local segment on each maintenance tick. An unreadable or unrecognized-version
-/// sidecar counts as needing a rebuild — the same conservative direction the
-/// query path takes when it treats one as absent.
-fn sidecar_needs_rebuild(segment: &Path, indexed: &[&str]) -> bool {
-    match read_header(&sidecar_path(segment)) {
-        Some(header) => !header.covers_columns(indexed),
-        None => true,
-    }
-}
-
-/// Trigram sidecars rebuilt per maintenance tick by the background backfill.
+/// Segment index bundles rebuilt per maintenance tick by the background backfill.
 ///
 /// A single index build over a terminal-level segment is heavy (substantial CPU
 /// and RAM), and the backfill is the lowest-priority maintenance work, so this
 /// stays small enough never to starve compaction/sync/eviction. It is four rather
-/// than one so a namespace whose sidecars all need rebuilding — every sidecar
-/// format bump does that — converges in tens of minutes instead of hours, during
-/// which its substring queries scan unpruned.
-pub const BACKFILL_SIDECARS_PER_TICK: usize = 4;
+/// than one so a namespace whose bundles all need rebuilding converges in tens
+/// of minutes instead of hours while queries safely use partial coverage.
+pub const BACKFILL_INDEX_BUNDLES_PER_TICK: usize = 4;
 
 /// Wall-clock a maintenance tick spends re-encoding stale-layout segments.
 ///
@@ -207,9 +241,9 @@ pub struct Namespace {
     /// instead of busy-waiting. Pushed to by `spawn_flush_task` /
     /// `spawn_maintenance_task`; drained by [`shutdown`](Namespace::shutdown).
     task_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
-    /// Segments the sidecar backfill has already rebuilt without reaching
-    /// coverage. See [`SidecarBackfillSkips`].
-    sidecar_backfill_skips: Mutex<SidecarBackfillSkips>,
+    /// Segments the index backfill has already rebuilt without reaching
+    /// coverage. See [`IndexBackfillSkips`].
+    index_backfill_skips: Mutex<IndexBackfillSkips>,
     /// Segments already confirmed to carry the current physical layout.
     ///
     /// Determining staleness means parsing a segment's whole footer, so without
@@ -218,24 +252,28 @@ pub struct Namespace {
     /// long after there is nothing left to rewrite. A path's layout only ever
     /// changes because this pass changed it.
     current_layouts: Mutex<HashSet<String>>,
+    index_cache: Arc<IndexCache>,
+    /// Shared by every namespace in this store so historical projection builds
+    /// cannot saturate the process with concurrent scans and compression.
+    index_backfill_slot: Arc<Mutex<()>>,
 }
 
-/// Segments the sidecar backfill cannot bring up to date, and the indexed set
+/// Segments the index backfill cannot bring up to date, and the indexed set
 /// that verdict was reached under.
 ///
 /// A trigram index covers only the columns a segment actually has: one written
-/// before a column existed indexes nothing for it, and its sidecar can never
+/// before a column existed indexes nothing for it, and its bundle can never
 /// satisfy the rebuild condition. Without this the backfill would re-read and
 /// re-serialize that segment on every maintenance tick forever, at one segment
 /// per tick starving every segment that can still make progress. Enabling
 /// another index resets the verdict, since the new column may well be present.
 #[derive(Default)]
-struct SidecarBackfillSkips {
+struct IndexBackfillSkips {
     indexed: Vec<String>,
     paths: HashSet<String>,
 }
 
-impl SidecarBackfillSkips {
+impl IndexBackfillSkips {
     /// Drop the recorded verdicts when the indexed set changes, and forget
     /// segments that are no longer local (compacted away or evicted).
     fn reconcile(&mut self, indexed: &[&str], live: &HashSet<&str>) {
@@ -248,6 +286,11 @@ impl SidecarBackfillSkips {
         }
         self.paths.retain(|p| live.contains(p.as_str()));
     }
+}
+
+struct BackfillCandidate {
+    path: String,
+    expected_rows: i64,
 }
 
 /// A namespace's sealed local segments as one consistent observation: the files a
@@ -280,6 +323,8 @@ impl Namespace {
         data_dir: Option<PathBuf>,
         catalog: Arc<Catalog>,
         query_visibility: Arc<RwLock<()>>,
+        index_cache: Arc<IndexCache>,
+        index_backfill_slot: Arc<Mutex<()>>,
         remote_log_dir: &str,
         storage_policy: StoragePolicy,
     ) -> Result<Arc<Namespace>, StatsError> {
@@ -361,8 +406,10 @@ impl Namespace {
             stop: Arc::new(Notify::new()),
             stopped: AtomicBool::new(false),
             task_handles: Mutex::new(Vec::new()),
-            sidecar_backfill_skips: Mutex::new(SidecarBackfillSkips::default()),
+            index_backfill_skips: Mutex::new(IndexBackfillSkips::default()),
             current_layouts: Mutex::new(HashSet::new()),
+            index_cache,
+            index_backfill_slot,
         });
 
         // Refresh the catalog from the adopted deque so the segments table
@@ -688,6 +735,9 @@ impl Namespace {
     /// Write the sealed buffer to disk + catalog (no `persisted_seq` advance).
     fn write_sealed(&self, dir: &std::path::Path, sealed: &SealedBuffer) -> Result<(), StatsError> {
         let (path, size) = write_segment_to_dir(dir, 0, sealed.min_seq, &sealed.batch)?;
+        // L0 files are small and short-lived. Derived indexes are built after
+        // compaction promotes them to L1+, keeping flush acknowledgement fast
+        // while query plans merge indexed counts with uncovered L0 data.
         let (min_key, max_key) = self.key_bounds(&sealed.batch);
         let seg = LocalSegment {
             path: path.to_string_lossy().into_owned(),
@@ -808,7 +858,7 @@ impl Namespace {
     /// `max_merge_arrow_bytes` admits — so the committed span comes from the
     /// swap, not the job, and both counts are logged.
     fn run_one_job(&self, dir: &std::path::Path, job: &CompactionJob) -> Result<(), StatsError> {
-        let indexed = self.indexed_columns();
+        let index_config = self.segment_index_config();
         let started = Instant::now();
         tracing::info!(
             namespace = %self.name,
@@ -823,7 +873,7 @@ impl Namespace {
             dir,
             &self.arrow_schema,
             self.key_column.as_deref(),
-            &indexed,
+            &index_config,
             self.compaction_config.max_merge_arrow_bytes,
             |path| self.input_key_bounds(path),
         )?;
@@ -887,6 +937,42 @@ impl Namespace {
             .collect()
     }
 
+    /// Explicit exact row-index and value-count policies for string columns.
+    fn exact_indexes(&self) -> Vec<ExactIndexConfig> {
+        self.schema
+            .columns
+            .iter()
+            .filter(|column| {
+                column.r#type == ColumnType::COLUMN_TYPE_STRING
+                    && (column.index.value_counts || !column.index.exact_values.is_empty())
+            })
+            .map(|column| ExactIndexConfig {
+                column: column.name.clone(),
+                exact_values: column.index.exact_values.clone(),
+                value_counts: column.index.value_counts,
+            })
+            .collect()
+    }
+
+    fn adaptive_count_columns(&self) -> impl Iterator<Item = &str> {
+        self.schema
+            .columns
+            .iter()
+            .filter(|column| column.r#type == ColumnType::COLUMN_TYPE_STRING)
+            .map(|column| column.name.as_str())
+    }
+
+    fn segment_index_config(&self) -> SegmentIndexConfig {
+        SegmentIndexConfig::from_policies(
+            self.indexed_columns(),
+            &self.exact_indexes(),
+            &self.schema.projections,
+            self.key_column.clone(),
+        )
+        .with_adaptive_value_counts(self.adaptive_count_columns())
+        .with_adaptive_group_extrema(self.schema.grouped_extrema.clone())
+    }
+
     /// Recover the typed Int64 key bounds for an input segment from the in-memory
     /// deque (the catalog round-trip stringifies them, losing numeric ordering).
     fn input_key_bounds(&self, path: &str) -> (Option<i64>, Option<i64>) {
@@ -928,18 +1014,47 @@ impl Namespace {
                     to.display()
                 ))
             })?;
-            // Carry the trigram sidecar with the segment it indexes (a bump is a
-            // pure rename, no rewrite, so the index stays valid). Best-effort: a
-            // missing sidecar (the bumped segment was never indexed) is fine.
-            let (sidecar_from, sidecar_to) = (sidecar_path(from), sidecar_path(to));
-            if sidecar_from.exists() {
-                if let Err(e) = std::fs::rename(&sidecar_from, &sidecar_to) {
-                    tracing::warn!(namespace = %self.name, from = %sidecar_from.display(), error = %e, "failed to carry trigram sidecar on level bump");
-                    // The parquet at `from` is gone (renamed to `to`), so no later
-                    // unlink or eviction will ever reach this sidecar — it would
-                    // linger as a stale orphan forever. Drop it; the bumped segment
-                    // then scans unpruned, which is correct.
-                    let _ = std::fs::remove_file(&sidecar_from);
+            // The query path no longer reads legacy containers. A source rename
+            // would orphan them, so delete them instead of carrying them forward.
+            for legacy in legacy_artifact_paths(from) {
+                remove_orphaned_index_artifact(&self.name, &legacy, "legacy index");
+            }
+            let (bundle_from, bundle_to) = (
+                crate::store::index_bundle::bundle_path(from),
+                crate::store::index_bundle::bundle_path(to),
+            );
+            if bundle_from.exists() {
+                if let Err(error) = std::fs::rename(&bundle_from, &bundle_to) {
+                    tracing::warn!(namespace = %self.name, from = %bundle_from.display(), %error, "failed to carry index bundle on level bump");
+                    remove_orphaned_index_artifact(&self.name, &bundle_from, "index bundle");
+                }
+            }
+            if let (Some(directory), Some(from_name), Some(to_name)) =
+                (from.parent(), from.file_name(), to.file_name())
+            {
+                let prefix = format!("{}{NAMED_PROJECTION_MARKER}", from_name.to_string_lossy());
+                match covering_projection_paths(from) {
+                    Ok(projections) => {
+                        for source in projections {
+                            let name = source.file_name().and_then(|name| name.to_str()).unwrap();
+                            let suffix = name.strip_prefix(&prefix).unwrap();
+                            let destination = directory.join(format!(
+                                "{}{NAMED_PROJECTION_MARKER}{suffix}",
+                                to_name.to_string_lossy()
+                            ));
+                            if let Err(error) = std::fs::rename(&source, &destination) {
+                                tracing::warn!(namespace = %self.name, from = %source.display(), %error, "failed to carry covering projection on level bump");
+                                remove_orphaned_index_artifact(
+                                    &self.name,
+                                    &source,
+                                    "covering projection",
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(namespace = %self.name, path = %from.display(), %error, "failed to enumerate covering projections on level bump")
+                    }
                 }
             }
         }
@@ -990,9 +1105,9 @@ impl Namespace {
                         tracing::warn!(namespace = %self.name, path = %path, error = %e, "failed to unlink merged input");
                     }
                 }
-                // The merged output carries a freshly-built sidecar; the inputs'
-                // sidecars are now stale and unlinked with their parquet.
-                remove_sidecar(path);
+                // The merged output carries a fresh bundle; the inputs' derived
+                // indexes are stale and unlinked with their Parquet.
+                remove_index_artifacts(path);
             }
         }
         Ok(())
@@ -1181,120 +1296,123 @@ impl Namespace {
                 tracing::warn!(namespace = %self.name, path = %path, error = %e, "failed to delete evicted segment");
             }
         }
-        // The local trigram sidecar is local-only (never uploaded in v1), so it
-        // is unlinked with the local parquet on eviction.
-        remove_sidecar(path);
+        // Derived indexes are local-only, so they are unlinked with the local
+        // Parquet on eviction.
+        remove_index_artifacts(path);
         removed_bytes
     }
 
-    // ----- trigram sidecar backfill -------------------------------------
+    // ----- segment index backfill ---------------------------------------
 
-    /// Rebuild trigram sidecars for up to `max` local L>=1 segments missing one.
+    /// Rebuild complete segment-index bundles for up to `max` local L>=1 files.
     ///
-    /// Compaction only builds a sidecar for the segments it merges (see
-    /// `executor::run_job`); L0 is intentionally unindexed, and a terminal-level
-    /// segment that never re-merges — or any segment written before sidecars
-    /// existed — stays without a `.tgm` and so scans `contains()`/`LIKE`
-    /// unpruned. This background sweep closes that gap for already-durable data.
-    ///
-    /// Bounded per call and run as the lowest-priority maintenance step so the
-    /// parquet reads + index build can't delay compaction/sync/eviction. A no-op
-    /// for namespaces without the indexed string column. Best-effort per segment
-    /// (a read/build failure only leaves that segment unpruned, never wrong),
-    /// mirroring the compaction-time sidecar write. Returns the number rebuilt.
-    ///
-    /// Writes are atomic (`write_sidecar` renames into place), so a query that
-    /// races the backfill sees either the old (absent) or the complete sidecar,
-    /// never a partial one.
-    fn backfill_missing_sidecars(&self, max: usize) -> usize {
+    /// All methods share one projected source read. The bundle is published
+    /// after every external projection, so a racing query sees either the old
+    /// complete policy or the new complete policy.
+    fn backfill_missing_index_bundles(&self, max: usize) -> usize {
         if self.data_dir.is_none() || max == 0 {
             return 0;
         }
-        // Only namespaces with at least one indexed column benefit; skip the
-        // parquet reads entirely otherwise.
-        let indexed = self.indexed_columns();
-        if indexed.is_empty() {
+        let config = self.segment_index_config();
+        if config.is_empty() {
             return 0;
         }
-        // A segment needs a sidecar when it has none, or when the one it has
-        // predates a column gaining its index — enabling an index on a live
-        // namespace is otherwise silently ineffective for existing segments,
-        // since file existence alone cannot tell the two cases apart.
-        let candidates: Vec<String> = {
-            let inner = self.inner.lock().unwrap();
-            let mut skips = self.sidecar_backfill_skips.lock().unwrap();
-            let live: HashSet<&str> = inner
-                .local_segments
-                .iter()
-                .map(|s| s.path.as_str())
-                .collect();
-            skips.reconcile(&indexed, &live);
-            inner
-                .local_segments
-                .iter()
-                .filter(|s| s.level >= 1)
-                .map(|s| s.path.clone())
-                .filter(|p| !skips.paths.contains(p))
-                .filter(|p| sidecar_needs_rebuild(Path::new(p), &indexed))
-                .take(max)
-                .collect()
+        let Ok(_slot) = self.index_backfill_slot.try_lock() else {
+            return 0;
         };
-        // The index only reads the indexed columns and the key, so project to
-        // those: a full read materializes every column as uncompressed Arrow,
-        // which is what makes this the heaviest maintenance step.
-        let mut projection: Vec<&str> = indexed.clone();
-        if let Some(key) = self.key_column.as_deref() {
-            if !projection.contains(&key) {
-                projection.push(key);
-            }
-        }
+        let segments: Vec<LocalSegment> = self
+            .inner
+            .lock()
+            .unwrap()
+            .local_segments
+            .iter()
+            .cloned()
+            .collect();
+        let fingerprint = format!("{:?}", config.policy_fingerprint());
+        let candidates = {
+            let mut skips = self.index_backfill_skips.lock().unwrap();
+            let live: HashSet<&str> = segments
+                .iter()
+                .map(|segment| segment.path.as_str())
+                .collect();
+            skips.reconcile(&[fingerprint.as_str()], &live);
+            let mut candidates = segments
+                .iter()
+                .filter(|segment| !skips.paths.contains(&segment.path))
+                .filter(|segment| {
+                    segment.level >= 1
+                        && self.layout_is_current(&segment.path)
+                        && segment_index_needs_rebuild(
+                            Path::new(&segment.path),
+                            segment.row_count,
+                            &config,
+                        )
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|segment| Reverse(segment.max_seq));
+            candidates
+                .into_iter()
+                .take(max)
+                .map(|segment| BackfillCandidate {
+                    path: segment.path.clone(),
+                    expected_rows: segment.row_count,
+                })
+                .collect::<Vec<_>>()
+        };
+        let projection = config.input_columns();
         let mut built = 0;
-        for path in candidates {
-            let p = Path::new(&path);
-            let batches = match read_segment_projected(p, Some(&projection)) {
+        for candidate in candidates {
+            let path = Path::new(&candidate.path);
+            let batches = match read_segment_projected(path, Some(&projection)) {
                 Ok(batches) => batches,
-                Err(e) => {
-                    tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: read failed");
+                Err(error) => {
+                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill read failed");
                     continue;
                 }
             };
-            match write_sidecar(p, &batches, &indexed, self.key_column.as_deref()) {
-                Ok(true) => {
-                    // The rewrite reuses the path, and the query cache keys on
-                    // path alone, so a reader holding the replaced header would
-                    // address the new file at the old offsets.
-                    SidecarManager::global().invalidate(&sidecar_path(p));
+            match write_segment_index(path, &batches, &config) {
+                Ok(SegmentIndexWrite::Written) => {
+                    self.index_cache
+                        .invalidate(&crate::store::index_bundle::bundle_path(path));
                     built += 1;
-                    tracing::debug!(namespace = %self.name, path = %path, "backfilled trigram sidecar");
+                    tracing::debug!(namespace = %self.name, path = %candidate.path, "backfilled segment index bundle");
                 }
-                Ok(false) => {}
-                Err(e) => {
-                    tracing::warn!(namespace = %self.name, path = %path, error = %e, "sidecar backfill: write failed")
+                Ok(SegmentIndexWrite::NotApplicable) => {}
+                Err(error) => {
+                    tracing::warn!(namespace = %self.name, path = %candidate.path, %error, "index backfill write failed");
+                    continue;
                 }
             }
-            // A rebuild that left the segment still qualifying is a rebuild that
-            // can never stop qualifying: the columns it is short of are not in
-            // the segment to index.
-            if sidecar_needs_rebuild(p, &indexed) {
-                tracing::debug!(
-                    namespace = %self.name,
-                    path = %path,
-                    "sidecar backfill: segment predates an indexed column; not retrying"
-                );
-                self.sidecar_backfill_skips
+            if segment_index_needs_rebuild(path, candidate.expected_rows, &config) {
+                tracing::debug!(namespace = %self.name, path = %candidate.path, "segment cannot satisfy the current index policy; not retrying");
+                self.index_backfill_skips
                     .lock()
                     .unwrap()
                     .paths
-                    .insert(path);
+                    .insert(candidate.path);
             }
         }
         built
     }
 
+    fn layout_is_current(&self, path: &str) -> bool {
+        if self.current_layouts.lock().unwrap().contains(path) {
+            return true;
+        }
+        if !segment_layout_is_current(Path::new(path)) {
+            return false;
+        }
+        self.current_layouts
+            .lock()
+            .unwrap()
+            .insert(path.to_string());
+        true
+    }
+
     // ----- maintenance orchestration ------------------------------------
 
     /// Run one full maintenance cycle: `flush -> compact -> sync -> evict ->
-    /// backfill sidecars`, serialized against other maintenance callers via
+    /// backfill indexes`, serialized against other maintenance callers via
     /// `maint_lock`.
     ///
     /// Supports an optional forced L0->L1 (the debug `force_compact_l0` flag).
@@ -1350,10 +1468,10 @@ impl Namespace {
 
         // Backfill (blocking parquet reads + index build). Last + bounded so it is
         // the lowest-priority work: older/terminal segments compaction never
-        // indexed get their trigram sidecars rebuilt a few per tick.
+        // indexed get their bundles rebuilt a few per tick.
         let ns = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
-            ns.backfill_missing_sidecars(BACKFILL_SIDECARS_PER_TICK)
+            ns.backfill_missing_index_bundles(BACKFILL_INDEX_BUNDLES_PER_TICK)
         })
         .await
         .map_err(|e| StatsError::Internal(format!("maintenance backfill task panicked: {e}")))?;
@@ -1383,10 +1501,10 @@ impl Namespace {
     /// already flipped to `Both` is never re-uploaded. Its remote copy keeps the
     /// old layout while holding identical rows, and ages out normally.
     ///
-    /// The trigram sidecar is left alone deliberately — spans are a fixed row
-    /// count, independent of row groups, and the prune reads each segment's
-    /// actual layout — so a rewritten segment keeps pruning with the sidecar it
-    /// already had.
+    /// Bundles on UUID-stamped segments remain valid because the rewrite
+    /// preserves segment ID, rows, and row order. Rewriting an older unstamped
+    /// segment replaces its local generation identity with a UUID, so its bundle
+    /// safely falls back until the next index-backfill pass rebuilds it.
     fn rewrite_stale_layouts(&self, budget: Duration) -> usize {
         if self.data_dir.is_none() {
             return 0;
@@ -1469,8 +1587,7 @@ impl Namespace {
                 .collect()
         };
         for (path, size) in candidates {
-            if segment_layout_is_current(Path::new(&path)) {
-                self.current_layouts.lock().unwrap().insert(path);
+            if self.layout_is_current(&path) {
                 continue;
             }
             return Some((path, size));
@@ -2015,6 +2132,8 @@ mod tests {
             data_dir,
             catalog,
             Arc::new(RwLock::new(())),
+            crate::query::index_cache::test_index_cache(),
+            Arc::new(Mutex::new(())),
             "",
             StoragePolicy::default(),
         )
@@ -2036,6 +2155,8 @@ mod tests {
             data_dir,
             catalog,
             Arc::new(RwLock::new(())),
+            crate::query::index_cache::test_index_cache(),
+            Arc::new(Mutex::new(())),
             remote_log_dir,
             policy,
         )
@@ -2290,7 +2411,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    // --- trigram sidecar backfill ---------------------------------------
+    // --- segment index backfill -----------------------------------------
 
     /// Log-form schema carrying the trigram-indexed `data` string column.
     fn data_schema() -> Schema {
@@ -2301,6 +2422,104 @@ mod tests {
             ],
             "timestamp_ms",
         ))
+    }
+
+    fn exact_data_schema() -> Schema {
+        with_implicit_seq(
+            Schema::new(
+                vec![
+                    Column::new("data", ColumnType::COLUMN_TYPE_STRING, false)
+                        .with_exact_values(["log line 0 searchable text"])
+                        .with_value_counts(),
+                    Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                ],
+                "timestamp_ms",
+            )
+            .with_covering_projection(crate::store::schema::CoveringProjection::new(
+                "matching-lines",
+                "data",
+                ["log line 0 searchable text"],
+                ["seq", "data", "timestamp_ms"],
+            )),
+        )
+    }
+
+    #[tokio::test]
+    async fn low_cardinality_counts_are_automatic_for_string_columns() {
+        let dir = tempdir();
+        let ns = open_ns(
+            "logs",
+            data_schema(),
+            Some(dir.join("logs")),
+            Arc::new(Catalog::open(Some(&dir)).unwrap()),
+        );
+
+        assert!(ns.segment_index_config().indexes.iter().any(|index| {
+            matches!(
+                index,
+                crate::store::segment_index::IndexSpec::AdaptiveValueCounts { column }
+                    if column == "data"
+            )
+        }));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn grouped_extrema_are_declared_instead_of_column_inferred() {
+        let dir = tempdir();
+        let schema = Schema::new(
+            vec![
+                Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                Column::new("service", ColumnType::COLUMN_TYPE_STRING, false),
+                Column::new(
+                    "resource_attributes_json",
+                    ColumnType::COLUMN_TYPE_STRING,
+                    false,
+                ),
+            ],
+            "timestamp_ms",
+        );
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let undeclared = open_ns(
+            "same_columns_without_policy",
+            with_implicit_seq(schema.clone()),
+            Some(dir.join("same_columns_without_policy")),
+            Arc::clone(&catalog),
+        );
+        assert!(!undeclared
+            .segment_index_config()
+            .indexes
+            .iter()
+            .any(|index| {
+                matches!(
+                    index,
+                    crate::store::segment_index::IndexSpec::AdaptiveGroupExtrema { .. }
+                )
+            }));
+
+        let config = crate::store::group_extrema::GroupExtremaConfig::new(
+            "service",
+            "resource_attributes_json",
+            "job_id",
+            "timestamp_ms",
+        );
+        let declared = open_ns(
+            "declared_policy",
+            with_implicit_seq(schema.with_grouped_extrema(config)),
+            Some(dir.join("declared_policy")),
+            catalog,
+        );
+        assert!(declared.segment_index_config().indexes.iter().any(|index| {
+            matches!(
+                index,
+                crate::store::segment_index::IndexSpec::AdaptiveGroupExtrema { config }
+                    if config.filter_column == "service"
+                        && config.json_column == "resource_attributes_json"
+                        && config.json_key == "job_id"
+                        && config.extrema_column == "timestamp_ms"
+            )
+        }));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// `n` rows of searchable `data` + monotonic `timestamp_ms` (non-seq columns
@@ -2325,13 +2544,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn backfill_rebuilds_missing_trigram_sidecar() {
+    async fn backfill_rebuilds_missing_index_bundle() {
         let dir = tempdir();
         let ns_dir = dir.join("log.test");
         let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
         let ns = open_ns("log.test", data_schema(), Some(ns_dir.clone()), catalog);
 
-        // Two L0 flushes merged to one L1 — the merge builds the sidecar.
+        // Two L0 flushes merged to one L1 — the merge builds the bundle.
         ns.append_aligned_batch(&data_aligned(5, 0));
         ns.flush_once().unwrap();
         let last = ns.append_aligned_batch(&data_aligned(5, 5));
@@ -2340,24 +2559,92 @@ mod tests {
             .await
             .unwrap();
         // run_maintenance wraps the merge in spawn_blocking (commit_swap takes the
-        // blocking query-visibility lock); a multi-input merge builds the sidecar.
+        // blocking query-visibility lock); a multi-input merge builds the bundle.
         ns.run_maintenance(true).await.unwrap();
 
         let segs = discover_segments(&ns_dir);
         assert_eq!(segs.len(), 1, "two L0 merged into one L1");
-        let sidecar = sidecar_path(&segs[0]);
-        assert!(sidecar.exists(), "the merge wrote a sidecar");
+        let bundle = crate::store::index_bundle::bundle_path(&segs[0]);
+        assert!(bundle.exists(), "the merge wrote an index bundle");
 
         // Simulate a segment compaction never indexed (single-input bump, or one
-        // written before sidecars existed): drop the sidecar.
-        std::fs::remove_file(&sidecar).unwrap();
-        assert!(!sidecar.exists());
+        // written before indexes existed): drop the bundle.
+        std::fs::remove_file(&bundle).unwrap();
+        assert!(!bundle.exists());
 
-        // The backfill rebuilds exactly the one missing sidecar, then idles.
-        assert_eq!(ns.backfill_missing_sidecars(10), 1);
-        assert!(sidecar.exists(), "backfill rebuilt the sidecar");
-        assert_eq!(ns.backfill_missing_sidecars(10), 0, "nothing left to do");
+        // The backfill rebuilds exactly the one missing bundle, then idles.
+        assert_eq!(ns.backfill_missing_index_bundles(10), 1);
+        assert!(bundle.exists(), "backfill rebuilt the bundle");
+        assert_eq!(
+            ns.backfill_missing_index_bundles(10),
+            0,
+            "nothing left to do"
+        );
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn exact_backfill_rebuilds_a_missing_filtered_projection() {
+        let dir = tempdir();
+        let ns_dir = dir.join("telemetry.test");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "telemetry.test",
+            exact_data_schema(),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+        ns.append_aligned_batch(&data_aligned(5, 0));
+        ns.flush_once().unwrap();
+        ns.run_maintenance(true).await.unwrap();
+
+        let segments = discover_segments(&ns_dir);
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("seg_L1_"));
+        let bundle = crate::store::index_bundle::bundle_path(&segments[0]);
+        let projection = crate::store::exact::named_projection_path(&segments[0], "matching-lines");
+        assert!(bundle.exists());
+        assert!(projection.exists());
+        std::fs::remove_file(&projection).unwrap();
+
+        assert_eq!(ns.backfill_missing_index_bundles(10), 1);
+        assert!(projection.exists());
+        assert_eq!(ns.backfill_missing_index_bundles(10), 0);
+
+        assert!(crate::store::index_bundle::bundle_path(&segments[0]).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn l0_does_not_write_derived_index_artifacts() {
+        let dir = tempdir();
+        let ns_dir = dir.join("telemetry.test");
+        let catalog = Arc::new(Catalog::open(Some(&dir)).unwrap());
+        let ns = open_ns(
+            "telemetry.test",
+            exact_data_schema(),
+            Some(ns_dir.clone()),
+            catalog,
+        );
+        ns.append_aligned_batch(&data_aligned(5, 0));
+        ns.flush_once().unwrap();
+
+        let segments = discover_segments(&ns_dir);
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("seg_L0_"));
+        assert!(!crate::store::index_bundle::bundle_path(&segments[0]).exists());
+        assert!(
+            !crate::store::exact::named_projection_path(&segments[0], "matching-lines").exists()
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -2382,12 +2669,12 @@ mod tests {
             .unwrap();
         ns.run_maintenance(true).await.unwrap();
 
-        assert_eq!(ns.backfill_missing_sidecars(10), 0);
+        assert_eq!(ns.backfill_missing_index_bundles(10), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A column indexed after a segment was written is not in that segment to
-    /// index, so its sidecar can never satisfy the rebuild condition. The
+    /// index, so its bundle can never satisfy the rebuild condition. The
     /// backfill must try once and drop it, or it re-reads that segment on every
     /// tick and never reaches the segments that can still be indexed.
     #[tokio::test]
@@ -2414,7 +2701,10 @@ mod tests {
         before.run_maintenance(true).await.unwrap();
         let segs = discover_segments(&ns_dir);
         assert_eq!(segs.len(), 1, "two L0 merged into one L1");
-        assert!(!sidecar_path(&segs[0]).exists(), "nothing was indexed yet");
+        assert!(
+            crate::store::index_bundle::bundle_path(&segs[0]).exists(),
+            "the original string columns receive adaptive counts"
+        );
         before.shutdown(Duration::from_secs(10)).await;
 
         // Reopen with `data` added and indexed, as `merge_schemas` would leave it.
@@ -2428,11 +2718,15 @@ mod tests {
             catalog,
         );
 
-        assert_eq!(after.backfill_missing_sidecars(10), 0, "nothing to index");
+        assert_eq!(
+            after.backfill_missing_index_bundles(10),
+            1,
+            "available adaptive sections are rebuilt once"
+        );
         let path = segs[0].to_string_lossy().to_string();
         assert!(
             after
-                .sidecar_backfill_skips
+                .index_backfill_skips
                 .lock()
                 .unwrap()
                 .paths
@@ -2442,16 +2736,11 @@ mod tests {
 
         // Indexing another column is a new question, so the verdict is dropped.
         after
-            .sidecar_backfill_skips
+            .index_backfill_skips
             .lock()
             .unwrap()
             .reconcile(&["data", "worker_id"], &HashSet::from([path.as_str()]));
-        assert!(after
-            .sidecar_backfill_skips
-            .lock()
-            .unwrap()
-            .paths
-            .is_empty());
+        assert!(after.index_backfill_skips.lock().unwrap().paths.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -2655,11 +2944,14 @@ mod tests {
 
         write_one(&ns).await;
         ns.run_maintenance(true).await.unwrap(); // L1 #1, uploaded, BOTH
-        let first_l1: Vec<_> = std::fs::read_dir(&ns_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("seg_L1_"))
-            .map(|e| e.path())
+        let first_l1: Vec<_> = discover_segments(&ns_dir)
+            .into_iter()
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("seg_L1_")
+            })
             .collect();
         assert_eq!(first_l1.len(), 1);
 
@@ -2667,11 +2959,14 @@ mod tests {
         ns.run_maintenance(true).await.unwrap(); // L1 #2; cap=1 evicts oldest
 
         // Local L1 files: exactly one remains, and it is NOT the first one.
-        let local_l1: Vec<_> = std::fs::read_dir(&ns_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("seg_L1_"))
-            .map(|e| e.path())
+        let local_l1: Vec<_> = discover_segments(&ns_dir)
+            .into_iter()
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("seg_L1_")
+            })
             .collect();
         assert_eq!(local_l1.len(), 1, "evicted oldest local L1");
         assert!(!first_l1[0].exists(), "oldest local file unlinked");
@@ -2714,10 +3009,14 @@ mod tests {
         ns.run_maintenance(true).await.unwrap();
         write_one(&ns).await;
         ns.run_maintenance(true).await.unwrap();
-        let local_l1 = std::fs::read_dir(&ns_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("seg_L1_"))
+        let local_l1 = discover_segments(&ns_dir)
+            .into_iter()
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("seg_L1_")
+            })
             .count();
         assert_eq!(local_l1, 2, "LOCAL-only segments are never evicted");
         std::fs::remove_dir_all(&dir).ok();
