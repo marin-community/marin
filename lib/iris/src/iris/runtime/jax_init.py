@@ -104,10 +104,11 @@ def configure_jax_compilation_cache() -> None:
     on JAX's ``xla_flags_to_exclude_from_cache_key`` list, so naming it in
     ``XLA_FLAGS`` does not perturb the compilation cache key.
 
-    Autotuning runs only on a compilation-cache miss, which is exactly when it
-    is expensive: a cold GB200 compile spends most of its time in Triton and
-    CUTLASS autotune sweeps. Keeping that on the node makes misses cheaper
-    without making hits rarer.
+    Autotuning runs only on a compilation-cache miss, so a node-local autotune
+    cache makes misses cheaper without making hits rarer. How much cheaper
+    depends on how much of the model XLA actually autotunes: a four-layer MoE
+    whose matmuls go through QuACK and CUTLASS custom calls showed no measurable
+    difference between a warm and a cold autotune directory.
 
     An explicit ``JAX_COMPILATION_CACHE_DIR`` or ``jax.config`` setting picks the
     JAX cache location; otherwise it lands under the cluster's region-local
