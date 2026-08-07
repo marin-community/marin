@@ -84,6 +84,15 @@ class VllmEngineConfig:
     max_num_batched_tokens: int | None = None
     max_num_seqs: int | None = None
     extra_args: tuple[str, ...] = ()
+    uv_with_packages: tuple[str, ...] = ()
+    """Extra packages installed into the isolated CUDA vLLM env (``uvx --with``).
+
+    For kernel artifact packages the runtime image cannot JIT-compile itself, e.g.
+    ``flashinfer-cubin`` / ``flashinfer-jit-cache`` (no nvcc on CoreWeave images).
+    CUDA launcher only."""
+    uv_extra_index_urls: tuple[str, ...] = ()
+    """Additional package indexes for ``uv_with_packages`` (``uvx --index``), e.g.
+    ``https://flashinfer.ai/whl/cu130/`` for ``flashinfer-jit-cache``."""
 
     def __post_init__(self) -> None:
         if self.startup_timeout_seconds <= 0:
@@ -94,6 +103,8 @@ class VllmEngineConfig:
             raise ValueError("max_num_seqs must be positive")
         if self.source is VllmSource.MARIN_FORK and self.launcher is not VllmLauncherType.CUDA:
             raise ValueError("the Marin vLLM fork source requires the CUDA launcher")
+        if (self.uv_with_packages or self.uv_extra_index_urls) and self.launcher is not VllmLauncherType.CUDA:
+            raise ValueError("uv_with_packages / uv_extra_index_urls require the CUDA launcher")
 
 
 @dataclass(frozen=True)

@@ -76,6 +76,23 @@ class InferenceWorkerMetadata:
     backend_name: str
 
 
+@dataclass(frozen=True)
+class BrokerStats:
+    """Point-in-time snapshot of the broker's queue, for run monitoring.
+
+    ``queued`` requests are waiting for a worker, ``leased`` are held by one right now, and
+    ``responses_ready`` are answered but not yet picked up by the proxy. ``completed_total``
+    counts every response the broker has accepted since it started, which is what a monitor
+    differentiates to get throughput.
+    """
+
+    queued: int
+    leased: int
+    responses_ready: int
+    workers: int
+    completed_total: int
+
+
 # Brokers route payloads only; callers own broker and worker lifecycle.
 class InferenceRequestProvider(Protocol):
     def fetch_requests(self, *, max_items: int) -> list[LeasedInferenceRequest]: ...
@@ -91,3 +108,7 @@ class InferenceResponseProvider(Protocol):
     def submit_request(self, request: InferenceRequest) -> None: ...
 
     def fetch_responses(self, *, max_items: int) -> list[InferenceResponse]: ...
+
+
+class BrokerStatsProvider(Protocol):
+    def stats(self) -> BrokerStats: ...

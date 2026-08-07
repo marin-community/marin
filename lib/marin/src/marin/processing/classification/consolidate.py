@@ -142,6 +142,7 @@ def consolidate(
     filetype: str = "jsonl.gz",
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     map_task_resources: ResourceConfig | None = None,
 ) -> ZephyrExecutionResult:
     """Consolidate documents by applying filters based on attributes.
@@ -186,11 +187,14 @@ def consolidate(
         # Drop rejected docs before the next join so its key extractor never sees None.
         ds = ds.filter(lambda r: r is not None)
 
-    ctx = ZephyrContext(
-        name="consolidate-filter",
-        max_workers=max_workers,
-        resources=worker_resources or ResourceConfig(cpu=2, ram="4g"),
-    )
+    ctx_kwargs: dict = {
+        "name": "consolidate-filter",
+        "max_workers": max_workers,
+        "resources": worker_resources or ResourceConfig(cpu=2, ram="4g"),
+    }
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
+    ctx = ZephyrContext(**ctx_kwargs)
     return ctx.execute(
         ds.write_parquet(f"{output_path}/part-{{shard:05d}}-of-{{total:05d}}.parquet"),
         map_task_resources=map_task_resources,

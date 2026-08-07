@@ -491,6 +491,7 @@ def decon_to_parquet(
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
 ) -> DeconAttributes:
     """Mark records in *normalized_data* that overlap with eval text.
@@ -542,6 +543,11 @@ def decon_to_parquet(
         worker_resources: Per-shard resource request for the marking pipeline.
             Defaults to 2 CPU / 4GB RAM.
         max_workers: Max Zephyr workers. Defaults to Zephyr's own default.
+        coordinator_resources: Resources for the Zephyr coordinator actor.
+            Defaults to Zephyr's own 1 GB, which is not enough headroom for the
+            coordinator process itself on every deployment; exceeding it is an
+            OOM kill (exit 137) near the end of the stage rather than a graceful
+            failure, and it is not a function of shard count.
 
     Returns:
         :class:`DeconAttributes` describing the output dataset and counters.
@@ -585,6 +591,8 @@ def decon_to_parquet(
     ctx_kwargs: dict[str, Any] = {"name": "decon-mark", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
     outcome = ctx.execute(
         pipeline,
@@ -1032,6 +1040,7 @@ def build_all_source_drop_sets(
     global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
 ) -> AllSourceDropSets:
     """Build per-source and cross-source common eval-ngram drop sets.
@@ -1106,6 +1115,8 @@ def build_all_source_drop_sets(
     ctx_kwargs: dict[str, Any] = {"name": "decon-drop-set", "resources": resources}
     if max_workers is not None:
         ctx_kwargs["max_workers"] = max_workers
+    if coordinator_resources is not None:
+        ctx_kwargs["coordinator_resources"] = coordinator_resources
     ctx = zephyr_context or ZephyrContext(**ctx_kwargs)
     outcome = ctx.execute(
         pipeline,
@@ -1148,6 +1159,7 @@ def all_source_drop_sets_step(
     global_common_min_sources: int,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
@@ -1213,6 +1225,7 @@ def all_source_drop_sets_step(
             global_common_min_sources=global_common_min_sources,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            coordinator_resources=coordinator_resources,
             zephyr_context=zephyr_context,
         ),
         deps=[prebuilt_bloom, *source_dependencies],
@@ -1240,6 +1253,7 @@ def decon_step(
     false_positive_rate: float = 1e-9,
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
+    coordinator_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
     output_path_prefix: str | None = None,
     override_output_path: str | None = None,
@@ -1347,6 +1361,7 @@ def decon_step(
                 flagged_sample_size=flagged_sample_size,
                 worker_resources=worker_resources,
                 max_workers=max_workers,
+                coordinator_resources=coordinator_resources,
                 zephyr_context=zephyr_context,
             ),
             deps=[*norm_deps, bloom_step, *drop_deps],
@@ -1378,6 +1393,7 @@ def decon_step(
             false_positive_rate=false_positive_rate,
             worker_resources=worker_resources,
             max_workers=max_workers,
+            coordinator_resources=coordinator_resources,
             zephyr_context=zephyr_context,
         ),
         deps=[*norm_deps, *eval_steps, *drop_deps],

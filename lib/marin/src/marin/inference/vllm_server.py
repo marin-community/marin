@@ -134,6 +134,11 @@ class IsolatedCudaVllm:
     from ``tool.uv.sources.vllm``)."""
     # Match the workspace interpreter so cloudpickled entrypoints stay compatible.
     python_version: str = WORKER_PYTHON_VERSION
+    with_packages: tuple[str, ...] = ()
+    """Extra ``uvx --with`` package specs, e.g. prebuilt FlashInfer kernel artifacts
+    (``flashinfer-cubin``, ``flashinfer-jit-cache``) that sidestep the missing-nvcc JIT path."""
+    extra_index_urls: tuple[str, ...] = ()
+    """Additional ``uvx --index`` URLs for :attr:`with_packages`."""
 
     def __post_init__(self) -> None:
         if self.source is VllmType.UPSTREAM and not self.version:
@@ -144,12 +149,19 @@ class IsolatedCudaVllm:
             from_spec = VLLM_FORK_REQUIREMENT
         else:
             from_spec = f"vllm[runai]=={self.version}"
-        return [
+        command = [
             "uvx",
             "--from",
             from_spec,
             "--with",
             _RUNAI_STREAMER_REQUIREMENT,
+        ]
+        for package in self.with_packages:
+            command += ["--with", package]
+        for index_url in self.extra_index_urls:
+            command += ["--index", index_url]
+        return [
+            *command,
             "--python",
             self.python_version,
             "--torch-backend",
@@ -159,9 +171,11 @@ class IsolatedCudaVllm:
 
     def env(self) -> dict[str, str]:
         # CoreWeave runtime images run without nvcc. FlashInfer would otherwise JIT-compile its
-        # sampling kernel; the native/Triton sampler needs no compiler. The same gap breaks the
-        # FlashInfer GDN prefill kernel for gated-delta-net archs (Qwen qwen_gdn_linear_attn) —
-        # callers pass `--gdn-prefill-backend triton` in vLLM extra arguments.
+        # sampling kernel; the native/Triton sampler needs no compiler. The same gap affects every
+        # other FlashInfer JIT path (Blackwell attention, GDN prefill for gated-delta-net archs) —
+        # callers who want those backends ship prebuilt artifacts via `with_packages`
+        # (flashinfer-cubin / flashinfer-jit-cache, pinned to vLLM's flashinfer-python version), or
+        # else pass `--gdn-prefill-backend triton` in vLLM extra arguments.
         # Both variants install the Run:ai loader and may receive an s3:// path from Marin's regional
         # model cache. CoreWeave rejects the loader's default path-style S3 requests.
         environment = {
@@ -174,6 +188,12 @@ class IsolatedCudaVllm:
 
     def cache_identity(self) -> str:
         source = VLLM_FORK_REQUIREMENT if self.source is VllmType.MARIN_FORK else f"vllm=={self.version}"
+        if self.with_packages:
+            source += ":" + ",".join(self.with_packages)
+        if self.extra_index_urls:
+            # Distinct indexes can serve different builds of the same requirement
+            # (e.g. cu130-vs-cu129 FlashInfer), so they must not share a compilation cache.
+            source += ":" + ",".join(sorted(self.extra_index_urls))
         return f"cuda:{source}:{self.python_version}:{_CUDA_TORCH_BACKEND}"
 
 
