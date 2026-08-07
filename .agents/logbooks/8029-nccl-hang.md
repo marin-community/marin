@@ -196,6 +196,14 @@ author: power
 
 ## Event Log
 
+### 2026-08-07 11:05 UTC - Correction: the old-code bisect was launched and produced no verdict
+
+- My final report on #8029 said the bisect at `5e496b051` remained staged and unrun. That is wrong. Job `/power/mhf-8rack-oldcode-20260807-coord` exists, ran 128 tasks across eight racks for 51 minutes 35 seconds per task, and ended `killed ... Terminated by user` when I turned capacity down during wrap-up.
+- It never reached step 0. Every faulthandler dump captured at teardown puts its rank inside `jax/_src/compiler.py backend_compile_and_load`, reached through `_run_grug_local`; no rank logged a training step, a loss or a step rate. The job spent its whole life in setup and the cold first compile.
+- One thing it did establish: the old lockfile resolves `nvidia-nccl-cu13==2.28.9` inside the container, which the 08:55 entry had only predicted. The bisect endpoint is therefore correctly configured for whenever it is rerun.
+- Cost: 128 tasks times 51.5 minutes, roughly 440 GPU-hours, for no result. Rerunning it needs a warm compilation cache or a much longer budget before the first step; a cold 300B compile at this shape did not finish inside 51 minutes.
+- The substantive conclusion on #8029 is unchanged, because a job that never reached step 0 carries no evidence either way about a wedge that appears between steps 17 and 183.
+
 ### 2026-08-07 10:45 UTC - The NCCL pin broke iris CI; expressed as a floor instead
 
 - `unit (iris)` failed on `test_restores_cuda13_shared_library_package_when_present[nvidia-nccl-cu13-2.28.9-...]`, which passes on `origin/main` at `839e5e9e18` and failed on this branch, so the branch broke it.
