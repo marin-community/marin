@@ -340,3 +340,21 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Controller: `/dlwh/grug-xem-d768-smoke-20260806`, https://iris.oa.dev/#/job/%2Fdlwh%2Fgrug-xem-d768-smoke-20260806.
 - Result: the first controller submit was rejected before job creation because a `--reserve v5p-8` availability constraint combined with the controller's non-preemptible tag had no schedulable central1 group. The resubmit used the established one-CPU Marin controller shape; all three child steps retain their central1 v5p-8 `ResourceConfig`. Iris accepted the controller, and one subagent owns continuous monitoring via `scratch/20260806-1753_monitoring_state.json`.
 - Next action: require all three 500-step arms to finish with finite loss, active routing, and zero overflow. If they pass, launch the matched 8,453-step matrix from the same snapshot and region.
+
+### 2026-08-06 18:35 - GRUG-XEM-004 d768 smoke gate and full launch
+
+- Hypothesis: The two-anchor middle-four topology remains stable at d768 and its full-schedule Paloma gap can be measured without a smoke-stage routing or memory failure.
+- Commit Hash: `85b3942f920e9c8f083891c5561ddd16d4b7ce59`.
+- Commands: the corrected smoke resubmit and exact full-matrix command are recorded in `scratch/20260806-1753_monitoring_state.json` and `scratch/20260806-1830-d768-full-monitoring_state.json`. Both use a one-CPU Iris controller, direct `WANDB_API_KEY` expansion, child v5p-8 resources, and `MARIN_PREFIX=gs://marin-us-central1`.
+- Config: d768, eight layers, sequence length 4096, batch 128. Smoke used 500 steps and 262,144,000 tokens per arm. Full runs use 8,453 steps and 4,431,806,464 tokens per arm for untied, middle-four unscaled, and middle-four `1/sqrt(4)` variants.
+- Result:
+
+  | Smoke variant | Paloma macro | Delta | Tokens/s | Routing entropy | Overflow |
+  |---|---:|---:|---:|---:|---:|
+  | Untied | 4.329813 | — | 288,542 | 5.531397 | 0 |
+  | Middle-four unscaled | 4.345620 | +0.015807 | 292,919 | 5.529754 | 0 |
+  | Middle-four `1/sqrt(4)` | 4.353538 | +0.023725 | 292,240 | 5.532593 | 0 |
+
+  All smoke arms finished exactly 262,144,000 tokens with finite loss. Mid-run checks found all 256 experts active in every layer, no routing collapse, and no OOM or runtime error. Permanent step-500 checkpoint metadata and artifact markers exist for all three variants. Iris accepted full controller [`/dlwh/grug-xem-d768-full-20260806`](https://iris.oa.dev/#/job/%2Fdlwh%2Fgrug-xem-d768-full-20260806); all three child TPU jobs and W&B runs reached running state with zero initial failures or preemptions.
+- Interpretation: the d768 smoke passes the stability gate. At 500 steps, unscaled tying is +0.01581 Paloma and `1/sqrt(4)` is +0.02373 relative to the matched untied arm. These are startup signals; the 8,453-step result determines the scale comparison.
+- Next action: babysit all three full runs through permanent checkpoint and artifact commit, then compare tied-minus-untied Paloma gaps against d512.
