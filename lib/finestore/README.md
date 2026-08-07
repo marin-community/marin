@@ -180,6 +180,21 @@ roughly a third of its raw size. The archive is then self-describing:
 `rebuild_lm_eval_samples(root)` re-derives the `samples` table from those blobs
 after a contract change, without the surrounding results tree still being intact.
 
+evalchemy runs the harness in a `tempfile` working directory and copies the tree
+into the results path, so a retried evaluation leaves a second complete tree
+under a `tmp<random>/` segment. Both are real evaluations and their
+loglikelihoods differ, because inference is not deterministic, but only the
+canonical tree produced the metrics on the run's record. `is_scratch_artifact`
+identifies the retry: it is preserved as a source blob like any other, and
+contributes no rows, so the samples a reader sees come from the same evaluation
+as the headline score. Indexing both would instead put two different rows on one
+merge key, which is a `MergeKeyConflict`, not a silent fold.
+
+Writing to an archive clears its `SEALED` marker. "Sealed" therefore means
+"these are the finished contents" rather than "some session once finished", so
+an export that dies partway leaves the archive visibly incomplete instead of
+carrying a marker that vouches for a table it no longer describes.
+
 ## Migration
 
 `experiments.evaluation.migrate_archive` backfills a run written before the

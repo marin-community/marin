@@ -277,8 +277,13 @@ def backfill_samples(prefixes: tuple[str, ...], workers: int) -> None:
 
 
 def _backfill_one(results_path: str) -> SweepOutcome:
-    """Export one archive unless it already matches the current contract."""
-    if CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION:
+    """Export one archive unless a completed export already brought it to the current contract.
+
+    Both halves matter: the version alone is stamped as soon as the new table is created, so an
+    export that died partway would otherwise read as current and never be retried.
+    """
+    reader = CompositeReader(results_path)
+    if reader.schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION and reader.is_sealed():
         return SweepOutcome("already_current", "current")
     written = export_lm_eval_samples(
         results_path,

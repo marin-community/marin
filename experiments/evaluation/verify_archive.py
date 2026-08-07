@@ -21,7 +21,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import click
-from finestore.eval import RESULTS_PREFIX
+from finestore.eval import RESULTS_PREFIX, is_scratch_artifact
 from marin.evaluation.records import list_records
 from rigging.filesystem import StoragePath
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -97,10 +97,16 @@ def verify_run(results_path: str) -> RunVerification:
     """Compare one run's archive sample count against what its results files claim was scored."""
     expectations: dict[str, TaskExpectation] = {}
     try:
-        for directory, _, names in StoragePath(results_path).walk():
+        root = StoragePath(results_path)
+        for directory, _, names in root.walk():
             for name in names:
-                if name.startswith(RESULTS_PREFIX) and name.endswith(".json"):
-                    expectations.update(leaf_task_expectations(json.loads((directory / name).read_text())))
+                if not (name.startswith(RESULTS_PREFIX) and name.endswith(".json")):
+                    continue
+                # A retried evaluation leaves a second results tree the export does not index, so
+                # counting it here would hold the archive to a total it was never meant to reach.
+                if is_scratch_artifact((directory / name).relative_to(root)):
+                    continue
+                expectations.update(leaf_task_expectations(json.loads((directory / name).read_text())))
         actual_rows = archive_sample_count(results_path)
     except Exception as exc:
         return RunVerification(

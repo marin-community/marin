@@ -225,6 +225,14 @@ class DataStore:
         # Stamp the archive-wide metadata at open. Concurrent writers write identical content, so a
         # last-writer-wins overwrite is harmless.
         StoragePath(self._layout.archive_path).write_text(ArchiveMetadata().model_dump_json(indent=2))
+        # An archive being written is not complete. Clearing a prior session's marker here is what
+        # makes "sealed" mean "these are the finished contents" rather than "some session once
+        # finished": without it an export that dies partway leaves the old marker vouching for a
+        # table it no longer describes.
+        sealed = StoragePath(self._layout.sealed_path)
+        if sealed.exists():
+            sealed.rm()
+            logger.info("finestore reopened sealed archive %s for writing", self.root)
         self._thread = threading.Thread(target=self._run, name="finestore-flush", daemon=True)
         self._thread.start()
 

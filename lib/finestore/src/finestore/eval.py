@@ -30,6 +30,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable, Iterable
 from enum import StrEnum
 
@@ -65,6 +66,10 @@ PRIMARY_METRIC_PRIORITY = ("exact_match", "accuracy", "acc_norm", "acc", "pass@1
 # Tie-break among same-base metrics that differ only in lm-eval filter. flexible-extract outranks
 # strict-match: chat models solve gsm8k-style problems but rarely emit the strict "#### N" format.
 FILTER_PRIORITY = ("flexible-extract",)
+
+# A ``tempfile.mkdtemp`` directory name that ended up inside a results tree. See
+# :func:`is_scratch_artifact`.
+_SCRATCH_SEGMENT = re.compile(r"(?:^|/)tmp[a-z0-9_]{6,}/")
 
 
 class SampleKind(StrEnum):
@@ -158,6 +163,19 @@ def primary_filter(filters: Iterable[str]) -> str | None:
         if preferred in names:
             return preferred
     return min(names)
+
+
+def is_scratch_artifact(relative_path: str) -> bool:
+    """Whether an artifact under a run came from the harness's scratch directory.
+
+    evalchemy runs the harness in a ``tempfile`` working directory and copies the tree into the
+    results path, so a retried evaluation leaves a second complete tree under a ``tmp<random>/``
+    segment. Both trees are real, and their loglikelihoods differ because inference is not
+    deterministic, but only the canonical copy produced the metrics on the run's record. Indexing
+    both would put two different rows on one merge key; the scratch copy is still preserved as a
+    source blob, so nothing is discarded by leaving it out of the table.
+    """
+    return _SCRATCH_SEGMENT.search(relative_path) is not None
 
 
 def base_metric(name: str) -> str:
@@ -673,9 +691,12 @@ def export_lm_eval_samples(
             # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
             store.flush()
         for path in sources:
+            relative = path.relative_to(root)
             payload = path.read_bytes()
-            store.add_source_artifact(path.relative_to(root), payload, content_type="application/x-ndjson")
+            store.add_source_artifact(relative, payload, content_type="application/x-ndjson")
             store.flush()
+            if is_scratch_artifact(relative):
+                continue
             count += _add_lm_eval_rows(store, path.name, payload)
         store.seal()
     finally:
@@ -797,6 +818,8 @@ def rebuild_lm_eval_samples(
     count = 0
     try:
         for name in names:
+            if is_scratch_artifact(name):
+                continue
             payload = reader.read_blob(name)
             if payload is None:
                 raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")

@@ -344,6 +344,41 @@ def test_an_existing_snapshot_is_never_overwritten(tmp_path):
     assert json.loads((backup / "_schema.json").read_text()) == {"sentinel": True}
 
 
+def test_a_retried_evaluation_indexes_only_the_published_tree(tmp_path):
+    # evalchemy copies its temp working directory into the results tree, so a retry leaves a second
+    # complete evaluation whose loglikelihoods differ. Only the canonical tree produced the metrics
+    # on the run's record, and indexing both would put two different rows on one merge key.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
+    scratch = results / "gsm8k_5shot" / "tmpp90h6r1d" / "model" / "samples_gsm8k_20260807.jsonl"
+    scratch.parent.mkdir(parents=True)
+    scratch.write_text(json.dumps(_lm_eval_row(0, "none", 0.0, "5")) + "\n")
+
+    assert export_lm_eval_samples(str(results)) == 1
+
+    [row] = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert sample_from_archive_row(row).output == "4"
+    # The retry is still recoverable: it is preserved even though it produced no row.
+    assert any("tmpp90h6r1d" in name for name in preserved_sample_sources(str(results)))
+
+
+def test_writing_to_a_sealed_archive_clears_its_seal(tmp_path):
+    # "Sealed" has to mean "these are the finished contents". A stale marker left by an earlier
+    # session would vouch for a table a failed export has since replaced.
+    root = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(root, writer_id="evalchemy")
+    store.add_sample(_mcq("1", correct=True))
+    store.seal()
+    store.close()
+    assert CompositeReader(root).is_sealed()
+
+    reopened = EvaluationStore.open(root, writer_id="evalchemy")
+    try:
+        assert not CompositeReader(root).is_sealed()
+    finally:
+        reopened.close()
+
+
 def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):
     # Several records can name one results tree. Two workers writing it at once make one compact
     # shards the other is reading, so the sweep must group by path before it fans out.
