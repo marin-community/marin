@@ -131,7 +131,7 @@ def num_steps_for(hidden_dim: int, batch_size: int) -> int:
     return max(1, round(tokens / (batch_size * SEQ_LEN)))
 
 
-def _build_model(hidden_dim: int, moe_implementation: str) -> GrugModelConfig:
+def _build_model(hidden_dim: int, moe_implementation: str, expert_chunks: int) -> GrugModelConfig:
     """The FSDP hero shape downsized to this width; depth from the even-round depth heuristic."""
     num_heads = hidden_dim // HEAD_DIM
     local_kv, global_kv = _kv_heads(num_heads)
@@ -160,7 +160,7 @@ def _build_model(hidden_dim: int, moe_implementation: str) -> GrugModelConfig:
         sconv=True,
         attention_implementation="gpu_fa4_cute",
         moe_implementation=moe_implementation,
-        expert_chunks=1,
+        expert_chunks=expert_chunks,
         report_capacity_overflow=True,
         rope_fused=True,
     )
@@ -178,7 +178,7 @@ class AblationResult(Artifact):
 
 
 def build_ablation_run(
-    *, run_id: str, size: str, accelerator: str = "H100", version: str | None = None
+    *, run_id: str, size: str, accelerator: str = "H100", expert_chunks: int = 1, version: str | None = None
 ) -> ArtifactStep[AblationResult]:
     if size not in WIDTHS:
         raise ValueError(f"size must be one of {sorted(WIDTHS)}, got {size!r}")
@@ -190,7 +190,7 @@ def build_ablation_run(
     hidden_dim = WIDTHS[size]
     steps = num_steps_for(hidden_dim, batch)
 
-    model = _build_model(hidden_dim, acc.moe_implementation)
+    model = _build_model(hidden_dim, acc.moe_implementation, expert_chunks)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=steps, batch_size=batch, hidden_dim=hidden_dim, seq_len=SEQ_LEN
     )
@@ -222,7 +222,17 @@ def build_ablation_run(
             tracker=WandbConfig(
                 entity="marin-community",
                 project="marin_moe",
-                tags=["grug", "moe", "hero", "fsdp", "abl", SIZE_GATE[size], f"shape-{size}", accelerator.lower()],
+                tags=[
+                    "grug",
+                    "moe",
+                    "hero",
+                    "fsdp",
+                    "abl",
+                    SIZE_GATE[size],
+                    f"shape-{size}",
+                    f"chunks-{expert_chunks}",
+                    accelerator.lower(),
+                ],
                 group="moe-hero-fsdp-abl",
                 name=run_id,
                 replicate_path=ctx.output_path,
@@ -297,9 +307,16 @@ def build_ablation_run(
     show_default=True,
     help="Target accelerator: H100 (ring MoE, no syrk) or B200 (sonic_cute MoE + syrk).",
 )
+@click.option(
+    "--expert-chunks",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="MoE expert-chunk count (only affects the sonic_cute / B200 path).",
+)
 @build_options
-def main(run_id: str, size: str, accelerator: str) -> ArtifactStep[AblationResult]:
-    return build_ablation_run(run_id=run_id, size=size, accelerator=accelerator)
+def main(run_id: str, size: str, accelerator: str, expert_chunks: int) -> ArtifactStep[AblationResult]:
+    return build_ablation_run(run_id=run_id, size=size, accelerator=accelerator, expert_chunks=expert_chunks)
 
 
 if __name__ == "__main__":
