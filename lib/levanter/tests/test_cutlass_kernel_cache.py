@@ -193,8 +193,12 @@ def test_an_unwritable_store_compiles_without_failing(fake_cutlass, tmp_path):
     assert result.module == b"objectcode:tile128-bf16:FakeFunctionSpec(shape=(8, 16))"
 
 
-def test_install_is_a_noop_when_cutlass_jax_will_not_import(monkeypatch, tmp_path):
+def test_install_is_a_noop_when_cutlass_jax_will_not_import(fake_cutlass, monkeypatch, tmp_path):
     """A CPU task on the GPU image has the package but no CUDA bindings to import it with."""
     monkeypatch.setitem(sys.modules, "cutlass.jax.primitive", None)
 
     install(CutlassKernelCache(directory=str(tmp_path)))
+
+    # Nothing was patched, so the compile never reaches the store.
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+    assert list(tmp_path.iterdir()) == []
