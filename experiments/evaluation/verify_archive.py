@@ -88,8 +88,12 @@ def leaf_task_expectations(results_json: dict) -> dict[str, TaskExpectation]:
                 continue
             filters.add(extraction_filter)
         documents = values.get(_DOCUMENT_COUNT)
-        if filters and isinstance(documents, (int, float)):
-            expectations[task] = TaskExpectation(documents=int(documents), filters=tuple(sorted(filters)))
+        if not isinstance(documents, (int, float)):
+            continue
+        # evalchemy's chat-native benchmarks (MATH500, AIME24) apply no extraction filter, so their
+        # metric keys carry no ",<filter>" suffix and the export stores the rows under the empty
+        # filter. Reading that as "no expectation" made the check vacuous for 134 fleet runs.
+        expectations[task] = TaskExpectation(documents=int(documents), filters=tuple(sorted(filters)) or ("",))
     return expectations
 
 
