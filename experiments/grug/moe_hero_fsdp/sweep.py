@@ -37,6 +37,11 @@ STEPS = 20
 WARMUP = 5  # first scored step
 PREFIX = "hs"  # hero sweep
 PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
+
+# The configuration adopted after wave 4: FSDP-sharded small parameters, the gate/up interleave
+# moved ahead of its all-gather, and NVLink SHARP for collectives.
+COMBINED_ENV = {"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"}
+COMBINED_ARGS = ["--small-param-sharding", "fsdp", "--interleave-before-gather"]
 LOGDIR = pathlib.Path("scratch/hero_sweep")
 PEAK_FLOPS_PER_DEVICE = 2.5e15
 NUM_DEVICES = 64
@@ -100,8 +105,8 @@ WAVES = {
         Arm("control"),
         Arm(
             "combined",
-            env={"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"},
-            args=["--small-param-sharding", "fsdp", "--interleave-before-gather"],
+            env=COMBINED_ENV,
+            args=COMBINED_ARGS,
             note="every winner from waves 1-3, measured end to end",
         ),
         Arm("chunks8", args=["--expert-chunks", "8"], note="shorter gather prologue, smaller GEMMs"),
@@ -113,12 +118,43 @@ WAVES = {
         Arm("control"),
         Arm(
             "combined",
-            env={"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"},
-            args=["--small-param-sharding", "fsdp", "--interleave-before-gather"],
+            env=COMBINED_ENV,
+            args=COMBINED_ARGS,
             note="replication of the wave-4 result",
         ),
         Arm("chunks2", args=["--expert-chunks", "2"], note="rerun; wave 4 lost a node mid-run"),
         Arm("chunks1", args=["--expert-chunks", "1"], note="no chunking, one gather of the full bank"),
+    ],
+    # Wave 6: stop capping HBM. Nothing sets XLA_PYTHON_CLIENT_MEM_FRACTION, so the allocator
+    # offers 138.22 GiB of the ~184.3 GiB on the part, while XLA reports it cannot get peak below
+    # 160.30 GiB without recomputing. Every arm carries the adopted `combined` configuration, so
+    # `base` is this wave's control and the deltas are increments on top of it. `memory/limit_gib`
+    # is logged per step, so an arm that silently ignores the knob is visible in the result.
+    "w6": [
+        Arm(
+            "base",
+            env=COMBINED_ENV,
+            args=COMBINED_ARGS,
+            note="adopted configuration; this wave's control",
+        ),
+        Arm(
+            "memfrac88",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
+            args=COMBINED_ARGS,
+            note="162.2 GiB, just above the control's 160.30 GiB remat floor",
+        ),
+        Arm(
+            "memfrac93",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.93"},
+            args=COMBINED_ARGS,
+            note="171.4 GiB; may OOM, since NCCL and cuBLAS workspaces live outside the pool",
+        ),
+        Arm(
+            "ceautotune",
+            env={**COMBINED_ENV, "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS": "1"},
+            args=COMBINED_ARGS,
+            note="tune cross-entropy block sizes for this shape instead of using the bucket default",
+        ),
     ],
 }
 
