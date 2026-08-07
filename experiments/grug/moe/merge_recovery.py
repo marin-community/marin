@@ -319,7 +319,13 @@ def recovery_forward(
         teacher_selected = teacher_trace.routing.selected_experts
         if layer_index == affected_layers[1] and source_to_shared is not None:
             assignment = jnp.asarray(source_to_shared, dtype=teacher_selected.dtype)
-            teacher_selected = assignment[teacher_selected]
+            if not get_abstract_mesh().empty:
+                assignment = jax.sharding.reshard(assignment, P(None))
+                teacher_selected = assignment.at[teacher_selected].get(
+                    out_sharding=P(("replica_dcn", "data", "expert"), None)
+                )
+            else:
+                teacher_selected = assignment[teacher_selected]
         student_selected = trace.selected_experts
         router_top1_agreements.append(jnp.mean(student_selected[:, 0] == teacher_selected[:, 0]))
         overlap = jnp.sum(

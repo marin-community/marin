@@ -146,12 +146,18 @@ def test_recovery_router_agreement_accounts_for_source_expert_permutation():
             source_layer=_AFFECTED_LAYERS[1],
             source_to_shared=np.asarray(permutation),
         )
-        actual = recovery_forward(
+        actual = jax.jit(
+            lambda student, teacher, token_ids: recovery_forward(
+                student,
+                teacher,
+                token_ids,
+                affected_layers=_AFFECTED_LAYERS,
+                source_to_shared=permutation,
+            )
+        )(
             student,
             teacher,
-            jnp.arange(8, dtype=jnp.int32).reshape(1, 8),
-            affected_layers=_AFFECTED_LAYERS,
-            source_to_shared=permutation,
+            jnp.arange(32, dtype=jnp.int32).reshape(4, 8),
         )
 
     np.testing.assert_allclose(actual.router_top1_agreement_with_teacher, 1.0)
