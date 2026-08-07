@@ -1189,7 +1189,9 @@ def test_pallas_tpu_autotune_sweeps_for_real_shard_map_tracers(monkeypatch: pyte
 
     monkeypatch.setattr(fused_api, "_benchmark_block_sizes_candidate", fake_benchmark)
     monkeypatch.setitem(fused_api.IMPLEMENTATIONS, "pallas_tpu", fake_impl)
-    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(None))
+    monkeypatch.setattr(
+        fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
+    )
 
     def run_from_shard_map(x_shard, y_shard, w_shard):
         return fused_api.fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -1359,7 +1361,9 @@ def test_pallas_autotune_cache_reuses_winner(monkeypatch: pytest.MonkeyPatch):
 
     calls = {"bench": 0}
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
-    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(None))
+    monkeypatch.setattr(
+        fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
+    )
     monkeypatch.setattr(
         fused_api,
         "_candidate_block_sizes",
@@ -1436,7 +1440,9 @@ def test_pallas_autotune_negative_caches_no_viable_candidate(monkeypatch: pytest
     """A sweep where every candidate fails is negative-cached, so a second call does not re-sweep."""
     calls = {"bench": 0}
     monkeypatch.setattr(fused_api, "_autotune_enabled", lambda: True)
-    monkeypatch.setattr(fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(None))
+    monkeypatch.setattr(
+        fused_api, "_AUTOTUNE_CACHE", fused_api.AutotuneBlockSizeCache(fused_api.PersistentKvCache.in_memory())
+    )
     monkeypatch.setattr(
         fused_api,
         "_candidate_block_sizes",

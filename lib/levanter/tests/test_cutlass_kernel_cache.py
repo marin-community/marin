@@ -83,15 +83,15 @@ def build_launcher(modules, *, tile: int, dtype: str = "bf16") -> Any:
 
 
 def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_cutlass, tmp_path):
-    cache = cutlass_kernel_cache(str(tmp_path))
     spec = FakeFunctionSpec(shape=(8, 16))
 
-    install(cache)
+    install(cutlass_kernel_cache(str(tmp_path)))
     cold = fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
     assert fake_cutlass.compiled == ["tile128-bf16"]
 
+    # A restart drops the in-process memory tier, so a fresh cache must read the store.
     fake_cutlass.forget_process_state()
-    install(cache)
+    install(cutlass_kernel_cache(str(tmp_path)))
     warm = fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
 
     assert fake_cutlass.compiled == ["tile128-bf16"]
@@ -100,8 +100,7 @@ def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_c
 
 
 def test_configuration_and_specification_both_discriminate_stored_kernels(fake_cutlass, tmp_path):
-    cache = cutlass_kernel_cache(str(tmp_path))
-    install(cache)
+    install(cutlass_kernel_cache(str(tmp_path)))
 
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
     fake_cutlass.compile_kernel(build_launcher(None, tile=256), FakeFunctionSpec(shape=(8, 16)))
@@ -111,7 +110,7 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
     assert len(list(tmp_path.iterdir())) == 3
 
     fake_cutlass.forget_process_state()
-    install(cache)
+    install(cutlass_kernel_cache(str(tmp_path)))
     served = fake_cutlass.compile_kernel(build_launcher(None, tile=256), FakeFunctionSpec(shape=(8, 16)))
 
     assert fake_cutlass.compiled == ["tile128-bf16", "tile256-bf16", "tile128-bf16"]
@@ -136,8 +135,7 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
     module_dir = tmp_path / "src"
     module_dir.mkdir()
     monkeypatch.syspath_prepend(str(module_dir))
-    cache = cutlass_kernel_cache(str(tmp_path / "store"))
-    install(cache)
+    store = str(tmp_path / "store")
 
     compiled_per_revision = []
     for revision in ("original", "edited"):
@@ -148,7 +146,7 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
         importlib.invalidate_caches()
         module = __import__(name)
         fake_cutlass.forget_process_state()
-        install(cache)
+        install(cutlass_kernel_cache(store))
         fake_cutlass.compile_kernel(module.build(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
         compiled_per_revision.append(list(fake_cutlass.compiled))
 

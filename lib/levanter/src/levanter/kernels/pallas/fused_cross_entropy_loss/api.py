@@ -6,7 +6,6 @@ from functools import lru_cache
 import hashlib
 import json
 import logging
-import threading
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
 import warnings
@@ -100,43 +99,26 @@ def _autotune_entry_name(key: str) -> str:
 
 
 class AutotuneBlockSizeCache:
-    """Tuned block sizes keyed by an opaque string, persisted one object per key.
+    """Tuned block sizes keyed by an opaque string, encoded to one object per key.
 
-    Concurrent writers of distinct keys each persist; a per-process memo answers a
-    repeated key without a second read. Passing ``None`` keeps the results in the
-    memo only, which the tests use to stay off shared storage.
+    The tiering and the per-process memo live in :class:`PersistentKvCache`; this
+    wrapper only translates a block-size entry to and from its JSON object. A
+    memory-only cache keeps the results off shared storage, which the tests use.
     """
 
-    def __init__(self, cache: PersistentKvCache | None) -> None:
+    def __init__(self, cache: PersistentKvCache) -> None:
         self._cache = cache
-        self._lock = threading.Lock()
-        self._memo: dict[str, _AutotuneCacheEntry] = {}
 
     def get(self, key: str) -> _AutotuneCacheEntry | None:
-        with self._lock:
-            if key in self._memo:
-                return self._memo[key]
-            if self._cache is None:
-                return None
-            entry = self._load(self._cache, key)
-            if entry is not None:
-                self._memo[key] = entry
-            return entry
-
-    def put(self, key: str, value: _AutotuneCacheEntry) -> None:
-        with self._lock:
-            self._memo[key] = value
-            if self._cache is None:
-                return
-            payload = json.dumps(_encode_autotune_entry(value), sort_keys=True).encode()
-            self._cache.store(_autotune_entry_name(key), payload)
-
-    def _load(self, cache: PersistentKvCache, key: str) -> _AutotuneCacheEntry | None:
-        raw = cache.load(_autotune_entry_name(key))
+        raw = self._cache.load(_autotune_entry_name(key))
         if raw is None:
             return None
         payload = json.loads(raw)
         return _decode_autotune_entry(payload) if isinstance(payload, dict) else None
+
+    def put(self, key: str, value: _AutotuneCacheEntry) -> None:
+        payload = json.dumps(_encode_autotune_entry(value), sort_keys=True).encode()
+        self._cache.store(_autotune_entry_name(key), payload)
 
 
 _CANONICAL_BACKEND_IMPLEMENTATIONS: dict[str, ArrayImpl] = {}

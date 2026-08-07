@@ -39,6 +39,24 @@ def test_store_leaves_no_staging_file_behind(tmp_path):
     assert [p.name for p in tmp_path.iterdir()] == ["k.o"]
 
 
+def test_in_memory_cache_round_trips_without_a_directory():
+    """A memory-only cache stores and loads within the process and reports no location."""
+    cache = PersistentKvCache.in_memory()
+    cache.store("k", b"v")
+    assert cache.load("k") == b"v"
+    assert cache.location() is None
+
+
+def test_a_read_key_is_served_from_memory_after_its_object_is_removed(tmp_path):
+    """A load populates the memory tier, so a repeated key is answered without re-reading the directory."""
+    PersistentKvCache.at(str(tmp_path), suffix=".o").store("k", b"v")
+
+    reader = PersistentKvCache.at(str(tmp_path), suffix=".o")
+    assert reader.load("k") == b"v"
+    (tmp_path / "k.o").unlink()
+    assert reader.load("k") == b"v"
+
+
 def test_the_directory_resolves_lazily_not_at_construction():
     """Constructing a cache does not call its resolver; the first access does."""
     calls: list[int] = []
