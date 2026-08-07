@@ -265,12 +265,6 @@ class DataLoaderIterator(Iterator[Ex]):
     def __del__(self):
         self.close()
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, _exc_type, _exc_value, _traceback):
-        self.close()
-
     def close(self):
         """Stop background prefetch and release its worker thread."""
         if self._closed or not hasattr(self, "_batches"):

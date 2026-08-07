@@ -53,7 +53,7 @@ def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
     return fs, plain_path
 
 
-def _checkpoint_candidates(checkpoint_search_paths: Sequence[str]) -> GrugCheckpointRestorePlan:
+def _checkpoint_restore_plan(checkpoint_search_paths: Sequence[str]) -> GrugCheckpointRestorePlan:
     candidates: list[tuple[int, str, str]] = []
     for search_path in checkpoint_search_paths:
         candidates.extend(_scan_checkpoint_root(search_path))
@@ -78,7 +78,7 @@ def prepare_grug_checkpoint_restore(
         return GrugCheckpointRestorePlan((), 0)
     if mode is GrugCheckpointRestoreMode.DISABLED:
         return GrugCheckpointRestorePlan((), 0)
-    return _checkpoint_candidates(checkpoint_search_paths)
+    return _checkpoint_restore_plan(checkpoint_search_paths)
 
 
 def _scan_checkpoint_root(root_path: str) -> list[tuple[int, str, str]]:

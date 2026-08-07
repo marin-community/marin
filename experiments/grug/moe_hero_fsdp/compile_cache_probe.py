@@ -34,7 +34,6 @@ import math
 
 import click
 import jmp
-from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
@@ -57,6 +56,7 @@ from experiments.grug.moe_hero_fsdp.launch import (
     HERO_PROCESS_STALL_TIMEOUT,
     HERO_PROCESSES_PER_TASK,
     HERO_TRAIN_STEP_TIMEOUT,
+    _hero_node_resources,
     _slimpajama_6b_dataset,
 )
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
@@ -77,12 +77,7 @@ class CompileCacheProbeResult(Artifact):
 
 
 def build_probe_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
-    """Build the four-layer probe model.
-
-    Head dim, sliding window, expert chunking, and both kernel backends match the
-    hero, so the compiled program has the same kinds of fusions and custom calls.
-    Layer and expert counts are cut to keep an iteration under five minutes.
-    """
+    """Build the model and optimizer for a short multi-node compilation-cache probe."""
     hidden_dim = 2048
     model = GrugModelConfig(
         vocab_size=128_256,
@@ -155,14 +150,7 @@ def build_compile_cache_probe_run(
         replica_axis_size=nodes,
         sharding_dump_path=None,
     )
-    train_resources = ResourceConfig.with_gpu(
-        "GB200",
-        count=HERO_GPUS_PER_TASK,
-        cpu=120,
-        ram="850g",
-        disk="1t",
-        replicas=nodes,
-    )
+    train_resources = _hero_node_resources(nodes)
     name = f"grug/compile-cache-probe/{run_id}"
     version = resolve_version(name, version)
     step_name = user_namespaced_name(name, version)
