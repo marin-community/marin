@@ -104,7 +104,21 @@ TARGETS: dict[str, Target] = {
     # 8 nodes, not 1: capacity is per (sender shard, expert) cell, so the shard count sets how
     # readily cells overflow. EP8 would give 4,096-row cells against 512 at EP64 and would drop far
     # less on the same routing, which is not the behavior these runs are meant to reproduce.
-    "h100-8node": Target("H100", 8, 8, 120, "1900g", "900g", "reference", False),
+    # 32 CPU and 600g, not 120 and 1900g: an H100 node allocates 127 CPU and about 2 TB, so the
+    # larger request demands an effectively empty node and Kueue rejects the whole 8-pod gang
+    # ("excluded: resource cpu: 39, resource memory: 25" of 65 nodes). Host memory here holds the
+    # loader and checkpoint staging -- a d1280 checkpoint is about 38 GB -- so 600g keeps a wide
+    # margin, and the trainer is GPU-bound at these capacity factors.
+    "h100-8node": Target("H100", 8, 8, 32, "600g", "900g", "reference", False),
+    # 2 nodes = EP16, which reproduces the d6144 hero's per-shard routing statistics exactly.
+    # Cell capacity is `cf * (tokens_per_step / shards) * top_k / num_experts`, so the shard count --
+    # not the expert count -- is what sets cell size. At EP16 with the grid's 1,048,576 tokens per
+    # step, each shard carries the hero's 65,536 tokens and 2,048-row cells. Pair this with
+    # `--seq-len 4096` (the batch widens to 256) and each shard also holds the hero's 16 documents,
+    # instead of the 2 that EP64 gives. Two documents per shard is why the EP64 ablation drops ~7%
+    # at cf 2.5 where the hero drops 0.27%: per-cell load is a sum over correlated document blocks,
+    # so the effective sample size is the document count, not the token count.
+    "h100-2node": Target("H100", 8, 2, 32, "600g", "900g", "reference", False),
 }
 
 
@@ -144,6 +158,12 @@ SMALL_SHAPES: dict[str, SmallShape] = {
     "d768": SmallShape(768, 8, 6, 1, 1, num_steps=3105),
     "d1024": SmallShape(1024, 12, 8, 2, 1, num_steps=8325),
     "d1280": SmallShape(1280, 14, 10, 2, 1, num_steps=15019),
+    # Extrapolated rung, not from #7856: head count stays hidden/128, depth continues 8/12/14 -> 16,
+    # and the KV split follows the rule the other three obey (local = heads//4, global = heads//8,
+    # floored at 1), which also reproduces the d6144 hero's 12/6 on 48 heads. The 60x step count is
+    # not a free choice -- active parameters scale as layers x hidden^2, and that model reproduces
+    # the three measured step counts to within 0.5%, giving 24,840 here.
+    "d1536": SmallShape(1536, 16, 12, 3, 1, num_steps=24840),
 }
 
 
