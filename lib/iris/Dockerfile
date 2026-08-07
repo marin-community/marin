@@ -47,6 +47,7 @@ RUN case "${TARGETARCH}" in \
         arm64) rust_target=aarch64-unknown-linux-gnu; cross_cc=aarch64-linux-gnu-gcc; cross_package=gcc-aarch64-linux-gnu; cross_libc=libc6-dev-arm64-cross ;; \
         *) echo "Unsupported Iris native target architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac && \
+    printf '%s\n' "${rust_target}" > /usr/local/lib/iris-rust-target && \
     rustup target add "${rust_target}" && \
     if [ "${BUILDARCH}" = "${TARGETARCH}" ]; then \
         ln -sf "$(command -v gcc)" "/usr/local/bin/${cross_cc}"; \
@@ -68,10 +69,7 @@ RUN mkdir -p src pyext/src && \
     printf 'pub fn placeholder() {}\n' > pyext/src/lib.rs
 RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
-    case "${TARGETARCH}" in \
-        amd64) rust_target=x86_64-unknown-linux-gnu ;; \
-        arm64) rust_target=aarch64-unknown-linux-gnu ;; \
-    esac && \
+    rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
     cargo build --locked --workspace --profile "${CARGO_PROFILE}" --target "${rust_target}"
 
 COPY lib/iris/rust/pyproject.toml lib/iris/rust/iris_native.pyi ./
@@ -80,10 +78,7 @@ COPY lib/iris/rust/pyext/src/ ./pyext/src/
 RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     --mount=type=cache,id=iris-native-target-linux-gnu-${TARGETARCH}-${CARGO_PROFILE},target=/build/iris-native/target,sharing=locked \
-    case "${TARGETARCH}" in \
-        amd64) rust_target=x86_64-unknown-linux-gnu ;; \
-        arm64) rust_target=aarch64-unknown-linux-gnu ;; \
-    esac && \
+    rust_target="$(cat /usr/local/lib/iris-rust-target)" && \
     find src pyext/src -type f -exec touch {} + && \
     uvx --python 3.12 --from 'maturin>=1.5,<2.0' maturin build \
         --target "${rust_target}" \
