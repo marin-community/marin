@@ -11,6 +11,7 @@ entry point bound into ``cutlass.jax.primitive``, the in-process
 
 import dataclasses
 import hashlib
+import importlib
 import sys
 import textwrap
 import types
@@ -142,6 +143,9 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
     for revision in ("original", "edited"):
         name = f"edited_launcher_{revision}"
         (module_dir / f"{name}.py").write_text(f"# revision: {revision}\n{source}")
+        # The import system caches each directory's listing against its mtime, so a
+        # second file written inside one mtime tick is invisible to the finder.
+        importlib.invalidate_caches()
         module = __import__(name)
         fake_cutlass.forget_process_state()
         install(cache)
