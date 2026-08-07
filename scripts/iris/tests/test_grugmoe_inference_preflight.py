@@ -3134,7 +3134,7 @@ def test_matrix_reader_reconstructs_phase_commands_and_matched_chat_diff() -> No
                         r3_enabled=bool(phase["r3_enabled"]),
                         max_num_batched_tokens=int(phase["max_num_batched_tokens"]),
                         max_num_seqs=int(phase["max_num_seqs"]),
-                        chat_transport=True,
+                        chat_transport=phase["request_transport"] == "chat",
                     )
                 )
                 command.append("--aggregate-engine-logging")
@@ -3233,6 +3233,33 @@ def test_matrix_reader_reconstructs_phase_commands_and_matched_chat_diff() -> No
         off_phase_id="targeted-ep8-chat-r3off",
         on_phase_id="targeted-ep8-chat-r3on",
     )["passed"]
+
+    reference_plan = grug_preflight._matrix_phase(
+        "capacity-scout-c768-1-exact-reference-ep16",
+        case="exact-reference-ep16",
+        role="attention-capacity-scout",
+        concurrencies=[768],
+        max_num_batched_tokens=8192,
+        max_num_seqs=768,
+        order="ab",
+        replicate=1,
+        require_manifest_coverage=False,
+        capacity_mode="scout",
+    )
+    candidate_plan = {
+        **reference_plan,
+        "phase_id": "capacity-scout-c768-2-global-every4-ep16",
+        "case": "global-every4-ep16",
+    }
+    reference = build(reference_plan)
+    candidate = build(candidate_plan)
+
+    assert grug_preflight._matrix_attention_capacity_runtime_contract([reference, candidate])["passed"]
+
+    candidate_command = candidate["all_rank_health"]["ranks"][0]["vllm_command"]
+    max_num_seqs_index = candidate_command.index("--max-num-seqs")
+    candidate_command[max_num_seqs_index + 1] = "769"
+    assert not grug_preflight._matrix_attention_capacity_runtime_contract([reference, candidate])["passed"]
 
 
 def test_topology_summary_requires_stable_canonical_and_balanced_ep8_wins() -> None:

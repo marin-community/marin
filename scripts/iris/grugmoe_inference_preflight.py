@@ -8961,6 +8961,12 @@ def _matrix_attention_capacity_runtime_contract(phase_results: list[dict[str, An
         if serve_index + 1 >= len(normalized):
             return None
         normalized[serve_index + 1] = "<fresh-model-directory>"
+        if "--served-model-name" not in normalized:
+            return None
+        served_name_index = normalized.index("--served-model-name")
+        if served_name_index + 1 >= len(normalized):
+            return None
+        normalized[served_name_index + 1] = "<model-case-name>"
         return normalized
 
     left, right = phase_results
