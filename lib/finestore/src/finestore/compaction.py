@@ -23,6 +23,7 @@ import itertools
 import logging
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.dataset as pds
@@ -77,24 +78,43 @@ def _shard_rows(shard: Shard, unified: pa.Schema, merge_key: tuple[str, ...], pa
             yield _key_tuple(row, merge_key), shard.generation, row.get(SEQ_COLUMN) or 0, row
 
 
-def _merge_dedup(streams: list[Iterator[_MergeItem]], merge_key: tuple[str, ...]) -> Iterator[dict]:
-    """Merge per-shard sorted streams into one merge-key-ordered stream, one surviving row per key."""
+@dataclass(frozen=True)
+class CompactionResult:
+    """What one compaction did: rows written, and rows a later write of the same key replaced.
+
+    ``superseded`` counts inputs that lost their merge key to a higher ``(seq, generation)`` row. It
+    is zero for a table whose keys are unique, so a non-zero count is the signal that supersession
+    actually happened rather than an assumption that it did not.
+    """
+
+    written: int
+    superseded: int = 0
+
+
+def _merge_dedup(streams: list[Iterator[_MergeItem]], merge_key: tuple[str, ...], counter: list[int]) -> Iterator[dict]:
+    """Merge per-shard sorted streams into one merge-key-ordered stream, one surviving row per key.
+
+    Losing rows are counted into ``counter[0]`` so the caller can report supersession instead of
+    discarding it without trace.
+    """
     merged = heapq.merge(*streams, key=lambda item: item[0])
     for _key, group in itertools.groupby(merged, key=lambda item: item[0]):
-        winner = max(group, key=lambda item: (item[2], item[1]))
+        items = list(group)
+        counter[0] += len(items) - 1
+        winner = max(items, key=lambda item: (item[2], item[1]))
         yield winner[3]
 
 
-def compact(root: str, table: str, *, delete_source: bool = True) -> int:
-    """Compact ``table`` under ``root`` into one sorted shard; return the row count written.
+def compact(root: str, table: str, *, delete_source: bool = True) -> CompactionResult:
+    """Compact ``table`` under ``root`` into one sorted shard; report rows written and superseded.
 
-    Returns 0 (writing nothing) when the table is empty or has no shards. When ``delete_source`` is
-    set, shards from generations below the new one are removed after the merged shard is published.
+    Writes nothing when the table is empty or has no shards. When ``delete_source`` is set, shards
+    from generations below the new one are removed after the merged shard is published.
     """
     reader = CompositeReader(root)
     shards = reader.list_shards(table)
     if not shards:
-        return 0
+        return CompactionResult(written=0)
     merge_key = reader.merge_key(table)
     next_generation = max(shard.generation for shard in shards) + 1
 
@@ -105,10 +125,11 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> int:
     )
 
     streams = [_shard_rows(shard, unified, merge_key, pa_fs) for shard in shards]
-    survivors = _merge_dedup(streams, merge_key)
+    superseded = [0]
+    survivors = _merge_dedup(streams, merge_key, superseded)
     first = next(survivors, None)
     if first is None:
-        return 0
+        return CompactionResult(written=0)
 
     out_path = FineStoreLayout(root).shard_path(table, _COMPACTOR, next_generation, 0, uuid.uuid4().hex[:8])
     written = 0
@@ -123,10 +144,16 @@ def compact(root: str, table: str, *, delete_source: bool = True) -> int:
         if batch:
             writer.write_table(pa.Table.from_pylist(batch, schema=unified))
             written += len(batch)
-    logger.info("finestore compacted %s to generation %d (%d rows)", table, next_generation, written)
+    logger.info(
+        "finestore compacted %s to generation %d (%d rows, %d superseded)",
+        table,
+        next_generation,
+        written,
+        superseded[0],
+    )
 
     if delete_source:
         for shard in shards:
             if shard.generation < next_generation:
                 fs.rm(shard.path)
-    return written
+    return CompactionResult(written=written, superseded=superseded[0])

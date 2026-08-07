@@ -10,7 +10,7 @@ trajectory into the ``blobs`` table (rewriting the sample's ``trajectory_uri`` t
 reference) and flattens its steps into the ``steps`` table. If a legacy trajectory is already
 missing, its sample and original URI are preserved.
 
-It is idempotent — samples dedupe on ``(task, doc_id, trial_id)`` — and validates every normalized
+It is idempotent — samples dedupe on ``(task, doc_id, trial_id, filter)`` — and validates every normalized
 sample, every available raw trajectory blob, and each flattened trajectory step before optionally
 moving the superseded ``samples_*.parquet`` files to region-local 30-day storage. A later migration
 can read those archived Parquets while writing replacement shards at the original results path.
@@ -35,6 +35,7 @@ from finestore.eval import (
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
+    TRIAL_ID_COLUMN,
     EvalSample,
     EvaluationStore,
     SampleKind,
@@ -62,7 +63,7 @@ _LEGACY_ARCHIVE_TTL_DAYS = 30
 _MIGRATION_WRITER_ID = "migrate"
 _OBJECT_CHECKSUM_KEYS = ("md5Hash", "md5", "ETag", "etag", "checksum")
 
-SampleKey = tuple[str, str, str]
+SampleKey = tuple[str, str, str, str]
 StepKey = tuple[str, str, str, int | None]
 
 
@@ -148,7 +149,12 @@ def _trial_id_from_uri(uri: str) -> str:
 
 
 def _sample_key(sample: EvalSample, trial_id: str) -> SampleKey:
-    return sample.task, sample.doc_id, trial_id
+    """The archive's identity for one sample: task, document, trial, and extraction filter.
+
+    A legacy Parquet holds one row per (document, filter) for a multi-filter task, so the filter must
+    take part or two distinct rows would compare as one and validation would accept a lossy archive.
+    """
+    return sample.task, sample.doc_id, trial_id, (sample.grading.filter or "") if sample.grading else ""
 
 
 def _trial_id(sample: EvalSample) -> str:
@@ -254,7 +260,7 @@ def _archive_samples(reader: CompositeReader) -> dict[SampleKey, EvalSample]:
     samples = {}
     for row in table.to_pylist(maps_as_pydicts="strict"):
         sample = sample_from_archive_row(row)
-        samples[_sample_key(sample, row.get("trial_id") or "")] = sample
+        samples[_sample_key(sample, row.get(TRIAL_ID_COLUMN) or "")] = sample
     return samples
 
 

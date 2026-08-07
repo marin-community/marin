@@ -15,6 +15,7 @@ from finestore.eval import (
     Grading,
     SampleKind,
     export_lm_eval_samples,
+    rebuild_lm_eval_samples,
     sample_from_archive_row,
     sample_to_archive_row,
     write_sample_parquet,
@@ -135,6 +136,138 @@ def test_export_lm_eval_samples_preserves_unicode_line_separator(tmp_path):
     sample = sample_from_archive_row(row)
     assert sample.prompt_messages is not None
     assert sample.prompt_messages[0].content == content
+
+
+def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: str) -> dict:
+    """One lm-eval --log_samples row: a task applying two filters writes one of these per filter."""
+    return {
+        "doc_id": doc_id,
+        "doc": {"question": "2+2?"},
+        "target": "4",
+        "arguments": [["Question: 2+2?"]],
+        "resps": [[response]],
+        "filtered_resps": [response],
+        "filter": extraction_filter,
+        "metrics": ["exact_match"],
+        "exact_match": score,
+        "schema_version": 1,
+        "task_name": "gsm8k",
+    }
+
+
+def _write_jsonl(results, rows: list[dict]):
+    path = results / "gsm8k_5shot" / "model" / "samples_gsm8k_20260807.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n")
+    return path
+
+
+def test_each_extraction_filter_keeps_its_own_sample(tmp_path):
+    # gsm8k scores one document under strict-match and flexible-extract, and they disagree. Both
+    # verdicts must survive: collapsing them onto one key discarded half the graded rows.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(
+        results,
+        [
+            _lm_eval_row(0, "strict-match", 0.0, "[invalid]"),
+            _lm_eval_row(0, "flexible-extract", 1.0, "4"),
+        ],
+    )
+
+    assert export_lm_eval_samples(str(results)) == 2
+
+    rows = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert len(rows) == 2
+    by_filter = {row["filter"]: sample_from_archive_row(row) for row in rows}
+    assert set(by_filter) == {"strict-match", "flexible-extract"}
+    assert by_filter["strict-match"].correct is False
+    assert by_filter["flexible-extract"].correct is True
+    # The filter is recorded on the grading the UI renders, not only in the archive key.
+    assert by_filter["strict-match"].grading.filter == "strict-match"
+
+
+def test_sample_metrics_exclude_the_row_format_stamp(tmp_path):
+    # lm-eval stamps each row with its own numeric schema_version; it is not a score.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4")])
+    export_lm_eval_samples(str(results))
+
+    [row] = CompositeReader(str(results)).scan("samples").to_pylist(maps_as_pydicts="strict")
+    assert sample_from_archive_row(row).metrics == {"exact_match": 1.0}
+
+
+def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
+    # The archive keeps the bytes it normalized, so a later contract change can rebuild the tables
+    # even if the surrounding results tree is gone.
+    results = tmp_path / "run" / "results"
+    source = _write_jsonl(results, [_lm_eval_row(0, "none", 1.0, "4"), _lm_eval_row(1, "none", 0.0, "5")])
+    (results / "gsm8k_5shot" / "model" / "results_20260807.json").write_text(json.dumps({"results": {}}))
+    assert export_lm_eval_samples(str(results)) == 2
+
+    reader = CompositeReader(str(results))
+    blob = reader.read_blob(f"sources/{source.relative_to(results)}")
+    assert blob == source.read_bytes()
+
+    source.unlink()
+    assert rebuild_lm_eval_samples(str(results)) == 2
+    assert CompositeReader(str(results)).scan("samples").num_rows == 2
+
+
+def test_rebuild_reports_when_no_sources_were_preserved(tmp_path):
+    results = str(tmp_path / "run" / "results")
+    store = EvaluationStore.open(results, writer_id="evalchemy")
+    store.add_sample(EvalSample(task="gsm8k", doc_id="1", kind=SampleKind.GENERATION, output="4"))
+    store.seal()
+    store.close()
+
+    assert rebuild_lm_eval_samples(results) == -1
+
+
+def test_re_export_replaces_rows_written_under_an_older_contract(tmp_path):
+    # A v3 archive folded both filters onto one key. Re-exporting must replace those rows, not leave
+    # the folded one beside the two new ones -- their merge keys no longer line up.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(
+        results,
+        [
+            _lm_eval_row(0, "strict-match", 0.0, "[invalid]"),
+            _lm_eval_row(0, "flexible-extract", 1.0, "4"),
+        ],
+    )
+    export_lm_eval_samples(str(results))
+    schema_path = StoragePath(str(results) + "/samples/_schema.json")
+    meta = json.loads(schema_path.read_text())
+    meta["schema_version"] = 3
+    schema_path.write_text(json.dumps(meta))
+
+    assert export_lm_eval_samples(str(results)) == 2
+    assert CompositeReader(str(results)).scan("samples").num_rows == 2
+
+
+def test_evaldash_serves_one_extraction_filter_at_a_time(tmp_path):
+    # Two rows per document would list every question twice and make the correctness counts
+    # disagree with the headline score, so the browser picks one filter and names the alternatives.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(
+        results,
+        [
+            _lm_eval_row(0, "strict-match", 0.0, "[invalid]"),
+            _lm_eval_row(0, "flexible-extract", 1.0, "4"),
+        ],
+    )
+    export_lm_eval_samples(str(results))
+
+    page = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all")
+    assert page.extraction_filters == ("flexible-extract", "strict-match")
+    # FILTER_PRIORITY ranks flexible-extract first, matching the headline metric's filter.
+    assert page.extraction_filter == "flexible-extract"
+    assert page.counts.all == 1
+    assert page.rows[0].correct is True
+
+    strict = fetch_samples(str(results), "gsm8k", offset=0, limit=10, correct="all", extraction_filter="strict-match")
+    assert strict.extraction_filter == "strict-match"
+    assert strict.counts.all == 1
+    assert strict.rows[0].correct is False
 
 
 def test_migrate_legacy_run_into_archive(tmp_path):

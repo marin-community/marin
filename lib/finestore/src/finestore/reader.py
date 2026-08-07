@@ -88,6 +88,17 @@ class CompositeReader:
         key = self._meta(table).merge_key
         return tuple(key) if key else _DEFAULT_MERGE_KEY
 
+    def schema_version(self, table: str) -> int | None:
+        """The caller's logical schema version for ``table``, or ``None`` if the table does not exist.
+
+        A writer compares this against its own contract version to tell a fresh archive and an
+        up-to-date one from an archive whose rows predate the current row shape.
+        """
+        try:
+            return self._meta(table).schema_version
+        except FileNotFoundError:
+            return None
+
     def _meta(self, table: str) -> TableMetadata:
         if table in self._meta_cache:
             return self._meta_cache[table]

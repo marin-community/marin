@@ -350,6 +350,10 @@ export interface SamplesResponse {
   task: string
   primary_metric: string | null
   metric_columns: string[]
+  /** Extraction filters this task was scored under; empty when it used only one. */
+  extraction_filters: string[]
+  /** The filter the returned page was drawn from. */
+  extraction_filter: string | null
   total: number
   offset: number
   limit: number

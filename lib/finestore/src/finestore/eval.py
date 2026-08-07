@@ -27,6 +27,7 @@ so it rides in every row for future evolution. The legacy per-(sub)task
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
 from collections.abc import Iterable
@@ -37,14 +38,19 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
 
+from finestore.layout import BLOBS_TABLE
+from finestore.reader import CompositeReader
 from finestore.schema import arrow_schema
-from finestore.store import DataStore
+from finestore.store import DataStore, drop_table
 
 logger = logging.getLogger(__name__)
 
 # 3: metrics moved from an inferred struct to a pinned ``map<string,double>`` and the unused
 # ``exchange_uri`` was dropped (finestore now pins both eval tables' schemas from these models).
-SCHEMA_VERSION = 3
+# 4: the lm-eval extraction filter joined the samples merge key. A task that scores one document
+# under several filters (gsm8k under strict-match and flexible-extract) emits one sample per filter,
+# and each is a distinct row rather than one overwriting the other.
+SCHEMA_VERSION = 4
 
 SAMPLES_PREFIX = "samples_"
 SAMPLES_SUFFIX = ".parquet"
@@ -136,6 +142,24 @@ class EvalSample(BaseModel):
     doc: str = "{}"
 
 
+def primary_filter(filters: Iterable[str]) -> str | None:
+    """Pick the extraction filter a reader should show by default, or ``None`` if there are none.
+
+    A task that scores each document under several filters stores one sample per filter, so a viewer
+    showing every row would list each question more than once. ``FILTER_PRIORITY`` decides which one
+    leads, and the alphabetically-first name is the fallback — the same ranking
+    :func:`primary_metric` applies to the aggregate keys, so the samples a reader sees by default and
+    the headline score it compares them against come from the same filter.
+    """
+    names = {name for name in filters if name}
+    if not names:
+        return None
+    for preferred in FILTER_PRIORITY:
+        if preferred in names:
+            return preferred
+    return min(names)
+
+
 def base_metric(name: str) -> str:
     """A metric key without lm-eval's ``,<filter>`` suffix (``exact_match,none`` -> ``exact_match``)."""
     return name.split(",", 1)[0]
@@ -169,9 +193,25 @@ def primary_metric(metrics: dict[str, float]) -> tuple[str, float] | None:
 # lm-eval adapter: normalize one --log_samples row into the contract.
 # --------------------------------------------------------------------------------------------------
 
-# lm-eval per-sample fields that are structural rather than metric values.
+# lm-eval per-sample fields that are structural rather than metric values. ``schema_version`` is
+# lm-eval's own row-format stamp and ``metrics`` its list of metric *names*, so both would otherwise
+# be mistaken for scores by the numeric sweep below.
 _LM_EVAL_STRUCTURAL_KEYS = frozenset(
-    {"doc", "doc_id", "target", "arguments", "resps", "filtered_resps", "doc_hash", "prompt_hash", "target_hash"}
+    {
+        "doc",
+        "doc_id",
+        "target",
+        "arguments",
+        "resps",
+        "filtered_resps",
+        "filter",
+        "metrics",
+        "schema_version",
+        "task_name",
+        "doc_hash",
+        "prompt_hash",
+        "target_hash",
+    }
 )
 
 
@@ -260,13 +300,18 @@ def _correct(metrics: dict[str, float]) -> bool | None:
     return picked[1] >= 1.0
 
 
-def _lm_eval_grading(metrics: dict[str, float]) -> Grading | None:
-    """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag."""
+def _lm_eval_grading(metrics: dict[str, float], extraction_filter: str | None) -> Grading | None:
+    """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag.
+
+    A per-sample row scores one extraction filter and names it in its own ``filter`` field, unlike an
+    aggregate result key which carries the filter as a ``,<filter>`` suffix. Both spellings are
+    accepted so the grading records the filter whichever shape the row uses.
+    """
     picked = primary_metric(metrics)
     if picked is None:
         return None
     name, value = picked
-    metric_filter = name.split(",", 1)[1] if "," in name else None
+    metric_filter = extraction_filter or (name.split(",", 1)[1] if "," in name else None)
     return Grading(
         method=f"lm-eval:{base_metric(name)}",
         metric=name,
@@ -284,18 +329,23 @@ def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
     model's pick is the loglikelihood argmax and the gold index is resolved from ``target`` (an
     index, a label, or the choice text). Generation rows carry a single prompt -- raw text, or a
     JSON-encoded chat message list when the chat API served the request.
+
+    A task that applies several extraction filters emits one row per (document, filter), each with
+    its own responses and score. The row's filter is recorded on the grading and forms part of the
+    sample's archive identity, so the variants coexist instead of overwriting one another.
     """
     arguments = raw.get("arguments")
     responses = raw.get("resps")
     doc = raw.get("doc")
     target = raw.get("target")
     metrics = _sample_metrics(raw)
+    extraction_filter = raw.get("filter")
     common = {
         "task": task,
         "doc_id": str(raw.get("doc_id")),
         "metrics": metrics,
         "correct": _correct(metrics),
-        "grading": _lm_eval_grading(metrics),
+        "grading": _lm_eval_grading(metrics, extraction_filter if isinstance(extraction_filter, str) else None),
         "target_text": target if isinstance(target, str) else json.dumps(target, ensure_ascii=False),
         "doc": doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False),
     }
@@ -380,19 +430,34 @@ def _task_from_filename(name: str, suffix: str) -> str:
 ARCHIVE_SAMPLES_TABLE = "samples"
 ARCHIVE_STEPS_TABLE = "steps"
 
-# The archive's own key on a samples row, added at write time (not an EvalSample field): a sample is
-# unique within a run by its task, its document, and (for multi-attempt Harbor runs) the trial that
-# produced it. evalchemy leaves ``trial_id`` empty: one attempt per document.
+# Blob-name prefix for preserved evaluator-native inputs. A blob under this prefix is the verbatim
+# bytes of a file the export read, keyed by its path relative to the run's results root, so a rebuild
+# can recover the same inputs from the archive alone.
+SOURCES_PREFIX = "sources"
+RESULTS_PREFIX = "results_"
+
+# The archive's own keys on a samples row, added at write time (not EvalSample fields): a sample is
+# unique within a run by its task, its document, the trial that produced it (for multi-attempt Harbor
+# runs), and the extraction filter that scored it (for lm-eval tasks that apply more than one).
+# evalchemy leaves ``trial_id`` empty (one attempt per document); a task with a single filter, or a
+# Harbor trial, leaves ``filter`` empty.
 TRIAL_ID_COLUMN = "trial_id"
-SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN)
+FILTER_COLUMN = "filter"
+SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, FILTER_COLUMN)
 STEPS_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, "step_id")
 
 
 def samples_schema() -> pa.Schema:
     """The pinned ``samples`` table schema: the :class:`EvalSample` columns plus the archive's
-    ``trial_id`` key. Pinning fixes each column's type up front, so ``metrics`` stays a
-    ``map<string,double>`` and no per-flush inference can drift a column's type across shards."""
-    return pa.schema([*arrow_schema(EvalSample), pa.field(TRIAL_ID_COLUMN, pa.string())])
+    ``trial_id`` and ``filter`` keys. Pinning fixes each column's type up front, so ``metrics`` stays
+    a ``map<string,double>`` and no per-flush inference can drift a column's type across shards."""
+    return pa.schema(
+        [
+            *arrow_schema(EvalSample),
+            pa.field(TRIAL_ID_COLUMN, pa.string()),
+            pa.field(FILTER_COLUMN, pa.string()),
+        ]
+    )
 
 
 def steps_schema() -> pa.Schema:
@@ -402,9 +467,14 @@ def steps_schema() -> pa.Schema:
 
 
 def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
-    """One archive ``samples`` row: the sample's JSON-mode dump plus its ``trial_id`` archive key."""
+    """One archive ``samples`` row: the sample's JSON-mode dump plus its archive keys.
+
+    The ``filter`` key is derived from the sample's own grading rather than passed in, so the row's
+    identity and the filter the UI displays can never disagree.
+    """
     row = sample.model_dump(mode="json")
-    row["trial_id"] = trial_id
+    row[TRIAL_ID_COLUMN] = trial_id
+    row[FILTER_COLUMN] = (sample.grading.filter or "") if sample.grading else ""
     return row
 
 
@@ -520,6 +590,20 @@ class EvaluationStore:
         """Append one evaluated question to the ``samples`` table."""
         self._samples.append(sample_to_archive_row(sample, trial_id=trial_id))
 
+    def add_source_artifact(self, name: str, raw: bytes, *, content_type: str) -> str:
+        """Preserve one evaluator-native source file inside the archive; return its blob URI.
+
+        The archive becomes self-describing: the normalized rows and the bytes they were derived from
+        live together, so a later contract change can rebuild the tables without the surrounding
+        results tree still being intact. Payloads ride the ``blobs`` table and compress with the rest
+        of the shard, so a text artifact costs a fraction of its raw size.
+        """
+        return self._store.write(
+            prefix_join(SOURCES_PREFIX, name),
+            {"content_type": content_type, "sha256": hashlib.sha256(raw).hexdigest()},
+            raw,
+        )
+
     def add_trajectory(self, raw: bytes, *, task: str, doc_id: str, trial_id: str) -> StoredTrajectory:
         """Store a raw trajectory as a blob and flatten its steps into the ``steps`` table.
 
@@ -540,6 +624,10 @@ class EvaluationStore:
             self._steps.extend(dataclasses.asdict(step) for step in steps)
         return StoredTrajectory(uri=uri, steps=steps)
 
+    def flush(self) -> None:
+        """Write buffered rows to shards now, bounding how much a large payload holds in memory."""
+        self._store.flush()
+
     def seal(self) -> None:
         """Flush every table and mark the run complete."""
         self._store.seal()
@@ -559,20 +647,83 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
     Returns the number of samples written. The source jsonl is kept as the mechanism's native
-    artifact. Re-running is idempotent: samples dedupe on ``(task, doc_id, trial_id)``.
+    artifact and is additionally preserved inside the archive, so the run can be rebuilt from the
+    archive alone after a contract change. Re-running is idempotent: an unchanged source produces
+    identical rows, which collapse on the merge key without conflict.
     """
+    root = StoragePath(out_path)
+    # A re-export reads every sample source under the run, so it produces the table's complete
+    # contents. Rows left by an older contract cannot collapse against the new ones (the widened
+    # merge key reads as null on their shards), so a version change replaces them; an export at the
+    # current version merges idempotently because identical rows share a digest.
+    stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    if stored_version is not None and stored_version != SCHEMA_VERSION:
+        logger.info("rebuilding %s samples written under schema v%s at v%s", out_path, stored_version, SCHEMA_VERSION)
+        drop_table(out_path, ARCHIVE_SAMPLES_TABLE)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:
+        for path in StoragePath(prefix_join(out_path, f"**/{RESULTS_PREFIX}*.json")).glob():
+            store.add_source_artifact(path.relative_to(root), path.read_bytes(), content_type="application/json")
+            # One shard per artifact keeps a multi-hundred-megabyte results tree from buffering whole.
+            store.flush()
         for path in StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob():
-            rows = [json.loads(line) for line in path.read_text().split("\n") if line.strip()]
-            if not rows:
-                logger.warning("samples file %s is empty; skipping archive export", path)
-                continue
-            task = _task_from_filename(path.name, ".jsonl")
-            for raw in rows:
-                store.add_sample(sample_from_lm_eval(task, raw))
-                count += 1
+            payload = path.read_bytes()
+            store.add_source_artifact(path.relative_to(root), payload, content_type="application/x-ndjson")
+            store.flush()
+            count += _add_lm_eval_rows(store, path.name, payload)
+        store.seal()
+    finally:
+        store.close()
+    return count
+
+
+def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> int:
+    """Normalize one ``samples_*.jsonl`` payload into ``store``; return the rows added.
+
+    Splits only on the physical LF delimiter, so a literal U+2028/U+2029 inside a JSON string stays
+    part of its record rather than being taken for a record boundary.
+    """
+    rows = [json.loads(line) for line in payload.decode().split("\n") if line.strip()]
+    if not rows:
+        logger.warning("samples file %s is empty; skipping archive export", filename)
+        return 0
+    task = _task_from_filename(filename, ".jsonl")
+    for raw in rows:
+        store.add_sample(sample_from_lm_eval(task, raw))
+    return len(rows)
+
+
+def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int:
+    """Rebuild a run's ``samples`` table from the source artifacts preserved inside its archive.
+
+    The inputs are the ``sources/`` blobs written by :func:`export_lm_eval_samples`, so this works on
+    an archive whose surrounding results tree has been pruned. Returns the number of samples written,
+    or -1 when the archive preserves no sample sources and the caller must fall back to the results
+    tree.
+    """
+    reader = CompositeReader(out_path)
+    names = [
+        key[0]
+        for key in reader.keys(BLOBS_TABLE)
+        if isinstance(key[0], str)
+        and key[0].startswith(f"{SOURCES_PREFIX}/")
+        and key[0].endswith(".jsonl")
+        and SAMPLES_PREFIX in key[0]
+    ]
+    if not names:
+        return -1
+    # The preserved sources are the complete input, so the existing rows are replaced rather than
+    # merged into: rows written under an older merge key would otherwise survive beside the new ones.
+    drop_table(out_path, ARCHIVE_SAMPLES_TABLE)
+    store = EvaluationStore.open(out_path, writer_id=writer_id)
+    count = 0
+    try:
+        for name in sorted(names):
+            payload = reader.read_blob(name)
+            if payload is None:
+                raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
+            count += _add_lm_eval_rows(store, name.rsplit("/", 1)[-1], payload)
         store.seal()
     finally:
         store.close()

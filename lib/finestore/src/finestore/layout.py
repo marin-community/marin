@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel
@@ -76,21 +77,46 @@ class ArchiveMetadata(BaseModel):
     format_version: int = FORMAT_VERSION
 
 
+class OnConflict(StrEnum):
+    """What a writer does when two rows in one session share a merge key.
+
+    ``ERROR`` treats the merge key as a primary key: a repeat whose payload differs from the row
+    already buffered is information loss and raises, because the reader would keep only one of them
+    and report nothing. A repeat with an identical payload is an at-least-once redelivery and
+    collapses silently, which loses nothing.
+
+    ``SUPERSEDE`` is the upsert contract: a later row deliberately replaces an earlier one under the
+    same key. Blob rewrites and migration backfills opt into it; the superseded rows are counted and
+    reported rather than dropped quietly.
+    """
+
+    ERROR = "error"
+    SUPERSEDE = "supersede"
+
+
 class TableMetadata(BaseModel):
     """The typed contents of a table's ``_schema.json``.
 
     Records what a Parquet footer cannot: ``merge_key`` names the columns a reader collapses
-    duplicates on, and ``schema_version`` is the caller's logical schema version for the table's rows.
+    duplicates on, ``schema_version`` is the caller's logical schema version for the table's rows, and
+    ``on_conflict`` is the policy the writer applied to repeated merge keys.
     """
 
     merge_key: tuple[str, ...] | None = None
     schema_version: int = 1
+    on_conflict: OnConflict = OnConflict.ERROR
 
 
 class SealMarker(BaseModel):
-    """The typed contents of the ``SEALED`` marker: which writer sealed the completed archive."""
+    """The typed contents of the ``SEALED`` marker: which writer sealed the completed archive.
+
+    ``superseded`` records, per table, how many rows compaction dropped because a later write of the
+    same merge key replaced them. A non-zero count on an ``ERROR`` table means rows were replaced
+    across sessions (a re-run or a resumed migration), which is legal but never silent.
+    """
 
     writer: str
+    superseded: dict[str, int] = {}
 
 
 @dataclass(frozen=True)

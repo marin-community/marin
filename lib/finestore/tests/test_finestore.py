@@ -10,9 +10,16 @@ import pyarrow.parquet as pq
 import pytest
 from finestore import compaction, shard_writer
 from finestore.compaction import compact
-from finestore.layout import FORMAT_VERSION, ArchiveMetadata, FineStoreLayout, SealMarker, TableMetadata
+from finestore.layout import (
+    FORMAT_VERSION,
+    ArchiveMetadata,
+    FineStoreLayout,
+    OnConflict,
+    SealMarker,
+    TableMetadata,
+)
 from finestore.reader import CompositeReader
-from finestore.store import DataStore, DataTable
+from finestore.store import DataStore, DataTable, MergeKeyConflict
 from fsspec.implementations.memory import MemoryFileSystem
 from rigging.filesystem import StoragePath
 
@@ -52,10 +59,10 @@ def test_point_lookup(tmp_path):
     assert CompositeReader(root).point("samples", task="arc", doc_id="99") is None
 
 
-def test_duplicate_delivery_latest_seq_wins(tmp_path):
+def test_supersede_keeps_latest_seq(tmp_path):
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", merge_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
         store.flush()
         # A retried trial re-delivers the same merge key with a fresh score in a later shard.
@@ -65,6 +72,60 @@ def test_duplicate_delivery_latest_seq_wins(tmp_path):
     rows = _rows(CompositeReader(root), "samples")
     assert len(rows) == 1
     assert rows[0]["score"] == 2.0
+
+
+def test_conflicting_merge_key_raises(tmp_path):
+    """A key repeat that would silently discard a differing row is rejected, not folded."""
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"))
+        table.append({"task": "gsm8k", "doc_id": "0", "score": 0.0})
+        with pytest.raises(MergeKeyConflict, match="gsm8k"):
+            table.append({"task": "gsm8k", "doc_id": "0", "score": 1.0})
+        # The rejected row never entered the buffer, so the accepted one is intact.
+        store.flush()
+
+    rows = _rows(CompositeReader(root), "samples")
+    assert [row["score"] for row in rows] == [0.0]
+
+
+def test_identical_redelivery_is_not_a_conflict(tmp_path):
+    """At-least-once delivery of the same row loses nothing, so it collapses without raising."""
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"))
+        table.append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.flush()
+        table.append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.flush()
+
+    rows = _rows(CompositeReader(root), "samples")
+    assert len(rows) == 1
+
+
+def test_conflict_detected_across_flushes(tmp_path):
+    """The earlier row already being durable does not hide the conflict."""
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"))
+        table.append({"task": "gsm8k", "doc_id": "0", "score": 0.0})
+        store.flush()
+        with pytest.raises(MergeKeyConflict):
+            table.append({"task": "gsm8k", "doc_id": "0", "score": 1.0})
+
+
+def test_seal_records_superseded_rows(tmp_path):
+    """Supersession is legal but never silent: the seal marker carries the count."""
+    root = str(tmp_path / "run")
+    with DataStore.open(root, writer_id="w1") as store:
+        table = store.table("samples", merge_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
+        table.append({"task": "arc", "doc_id": "1", "score": 1.0})
+        store.flush()
+        table.append({"task": "arc", "doc_id": "1", "score": 2.0})
+        store.seal()
+
+    marker = SealMarker.model_validate_json(StoragePath(FineStoreLayout(root).sealed_path).read_text())
+    assert marker.superseded["samples"] == 1
 
 
 def test_multi_writer_compose(tmp_path):
@@ -223,8 +284,7 @@ def test_compaction_merges_and_deletes_source(tmp_path):
     before = CompositeReader(root).list_shards("samples")
     assert len(before) == 3
 
-    written = compact(root, "samples")
-    assert written == 3
+    assert compact(root, "samples").written == 3
 
     after = CompositeReader(root).list_shards("samples")
     assert len(after) == 1
@@ -263,8 +323,7 @@ def test_recompaction_merges_all_generations(tmp_path):
     compact(root, "samples", delete_source=False)
     assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {0, 1}
 
-    written = compact(root, "samples")
-    assert written == 4
+    assert compact(root, "samples").written == 4
     assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
     assert rows == {"0": 0.0, "1": 1.0, "2": 2.0, "3": 3.0}
@@ -304,8 +363,7 @@ def test_compaction_streams_multiple_row_groups(tmp_path, monkeypatch):
         )
         store.flush()
 
-    written = compact(root, "samples")
-    assert written == 10
+    assert compact(root, "samples").written == 10
     assert {s.generation for s in CompositeReader(root).list_shards("samples")} == {2}
     rows = {r["doc_id"]: r["score"] for r in _rows(CompositeReader(root), "samples")}
     assert rows == {f"{i:03d}": float(i) for i in range(10)}
@@ -363,7 +421,7 @@ def test_seal_compacts_each_table_to_one_generation(tmp_path):
     # generation-1 shard holding the latest row -- readable without applying finestore's dedup rule.
     root = str(tmp_path / "run")
     with DataStore.open(root, writer_id="w1") as store:
-        table = store.table("samples", merge_key=("task", "doc_id"))
+        table = store.table("samples", merge_key=("task", "doc_id"), on_conflict=OnConflict.SUPERSEDE)
         table.append({"task": "arc", "doc_id": "1", "score": 1.0})
         store.flush()
         table.append({"task": "arc", "doc_id": "1", "score": 2.0})

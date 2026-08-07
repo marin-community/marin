@@ -70,6 +70,20 @@ regenerated in place; the source jsonl is untouched):
 uv run python -m experiments.evaluation.cli backfill-samples --prefix gs://marin-eval-metadata/evals
 ```
 
+`verify-archive` checks that each run's archive holds every sample its evaluator scored. A task's
+`results_*.json` reports the documents it evaluated and the extraction filters that scored them, so
+the archive should hold `documents x filters` rows. Run it after a backfill:
+
+```bash
+uv run python -m experiments.evaluation.verify_archive \
+  --records-prefix gs://marin-eval-metadata/evals --only-failures
+```
+
+A task scored under several extraction filters (gsm8k under `strict-match` and `flexible-extract`)
+stores one sample per (document, filter); the two disagree by design. The dashboard's sample browser
+shows one filter at a time, defaulting to the one that produced the run's headline metric, with a
+selector for the others.
+
 ## Records and the dashboard index
 
 Every eval writes `{records_prefix}/{run_id}/record.json` (`marin.evaluation.records`). That record

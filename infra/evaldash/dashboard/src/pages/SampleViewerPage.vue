@@ -33,10 +33,15 @@ function queryIndex(): number {
   const i = Number(route.query.i)
   return Number.isFinite(i) && i >= 0 ? Math.floor(i) : 0
 }
+function queryExtraction(): string | null {
+  return typeof route.query.extraction === 'string' && route.query.extraction ? route.query.extraction : null
+}
 
 const task = ref(queryTask())
 const filter = ref<SampleFilter>(queryFilter())
 const index = ref(queryIndex())
+// Null means "whichever filter the server ranks first"; the resolved name comes back with the page.
+const extractionFilter = ref<string | null>(queryExtraction())
 
 const { data: tasksData, error: tasksError, refresh: refreshTasks } = useApi<SampleTasksResponse>(
   () => `api/runs/${props.runId}/samples/tasks`,
@@ -48,26 +53,56 @@ watch(tasksData, (tasks) => {
   if (!task.value && tasks?.tasks.length) task.value = tasks.tasks[0].task
 })
 
-const { total, counts, primaryMetric, loading, error, sample: sampleAt, ensure } = useSamplePager(
-  props.runId,
-  task,
-  filter,
-)
+const {
+  total,
+  counts,
+  primaryMetric,
+  extractionFilters,
+  resolvedExtractionFilter,
+  loading,
+  error,
+  sample: sampleAt,
+  ensure,
+} = useSamplePager(props.runId, task, filter, extractionFilter)
 
 const FILTERS = computed(() => sampleFilters(counts.value?.ungraded))
 
-watch([task, filter], () => {
+// A task scored under one filter needs no control; only offer the selector when there is a choice.
+const showExtractionFilters = computed(() => extractionFilters.value.length > 1)
+
+// Until the reader pins one, the control shows the filter the server actually served.
+const selectedExtractionFilter = computed<string | null>({
+  get: () => extractionFilter.value ?? resolvedExtractionFilter.value,
+  set: (value) => {
+    extractionFilter.value = value
+  },
+})
+
+// Switching task can land on a task that never had the previously selected filter, so fall back to
+// the server's ranked default rather than showing an empty page.
+watch(task, () => {
+  extractionFilter.value = null
+})
+
+watch([task, filter, extractionFilter], () => {
   index.value = 0
 })
 
 // Fetch (and keep the URL pointed at) whichever row is current; runs once immediately for deep
 // links, then again on every task/filter/index change.
 watch(
-  [task, filter, index],
+  [task, filter, index, resolvedExtractionFilter],
   () => {
     ensure(index.value)
     if (!task.value) return
-    router.replace({ query: { task: task.value, filter: filter.value, i: String(index.value) } })
+    const query: Record<string, string> = {
+      task: task.value,
+      filter: filter.value,
+      i: String(index.value),
+    }
+    // Pin the resolved name so a shared link reopens the same rows even if the ranking changes.
+    if (resolvedExtractionFilter.value) query.extraction = resolvedExtractionFilter.value
+    router.replace({ query })
   },
   { immediate: true },
 )
@@ -115,6 +150,17 @@ function metricEntries(row: SampleRow): [string, number][] {
       <select v-model="task" class="rounded border border-surface-border bg-surface px-2 py-1 text-sm min-w-[10rem]">
         <option v-for="t in tasksData?.tasks ?? []" :key="t.task" :value="t.task">{{ t.task }}</option>
       </select>
+
+      <label v-if="showExtractionFilters" class="flex items-center gap-1.5 whitespace-nowrap">
+        <span class="text-xs text-text-muted">filter</span>
+        <select
+          v-model="selectedExtractionFilter"
+          class="rounded border border-surface-border bg-surface px-2 py-1 text-sm"
+          title="Extraction filter this task was scored under"
+        >
+          <option v-for="name in extractionFilters" :key="name" :value="name">{{ name }}</option>
+        </select>
+      </label>
 
       <div class="flex gap-1">
         <button

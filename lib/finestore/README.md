@@ -134,6 +134,39 @@ There is no manifest and no rewrite, so recovery is a listing, not a repair.
 - Duplicate or retried delivery: the same primary key re-appears in a later
   shard with a higher `_seq` and wins, so at-least-once producers are safe.
 
+## Primary keys are not silently folded
+
+A table's merge key is a primary key, and a reader keeps one row per key. Writing
+two different rows under one key would therefore discard one of them with nothing
+to say it existed, so the writer refuses instead.
+
+`store.table(..., on_conflict=...)` picks the policy:
+
+- `OnConflict.ERROR` (the default) raises `MergeKeyConflict` when a key repeats
+  with a different payload, naming the table and the key. A repeat with an
+  identical payload is an at-least-once redelivery and collapses, because that
+  loses nothing. Detection spans the whole writer session, so an earlier row
+  already being flushed to a shard does not hide the conflict.
+- `OnConflict.SUPERSEDE` is the upsert contract, for a caller that means to
+  replace a row: blob rewrites and migration backfills. The replaced rows are
+  counted during compaction and recorded per table in the `SEALED` marker, so
+  supersession leaves a number behind rather than happening invisibly.
+
+Widening a merge key is a schema change. Rows written under the old key cannot
+collapse against rows written under the new one — the added column reads as null
+on the old shards — so a rebuild calls `drop_table(root, table)` first, and
+`export_lm_eval_samples` does this automatically when the stored
+`schema_version` differs from the current contract.
+
+## Preserved sources
+
+`export_lm_eval_samples` writes every `samples_*.jsonl` and `results_*.json` it
+reads into the archive's `blobs` table under a `sources/` prefix, alongside the
+rows normalized from them. Shards are zstd-compressed, so a text artifact costs
+roughly a third of its raw size. The archive is then self-describing:
+`rebuild_lm_eval_samples(root)` re-derives the `samples` table from those blobs
+after a contract change, without the surrounding results tree still being intact.
+
 ## Migration
 
 `experiments.evaluation.migrate_archive` backfills a run written before the
@@ -146,6 +179,17 @@ each referenced trajectory into the `blobs` table (rewriting the sample's
 `--archive-legacy` moves validated source Parquets to deterministic region-local
 30-day storage. `--from-legacy-archive` reads those preserved Parquets to rebuild
 the archive at the original results path without moving the backup again.
+
+`experiments.evaluation.verify_archive` checks the result: a run's
+`results_*.json` states how many documents each leaf task scored and under which
+extraction filters, so the archive should hold `documents x filters` sample rows.
+It exits non-zero when a run holds fewer, which is what a silent fold looks like
+from the outside.
+
+```shell
+uv run python -m experiments.evaluation.verify_archive \
+  --records-prefix gs://marin-eval-metadata/evals --only-failures
+```
 
 ```shell
 uv run python -m experiments.evaluation.migrate_archive gs://bucket/run/results
