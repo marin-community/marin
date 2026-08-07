@@ -103,6 +103,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--json-output", type=Path, required=True)
+    parser.add_argument("--semantic-fixture-output", type=Path, required=True)
     return parser
 
 
@@ -569,6 +570,7 @@ def _small_semantic_reference(
     device: torch.device,
     seed: int,
     gate_up_layout: GateUpLayout,
+    fixture_output: Path,
 ) -> dict[str, Any]:
     """Compare the physical runtime with an independent source-ordered Torch MoE."""
     world_size = dist.get_world_size()
@@ -673,6 +675,16 @@ def _small_semantic_reference(
     reference = (reference_routed + reference_shared.float()).bfloat16()
     absolute_error = (generated.float() - reference.float()).abs()
     passed = bool(torch.allclose(generated, reference, atol=0.125, rtol=0.05))
+    fixture_output.parent.mkdir(parents=True, exist_ok=True)
+    rank_fixture = fixture_output.with_name(f"{fixture_output.stem}-rank{rank}{fixture_output.suffix}")
+    np.savez(
+        rank_fixture,
+        input_bf16_bits=x.view(torch.uint16).cpu().numpy(),
+        selected_experts=selected_experts[source_start:source_end],
+        combine_weights=combine_weights[source_start:source_end],
+        generated_bf16_bits=generated.view(torch.uint16).cpu().numpy(),
+        reference_bf16_bits=reference.view(torch.uint16).cpu().numpy(),
+    )
     return {
         "passed": passed,
         "independent": True,
@@ -694,6 +706,24 @@ def _small_semantic_reference(
         "finite": bool(torch.isfinite(generated).all().item()),
         "generated_output_sha256": _tensor_sha256(generated),
         "reference_output_sha256": _tensor_sha256(reference),
+        "fixture": {
+            "path": str(rank_fixture),
+            "sha256": file_sha256(rank_fixture),
+            "weight_generation": {
+                "routed_seed": seed + 50_000 + rank,
+                "shared_seed": seed + 60_000,
+            },
+            "routed_weight_sha256": {
+                "gate": _tensor_sha256(runtime.gate_weights),
+                "up": _tensor_sha256(runtime.up_weights),
+                "down": _tensor_sha256(runtime.down_weights),
+            },
+            "shared_weight_sha256": {
+                "gate": _tensor_sha256(runtime.shared_gate_weights),
+                "up": _tensor_sha256(runtime.shared_up_weights),
+                "down": _tensor_sha256(runtime.shared_down_weights),
+            },
+        },
     }
 
 
@@ -784,6 +814,7 @@ def main() -> None:
         intermediate_size=args.intermediate_size,
         seed=args.seed,
         gate_up_layout=args.gate_up_layout,
+        fixture_output=args.semantic_fixture_output,
     )
     runtime.sequential()
     torch.cuda.synchronize(device)

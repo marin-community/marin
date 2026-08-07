@@ -275,6 +275,8 @@ def main() -> None:
         replay_root = args.replay_root.resolve()
         replay_names = [path.name for path in sorted(replay_root.glob("*.json"))]
         artifact_paths.extend(_copy_artifacts(replay_root, schema2_root, replay_names))
+        semantic_fixture_names = [path.name for path in sorted(replay_root.glob("semantic-fixture-*.npz"))]
+        artifact_paths.extend(_copy_artifacts(replay_root, fixture_root / "schema2", semantic_fixture_names))
 
     cache_entries = _cache_entries(schema1_root) + _cache_entries(schema2_root)
     candidate_path = output_root / "candidate_space.json"
