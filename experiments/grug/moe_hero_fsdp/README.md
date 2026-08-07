@@ -47,6 +47,13 @@ synchronous host-staging and asynchronous commit phases without enabling Python 
 The entire artifact is pinned under `marin_temp_bucket(ttl_days=1)`, so it is disposable and covered
 by the one-day lifecycle policy.
 
+### Kernel cache
+
+The QuACK and FA4 kernels compile through CuTeDSL during MLIR lowering, before JAX's compilation
+cache is consulted, so a compilation-cache hit still regenerates them. Levanter persists them under
+`cutlass-kernels/` inside whatever `jax_compilation_cache_dir` is in effect. Entries are
+content-addressed, so runs share them and a launcher edit invalidates only its own kernels.
+
 ## Files
 
 | file | contents |
