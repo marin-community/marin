@@ -1,24 +1,43 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Measure GB200 checkpoint staging and object-store commit time.
+"""Multi-node XLA compilation-cache probe on the hero FSDP code path.
 
-Unlike the throughput hero run, this benchmark uses a smaller 52.85B-total,
-1.71B-active MoE and checkpoints at deterministic steps. It retains rack-local
-FSDP and optimizer offload while disabling W&B, profiling, and Python allocation
-tracing, then writes the disposable checkpoints to a one-day temporary bucket.
+The hero run's compile is minutes long, so a caching change costs an hour per
+iteration to evaluate. This launcher runs the same ``run_grug`` entrypoint, the
+same ``sonic_cute`` / ``gpu_fa4_cute`` kernels, and the same PGLE and mesh
+wiring against a four-layer model, which brings the loop down to a few minutes
+while keeping every cache key input that matters: XLA flags, device topology,
+and PGLE's two-key scheme.
+
+Compile time does not scale down with the model, so the probe measures cache
+hits and keys, not the cost of a hero compile. Four layers of custom-call
+matmuls also leave XLA little to autotune, so it is the wrong instrument for
+measuring the per-fusion autotune cache.
+
+Two nodes is the smallest shape that exercises cross-node behavior — JAX writes
+persistent cache entries only from process 0, so a single node cannot show
+whether the other nodes hit or miss.
+
+Read the outcome from the task logs, which carry JAX's own accounting when the
+launcher is submitted with ``-e JAX_EXPLAIN_CACHE_MISSES 1``:
+
+    PERSISTENT COMPILATION CACHE MISS for '<module>' with key '<key>'
+    Persistent compilation cache hit for '<module>' with key '<key>'
+
+Point successive runs at their own cache prefix with
+``-e JAX_COMPILATION_CACHE_DIR <prefix>`` to make "cold" reproducible.
 """
 
 import dataclasses
 import math
-from datetime import timedelta
 
 import click
 import jmp
 from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
-from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.tracker.telemetry import TelemetryConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
@@ -32,9 +51,8 @@ from rigging.filesystem import marin_temp_bucket, prefix_join
 from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_fsdp.launch import (
     _SLIMPAJAMA_SHUFFLE,
-    HERO_FSDP_BATCH_SIZE,
+    HERO_GPUS_PER_TASK,
     HERO_MIXED_PRECISION,
-    HERO_NODES_PER_RACK,
     HERO_PROCESS_STALL_TIMEOUT,
     HERO_PROCESSES_PER_TASK,
     HERO_TRAIN_STEP_TIMEOUT,
@@ -45,21 +63,21 @@ from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
 from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugTrainerConfig, run_grug
 
-DEFAULT_BENCHMARK_STEPS = 12
-DEFAULT_CHECKPOINT_EVERY_STEPS = 8
-CHECKPOINT_OUTPUT_TTL_DAYS = 1
-CHECKPOINT_DEBUG_INTERVAL = 5.0
-CHECKPOINT_STACK_DUMP_AFTER = timedelta(minutes=5).total_seconds()
+DEFAULT_PROBE_NODES = 2
+# PGLE recompiles with an FDO profile only after `jax_pgle_profiling_runs` (3)
+# executions, and that recompile is what populates the second of PGLE's two
+# cache keys. Stay well clear of the boundary.
+DEFAULT_PROBE_STEPS = 8
+PROBE_SEQUENCES_PER_DEVICE = 8
+PROBE_OUTPUT_TTL_DAYS = 1
 
 
-class CheckpointBenchmarkResult(Artifact):
-    """Timing logs and checkpoints from the GB200 checkpoint benchmark."""
+class CompileCacheProbeResult(Artifact):
+    """Task logs from a compilation-cache probe run."""
 
 
-def build_checkpoint_benchmark_configs(
-    *, num_train_steps: int, batch_size: int
-) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
-    """Build the 52.85B-total, approximately 1.71B-active benchmark model."""
+def build_probe_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+    """Build the model and optimizer for a short multi-node compilation-cache probe."""
     hidden_dim = 2048
     model = GrugModelConfig(
         vocab_size=128_256,
@@ -67,9 +85,9 @@ def build_checkpoint_benchmark_configs(
         intermediate_dim=hidden_dim,
         shared_expert_intermediate_dim=hidden_dim,
         num_shared_experts=1,
-        num_experts=128,
+        num_experts=32,
         num_experts_per_token=1,
-        num_layers=32,
+        num_layers=4,
         num_heads=16,
         num_kv_heads=4,
         local_kv_heads=4,
@@ -97,49 +115,47 @@ def build_checkpoint_benchmark_configs(
     return model, optimizer
 
 
-def build_checkpoint_benchmark_run(
+def build_compile_cache_probe_run(
     *,
     run_id: str,
-    dp_racks: int,
+    nodes: int,
     num_steps: int,
-    checkpoint_every_steps: int,
+    data_seed: int | None = None,
     version: str | None = None,
-) -> ArtifactStep[CheckpointBenchmarkResult]:
-    """Build a deterministic checkpoint benchmark on one or more GB200 racks."""
+) -> ArtifactStep[CompileCacheProbeResult]:
+    """Build the multi-node compilation-cache probe.
+
+    Change ``data_seed`` between runs to select a different first shuffled data
+    block without changing compilation keys.
+    """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
-    if dp_racks <= 0:
-        raise ValueError(f"dp_racks must be positive, got {dp_racks}")
-    if num_steps <= 1:
-        raise ValueError(f"num_steps must be greater than one, got {num_steps}")
-    if checkpoint_every_steps <= 0 or checkpoint_every_steps >= num_steps:
-        raise ValueError(
-            "checkpoint_every_steps must be positive and less than num_steps, "
-            f"got checkpoint_every_steps={checkpoint_every_steps}, num_steps={num_steps}"
-        )
+    if nodes < 2:
+        raise ValueError(f"nodes must be at least 2 to exercise cross-node caching, got {nodes}")
+    if num_steps <= 0:
+        raise ValueError(f"num_steps must be positive, got {num_steps}")
 
-    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
-    model, optimizer = build_checkpoint_benchmark_configs(num_train_steps=num_steps, batch_size=batch_size)
+    batch_size = nodes * HERO_GPUS_PER_TASK * PROBE_SEQUENCES_PER_DEVICE
+    model, optimizer = build_probe_configs(num_train_steps=num_steps, batch_size=batch_size)
+    # One DP replica per node: parameters are FSDP-sharded over each node's four
+    # GPUs and replicated across nodes, the hero's rack-local layout at node scale.
     grug_trainer = GrugTrainerConfig(
-        data_seed=None,
+        data_seed=data_seed,
         log_every=1,
         ema_beta=None,
         z_loss_weight=1e-4,
-        offload_opt_state=True,
-        save_checkpoints=True,
+        offload_opt_state=False,
+        save_checkpoints=False,
         expert_axis_size=1,
-        replica_axis_size=dp_racks,
+        replica_axis_size=nodes,
         sharding_dump_path=None,
     )
-    train_resources = _hero_node_resources(HERO_NODES_PER_RACK * dp_racks)
-    name = f"grug/checkpoint-benchmark/{run_id}"
+    train_resources = _hero_node_resources(nodes)
+    name = f"grug/compile-cache-probe/{run_id}"
     version = resolve_version(name, version)
     step_name = user_namespaced_name(name, version)
     slim = _slimpajama_6b_dataset()
-    output_path = marin_temp_bucket(
-        ttl_days=CHECKPOINT_OUTPUT_TTL_DAYS,
-        prefix=prefix_join(step_name, version),
-    )
+    output_path = marin_temp_bucket(ttl_days=PROBE_OUTPUT_TTL_DAYS, prefix=prefix_join(step_name, version))
 
     def build_config(ctx: StepContext) -> GrugRunConfig:
         trainer = TrainerConfig(
@@ -162,18 +178,8 @@ def build_checkpoint_benchmark_run(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
                 temporary_base_path=None,
                 save_interval=None,
-                keep=[{"every": checkpoint_every_steps}],
+                keep=None,
                 append_run_id_to_base_path=False,
-                delete_old_temp_checkpoints=False,
-                keep_last_temporary_checkpoints=0,
-                debug=CheckpointDebugConfig(
-                    enabled=True,
-                    log_interval=CHECKPOINT_DEBUG_INTERVAL,
-                    dump_stacks_after=CHECKPOINT_STACK_DUMP_AFTER,
-                    tracemalloc_frames=None,
-                    top_allocations=0,
-                    force_gc_before_serialize=False,
-                ),
             ),
         )
         return GrugRunConfig(
@@ -189,7 +195,7 @@ def build_checkpoint_benchmark_run(
     return ArtifactStep(
         name=step_name,
         version=version,
-        artifact_type=CheckpointBenchmarkResult,
+        artifact_type=CompileCacheProbeResult,
         run=run_grug,
         build_config=build_config,
         deps=(slim,),
@@ -201,38 +207,32 @@ def build_checkpoint_benchmark_run(
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and telemetry names.")
 @click.option(
-    "--dp-racks",
-    type=click.IntRange(min=1),
-    default=1,
+    "--nodes",
+    type=click.IntRange(min=2),
+    default=DEFAULT_PROBE_NODES,
     show_default=True,
-    help="Data-parallel NVL72 rack count.",
+    help="GB200 nodes, four GPUs each. One data-parallel replica per node.",
 )
 @click.option(
     "--num-steps",
-    type=click.IntRange(min=2),
-    default=DEFAULT_BENCHMARK_STEPS,
+    type=click.IntRange(min=1),
+    default=DEFAULT_PROBE_STEPS,
     show_default=True,
     help="Number of training steps.",
 )
 @click.option(
-    "--checkpoint-every-steps",
-    type=click.IntRange(min=1),
-    default=DEFAULT_CHECKPOINT_EVERY_STEPS,
-    show_default=True,
-    help="Deterministic checkpoint interval for the benchmark.",
+    "--data-seed",
+    type=int,
+    default=None,
+    help="Dataset shuffle seed. Use distinct values to measure cold first-block reads on reused nodes.",
 )
 @build_options
-def main(
-    run_id: str,
-    dp_racks: int,
-    num_steps: int,
-    checkpoint_every_steps: int,
-) -> ArtifactStep[CheckpointBenchmarkResult]:
-    return build_checkpoint_benchmark_run(
+def main(run_id: str, nodes: int, num_steps: int, data_seed: int | None) -> ArtifactStep[CompileCacheProbeResult]:
+    return build_compile_cache_probe_run(
         run_id=run_id,
-        dp_racks=dp_racks,
+        nodes=nodes,
         num_steps=num_steps,
-        checkpoint_every_steps=checkpoint_every_steps,
+        data_seed=data_seed,
     )
 
 

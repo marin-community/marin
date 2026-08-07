@@ -161,14 +161,14 @@ def _hero_run_config(
     )
 
 
-def _hero_resources(dp_racks: int) -> ResourceConfig:
+def _hero_node_resources(nodes: int) -> ResourceConfig:
     return ResourceConfig.with_gpu(
         "GB200",
         count=HERO_GPUS_PER_TASK,
         cpu=120,
         ram="850g",
         disk="1t",
-        replicas=HERO_NODES_PER_RACK * dp_racks,
+        replicas=nodes,
     )
 
 
@@ -217,7 +217,7 @@ def _hero_run_parts(
             replica_axis_size=dp_racks,
             sharding_dump_path=None,
         ),
-        train_resources=_hero_resources(dp_racks),
+        train_resources=_hero_node_resources(HERO_NODES_PER_RACK * dp_racks),
         name=name,
         version=resolve_version(name, version),
         slim=_slimpajama_6b_dataset(),

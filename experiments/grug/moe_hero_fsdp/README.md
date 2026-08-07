@@ -47,6 +47,27 @@ synchronous host-staging and asynchronous commit phases without enabling Python 
 The entire artifact is pinned under `marin_temp_bucket(ttl_days=1)`, so it is disposable and covered
 by the one-day lifecycle policy.
 
+### Compilation-cache probe
+
+```bash
+RID="ccprobe-1"
+iris --cluster=marin job run --no-wait --enable-extra-resources \
+  --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
+  -e JAX_EXPLAIN_CACHE_MISSES 1 \
+  -e JAX_LOG_COMPILES 1 \
+  -e JAX_COMPILATION_CACHE_DIR s3://marin-us-east-02a/marin/compile-cache-probe/"$RID" \
+  -- python -m experiments.grug.moe_hero_fsdp.compile_cache_probe \
+    --run-id "$RID" --nodes 2 --num-steps 8 --data-seed 104729 --version dev --run
+```
+
+Four layers on two nodes, about five minutes end to end, on the same `run_grug` entrypoint and the
+same kernels as the hero. `JAX_EXPLAIN_CACHE_MISSES` turns JAX's per-module hit and miss accounting
+into WARNING lines in the task logs. Give each run its own `JAX_COMPILATION_CACHE_DIR` for a cold
+measurement, or repeat a prefix to warm both XLA entries and the `cutlass-kernels/` subtree. Change
+`--data-seed` between runs to select a different first shuffled data block without changing the
+compilation keys.
+
 ### Kernel cache
 
 The QuACK and FA4 kernels compile through CuTeDSL during MLIR lowering, before JAX's compilation
@@ -64,6 +85,7 @@ content-addressed, so runs share them and a launcher edit invalidates only its o
 | `adamh.py` | AdamH (Adam direction + Frobenius hyperball scale-invariant step) |
 | `heuristic.py` | May Recipe compute-scaling LR refit; derives the optimizer from steps + batch |
 | `train.py` | training loop, state init, dispatch, hero runtime env |
+| `compile_cache_probe.py` | four-layer two-node startup and compilation-cache probe |
 | `launch.py` | rack-scaled resources, DP/FSDP mesh, batch, tracker, dataset, and entry point |
 
 ## What's distinctive about this run
