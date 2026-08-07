@@ -18,6 +18,7 @@ Usage
 
 import dataclasses
 import os
+import subprocess
 import sys
 
 os.environ["JAX_PLATFORMS"] = "cpu"
@@ -104,12 +105,39 @@ def trace(cfg):
         jax.eval_shape(loss, tokens, weights)
 
 
+def check_xla_flags(arm):
+    """Reject an arm whose ``XLA_FLAGS`` this build will not accept.
+
+    XLA aborts the process on a bad flag, so a stale name or an ill-typed value takes down a whole
+    16-node gang minutes into startup. Grepping the jaxlib binary does not catch it: a substring
+    search matches `--xla_gpu_cudnn_gemm_fusion` against the real `..._level` flag and passes a name
+    XLA then rejects. Hand the exact string to XLA's own parser instead.
+
+    The gate is the child's exit status, not its error text. An unknown name and an unparsable value
+    abort through different messages -- `xla_gpu_cudnn_gemm_fusion_level` is an int and rejects
+    ``true`` -- and both kill a rack, so match on the abort rather than on one of its wordings.
+    """
+    flags = arm.env.get("XLA_FLAGS")
+    if not flags:
+        return
+    probe = subprocess.run(
+        [sys.executable, "-c", "import jax; jax.devices()"],
+        env={**os.environ, "XLA_FLAGS": flags, "JAX_PLATFORMS": "cpu"},
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if probe.returncode:
+        raise ValueError(f"XLA rejected the flags: {probe.stderr.strip().splitlines()[-1]}")
+
+
 def main(wave):
     missing = set(BATCH_AXES) - set(MESH_AXIS_SIZES)
     assert not missing, f"mesh axes drifted from the trainer: {missing}"
     failures = 0
     for arm in WAVES[wave]:
         try:
+            check_xla_flags(arm)
             trace(preflight_model(arm))
         except Exception as exc:
             failures += 1

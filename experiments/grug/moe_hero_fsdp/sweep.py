@@ -57,11 +57,14 @@ EP_SCHEDULER_FLAGS = (
 )
 SOL_ESTIMATOR_FLAG = "--xla_gpu_enable_analytical_sol_latency_estimator=true"
 NCCL_MEMORY_FLAGS = "--xla_gpu_enable_nccl_comm_splitting=true --xla_gpu_enable_nccl_per_stream_comms=false"
-FUSION_FLAGS = (
-    "--xla_gpu_cudnn_gemm_fusion=true "
-    "--xla_gpu_enable_custom_fusions=true "
-    "--xla_gpu_enable_address_computation_fusion=true"
-)
+# `xla_gpu_cudnn_gemm_fusion_level` is an int, not a bool, and the two other fusion switches this
+# once carried no longer exist in XLA 0.11 (`enable_custom_fusions`, and
+# `enable_address_computation_fusion`, whose successor `enable_dynamic_slice_fusion` is already on).
+# Level 2 lets cuDNN take GEMM epilogues, which is the lever against the memory-bound elementwise
+# kernels trailing the projections.
+CUDNN_FUSION_FLAGS = "--xla_gpu_cudnn_gemm_fusion_level=2"
+# The block-level (Triton) fusion emitter, off by default.
+BLOCK_FUSION_FLAGS = "--xla_gpu_experimental_enable_fusion_block_level_rewriter=true"
 _COMBINE_BYTES = 512 * 1024 * 1024
 COMBINE_THRESHOLD_FLAGS = (
     " ".join(
@@ -73,6 +76,12 @@ COMBINE_THRESHOLD_FLAGS = (
 LOGDIR = pathlib.Path("scratch/hero_sweep")
 PEAK_FLOPS_PER_DEVICE = 2.5e15
 NUM_DEVICES = 64
+
+
+# Early waves named the in-window baseline `control`; from wave 6 on it is `base`, the adopted
+# configuration. Scoring against whichever arm happens to be fastest would turn cluster drift into a
+# result, so the reference is always one of these and scoring fails loudly if a wave has neither.
+CONTROL_TAGS = frozenset({"control", "base"})
 
 
 class Arm:
@@ -249,16 +258,61 @@ WAVES = {
             note="zero-copy collectives with a preallocated user-buffer pool",
         ),
         Arm(
-            "ncclgroup",
-            env={**COMBINED_ENV, "NCCL_LAUNCH_MODE": "GROUP"},
+            "solonly",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{SOL_ESTIMATOR_FLAG} {_COMMAND_BUFFER_DISABLED}"},
             args=COMBINED_ARGS,
-            note="B200 workaround for multi-device single-process gangs; this hero is 4 GPUs per process",
+            note="rerun; wave 8's attempt never got past a node fault",
         ),
         Arm(
             "fusions",
-            env={**COMBINED_ENV, "XLA_FLAGS": f"{FUSION_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{CUDNN_FUSION_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
             args=COMBINED_ARGS,
-            note="cuDNN GEMM fusion and the custom fusions, against 5.00 s/step of memory-bound fusions",
+            note="dead: shipped three flag names XLA 0.11 does not have; rerun as w10 cudnnfusion",
+        ),
+    ],
+    # Wave 10: confirm the one candidate win, retry the arm iris#7650 killed, and try the fusion
+    # flags under their real names. `solonly` measured +1.10% in wave 9, close enough to the
+    # control-to-control drift that a second in-window reading decides it.
+    "w10": [
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
+        Arm(
+            "solonly",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{SOL_ESTIMATOR_FLAG} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="confirmation of wave 9's +1.10%",
+        ),
+        Arm(
+            "cudnnfusion",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{CUDNN_FUSION_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="cuDNN takes GEMM epilogues, against 5.00 s/step of memory-bound fusions",
+        ),
+        Arm(
+            "userbuffers",
+            env={
+                **COMBINED_ENV,
+                "XLA_FLAGS": f"--xla_gpu_enable_nccl_user_buffers=true {_COMMAND_BUFFER_DISABLED}",
+                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": "2048",
+            },
+            args=COMBINED_ARGS,
+            note="rerun; zero-copy collectives with a preallocated user-buffer pool",
+        ),
+    ],
+    # Wave 11: the cross-entropy kernel's own tiling, the block-level fusion emitter, and the SOL
+    # estimator stacked on whichever of wave 10's arms won.
+    "w11": [
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
+        Arm(
+            "ceautotune",
+            env={**COMBINED_ENV, "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS": "1"},
+            args=COMBINED_ARGS,
+            note="rerun; let the cross-entropy kernel autotune its tiling instead of taking the cached miss",
+        ),
+        Arm(
+            "blockfusion",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{BLOCK_FUSION_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="the block-level Triton fusion emitter, off by default",
         ),
     ],
 }
@@ -382,11 +436,11 @@ def score(wave):
 
     if not results:
         return
-    control = next((r for r in results if r["tag"] == "control"), None)
-    base = control["median"] if control else min(r["median"] for r in results)
+    control = next(r for r in results if r["tag"] in CONTROL_TAGS)
+    reference = control["median"]
     print(f"\n{'arm':12s} {'n':>3} {'median':>9} {'MAD':>7} {'min':>8} {'MFU':>7} {'peak HBM':>9} {'vs control':>11}")
     for r in sorted(results, key=lambda r: r["median"]):
-        delta = 100 * (base - r["median"]) / base
+        delta = 100 * (reference - r["median"]) / reference
         hbm = f"{r['peak_gib']:.1f} GiB" if r["peak_gib"] is not None else "-"
         print(
             f"{r['tag']:12s} {r['n']:3d} {r['median']:8.3f}s {r['mad']:6.3f}s {r['min']:7.3f}s "
