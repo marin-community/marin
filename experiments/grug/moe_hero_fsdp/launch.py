@@ -11,7 +11,7 @@ from datetime import timedelta
 import click
 import jmp
 from fray.cluster import ResourceConfig
-from levanter.callbacks.profiler import ProfilerConfig
+from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -55,6 +55,14 @@ HERO_TRAIN_STEP_TIMEOUT = timedelta(minutes=15)
 # Evaluation, checkpointing, and other hooks use this process-wide deadline.
 HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 HERO_STALL_DIAGNOSTIC_TIMEOUT = timedelta(seconds=20)
+# Grad/param norm reductions run outside the scanned step, cost a visible slice of a short run's
+# wall clock, and can require a 117 GiB temporary buffer on this model. The hero default leaves
+# them off; --watch-interval re-enables them every N steps for a run that wants the diagnostic.
+HERO_WATCH_INTERVAL = 0
+# One process writes the XPlane capture. Every rank of a 16-node gang would upload a
+# multi-hundred-MB session into the same directory for the same timeline.
+HERO_PROFILE_PROCESS_INDEX = 0
+HERO_PROFILE_NUM_STEPS = 3
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -86,14 +94,28 @@ def _hero_run_config(
     wandb_project: str,
     slim: ArtifactStep[TokenizedCache],
     run_mode: GrugRunMode,
+    watch_interval: int = HERO_WATCH_INTERVAL,
+    profile_start_step: int | None = None,
+    profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
 ) -> GrugRunConfig:
-    """Assemble one hero trainer config; ``run_id`` names both the trainer and its W&B run."""
+    """Assemble one hero trainer config; ``run_id`` names both the trainer and its W&B run.
+
+    ``profile_start_step`` captures an XPlane trace over ``profile_num_steps`` steps from a single
+    process and uploads it to the temp-bucket XProf store; leave it ``None`` to disable profiling.
+    ``watch_interval`` re-enables the grad/param norm dumps every N steps and defaults to off.
+    """
     trainer = TrainerConfig(
         id=run_id,
         seed=0,
         train_batch_size=batch_size,
         num_train_steps=num_steps,
-        profiler=ProfilerConfig(enabled=False, start_step=8, num_steps=0),
+        profiler=ProfilerConfig(
+            enabled=profile_start_step is not None,
+            start_step=profile_start_step or 0,
+            num_steps=profile_num_steps,
+            process_index=HERO_PROFILE_PROCESS_INDEX,
+            profile_options=ProfileOptionsConfig(host_tracer_level=1, python_tracer_level=0, enable_hlo_proto=True),
+        ),
         mp=jmp.get_policy(HERO_MIXED_PRECISION),
         tracker=(
             WandbConfig(
@@ -106,8 +128,9 @@ def _hero_run_config(
             ),
             TelemetryConfig(),
         ),
-        # Watch statistics can require a 117 GiB temporary buffer on this model.
-        watch=WatchConfig(watch_targets=[]),
+        # Watch statistics can require a 117 GiB temporary buffer on this model, so leave them off
+        # unless the caller opts in with a positive interval.
+        watch=WatchConfig(interval=watch_interval) if watch_interval > 0 else WatchConfig(watch_targets=[]),
         progress_watchdog=ProgressWatchdogConfig(
             step_timeout=HERO_TRAIN_STEP_TIMEOUT,
             process_timeout=HERO_PROCESS_STALL_TIMEOUT,
@@ -208,6 +231,9 @@ def build_hero_run(
     num_steps: int,
     save_checkpoints: bool = True,
     run_mode: GrugRunMode = GrugRunMode.DEFAULT,
+    watch_interval: int = HERO_WATCH_INTERVAL,
+    profile_start_step: int | None = None,
+    profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run.
@@ -215,7 +241,16 @@ def build_hero_run(
     A short throughput gate sets ``save_checkpoints=False``. The final forced checkpoint writes the
     parameters and the offloaded optimizer state, about 2.7 TiB at the hero shape, which a run that
     only reports MFU does not need.
+
+    ``profile_start_step`` captures an XPlane trace over ``profile_num_steps`` steps from process 0
+    and uploads it to the temp-bucket XProf store. Start it well after PGLE's own profiling recompile
+    so the capture covers the steady-state program.
     """
+    if watch_interval < 0:
+        raise ValueError(f"watch_interval must be non-negative, got {watch_interval}")
+    if profile_start_step is not None and not 0 < profile_start_step < num_steps:
+        raise ValueError(f"profile_start_step must fall inside (0, {num_steps}), got {profile_start_step}")
+
     parts = _hero_run_parts(
         run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, save_checkpoints=save_checkpoints, version=version
     )
@@ -238,6 +273,9 @@ def build_hero_run(
             wandb_project=wandb_project,
             slim=slim,
             run_mode=run_mode,
+            watch_interval=watch_interval,
+            profile_start_step=profile_start_step,
+            profile_num_steps=profile_num_steps,
         )
 
     return ArtifactStep(
@@ -332,6 +370,26 @@ def build_ablation_sweep_hero_run(
     default=GrugRunMode.DEFAULT.value,
     show_default=True,
 )
+@click.option(
+    "--watch-interval",
+    type=click.IntRange(min=0),
+    default=HERO_WATCH_INTERVAL,
+    show_default=True,
+    help="Steps between grad/param norm dumps. 0 disables them.",
+)
+@click.option(
+    "--profile-start-step",
+    type=click.IntRange(min=1),
+    default=None,
+    help="First step of the XPlane capture window. Unset disables profiling.",
+)
+@click.option(
+    "--profile-num-steps",
+    type=click.IntRange(min=1),
+    default=HERO_PROFILE_NUM_STEPS,
+    show_default=True,
+    help="Steps to capture once --profile-start-step is reached.",
+)
 @build_options
 def main(
     run_id: str,
@@ -339,6 +397,9 @@ def main(
     num_steps: int,
     save_checkpoints: bool,
     mode: str,
+    watch_interval: int,
+    profile_start_step: int | None,
+    profile_num_steps: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -346,6 +407,9 @@ def main(
         num_steps=num_steps,
         save_checkpoints=save_checkpoints,
         run_mode=GrugRunMode(mode),
+        watch_interval=watch_interval,
+        profile_start_step=profile_start_step,
+        profile_num_steps=profile_num_steps,
     )
 
 
