@@ -9,7 +9,6 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
 
 import equinox as eqx
 import jax
@@ -40,6 +39,7 @@ from levanter.recovery.detection import DetectionConfig, recovery_xla_env, touch
 from levanter.recovery.supervisor import ENV_HEARTBEAT_PATH, GPUHangSupervisor
 from levanter.recovery.types import AblationSpec, RunOutcome
 from levanter.schedule import BatchSchedule
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
@@ -382,7 +382,9 @@ def _drop_metrics(
     }
 
 
-def _router_metrics_for_logging(metrics: Mapping[str, Any]) -> dict[str, Any]:
+def _router_metrics_for_logging(
+    metrics: Mapping[str, jax.Array | SummaryStats],
+) -> dict[str, jax.Array | SummaryStats]:
     router_metrics = {
         key: value
         for key, value in metrics.items()

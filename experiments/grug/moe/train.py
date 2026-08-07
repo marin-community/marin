@@ -7,7 +7,6 @@ import logging
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
 
 import equinox as eqx
 import jax
@@ -35,6 +34,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
+from levanter.tracker.histogram import SummaryStats
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
@@ -298,7 +298,9 @@ def initial_state(
     )
 
 
-def _router_metrics_for_logging(metrics: Mapping[str, Any]) -> dict[str, Any]:
+def _router_metrics_for_logging(
+    metrics: Mapping[str, jax.Array | SummaryStats],
+) -> dict[str, jax.Array | SummaryStats]:
     router_metrics = {
         key: value
         for key, value in metrics.items()
