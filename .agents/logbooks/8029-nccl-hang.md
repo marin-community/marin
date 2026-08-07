@@ -85,6 +85,22 @@ author: power
 - Environment ablation: `CUDA_MODULE_LOADING=EAGER`.
 - Babysitter: Codex, two-minute cadence through first progress, then at most 15 minutes.
 
+### 2026-08-07 03:07 UTC - moe-hero-fsdp-nccl2307-2rack-failsafeonly-1000-20260807
+
+- Command: `uv run --frozen iris --cluster=marin job run --target-cluster cw-us-east-08a --priority production --no-wait --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 43200 --max-retries 0 --job-name moe-hero-fsdp-nccl2307-2rack-failsafeonly-1000-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch_failsafe_control --run-id moe-hero-fsdp-nccl2307-2rack-failsafeonly-1000-20260807 --dp-racks 2 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/moe-hero-fsdp-nccl2307-2rack-failsafeonly-1000-20260807-coord`; expected child `grug-train-moe-hero-fsdp-nccl2307-2rack-failsafeonly-1000-20260807`.
+- Git SHA: `1f8d8377f499884e2bea9b65489aff221cd03494`.
+- Dirty tree: No; the commit was pushed before submission.
+- Source bundle: Iris workspace bundle, 9.8 MB; no content ID was reported.
+- Hardware: 32 workers, four GB200 GPUs each, two NVL72 racks on `cw-us-east-08a`.
+- W&B: ID and display name `moe-hero-fsdp-nccl2307-2rack-failsafeonly-1000-20260807`, project `marin_moe`, group `moe-hero-fsdp`, resume `allow`.
+- Output root: `s3://marin-us-east-02a/marin/grug/moe-hero-fsdp-nccl2307-2rack-failsafeonly-1000-20260807/2026.08.07`.
+- Initialization: None.
+- Final step: 1000.
+- Checkpoint policy: Metrics only; no checkpoints.
+- Diagnostic control: Same XLA failsafe flags as the supervisor, direct trainer process, zero task retries.
+- Babysitter: Codex, two-minute cadence through first progress, then at most 15 minutes.
+
 ## Event Log
 
 ### 2026-08-07 02:11 UTC - Two-rack NCCL 2.30.7 gate completed
@@ -135,3 +151,10 @@ author: power
 - Evidence: The clique completed after 10.95 seconds at 03:01:45; `std::bad_alloc` followed nine seconds later, and the supervisor classified `crash returncode=-6 last_step=None`.
 - Decision: Pause environment arms because `std::bad_alloc` is new relative to the historical unsupervised 300B runs. Split the supervisor parent from its XLA failsafe flags before interpreting further ablations.
 - Next: Run the identical two-rack model directly with the same XLA flags and zero task retries, capture cgroup/GPU memory, and attach the Iris native profiler around first execution.
+
+### 2026-08-07 03:20 UTC - Direct failsafe control reproduced a C++ exception
+
+- Status: The first `jit_train_step` failed without a supervisor parent; rank 2 terminated on `std::length_error: basic_string::_M_create` before step zero.
+- Evidence: Immediately before execution, task 0 used 186.5 GB of an 850 GiB cgroup limit with no `memory.events`, about 143.7 GiB of each 186 GiB GPU, and 172 GiB RSS. A five-second native sample placed the main thread in JAX/XLA compilation, including SPMD partitioning and HLO passes, rather than NCCL execution.
+- Decision: Exonerate the supervisor parent process. Treat the shared XLA failsafe flags, especially progress tracking, as the leading explanation for the new `bad_alloc`/`length_error` family.
+- Next: Repeat the same direct control with LLDB breakpoints on `abort` across ranks to capture the throwing native stack, then set `xla_gpu_execution_progress_tracking=0` while preserving the execution and NCCL-init timeouts.
