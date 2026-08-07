@@ -51,7 +51,7 @@ class PersistentKvCache:
         return path.read_bytes() if path.exists() else None
 
     def store(self, key: str, value: bytes) -> None:
-        """Persist ``value`` under ``key``, staged and renamed so readers never see a partial write."""
+        """Persist ``value`` under ``key``; a reader never sees a partial write."""
         path = str(self._object(key))
         with atomic_rename(path) as staged:
             StoragePath(staged).write_bytes(value)

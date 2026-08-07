@@ -6,7 +6,6 @@ from functools import lru_cache
 import hashlib
 import json
 import logging
-import os
 import threading
 import time
 from typing import Literal, Optional, TypeAlias, cast, overload
@@ -16,7 +15,7 @@ import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 from rigging.cache import PersistentKvCache
-from rigging.filesystem import marin_prefix
+from rigging.filesystem import marin_prefix, prefix_join
 
 from levanter.kernels.pallas import autotune_utils
 
@@ -56,7 +55,6 @@ _DEFAULT_IMPLEMENTATION: tuple[Implementation, ...] = ("xla",)
 _IMPLEMENTATION_FALLBACK_WARNINGS_EMITTED: set[str] = set()
 _SELECTED_IMPL_LOGGED: set[str] = set()
 _AUTOTUNE_ON_MISS_ENV_VAR = "LEVANTER_PALLAS_CE_AUTOTUNE_ON_MISS"
-_AUTOTUNE_TRUTHY_VALUES = frozenset({"1", "true", "yes", "on"})
 _AUTOTUNE_CACHE_SUBDIR = "levanter_kernel_autotune"
 _AUTOTUNE_KERNEL_NAME = "fused_cross_entropy_loss"
 _AUTOTUNE_CACHE_DIRNAME = "block_sizes_v2"
@@ -98,8 +96,8 @@ def _decode_autotune_entry(entry: dict) -> _AutotuneCacheEntry | None:
 
 def _autotune_cache_dir() -> str:
     """Region-local directory holding this kernel's tuned block sizes, one object per key."""
-    root = marin_prefix().rstrip("/")
-    return f"{root}/{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_DIRNAME}"
+    relative = f"{_AUTOTUNE_CACHE_SUBDIR}/{_AUTOTUNE_KERNEL_NAME}/{_AUTOTUNE_CACHE_DIRNAME}"
+    return prefix_join(marin_prefix(), relative)
 
 
 def _autotune_entry_name(key: str) -> str:
@@ -108,11 +106,10 @@ def _autotune_entry_name(key: str) -> str:
 
 
 class AutotuneBlockSizeCache:
-    """Tuned block sizes keyed by an opaque string, one object per key.
+    """Tuned block sizes keyed by an opaque string, persisted one object per key.
 
-    Each key is its own object, so two processes tuning distinct keys at once
-    both persist rather than racing to rewrite one shared file. A per-process memo
-    keeps a key read at most once from storage.
+    Concurrent writers of distinct keys each persist; a per-process memo answers a
+    repeated key without a second read.
     """
 
     def __init__(self, directory_fn: Callable[[], str | None] = _autotune_cache_dir) -> None:
@@ -249,10 +246,7 @@ def _implementation_matches_current_backend(impl_name: str, *, fn: ArrayImpl | N
 
 
 def _autotune_enabled() -> bool:
-    value = os.environ.get(_AUTOTUNE_ON_MISS_ENV_VAR)
-    if value is None:
-        return True
-    return value.lower() in _AUTOTUNE_TRUTHY_VALUES
+    return autotune_utils.env_flag(_AUTOTUNE_ON_MISS_ENV_VAR, default=True)
 
 
 _AUTOTUNE_CACHE = AutotuneBlockSizeCache()
