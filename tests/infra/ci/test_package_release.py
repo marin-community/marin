@@ -4,14 +4,20 @@
 """Behavioral contracts for Marin-owned package releases."""
 
 import hashlib
+import tomllib
 from pathlib import Path
 
 import pytest
 import yaml
 
 from scripts.ci.package_release import (
+    LINUX_TARGETS,
+    MAC_TARGETS,
     PACKAGES,
     PYTHON_LIBS_FAMILY,
+    ArtifactExpectation,
+    BuildOperation,
+    NativeBuild,
     PublishedArtifact,
     artifact_manifest,
     cargo_compatible_version,
@@ -35,6 +41,13 @@ PLATFORM_WHEEL_TAGS = (
     "cp312-cp312-macosx_11_0_x86_64.whl",
     "cp312-cp312-macosx_11_0_arm64.whl",
 )
+
+# maturin builds one wheel per Rust target on the leg that owns that platform.
+WHEELS_PER_LEG = {BuildOperation.LINUX: len(LINUX_TARGETS), BuildOperation.MACOS: len(MAC_TARGETS)}
+
+
+def _project_name(directory: Path) -> str:
+    return tomllib.loads((directory / "pyproject.toml").read_text())["project"]["name"]
 
 
 def _artifact_names(package: str, version: str) -> list[str]:
@@ -248,10 +261,34 @@ def test_python_libs_release_expectations_track_the_bundle_builder() -> None:
     """
     family = PACKAGES[PYTHON_LIBS_FAMILY]
 
-    assert set(family.artifacts) == set(BUNDLED_LIBRARIES)
+    # The builder runs `uv build --wheel --sdist` once per library.
+    assert dict(family.artifacts) == {
+        distribution: ArtifactExpectation(wheels=1, sdists=1, pure_python=True) for distribution in BUNDLED_LIBRARIES
+    }
     assert set(family.declared_version_paths) == {
         Path(library["path"]) / library["version_file"] for library in BUNDLED_LIBRARIES.values()
     }
+
+
+@pytest.mark.parametrize("package", ["iris", "dupekit", "finelog"])
+def test_native_release_expectations_track_the_build_legs(package: str) -> None:
+    """Native families must expect exactly the distributions and wheels their legs build.
+
+    The distribution names come from the pyprojects maturin and uv build, and the
+    wheel counts from the Rust targets each leg compiles. Expect fewer artifacts than
+    the legs emit and the extras are published unverified; expect more and the release
+    stalls on artifacts nobody builds.
+    """
+    family = PACKAGES[package]
+    build = family.build
+    assert isinstance(build, NativeBuild)
+
+    native_wheels = sum(WHEELS_PER_LEG.get(operation, 0) for _, operation in family.build_legs)
+    expected = {_project_name(build.native_path): ArtifactExpectation(wheels=native_wheels, sdists=1, pure_python=False)}
+    if build.pure_path is not None:
+        expected[_project_name(build.pure_path)] = ArtifactExpectation(wheels=1, sdists=1, pure_python=True)
+
+    assert dict(family.artifacts) == expected
 
 
 @pytest.mark.parametrize("package", ["iris", "dupekit", "finelog", "python-libs"])
