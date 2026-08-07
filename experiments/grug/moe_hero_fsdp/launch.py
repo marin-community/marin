@@ -160,8 +160,6 @@ def _validate_hero_args(run_id: str, dp_racks: int, num_steps: int) -> None:
 
 @dataclass(frozen=True)
 class _HeroRunParts:
-    """The pieces every hero run shares, resolved once before the lazy `build_config` closure."""
-
     batch_size: int
     model: GrugModelConfig
     optimizer: GrugMoeMuonHConfig

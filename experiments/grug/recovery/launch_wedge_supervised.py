@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch the #7344 wedge reproducer under GPUHangSupervisor on GB200 racks."""
+"""Launch the synthetic NCCL proxy-slot wedge under GPUHangSupervisor."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from marin.experiment.namespacing import user_namespaced_name
 
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.recovery.ablation_catalog import (
+    BASELINE_ABLATION_NAME,
     environment_ablation_names,
     environment_ablations,
     selected_ablations,
@@ -155,7 +156,7 @@ def _run_dispatch(config: SupervisedWedgeConfig) -> None:
     "ablation_names",
     type=click.Choice(environment_ablation_names()),
     multiple=True,
-    default=("baseline",),
+    default=(BASELINE_ABLATION_NAME,),
     show_default=True,
     help="Environment arm to run; repeat the option to sweep several arms on one allocation.",
 )

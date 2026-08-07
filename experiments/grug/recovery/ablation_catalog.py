@@ -12,6 +12,7 @@ from levanter.recovery.types import AblationSpec
 NCCL_PROTO_ENV = "NCCL_PROTO"
 NCCL_NVLS_ENABLE_ENV = "NCCL_NVLS_ENABLE"
 NCCL_MAX_NCHANNELS_ENV = "NCCL_MAX_NCHANNELS"
+BASELINE_ABLATION_NAME = "baseline"
 
 
 def environment_ablations(*, num_steps: int) -> list[AblationSpec]:
@@ -20,7 +21,7 @@ def environment_ablations(*, num_steps: int) -> list[AblationSpec]:
         raise ValueError("num_steps must be positive")
 
     return [
-        AblationSpec(name="baseline", env={}, num_steps=num_steps, notes="stock flags"),
+        AblationSpec(name=BASELINE_ABLATION_NAME, env={}, num_steps=num_steps, notes="stock flags"),
         AblationSpec(
             name="nccl-launch-order-implicit",
             env={"NCCL_LAUNCH_ORDER_IMPLICIT": "1"},

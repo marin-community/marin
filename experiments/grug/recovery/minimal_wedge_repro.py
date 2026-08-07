@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# SPDX-License-Identifier: Apache-2.0
 """Minimal single-file JAX reproducer for the NCCL 2.28.9 proxy-slot wedge on GB200 NVL72.
 
 Symptom: a multi-node JAX/XLA job stops making progress with no error. Every rank
@@ -10,9 +9,8 @@ traffic, and NCCL RAS reports one rank a few collective operations behind the re
 static forever. NCCL 2.29.3-1 and later contain the upstream aarch64 proxy-slot
 fix and should complete the requested step count.
 
-That applies to this synthetic collective only. The 300B hero wedge tracked in
-#7344 is not the same fault: #8029 records it wedging on 2.30.7 behind a verified
-provenance gate, so a clean run here does not clear a build for the hero shape.
+This synthetic collective does not reproduce the distinct 300B hero wedge observed
+with NCCL 2.30.7. A clean run here does not validate the hero shape.
 
 This file contains no model framework and no custom CUDA kernels -- no attention,
 no MoE, no flash-attn, no CuTe/CUTLASS. It is a dense MLP stack that keeps only the

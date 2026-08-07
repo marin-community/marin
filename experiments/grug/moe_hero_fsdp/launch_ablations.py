@@ -7,7 +7,7 @@ import click
 from marin.experiment.cli import build_options
 
 from experiments.grug.moe_hero_fsdp.launch import build_ablation_sweep_hero_run
-from experiments.grug.recovery.ablation_catalog import environment_ablation_names
+from experiments.grug.recovery.ablation_catalog import BASELINE_ABLATION_NAME, environment_ablation_names
 
 
 @click.command()
@@ -25,7 +25,7 @@ from experiments.grug.recovery.ablation_catalog import environment_ablation_name
     "ablation_names",
     type=click.Choice(environment_ablation_names()),
     multiple=True,
-    default=("baseline",),
+    default=(BASELINE_ABLATION_NAME,),
     show_default=True,
     help="Environment arm to run; repeat the option to sweep several arms on one allocation.",
 )

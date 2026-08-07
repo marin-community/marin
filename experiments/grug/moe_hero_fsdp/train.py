@@ -734,12 +734,10 @@ def run_grug(config: GrugRunConfig) -> None:
 
 @dataclass(frozen=True)
 class GrugAblationSweepConfig:
-    """Several environment arms run back to back on one allocation.
+    """Configuration for a sequence of environment arms.
 
     ``arms`` and ``runs`` are parallel: arm *i* supplies the process-start environment
-    for run *i*, whose ``trainer.id`` names its own W&B run. Holding the allocation across
-    arms removes a scheduler round trip and a cold node per arm, which at 300B dominates
-    the arm itself.
+    for run *i*.
     """
 
     run_id: str
