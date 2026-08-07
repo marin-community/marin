@@ -14,6 +14,7 @@ A[M,K] @ B[E,K,2N]  -> (per expert group) -> SwiGLU -> PostAct[M,N]
 """
 from __future__ import annotations
 
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -39,8 +40,14 @@ def _cute_dtype(dt):
     return _JAX_TO_CUTE[jnp.dtype(dt)]
 
 
+@functools.lru_cache(maxsize=None)
 def _build_launcher(*, a_dtype, tile_mn, cluster_mnk, activation, max_active_clusters, max_swizzle):
     """Return a ``@cute.jit`` launcher with the cutlass_call signature.
+
+    Memoized on the kernel configuration because ``cutlass.jax`` keys its compile
+    cache on launcher identity: a fresh launcher object forces a fresh CuTeDSL
+    compile even when the resulting kernel is byte-identical. One launcher per
+    configuration lets every expert chunk and every scanned layer share one compile.
 
     Signature: (stream, mA, mB, mCuSeqlens, mD, mPostAct)
       mA:[M,K] tokens (k-major)  mB:[E,K,2N] weights  mCuSeqlens:[E+1] int32
@@ -127,7 +134,10 @@ def quack_gated_grouped_gemm(
     return (preact, postact) if return_preact else postact
 
 
+@functools.lru_cache(maxsize=None)
 def _build_plain_launcher(*, a_dtype, tile_mn, cluster_mnk, max_active_clusters, max_swizzle):
+    """Return a ``@cute.jit`` plain grouped-GEMM launcher. Memoized as in ``_build_launcher``."""
+
     @cute.jit
     def launcher(stream, mA, mB, mCuSeqlens, mD):
         gemm = GemmDefaultSm100(_ACC, a_dtype, tile_mn, cluster_mnk, gather_A=False, use_clc_persistence=False)

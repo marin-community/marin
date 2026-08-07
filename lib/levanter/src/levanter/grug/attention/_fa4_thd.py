@@ -3,6 +3,7 @@
 
 """Upstream FlashAttention-4 THD/varlen wrapper for Grug attention."""
 
+import functools
 import importlib
 import math
 from dataclasses import dataclass
@@ -54,6 +55,7 @@ def _sm90_backward_kernel_options() -> dict[str, int | bool]:
     }
 
 
+@functools.lru_cache(maxsize=1)
 def _import_upstream_fa4_cute() -> _UpstreamFa4CuteModules:
     try:
         arch = _gpu_compute_arch()
@@ -279,6 +281,7 @@ def _window_size_arguments(sliding_window: int | None) -> tuple[int | None, int 
     return sliding_window - 1, 0
 
 
+@functools.lru_cache(maxsize=None)
 def _upstream_fa4_thd_forward_launcher(
     modules: _UpstreamFa4CuteModules,
     *,
@@ -367,6 +370,7 @@ def _upstream_fa4_thd_forward_launcher(
     return _launch_upstream_fa4_thd_forward
 
 
+@functools.lru_cache(maxsize=None)
 def _upstream_fa4_thd_backward_launcher(
     modules: _UpstreamFa4CuteModules,
     *,

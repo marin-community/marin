@@ -12,6 +12,7 @@ target is BF16/FP16 BSHD causal self-attention with dynamic per-token lower boun
 This avoids both THD compaction and materialized [B, S, S] masks.
 """
 
+import functools
 import importlib
 from dataclasses import dataclass
 from functools import partial
@@ -45,7 +46,13 @@ class _BackwardBlockSparseMetadata:
     full_block_idx: jax.Array
 
 
+@functools.lru_cache(maxsize=1)
 def _import_cutlass_cute() -> _CutlassCuteModules:
+    """Return the CuTe/CUTLASS module bundle.
+
+    Memoized so the bundle is a singleton: the launcher factories are keyed on it,
+    and a fresh bundle per call would defeat their memoization.
+    """
     cute = importlib.import_module("cutlass.cute")
     cjax = importlib.import_module("cutlass.jax")
     cuda = importlib.import_module("cuda.bindings.driver")

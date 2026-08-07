@@ -58,6 +58,7 @@ Nontrivial differences from upstream FA4/CuTe:
   backward kernel is the segmented port in ``_fa4_cute_segmented_bwd``.
 """
 
+import functools
 import importlib
 import math
 from dataclasses import dataclass
@@ -152,6 +153,11 @@ def _validate_sm90_native_config(
         )
 
 
+# Every launcher factory below is memoized on its configuration. ``cutlass.jax``
+# keys its compile cache on launcher identity, so a fresh launcher object forces a
+# fresh CuTeDSL compile even when the resulting kernel is byte-identical — and the
+# three backward postprocess call sites request the same kernel three times.
+@functools.lru_cache(maxsize=None)
 def segmented_flash_attention_forward_launcher(
     modules: Any,
     *,
@@ -930,6 +936,7 @@ def segmented_flash_attention_forward_launcher(
     return _launch_segmented_flash_attention_forward
 
 
+@functools.lru_cache(maxsize=None)
 def segmented_flash_attention_backward_launcher(
     modules: Any,
     *,
@@ -1174,6 +1181,7 @@ def segmented_flash_attention_backward_launcher(
     return _launch_segmented_flash_attention_backward
 
 
+@functools.lru_cache(maxsize=None)
 def segmented_flash_attention_backward_sm90_launcher(
     modules: Any,
     *,
@@ -1368,6 +1376,7 @@ def segmented_flash_attention_backward_sm90_launcher(
     return _launch_segmented_flash_attention_backward_sm90
 
 
+@functools.lru_cache(maxsize=None)
 def segmented_flash_attention_backward_sm90_preprocess_launcher(
     modules: Any,
     *,
@@ -1415,6 +1424,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
     return _launch_flash_attention_backward_sm90_preprocess
 
 
+@functools.lru_cache(maxsize=None)
 def flash_attention_backward_postprocess_launcher(
     modules: Any,
     *,
