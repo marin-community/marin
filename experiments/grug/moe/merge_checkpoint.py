@@ -17,6 +17,7 @@ from levanter.grug.grug_moe import MoEExpertMlp
 from rigging.filesystem import StoragePath, prefix_join
 
 from experiments.grug.moe.expert_merge import AssignmentMode, convert_one_expert_pair, permute_pending_qb_beta
+from experiments.grug.moe.expert_prefit import PrefitObjective
 from experiments.grug.moe.model import Transformer
 from experiments.grug.moe.train import GrugTrainState
 
@@ -41,6 +42,7 @@ class OnePairMergeCheckpointSpec:
     probe_path: str | None = None
     prefit_applied: bool = False
     prefit_checkpoint: str | None = None
+    prefit_objective: PrefitObjective | None = None
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,11 @@ class MergeCheckpointManifest:
             probe_path=spec_payload.get("probe_path"),
             prefit_applied=bool(spec_payload.get("prefit_applied", False)),
             prefit_checkpoint=spec_payload["prefit_checkpoint"],
+            prefit_objective=(
+                PrefitObjective(spec_payload["prefit_objective"])
+                if spec_payload.get("prefit_objective") is not None
+                else None
+            ),
         )
         return cls(
             spec=spec,

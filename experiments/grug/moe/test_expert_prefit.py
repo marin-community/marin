@@ -10,13 +10,17 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 from experiments.grug.moe.expert_merge import MoeLayerTrace
 from experiments.grug.moe.expert_prefit import (
+    AggregatePrefitDataset,
     PrefitConfig,
     PrefitDataset,
     PrefitSplit,
+    aggregate_prefit_loss,
     aggregate_routed_moe_nrmse,
+    make_aggregate_prefit_dataset,
     make_prefit_dataset,
     prefit_loss,
     prefit_shared_bank,
+    sample_aggregate_prefit_batch,
     sample_prefit_batch,
 )
 
@@ -136,6 +140,72 @@ def test_aggregate_routed_moe_nrmse_matches_independent_topk_reference():
 
     np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
     assert not np.isclose(float(actual), float(aggregate_routed_moe_nrmse(shared, trace, (0, 1))))
+
+
+def test_aggregate_prefit_split_batch_and_loss_match_independent_layer_balanced_reference():
+    teacher_by_layer = {2: _bank(7), 3: _bank(8)}
+    shared = _bank(9)
+    assignments = {2: (0, 1), 3: (1, 0)}
+    datasets: list[AggregatePrefitDataset] = []
+    for layer, teacher in teacher_by_layer.items():
+        inputs = np.random.default_rng(layer).normal(size=(20, 3)).astype(np.float32)
+        selected = np.stack(
+            [np.arange(20, dtype=np.int32) % 2, (np.arange(20, dtype=np.int32) + 1) % 2],
+            axis=-1,
+        )
+        combine = np.tile(np.asarray([[0.75, 0.25]], dtype=np.float32), (20, 1))
+        teacher_output = teacher(inputs, selected, combine)
+        assert not isinstance(teacher_output, tuple)
+        trace = MoeLayerTrace(inputs, selected, combine, teacher_output)
+        first = make_aggregate_prefit_dataset(
+            trace,
+            source_layer=layer,
+            source_to_shared=assignments[layer],
+            heldout_fraction=0.25,
+            seed=100 + layer,
+        )
+        repeated = make_aggregate_prefit_dataset(
+            trace,
+            source_layer=layer,
+            source_to_shared=assignments[layer],
+            heldout_fraction=0.25,
+            seed=100 + layer,
+        )
+        np.testing.assert_array_equal(first.train.mlp_input, repeated.train.mlp_input)
+        np.testing.assert_array_equal(first.heldout.mlp_input, repeated.heldout.mlp_input)
+        assert first.train.mlp_input.shape[0] == 15
+        assert first.heldout.mlp_input.shape[0] == 5
+        datasets.append(first)
+
+    batch = sample_aggregate_prefit_batch(
+        tuple(datasets),
+        examples_per_layer=4,
+        split=PrefitSplit.HELDOUT,
+        rng=np.random.default_rng(11),
+    )
+    np.testing.assert_array_equal(np.bincount(np.asarray(batch.layer_indices)), [4, 4])
+    source_heldout = datasets[1].heldout
+    for row, mapped_experts in zip(np.asarray(batch.inputs)[4:], np.asarray(batch.shared_experts)[4:], strict=True):
+        source_index = int(np.flatnonzero(np.all(np.asarray(source_heldout.mlp_input) == row, axis=-1))[0])
+        np.testing.assert_array_equal(mapped_experts, 1 - np.asarray(source_heldout.selected_experts)[source_index])
+
+    actual_loss, actual_nrmse = aggregate_prefit_loss(shared, batch)
+    explicit_predictions = np.zeros_like(np.asarray(batch.targets))
+    for token in range(batch.inputs.shape[0]):
+        for route in range(batch.shared_experts.shape[1]):
+            expert = int(batch.shared_experts[token, route])
+            weight = float(batch.combine_weights[token, route])
+            gate = np.asarray(batch.inputs[token]) @ np.asarray(shared.w_gate[expert])
+            up = np.asarray(batch.inputs[token]) @ np.asarray(shared.w_up[expert])
+            hidden = np.asarray(jax.nn.silu(gate)) * up
+            explicit_predictions[token] += weight * (hidden @ np.asarray(shared.w_down[expert]))
+    expected_nrmse = []
+    for layer_index in range(2):
+        mask = np.asarray(batch.layer_indices) == layer_index
+        error = np.mean(np.sum(np.square(explicit_predictions[mask] - np.asarray(batch.targets)[mask]), axis=-1))
+        expected_nrmse.append(np.sqrt(error / float(batch.target_power_by_layer[layer_index])))
+    np.testing.assert_allclose(actual_nrmse, expected_nrmse, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(actual_loss, np.mean(np.square(expected_nrmse)), rtol=1e-5, atol=1e-6)
 
 
 def test_prefit_rejects_unbalanced_shared_clusters():

@@ -20,6 +20,7 @@ from marin.training.training import LevanterCheckpoint
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe.expert_merge import AssignmentMode
+from experiments.grug.moe.expert_prefit import PrefitObjective
 from experiments.grug.moe.heuristic import build_from_heuristic
 from experiments.grug.moe.launch import grug_moe_training_datasets, grug_moe_validation_datasets
 from experiments.grug.moe.merge_artifacts import (
@@ -56,6 +57,7 @@ class MergeBranchName(StrEnum):
     NATIVE = "native"
     SPECTRAL = "spectral"
     SPECTRAL_PREFIT = "spectral_prefit"
+    NATIVE_AGGREGATE_PREFIT = "native_aggregate_prefit"
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,7 @@ class MergeRecoveryPipeline:
     calibration: ArtifactStep[ExpertCalibrationArtifact]
     matching: ArtifactStep[ExpertMatchingArtifact]
     prefit: ArtifactStep[LevanterCheckpoint]
+    native_aggregate_prefit: ArtifactStep[LevanterCheckpoint]
     branches: tuple[MergeRecoveryBranch, ...]
 
 
@@ -180,6 +183,8 @@ def build_merge_recovery_pipeline(
             output_path=ctx.output_path,
             resources=ctx.runtime_arg(_RESOURCES_KEY),
             run_id="grug-xem-spectral-prefit-d512-l2-l3",
+            assignment_mode=AssignmentMode.SPECTRAL,
+            objective=PrefitObjective.PER_EXPERT,
         )
 
     prefit = ArtifactStep(
@@ -192,14 +197,51 @@ def build_merge_recovery_pipeline(
         runtime_args={_RESOURCES_KEY: resources},
     )
 
+    native_aggregate_prefit_name = "grug/expert_merge/d512/native-aggregate-prefit-layers-2-3"
+    native_aggregate_prefit_version = resolve_version(native_aggregate_prefit_name, version)
+
+    def native_aggregate_prefit_config(ctx: StepContext) -> PrefitJobConfig:
+        return PrefitJobConfig(
+            source=SourceCheckpointConfig(
+                model=base_model,
+                optimizer=base_optimizer,
+                training_steps=source_steps,
+                checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                source_commit=teacher_commit,
+            ),
+            calibration_path=ctx.artifact_path(calibration),
+            matching_path=ctx.artifact_path(matching),
+            output_path=ctx.output_path,
+            resources=ctx.runtime_arg(_RESOURCES_KEY),
+            run_id="grug-xem-native-aggregate-prefit-d512-l2-l3",
+            assignment_mode=AssignmentMode.NATIVE,
+            objective=PrefitObjective.AGGREGATE_ROUTED,
+        )
+
+    native_aggregate_prefit = ArtifactStep(
+        name=user_namespaced_name(native_aggregate_prefit_name, native_aggregate_prefit_version),
+        version=native_aggregate_prefit_version,
+        artifact_type=LevanterCheckpoint,
+        run=run_prefit,
+        build_config=native_aggregate_prefit_config,
+        deps=(teacher, calibration, matching),
+        runtime_args={_RESOURCES_KEY: resources},
+    )
+
     branch_specs = (
-        (MergeBranchName.IDENTITY, AssignmentMode.IDENTITY, False),
-        (MergeBranchName.NATIVE, AssignmentMode.NATIVE, False),
-        (MergeBranchName.SPECTRAL, AssignmentMode.SPECTRAL, False),
-        (MergeBranchName.SPECTRAL_PREFIT, AssignmentMode.SPECTRAL, True),
+        (MergeBranchName.IDENTITY, AssignmentMode.IDENTITY, None),
+        (MergeBranchName.NATIVE, AssignmentMode.NATIVE, None),
+        (MergeBranchName.SPECTRAL, AssignmentMode.SPECTRAL, None),
+        (MergeBranchName.SPECTRAL_PREFIT, AssignmentMode.SPECTRAL, prefit),
+        (
+            MergeBranchName.NATIVE_AGGREGATE_PREFIT,
+            AssignmentMode.NATIVE,
+            native_aggregate_prefit,
+        ),
     )
     branches = []
-    for branch_name, assignment_mode, prefit_applied in branch_specs:
+    for branch_name, assignment_mode, branch_prefit in branch_specs:
+        prefit_applied = branch_prefit is not None
         conversion_name = f"grug/expert_merge/d512/{branch_name.value}/converted"
         conversion_version = resolve_version(conversion_name, version)
 
@@ -209,6 +251,7 @@ def build_merge_recovery_pipeline(
             branch_name=branch_name,
             assignment_mode=assignment_mode,
             prefit_applied=prefit_applied,
+            branch_prefit=branch_prefit,
         ) -> ConversionJobConfig:
             return ConversionJobConfig(
                 source=SourceCheckpointConfig(
@@ -220,7 +263,7 @@ def build_merge_recovery_pipeline(
                 ),
                 calibration_path=ctx.artifact_path(calibration),
                 matching_path=ctx.artifact_path(matching),
-                prefit_path=_checkpoint_dir(ctx.artifact_path(prefit)) if prefit_applied else None,
+                prefit_path=_checkpoint_dir(ctx.artifact_path(branch_prefit)) if branch_prefit is not None else None,
                 output_path=ctx.output_path,
                 resources=ctx.runtime_arg(_RESOURCES_KEY),
                 run_id=f"grug-xem-{branch_name.value}-convert-d512-l2-l3",
@@ -228,7 +271,9 @@ def build_merge_recovery_pipeline(
             )
 
         conversion_deps = (
-            (teacher, calibration, matching, prefit) if prefit_applied else (teacher, calibration, matching)
+            (teacher, calibration, matching, branch_prefit)
+            if branch_prefit is not None
+            else (teacher, calibration, matching)
         )
         converted = ArtifactStep(
             name=user_namespaced_name(conversion_name, conversion_version),
@@ -311,6 +356,7 @@ def build_merge_recovery_pipeline(
         calibration=calibration,
         matching=matching,
         prefit=prefit,
+        native_aggregate_prefit=native_aggregate_prefit,
         branches=tuple(branches),
     )
 

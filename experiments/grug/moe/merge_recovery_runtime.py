@@ -28,11 +28,17 @@ from rigging.filesystem import StoragePath, check_gcs_paths_same_region, prefix_
 
 from experiments.grug.moe.expert_merge import AssignmentMode, ExpertProbeSet, build_spectral_probe_set, eval_expert
 from experiments.grug.moe.expert_prefit import (
+    AggregatePrefitBatch,
+    AggregatePrefitDataset,
     PrefitBatch,
     PrefitDataset,
+    PrefitObjective,
     PrefitSplit,
+    aggregate_prefit_loss,
     aggregate_routed_moe_nrmse,
+    make_aggregate_prefit_dataset,
     prefit_loss,
+    sample_aggregate_prefit_batch,
     sample_prefit_batch,
 )
 from experiments.grug.moe.merge_artifacts import (
@@ -322,7 +328,7 @@ def _prefit_datasets(
     config: PrefitJobConfig,
     matching: MatchingArtifactManifest,
 ) -> tuple[PrefitDataset, ...]:
-    assignment = np.asarray(matching.assignments[AssignmentMode.SPECTRAL], dtype=np.int32)
+    assignment = np.asarray(matching.assignments[config.assignment_mode], dtype=np.int32)
     representative_bank = teacher.expert_banks[teacher.blocks[config.representative_layer].expert_bank_index]
     source_bank = teacher.expert_banks[teacher.blocks[config.source_layer].expert_bank_index]
     datasets: list[PrefitDataset] = []
@@ -371,6 +377,30 @@ def _prefit_datasets(
             )
         )
     return tuple(datasets)
+
+
+def _aggregate_prefit_datasets(
+    config: PrefitJobConfig,
+    matching: MatchingArtifactManifest,
+) -> tuple[AggregatePrefitDataset, ...]:
+    identity = tuple(range(matching.num_experts))
+    source_assignment = tuple(int(index) for index in matching.assignments[config.assignment_mode])
+    return (
+        make_aggregate_prefit_dataset(
+            read_layer_calibration_trace(config.calibration_path, config.representative_layer),
+            source_layer=config.representative_layer,
+            source_to_shared=identity,
+            heldout_fraction=config.config.aggregate_trace_heldout_fraction,
+            seed=config.seed + config.representative_layer,
+        ),
+        make_aggregate_prefit_dataset(
+            read_layer_calibration_trace(config.calibration_path, config.source_layer),
+            source_layer=config.source_layer,
+            source_to_shared=source_assignment,
+            heldout_fraction=config.config.aggregate_trace_heldout_fraction,
+            seed=config.seed + config.source_layer,
+        ),
+    )
 
 
 def _initial_prefit_state(bank: MoEExpertMlp, config: PrefitJobConfig) -> PrefitRuntimeState:
@@ -424,13 +454,52 @@ def _evaluate_prefit(
     return state, loss_value, np.asarray(jax.device_get(nrmse))
 
 
+def _aggregate_prefit_step(
+    state: PrefitRuntimeState,
+    batch: AggregatePrefitBatch,
+    optimizer: optax.GradientTransformation,
+    epsilon: float,
+) -> tuple[PrefitRuntimeState, jax.Array]:
+    loss, grads = jax.value_and_grad(lambda bank: aggregate_prefit_loss(bank, batch, epsilon=epsilon)[0])(state.bank)
+    updates, opt_state = optimizer.update(grads, state.opt_state, state.bank)
+    return (
+        dataclasses.replace(
+            state,
+            step=state.step + jnp.array(1, dtype=jnp.int32),
+            bank=optax.apply_updates(state.bank, updates),
+            opt_state=opt_state,
+        ),
+        loss,
+    )
+
+
+def _evaluate_aggregate_prefit(
+    state: PrefitRuntimeState,
+    heldout_batch: AggregatePrefitBatch,
+    *,
+    epsilon: float,
+) -> tuple[PrefitRuntimeState, float, np.ndarray]:
+    loss, nrmse = aggregate_prefit_loss(state.bank, heldout_batch, epsilon=epsilon)
+    loss_value = float(jax.device_get(loss))
+    if loss_value < float(jax.device_get(state.best_loss)):
+        state = dataclasses.replace(
+            state,
+            best_bank=state.bank,
+            best_loss=jnp.asarray(loss, dtype=jnp.float32),
+            stale_evaluations=jnp.array(0, dtype=jnp.int32),
+        )
+    else:
+        state = dataclasses.replace(state, stale_evaluations=state.stale_evaluations + 1)
+    return state, loss_value, np.asarray(jax.device_get(nrmse))
+
+
 def evaluate_prefit_routed_nrmse(
     bank: MoEExpertMlp,
     config: PrefitJobConfig,
     matching: MatchingArtifactManifest,
 ) -> dict[int, float]:
     """Evaluate aggregate persisted calibration traces for both merged layers."""
-    assignment = tuple(int(index) for index in matching.assignments[AssignmentMode.SPECTRAL])
+    assignment = tuple(int(index) for index in matching.assignments[config.assignment_mode])
     identity = tuple(range(matching.num_experts))
     assignments = {
         config.representative_layer: identity,
@@ -482,6 +551,23 @@ def evaluate_prefit_checkpoint_local(config: PrefitJobConfig) -> dict[int, float
             source_state.params.blocks[config.representative_layer].expert_bank_index
         ]
         state = load_checkpoint(_initial_prefit_state(initial_bank, config), checkpoint, mesh=mesh)
+        if config.objective is PrefitObjective.AGGREGATE_ROUTED:
+            datasets = _aggregate_prefit_datasets(config, matching)
+            heldout_batch = sample_aggregate_prefit_batch(
+                datasets,
+                examples_per_layer=config.config.aggregate_heldout_examples_per_layer,
+                split=PrefitSplit.HELDOUT,
+                rng=np.random.default_rng(config.seed),
+            )
+            _, nrmse = aggregate_prefit_loss(state.best_bank, heldout_batch, epsilon=config.config.epsilon)
+            values = np.asarray(jax.device_get(nrmse))
+            metrics = {dataset.source_layer: float(value) for dataset, value in zip(datasets, values, strict=True)}
+            logger.info(
+                "Prefit checkpoint %s held-out aggregate routed-MoE NRMSE by layer: %s",
+                checkpoint,
+                metrics,
+            )
+            return metrics
         metrics = evaluate_prefit_routed_nrmse(state.best_bank, config, matching)
         logger.info(
             "Prefit checkpoint %s aggregate routed-MoE NRMSE by layer: %s",
@@ -514,6 +600,8 @@ def _prefit_manifest(
         )
     return {
         "format_version": _PREFIT_FORMAT_VERSION,
+        "assignment_mode": config.assignment_mode.value,
+        "objective": config.objective.value,
         "source_checkpoint": source_checkpoint,
         "calibration_path": config.calibration_path,
         "matching_path": config.matching_path,
@@ -528,8 +616,57 @@ def _prefit_manifest(
             f"layer_{layer}": value for layer, value in routed_nrmse_by_layer.items()
         },
         "probe_config": json.loads(json.dumps(dataclasses.asdict(config.probe))),
-        "prefit_config": json.loads(json.dumps(dataclasses.asdict(config.config))),
+        "prefit_config": _prefit_config_payload(config),
     }
+
+
+def _aggregate_prefit_manifest(
+    config: PrefitJobConfig,
+    *,
+    source_checkpoint: str,
+    step: int,
+    best_loss: float,
+    stopped_early: bool,
+    nrmse_by_layer: np.ndarray,
+    datasets: tuple[AggregatePrefitDataset, ...],
+) -> dict[str, Any]:
+    return {
+        "format_version": _PREFIT_FORMAT_VERSION,
+        "assignment_mode": config.assignment_mode.value,
+        "objective": config.objective.value,
+        "source_checkpoint": source_checkpoint,
+        "calibration_path": config.calibration_path,
+        "matching_path": config.matching_path,
+        "representative_layer": config.representative_layer,
+        "source_layer": config.source_layer,
+        "step": step,
+        "best_loss": best_loss,
+        "stopped_early": stopped_early,
+        "merge/prefit_heldout_routed_moe_nrmse_by_layer": {
+            f"layer_{dataset.source_layer}": float(nrmse)
+            for dataset, nrmse in zip(datasets, nrmse_by_layer, strict=True)
+        },
+        "aggregate_trace_split": {
+            f"layer_{dataset.source_layer}": {
+                "train_tokens": int(dataset.train.mlp_input.shape[0]),
+                "heldout_tokens": int(dataset.heldout.mlp_input.shape[0]),
+            }
+            for dataset in datasets
+        },
+        "prefit_config": _prefit_config_payload(config),
+    }
+
+
+def _prefit_config_payload(config: PrefitJobConfig) -> dict[str, Any]:
+    payload = json.loads(json.dumps(dataclasses.asdict(config.config)))
+    if config.objective is PrefitObjective.PER_EXPERT:
+        payload.pop("aggregate_examples_per_layer")
+        payload.pop("aggregate_heldout_examples_per_layer")
+        payload.pop("aggregate_trace_heldout_fraction")
+    else:
+        payload.pop("examples_per_source")
+        payload.pop("heldout_examples_per_source")
+    return payload
 
 
 def _validate_prefit_provenance(
@@ -539,23 +676,112 @@ def _validate_prefit_provenance(
     source_checkpoint: str,
 ) -> None:
     manifest = json.loads(StoragePath(prefix_join(checkpoint, _PREFIT_MANIFEST_FILENAME)).read_text())
+    actual = {
+        **manifest,
+        "assignment_mode": manifest.get("assignment_mode", AssignmentMode.SPECTRAL.value),
+        "objective": manifest.get("objective", PrefitObjective.PER_EXPERT.value),
+    }
     expected = {
+        "assignment_mode": config.assignment_mode.value,
+        "objective": config.objective.value,
         "source_checkpoint": source_checkpoint,
         "calibration_path": config.calibration_path,
         "matching_path": config.matching_path,
         "representative_layer": config.representative_layer,
         "source_layer": config.source_layer,
-        "probe_config": json.loads(json.dumps(dataclasses.asdict(config.probe))),
-        "prefit_config": json.loads(json.dumps(dataclasses.asdict(config.config))),
+        "prefit_config": _prefit_config_payload(config),
     }
-    mismatches = {key: (manifest.get(key), value) for key, value in expected.items() if manifest.get(key) != value}
+    if config.objective is PrefitObjective.PER_EXPERT:
+        expected["probe_config"] = json.loads(json.dumps(dataclasses.asdict(config.probe)))
+    mismatches = {key: (actual.get(key), value) for key, value in expected.items() if actual.get(key) != value}
     if mismatches:
         raise ValueError(f"existing prefit checkpoint has stale provenance: {mismatches}")
+
+
+def _run_aggregate_prefit(
+    config: PrefitJobConfig,
+    *,
+    matching: MatchingArtifactManifest,
+    state: PrefitRuntimeState,
+    optimizer: optax.GradientTransformation,
+    checkpoint_root: str,
+    source_checkpoint: str,
+) -> None:
+    datasets = _aggregate_prefit_datasets(config, matching)
+    heldout_batch = sample_aggregate_prefit_batch(
+        datasets,
+        examples_per_layer=config.config.aggregate_heldout_examples_per_layer,
+        split=PrefitSplit.HELDOUT,
+        rng=np.random.default_rng(config.seed),
+    )
+    if int(state.step) == 0 and math.isinf(float(jax.device_get(state.best_loss))):
+        state, _, _ = _evaluate_aggregate_prefit(state, heldout_batch, epsilon=config.config.epsilon)
+
+    step_fn = jax.jit(_aggregate_prefit_step, static_argnums=(2, 3))
+    stopped_early = int(state.stale_evaluations) >= config.config.early_stopping_patience
+    while int(state.step) < config.config.steps and not stopped_early:
+        next_step = int(state.step) + 1
+        batch = sample_aggregate_prefit_batch(
+            datasets,
+            examples_per_layer=config.config.aggregate_examples_per_layer,
+            split=PrefitSplit.TRAIN,
+            rng=np.random.default_rng(config.seed + next_step),
+        )
+        state, loss = step_fn(state, batch, optimizer, config.config.epsilon)
+        if next_step % config.config.eval_every != 0 and next_step != config.config.steps:
+            continue
+        state, heldout_loss, _ = _evaluate_aggregate_prefit(
+            state,
+            heldout_batch,
+            epsilon=config.config.epsilon,
+        )
+        _, best_nrmse_by_layer = aggregate_prefit_loss(
+            state.best_bank,
+            heldout_batch,
+            epsilon=config.config.epsilon,
+        )
+        nrmse_by_layer = np.asarray(jax.device_get(best_nrmse_by_layer))
+        stopped_early = int(state.stale_evaluations) >= config.config.early_stopping_patience
+        manifest = _aggregate_prefit_manifest(
+            config,
+            source_checkpoint=source_checkpoint,
+            step=int(state.step),
+            best_loss=float(jax.device_get(state.best_loss)),
+            stopped_early=stopped_early,
+            nrmse_by_layer=nrmse_by_layer,
+            datasets=datasets,
+        )
+        _save_permanent_checkpoint(
+            state,
+            checkpoint_root=checkpoint_root,
+            step=int(state.step),
+            sync_name=f"aggregate_prefit_{int(state.step)}",
+            extra_manifest=(_PREFIT_MANIFEST_FILENAME, manifest),
+        )
+        if jax.process_index() == 0:
+            logger.info(
+                "aggregate prefit step=%d train_loss=%g heldout_loss=%g best_loss=%g stale=%d "
+                "heldout_routed_moe_nrmse=%s",
+                int(state.step),
+                float(jax.device_get(loss)),
+                heldout_loss,
+                float(jax.device_get(state.best_loss)),
+                int(state.stale_evaluations),
+                {dataset.source_layer: float(value) for dataset, value in zip(datasets, nrmse_by_layer, strict=True)},
+            )
 
 
 def run_prefit_local(config: PrefitJobConfig) -> None:
     if config.config.steps <= 0 or config.config.eval_every <= 0 or config.config.early_stopping_patience <= 0:
         raise ValueError("prefit steps, eval_every, and early_stopping_patience must be positive")
+    if config.objective is PrefitObjective.AGGREGATE_ROUTED and (
+        config.config.aggregate_examples_per_layer <= 0
+        or config.config.aggregate_heldout_examples_per_layer <= 0
+        or not 0.0 < config.config.aggregate_trace_heldout_fraction < 1.0
+    ):
+        raise ValueError("aggregate prefit batch sizes must be positive and heldout fraction must lie in (0, 1)")
+    if config.objective is PrefitObjective.AGGREGATE_ROUTED and config.assignment_mode is not AssignmentMode.NATIVE:
+        raise ValueError("aggregate routed prefit requires the native Hungarian assignment")
     _validate_runtime_paths(
         config,
         {
@@ -602,6 +828,32 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
                 int(state.step) >= config.config.steps
                 or int(state.stale_evaluations) >= config.config.early_stopping_patience
             ):
+                if config.objective is PrefitObjective.AGGREGATE_ROUTED:
+                    datasets = _aggregate_prefit_datasets(config, matching)
+                    heldout_batch = sample_aggregate_prefit_batch(
+                        datasets,
+                        examples_per_layer=config.config.aggregate_heldout_examples_per_layer,
+                        split=PrefitSplit.HELDOUT,
+                        rng=np.random.default_rng(config.seed),
+                    )
+                    _, nrmse = aggregate_prefit_loss(
+                        state.best_bank,
+                        heldout_batch,
+                        epsilon=config.config.epsilon,
+                    )
+                    logger.info(
+                        "Loaded completed aggregate prefit output at step %d; held-out NRMSE by layer: %s",
+                        int(state.step),
+                        {
+                            dataset.source_layer: float(value)
+                            for dataset, value in zip(
+                                datasets,
+                                np.asarray(jax.device_get(nrmse)),
+                                strict=True,
+                            )
+                        },
+                    )
+                    return
                 routed_nrmse_by_layer = evaluate_prefit_routed_nrmse(state.best_bank, config, matching)
                 logger.info(
                     "Loaded completed prefit output at step %d; aggregate routed-MoE NRMSE by layer: %s",
@@ -609,6 +861,19 @@ def run_prefit_local(config: PrefitJobConfig) -> None:
                     routed_nrmse_by_layer,
                 )
                 return
+
+        if config.objective is PrefitObjective.AGGREGATE_ROUTED:
+            _run_aggregate_prefit(
+                config,
+                matching=matching,
+                state=state,
+                optimizer=optimizer,
+                checkpoint_root=checkpoint_root,
+                source_checkpoint=source_checkpoint,
+            )
+            return
+        if config.objective is not PrefitObjective.PER_EXPERT:
+            raise AssertionError(f"unhandled prefit objective {config.objective}")
 
         datasets = _prefit_datasets(source_state.params, config, matching)
         heldout_batch = sample_prefit_batch(
@@ -676,9 +941,9 @@ def _load_prefitted_bank(
     initial_bank: MoEExpertMlp,
     *,
     mesh: jax.sharding.Mesh,
-) -> tuple[MoEExpertMlp | None, str | None]:
+) -> tuple[MoEExpertMlp | None, str | None, PrefitObjective | None]:
     if config.prefit_path is None:
-        return None, None
+        return None, None, None
     checkpoint = latest_checkpoint_path(config.prefit_path)
     manifest = json.loads(StoragePath(prefix_join(checkpoint, _PREFIT_MANIFEST_FILENAME)).read_text())
     if int(manifest["format_version"]) != _PREFIT_FORMAT_VERSION:
@@ -690,6 +955,12 @@ def _load_prefitted_bank(
         config.source_layer,
     ):
         raise ValueError("prefit checkpoint layers do not match the conversion")
+    assignment_mode = AssignmentMode(manifest.get("assignment_mode", AssignmentMode.SPECTRAL.value))
+    objective = PrefitObjective(manifest.get("objective", PrefitObjective.PER_EXPERT.value))
+    if assignment_mode is not config.assignment_mode:
+        raise ValueError(
+            f"prefit checkpoint uses {assignment_mode.value} assignment, conversion uses {config.assignment_mode.value}"
+        )
     optimizer = optax.adamw(1e-4, weight_decay=0.0)
     template = PrefitRuntimeState(
         step=jnp.array(0, dtype=jnp.int32),
@@ -700,7 +971,7 @@ def _load_prefitted_bank(
         stale_evaluations=jnp.array(0, dtype=jnp.int32),
     )
     restored = load_checkpoint(template, checkpoint, mesh=mesh)
-    return restored.best_bank, checkpoint
+    return restored.best_bank, checkpoint, objective
 
 
 def _validate_conversion_provenance(
@@ -710,12 +981,17 @@ def _validate_conversion_provenance(
 ) -> None:
     spec = manifest.spec
     expected_prefit = latest_checkpoint_path(config.prefit_path) if config.prefit_path is not None else None
+    expected_prefit_objective = None
+    if expected_prefit is not None:
+        prefit_manifest = json.loads(StoragePath(prefix_join(expected_prefit, _PREFIT_MANIFEST_FILENAME)).read_text())
+        expected_prefit_objective = PrefitObjective(prefit_manifest.get("objective", PrefitObjective.PER_EXPERT.value))
     expected = {
         "source_checkpoint": latest_checkpoint_path(config.source.checkpoint_dir),
         "calibration_path": config.calibration_path,
         "cost_matrix_path": prefix_join(config.matching_path, "cost_matrix.npz"),
         "probe_path": prefix_join(config.matching_path, "probes"),
         "prefit_checkpoint": expected_prefit,
+        "prefit_objective": expected_prefit_objective,
     }
     actual = {name: getattr(spec, name) for name in expected}
     mismatches = {name: (actual[name], value) for name, value in expected.items() if actual[name] != value}
@@ -797,7 +1073,11 @@ def run_conversion_local(config: ConversionJobConfig) -> None:
         representative_bank = source_state.params.expert_banks[
             source_state.params.blocks[config.representative_layer].expert_bank_index
         ]
-        prefitted_bank, prefit_checkpoint = _load_prefitted_bank(config, representative_bank, mesh=mesh)
+        prefitted_bank, prefit_checkpoint, prefit_objective = _load_prefitted_bank(
+            config,
+            representative_bank,
+            mesh=mesh,
+        )
         spec = OnePairMergeCheckpointSpec(
             representative_layer=config.representative_layer,
             source_layer=config.source_layer,
@@ -810,6 +1090,7 @@ def run_conversion_local(config: ConversionJobConfig) -> None:
             probe_path=prefix_join(config.matching_path, "probes"),
             prefit_applied=prefitted_bank is not None,
             prefit_checkpoint=prefit_checkpoint,
+            prefit_objective=prefit_objective,
         )
         converted = convert_grug_state_for_one_pair_merge(
             source_state,

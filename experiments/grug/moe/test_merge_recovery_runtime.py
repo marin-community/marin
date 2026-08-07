@@ -30,7 +30,7 @@ from experiments.grug.moe.expert_merge import (
     MoeLayerTrace,
     SpectralProbeConfig,
 )
-from experiments.grug.moe.expert_prefit import PrefitConfig
+from experiments.grug.moe.expert_prefit import PrefitConfig, PrefitObjective
 from experiments.grug.moe.merge_artifacts import (
     CalibrationArtifactManifest,
     MatchingArtifactManifest,
@@ -162,7 +162,11 @@ def _runtime_inputs(tmp_path: Path) -> _RuntimeInputs:
     )
 
     matching_path = tmp_path / "matching"
-    assignments = {mode: (0, 1) for mode in AssignmentMode}
+    assignments = {
+        AssignmentMode.IDENTITY: (0, 1),
+        AssignmentMode.NATIVE: (1, 0),
+        AssignmentMode.SPECTRAL: (0, 1),
+    }
     zero_costs = np.zeros((2, 2), dtype=np.float32)
     write_matching_artifact(
         str(matching_path),
@@ -204,7 +208,11 @@ from experiments.grug.moe.expert_merge import (
     build_spectral_probe_set,
     eval_expert,
 )
-from experiments.grug.moe.expert_prefit import aggregate_routed_moe_nrmse
+from experiments.grug.moe.expert_prefit import (
+    AggregatePrefitBatch,
+    aggregate_prefit_loss,
+    aggregate_routed_moe_nrmse,
+)
 from experiments.grug.moe.merge_recovery_runtime import compact_merge_mesh
 
 mesh = compact_merge_mesh()
@@ -306,11 +314,47 @@ with set_mesh(mesh):
         routed_output=teacher_output,
     )
     aggregate_nrmse = aggregate_routed_moe_nrmse(bank, trace, assignment)
+    target_power_by_layer = np.asarray(
+        [
+            np.mean(np.sum(np.square(teacher_output[:4]), axis=-1)),
+            np.mean(np.sum(np.square(teacher_output[4:]), axis=-1)),
+        ],
+        dtype=np.float32,
+    )
+    aggregate_batch = AggregatePrefitBatch(
+        inputs=jnp.asarray(routed_inputs),
+        targets=jnp.asarray(teacher_output),
+        shared_experts=jnp.asarray(np.asarray(assignment)[routed_experts]),
+        combine_weights=jnp.asarray(routed_weights),
+        layer_indices=jnp.asarray([0, 0, 0, 0, 1, 1, 1, 1], dtype=jnp.int32),
+        target_power_by_layer=jnp.asarray(target_power_by_layer),
+    )
+    routed_shared_output = bank(
+        aggregate_batch.inputs,
+        aggregate_batch.shared_experts,
+        aggregate_batch.combine_weights,
+    )
+    assert not isinstance(routed_shared_output, tuple)
+    aggregate_loss, aggregate_nrmse_by_layer = aggregate_prefit_loss(bank, aggregate_batch)
+    gradient = jax.grad(lambda current: aggregate_prefit_loss(current, aggregate_batch)[0])(bank)
     expected_nrmse = np.sqrt(
         np.sum(np.square(shared_output - teacher_output)) / np.sum(np.square(teacher_output))
     )
+    expected_nrmse_by_layer = []
+    for layer_slice in (slice(0, 4), slice(4, 8)):
+        error = np.mean(
+            np.sum(
+                np.square(np.asarray(routed_shared_output)[layer_slice] - teacher_output[layer_slice]),
+                axis=-1,
+            )
+        )
+        power = np.mean(np.sum(np.square(teacher_output[layer_slice]), axis=-1))
+        expected_nrmse_by_layer.append(np.sqrt(error / (power + 1e-8)))
 np.testing.assert_allclose(closed, explicit, rtol=1e-5, atol=1e-5)
 np.testing.assert_allclose(aggregate_nrmse, expected_nrmse, rtol=5e-3, atol=1e-6)
+np.testing.assert_allclose(aggregate_nrmse_by_layer, expected_nrmse_by_layer, rtol=5e-3, atol=1e-6)
+np.testing.assert_allclose(aggregate_loss, np.mean(np.square(expected_nrmse_by_layer)), rtol=5e-3, atol=1e-6)
+assert all(np.all(np.isfinite(np.asarray(leaf))) for leaf in jax.tree.leaves(gradient))
 assert probes.spectral_pairs.shape == (8, 2, 16)
 assert expert_output.shape == (4, 16)
 """
@@ -386,6 +430,8 @@ def test_prefit_worker_persists_best_bank_and_balanced_layer_metrics(tmp_path: P
         output_path=str(output_path),
         resources=ResourceConfig.with_cpu(),
         run_id="test-prefit",
+        assignment_mode=AssignmentMode.SPECTRAL,
+        objective=PrefitObjective.PER_EXPERT,
         representative_layer=1,
         source_layer=2,
         probe=SpectralProbeConfig(
@@ -411,6 +457,9 @@ def test_prefit_worker_persists_best_bank_and_balanced_layer_metrics(tmp_path: P
     checkpoint = latest_checkpoint_path(str(output_path / "checkpoints"))
     manifest = json.loads((Path(checkpoint) / "prefit_manifest.json").read_text())
     assert manifest["step"] == 1
+    assert manifest["assignment_mode"] == AssignmentMode.SPECTRAL.value
+    assert manifest["objective"] == PrefitObjective.PER_EXPERT.value
+    assert not any(key.startswith("aggregate_") for key in manifest["prefit_config"])
     assert len(manifest["nrmse_by_source"]) == 4
     assert set(manifest["merge/expert_holdout_nrmse_by_cluster"]) == {"shared_0000", "shared_0001"}
     routed_nrmse = manifest["merge/prefit_routed_moe_nrmse_by_layer"]
@@ -433,8 +482,91 @@ def test_prefit_worker_persists_best_bank_and_balanced_layer_metrics(tmp_path: P
     assert int(restored.step) == 1
     assert np.isfinite(float(restored.best_loss))
 
+    legacy_manifest = dict(manifest)
+    legacy_manifest.pop("assignment_mode")
+    legacy_manifest.pop("objective")
+    (Path(checkpoint) / "prefit_manifest.json").write_text(json.dumps(legacy_manifest))
+    assert evaluate_prefit_checkpoint_local(config) == posthoc_routed_nrmse
+
     with pytest.raises(ValueError, match="stale provenance"):
         run_prefit_local(dataclasses.replace(config, config=dataclasses.replace(config.config, steps=2)))
+
+
+def test_native_aggregate_prefit_checkpoint_preserves_objective_assignment_and_converts(tmp_path: Path) -> None:
+    inputs = _runtime_inputs(tmp_path)
+    output_path = tmp_path / "native-aggregate-prefit"
+    config = PrefitJobConfig(
+        source=inputs.source,
+        calibration_path=inputs.calibration_path,
+        matching_path=inputs.matching_path,
+        output_path=str(output_path),
+        resources=ResourceConfig.with_cpu(),
+        run_id="test-native-aggregate-prefit",
+        assignment_mode=AssignmentMode.NATIVE,
+        objective=PrefitObjective.AGGREGATE_ROUTED,
+        representative_layer=1,
+        source_layer=2,
+        config=PrefitConfig(
+            learning_rate=1e-3,
+            steps=1,
+            eval_every=1,
+            early_stopping_patience=1,
+            aggregate_examples_per_layer=2,
+            aggregate_heldout_examples_per_layer=2,
+            aggregate_trace_heldout_fraction=0.25,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="requires the native Hungarian assignment"):
+        run_prefit_local(dataclasses.replace(config, assignment_mode=AssignmentMode.SPECTRAL))
+
+    run_prefit_local(config)
+    posthoc_nrmse = evaluate_prefit_checkpoint_local(config)
+
+    checkpoint = latest_checkpoint_path(str(output_path / "checkpoints"))
+    manifest = json.loads((Path(checkpoint) / "prefit_manifest.json").read_text())
+    assert manifest["assignment_mode"] == AssignmentMode.NATIVE.value
+    assert manifest["objective"] == PrefitObjective.AGGREGATE_ROUTED.value
+    assert "probe_config" not in manifest
+    assert "examples_per_source" not in manifest["prefit_config"]
+    assert "heldout_examples_per_source" not in manifest["prefit_config"]
+    assert "merge/expert_holdout_nrmse_by_cluster" not in manifest
+    heldout_nrmse = manifest["merge/prefit_heldout_routed_moe_nrmse_by_layer"]
+    assert posthoc_nrmse == {1: heldout_nrmse["layer_1"], 2: heldout_nrmse["layer_2"]}
+    assert manifest["aggregate_trace_split"] == {
+        "layer_1": {"heldout_tokens": 2, "train_tokens": 6},
+        "layer_2": {"heldout_tokens": 2, "train_tokens": 6},
+    }
+    with pytest.raises(ValueError, match="stale provenance"):
+        evaluate_prefit_checkpoint_local(dataclasses.replace(config, objective=PrefitObjective.PER_EXPERT))
+
+    converted_path = tmp_path / "native-aggregate-converted"
+    conversion = ConversionJobConfig(
+        source=inputs.source,
+        calibration_path=inputs.calibration_path,
+        matching_path=inputs.matching_path,
+        prefit_path=str(output_path / "checkpoints"),
+        output_path=str(converted_path),
+        resources=ResourceConfig.with_cpu(),
+        run_id="test-native-aggregate-conversion",
+        assignment_mode=AssignmentMode.NATIVE,
+        representative_layer=1,
+        source_layer=2,
+    )
+    run_conversion_local(conversion)
+    converted_manifest = read_merge_checkpoint_manifest(latest_checkpoint_path(str(converted_path / "checkpoints")))
+    assert converted_manifest.spec.assignment_mode is AssignmentMode.NATIVE
+    assert converted_manifest.spec.prefit_applied
+    assert converted_manifest.spec.prefit_objective is PrefitObjective.AGGREGATE_ROUTED
+
+    with pytest.raises(ValueError, match="prefit checkpoint uses native assignment"):
+        run_conversion_local(
+            dataclasses.replace(
+                conversion,
+                assignment_mode=AssignmentMode.SPECTRAL,
+                output_path=str(tmp_path / "wrong-assignment-converted"),
+            )
+        )
 
 
 def _data_config() -> LmDataConfig:

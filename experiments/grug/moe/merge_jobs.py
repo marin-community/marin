@@ -11,7 +11,7 @@ from levanter.optim.config import OptimizerConfig
 
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.expert_merge import AssignmentMode, SpectralProbeConfig
-from experiments.grug.moe.expert_prefit import PrefitConfig
+from experiments.grug.moe.expert_prefit import PrefitConfig, PrefitObjective
 from experiments.grug.moe.merge_recovery import RecoveryStage
 from experiments.grug.moe.model import GrugModelConfig
 
@@ -64,6 +64,8 @@ class PrefitJobConfig:
     output_path: str
     resources: ResourceConfig
     run_id: str
+    assignment_mode: AssignmentMode
+    objective: PrefitObjective
     representative_layer: int = 2
     source_layer: int = 3
     probe: SpectralProbeConfig = field(default_factory=SpectralProbeConfig)

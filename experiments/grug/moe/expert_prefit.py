@@ -25,6 +25,11 @@ class PrefitSplit(StrEnum):
     HELDOUT = "heldout"
 
 
+class PrefitObjective(StrEnum):
+    PER_EXPERT = "per_expert"
+    AGGREGATE_ROUTED = "aggregate_routed"
+
+
 @dataclass(frozen=True)
 class PrefitDataset:
     """Native and spectral examples for one source expert in one source layer."""
@@ -61,6 +66,27 @@ class PrefitBatch:
     target_power_by_source: jax.Array
 
 
+@dataclass(frozen=True)
+class AggregatePrefitDataset:
+    """Deterministically split routed-MoE trace for one source layer."""
+
+    source_layer: int
+    source_to_shared: tuple[int, ...]
+    train: MoeLayerTrace
+    heldout: MoeLayerTrace
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class AggregatePrefitBatch:
+    inputs: jax.Array
+    targets: jax.Array
+    shared_experts: jax.Array
+    combine_weights: jax.Array
+    layer_indices: jax.Array
+    target_power_by_layer: jax.Array
+
+
 @register_dataclass
 @dataclass(frozen=True)
 class PrefitState:
@@ -79,6 +105,9 @@ class PrefitConfig:
     eval_every: int = 100
     early_stopping_patience: int = 5
     epsilon: float = _DEFAULT_NORMALIZATION_EPSILON
+    aggregate_examples_per_layer: int = 256
+    aggregate_heldout_examples_per_layer: int = 512
+    aggregate_trace_heldout_fraction: float = 0.2
 
 
 @dataclass(frozen=True)
@@ -134,6 +163,120 @@ def aggregate_routed_moe_nrmse(
     error = jnp.sum(jnp.square(shared_output.astype(jnp.float32) - teacher_output))
     teacher_power = jnp.sum(jnp.square(teacher_output))
     return jnp.sqrt(error / (teacher_power + epsilon))
+
+
+def _slice_trace(trace: MoeLayerTrace, indices: np.ndarray) -> MoeLayerTrace:
+    return MoeLayerTrace(
+        mlp_input=np.asarray(trace.mlp_input)[indices],
+        selected_experts=np.asarray(trace.selected_experts)[indices],
+        combine_weights=np.asarray(trace.combine_weights)[indices],
+        routed_output=np.asarray(trace.routed_output)[indices],
+    )
+
+
+def make_aggregate_prefit_dataset(
+    trace: MoeLayerTrace,
+    *,
+    source_layer: int,
+    source_to_shared: tuple[int, ...],
+    heldout_fraction: float,
+    seed: int,
+) -> AggregatePrefitDataset:
+    """Split one cached layer trace into deterministic train and held-out subsets."""
+    if not 0.0 < heldout_fraction < 1.0:
+        raise ValueError(f"heldout_fraction must lie strictly between zero and one, got {heldout_fraction}")
+    num_tokens = trace.mlp_input.shape[0]
+    if num_tokens < 2:
+        raise ValueError("aggregate prefit needs at least two trace tokens per layer")
+    assignment = np.asarray(source_to_shared, dtype=np.int32)
+    if assignment.ndim != 1 or not np.array_equal(np.sort(assignment), np.arange(assignment.shape[0])):
+        raise ValueError("source_to_shared must be a bijection")
+    selected_experts = np.asarray(trace.selected_experts)
+    if np.any(selected_experts < 0) or np.any(selected_experts >= assignment.shape[0]):
+        raise ValueError("trace contains an out-of-range source expert ID")
+
+    permutation = np.random.default_rng(seed).permutation(num_tokens)
+    heldout_count = min(num_tokens - 1, max(1, round(num_tokens * heldout_fraction)))
+    heldout_indices = permutation[:heldout_count]
+    train_indices = permutation[heldout_count:]
+    return AggregatePrefitDataset(
+        source_layer=source_layer,
+        source_to_shared=tuple(int(index) for index in assignment),
+        train=_slice_trace(trace, train_indices),
+        heldout=_slice_trace(trace, heldout_indices),
+    )
+
+
+def sample_aggregate_prefit_batch(
+    datasets: tuple[AggregatePrefitDataset, ...],
+    *,
+    examples_per_layer: int,
+    split: PrefitSplit,
+    rng: np.random.Generator,
+) -> AggregatePrefitBatch:
+    """Sample an equal number of frozen routed examples from every layer."""
+    if not datasets:
+        raise ValueError("at least one aggregate prefit dataset is required")
+    if examples_per_layer <= 0:
+        raise ValueError(f"examples_per_layer must be positive, got {examples_per_layer}")
+    if len({dataset.source_layer for dataset in datasets}) != len(datasets):
+        raise ValueError("aggregate prefit source layers must be distinct")
+
+    input_rows = []
+    target_rows = []
+    shared_expert_rows = []
+    combine_rows = []
+    layer_indices = []
+    target_power = []
+    for layer_index, dataset in enumerate(datasets):
+        trace = dataset.heldout if split is PrefitSplit.HELDOUT else dataset.train
+        inputs = np.asarray(trace.mlp_input)
+        indices = rng.choice(inputs.shape[0], size=examples_per_layer, replace=inputs.shape[0] < examples_per_layer)
+        targets = np.asarray(trace.routed_output)
+        assignment = np.asarray(dataset.source_to_shared, dtype=np.int32)
+        input_rows.append(inputs[indices])
+        target_rows.append(targets[indices])
+        shared_expert_rows.append(assignment[np.asarray(trace.selected_experts)[indices]])
+        combine_rows.append(np.asarray(trace.combine_weights)[indices])
+        layer_indices.extend([layer_index] * examples_per_layer)
+        target_power.append(float(np.mean(np.sum(np.square(targets.astype(np.float64)), axis=-1))))
+
+    return AggregatePrefitBatch(
+        inputs=jnp.asarray(np.concatenate(input_rows)),
+        targets=jnp.asarray(np.concatenate(target_rows)),
+        shared_experts=jnp.asarray(np.concatenate(shared_expert_rows), dtype=jnp.int32),
+        combine_weights=jnp.asarray(np.concatenate(combine_rows)),
+        layer_indices=jnp.asarray(layer_indices, dtype=jnp.int32),
+        target_power_by_layer=jnp.asarray(target_power, dtype=jnp.float32),
+    )
+
+
+def aggregate_prefit_loss(
+    bank: MoEExpertMlp,
+    batch: AggregatePrefitBatch,
+    *,
+    epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
+) -> tuple[jax.Array, jax.Array]:
+    """Return layer-balanced normalized aggregate routed-output loss."""
+    predictions = bank(batch.inputs, batch.shared_experts, batch.combine_weights)
+    if isinstance(predictions, tuple):
+        predictions = predictions[0]
+    squared_error = jnp.sum(jnp.square(predictions.astype(jnp.float32) - batch.targets), axis=-1)
+    num_layers = batch.target_power_by_layer.shape[0]
+    layer_mask = jax.nn.one_hot(batch.layer_indices, num_layers, dtype=squared_error.dtype)
+    replicated_sharding = None if get_abstract_mesh().empty else P(None)
+    error_by_layer = jnp.einsum("n,nl->l", squared_error, layer_mask, out_sharding=replicated_sharding)
+    count_by_layer = jnp.einsum(
+        "n,nl->l",
+        jnp.ones_like(squared_error),
+        layer_mask,
+        out_sharding=replicated_sharding,
+    )
+    target_power_by_layer = batch.target_power_by_layer
+    if replicated_sharding is not None:
+        target_power_by_layer = jax.sharding.reshard(target_power_by_layer, replicated_sharding)
+    normalized_mse = error_by_layer / count_by_layer / (target_power_by_layer + epsilon)
+    return jnp.mean(normalized_mse), jnp.sqrt(normalized_mse)
 
 
 def make_prefit_dataset(
@@ -338,14 +481,21 @@ def prefit_shared_bank(
 
 
 __all__ = [
+    "AggregatePrefitBatch",
+    "AggregatePrefitDataset",
     "PrefitBatch",
     "PrefitConfig",
     "PrefitDataset",
     "PrefitEvaluation",
+    "PrefitObjective",
     "PrefitResult",
     "PrefitSplit",
+    "aggregate_prefit_loss",
+    "aggregate_routed_moe_nrmse",
+    "make_aggregate_prefit_dataset",
     "make_prefit_dataset",
     "prefit_loss",
     "prefit_shared_bank",
+    "sample_aggregate_prefit_batch",
     "sample_prefit_batch",
 ]
