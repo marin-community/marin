@@ -494,9 +494,9 @@ class PodConfig:
     # this: dispatching one with no LocalQueue configured raises (Kueue or
     # nothing — there is no non-Kueue colocation fallback).
     local_queue: str = ""
-    # PriorityBand -> WorkloadPriorityClass name. A band with no entry is not
-    # stamped (Kueue uses its default priority); Iris never invents class names.
-    kueue_priority_classes: dict[int, str] = field(default_factory=dict)
+    # PriorityBand -> WorkloadPriorityClass name for GPU and coordinator work.
+    # A band with no entry leaves all Workloads at the native Pod priority.
+    protected_priority_classes: dict[int, str] = field(default_factory=dict)
     # coscheduling group_by -> KueueTopologyBinding. Defaults to CoreWeave
     # conventions; a group_by with no entry carries no topology annotation.
     kueue_topologies: dict[str, KueueTopologyBinding] = field(default_factory=lambda: dict(_CW_DEFAULT_TOPOLOGIES))
@@ -909,13 +909,12 @@ def _build_pod_manifest(
     # The composer enforces a configured LocalQueue for the K8s backend.
     assert config.local_queue, "K8s backend requires a Kueue LocalQueue (kubernetes_provider.kueue.cluster_queue)"
     labels[_KUEUE_QUEUE_NAME] = config.local_queue
-    # Stamp an explicit WorkloadPriorityClass only when the cluster maps this band.
-    # An unmapped band is not left unranked: Kueue derives the Workload's priority
-    # from the pod's own PriorityClass (spec.priorityClassName), so the
-    # iris-{production,interactive,batch} bands already order the queue. Iris never
-    # invents a WorkloadPriorityClass name (a missing one is rejected).
-    wpc = config.kueue_priority_classes.get(run_req.priority)
-    if wpc:
+    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
+    # Kueue preempts plain Pods with a delete, which bypasses PodDisruptionBudgets.
+    # Coordinators therefore share the GPU offset so reclaim never selects one as
+    # a same-band CPU victim. Ordinary CPU Workloads retain the native band value.
+    wpc = config.protected_priority_classes.get(effective_band)
+    if wpc and (gpu_count > 0 or _is_coordinator_task(run_req)):
         labels[_KUEUE_PRIORITY_CLASS] = wpc
     if is_gang:
         group_by = run_req.coscheduling.group_by
@@ -1012,7 +1011,6 @@ def _build_pod_manifest(
     # The INTERACTIVE floor keeps a request built outside that path (an unset field reads
     # as INHERIT) from silently dropping to the cluster default. A band with no configured
     # class name leaves priorityClassName unset.
-    effective_band = run_req.priority or job_pb2.PRIORITY_BAND_INTERACTIVE
     priority_class_name = config.priority_class_names.get(effective_band)
     if priority_class_name:
         spec["priorityClassName"] = priority_class_name

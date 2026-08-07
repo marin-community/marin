@@ -1356,21 +1356,38 @@ def test_kueue_pod_group_pod_index_from_task_ordinal():
 
 
 def test_kueue_priority_class_not_stamped_without_config():
-    """With no configured priority-class mapping, pods carry no WorkloadPriorityClass label
-    (the cluster's Kueue default applies)."""
     req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
     manifest = _build_pod_manifest(req, pod_config(local_queue="iris-lq"))
     assert _KUEUE_PRIORITY_CLASS not in manifest["metadata"]["labels"]
 
 
-def test_kueue_priority_class_stamped_from_config():
-    """A configured band->WorkloadPriorityClass mapping stamps the label for that band."""
+def test_kueue_priority_class_not_stamped_on_ordinary_cpu_work():
     req = _cosched_req("/job/task/0", num_tasks=64, priority=job_pb2.PRIORITY_BAND_BATCH)
     manifest = _build_pod_manifest(
         req,
-        pod_config(local_queue="iris-lq", kueue_priority_classes={job_pb2.PRIORITY_BAND_BATCH: "iris-batch"}),
+        pod_config(
+            local_queue="iris-lq",
+            protected_priority_classes={job_pb2.PRIORITY_BAND_BATCH: "iris-protected-batch"},
+        ),
     )
-    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-batch"
+    assert _KUEUE_PRIORITY_CLASS not in manifest["metadata"]["labels"]
+
+
+@pytest.mark.parametrize("shape", ["gpu", "coordinator"])
+def test_kueue_priority_class_stamped_on_protected_work(shape):
+    req = make_run_req("/job/task/0", num_tasks=1, priority=job_pb2.PRIORITY_BAND_BATCH)
+    if shape == "gpu":
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=8))
+    manifest = _build_pod_manifest(
+        req,
+        pod_config(
+            local_queue="iris-lq",
+            protected_priority_classes={job_pb2.PRIORITY_BAND_BATCH: "iris-protected-batch"},
+        ),
+    )
+
+    assert manifest["metadata"]["labels"][_KUEUE_PRIORITY_CLASS] == "iris-protected-batch"
+    assert manifest["spec"]["priorityClassName"] == "iris-batch"
 
 
 def test_kueue_required_topology_for_nvlink_domain():

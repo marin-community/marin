@@ -10,6 +10,7 @@ functions return plain dicts and do no I/O.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import yaml
 
@@ -18,6 +19,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     CW_MULTINODE_TOPOLOGY_LABELS,
 )
 from iris.cluster.platforms.k8s.nodepool_manifests import KUEUE_NODE_LABEL
+from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, IRIS_PRIORITY_CLASSES
 
 # --------------------------------------------------------------------------
 # Variants
@@ -114,6 +116,29 @@ NON_BINDING_QUOTA = {
     "rdma/ib": "1G",
 }
 COVERED_RESOURCES = list(NON_BINDING_QUOTA)
+
+
+# Kueue-only priority offset for GPU and protected coordinator Workloads. The
+# one-point gaps preserve Iris's user-facing priority bands while allowing a
+# protected Workload to reclaim capacity from ordinary CPU work in the same
+# band. Kubernetes Pod PriorityClasses remain unchanged.
+@dataclass(frozen=True)
+class ProtectedWorkloadPriorityClass:
+    band: str
+    name: str
+    value: int
+
+
+PROTECTED_WORKLOAD_PRIORITY_CLASSES = tuple(
+    ProtectedWorkloadPriorityClass(
+        band=class_name.removeprefix("iris-"),
+        name=f"iris-protected-{class_name.removeprefix('iris-')}",
+        value=value + 1,
+    )
+    for class_name, value, _ in IRIS_PRIORITY_CLASSES
+    if class_name != IRIS_PRIORITY_CLASS_SYSTEM
+)
+WORKLOAD_PRIORITY_CLASS_SOURCE = "kueue.x-k8s.io/workloadpriorityclass"
 
 
 # --------------------------------------------------------------------------
@@ -282,6 +307,17 @@ def build_resource_flavor(topology_name: str = INFINIBAND_TOPOLOGY_NAME) -> dict
             # Tie the flavor to the Topology so podset-topology annotations resolve.
             "topologyName": topology_name,
         },
+    }
+
+
+def build_workload_priority_class(name: str, value: int) -> dict:
+    """Return a Kueue WorkloadPriorityClass for protected Iris work."""
+    return {
+        "apiVersion": "kueue.x-k8s.io/v1beta1",
+        "kind": "WorkloadPriorityClass",
+        "metadata": {"name": name},
+        "value": value,
+        "description": "Iris GPU and coordinator workload priority",
     }
 
 

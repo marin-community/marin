@@ -120,6 +120,7 @@ kubernetes_provider:
     # Pulumi owns the cluster-scoped ClusterQueue and cw-tas ResourceFlavor;
     # Iris reconciles the namespaced LocalQueue bound to it at controller start.
     cluster_queue: iris-cq
+    protect_accelerator_workloads: true
   # CoreWeave's node health checker runs preemptible (priority -1) GPU
   # verification pods on idle nodes. Kueue TAS counts them as fixed node usage
   # and cannot preempt non-Kueue pods, so gangs queue behind every NHC sweep;

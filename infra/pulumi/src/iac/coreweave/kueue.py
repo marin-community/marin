@@ -10,6 +10,7 @@ import pulumi_kubernetes as k8s
 from iris.cluster.platforms.k8s.kueue_manifests import (
     CW_REPO_URL,
     OPERATOR_NS,
+    PROTECTED_WORKLOAD_PRIORITY_CLASSES,
     RELEASE_DEFAULT,
     RESOURCE_FLAVOR_NAME,
     TOPOLOGIES,
@@ -17,6 +18,7 @@ from iris.cluster.platforms.k8s.kueue_manifests import (
     build_cluster_queue,
     build_resource_flavor,
     build_topology_cr,
+    build_workload_priority_class,
 )
 from iris.cluster.platforms.k8s.types import IRIS_PRIORITY_CLASS_SYSTEM, iris_priority_class_manifest
 
@@ -117,6 +119,21 @@ class KueueAddon(pulumi.ComponentResource):
             opts=child_opts(RESOURCE_FLAVOR_NAME, depends_on=[release, *topologies]),
         )
 
+        workload_priority_classes = []
+        for priority_class in PROTECTED_WORKLOAD_PRIORITY_CLASSES:
+            manifest = build_workload_priority_class(priority_class.name, priority_class.value)
+            workload_priority_classes.append(
+                k8s.apiextensions.CustomResource(
+                    f"workload-priority-{priority_class.band}",
+                    api_version=manifest["apiVersion"],
+                    kind=manifest["kind"],
+                    metadata=manifest["metadata"],
+                    value=manifest["value"],
+                    description=manifest["description"],
+                    opts=child_opts(priority_class.name, depends_on=[release]),
+                )
+            )
+
         queue_manifest = build_cluster_queue(args.cluster_queue)
         k8s.apiextensions.CustomResource(
             "cluster-queue",
@@ -124,7 +141,10 @@ class KueueAddon(pulumi.ComponentResource):
             kind=queue_manifest["kind"],
             metadata=queue_manifest["metadata"],
             spec=queue_manifest["spec"],
-            opts=child_opts(args.cluster_queue, depends_on=[release, resource_flavor]),
+            opts=child_opts(
+                args.cluster_queue,
+                depends_on=[release, resource_flavor, *workload_priority_classes],
+            ),
         )
 
         # The iris-system PriorityClass and the manager's pin to it.
