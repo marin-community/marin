@@ -89,7 +89,7 @@ class BlockingBatchDataset(AsyncDataset[np.ndarray]):
 def test_loader_iterator_close_cancels_in_flight_prefetch():
     with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
         dataset = BlockingBatchDataset()
-        loader = DataLoader(dataset, 1, max_buffered_batches=1, mesh=mesh, axis_resources=None)
+        loader = DataLoader(dataset, len(jax.devices()), max_buffered_batches=1, mesh=mesh, axis_resources=None)
         iterator = loader.iter_from_step(0)
 
         assert dataset.started.wait(timeout=5)
