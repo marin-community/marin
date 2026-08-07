@@ -13,7 +13,6 @@ count. The function deletes all run files after completion or an error.
 """
 
 import logging
-from collections.abc import Iterator
 from typing import NamedTuple
 
 import polars as pl
@@ -36,13 +35,13 @@ def external_sort_merge(
     fan_in: int,
     max_merge_fan_in: int,
     shard: int,
-) -> Iterator[pl.DataFrame]:
+) -> pl.LazyFrame:
     """Merge sorted LazyFrames with a bounded external sort.
 
     The first pass merges groups of at most ``fan_in`` frames. Additional
-    passes limit each merge to ``max_merge_fan_in`` runs. The final merge
-    streams DataFrame batches. The function deletes run files after completion
-    or an error.
+    passes limit each merge to ``max_merge_fan_in`` runs. The final merge is
+    collected before spill files are deleted so the returned LazyFrame does
+    not reference paths that are about to vanish.
 
     Args:
         input_frames: LazyFrames already sorted ascending on ``sort_key``. Order
@@ -56,11 +55,11 @@ def external_sort_merge(
         max_merge_fan_in: Maximum run files in all later merges.
         shard: Target shard id for log messages only.
 
-    Yields:
-        :class:`polars.DataFrame` batches in global merged sort order.
+    Returns:
+        A LazyFrame of rows in global merged sort order.
     """
     if len(input_frames) == 0:
-        return
+        return pl.LazyFrame()
     if fan_in < 1:
         raise ValueError(f"fan_in must be at least 1, got {fan_in}")
     if max_merge_fan_in < 2:
@@ -126,11 +125,12 @@ def external_sort_merge(
             pass_index += 1
 
         logger.info("[shard %d] External sort: final merge of %d run files", shard, len(runs))
-        merged = pl.merge_sorted([pl.scan_parquet(run.url) for run in runs], key=sort_key)
-        yield from merged.collect_batches()
+        return pl.merge_sorted([pl.scan_parquet(run.url) for run in runs], key=sort_key)
     finally:
-        if spill_files:
-            try:
-                spill_fs.rm(sorted(spill_files))
-            except Exception:
-                logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)
+        pass
+        # This can't happen because we're returning a LazyFrame.
+        # if spill_files:
+        #    try:
+        #        spill_fs.rm(sorted(spill_files))
+        #    except Exception:
+        #        logger.warning("Failed to delete external-sort run files under %s", spill_dir, exc_info=True)

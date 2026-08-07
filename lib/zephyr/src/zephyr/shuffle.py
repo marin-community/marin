@@ -477,69 +477,63 @@ class ScatterReader:
     def total_chunks(self) -> int:
         return sum(len(chunks) for _, chunks in self._files)
 
-    def merge_sorted_chunks(self, external_sort_dir: str) -> Iterator[Any]:
-        """Merge sorted chunks using k-way merge, yielding items in global sort order.
+    def merge_sorted_chunks(self, external_sort_dir: str) -> pl.LazyFrame:
+        """Merge sorted chunks into one LazyFrame in global sort order.
 
         Each chunk file is assumed to be sorted by ``_SORT_KEY_COL`` (key plus optional
         secondary sort). Performs a k-way merge across all chunks.
+
         Args:
-            external_sort_dir: If set and the shard exceeds the memory budget,
-                spill intermediate runs.
+            external_sort_dir: Directory for intermediate runs when the shard
+                exceeds the memory budget.
 
-        Yields:
-            Deserialized Python items in merged sort order.
+        Returns:
+            A LazyFrame of merged rows (including ``_SORT_KEY_COL``). Empty when
+            this shard has no chunks.
         """
+        if self.total_chunks == 0:
+            return pl.LazyFrame()
 
-        with pl.Config() as polars_config:
-            polars_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)
+        # Upper bound on merge memory: the target shard's entire data
+        # resident at once (the streaming merge holds strictly less in
+        # flight), using the exact per-shard payload bytes recorded in the
+        # sidecars — no row-count estimation.
+        estimated_merge_memory_bytes = self.shard_payload_bytes
+        # Overhead per row in the Polars DataFrame plus the deserialized Python object.
+        # Future Polars-only processing would remove the Python overhead.
+        overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
+        memory_bytes = _task_memory_bytes()
 
-            if self.total_chunks == 0:
-                return
+        if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
+            fan_in = math.ceil(math.sqrt(self.total_chunks))
 
-            # Upper bound on merge memory: the target shard's entire data
-            # resident at once (the streaming merge holds strictly less in
-            # flight), using the exact per-shard payload bytes recorded in the
-            # sidecars — no row-count estimation.
-            estimated_merge_memory_bytes = self.shard_payload_bytes
-            # Overhead per row in the Polars DataFrame plus the deserialized Python object.
-            # Future Polars-only processing would remove the Python overhead.
-            overhead = _SCATTER_READ_POLARS_ROW_OVERHEAD * _SCATTER_READ_PYTHON_ROW_OVERHEAD
-            memory_bytes = _task_memory_bytes()
+            logger.info(
+                "[shard %d] Merging %d chunks via external sort "
+                "(%s memory needed > %s memory available); fan_in=%d",
+                self._target_shard,
+                self.total_chunks,
+                humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+                humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
+                fan_in,
+            )
 
-            if estimated_merge_memory_bytes * overhead > memory_bytes * _SCATTER_READ_MEMORY_FRACTION:
-                fan_in = math.ceil(math.sqrt(self.total_chunks))
-
-                logger.info(
-                    "[shard %d] Merging %d chunks via external sort "
-                    "(%s memory needed > %s memory available); fan_in=%d",
-                    self._target_shard,
-                    self.total_chunks,
-                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
-                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
-                    fan_in,
-                )
-
-                batches = external_sort_merge(
-                    input_frames=self.get_frames(),
-                    sort_key=_SORT_KEY_COL,
-                    external_sort_dir=external_sort_dir,
-                    fan_in=fan_in,
-                    max_merge_fan_in=_EXTERNAL_SORT_MAX_MERGE_FAN_IN,
-                    shard=self._target_shard,
-                )
-
-            else:
-                logger.info(
-                    "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
-                    self._target_shard,
-                    self.total_chunks,
-                    humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
-                    humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
-                )
-                batches = pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL).collect_batches()
-
-            for batch in batches:
-                yield from _dataframe_to_items(batch)
+            return external_sort_merge(
+                input_frames=self.get_frames(),
+                sort_key=_SORT_KEY_COL,
+                external_sort_dir=external_sort_dir,
+                fan_in=fan_in,
+                max_merge_fan_in=_EXTERNAL_SORT_MAX_MERGE_FAN_IN,
+                shard=self._target_shard,
+            )
+        else:
+            logger.info(
+                "[shard %d] Merging %d chunks in memory (%s memory needed < %s memory available)",
+                self._target_shard,
+                self.total_chunks,
+                humanfriendly.format_size(estimated_merge_memory_bytes * overhead, binary=True),
+                humanfriendly.format_size(memory_bytes * _SCATTER_READ_MEMORY_FRACTION, binary=True),
+            )
+            return pl.merge_sorted(self.get_frames(), key=_SORT_KEY_COL)
 
 
 # ---------------------------------------------------------------------------

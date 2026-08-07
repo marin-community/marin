@@ -11,6 +11,7 @@ knowledge of logical operation types.
 import functools
 import heapq
 import logging
+import polars as pl
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -43,9 +44,9 @@ from zephyr.dataset import (
     WriteOp,
     resolve_glob,
 )
-from zephyr.expr import Expr, referenced_columns
+from zephyr.expr import ColumnExpr, Expr, referenced_columns
 from zephyr.readers import InputFileSpec, compute_parquet_splits, load_file, load_file_batch
-from zephyr.shuffle import ScatterReader
+from zephyr.shuffle import _PAYLOAD_COL, _SORT_KEY_COL, ScatterReader, _dataframe_to_items
 from zephyr.writers import write_binary_file, write_jsonl_file, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
@@ -179,18 +180,69 @@ def _flatmap_gen(stream: Iterator, fn: Callable) -> Iterator:
         yield from fn(item)
 
 
+def _call_reducer(reducer_fn: Callable, key: Any, items: list) -> list:
+    """Invoke ``reducer_fn(key, Iterator)`` and normalize to a list of results."""
+    result = reducer_fn(key, iter(items))
+    if isinstance(result, Iterator):
+        return list(result)
+    return [result]
+
+
 def _reduce_gen(
     shard: ScatterReader,
     key_fn: Callable | Expr,
     reducer_fn: Callable,
     external_sort_dir: str,
 ) -> Iterator:
+    """Apply ``reducer_fn`` to each key group from a merged scatter shard.
+
+    When ``key_fn`` is a ``ColumnExpr`` naming a real data column (the
+    DataFrame/RecordBatch scatter path), groups are formed with Polars
+    ``group_by`` + ``agg`` and ``reducer_fn`` is called via ``map_elements`` —
+    still as ``reducer_fn(key, Iterator[items])``. Otherwise rows are
+    materialized and grouped with ``itertools.groupby`` (callable keys and
+    payload-encoded Python items).
+    """
+
+    # Maybe add this back
+    # with pl.Config() as polars_config:
+    #     polars_config.set_streaming_chunk_size(_POLARS_STREAMING_CHUNK_SIZE)
+
+    if shard.total_chunks == 0:
+        return
+
+    merged = shard.merge_sorted_chunks(external_sort_dir)
+    schema_names = set(merged.collect_schema().names())
+
+    if isinstance(key_fn, ColumnExpr) and key_fn.name in schema_names and _PAYLOAD_COL not in schema_names:
+        key_name = key_fn.name
+
+        def apply_reducer(row: dict) -> list:
+            return _call_reducer(reducer_fn, row[key_name], row["_row"])
+
+        batches = (
+            merged.drop(_SORT_KEY_COL)
+            .with_columns(pl.struct(pl.all()).alias("_row"))
+            .group_by(key_name, maintain_order=True)
+            .agg(pl.col("_row"))
+            .select(
+                pl.struct(pl.col(key_name), pl.col("_row"))
+                .map_elements(apply_reducer, return_dtype=pl.Object)
+                .alias("_results")
+            )
+            .collect_batches()
+        )
+        for batch in batches:
+            for group_results in batch.get_column("_results").to_list():
+                yield from group_results
+        return
+
     # key_fn is the same Scatter.key_fn/Reduce.key_fn value used to route
     # items on write; itertools.groupby needs a plain row-wise callable, so a
     # zephyr.expr.col(...) is normalized via its dict-evaluating .evaluate.
     row_key_fn = key_fn.evaluate if isinstance(key_fn, Expr) else key_fn
-    merged = shard.merge_sorted_chunks(external_sort_dir)
-    for key, grouped in groupby(merged, key=row_key_fn):
+    items = _dataframe_to_items(merged.collect())
+    for key, grouped in groupby(items, key=row_key_fn):
         result = reducer_fn(key, grouped)
         if isinstance(result, Iterator):
             yield from result
