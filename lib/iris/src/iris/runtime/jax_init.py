@@ -23,6 +23,8 @@ from rigging.timing import Deadline, Duration, ExponentialBackoff
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
+from iris.cluster.runtime.env import XLA_CACHE_PATH
+from iris.env_resources import TaskResources
 from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
@@ -32,6 +34,8 @@ from iris.hooks.multigpu import (
 logger = logging.getLogger(__name__)
 
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
+_XLA_AUTOTUNE_CACHE_SUBDIR = "per-fusion-autotune"
+_XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
 # JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
 # preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
 # GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
@@ -80,35 +84,74 @@ def _log_jax_bootstrap_inputs(job_info, *, port: int, endpoint_name: str) -> Non
 
 
 def configure_jax_compilation_cache() -> None:
-    """Default the JAX compilation cache to a subdir of the active Marin prefix.
+    """Set up both compilation caches: JAX's on object storage, XLA's on the node.
 
-    Without a cache dir, every process re-runs XLA compilation and kernel
-    autotune sweeps at startup. An explicit setting (``JAX_COMPILATION_CACHE_DIR``
-    or ``jax.config``) wins; otherwise the cache lands under the cluster's
-    region-local storage prefix, which may be a ``gs://``/``s3://`` URL.
+    JAX keeps compiled executables in a persistent cache it reads and writes
+    through fsspec, so a ``gs://``/``s3://`` prefix works and is what we want:
+    the cache is written only by process 0 (``jax._src.compiler._cache_write``),
+    so every other process and every later run can only benefit if they share
+    one location. A node-local directory would leave all but one node
+    permanently cold and would lose the cache on every reschedule.
 
-    JAX's own compilation cache handles a remote URL fine (it reads/writes via
-    fsspec), but it also derives XLA's C++ per-fusion autotune cache path from
-    the same directory and hands it to XLA's `tsl::Env`, which has no
-    ``gs://``/``s3://`` support and crashes the first compile with
-    "UNIMPLEMENTED: File system scheme ... not implemented". Disable that
-    derivation when the cache dir is remote; the autotune cache is ephemeral
-    (skipped entirely on a compilation-cache hit), so losing it costs at most
-    a few minutes on a cold compile.
+    XLA's per-fusion autotune cache is a different mechanism with the opposite
+    constraint. XLA opens it from C++ through ``tsl::Env``, which an OSS jaxlib
+    registers no object-store filesystem with, so a URL crashes the first
+    compile with "UNIMPLEMENTED: File system scheme ... not implemented". JAX
+    derives that path from ``jax_compilation_cache_dir``, which leaves no way to
+    split the two through JAX's own configuration. So on a remote cache dir we
+    turn JAX's derivation off and set XLA's flag ourselves, pointing it at the
+    node-local Iris cache mount. ``--xla_gpu_per_fusion_autotune_cache_dir`` is
+    on JAX's ``xla_flags_to_exclude_from_cache_key`` list, so naming it in
+    ``XLA_FLAGS`` does not perturb the compilation cache key.
+
+    Autotuning runs only on a compilation-cache miss, which is exactly when it
+    is expensive: a cold GB200 compile spends most of its time in Triton and
+    CUTLASS autotune sweeps. Keeping that on the node makes misses cheaper
+    without making hits rarer.
+
+    An explicit ``JAX_COMPILATION_CACHE_DIR`` or ``jax.config`` setting picks the
+    JAX cache location; otherwise it lands under the cluster's region-local
+    Marin prefix.
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
-    if os.environ.get("JAX_COMPILATION_CACHE_DIR") or jax.config.jax_compilation_cache_dir:
-        return
-
-    cache_dir = f"{marin_prefix().rstrip('/')}/{_COMPILATION_CACHE_SUBDIR}"
-    os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
-    jax.config.update("jax_compilation_cache_dir", cache_dir)
+    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or jax.config.jax_compilation_cache_dir
+    if not cache_dir:
+        cache_dir = f"{marin_prefix().rstrip('/')}/{_COMPILATION_CACHE_SUBDIR}"
+        os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
+        jax.config.update("jax_compilation_cache_dir", cache_dir)
     logger.info("JAX compilation cache: %s", cache_dir)
 
-    if "://" in cache_dir and "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
+    if "://" not in cache_dir:
+        return
+
+    if "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
         jax.config.update("jax_persistent_cache_enable_xla_caches", "none")
-        logger.info("XLA autotune sub-cache disabled (compilation cache is remote: %s)", cache_dir)
+    _enable_node_local_xla_autotune_cache()
+
+
+def _enable_node_local_xla_autotune_cache() -> None:
+    """Point XLA's per-fusion autotune cache at the node-local Iris cache mount.
+
+    Only GPU tasks: the flag exists in a CUDA jaxlib and a TPU or CPU build
+    aborts the process on an unknown XLA flag. An explicit setting in
+    ``XLA_FLAGS`` wins.
+    """
+    if TaskResources.from_environment().gpu_count == 0:
+        return
+
+    if not os.path.isdir(XLA_CACHE_PATH):
+        logger.info("XLA autotune cache disabled: %s is not mounted", XLA_CACHE_PATH)
+        return
+
+    xla_flags = os.environ.get("XLA_FLAGS", "")
+    if any(flag.partition("=")[0] == _XLA_AUTOTUNE_CACHE_DIR_FLAG for flag in xla_flags.split()):
+        return
+
+    autotune_dir = f"{XLA_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
+    os.makedirs(autotune_dir, exist_ok=True)
+    os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
+    logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
 
 
 # An endpoint name that has not been registered yet surfaces differently across

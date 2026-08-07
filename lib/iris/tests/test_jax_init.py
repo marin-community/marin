@@ -20,6 +20,7 @@ import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
+from iris.env_resources import _read_iris_resource_proto
 from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax
 
 EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800
@@ -415,10 +416,25 @@ def _isolated_jax_cache_config():
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("JAX_COMPILATION_CACHE_DIR", None)
             os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
+            os.environ.pop("XLA_FLAGS", None)
+            os.environ.pop("IRIS_TASK_RESOURCES", None)
+            _read_iris_resource_proto.cache_clear()
             yield
     finally:
+        _read_iris_resource_proto.cache_clear()
         jax.config.update("jax_compilation_cache_dir", original_cache_dir)
         jax.config.update("jax_persistent_cache_enable_xla_caches", original_enable_xla_caches)
+
+
+@contextmanager
+def _gpu_task(tmp_path):
+    """Present this process as an Iris GPU task with the XLA cache mount in place."""
+    xla_cache_dir = tmp_path / "xla-cache"
+    xla_cache_dir.mkdir()
+    os.environ["IRIS_TASK_RESOURCES"] = '{"device": {"gpu": {"count": 4, "variant": "GB200"}}}'
+    _read_iris_resource_proto.cache_clear()
+    with patch.object(jax_init_module, "XLA_CACHE_PATH", str(xla_cache_dir)):
+        yield xla_cache_dir
 
 
 def test_configure_compilation_cache_derives_from_marin_prefix() -> None:
@@ -493,3 +509,67 @@ def test_configure_compilation_cache_keeps_explicit_xla_autotune_setting() -> No
         # var itself (which JAX reads directly) is left as the caller set it.
         assert jax.config.jax_persistent_cache_enable_xla_caches == original
         assert os.environ["JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES"] == "all"
+
+
+def test_remote_cache_points_xla_autotune_at_the_node_mount(tmp_path) -> None:
+    """A GPU task with a remote JAX cache autotunes into the node-local mount."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as xla_cache_dir:
+        os.environ["XLA_FLAGS"] = "--xla_gpu_enable_command_buffer="
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        autotune_dir = f"{xla_cache_dir}/per-fusion-autotune"
+        assert f"--xla_gpu_per_fusion_autotune_cache_dir={autotune_dir}" in os.environ["XLA_FLAGS"].split()
+        # The pre-existing flag survives; XLA_FLAGS is additive, not replaced.
+        assert "--xla_gpu_enable_command_buffer=" in os.environ["XLA_FLAGS"].split()
+        assert os.path.isdir(autotune_dir)
+
+
+def test_remote_cache_leaves_xla_flags_alone_without_gpus(tmp_path) -> None:
+    """A TPU or CPU jaxlib aborts on an unknown --xla_gpu flag, so never set one there."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        os.environ["IRIS_TASK_RESOURCES"] = '{"device": {"tpu": {"count": 4, "variant": "v5p-8"}}}'
+        _read_iris_resource_proto.cache_clear()
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        assert "XLA_FLAGS" not in os.environ
+
+
+def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
+    """An operator-chosen autotune directory wins over the node mount."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        os.environ["XLA_FLAGS"] = "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        assert os.environ["XLA_FLAGS"] == "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+
+
+def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:
+    """The remote-URL guard follows the cache dir, not who set it.
+
+    An explicitly configured ``gs://``/``s3://`` cache dir used to skip the
+    guard entirely, so JAX handed XLA a URL and the first compile died with
+    "UNIMPLEMENTED: File system scheme not implemented".
+    """
+    from jax._src import compiler as jax_compiler  # noqa: PLC0415
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as xla_cache_dir:
+        os.environ["JAX_COMPILATION_CACHE_DIR"] = "s3://explicit/cache"
+        configure_jax_compilation_cache()
+
+        options = jax_compiler.get_compile_options(num_replicas=1, num_partitions=1)
+        assert options.executable_build_options.debug_options.xla_gpu_per_fusion_autotune_cache_dir == ""
+        assert f"--xla_gpu_per_fusion_autotune_cache_dir={xla_cache_dir}/per-fusion-autotune" in os.environ["XLA_FLAGS"]
+
+
+def test_xla_autotune_flag_is_excluded_from_the_compilation_cache_key() -> None:
+    """The split depends on JAX ignoring this flag when it hashes XLA_FLAGS.
+
+    If a JAX upgrade drops the exclusion, every node's autotune directory name
+    enters the compilation cache key and the shared cache stops hitting.
+    """
+    from jax._src import cache_key  # noqa: PLC0415
+
+    assert jax_init_module._XLA_AUTOTUNE_CACHE_DIR_FLAG in cache_key.xla_flags_to_exclude_from_cache_key

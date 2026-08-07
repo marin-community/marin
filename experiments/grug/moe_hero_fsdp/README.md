@@ -39,6 +39,30 @@ synchronous host-staging and asynchronous commit phases without enabling Python 
 The entire artifact is pinned under `marin_temp_bucket(ttl_days=1)`, so it is disposable and covered
 by the one-day lifecycle policy.
 
+Compilation-cache probe:
+
+```bash
+RID="ccprobe-1"
+iris --cluster=marin job run --no-wait --enable-extra-resources \
+  --target-cluster cw-us-east-08a --priority interactive \
+  --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
+  -e JAX_EXPLAIN_CACHE_MISSES 1 \
+  -e JAX_COMPILATION_CACHE_DIR s3://marin-us-east-02a/marin/compile-cache-probe/"$RID" \
+  -- python -m experiments.grug.moe_hero_fsdp.compile_cache_probe \
+    --run-id "$RID" --nodes 2 --num-steps 8 --version dev --run
+```
+
+Four layers on two nodes, about five minutes end to end, on the same `run_grug` entrypoint and the
+same kernels as the hero. `JAX_EXPLAIN_CACHE_MISSES` turns JAX's per-module hit and miss accounting
+into WARNING lines in the task logs. Give each run its own `JAX_COMPILATION_CACHE_DIR` for a cold
+measurement, or repeat a prefix for a warm one. Add `-e JAX_DEBUG_LOG_MODULES jax._src.cache_key` to
+get the running hash after each cache-key component, which is how you find out *which* input
+changed when two runs that should share a key do not.
+
+On a hero rerun whose configuration has not changed, `-e JAX_COMPILATION_CACHE_EXPECT_PGLE 1` turns
+every unexpected compilation-cache write into a warning and loads the PGLE-optimized executable
+without re-running PGLE profiling.
+
 ## Files
 
 | file | contents |
@@ -49,6 +73,7 @@ by the one-day lifecycle policy.
 | `adamh.py` | AdamH (Adam direction + Frobenius hyperball scale-invariant step) |
 | `heuristic.py` | May Recipe compute-scaling LR refit; derives the optimizer from steps + batch |
 | `train.py` | training loop, state init, dispatch, hero runtime env |
+| `compile_cache_probe.py` | four-layer two-node run for measuring compilation-cache hits and misses |
 | `launch.py` | rack-scaled resources, DP/FSDP mesh, batch, tracker, dataset, and entry point |
 
 ## What's distinctive about this run

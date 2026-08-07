@@ -293,7 +293,7 @@ Task working directories and caches are node-local:
 | Container path | Kubernetes volume | Lifetime |
 | --- | --- | --- |
 | `/app`, `/tmp` | `emptyDir` | Pod |
-| `/uv/cache`, `/hf/cache`, `/cargo` | `hostPath` below `kubernetes_provider.cache_dir` | Node |
+| `/uv/cache`, `/hf/cache`, `/cargo`, `/xla/cache` | `hostPath` below `kubernetes_provider.cache_dir` | Node |
 | `/dev/shm` | memory-backed `emptyDir` | Pod |
 
 Keep `cache_dir` on `/mnt/local`, the node's NVMe storage. The shared Hugging
@@ -301,6 +301,12 @@ Face path is `HF_HUB_CACHE`; Iris deliberately leaves `HF_HOME` private because
 it may contain the submitter's token. HostPath caches are not durable and are
 not automatically pruned, so they can grow until the node is replaced or an
 operator cleans them. Durable outputs belong in object storage.
+
+`/xla/cache` holds XLA's per-fusion autotune results for GPU tasks, which
+`iris.runtime.jax_init` points there because XLA opens that directory from C++
+and cannot read an object-store URL. JAX's own compilation cache is the opposite
+case and stays on object storage under the Marin prefix: JAX writes it only from
+process 0, so a node-local copy would leave every other node permanently cold.
 
 `storage.local_state_dir` controls controller SQLite storage. When it is empty,
 Iris creates a controller state PVC. `storage.remote_state_dir` stores durable

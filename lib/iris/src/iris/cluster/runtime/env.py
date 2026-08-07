@@ -40,6 +40,11 @@ VENV_PATH = f"{WORKDIR_PATH}/.venv"
 UV_CACHE_PATH = "/uv/cache"
 HF_HUB_CACHE_PATH = "/hf/cache"
 CARGO_HOME_PATH = "/cargo"
+# XLA's per-fusion autotune cache. Unlike the others this is not a download
+# cache: XLA opens it from C++ through `tsl::Env`, which has no object-store
+# filesystem, so it cannot live under the Marin prefix alongside JAX's own
+# compilation cache. `iris.runtime.jax_init` points XLA here on GPU tasks.
+XLA_CACHE_PATH = "/xla/cache"
 
 # The task container filesystem, as mounted by every runtime. Each runtime binds
 # a CACHE entry to cache_host_dirname(path) under its own cache_dir, so one node
@@ -57,6 +62,7 @@ STANDARD_MOUNTS: tuple[MountSpec, ...] = (
     MountSpec("uv-cache", UV_CACHE_PATH, kind=MountKind.CACHE),
     MountSpec("hf-cache", HF_HUB_CACHE_PATH, kind=MountKind.CACHE),
     MountSpec("cargo", CARGO_HOME_PATH, kind=MountKind.CACHE),
+    MountSpec("xla-cache", XLA_CACHE_PATH, kind=MountKind.CACHE),
 )
 
 
