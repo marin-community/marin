@@ -235,6 +235,7 @@ class DataLoaderIterator(Iterator[Ex]):
     def __init__(self, data_loader: DataLoader, start_from_batch: int | None = None):
         self.dl = data_loader
         self._start_from_batch = start_from_batch
+        self._closed = False
         self.mapping = self.dl.axis_resources
         if self.mapping is None:
             self.mapping = hax.partitioning.current_thread_local_mapping()
@@ -262,8 +263,23 @@ class DataLoaderIterator(Iterator[Ex]):
         return batch
 
     def __del__(self):
-        if hasattr(self, "_batches") and hasattr(self._batches, "stop"):
+        self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def close(self):
+        """Stop background prefetch and release its worker thread."""
+        if self._closed or not hasattr(self, "_batches"):
+            return
+        self._closed = True
+        if isinstance(self._batches, BackgroundIterator):
             self._batches.stop()
+        elif isinstance(self._batches, AsyncIteratorWrapper):
+            self._batches.close()
 
     async def _produce_batches(self):
         with local_cpu_mesh():

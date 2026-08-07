@@ -47,9 +47,10 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
   --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 5400 --job-name "${RID}-coord" \
   -e JAX_EXPLAIN_CACHE_MISSES 1 \
+  -e JAX_LOG_COMPILES 1 \
   -e JAX_COMPILATION_CACHE_DIR s3://marin-us-east-02a/marin/compile-cache-probe/"$RID" \
   -- python -m experiments.grug.moe_hero_fsdp.compile_cache_probe \
-    --run-id "$RID" --nodes 2 --num-steps 8 --version dev --run
+    --run-id "$RID" --nodes 2 --num-steps 8 --data-seed 104729 --version dev --run
 ```
 
 Four layers on two nodes, about five minutes end to end, on the same `run_grug` entrypoint and the
@@ -57,7 +58,8 @@ same kernels as the hero. `JAX_EXPLAIN_CACHE_MISSES` turns JAX's per-module hit 
 into WARNING lines in the task logs. Give each run its own `JAX_COMPILATION_CACHE_DIR` for a cold
 measurement, or repeat a prefix for a warm one. Add `-e JAX_DEBUG_LOG_MODULES jax._src.cache_key` to
 get the running hash after each cache-key component, which is how you find out *which* input
-changed when two runs that should share a key do not.
+changed when two runs that should share a key do not. Change `--data-seed` between runs to select a
+different first block from the shuffled training data while reusing the compilation-cache prefix.
 
 On a hero rerun whose configuration has not changed, `-e JAX_COMPILATION_CACHE_EXPECT_PGLE 1` turns
 every unexpected compilation-cache write into a warning and loads the PGLE-optimized executable

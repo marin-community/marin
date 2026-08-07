@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import threading
 from typing import Sequence
 
 import jax
@@ -61,6 +62,40 @@ def test_loader_rejects_empty_finite_dataset():
         dataset = ListAsyncDataset([])
         with pytest.raises(ValueError, match="finite but has length 0"):
             DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
+
+
+class BlockingBatchDataset(AsyncDataset[np.ndarray]):
+    def __init__(self):
+        self.started = threading.Event()
+        self.cancelled = threading.Event()
+
+    def is_finite(self) -> bool:
+        return False
+
+    async def async_len(self) -> int:
+        raise ValueError("infinite dataset")
+
+    async def getitem_async(self, index: int) -> np.ndarray:
+        return np.array(index, dtype=np.int32)
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[np.ndarray]:
+        self.started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            self.cancelled.set()
+
+
+def test_loader_iterator_close_cancels_in_flight_prefetch():
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+        dataset = BlockingBatchDataset()
+        loader = DataLoader(dataset, 1, max_buffered_batches=1, mesh=mesh, axis_resources=None)
+        iterator = loader.iter_from_step(0)
+
+        assert dataset.started.wait(timeout=5)
+        iterator.close()
+        assert dataset.cancelled.wait(timeout=5)
+        iterator.close()
 
 
 class StructuredDataset(AsyncDataset):

@@ -35,23 +35,43 @@ class _GrugState(Protocol):
 GrugStateT = TypeVar("GrugStateT", bound=_GrugState)
 
 
+@dataclasses.dataclass(frozen=True)
+class GrugCheckpointRestorePlan:
+    candidate_paths: tuple[str, ...]
+    expected_step: int
+
+
 def _get_fs_and_plain_path(path: str) -> tuple[AbstractFileSystem, str]:
     fs, _, (plain_path,) = fsspec.get_fs_token_paths(path)
     return fs, plain_path
 
 
-def _checkpoint_candidates(checkpoint_search_paths: Sequence[str]) -> list[str]:
+def _checkpoint_candidates(checkpoint_search_paths: Sequence[str]) -> GrugCheckpointRestorePlan:
     candidates: list[tuple[int, str, str]] = []
     for search_path in checkpoint_search_paths:
         candidates.extend(_scan_checkpoint_root(search_path))
 
     candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
     ordered_candidates = [candidate for _, _, candidate in candidates]
+    expected_step = max(0, candidates[0][0]) if candidates else 0
 
     for search_path in checkpoint_search_paths:
         if search_path not in ordered_candidates:
             ordered_candidates.append(search_path)
-    return ordered_candidates
+    return GrugCheckpointRestorePlan(tuple(ordered_candidates), expected_step)
+
+
+def prepare_grug_checkpoint_restore(
+    checkpoint_search_paths: Sequence[str], load_checkpoint_setting: bool | None
+) -> GrugCheckpointRestorePlan:
+    """Discover checkpoint candidates and the data step to prefetch."""
+    if not checkpoint_search_paths:
+        if load_checkpoint_setting:
+            raise FileNotFoundError("load_checkpoint=True but no checkpoint search paths are configured.")
+        return GrugCheckpointRestorePlan((), 0)
+    if load_checkpoint_setting is False:
+        return GrugCheckpointRestorePlan((), 0)
+    return _checkpoint_candidates(checkpoint_search_paths)
 
 
 def _scan_checkpoint_root(root_path: str) -> list[tuple[int, str, str]]:
@@ -100,6 +120,7 @@ def restore_grug_state_from_checkpoint(
     load_checkpoint_setting: bool | None,
     mesh: jax.sharding.Mesh | None,
     allow_partial: bool,
+    restore_plan: GrugCheckpointRestorePlan | None = None,
     _load_fn: Callable[..., StateT] = load_checkpoint,
 ) -> StateT:
     if not checkpoint_search_paths:
@@ -110,10 +131,11 @@ def restore_grug_state_from_checkpoint(
     if load_checkpoint_setting is False:
         return state
 
-    candidates = _checkpoint_candidates(checkpoint_search_paths)
+    if restore_plan is None:
+        restore_plan = prepare_grug_checkpoint_restore(checkpoint_search_paths, load_checkpoint_setting)
     last_error: FileNotFoundError | None = None
 
-    for candidate in candidates:
+    for candidate in restore_plan.candidate_paths:
         try:
             loaded = _load_candidate_state(
                 state=state,
@@ -133,7 +155,7 @@ def restore_grug_state_from_checkpoint(
 
     if load_checkpoint_setting is True:
         search_path_summary = ", ".join(checkpoint_search_paths)
-        attempted = ", ".join(candidates)
+        attempted = ", ".join(restore_plan.candidate_paths)
         if last_error is None:
             raise FileNotFoundError(f"Could not find checkpoint under any of: {search_path_summary}")
         raise FileNotFoundError(

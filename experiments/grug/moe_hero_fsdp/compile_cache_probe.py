@@ -126,13 +126,15 @@ def build_compile_cache_probe_run(
     run_id: str,
     nodes: int,
     num_steps: int,
+    data_seed: int | None = None,
     kernel_cache_dir: str | None = None,
     version: str | None = None,
 ) -> ArtifactStep[CompileCacheProbeResult]:
     """Build the multi-node compilation-cache probe.
 
     ``kernel_cache_dir`` defaults to the shared hero kernel store. Point it at a
-    fresh prefix to measure a cold CuTeDSL compile.
+    fresh prefix to measure a cold CuTeDSL compile. Change ``data_seed`` between
+    runs to select a different first shuffled data block.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -146,7 +148,7 @@ def build_compile_cache_probe_run(
     # One DP replica per node: parameters are FSDP-sharded over each node's four
     # GPUs and replicated across nodes, the hero's rack-local layout at node scale.
     grug_trainer = GrugTrainerConfig(
-        data_seed=None,
+        data_seed=data_seed,
         log_every=1,
         ema_beta=None,
         z_loss_weight=1e-4,
@@ -232,10 +234,22 @@ def build_compile_cache_probe_run(
     default=None,
     help="CuTeDSL kernel store. Defaults to the shared hero store; a fresh prefix forces a cold compile.",
 )
+@click.option(
+    "--data-seed",
+    type=int,
+    default=None,
+    help="Dataset shuffle seed. Use distinct values to measure cold first-block reads on reused nodes.",
+)
 @build_options
-def main(run_id: str, nodes: int, num_steps: int, kernel_cache_dir: str | None) -> ArtifactStep[CompileCacheProbeResult]:
+def main(
+    run_id: str, nodes: int, num_steps: int, kernel_cache_dir: str | None, data_seed: int | None
+) -> ArtifactStep[CompileCacheProbeResult]:
     return build_compile_cache_probe_run(
-        run_id=run_id, nodes=nodes, num_steps=num_steps, kernel_cache_dir=kernel_cache_dir
+        run_id=run_id,
+        nodes=nodes,
+        num_steps=num_steps,
+        data_seed=data_seed,
+        kernel_cache_dir=kernel_cache_dir,
     )
 
 
