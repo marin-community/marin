@@ -62,6 +62,14 @@ constraint-dependencies = [
     "opentelemetry-semantic-conventions>=0.1b0",
 ]
 override-dependencies = [
+    # NCCL < 2.29.3 silently leaks proxy-op slots on aarch64 (weak-CAS spurious
+    # failure treated as success in the freeOps return path) and deadlocks GB200
+    # jobs with no error once a rank's slot pool runs dry; fixed upstream in
+    # v2.29.3-1 (NVIDIA/nccl@25368a7f78ba), see #7344. An override (not a
+    # constraint) because torch 2.11.0 hard-pins nvidia-nccl-cu13==2.28.9 on
+    # Linux; a constraint conflicts with that pin and uv drops torch's whole
+    # CUDA dependency set instead of failing.
+    "nvidia-nccl-cu13==2.30.7 ; sys_platform == 'linux'",
     "omegaconf>=2.4.0.dev4",
     "aiofiles>=24.1.0",
     "anthropic>=0.71.0",

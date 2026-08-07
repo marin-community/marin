@@ -20,7 +20,10 @@ from iris.cluster.types import EnvironmentSpec
 
 _CUDA_13_TEST_PACKAGES = (
     ("nvidia-cudnn-cu13", "9.19.0.56", "nvidia/cudnn/lib/libcudnn.so.9"),
-    ("nvidia-nccl-cu13", "2.28.9", "nvidia/nccl/lib/libnccl.so.2"),
+    # Must match the locked nvidia-nccl-cu13 version: the repo-level
+    # override-dependencies pin rewrites the reinstall requirement, and the
+    # test's offline wheelhouse only holds the fixture version.
+    ("nvidia-nccl-cu13", "2.30.7", "nvidia/nccl/lib/libnccl.so.2"),
 )
 
 
