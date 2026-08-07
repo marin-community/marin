@@ -104,7 +104,10 @@ def _hero_run_config(
             ),
             TelemetryConfig(),
         ),
-        watch=WatchConfig(interval=20),
+        # Watch stats are off. The `compute_watch` variant of the train step needs a 117 GiB
+        # buffer that the cuda_async pool cannot always satisfy once fragmented, so at 2 racks
+        # the run dies on a watch step instead of on whatever it was there to measure.
+        watch=WatchConfig(watch_targets=[]),
         progress_watchdog=ProgressWatchdogConfig(
             step_timeout=HERO_TRAIN_STEP_TIMEOUT,
             process_timeout=HERO_PROCESS_STALL_TIMEOUT,
