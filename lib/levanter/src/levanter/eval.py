@@ -67,6 +67,10 @@ class EvalResult:
     macro_bpb: Optional[float] = None
     tag_macro_bpb: Optional[dict[str, float]] = None
     tag_micro_bpb: Optional[dict[str, float]] = None
+    byte_weighted_bpb: Optional[float] = None
+    byte_weighted_macro_bpb: Optional[float] = None
+    tag_byte_weighted_macro_bpb: Optional[dict[str, float]] = None
+    tag_byte_weighted_bpb: Optional[dict[str, float]] = None
 
 
 @dataclasses.dataclass
@@ -468,14 +472,20 @@ def construct_log_dict(evaluator, eval_result, total_time, prefix):
             logger.info(f"{tag} micro loss: {loss:.3f}")
     if tokenizer is not None:
         log_dict[_join_prefix(prefix, "bpb")] = eval_result.micro_bpb
+        log_dict[_join_prefix(prefix, "byte_weighted_bpb")] = eval_result.byte_weighted_bpb
         if has_tags:
             log_dict[_join_prefix(prefix, "macro_bpb")] = eval_result.macro_bpb
+            log_dict[_join_prefix(prefix, "byte_weighted_macro_bpb")] = eval_result.byte_weighted_macro_bpb
         for tag, bpb in eval_result.tag_micro_bpb.items():
             log_dict[_join_prefix(prefix, tag) + "/bpb"] = bpb
+        for tag, bpb in eval_result.tag_byte_weighted_bpb.items():
+            log_dict[_join_prefix(prefix, tag) + "/byte_weighted_bpb"] = bpb
 
         if has_tags:
             for tag, bpb in eval_result.tag_macro_bpb.items():
                 log_dict[_join_prefix(prefix, tag) + "/macro_bpb"] = bpb
+            for tag, bpb in eval_result.tag_byte_weighted_macro_bpb.items():
+                log_dict[_join_prefix(prefix, tag) + "/byte_weighted_macro_bpb"] = bpb
     return log_dict
 
 
@@ -574,10 +584,20 @@ class TaggedEvaluator(Generic[Ex, M]):
                 bpb_per_tag = this_loss_per_tag / jnp.maximum(bytes_per_tag, 1.0) * log2e
 
                 bpb_mean = state.bpb.add(bpb, this_weights)
-                state = dataclasses.replace(state, bpb=bpb_mean)
+                byte_weighted_bpb_mean = state.byte_weighted_bpb.add(bpb, this_bytes)
+                state = dataclasses.replace(
+                    state,
+                    bpb=bpb_mean,
+                    byte_weighted_bpb=byte_weighted_bpb_mean,
+                )
                 if len(self.dataset.tag_to_index) > 0:
                     bpb_per_tag_mean = state.bpb_per_tag.add(bpb_per_tag, this_weights_per_tag)
-                    state = dataclasses.replace(state, bpb_per_tag=bpb_per_tag_mean)
+                    byte_weighted_bpb_per_tag_mean = state.byte_weighted_bpb_per_tag.add(bpb_per_tag, bytes_per_tag)
+                    state = dataclasses.replace(
+                        state,
+                        bpb_per_tag=bpb_per_tag_mean,
+                        byte_weighted_bpb_per_tag=byte_weighted_bpb_per_tag_mean,
+                    )
 
             return state
 
@@ -604,19 +624,28 @@ class TaggedEvaluator(Generic[Ex, M]):
             micro_bpb = state.bpb.mean.item()
             tag_avg_bpb = state.bpb_per_tag.mean
             macro_avg_bpb = jnp.mean(tag_avg_bpb).item()
+            byte_weighted_bpb = state.byte_weighted_bpb.mean.item()
+            tag_avg_byte_weighted_bpb = state.byte_weighted_bpb_per_tag.mean
+            byte_weighted_macro_bpb = jnp.mean(tag_avg_byte_weighted_bpb).item()
         else:
             micro_bpb = None
             macro_avg_bpb = None
+            byte_weighted_bpb = None
+            byte_weighted_macro_bpb = None
 
         tag_macro_loss: dict[str, float] = {}
         tag_micro_loss: dict[str, float] = {}
         tag_macro_bpb: dict[str, float] = {}
         tag_micro_bpb: dict[str, float] = {}
+        tag_byte_weighted_macro_bpb: dict[str, float] = {}
+        tag_byte_weighted_bpb: dict[str, float] = {}
 
         mean_loss_per_tag_cpu = np.array(state.loss_per_tag.mean)
         total_tokens_per_tag_cpu = np.array(state.loss_per_tag.total)
         mean_bits_per_tag_cpu = np.array(state.bpb_per_tag.mean)
         total_bytes_per_tag_cpu = np.array(state.bpb_per_tag.total)
+        mean_byte_weighted_bits_per_tag_cpu = np.array(state.byte_weighted_bpb_per_tag.mean)
+        byte_weighted_totals_per_tag_cpu = np.array(state.byte_weighted_bpb_per_tag.total)
 
         for parent, children in self.hierarchy.items():
             mask = np.zeros(self.dataset.num_tags, dtype=bool)
@@ -629,11 +658,18 @@ class TaggedEvaluator(Generic[Ex, M]):
             if self.bytes_per_token is not None:
                 tag_macro_bpb[parent] = np.mean(mean_bits_per_tag_cpu, where=mask)
                 tag_micro_bpb[parent] = np.average(mean_bits_per_tag_cpu, weights=total_bytes_per_tag_cpu * mask)
+                byte_mask = mask & (byte_weighted_totals_per_tag_cpu > 0)
+                tag_byte_weighted_macro_bpb[parent] = np.mean(mean_byte_weighted_bits_per_tag_cpu, where=byte_mask)
+                tag_byte_weighted_bpb[parent] = np.average(
+                    mean_byte_weighted_bits_per_tag_cpu,
+                    weights=byte_weighted_totals_per_tag_cpu * byte_mask,
+                )
 
         for tag, index in self.dataset.tag_to_index.items():
             tag_micro_loss[tag] = float(mean_loss_per_tag_cpu[index])
             if self.bytes_per_token is not None:
                 tag_micro_bpb[tag] = float(mean_bits_per_tag_cpu[index])
+                tag_byte_weighted_bpb[tag] = float(mean_byte_weighted_bits_per_tag_cpu[index])
 
         return EvalResult(
             micro_avg_loss,
@@ -645,6 +681,10 @@ class TaggedEvaluator(Generic[Ex, M]):
             macro_avg_bpb,
             tag_macro_bpb,
             tag_micro_bpb,
+            byte_weighted_bpb,
+            byte_weighted_macro_bpb,
+            tag_byte_weighted_macro_bpb,
+            tag_byte_weighted_bpb,
         )
 
     def _construct_tag_hierarchy(self) -> dict[str, list[int]]:
@@ -823,12 +863,14 @@ class _EvalRunningMeans(eqx.Module):
     loss_per_tag: RunningMean  # average loss per tag
     bpb: RunningMean  # bits per byte averaged over all tokens
     bpb_per_tag: RunningMean  # bits per byte per tag
+    byte_weighted_bpb: RunningMean  # bits per byte weighted by decoded bytes
+    byte_weighted_bpb_per_tag: RunningMean
 
     @staticmethod
     def zeros_like(total: Float[Array, "..."], per_tag: Float[Array, "tag"]) -> "_EvalRunningMeans":
         z = RunningMean.zeros_like(total)
         per_tag_mean = RunningMean.zeros_like(per_tag)
-        return _EvalRunningMeans(z, per_tag_mean, z, per_tag_mean)
+        return _EvalRunningMeans(z, per_tag_mean, z, per_tag_mean, z, per_tag_mean)
 
 
 class _LabeledEvalRunningMeans(eqx.Module):

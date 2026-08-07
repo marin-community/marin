@@ -9,6 +9,7 @@ import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
@@ -37,6 +38,56 @@ from levanter.utils.tree_utils import inference_mode
 
 from test_lm_model_loss import ToyLmConfig, ToyLmHeadModel
 from test_utils import use_test_mesh
+
+
+class _VariableByteTokenizer:
+    all_special_ids: list[int] = []
+
+    def get_vocab(self) -> dict[str, int]:
+        return {"a": 0, "bbbb": 1}
+
+    def convert_ids_to_tokens(self, token_id: int) -> str:
+        return ("a", "bbbb")[token_id]
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        del add_special_tokens
+        if text != ".":
+            raise ValueError(f"unsupported text: {text!r}")
+        return [0]
+
+    def decode(self, token_ids: list[int]) -> str:
+        pieces = [
+            "." if index == 0 and len(token_ids) > 1 else ("a", "bbbb")[token_id]
+            for index, token_id in enumerate(token_ids)
+        ]
+        return "".join(pieces)
+
+
+def test_tagged_evaluator_logs_globally_byte_weighted_bpb() -> None:
+    eval_batch_size = len(jax.devices())
+    EvalBatch = Axis("batch", eval_batch_size)
+    examples = [jnp.array([0], dtype=jnp.int32) for _ in range(eval_batch_size)]
+    examples.extend(jnp.array([1], dtype=jnp.int32) for _ in range(eval_batch_size))
+
+    def loss_fn(_model, batch: jax.Array) -> LossFnOutput:
+        return jnp.ones_like(batch, dtype=jnp.float32), jnp.ones_like(batch), batch
+
+    with use_test_mesh(tensor_parallelism=1) as mesh:
+        evaluator = TaggedEvaluator(
+            EvalBatch=EvalBatch,
+            tagged_eval_sets=[(ListAsyncDataset(examples), ["mixed-bytes"])],
+            loss_fn=loss_fn,
+            tokenizer=_VariableByteTokenizer(),
+            device_mesh=mesh,
+            axis_mapping={EvalBatch.name: ResourceAxis.DATA},
+        )
+        result = evaluator.evaluate(None)
+
+    expected = 2.0 * np.log2(np.e) / 5.0
+    historical_token_weighted = ((1.0 + 0.25) / 2.0) * np.log2(np.e)
+    assert result.byte_weighted_bpb == pytest.approx(expected)
+    assert result.tag_byte_weighted_bpb["mixed-bytes"] == pytest.approx(expected)
+    assert result.micro_bpb == pytest.approx(historical_token_weighted)
 
 
 def test_tagged_evaluator_accepts_grug_lm_examples():

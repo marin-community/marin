@@ -42,6 +42,14 @@ dependencies = [
     "marin-dupekit",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3.2",
+    "pytest-asyncio",
+    "pytest-xdist",
+    "pytest-timeout",
+]
+
 [tool.uv]
 fork-strategy = "fewest"
 # "explicit": allow pre-releases only for packages whose declared specifier
