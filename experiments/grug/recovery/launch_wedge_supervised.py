@@ -1,0 +1,174 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Launch the #7344 wedge reproducer under GPUHangSupervisor on multiple GB200 racks.
+
+WHY THIS EXISTS: the reproducer wedges a real cross-rack collective within seconds
+and no native NCCL timeout ever fires (see the standalone repro's README). This
+launcher runs it as the supervised child so we can show that our framework's
+primary detector — XLA's per-execution deadman, armed by the supervisor in the
+child's ``XLA_FLAGS`` — catches that wedge where nothing else does.
+
+One task per node runs a ``GPUHangSupervisor``. The supervisor makes no JAX calls;
+it spawns the reproducer via ``levanter.recovery.child``, which brings up
+``jax.distributed`` and joins the ``16 * dp_racks``-process mesh. When the
+collective wedges, the deadman ends every wedged process in ``LOG(FATAL)`` and each
+supervisor records the crash. The dispatch path is identical to ``minrepro_launch``
+and ``moe_hero_fsdp`` so the image, dependency set, and mesh match the production
+job.
+
+Recovery is intentionally out of scope here: no snapshot, no restart budget
+(``--max-restarts 0``). The goal is to reproduce the wedge and confirm detection.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+import click
+from fray.cluster import ResourceConfig
+from levanter.recovery.detection import DetectionConfig
+from levanter.recovery.supervisor import GPUHangSupervisor
+from levanter.recovery.types import RunOutcome
+from marin.execution.artifact import Artifact
+from marin.execution.build_context import resolve_version
+from marin.execution.lazy import ArtifactStep, StepContext
+from marin.experiment.cli import build_options
+from marin.experiment.namespacing import user_namespaced_name
+
+from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.recovery.wedge_entrypoint import WedgeReproConfig, run_wedge_repro
+
+logger = logging.getLogger(__name__)
+
+HERO_NODES_PER_RACK = 16  # matches moe_hero_fsdp / minrepro_launch
+# The deadman must sit well above a healthy execution (sub-second here) so it only
+# fires on the wedge, and well below the reproducer's time-to-wedge budget so
+# detection is sub-minute.
+DEFAULT_EXECUTION_TERMINATE_TIMEOUT = 60.0
+
+
+@dataclass(frozen=True)
+class SupervisedWedgeConfig:
+    run_id: str
+    resources: ResourceConfig
+    dp_racks: int
+    num_steps: int
+    execution_terminate_timeout: float
+    max_restarts: int
+
+
+class SupervisedWedgeResult(Artifact):
+    """Marker artifact for the supervised wedge-detection run."""
+
+
+def _run_supervised(config: SupervisedWedgeConfig) -> None:
+    """Per-task driver: supervise one reproducer child and report what detection fired."""
+    detection = DetectionConfig(
+        execution_terminate_timeout_seconds=config.execution_terminate_timeout,
+        enable_recoverability=False,
+    )
+    with GPUHangSupervisor(
+        detection=detection,
+        # Inert here (the reproducer writes no heartbeat), but must be positive; the
+        # XLA execution deadman is the detector, with startup_timeout as the backstop.
+        deadman_timeout=120.0,
+        max_restarts_per_run=config.max_restarts,
+    ) as supervisor:
+        result = supervisor.run(
+            run_wedge_repro,
+            WedgeReproConfig(dp_racks=config.dp_racks, num_steps=config.num_steps),
+            label=config.run_id,
+        )
+
+    faults = ", ".join(
+        f"attempt={f.attempt} class={f.fault_class} returncode={f.returncode} detail={f.detail!r}" for f in result.faults
+    )
+    if result.faults:
+        logger.warning(
+            "WEDGE DETECTED by supervisor: outcome=%s attempts=%d faults=[%s]",
+            result.outcome,
+            result.attempts,
+            faults,
+        )
+    elif result.outcome is RunOutcome.COMPLETED:
+        logger.warning("no wedge reproduced: reproducer ran %d steps clean", config.num_steps)
+    else:
+        logger.warning("supervisor ended with outcome=%s and no recorded fault", result.outcome)
+
+
+def build_supervised_wedge_run(
+    *,
+    run_id: str,
+    dp_racks: int,
+    num_steps: int,
+    execution_terminate_timeout: float,
+    max_restarts: int,
+    version: str | None = None,
+) -> ArtifactStep:
+    resources = ResourceConfig.with_gpu(
+        "GB200", count=4, cpu=120, ram="850g", disk="1t", replicas=HERO_NODES_PER_RACK * dp_racks
+    )
+    name = f"grug/{run_id}"
+    version = resolve_version(name, version)
+
+    def build_config(ctx: StepContext) -> SupervisedWedgeConfig:
+        return SupervisedWedgeConfig(
+            run_id=run_id,
+            resources=ctx.runtime_arg("train_resources"),
+            dp_racks=dp_racks,
+            num_steps=num_steps,
+            execution_terminate_timeout=execution_terminate_timeout,
+            max_restarts=max_restarts,
+        )
+
+    return ArtifactStep(
+        name=user_namespaced_name(name, version),
+        version=version,
+        artifact_type=SupervisedWedgeResult,
+        run=_run_dispatch,
+        build_config=build_config,
+        deps=(),
+        runtime_args={"train_resources": resources},
+    )
+
+
+def _run_dispatch(config: SupervisedWedgeConfig) -> None:
+    # Iris does not retry the gang on failure: the supervisor owns recovery, and a
+    # retry would just re-wedge an expensive 128-GPU gang.
+    dispatch_grug_training_run(
+        run_id=config.run_id,
+        config=config,
+        local_entrypoint=_run_supervised,
+        resources=config.resources,
+        max_retries_failure=0,
+        processes_per_task=1,
+    )
+
+
+@click.command()
+@click.option("--run-id", required=True)
+@click.option("--dp-racks", type=click.IntRange(min=2), required=True, help="Rack count; >=2 to span racks.")
+@click.option("--num-steps", type=int, default=20000, show_default=True)
+@click.option(
+    "--execution-terminate-timeout",
+    type=float,
+    default=DEFAULT_EXECUTION_TERMINATE_TIMEOUT,
+    show_default=True,
+    help="XLA per-execution deadman budget, in seconds.",
+)
+@click.option("--max-restarts", type=int, default=0, show_default=True, help="Supervisor warm-restart budget.")
+@build_options
+def main(run_id: str, dp_racks: int, num_steps: int, execution_terminate_timeout: float, max_restarts: int):
+    return build_supervised_wedge_run(
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        execution_terminate_timeout=execution_terminate_timeout,
+        max_restarts=max_restarts,
+    )
+
+
+if __name__ == "__main__":
+    main()
