@@ -5,7 +5,6 @@
 
 import dataclasses
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -35,12 +34,10 @@ from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import (
     GrugAblationSweepConfig,
     GrugRunConfig,
+    GrugRunMode,
     GrugTrainerConfig,
     run_grug,
     run_grug_ablation_sweep,
-    run_grug_failsafe_control,
-    run_grug_stock_control,
-    run_grug_supervised,
 )
 from experiments.grug.recovery.ablation_catalog import environment_ablations, selected_ablations
 from experiments.llama import llama3_tokenizer
@@ -88,6 +85,7 @@ def _hero_run_config(
     grug_trainer: GrugTrainerConfig,
     wandb_project: str,
     slim: ArtifactStep[TokenizedCache],
+    run_mode: GrugRunMode,
 ) -> GrugRunConfig:
     """Assemble one hero trainer config; ``run_id`` names both the trainer and its W&B run."""
     trainer = TrainerConfig(
@@ -108,9 +106,7 @@ def _hero_run_config(
             ),
             TelemetryConfig(),
         ),
-        # Watch stats are off. The `compute_watch` variant of the train step needs a 117 GiB
-        # buffer that the cuda_async pool cannot always satisfy once fragmented, so at 2 racks
-        # the run dies on a watch step instead of on whatever it was there to measure.
+        # Watch statistics can require a 117 GiB temporary buffer on this model.
         watch=WatchConfig(watch_targets=[]),
         progress_watchdog=ProgressWatchdogConfig(
             step_timeout=HERO_TRAIN_STEP_TIMEOUT,
@@ -138,6 +134,7 @@ def _hero_run_config(
         trainer=dataclasses.replace(grug_trainer, trainer=trainer),
         eval=None,
         processes_per_task=HERO_PROCESSES_PER_TASK,
+        run_mode=run_mode,
     )
 
 
@@ -206,14 +203,14 @@ def _hero_run_parts(
     )
 
 
-def _build_hero_run(
+def build_hero_run(
     *,
     run_id: str,
     dp_racks: int,
     num_steps: int,
-    save_checkpoints: bool,
-    run: Callable[[GrugRunConfig], None],
-    version: str | None,
+    save_checkpoints: bool = True,
+    run_mode: GrugRunMode = GrugRunMode.DEFAULT,
+    version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run.
 
@@ -242,58 +239,17 @@ def _build_hero_run(
             grug_trainer=grug_trainer,
             wandb_project=wandb_project,
             slim=slim,
+            run_mode=run_mode,
         )
 
     return ArtifactStep(
         name=user_namespaced_name(name, version),
         version=version,
         artifact_type=HeroThroughputResult,
-        run=run,
+        run=run_grug,
         build_config=build_config,
         deps=(slim,),
         runtime_args={"train_resources": train_resources},
-    )
-
-
-def build_hero_run(
-    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
-) -> ArtifactStep[HeroThroughputResult]:
-    """Build the ordinary rack-local FSDP hero run."""
-    return _build_hero_run(
-        run_id=run_id,
-        dp_racks=dp_racks,
-        num_steps=num_steps,
-        save_checkpoints=save_checkpoints,
-        run=run_grug,
-        version=version,
-    )
-
-
-def build_supervised_hero_run(
-    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
-) -> ArtifactStep[HeroThroughputResult]:
-    """Build the rack-local FSDP hero run with one crash supervisor per task."""
-    return _build_hero_run(
-        run_id=run_id,
-        dp_racks=dp_racks,
-        num_steps=num_steps,
-        save_checkpoints=save_checkpoints,
-        run=run_grug_supervised,
-        version=version,
-    )
-
-
-def build_stock_control_hero_run(
-    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
-) -> ArtifactStep[HeroThroughputResult]:
-    """Build the hero run with no recovery instrumentation, for measuring what it costs the hazard."""
-    return _build_hero_run(
-        run_id=run_id,
-        dp_racks=dp_racks,
-        num_steps=num_steps,
-        save_checkpoints=save_checkpoints,
-        run=run_grug_stock_control,
-        version=version,
     )
 
 
@@ -333,6 +289,7 @@ def build_ablation_sweep_hero_run(
                 grug_trainer=grug_trainer,
                 wandb_project=wandb_project,
                 slim=slim,
+                run_mode=GrugRunMode.SUPERVISED,
             )
             for arm in arms
         )
@@ -355,54 +312,43 @@ def build_ablation_sweep_hero_run(
     )
 
 
-def build_failsafe_control_hero_run(
-    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool = True, version: str | None = None
+@click.command()
+@click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
+@click.option("--dp-racks", type=click.IntRange(min=1), required=True, help="Data-parallel NVL72 rack count.")
+@click.option(
+    "--num-steps",
+    type=click.IntRange(min=1),
+    default=DEFAULT_HERO_STEPS,
+    show_default=True,
+    help="Number of training steps.",
+)
+@click.option(
+    "--save-checkpoints/--no-save-checkpoints",
+    default=True,
+    show_default=True,
+    help="Write resumable checkpoints. Use --no-save-checkpoints for a metrics-only diagnostic.",
+)
+@click.option(
+    "--mode",
+    type=click.Choice([mode.value for mode in GrugRunMode]),
+    default=GrugRunMode.DEFAULT.value,
+    show_default=True,
+)
+@build_options
+def main(
+    run_id: str,
+    dp_racks: int,
+    num_steps: int,
+    save_checkpoints: bool,
+    mode: str,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build the hero run with XLA failsafes but no recovery supervisor parent."""
-    return _build_hero_run(
+    return build_hero_run(
         run_id=run_id,
         dp_racks=dp_racks,
         num_steps=num_steps,
         save_checkpoints=save_checkpoints,
-        run=run_grug_failsafe_control,
-        version=version,
+        run_mode=GrugRunMode(mode),
     )
-
-
-def hero_launch_command(
-    build_run: Callable[..., ArtifactStep[HeroThroughputResult]],
-) -> click.Command:
-    @click.command()
-    @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
-    @click.option("--dp-racks", type=click.IntRange(min=1), required=True, help="Data-parallel NVL72 rack count.")
-    @click.option(
-        "--num-steps",
-        type=click.IntRange(min=1),
-        default=DEFAULT_HERO_STEPS,
-        show_default=True,
-        help="Number of training steps.",
-    )
-    @click.option(
-        "--save-checkpoints/--no-save-checkpoints",
-        default=True,
-        show_default=True,
-        help="Write resumable checkpoints. Use --no-save-checkpoints for a metrics-only diagnostic.",
-    )
-    @build_options
-    def command(
-        run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool
-    ) -> ArtifactStep[HeroThroughputResult]:
-        return build_run(
-            run_id=run_id,
-            dp_racks=dp_racks,
-            num_steps=num_steps,
-            save_checkpoints=save_checkpoints,
-        )
-
-    return command
-
-
-main = hero_launch_command(build_hero_run)
 
 
 if __name__ == "__main__":

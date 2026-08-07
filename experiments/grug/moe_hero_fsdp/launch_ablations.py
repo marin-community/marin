@@ -1,13 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sweep environment arms against the 300B FSDP hero on one allocation.
-
-Every arm runs on the same nodes under one ``GPUHangSupervisor`` per task, in a fresh
-trainer subprocess so process-start variables take effect. A wedged arm is ended by the
-XLA execution deadman and the sweep advances to the next arm, so the whole matrix runs
-without a scheduler round trip or an operator between arms.
-"""
+"""Sweep process-environment arms against the 300B FSDP hero on one allocation."""
 
 import click
 from marin.experiment.cli import build_options

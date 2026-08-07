@@ -1,31 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Launch the #7344 wedge reproducer under GPUHangSupervisor on multiple GB200 racks.
-
-WHY THIS EXISTS: NCCL 2.28.9 on aarch64 wedges this cross-rack collective within
-seconds, while versions with the upstream proxy-slot fix should complete. No
-native NCCL timeout fires on an affected build (see the standalone repro's
-README). That is a property of this synthetic collective, not an explanation of
-the 300B hero wedge in #7344, which #8029 records wedging on 2.30.7 behind a
-verified provenance gate. Treat this as a detector test, not a root-cause test.
-This launcher runs it as a supervised child so we can show that our framework's
-primary detector — XLA's per-execution deadman, armed by the supervisor in the
-child's ``XLA_FLAGS`` — catches that wedge where nothing else does. Repeated
-``--ablation`` options run environment arms sequentially on one allocation, with
-a fresh child process for every arm.
-
-One task per node runs a ``GPUHangSupervisor``. The supervisor makes no JAX calls;
-it spawns the reproducer via ``levanter.recovery.child``, which brings up
-``jax.distributed`` and joins the ``16 * dp_racks``-process mesh. When the
-collective wedges, the deadman ends every wedged process in ``LOG(FATAL)`` and each
-supervisor records the crash. The dispatch path is identical to ``minrepro_launch``
-and ``moe_hero_fsdp`` so the image, dependency set, and mesh match the production
-job.
-
-Recovery is intentionally out of scope here: no snapshot, no restart budget
-(``--max-restarts 0``). The goal is to reproduce or exclude the wedge and confirm detection.
-"""
+"""Launch the #7344 wedge reproducer under GPUHangSupervisor on GB200 racks."""
 
 from __future__ import annotations
 
@@ -54,10 +30,7 @@ from experiments.grug.recovery.wedge_entrypoint import WedgeReproConfig, run_wed
 
 logger = logging.getLogger(__name__)
 
-HERO_NODES_PER_RACK = 16  # matches moe_hero_fsdp / minrepro_launch
-# The deadman must sit well above a healthy execution (sub-second here) so it only
-# fires on the wedge, and well below the reproducer's time-to-wedge budget so
-# detection is sub-minute.
+HERO_NODES_PER_RACK = 16
 DEFAULT_EXECUTION_TERMINATE_TIMEOUT = 60.0
 WEDGE_PROVENANCE_ENV = MappingProxyType(
     {
@@ -89,8 +62,6 @@ def _run_supervised(config: SupervisedWedgeConfig) -> None:
     )
     with GPUHangSupervisor(
         detection=detection,
-        # Inert here (the reproducer writes no heartbeat), but must be positive; the
-        # XLA execution deadman is the detector, with startup_timeout as the backstop.
         deadman_timeout=120.0,
         max_restarts_per_run=config.max_restarts,
     ) as supervisor:

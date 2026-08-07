@@ -51,15 +51,6 @@ goes stale on the next commit.
 - Purpose: one-rack GB200 EP64 throughput and MFU baseline.
 - Issue: https://github.com/marin-community/marin/issues/7279
 
-### grug-recovery
-- Path: `experiments/grug/recovery/`
-- Origin: `base`
-- Introduced: 806d6c8996
-- Status: active
-- Purpose: GPU hang detection, warm-restart drills, and process-environment ablations against the GB200 wedge reproducer.
-- Diff: https://marin-community.github.io/marin/grug-diffs/pr-8031/recovery/index.html
-- Issue: https://github.com/marin-community/marin/issues/7344
-
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`
 - Introduced: 5efe76834

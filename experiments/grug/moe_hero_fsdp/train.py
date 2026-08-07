@@ -6,8 +6,8 @@ import functools
 import logging
 import os
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -34,9 +34,9 @@ from levanter.eval import TaggedEvaluator, cb_tagged_evaluate
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
-from levanter.recovery.detection import DetectionConfig, recovery_xla_env
-from levanter.recovery.supervisor import GPUHangSupervisor
-from levanter.recovery.types import AblationSpec, RunOutcome, RunResult
+from levanter.recovery.detection import DetectionConfig, recovery_xla_env, touch_heartbeat
+from levanter.recovery.supervisor import ENV_HEARTBEAT_PATH, GPUHangSupervisor
+from levanter.recovery.types import AblationSpec, RunOutcome
 from levanter.schedule import BatchSchedule
 from levanter.tracker.telemetry import capture_stall_diagnostics
 from levanter.trainer import TrainerConfig
@@ -47,7 +47,6 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, Transformer
-from experiments.grug.recovery.run_summary import format_run_summary
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
@@ -63,22 +62,13 @@ HERO_FSDP_RUNTIME_ENV = {
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
-# The deadman is armed per execution, and at 2 racks the first `jit_train_step` execution
-# measured 261s: it carries ncclCommSplit across every rank, lazy CUDA module loading, and
-# a PGLE profile pass that a steady-state 18.5s step does not. 600s clears that first step
-# with margin while still ending a permanent wedge in ten minutes.
+# Hang detection: maximum execution time before XLA aborts.
 HERO_EXECUTION_TERMINATE_TIMEOUT = 600.0
-# The supervisor deadman bounds heartbeat staleness, not wall clock, and the trainer touches
-# the heartbeat every step (~35s at 8 racks). Thirty minutes is unambiguous while still
-# clearing the cold first execution. It only backstops wedges that stall outside an XLA
-# execution; the per-execution deadman above is the primary detector. Sizing matters for a
-# sweep, where every arm shares one allocation and a loose bound spends the rest of it.
+# Hang detection: maximum time between completed training steps.
 HERO_HEARTBEAT_DEADMAN = 30 * 60.0
-# First heartbeat trails process start by imports, data cache open, mesh init and compilation.
+# Hang detection: maximum startup time before the first completed step.
 HERO_STARTUP_TIMEOUT = 60 * 60.0
-# Reporting pending thunks on timeout throws std::bad_alloc / std::length_error on a module
-# this size, replacing the abort diagnostic with an allocation error. Keep it off until that
-# is fixed upstream: an accurate "execution timed out" beats a corrupt thunk list.
+# Pending-thunk reporting exhausts host memory for this model.
 HERO_PROGRESS_TRACKING = 0
 HERO_DETECTION_CONFIG = DetectionConfig(
     execution_terminate_timeout_seconds=HERO_EXECUTION_TERMINATE_TIMEOUT,
@@ -135,6 +125,13 @@ class GrugEvalConfig:
     compute_bpb: bool = True
 
 
+class GrugRunMode(StrEnum):
+    DEFAULT = "default"
+    SUPERVISED = "supervised"
+    FAILSAFE_CONTROL = "failsafe-control"
+    STOCK_CONTROL = "stock-control"
+
+
 @dataclass(frozen=True)
 class GrugRunConfig:
     """Top-level config for grug training."""
@@ -148,6 +145,7 @@ class GrugRunConfig:
     # GPU processes per task: > 1 runs one JAX process per GPU (multi-controller)
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
+    run_mode: GrugRunMode = GrugRunMode.DEFAULT
 
 
 def build_train_dataset(
@@ -471,6 +469,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     run_id = trainer.id
     if run_id is None:
         raise ValueError("trainer.id was not initialized")
+    heartbeat_path = os.environ.get(ENV_HEARTBEAT_PATH)
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
@@ -622,6 +621,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
                 jax.block_until_ready(metrics["train/loss"])
                 state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
+                if heartbeat_path is not None:
+                    touch_heartbeat(heartbeat_path, int(state.step))
 
                 if not jnp.isfinite(metrics["train/loss"]):
                     raise RuntimeError(f"Non-finite loss ({float(metrics['train/loss'])}) at step {int(state.step)}.")
@@ -688,50 +689,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     levanter.tracker.current_tracker().finish()
 
 
-def _dispatch_grug(
-    config: GrugRunConfig,
-    local_entrypoint: Callable[[GrugRunConfig], None],
-    *,
-    max_retries_failure: int,
-) -> None:
-    trainer = config.trainer.trainer
-    if trainer.id is None:
-        raise ValueError("trainer.id must be set before dispatching grug training.")
-
-    # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
-    _apply_hero_fsdp_runtime_defaults()
-    dispatch_grug_training_run(
-        run_id=trainer.id,
-        config=config,
-        local_entrypoint=local_entrypoint,
-        resources=config.resources,
-        max_retries_failure=max_retries_failure,
-        processes_per_task=config.processes_per_task,
-    )
-
-
-def run_grug(config: GrugRunConfig) -> None:
-    """Dispatch grug training through Fray jobs."""
-    _dispatch_grug(config, _run_grug_local, max_retries_failure=3)
-
-
-def run_grug_failsafe_control(config: GrugRunConfig) -> None:
-    """Dispatch without the supervisor parent but retain its XLA failsafe flags."""
-    os.environ.update(recovery_xla_env(HERO_DETECTION_CONFIG, os.environ))
-    _dispatch_grug(config, _run_grug_local, max_retries_failure=0)
-
-
-def run_grug_stock_control(config: GrugRunConfig) -> None:
-    """Dispatch with no recovery instrumentation at all: no supervisor, no XLA failsafe flags.
-
-    The third leg of the instrumentation comparison, against `run_grug_supervised` (supervisor
-    and flags) and `run_grug_failsafe_control` (flags only). `run_grug` is not a substitute
-    because it retries three times on failure, and a retry restarts the exposure a wedge trial
-    is accumulating.
-    """
-    _dispatch_grug(config, _run_grug_local, max_retries_failure=0)
-
-
 def _run_grug_supervised_local(config: GrugRunConfig) -> None:
     """Run one local trainer under the XLA hang-deadman subprocess supervisor."""
     run_id = config.trainer.trainer.id
@@ -740,9 +697,6 @@ def _run_grug_supervised_local(config: GrugRunConfig) -> None:
 
     with GPUHangSupervisor(
         detection=HERO_DETECTION_CONFIG,
-        # The production loop does not yet emit the recovery heartbeat. Keep the
-        # host watchdog outside the coordinator's 12-hour deadline; XLA's
-        # per-execution deadman and ProgressWatchdog remain active in the child.
         deadman_timeout=HERO_HEARTBEAT_DEADMAN,
         startup_timeout=HERO_STARTUP_TIMEOUT,
         max_restarts_per_run=0,
@@ -756,9 +710,26 @@ def _run_grug_supervised_local(config: GrugRunConfig) -> None:
         raise RuntimeError(f"supervised trainer {run_id!r} ended with outcome={result.outcome}; faults=[{faults}]")
 
 
-def run_grug_supervised(config: GrugRunConfig) -> None:
-    """Dispatch grug training with one crash supervisor per GPU task."""
-    _dispatch_grug(config, _run_grug_supervised_local, max_retries_failure=0)
+def run_grug(config: GrugRunConfig) -> None:
+    """Dispatch grug training through Fray jobs."""
+    trainer = config.trainer.trainer
+    if trainer.id is None:
+        raise ValueError("trainer.id must be set before dispatching grug training.")
+
+    _apply_hero_fsdp_runtime_defaults()
+    if config.run_mode is GrugRunMode.FAILSAFE_CONTROL:
+        os.environ.update(recovery_xla_env(HERO_DETECTION_CONFIG, os.environ))
+
+    local_entrypoint = _run_grug_supervised_local if config.run_mode is GrugRunMode.SUPERVISED else _run_grug_local
+    max_retries_failure = 3 if config.run_mode is GrugRunMode.DEFAULT else 0
+    dispatch_grug_training_run(
+        run_id=trainer.id,
+        config=config,
+        local_entrypoint=local_entrypoint,
+        resources=config.resources,
+        max_retries_failure=max_retries_failure,
+        processes_per_task=config.processes_per_task,
+    )
 
 
 @dataclass(frozen=True)
@@ -786,7 +757,6 @@ class GrugAblationSweepConfig:
 
 def _run_grug_sweep_local(config: GrugAblationSweepConfig) -> None:
     """Run every arm under one supervisor, and never let one arm's fault end the sweep."""
-    outcomes: list[tuple[AblationSpec, RunResult]] = []
     with GPUHangSupervisor(
         detection=HERO_DETECTION_CONFIG,
         deadman_timeout=HERO_HEARTBEAT_DEADMAN,
@@ -796,7 +766,6 @@ def _run_grug_sweep_local(config: GrugAblationSweepConfig) -> None:
         for arm, run in zip(config.arms, config.runs, strict=True):
             logger.warning("=== hero ablation %s: %s (env=%s) ===", arm.name, arm.notes, dict(arm.env))
             result = supervisor.run(_run_grug_local, run, label=run.trainer.trainer.id, env=arm.env)
-            outcomes.append((arm, result))
             logger.warning(
                 "hero ablation %s -> outcome=%s attempts=%d faults=[%s]",
                 arm.name,
@@ -804,9 +773,6 @@ def _run_grug_sweep_local(config: GrugAblationSweepConfig) -> None:
                 result.attempts,
                 ", ".join(f"class={f.fault_class.value} rc={f.returncode} detail={f.detail!r}" for f in result.faults),
             )
-
-    summary = format_run_summary([(arm.name, result) for arm, result in outcomes])
-    logger.warning("hero ablation sweep %s complete:\n%s", config.run_id, summary)
 
 
 def run_grug_ablation_sweep(config: GrugAblationSweepConfig) -> None:
@@ -827,12 +793,10 @@ __all__ = [
     "GrugAblationSweepConfig",
     "GrugEvalConfig",
     "GrugRunConfig",
+    "GrugRunMode",
     "GrugTrainState",
     "GrugTrainerConfig",
     "initial_state",
     "run_grug",
     "run_grug_ablation_sweep",
-    "run_grug_failsafe_control",
-    "run_grug_stock_control",
-    "run_grug_supervised",
 ]

@@ -25,18 +25,13 @@ iris --cluster=marin job run --no-wait --enable-extra-resources \
 W&B: `marin-community/marin_moe`, group `moe-hero-fsdp`, run name `--run-id`. Pass
 `-e WANDB_PROJECT <project>` to the Iris coordinator command to use another W&B project.
 
-Use `experiments.grug.moe_hero_fsdp.launch_supervised` instead of `launch` for NCCL diagnostics.
-Each GPU task then runs training in a child process with XLA's 600-second per-execution deadman and
-no in-pod restart. A deadman abort or another child failure fails the task immediately; the existing
-15-minute progress watchdog remains the fallback. The deadman has to clear a cold first execution,
-which measured 261s at two racks because it carries `ncclCommSplit` across every rank, lazy CUDA
-module loading, and a PGLE profile pass that a steady-state step does not.
+Pass `--mode supervised` for NCCL diagnostics. Each GPU task runs training in a child process with
+XLA's 600-second per-execution deadman and no in-pod restart. The supervisor allows one hour for the
+first completed step, then 30 minutes between completed steps. A deadman abort or another child
+failure fails the task immediately; the existing 15-minute progress watchdog remains the fallback.
 
-`experiments.grug.moe_hero_fsdp.launch_failsafe_control` is the diagnostic control for the supervisor
-itself: it keeps the same XLA deadman, progress tracking, and NCCL initialization timeout but runs the
-trainer directly with no recovery parent and no task retry.
-`experiments.grug.moe_hero_fsdp.launch_stock_control` is the third leg: no supervisor parent, no
-failsafe flags, and no retries, for measuring what the instrumentation itself costs a hazard.
+Use `--mode failsafe-control` to keep the XLA failsafes without the supervisor parent, or
+`--mode stock-control` to run without either and without task retries.
 
 Checkpoint staging benchmark:
 

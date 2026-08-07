@@ -33,7 +33,6 @@ from levanter.recovery.types import DEFAULT_TMPFS_DIR, AblationSpec, RunResult
 
 from experiments.grug.recovery.ablation_catalog import environment_ablations, selected_ablations
 from experiments.grug.recovery.config import RecoveryRunConfig, grug_model_preset
-from experiments.grug.recovery.run_summary import format_run_summary
 from experiments.grug.recovery.train import recovery_train
 
 logger = logging.getLogger(__name__)
@@ -65,6 +64,18 @@ def build_ablations(*, fault_step: int, sweep_steps: int) -> list[AblationSpec]:
         ),
         *environment_ablations(num_steps=sweep_steps),
     ]
+
+
+def _summary(results: list[RunResult]) -> str:
+    header = f"{'ablation':<28} {'outcome':<14} {'attempts':>8} {'faults':>7} {'final_step':>11} {'wall_s':>8}"
+    lines = [header, "-" * len(header)]
+    for r in results:
+        fault_classes = ",".join(f.fault_class.value for f in r.faults) or "-"
+        lines.append(
+            f"{r.label:<28} {r.outcome.value:<14} {r.attempts:>8} {fault_classes:>7} "
+            f"{r.final_step!s:>11} {r.total_wall_time:>8.1f}"
+        )
+    return "\n".join(lines)
 
 
 def main() -> None:
@@ -127,7 +138,7 @@ def main() -> None:
             results.append(result)
             logger.info("ablation %s -> %s", ablation.name, result.outcome.value)
 
-    print("\n" + format_run_summary([(r.label, r) for r in results]) + "\n")
+    print("\n" + _summary(results) + "\n")
 
 
 if __name__ == "__main__":
