@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Iterable
+from enum import StrEnum
 from urllib.parse import urlsplit
 
 import click
@@ -63,6 +64,12 @@ _OBJECT_CHECKSUM_KEYS = ("md5Hash", "md5", "ETag", "etag", "checksum")
 
 SampleKey = tuple[str, str, str]
 StepKey = tuple[str, str, str, int | None]
+
+
+class _MigrationMode(StrEnum):
+    KEEP_LEGACY = "keep_legacy"
+    ARCHIVE_LEGACY = "archive_legacy"
+    FROM_LEGACY_ARCHIVE = "from_legacy_archive"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -514,6 +521,16 @@ def _selected_results_paths(results_paths: tuple[str, ...], records_prefixes: tu
     return tuple(sorted(selected))
 
 
+def _migration_mode(*, archive_legacy: bool, from_legacy_archive: bool) -> _MigrationMode:
+    if archive_legacy and from_legacy_archive:
+        raise click.UsageError("--from-legacy-archive requires --keep-legacy")
+    if archive_legacy:
+        return _MigrationMode.ARCHIVE_LEGACY
+    if from_legacy_archive:
+        return _MigrationMode.FROM_LEGACY_ARCHIVE
+    return _MigrationMode.KEEP_LEGACY
+
+
 @click.command()
 @click.argument("results_paths", nargs=-1)
 @click.option(
@@ -546,15 +563,16 @@ def main(
     logging.basicConfig(level=logging.INFO)
     if not results_paths and not records_prefixes:
         raise click.UsageError("pass at least one RESULTS_PATH or --records-prefix")
-    if archive_legacy and from_legacy_archive:
-        raise click.UsageError("--from-legacy-archive requires --keep-legacy")
+    mode = _migration_mode(archive_legacy=archive_legacy, from_legacy_archive=from_legacy_archive)
     if any(path.startswith("s3://") for path in (*results_paths, *records_prefixes)):
         configure_coreweave_s3()
     selected = _selected_results_paths(results_paths, records_prefixes)
     migrated = archived = skipped = 0
     for results_path in selected:
-        legacy_source = legacy_archive_prefix(results_path) if from_legacy_archive else results_path
-        if from_legacy_archive and not StoragePath(legacy_source).exists():
+        legacy_source = (
+            legacy_archive_prefix(results_path) if mode is _MigrationMode.FROM_LEGACY_ARCHIVE else results_path
+        )
+        if mode is _MigrationMode.FROM_LEGACY_ARCHIVE and not StoragePath(legacy_source).exists():
             skipped += 1
             continue
         plan = migration_plan(results_path, legacy_source=legacy_source)
@@ -564,7 +582,7 @@ def main(
         if dry_run:
             click.echo(json.dumps({"status": "planned", **dataclasses.asdict(plan)}, sort_keys=True))
             continue
-        if archive_legacy:
+        if mode is _MigrationMode.ARCHIVE_LEGACY:
             result = migrate_run_and_archive(results_path, writer_id=writer_id)
         else:
             result = migrate_run_and_validate(results_path, legacy_source=legacy_source, writer_id=writer_id)

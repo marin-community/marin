@@ -21,6 +21,7 @@ from finestore.eval import (
 )
 from finestore.reader import CompositeReader
 from fsspec.core import url_to_fs
+from rigging.filesystem import StoragePath
 
 from experiments.evaluation.migrate_archive import (
     MigrationCounts,
@@ -188,16 +189,16 @@ def test_migration_cli_reads_archived_legacy_shards(tmp_path):
     results = (tmp_path / "run" / "results").as_uri()
     missing_results = (tmp_path / "run-without-backup" / "results").as_uri()
     archive = legacy_archive_prefix(results)
-    fs, archive_root = url_to_fs(archive)
-    legacy_path = f"{archive_root}/arc/model/samples_arc_20260101.parquet"
-    fs.makedirs(legacy_path.rsplit("/", 1)[0], exist_ok=True)
+    legacy_file = StoragePath(archive) / "arc/model/samples_arc_20260101.parquet"
+    legacy_file.parent.mkdirs()
+    fs, legacy_path = url_to_fs(str(legacy_file))
     write_sample_parquet(fs, legacy_path, [_mcq("1", correct=True)])
 
     result = CliRunner().invoke(migrate_archive_cli, [results, missing_results, "--from-legacy-archive"])
 
     assert result.exit_code == 0, result.output
     assert archive_sample_count(results) == 1
-    assert fs.exists(legacy_path)
+    assert legacy_file.exists()
     summary = json.loads(result.output.splitlines()[-1])
     assert summary["migrated_runs"] == 1
     assert summary["skipped_runs"] == 1

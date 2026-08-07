@@ -8,7 +8,7 @@
  * name, and — when history is supplied — a score-over-runs sparkline under each gauge.
  */
 import { computed } from 'vue'
-import type { MatrixCell } from '@/types/api'
+import { RUN_STATUS, type MatrixCell } from '@/types/api'
 import { formatScore, formatStderr } from '@/utils/formatting'
 import { scoreColor } from '@/utils/score'
 import { type BestCell } from '@/utils/matrix'
@@ -67,7 +67,12 @@ const gauges = computed<Gauge[]>(() =>
       }
     }
     if (cell.value === null) {
-      const kind = cell.status === 'infra_failed' ? 'infra' : cell.status === 'artifact_failed' ? 'artifact' : 'failed'
+      const kind =
+        cell.status === RUN_STATUS.INFRA_FAILED
+          ? 'infra'
+          : cell.status === RUN_STATUS.ARTIFACT_FAILED
+            ? 'artifact'
+            : 'failed'
       return {
         task, cell, kind, fillH: 0, whiskerBottom: 0, whiskerHeight: 0, bestY: 0, isBest: false, color: '',
         content: { title: task, lines: [{ label: props.model, value: cell.status.replace('_', ' '), tone: 'muted' }] },

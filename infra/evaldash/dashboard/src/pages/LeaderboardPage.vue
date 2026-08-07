@@ -7,7 +7,7 @@ import { formatDelta, formatScore, formatStderr } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
 import { cellsByModel, fleetBest } from '@/utils/matrix'
 import { MAX_COMPARE } from '@/constants'
-import type { LeaderboardEntry, Matrix, MatrixCell, MatrixRow, Meta } from '@/types/api'
+import { RUN_STATUS, type LeaderboardEntry, type Matrix, type MatrixCell, type MatrixRow, type Meta } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
 import EvalRail from '@/components/charts/EvalRail.vue'
 import HistoryModal from '@/components/charts/HistoryModal.vue'
@@ -65,8 +65,8 @@ function deltaBest(entry: LeaderboardEntry): number | null {
 }
 
 function failureLabel(status: string): string {
-  if (status === 'infra_failed') return 'infra'
-  if (status === 'artifact_failed') return 'artifact'
+  if (status === RUN_STATUS.INFRA_FAILED) return 'infra'
+  if (status === RUN_STATUS.ARTIFACT_FAILED) return 'artifact'
   return 'failed'
 }
 
@@ -447,7 +447,7 @@ function goToModel(model: string) {
                     <button
                       v-else
                       class="w-full rounded px-2 py-1.5 text-[11px] font-mono font-semibold leading-tight cursor-pointer"
-                      :class="cellFor(row, task)!.status === 'failed' ? 'text-status-danger bg-status-danger-bg' : 'text-status-warning bg-status-warning-bg'"
+                      :class="cellFor(row, task)!.status === RUN_STATUS.FAILED ? 'text-status-danger bg-status-danger-bg' : 'text-status-warning bg-status-warning-bg'"
                       :title="`${cellFor(row, task)!.status} — open run ${cellFor(row, task)!.run_id}`"
                       @click="goToRun(cellFor(row, task)!.run_id)"
                     >

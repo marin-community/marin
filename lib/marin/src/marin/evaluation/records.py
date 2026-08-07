@@ -47,7 +47,6 @@ class RunStatus(StrEnum):
 
     ``FAILED`` means the evaluator failed, ``ARTIFACT_FAILED`` means it completed but its durable
     output could not be read or exported, and ``INFRA_FAILED`` means serving or orchestration failed.
-    The dashboard keeps these separate so a usable native result is not labeled as infrastructure loss.
     """
 
     SUCCEEDED = "succeeded"

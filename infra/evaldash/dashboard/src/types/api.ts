@@ -1,6 +1,15 @@
 // Shapes returned by the evaldash server (src/server.py). Kept in sync with the
 // dict shapes that RecordStore, cluster.py, and samples.py produce.
 
+export const RUN_STATUS = {
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  ARTIFACT_FAILED: 'artifact_failed',
+  INFRA_FAILED: 'infra_failed',
+} as const
+
+export type RunStatus = (typeof RUN_STATUS)[keyof typeof RUN_STATUS]
+
 export interface RunRow {
   run_id: string
   group_id: string | null
@@ -460,7 +469,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: 'succeeded' | 'failed' | 'artifact_failed' | 'infra_failed' | 'mixed'
+  status: RunStatus | 'mixed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]

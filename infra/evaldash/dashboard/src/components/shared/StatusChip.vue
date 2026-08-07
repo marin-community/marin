@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { RUN_STATUS } from '@/types/api'
 
 const props = defineProps<{
   status: string
@@ -7,10 +8,10 @@ const props = defineProps<{
 
 // Artifact and infrastructure failures are warnings: neither is a model/eval regression.
 const STYLES: Record<string, string> = {
-  succeeded: 'bg-status-success-bg text-status-success border-status-success-border',
-  failed: 'bg-status-danger-bg text-status-danger border-status-danger-border',
-  artifact_failed: 'bg-status-warning-bg text-status-warning border-status-warning-border',
-  infra_failed: 'bg-status-warning-bg text-status-warning border-status-warning-border',
+  [RUN_STATUS.SUCCEEDED]: 'bg-status-success-bg text-status-success border-status-success-border',
+  [RUN_STATUS.FAILED]: 'bg-status-danger-bg text-status-danger border-status-danger-border',
+  [RUN_STATUS.ARTIFACT_FAILED]: 'bg-status-warning-bg text-status-warning border-status-warning-border',
+  [RUN_STATUS.INFRA_FAILED]: 'bg-status-warning-bg text-status-warning border-status-warning-border',
 }
 
 const chipClass = computed(

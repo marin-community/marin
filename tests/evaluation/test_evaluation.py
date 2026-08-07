@@ -182,7 +182,7 @@ def test_evaluate_batch_persists_failures_and_continues_on_the_same_endpoint(tmp
 
 
 def test_evalchemy_executor_classifies_archive_export_failure(tmp_path, monkeypatch):
-    output_dir = f"memory://evalchemy-export-failure/{tmp_path.name}"
+    output_dir = str(StoragePath("memory://evalchemy-export-failure") / tmp_path.name)
     model_dir = StoragePath(output_dir) / "gsm8k_5shot" / "model"
     model_dir.mkdirs()
     (model_dir / "results_20260807.json").write_text(
