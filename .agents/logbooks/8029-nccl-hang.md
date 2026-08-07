@@ -196,6 +196,13 @@ author: power
 
 ## Event Log
 
+### 2026-08-07 11:30 UTC - Watch state does not explain the non-reproduction
+
+- Checked the most obvious objection to the null result: watch stats were turned off for hero runs at `eb6a320a18`, while the wedging source `5e496b051` ran `watch=WatchConfig(interval=20)`. If the watch program variant were part of the hazard, disabling it would suppress the wedge and the null would be an artifact of my own change.
+- It is not. The longest clean arm, `mhf-8rack-1ppg-sup-base-20260807`, predates that commit and ran watch enabled at interval 20, clearing every watch step through step 301. That single arm covers the entire documented 17-183 wedge window with the watch configuration matched to the wedging source.
+- The two later stock arms ran watch off, so they differ on this axis, but they are not what the null rests on. Watch-on coverage is already in hand and no follow-up watch-on arm is needed; the note at the `mhf-8rack-1ppg-stock` entry calling for one is superseded.
+- Remaining untested differences against the wedging population are the 58 commits between `5e496b051` and now, and node-set specificity. Both need capacity.
+
 ### 2026-08-07 11:05 UTC - Correction: the old-code bisect was launched and produced no verdict
 
 - My final report on #8029 said the bisect at `5e496b051` remained staged and unrun. That is wrong. Job `/power/mhf-8rack-oldcode-20260807-coord` exists, ran 128 tasks across eight racks for 51 minutes 35 seconds per task, and ended `killed ... Terminated by user` when I turned capacity down during wrap-up.
