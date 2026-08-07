@@ -44,7 +44,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
 
-from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import prepare_grug_checkpoint_restore, restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
@@ -511,6 +511,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             batch_schedule=batch_schedule,
             mesh=mesh,
         )
+        checkpoint_search_paths = trainer.checkpoint_search_paths(run_id)
+        restore_plan = prepare_grug_checkpoint_restore(checkpoint_search_paths, trainer.load_checkpoint)
+        data_iterator = train_loader.iter_from_step(restore_plan.expected_step)
+        iterator = LoadingTimeTrackerIterator(data_iterator)
 
         @jax.jit
         def _init_state(model_rng):
@@ -523,16 +527,26 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 offload_opt_state=config.trainer.offload_opt_state,
             )
 
-        state = _init_state(model_key)
+        try:
+            state = _init_state(model_key)
 
-        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
-        state = restore_grug_state_from_checkpoint(
-            state,
-            checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
-            load_checkpoint_setting=trainer.load_checkpoint,
-            mesh=mesh,
-            allow_partial=trainer.allow_partial_checkpoint,
-        )
+            checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
+            state = restore_grug_state_from_checkpoint(
+                state,
+                checkpoint_search_paths=checkpoint_search_paths,
+                load_checkpoint_setting=trainer.load_checkpoint,
+                mesh=mesh,
+                allow_partial=trainer.allow_partial_checkpoint,
+                restore_plan=restore_plan,
+            )
+        except BaseException:
+            data_iterator.close()
+            raise
+
+        if int(state.step) != restore_plan.expected_step:
+            data_iterator.close()
+            data_iterator = train_loader.iter_from_step(int(state.step))
+            iterator = LoadingTimeTrackerIterator(data_iterator)
         dump_grug_state_sharding_run_artifact(
             state,
             log_dir=trainer.log_dir,
@@ -560,8 +574,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         profiler_enabled = profiler_cfg.is_enabled and profiler_num_steps > 0
 
         log_every = max(1, config.trainer.log_every)
-        iterator = LoadingTimeTrackerIterator(train_loader.iter_from_step(int(state.step)))
-
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
@@ -687,6 +699,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     checkpointer.on_step(tree=state, step=int(state.step), force=True)
                     checkpointer.wait_until_finished()
         finally:
+            data_iterator.close()
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAINING_FINISHED)
 
     levanter.tracker.current_tracker().finish()
