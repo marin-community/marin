@@ -536,6 +536,30 @@ def test_remote_cache_leaves_xla_flags_alone_without_gpus(tmp_path) -> None:
         assert "XLA_FLAGS" not in os.environ
 
 
+def test_remote_cache_skips_the_autotune_flag_when_the_mount_is_absent(tmp_path) -> None:
+    """Workers on the VM clusters restart on their own daily schedule, not with the controller.
+
+    For up to a day after a rollout adds the mount, tasks land on a worker that
+    does not have it. Compile without the autotune cache rather than abort.
+    """
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        with patch.object(jax_init_module, "SCRATCH_CACHE_PATH", str(tmp_path / "never-mounted")):
+            with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+                configure_jax_compilation_cache()
+
+        assert "XLA_FLAGS" not in os.environ
+
+
+def test_remote_cache_skips_the_autotune_flag_when_the_directory_cannot_be_created(tmp_path) -> None:
+    """A mount that is present but unwritable is the same non-event as a missing one."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        (scratch_cache_dir / "xla").write_bytes(b"")
+        with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+            configure_jax_compilation_cache()
+
+        assert "XLA_FLAGS" not in os.environ
+
+
 def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
     """An operator-chosen autotune directory wins over the node mount."""
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):

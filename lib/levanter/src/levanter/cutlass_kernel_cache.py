@@ -109,15 +109,24 @@ class CutlassKernelCache:
     directory: str
 
     def load(self, key: str) -> bytes | None:
-        path = self._object(key)
-        return path.read_bytes() if path.exists() else None
+        # A store that cannot be reached is a miss, not a failure: the caller
+        # compiles instead. Training must not depend on the cache being healthy.
+        try:
+            path = self._object(key)
+            return path.read_bytes() if path.exists() else None
+        except OSError as exc:
+            logger.warning("CuTeDSL kernel cache unreadable, compiling instead: %s", exc)
+            return None
 
     def store(self, key: str, module: bytes) -> None:
         # Every process compiles the same kernels at once, so stage and rename
         # rather than let a reader see a half-written object.
-        path = str(self._object(key))
-        with atomic_rename(path) as staged:
-            StoragePath(staged).write_bytes(module)
+        try:
+            path = str(self._object(key))
+            with atomic_rename(path) as staged:
+                StoragePath(staged).write_bytes(module)
+        except OSError as exc:
+            logger.warning("CuTeDSL kernel cache unwritable, not storing %s: %s", key, exc)
 
     def _object(self, key: str) -> StoragePath:
         return _root(self.directory) / f"{key}{_OBJECT_SUFFIX}"
@@ -128,6 +137,23 @@ def _root(directory: str) -> StoragePath:
     path = StoragePath(directory)
     path.mkdirs()
     return path
+
+
+def install_if_available(cache: CutlassKernelCache) -> bool:
+    """Install ``cache`` when ``cutlass.jax`` can actually be imported.
+
+    The package being present does not mean it imports: ``cutlass.jax`` pulls in
+    CUDA bindings, so it fails on a CPU task running the GPU image, or on a host
+    whose driver does not match. Returns whether the cache was installed.
+    """
+    try:
+        importlib.import_module("cutlass.jax.primitive")
+    except ImportError as exc:
+        logger.info("CuTeDSL kernel cache skipped, cutlass.jax unavailable: %s", exc)
+        return False
+
+    install(cache)
+    return True
 
 
 def install(cache: CutlassKernelCache) -> None:

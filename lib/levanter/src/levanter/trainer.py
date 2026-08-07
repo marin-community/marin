@@ -4,7 +4,6 @@
 import atexit
 import copy
 import functools
-import importlib.util
 import logging as pylogging
 import os
 import sys
@@ -69,7 +68,7 @@ from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import Checkpointer, CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
 from levanter.config import JsonAtom
 from levanter.cutlass_kernel_cache import CutlassKernelCache
-from levanter.cutlass_kernel_cache import install as install_cutlass_kernel_cache
+from levanter.cutlass_kernel_cache import install_if_available as install_cutlass_kernel_cache
 from levanter.data.dataset import AsyncDataset
 from levanter.data.loader import DataLoader
 from levanter.data.loader import _round_to_nearest_multiple
@@ -851,10 +850,10 @@ def _install_cutlass_kernel_cache() -> None:
 
     The two caches want the same location for the same reason, so this derives one
     from the other instead of adding a second knob. Skipped when no compilation
-    cache is configured, or on a build without ``cutlass.jax``.
+    cache is configured, or when ``cutlass.jax`` will not import.
     """
     cache_dir = jax.config.jax_compilation_cache_dir
-    if not cache_dir or importlib.util.find_spec("cutlass") is None:
+    if not cache_dir:
         return
 
     install_cutlass_kernel_cache(CutlassKernelCache(directory=prefix_join(cache_dir, _CUTLASS_KERNEL_CACHE_SUBDIR)))
