@@ -63,6 +63,18 @@ On a hero rerun whose configuration has not changed, `-e JAX_COMPILATION_CACHE_E
 every unexpected compilation-cache write into a warning and loads the PGLE-optimized executable
 without re-running PGLE profiling.
 
+### The two caches a hero start depends on
+
+JAX's compilation cache only covers XLA compilation. The QuACK and FA4 kernels compile through
+CuTeDSL during MLIR lowering, which runs before JAX can compute the cache key, so a compilation-cache
+hit still regenerates every kernel. `TrainerConfig.cutlass_kernel_cache_dir` is the store that
+recovers those; the hero and the probe share
+`marin_temp_bucket(ttl_days=30, prefix="cutlass-kernel-cache")`. Entries are content-addressed on the
+kernel configuration, the launcher source, the argument specification, the device architecture, and
+the CuTeDSL and QuACK versions, so sharing one prefix across runs is safe and an edit to a launcher
+invalidates only its own kernels. Pass `--kernel-cache-dir` a fresh prefix to force a cold compile;
+the task logs report a hit or a miss per kernel.
+
 ## Files
 
 | file | contents |

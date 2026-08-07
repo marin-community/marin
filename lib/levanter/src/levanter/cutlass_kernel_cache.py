@@ -26,13 +26,11 @@ import functools
 import hashlib
 import importlib
 import logging
-import os
-import threading
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Callable
 
 import jax
-from rigging.filesystem import url_to_fs
+from rigging.filesystem import StoragePath, atomic_rename
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +72,26 @@ def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
 
 
 @functools.lru_cache(maxsize=None)
+def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
+    """Return ``cutlass.jax.cutlass_call(launcher, **kwargs)``, memoized on its arguments.
+
+    ``cutlass_call`` builds its JAX entry point as a fresh ``@jax.jit`` closure per
+    invocation, and JAX's tracing cache is keyed on function identity, so a call
+    site that rebuilds it per use is re-traced and lowered as its own nested
+    ``pjit`` every time. Lowering then scales with call-site count rather than with
+    distinct kernels. Reusing one wrapper per distinct kernel collapses that:
+    launchers from :func:`cute_launcher_factory` are singletons, ``TensorSpec`` is
+    a frozen dataclass, and ``ShapeDtypeStruct`` is hashable, so every argument
+    that identifies a kernel can key the memo.
+
+    Keyword arguments must be passed in a consistent order — ``lru_cache`` does
+    not sort them, so a reordered call misses rather than hits.
+    """
+    cjax = importlib.import_module("cutlass.jax")
+    return cjax.cutlass_call(launcher, **kwargs)
+
+
+@functools.lru_cache(maxsize=None)
 def _source_digest(build: Callable[..., Any]) -> str:
     """Digest the source file that defines ``build``.
 
@@ -99,31 +117,25 @@ class CutlassKernelCache:
     directory: str
 
     def load(self, key: str) -> bytes | None:
-        fs, path = self._locate(key)
-        if not fs.exists(path):
-            return None
-        with fs.open(path, "rb") as handle:
-            return handle.read()
+        path = self._object(key)
+        return path.read_bytes() if path.exists() else None
 
     def store(self, key: str, module: bytes) -> None:
-        fs, path = self._locate(key)
-        # Stage under a writer-unique name so a reader never observes a partial
-        # object: every process compiles the same kernels at the same time.
-        staged = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-        with fs.open(staged, "wb") as handle:
-            handle.write(module)
-        fs.mv(staged, path)
+        # Stage and rename so a reader never observes a partial object: every
+        # process compiles the same kernels at the same time.
+        path = str(self._object(key))
+        with atomic_rename(path) as staged:
+            StoragePath(staged).write_bytes(module)
 
-    def _locate(self, key: str) -> tuple[Any, str]:
-        fs, root = _filesystem(self.directory)
-        return fs, f"{root.rstrip('/')}/{key}{_OBJECT_SUFFIX}"
+    def _object(self, key: str) -> StoragePath:
+        return _root(self.directory) / f"{key}{_OBJECT_SUFFIX}"
 
 
 @functools.lru_cache(maxsize=None)
-def _filesystem(directory: str) -> tuple[Any, str]:
-    fs, root = url_to_fs(directory)
-    fs.makedirs(root, exist_ok=True)
-    return fs, root
+def _root(directory: str) -> StoragePath:
+    path = StoragePath(directory)
+    path.mkdirs()
+    return path
 
 
 def install(cache: CutlassKernelCache) -> None:

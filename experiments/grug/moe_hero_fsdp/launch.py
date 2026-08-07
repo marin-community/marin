@@ -63,14 +63,7 @@ def hero_gb200_nodes(replicas: int) -> ResourceConfig:
 
 
 def hero_cutlass_kernel_cache_dir() -> str:
-    """Shared store for compiled QuACK and FA4 kernels.
-
-    Those compile during MLIR lowering, before JAX's compilation cache is
-    consulted, so this is the only cache that recovers them on a restart. Entries
-    are content-addressed on the kernel configuration, source, argument
-    specification, device architecture, and package versions, so every run that
-    uses the same kernels shares them.
-    """
+    """Store for compiled QuACK and FA4 kernels, shared by every run that uses them."""
     return marin_temp_bucket(ttl_days=HERO_KERNEL_CACHE_TTL_DAYS, prefix="cutlass-kernel-cache")
 
 

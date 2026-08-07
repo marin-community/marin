@@ -18,7 +18,7 @@ from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 from jaxtyping import Array, Bool, Float, Int
 
-from levanter.cutlass_kernel_cache import cute_launcher_factory
+from levanter.cutlass_kernel_cache import cute_launcher_factory, cutlass_call
 from levanter.grug.attention._core import AttentionMask
 from levanter.grug.attention._fa4_cute import _gpu_compute_arch
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
@@ -577,7 +577,7 @@ def fa4_thd_attention_forward(
     input_spec, output_spec = _cutlass_thd_forward_specs(modules)
     out_shape_dtype = jax.ShapeDtypeStruct(q.shape, q.dtype)
     lse_shape_dtype = jax.ShapeDtypeStruct((q.shape[1], q.shape[0]), jnp.float32)
-    call = modules.cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=(out_shape_dtype, lse_shape_dtype),
         input_spec=input_spec,
@@ -620,7 +620,7 @@ def fa4_thd_attention_backward(
     )
     input_spec, output_spec = _cutlass_thd_backward_specs(modules)
     output_shape_dtype = _cutlass_thd_backward_output_shapes(q, k, v, cu_seqlens, kernel_config.backward_tile)
-    call = modules.cjax.cutlass_call(
+    call = cutlass_call(
         launcher,
         output_shape_dtype=output_shape_dtype,
         input_spec=input_spec,

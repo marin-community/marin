@@ -115,9 +115,8 @@ def configure_jax_compilation_cache() -> None:
 def _enable_node_local_xla_autotune_cache() -> None:
     """Point XLA's per-fusion autotune cache at the node-local Iris cache mount.
 
-    Set through ``XLA_FLAGS`` rather than JAX's ``jax_persistent_cache_enable_xla_caches``,
-    which derives the path from the compilation cache dir and so cannot put one
-    remote and the other local. The flag is on JAX's
+    Set through ``XLA_FLAGS``, which is the only place one cache can be local while
+    the compilation cache is remote. The flag is on JAX's
     ``xla_flags_to_exclude_from_cache_key`` list, so it does not perturb the
     compilation cache key.
 
