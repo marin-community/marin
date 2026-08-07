@@ -89,9 +89,11 @@ watch([task, filter, extractionFilter], () => {
 })
 
 // Fetch (and keep the URL pointed at) whichever row is current; runs once immediately for deep
-// links, then again on every task/filter/index change.
+// links, then again on every task/filter/index change. The selected extraction filter is a
+// dependency as well as the resolved one: picking a filter while on row 0 changes neither the index
+// nor the filter the last response reported, so nothing else here would notice.
 watch(
-  [task, filter, index, resolvedExtractionFilter],
+  [task, filter, index, extractionFilter, resolvedExtractionFilter],
   () => {
     ensure(index.value)
     if (!task.value) return
