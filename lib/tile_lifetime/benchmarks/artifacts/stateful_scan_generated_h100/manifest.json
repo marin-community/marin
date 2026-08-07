@@ -1,0 +1,89 @@
+{
+  "artifact": "stateful_scan_generated_h100",
+  "schema_version": 1,
+  "backend_policy": {
+    "external_architecture_kernel": false,
+    "fla_installed": false,
+    "flash_qla_installed": false,
+    "implementation": "generated_bounded_rank_affine_triton"
+  },
+  "environment": {
+    "cuda_runtime": "12.8",
+    "driver": "595.71.05",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "gpu_count_reserved": 8,
+    "gpu_count_used": 1,
+    "hostname": "g83d0f6",
+    "python": "3.12.13",
+    "torch": "2.8.0+cu128",
+    "triton": "3.4.0"
+  },
+  "revisions": {
+    "shuttle": "fae336fd48143fb70a9be3257ac45223a710d675"
+  },
+  "run_source_sha256": {
+    "delta_rule_reference.py": "d3b97ccb4424041561f22bdb38adc2de55511a434a747800fe5a6e659f368f79",
+    "h100_generated_affine_scan.py": "5df1c4091cbbd05d43f12b3f2acfee343b135c76ee50ede0e7e3c0b15c6b7f8d",
+    "plan.py": "093b8bd9360453c41aeeded1cac272b34cbe34aa6da92e0af53e56fb1c897612",
+    "stateful_scan_recovery.py": "d0a4d72fb1ea9b3397e44d0630c0a112f81a97d42bc73d7da3456478a3039e41",
+    "triton_affine_scan.py": "c410d304e941cfe5292bd1f727ba2af7485d33255f2952d5d728ffc2cfbe4d3b"
+  },
+  "candidate_set": {
+    "block_v": [8, 16, 32],
+    "decay_axes": ["scalar", "key"],
+    "update_rank": [1, 2]
+  },
+  "production_shape": {
+    "batch_size": 1,
+    "factor_dtype": "bf16",
+    "heads": 32,
+    "key_dimension": 128,
+    "output_dtype": "bf16",
+    "sequence_length": 64,
+    "state_dtype": "fp32",
+    "value_dimension": 128
+  },
+  "results": {
+    "mutation_per_key_r1_bv32": {
+      "median_ms": 0.1380000039935112,
+      "output_maximum_absolute_error": 6.103515625e-5,
+      "repeat_bitwise": true,
+      "state_maximum_absolute_error": 1.862645149230957e-8
+    },
+    "mutation_scalar_r2_bv32": {
+      "median_ms": 0.1833759993314743,
+      "output_maximum_absolute_error": 0.0001220703125,
+      "repeat_bitwise": true,
+      "state_maximum_absolute_error": 1.862645149230957e-8
+    },
+    "production_scalar_r1_bv8": {
+      "median_ms": 0.1571199968457222,
+      "output_maximum_absolute_error": 6.103515625e-5,
+      "repeat_bitwise": true,
+      "state_maximum_absolute_error": 1.4901161193847656e-8
+    },
+    "production_scalar_r1_bv16": {
+      "median_ms": 0.1494240015745163,
+      "output_maximum_absolute_error": 0.000244140625,
+      "repeat_bitwise": true,
+      "state_maximum_absolute_error": 1.4901161193847656e-8
+    },
+    "production_scalar_r1_bv32": {
+      "median_ms": 0.138544000685215,
+      "output_maximum_absolute_error": 0.000244140625,
+      "repeat_bitwise": true,
+      "state_maximum_absolute_error": 1.4901161193847656e-8
+    },
+    "smoke_r1_bv16": {
+      "median_ms": 0.04887999966740608,
+      "output_maximum_absolute_error": 0.0,
+      "repeat_bitwise": true,
+      "state_maximum_absolute_error": 5.587935447692871e-9
+    }
+  },
+  "holder_cleanup": {
+    "active_session_after_release": false,
+    "job_state": "killed",
+    "matching_pod_after_release": false
+  }
+}

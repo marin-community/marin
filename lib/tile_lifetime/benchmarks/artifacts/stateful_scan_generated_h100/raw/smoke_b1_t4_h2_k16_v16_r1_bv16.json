@@ -1,0 +1,92 @@
+{
+  "configuration": {
+    "batch_size": 1,
+    "block_v": 16,
+    "decay_axes": "scalar",
+    "gate_operation": "exp",
+    "heads": 2,
+    "key_dimension": 16,
+    "seed": 1234,
+    "sequence_length": 4,
+    "update_rank": 1,
+    "value_dimension": 16
+  },
+  "correctness": {
+    "output": {
+      "finite": true,
+      "maximum_absolute_error": 0.0,
+      "mean_absolute_error": 0.0
+    },
+    "output_bitwise_repeat": true,
+    "output_sha256": "a9006eadd81f4a907396d67ce68876b7970510f3a4b10282c19586524dfce39e",
+    "state": {
+      "finite": true,
+      "maximum_absolute_error": 5.587935447692871e-09,
+      "mean_absolute_error": 4.76688910566736e-10
+    },
+    "state_bitwise_repeat": true,
+    "state_sha256": "e8356662bbb2a59e94e4d271dd32092538ced048c61c75f189368a71609d4ba7"
+  },
+  "environment": {
+    "compute_capability": [
+      9,
+      0
+    ],
+    "cuda_runtime": "12.8",
+    "driver_and_clocks": "595.71.05, 1830 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "hostname": "g83d0f6",
+    "python": "3.12.13",
+    "torch": "2.8.0+cu128",
+    "triton": "3.4.0"
+  },
+  "recovery": {
+    "diagonal_scale_axes": [
+      "batch",
+      "head"
+    ],
+    "maximum_low_rank": 1,
+    "term_signatures": [
+      [
+        "multiply"
+      ],
+      [
+        "multiply",
+        "contract[key]",
+        "multiply",
+        "contract[]"
+      ]
+    ],
+    "transition_structure": "diagonal_plus_low_rank"
+  },
+  "schema_version": 1,
+  "shuttle_revision": "fae336fd48143fb70a9be3257ac45223a710d675",
+  "timing": {
+    "maximum_ms": 0.06707199662923813,
+    "mean_ms": 0.05067519973963499,
+    "median_ms": 0.04887999966740608,
+    "minimum_ms": 0.04553600028157234,
+    "samples_ms": [
+      0.06707199662923813,
+      0.05958399921655655,
+      0.05363199859857559,
+      0.05100800096988678,
+      0.05119999870657921,
+      0.052319999784231186,
+      0.0560000017285347,
+      0.050303999334573746,
+      0.05020799860358238,
+      0.04902400076389313,
+      0.04873599857091904,
+      0.04745600000023842,
+      0.04793599992990494,
+      0.04854400083422661,
+      0.04790399968624115,
+      0.047648001462221146,
+      0.04755200073122978,
+      0.045951999723911285,
+      0.04588799923658371,
+      0.04553600028157234
+    ]
+  }
+}

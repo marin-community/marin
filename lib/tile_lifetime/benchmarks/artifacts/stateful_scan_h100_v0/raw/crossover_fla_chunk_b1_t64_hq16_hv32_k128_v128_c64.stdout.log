@@ -1,0 +1,208 @@
+{
+  "backend": "fla_chunk",
+  "candidate_set": [
+    {
+      "backend": "jax_recurrent_gated_delta_rule",
+      "backend_revision": null,
+      "chunk_size": 1,
+      "execution_form": "recurrent",
+      "length": 64,
+      "materialized_values": [
+        "persistent_state",
+        "output"
+      ],
+      "name": "gated_delta_recurrent",
+      "numerical_contract": "source_ordered",
+      "numerical_effect": "Executes token updates in source order with FP32 state.",
+      "ordered_axis": "position",
+      "output": "output",
+      "state": "state",
+      "state_dtype": "fp32",
+      "state_layout": "batch_head_key_value",
+      "state_shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "summary_representation": "none"
+    },
+    {
+      "backend": "jax_chunk_gated_delta_rule",
+      "backend_revision": null,
+      "chunk_size": 16,
+      "execution_form": "chunkwise",
+      "length": 64,
+      "materialized_values": [
+        "persistent_state",
+        "chunk_summary",
+        "output"
+      ],
+      "name": "gated_delta_chunk_16",
+      "numerical_contract": "bounded_reassociation",
+      "numerical_effect": "Parallelizes the within-chunk triangular transform and scans chunk summaries in order; FP32 contractions are reassociated relative to token recurrence.",
+      "ordered_axis": "position",
+      "output": "output",
+      "state": "state",
+      "state_dtype": "fp32",
+      "state_layout": "batch_head_key_value",
+      "state_shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "summary_representation": "factored_affine"
+    },
+    {
+      "backend": "jax_chunk_gated_delta_rule",
+      "backend_revision": null,
+      "chunk_size": 32,
+      "execution_form": "chunkwise",
+      "length": 64,
+      "materialized_values": [
+        "persistent_state",
+        "chunk_summary",
+        "output"
+      ],
+      "name": "gated_delta_chunk_32",
+      "numerical_contract": "bounded_reassociation",
+      "numerical_effect": "Parallelizes the within-chunk triangular transform and scans chunk summaries in order; FP32 contractions are reassociated relative to token recurrence.",
+      "ordered_axis": "position",
+      "output": "output",
+      "state": "state",
+      "state_dtype": "fp32",
+      "state_layout": "batch_head_key_value",
+      "state_shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "summary_representation": "factored_affine"
+    },
+    {
+      "backend": "jax_chunk_gated_delta_rule",
+      "backend_revision": null,
+      "chunk_size": 64,
+      "execution_form": "chunkwise",
+      "length": 64,
+      "materialized_values": [
+        "persistent_state",
+        "chunk_summary",
+        "output"
+      ],
+      "name": "gated_delta_chunk_64",
+      "numerical_contract": "bounded_reassociation",
+      "numerical_effect": "Parallelizes the within-chunk triangular transform and scans chunk summaries in order; FP32 contractions are reassociated relative to token recurrence.",
+      "ordered_axis": "position",
+      "output": "output",
+      "state": "state",
+      "state_dtype": "fp32",
+      "state_layout": "batch_head_key_value",
+      "state_shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "summary_representation": "factored_affine"
+    }
+  ],
+  "config": {
+    "batch_size": 1,
+    "chunk_size": 64,
+    "decay_scale": 0.1,
+    "input_dtype": "bf16",
+    "key_dimension": 128,
+    "query_heads": 16,
+    "seed": 1234,
+    "sequence_length": 64,
+    "state_dtype": "fp32",
+    "value_dimension": 128,
+    "value_heads": 32
+  },
+  "environment": {
+    "compute_capability": [
+      9,
+      0
+    ],
+    "cuda_runtime": "12.8",
+    "driver_and_clocks": "595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "hostname": "g83d0f6",
+    "python": "3.12.13",
+    "torch": "2.8.0+cu128"
+  },
+  "mode": "prefill",
+  "output_bitwise_repeat": true,
+  "output_sha256": "c0d8f3dd4e6f652aa4102bf2885917d82cd46a0d18ad6f7b1a21d0f16229ce84",
+  "revisions": {
+    "fla_actual": "9c8e42e762fce087c27b673af4922795d9edb85e",
+    "fla_expected": "9c8e42e762fce087c27b673af4922795d9edb85e",
+    "flash_qla_actual": null,
+    "flash_qla_expected": "050c6bbee9e03efbbfe41063fe4e33742c4a87cb",
+    "shuttle": "fae336fd48143fb70a9be3257ac45223a710d675"
+  },
+  "schema_version": 1,
+  "state_bitwise_repeat": true,
+  "state_sha256": "b19f25dda49a68271dba567e77d24f5785f2cf8440253ed54178ca3ba4752fce",
+  "timing": {
+    "maximum_ms": 0.5478079915046692,
+    "mean_ms": 0.5147225570678711,
+    "median_ms": 0.5151039958000183,
+    "minimum_ms": 0.4885120093822479,
+    "samples_ms": [
+      0.5241919755935669,
+      0.5478079915046692,
+      0.5164480209350586,
+      0.5448639988899231,
+      0.516543984413147,
+      0.5369279980659485,
+      0.5186880230903625,
+      0.5298879742622375,
+      0.5158720016479492,
+      0.5053439736366272,
+      0.5271040201187134,
+      0.5134080052375793,
+      0.5447999835014343,
+      0.5171840190887451,
+      0.5410240292549133,
+      0.5146880149841309,
+      0.5415999889373779,
+      0.5136319994926453,
+      0.5182080268859863,
+      0.5155199766159058,
+      0.49398401379585266,
+      0.5297279953956604,
+      0.49881601333618164,
+      0.529695987701416,
+      0.5056639909744263,
+      0.5021439790725708,
+      0.5110399723052979,
+      0.4896000027656555,
+      0.5248960256576538,
+      0.5070719718933105,
+      0.527679979801178,
+      0.5158720016479492,
+      0.5089280009269714,
+      0.4885120093822479,
+      0.5308799743652344,
+      0.5035840272903442,
+      0.5068479776382446,
+      0.506879985332489,
+      0.49532800912857056,
+      0.5195840001106262,
+      0.4942399859428406,
+      0.516543984413147,
+      0.4970560073852539,
+      0.5177599787712097,
+      0.4991360008716583,
+      0.5005760192871094,
+      0.5023999810218811,
+      0.5093439817428589,
+      0.5051199793815613,
+      0.49347200989723206
+    ]
+  }
+}

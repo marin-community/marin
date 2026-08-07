@@ -8,6 +8,14 @@ The formalism is a target, not an immediate implementation mandate. During proto
 
 The current prototype has already demonstrated substantial proof of life on dense Transformers and distributed MoE. The next objective is to determine whether the same abstractions transfer to qualitatively different architectures before stabilizing them into a production compiler.
 
+Current prototype records:
+
+- [Routed sparse-attention conclusion](seer_delta_analysis.md)
+- [StatefulScan brief](stateful_scan_brief.md)
+- [StatefulScan background](stateful_scan_background.md)
+- [StatefulScan implementation plan](stateful_scan_plan.md)
+- [Synthesis-boundary audit](synthesis_boundary_audit.md)
+
 ---
 
 ## 1. Thesis
@@ -2185,13 +2193,17 @@ NOW
 │    └─ test RelationPlan reuse
 │
 ├─ Gated DeltaNet / KDA
-│    └─ test Scan + ChunkAlgebra
+│    ├─ recover generic affine/factored state algebra
+│    └─ generate recurrent + chunk kernels from scan skeletons
+│
+├─ FSDP
+│    └─ test placement transitions + streamed communication + tile lifetimes
 │
 ├─ Reevaluate the normal form
 │    └─ remove decorative abstractions
 │
 ├─ If still coherent:
-│    └─ begin serious XLA/Shuttle implementation
+│    └─ begin serious XLA/Shardy/Shuttle implementation
 │
 ├─ Whole training step
 │    ├─ backward
@@ -2206,6 +2218,10 @@ NOW
      └─ long convolutions if needed
 ```
 
-The next prototypes are intended to earn the right to build the compiler.
+The scan and FSDP prototypes are intended to earn the right to build the
+integrated compiler. Together with the existing dense and runtime-relation
+results, they test dense compute, sparse relations, ordered state, and
+distributed parameter movement before the representation is stabilized in an
+XLA/Shardy integration.
 
 The longer-term target is to make expert kernel design increasingly a source of compiler transformations rather than an endless sequence of bespoke implementations.

@@ -1,0 +1,168 @@
+Traceback (most recent call last):
+  File "/tmp/shuttle-gdn/tile_lifetime/benchmarks/h100_stateful_scan.py", line 352, in <module>
+    main()
+  File "/tmp/shuttle-gdn/tile_lifetime/benchmarks/h100_stateful_scan.py", line 320, in main
+    result["correctness"] = _correctness(backend, args)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/tile_lifetime/benchmarks/h100_stateful_scan.py", line 226, in _correctness
+    output, final_state = _invoke(backend, args.backend, inputs, args.chunk_size)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/tile_lifetime/benchmarks/h100_stateful_scan.py", line 146, in _invoke
+    output, final_state = backend(**kwargs)
+                          ^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 929, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/repos/flash-qla/flash_qla/ops/gated_delta_rule/chunk/__init__.py", line 388, in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/torch/autograd/function.py", line 576, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/repos/flash-qla/flash_qla/utils/contiguous.py", line 39, in wrapper
+    return fn(*contiguous_args, **contiguous_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/torch/amp/autocast_mode.py", line 517, in decorate_fwd
+    return fwd(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/repos/flash-qla/flash_qla/ops/gated_delta_rule/chunk/__init__.py", line 187, in forward
+    g, A, o, _, final_state, cp_cache = chunk_gated_delta_rule_fwd(
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/repos/flash-qla/flash_qla/ops/gated_delta_rule/chunk/__init__.py", line 48, in chunk_gated_delta_rule_fwd
+    g = chunk_local_cumsum(
+        ^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/repos/flash-qla/flash_qla/ops/utils/cumsum.py", line 157, in chunk_local_cumsum
+    tilelang_chunk_local_cumsum_kernel = tilelang_chunk_local_cumsum(
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/jit/__init__.py", line 465, in __call__
+    kernel = self.compile(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/jit/__init__.py", line 395, in compile
+    kernel_result = compile(
+                    ^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/jit/__init__.py", line 115, in compile
+    return cached(
+           ^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/cache/__init__.py", line 74, in cached
+    return _dispatch_map[execution_backend].cached(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/cache/kernel_cache.py", line 345, in cached
+    kernel = JITKernel(
+             ^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/jit/kernel.py", line 136, in __init__
+    adapter = self._compile_and_create_adapter(func, out_idx)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/jit/kernel.py", line 247, in _compile_and_create_adapter
+    artifact = tilelang.lower(
+               ^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/engine/lower.py", line 315, in lower
+    codegen_mod = device_codegen(device_mod, target) if enable_device_compile else device_codegen_without_compile(device_mod, target)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/engine/lower.py", line 235, in device_codegen
+    device_mod = tvm.ffi.get_global_func(global_func)(device_mod, target)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "python/tvm_ffi/cython/function.pxi", line 929, in tvm_ffi.core.Function.__call__
+  File "<unknown>", line 0, in tvm::codegen::BuildTileLangCUDA(tvm::IRModule, tvm::Target)
+  File "python/tvm_ffi/cython/function.pxi", line 1083, in tvm_ffi.core.tvm_ffi_callback
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/engine/lower.py", line 150, in tilelang_callback_cuda_compile
+    ptx = nvcc.compile_cuda(
+
+  File "/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/contrib/nvcc.py", line 119, in compile_cuda
+    raise RuntimeError(msg)
+
+RuntimeError: #include <tl_templates/cuda/gemm.h>
+#include <tl_templates/cuda/copy.h>
+#include <tl_templates/cuda/reduce.h>
+#include <tl_templates/cuda/ldsm.h>
+#include <tl_templates/cuda/threadblock_swizzle.h>
+#include <tl_templates/cuda/debug.h>
+#ifdef ENABLE_BF16
+#include <tl_templates/cuda/cuda_bf16_fallbacks.cuh>
+#endif
+
+extern "C" __global__ void tilelang_chunk_local_cumsum_kernel_kernel(float* __restrict__ g_cumsum, const float* __restrict__ g_raw, int data_batch_size, int num_chunks, int seq_end_idx);
+extern "C" __global__ void __launch_bounds__(128, 1) tilelang_chunk_local_cumsum_kernel_kernel(float* __restrict__ g_cumsum, const float* __restrict__ g_raw, int data_batch_size, int num_chunks, int seq_end_idx) {
+  extern __shared__ __align__(1024) uchar buf_dyn_shmem[];
+  float gT_fragment[16];
+  float src_buffer[16];
+  if ((((((int)blockIdx.x) / data_batch_size) * 64) + 64) <= seq_end_idx) {
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+      *(float4*)(gT_fragment + (i * 4)) = *(float4*)(g_raw + (((((((int64_t)((int)blockIdx.x)) / ((int64_t)data_batch_size)) * (int64_t)2048) + (((int64_t)i) * (int64_t)512)) + (((((int64_t)((int)blockIdx.x)) % ((int64_t)data_batch_size)) * ((int64_t)seq_end_idx)) * (int64_t)32)) + (((int64_t)((int)threadIdx.x)) * (int64_t)4)));
+    }
+  } else {
+    #pragma unroll
+    for (int i_1 = 0; i_1 < 4; ++i_1) {
+      if (((((((int)blockIdx.x) / data_batch_size) * 64) + (i_1 * 16)) + (((int)threadIdx.x) >> 3)) < seq_end_idx) {
+        *(float4*)(gT_fragment + (i_1 * 4)) = *(float4*)(g_raw + (((((((int64_t)((int)blockIdx.x)) / ((int64_t)data_batch_size)) * (int64_t)2048) + (((int64_t)i_1) * (int64_t)512)) + (((((int64_t)((int)blockIdx.x)) % ((int64_t)data_batch_size)) * ((int64_t)seq_end_idx)) * (int64_t)32)) + (((int64_t)((int)threadIdx.x)) * (int64_t)4)));
+      } else {
+        float broadcast_var = 0x0p+0f/*0.000000e+00*/;
+        *(float4*)(gT_fragment + (i_1 * 4)) = make_float4(broadcast_var, broadcast_var, broadcast_var, broadcast_var);
+      }
+    }
+  }
+  #pragma unroll
+  for (int i_2 = 0; i_2 < 16; ++i_2) {
+    ((float*)buf_dyn_shmem)[(((((i_2 >> 2) * 528) + ((((int)threadIdx.x) >> 3) * 33)) + ((((int)threadIdx.x) & 7) * 4)) + (i_2 & 3))] = gT_fragment[i_2];
+  }
+  __syncthreads();
+  #pragma unroll
+  for (int i_3 = 0; i_3 < 16; ++i_3) {
+    src_buffer[i_3] = ((float*)buf_dyn_shmem)[((((((int)threadIdx.x) & 63) * 33) + (i_3 * 2)) + (((int)threadIdx.x) >> 6))];
+  }
+  #pragma unroll
+  for (int i_4 = 0; i_4 < 16; ++i_4) {
+    ((float*)buf_dyn_shmem)[(((i_4 * 128) + ((int)threadIdx.x)) + 2112)] = src_buffer[i_4];
+  }
+  __syncthreads();
+  tl::CumSum2D<128, 1, false>::run((&(((float*)buf_dyn_shmem)[2112])), (&(((float*)buf_dyn_shmem)[2112])), 32, 64);
+  __syncthreads();
+  #pragma unroll
+  for (int i_5 = 0; i_5 < 16; ++i_5) {
+    src_buffer[i_5] = ((float*)buf_dyn_shmem)[(((i_5 * 128) + ((int)threadIdx.x)) + 2112)];
+  }
+  #pragma unroll
+  for (int i_6 = 0; i_6 < 16; ++i_6) {
+    ((float*)buf_dyn_shmem)[((((((int)threadIdx.x) & 63) * 33) + (i_6 * 2)) + (((int)threadIdx.x) >> 6))] = src_buffer[i_6];
+  }
+  __syncthreads();
+  #pragma unroll
+  for (int i_7 = 0; i_7 < 16; ++i_7) {
+    gT_fragment[i_7] = ((float*)buf_dyn_shmem)[(((((i_7 >> 2) * 528) + ((((int)threadIdx.x) >> 3) * 33)) + ((((int)threadIdx.x) & 7) * 4)) + (i_7 & 3))];
+  }
+  if ((((((int)blockIdx.x) / data_batch_size) * 64) + 64) <= seq_end_idx) {
+    #pragma unroll
+    for (int i_8 = 0; i_8 < 4; ++i_8) {
+      *(float4*)(g_cumsum + (((((((int64_t)((int)blockIdx.x)) / ((int64_t)data_batch_size)) * (int64_t)2048) + (((int64_t)i_8) * (int64_t)512)) + (((((int64_t)((int)blockIdx.x)) % ((int64_t)data_batch_size)) * ((int64_t)seq_end_idx)) * (int64_t)32)) + (((int64_t)((int)threadIdx.x)) * (int64_t)4))) = *(float4*)(gT_fragment + (i_8 * 4));
+    }
+  } else {
+    #pragma unroll
+    for (int i_9 = 0; i_9 < 4; ++i_9) {
+      if (((((((int)blockIdx.x) / data_batch_size) * 64) + (i_9 * 16)) + (((int)threadIdx.x) >> 3)) < seq_end_idx) {
+        *(float4*)(g_cumsum + (((((((int64_t)((int)blockIdx.x)) / ((int64_t)data_batch_size)) * (int64_t)2048) + (((int64_t)i_9) * (int64_t)512)) + (((((int64_t)((int)blockIdx.x)) % ((int64_t)data_batch_size)) * ((int64_t)seq_end_idx)) * (int64_t)32)) + (((int64_t)((int)threadIdx.x)) * (int64_t)4))) = *(float4*)(gT_fragment + (i_9 * 4));
+      }
+    }
+  }
+}
+
+
+Compilation error:
+In file included from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/std/__cccl/extended_data_types.h:26,
+                 from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/std/__cccl/builtin.h:26,
+                 from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/std/__cccl/dialect.h:25,
+                 from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/std/__cccl/attributes.h:26,
+                 from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/std/__cccl/assert.h:25,
+                 from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/__cccl_config:15,
+                 from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/std/__internal/atomic.h:13,
+                 from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/std/detail/__config:14,
+                 from /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/atomic:14,
+                 from /tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/3rdparty/../src/tl_templates/cuda/./instruction/../atomic.h:7,
+                 from /tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/3rdparty/../src/tl_templates/cuda/./instruction/../common.h:9,
+                 from /tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/3rdparty/../src/tl_templates/cuda/./instruction/wgmma.h:3,
+                 from /tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/3rdparty/../src/tl_templates/cuda/gemm.h:8,
+                 from /tmp/tvm-debug-mode-tempdirs/2026-08-07T15-18-02___1bxta6gg/00000/tvm_kernels.cu:1:
+/uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/include/cccl/cuda/std/__cccl/cuda_toolkit.h:41:8: error: #error "CUDA compiler and CUDA toolkit headers are incompatible, please check your include paths"
+   41 | #      error "CUDA compiler and CUDA toolkit headers are incompatible, please check your include paths"
+      |        ^~~~~
+
+Command: /uv/cache/archive-v0/vLxWimBc7YG_A9Adf0hOi/lib/python3.12/site-packages/nvidia/cu13/bin/nvcc --cubin -O3 -lineinfo -arch=sm_90a -std=c++17 -I/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/3rdparty/../src -I/tmp/shuttle-gdn/venv/lib/python3.12/site-packages/tilelang/3rdparty/cutlass/include -o /tmp/tvm-debug-mode-tempdirs/2026-08-07T15-18-02___1bxta6gg/00000/tvm_kernels.cubin /tmp/tvm-debug-mode-tempdirs/2026-08-07T15-18-02___1bxta6gg/00000/tvm_kernels.cu

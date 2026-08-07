@@ -557,3 +557,116 @@ author: dlwh
 - Validation: all 74 tile-lifetime tests pass.
 - Artifact: `lib/tile_lifetime/benchmarks/artifacts/routed_sparse_attention_h100_v0/slot_waves` contains raw distributions, outputs/input hashes, exact source/result digests, source evolution, telemetry, complete plan dumps, and all candidate points.
 - Next action: use a deliberately non-monotone relation to measure grouping, then add actual shared KV staging or cluster-level reuse. Do not infer a sorting benefit from the canonical fixture.
+### 2026-08-07 - TLTC-040 StatefulScan experiment begins
+
+- Routed sparse attention is frozen at commit `fae336fd48143fb70a9be3257ac45223a710d675`; the new branch is `research/shuttle-stateful-scan`.
+- Goal: represent Gated DeltaNet as a generic ordered state program and recover both recurrent decode and chunkwise prefill/training candidates without a GDN-specific semantic node.
+- Existing asset: Marin already contains independent JAX recurrent and chunkwise GDN implementations with parity tests against Hugging Face. They will be used at the backend/reference boundary; the Shuttle semantic IR remains dependency-free.
+- Sparse-attention carryover: first explain the 2.388-ms Seer versus 4.017-ms KV-major gap through state traffic, fusion, staging, and resource evidence. Do not do another tile-size sweep.
+- Plan: add a minimal `StatefulScan` record and source-order NumPy executor, then add the weakest useful `ChunkAlgebra` contract and benchmark both physical forms on H100.
+- Next action: finish primary-source and backend foraging, preserve the Seer delta analysis, and implement the ordered recurrence plus behavioral tests.
+
+### 2026-08-07 - TLTC-041 Seer delta accounted for
+
+- Frozen comparison: identical 996-edge 16K relation and 267.362-GFLOP selected work; Seer is 2.388208 ms and Shuttle slot waves are 4.017344 ms, a 1.629136-ms gap.
+- The generated schedule reads and writes FP32 `(max, sum-exp, weighted-value)` state per edge. Its minimum state lifecycle is 4.92 GB; edge-wise Q traversal adds roughly 0.91 GB beyond a single query-major read.
+- At 2.5--3.35 TB/s those bytes predict 1.74--2.33 ms. This is sufficient to explain the observed gap; relation metadata and eager launch overhead are smaller terms.
+- Seer uses query-major M128 work units and can keep Q/state resident. Shuttle uses eight M32 waves and spills state between them. Neither result demonstrates explicit shared-memory reuse of K/V across queries.
+- Caveat: Seer's 8-to-32-head K/V expansion is excluded from its timed kernel; Shuttle performs native GQA indexing.
+- Decision: stop sparse tile tuning. A future iteration must use a non-monotone relation plus real cluster/shared-memory KV staging and a longer fused state lifetime.
+
+### 2026-08-07 - TLTC-042 generic StatefulScan semantic slice
+
+- Added a dependency-free ordered-state representation with stable logical axes, typed state/input/output values, Map/Contract/Fold body primitives, explicit numerical contracts, and optional chunk algebra.
+- Added exact full-affine `(P,H)` composition: `(P2,H2) after (P1,H1) = (P2 P1, P2 H1 + H2)`. GDN and KDA use the same semantic record and candidate skeleton types.
+- GDN recovery uses scalar head decay; KDA uses per-key-channel diagonal decay. Both source-order recurrences and exact affine chunk executions pass independent NumPy comparisons, nonzero-state continuation, tail chunks, and multiple decay regimes.
+- The efficient physical summary is factored affine. GDN uses scalar-decay WY/UT factors; KDA needs diagonal-plus-low-rank factors. Compact factors are not closed under unrestricted tree composition, so the physical candidates retain an ordered inter-chunk scan.
+- Local validation: 89 tile-lifetime tests pass before the added decay-regime cases; Levanter's 13 JAX GDN kernel tests also pass; Pyrefly reports zero errors.
+- Frontend probe: ordinary JAX `lax.scan` lowers to `stablehlo.while` with private called recurrence bodies. The current flat StableHLO importer rejects this form. Structured while/private-function import is the next semantic-recovery requirement after physical benchmarking.
+- Next action: benchmark FLA fused recurrent decode and FLA/FlashQLA chunk prefill on the pinned Qwen3-Next shape, preserving raw distributions and numerical error fields.
+
+### 2026-08-07 - TLTC-043 StatefulScan H100 execution-form crossover
+
+- Hypothesis: one generic ordered-state program can select recurrent decode or
+  factored chunkwise execution based on measured shape behavior, without a
+  Gated DeltaNet semantic kernel node.
+- Hardware: one H100 80GB HBM3 from an eight-GPU low-priority holder, driver
+  595.71.05, Torch 2.8.0+cu128, CUDA runtime 12.8, Triton 3.4.0, Python 3.12.13,
+  700 W power limit, and cluster-default unpinned clocks.
+- Workload: Qwen3-Next core with 16 Q/K heads, 32 value/state heads, K=V=128,
+  BF16 inputs/output, FP32 persistent state, chunk 64, seed 1234, random decay
+  in `[-0.1,0]`, and random beta.
+- Backend: FLA `9c8e42e762fce087c27b673af4922795d9edb85e`.
+  FlashQLA `050c6bbee9e03efbbfe41063fe4e33742c4a87cb` imported and passed its API test,
+  but kernel JIT could not find `crt/host_config.h` in the split CUDA package
+  set. The pin was not changed.
+- Matched results: recurrent/chunk medians are 0.084960/0.515104 ms at T=64,
+  0.321792/0.532176 ms at T=256, and 3.940768/0.510624 ms at T=2048. Chunk T=8192
+  is 0.703536 ms. Each record retains 50 raw samples.
+- Decode: recurrent T=1 medians are 0.073168, 0.070048, and 0.073728 ms for
+  batches 1, 4, and 16.
+- Correctness: recurrent output/state maximum absolute errors are `2.441e-4`
+  and `5.364e-7`; chunkwise errors are `4.427e-4` and `5.543e-3`. Both outputs
+  and final states repeat bitwise. The chunk candidate retains a
+  `bounded_reassociation` contract.
+- Interpretation: the execution-form crossover is a real compiler choice.
+  This validates backend binding and selection, not synthesis of FLA's WY
+  kernel. KDA fits the same semantic abstraction with diagonal-plus-low-rank
+  factors and an ordered inter-chunk scan.
+- Frontend blocker: ordinary JAX scan exports structured `stablehlo.while` and
+  a private called body; narrow region/function import is still required.
+- Artifacts: `lib/tile_lifetime/benchmarks/artifacts/stateful_scan_h100_v0`
+  contains raw distributions, candidate dumps, hashes, pins, correctness, and
+  exact failure logs. The benchmark script SHA256 is
+  `de4b8746b4b8cdeabff254a037f9584fff4214a014f268d939a001c11ca5b36d`.
+- Infrastructure: holder `/dlwh/dev-gpu-dlwh-stateful-gdn-i-20260807` was
+  released; Iris reports `killed`, its pod is gone, and `dev_gpu status` shows
+  no active session.
+- Next action: test FSDP placement transitions, streamed communication, and
+  tile lifetimes before serious XLA/Shardy integration.
+
+### 2026-08-07 09:12 PDT - TLTC-044 generated affine recurrent skeleton
+
+- Hypothesis: state-affine tensor analysis can instantiate one recurrent
+  physical skeleton that remains valid when the decay domain, gate expression,
+  or bounded update rank changes, without recognizing or calling a named
+  GDN/KDA kernel.
+- Commit Hash: uncommitted research state based on
+  `fae336fd48143fb70a9be3257ac45223a710d675`. Executed source identity is pinned
+  by SHA-256 in the artifact manifest.
+- Local command:
+  `uv run --project lib/tile_lifetime pytest -q` followed by
+  `uv run --all-packages pyrefly check lib/tile_lifetime/src`.
+- Local result: 1178 tests passed, 4 skipped, 41 deselected, and 5 expected
+  failures; Pyrefly reports zero errors. The focused StatefulScan suite has 55
+  passing tests, including 18 scalar/per-key, gate-expression, and rank
+  recovery combinations plus 12 exact factored-chunk variants.
+- H100 command: the full invocation and environment setup are preserved in
+  `lib/tile_lifetime/benchmarks/artifacts/stateful_scan_generated_h100/README.md`.
+  Representative production arguments are `B1,T64,H32,K=V128,R1`, scalar
+  exponential decay, `block_v=32`, 10 warmups, and 50 samples.
+- Environment: NVIDIA H100 80GB HBM3, driver 595.71.05, CUDA runtime 12.8,
+  Torch 2.8.0+cu128, Triton 3.4.0, Python 3.12.13, 700 W, unpinned application
+  clocks. FLA and FlashQLA were absent and asserted unimportable.
+- Result: scalar-rank-1 medians for `block_v` 8/16/32 are
+  0.157120/0.149424/0.138544 ms. Per-key-rank-1 is 0.138000 ms and simultaneous
+  scalar-rank-2 is 0.183376 ms at `block_v=32`.
+- Correctness: all outputs/states are finite and repeat bitwise. Maximum BF16
+  output error is `2.441e-4`; maximum FP32 state error is `1.863e-8`. The rank-2
+  implementation computes all residuals from one decayed state before applying
+  their summed correction.
+- Interpretation: this is a synthesized recurrent core, not oracle-backed
+  execution. Generic expression recovery supplies physical factors to one
+  generated Triton skeleton; no complete architecture kernel is called. The
+  result excludes producer-map preparation and does not yet cover the generated
+  ordered-chunk path or full GDN/KDA layer.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/stateful_scan_generated_h100`
+  contains 20/50-sample distributions, deterministic hashes, source hashes,
+  environment, commands, manifest, and validated checksums.
+- Infrastructure: holder `/dlwh/generated-affine-scan-20260807` was released;
+  Iris reports `killed`, no matching pod remains, and no active dev-GPU session
+  exists.
+- Decision: replace the stale TLTC-043 FSDP next action. Generate the ordered
+  factored-chunk physical path and include factor-preparation/materialization
+  costs before moving to FSDP.

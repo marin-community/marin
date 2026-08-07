@@ -1,0 +1,76 @@
+{
+  "artifact": "stateful_scan_h100_v0",
+  "schema_version": 1,
+  "candidate_policy": {
+    "chunk_sizes": [16, 32, 64],
+    "execution_forms": ["recurrent", "chunkwise"],
+    "selection": "empirical_by_shape"
+  },
+  "environment": {
+    "cuda_runtime": "12.8",
+    "driver": "595.71.05",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "gpu_count_reserved": 8,
+    "gpu_count_used": 1,
+    "hostname": "g83d0f6",
+    "python": "3.12.13",
+    "tilelang": "0.1.9",
+    "torch": "2.8.0+cu128",
+    "triton": "3.4.0"
+  },
+  "revisions": {
+    "flash_qla": "050c6bbee9e03efbbfe41063fe4e33742c4a87cb",
+    "fla": "9c8e42e762fce087c27b673af4922795d9edb85e",
+    "shuttle": "fae336fd48143fb70a9be3257ac45223a710d675"
+  },
+  "run_source_sha256": {
+    "gated_delta_scan.py": "2433b19659824586e68e3ba66d4a15b234c9575ec603ab793c390a2abb7fecc4",
+    "h100_stateful_scan.py": "de4b8746b4b8cdeabff254a037f9584fff4214a014f268d939a001c11ca5b36d",
+    "stateful_scan.py": "8a629380c85df437ece1b6ca504a1b48a511308430c1ced9e1e0ad28ce392fb8"
+  },
+  "shape": {
+    "chunk_size": 64,
+    "input_dtype": "bf16",
+    "key_dimension": 128,
+    "query_heads": 16,
+    "state_dtype": "fp32",
+    "value_dimension": 128,
+    "value_heads": 32
+  },
+  "correctness": {
+    "fla_chunk": {
+      "final_state_maximum_absolute_error": 0.0055429935455322266,
+      "output_maximum_absolute_error": 0.0004426799714565277,
+      "repeat_bitwise": true
+    },
+    "fla_recurrent": {
+      "final_state_maximum_absolute_error": 5.364418029785156e-7,
+      "output_maximum_absolute_error": 0.00024410337209701538,
+      "repeat_bitwise": true
+    },
+    "sequence_length": 64
+  },
+  "median_ms": {
+    "decode_fla_recurrent_b1_t1": 0.07316799834370613,
+    "decode_fla_recurrent_b4_t1": 0.0700480006635189,
+    "decode_fla_recurrent_b16_t1": 0.07372800260782242,
+    "prefill_fla_chunk_b1_t64": 0.5151039958000183,
+    "prefill_fla_chunk_b1_t256": 0.5321759879589081,
+    "prefill_fla_chunk_b1_t2048": 0.5106240212917328,
+    "prefill_fla_chunk_b1_t8192": 0.7035360038280487,
+    "prefill_fla_recurrent_b1_t64": 0.08495999872684479,
+    "prefill_fla_recurrent_b1_t256": 0.32179200649261475,
+    "prefill_fla_recurrent_b1_t2048": 3.940768003463745
+  },
+  "flash_qla": {
+    "import": "passed",
+    "kernel_jit": "blocked",
+    "reason": "available CUDA 13.2 nvcc/header bundle was rejected as incompatible by CCCL",
+    "upstream_signature_test": "passed"
+  },
+  "holder_cleanup": {
+    "active_session_after_release": false,
+    "job_state": "killed",
+    "matching_pod_after_release": false
+  }
+}

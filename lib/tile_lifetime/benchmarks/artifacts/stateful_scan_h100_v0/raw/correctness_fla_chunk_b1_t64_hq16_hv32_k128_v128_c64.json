@@ -1,0 +1,164 @@
+{
+  "backend": "fla_chunk",
+  "candidate_set": [
+    {
+      "backend": "jax_recurrent_gated_delta_rule",
+      "backend_revision": null,
+      "chunk_size": 1,
+      "execution_form": "recurrent",
+      "length": 64,
+      "materialized_values": [
+        "persistent_state",
+        "output"
+      ],
+      "name": "gated_delta_recurrent",
+      "numerical_contract": "source_ordered",
+      "numerical_effect": "Executes token updates in source order with FP32 state.",
+      "ordered_axis": "position",
+      "output": "output",
+      "state": "state",
+      "state_dtype": "fp32",
+      "state_layout": "batch_head_key_value",
+      "state_shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "summary_representation": "none"
+    },
+    {
+      "backend": "jax_chunk_gated_delta_rule",
+      "backend_revision": null,
+      "chunk_size": 16,
+      "execution_form": "chunkwise",
+      "length": 64,
+      "materialized_values": [
+        "persistent_state",
+        "chunk_summary",
+        "output"
+      ],
+      "name": "gated_delta_chunk_16",
+      "numerical_contract": "bounded_reassociation",
+      "numerical_effect": "Parallelizes the within-chunk triangular transform and scans chunk summaries in order; FP32 contractions are reassociated relative to token recurrence.",
+      "ordered_axis": "position",
+      "output": "output",
+      "state": "state",
+      "state_dtype": "fp32",
+      "state_layout": "batch_head_key_value",
+      "state_shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "summary_representation": "factored_affine"
+    },
+    {
+      "backend": "jax_chunk_gated_delta_rule",
+      "backend_revision": null,
+      "chunk_size": 32,
+      "execution_form": "chunkwise",
+      "length": 64,
+      "materialized_values": [
+        "persistent_state",
+        "chunk_summary",
+        "output"
+      ],
+      "name": "gated_delta_chunk_32",
+      "numerical_contract": "bounded_reassociation",
+      "numerical_effect": "Parallelizes the within-chunk triangular transform and scans chunk summaries in order; FP32 contractions are reassociated relative to token recurrence.",
+      "ordered_axis": "position",
+      "output": "output",
+      "state": "state",
+      "state_dtype": "fp32",
+      "state_layout": "batch_head_key_value",
+      "state_shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "summary_representation": "factored_affine"
+    },
+    {
+      "backend": "jax_chunk_gated_delta_rule",
+      "backend_revision": null,
+      "chunk_size": 64,
+      "execution_form": "chunkwise",
+      "length": 64,
+      "materialized_values": [
+        "persistent_state",
+        "chunk_summary",
+        "output"
+      ],
+      "name": "gated_delta_chunk_64",
+      "numerical_contract": "bounded_reassociation",
+      "numerical_effect": "Parallelizes the within-chunk triangular transform and scans chunk summaries in order; FP32 contractions are reassociated relative to token recurrence.",
+      "ordered_axis": "position",
+      "output": "output",
+      "state": "state",
+      "state_dtype": "fp32",
+      "state_layout": "batch_head_key_value",
+      "state_shape": [
+        1,
+        32,
+        128,
+        128
+      ],
+      "summary_representation": "factored_affine"
+    }
+  ],
+  "config": {
+    "batch_size": 1,
+    "chunk_size": 64,
+    "decay_scale": 0.1,
+    "input_dtype": "bf16",
+    "key_dimension": 128,
+    "query_heads": 16,
+    "seed": 1234,
+    "sequence_length": 64,
+    "state_dtype": "fp32",
+    "value_dimension": 128,
+    "value_heads": 32
+  },
+  "correctness": {
+    "final_state": {
+      "bitwise_repeat": true,
+      "finite": true,
+      "maximum_absolute_error": 0.0055429935455322266,
+      "mean_absolute_error": 0.00041103211697191,
+      "p99_absolute_error": 0.0016772969393059611,
+      "sha256": "b19f25dda49a68271dba567e77d24f5785f2cf8440253ed54178ca3ba4752fce"
+    },
+    "output": {
+      "bitwise_repeat": true,
+      "finite": true,
+      "maximum_absolute_error": 0.0004426799714565277,
+      "mean_absolute_error": 4.213544161757454e-05,
+      "p99_absolute_error": 0.00017137691611424088,
+      "sha256": "c0d8f3dd4e6f652aa4102bf2885917d82cd46a0d18ad6f7b1a21d0f16229ce84"
+    }
+  },
+  "environment": {
+    "compute_capability": [
+      9,
+      0
+    ],
+    "cuda_runtime": "12.8",
+    "driver_and_clocks": "595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "hostname": "g83d0f6",
+    "python": "3.12.13",
+    "torch": "2.8.0+cu128"
+  },
+  "mode": "correctness",
+  "revisions": {
+    "fla_actual": "9c8e42e762fce087c27b673af4922795d9edb85e",
+    "fla_expected": "9c8e42e762fce087c27b673af4922795d9edb85e",
+    "flash_qla_actual": null,
+    "flash_qla_expected": "050c6bbee9e03efbbfe41063fe4e33742c4a87cb",
+    "shuttle": "fae336fd48143fb70a9be3257ac45223a710d675"
+  },
+  "schema_version": 1
+}

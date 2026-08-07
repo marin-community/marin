@@ -27,7 +27,21 @@ from tile_lifetime.expert_parallel_plan import (
     ReadinessGranularity,
     TileStorage,
 )
+from tile_lifetime.gated_delta_scan import (
+    GatedDeltaScanCompilation,
+    chunkwise_gated_delta_reference,
+    compile_gated_delta_scan,
+    recurrent_gated_delta_reference,
+    summarize_gated_delta_chunk,
+)
 from tile_lifetime.ir import DType, TensorGraph
+from tile_lifetime.kimi_delta_scan import (
+    KimiDeltaScanCompilation,
+    chunkwise_kimi_delta_reference,
+    compile_kimi_delta_scan,
+    recurrent_kimi_delta_reference,
+    summarize_kimi_delta_chunk,
+)
 from tile_lifetime.moe import (
     MoELegalityError,
     MoERoutedPrecision,
@@ -44,11 +58,16 @@ from tile_lifetime.pipeline import (
 )
 from tile_lifetime.plan import (
     AttachmentSite,
+    ChunkSummaryRepresentation,
     ExpertParallelMoESkeleton,
     GemmSkeleton,
     MaterializationDisposition,
     NumericalPolicy,
     ReductionSkeleton,
+    ScanNumericalContract,
+    StatefulScanExecutionForm,
+    StatefulScanSkeleton,
+    StateTransitionStructure,
     StreamingAttentionSkeleton,
     TransformSkeleton,
 )
@@ -83,5 +102,38 @@ from tile_lifetime.runtime import (
     execute_region_plan,
     required_input_specs,
     validate_region_plan,
+)
+from tile_lifetime.stateful_scan import (
+    AffineChunkSummary,
+    AffineStateTransform,
+    ChunkAlgebra,
+    LogicalAxis,
+    ScanPrimitive,
+    ScanPrimitiveKind,
+    ScanValue,
+    ScanValueRole,
+    StatefulScan,
+    TensorExpression,
+    TensorExpressionKind,
+    apply_affine_transform,
+    binary_expression,
+    compose_affine_transforms,
+    contract_expression,
+    explain_stateful_scan,
+    input_expression,
+    summarize_affine_sequence,
+    unary_expression,
+)
+from tile_lifetime.stateful_scan_planner import compile_affine_scan_candidates
+from tile_lifetime.stateful_scan_recovery import (
+    AffineTensorExpression,
+    AppliedLinearMap,
+    FactoredAffineChunkSummary,
+    RecoveredAffineStateUpdate,
+    StateLinearTerm,
+    apply_factored_affine_chunk,
+    execute_recurrent_factored_affine,
+    recover_affine_state_update,
+    summarize_factored_affine_chunk,
 )
 from tile_lifetime.swiglu import compile_swiglu_region

@@ -130,6 +130,62 @@ class TransformSkeleton:
     output: str
 
 
+class ScanNumericalContract(StrEnum):
+    """Finite-precision relationship between a scan lowering and its source."""
+
+    SOURCE_ORDERED = "source_ordered"
+    ORDERED_FP = "ordered_fp"
+    BOUNDED_REASSOCIATION = "bounded_reassociation"
+    REAL_ALGEBRA_EQUIVALENT = "real_algebra_equivalent"
+
+
+class StatefulScanExecutionForm(StrEnum):
+    """Physical traversal selected for one ordered state program."""
+
+    RECURRENT = "recurrent"
+    CHUNKWISE = "chunkwise"
+
+
+class ChunkSummaryRepresentation(StrEnum):
+    """Representation used to carry a state transform across chunk boundaries."""
+
+    NONE = "none"
+    FULL_AFFINE = "full_affine"
+    FACTORED_AFFINE = "factored_affine"
+
+
+class StateTransitionStructure(StrEnum):
+    """Physical factor family recovered from an affine state update."""
+
+    DIAGONAL = "diagonal"
+    DIAGONAL_PLUS_LOW_RANK = "diagonal_plus_low_rank"
+    GENERAL_AFFINE = "general_affine"
+
+
+@dataclass(frozen=True)
+class StatefulScanSkeleton:
+    """One physical candidate for an ordered stateful computation."""
+
+    name: str
+    ordered_axis: str
+    length: int
+    state: str
+    state_shape: tuple[int, ...]
+    state_dtype: DType
+    output: str
+    execution_form: StatefulScanExecutionForm
+    chunk_size: int
+    summary_representation: ChunkSummaryRepresentation
+    transition_structure: StateTransitionStructure
+    maximum_update_rank: int
+    backend: str
+    backend_revision: str | None
+    state_layout: str
+    materialized_values: tuple[str, ...]
+    numerical_contract: ScanNumericalContract
+    numerical_effect: str
+
+
 class PersistentTaskPlacement(StrEnum):
     """Physical worker domain assigned to one persistent MoE task."""
 
@@ -256,7 +312,12 @@ class ExpertParallelMoESkeleton:
 
 
 ExecutionSkeleton = (
-    GemmSkeleton | ReductionSkeleton | StreamingAttentionSkeleton | TransformSkeleton | ExpertParallelMoESkeleton
+    GemmSkeleton
+    | ReductionSkeleton
+    | StreamingAttentionSkeleton
+    | TransformSkeleton
+    | StatefulScanSkeleton
+    | ExpertParallelMoESkeleton
 )
 
 

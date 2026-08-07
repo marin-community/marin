@@ -1,0 +1,174 @@
+
+tests/ops/test_gdn.py::test_chunk_with_chunk_size[B1-T64-H2-HV4-D32-scale0.1-gate1.0-torch.float32-chunk64] FAILED [100%]
+
+=================================== FAILURES ===================================
+_ test_chunk_with_chunk_size[B1-T64-H2-HV4-D32-scale0.1-gate1.0-torch.float32-chunk64] _
+
+B = 1, T = 64, H = 2, HV = 4, D = 32, scale = 0.1, gate_logit_normalizer = 1.0
+dtype = torch.float32, chunk_size = 64
+
+    @pytest.mark.parametrize(
+        ('B', 'T', 'H', 'HV', 'D', 'scale', 'gate_logit_normalizer', 'dtype', 'chunk_size'),
+        [
+            pytest.param(*test, id="B{}-T{}-H{}-HV{}-D{}-scale{}-gate{}-{}-chunk{}".format(*test))
+            for chunk_size in [16, 32, 64]
+            for test in [
+                (1, 64, 2, 4, 32, 0.1, 1.0, torch.float32, chunk_size),
+            ]
+        ],
+    )
+    def test_chunk_with_chunk_size(
+        B: int,
+        T: int,
+        H: int,
+        HV: int,
+        D: int,
+        scale: float,
+        gate_logit_normalizer: float,
+        dtype: torch.dtype,
+        chunk_size: int,
+    ):
+        torch.manual_seed(42)
+        assert HV % H == 0
+        G = HV // H
+
+        q = torch.rand(B, T, H, D, dtype=dtype, device=device)
+        k = torch.rand(B, T, H, D, dtype=dtype, device=device)
+        v = torch.rand(B, T, HV, D, dtype=dtype, device=device)
+        beta = torch.rand(B, T, HV, dtype=torch.float32, device=device).sigmoid()
+        g = F.logsigmoid(torch.rand(B, T, HV, dtype=torch.float32, device=device)) / gate_logit_normalizer
+        h0 = torch.zeros(B, HV, D, D, dtype=torch.float32, device=device)
+        do = torch.randn_like(v)
+        dht = torch.randn_like(h0)
+
+        def run_ref():
+            q_, k_, v_, beta_, g_, h0_ = (x.detach().clone().requires_grad_(True) for x in (q, k, v, beta, g, h0))
+            o, ht = naive_recurrent_gated_delta_rule(
+                q=F.normalize(repeat(q_, 'b t h d -> b t (h g) d', g=G), p=2, dim=-1),
+                k=F.normalize(repeat(k_, 'b t h d -> b t (h g) d', g=G), p=2, dim=-1),
+                v=v_,
+                beta=beta_,
+                g=g_,
+                scale=scale,
+                initial_state=h0_,
+                output_final_state=True,
+            )
+            ((o * do).sum() + (ht * dht).sum()).backward()
+            return o, ht, q_.grad, k_.grad, v_.grad, beta_.grad, g_.grad, h0_.grad
+
+        def run_tri(chunk_size: int):
+            q_, k_, v_, beta_, g_, h0_ = (x.detach().clone().requires_grad_(True) for x in (q, k, v, beta, g, h0))
+            o, ht = chunk_gated_delta_rule(
+                q=F.normalize(q_, p=2, dim=-1),
+                k=F.normalize(k_, p=2, dim=-1),
+                v=v_,
+                beta=beta_,
+                g=g_,
+                scale=scale,
+                initial_state=h0_,
+                output_final_state=True,
+                chunk_size=chunk_size,
+            )
+            ((o * do).sum() + (ht * dht).sum()).backward()
+            return o, ht, q_.grad, k_.grad, v_.grad, beta_.grad, g_.grad, h0_.grad
+
+        ref_o, ref_ht, ref_dq, ref_dk, ref_dv, ref_dbeta, ref_dg, ref_dh0 = run_ref()
+>       tri_o, tri_ht, tri_dq, tri_dk, tri_dv, tri_dbeta, tri_dg, tri_dh0 = run_tri(chunk_size)
+                                                                            ^^^^^^^^^^^^^^^^^^^
+
+tests/ops/test_gdn.py:268:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/ops/test_gdn.py:264: in run_tri
+    ((o * do).sum() + (ht * dht).sum()).backward()
+../../venv/lib/python3.12/site-packages/torch/_tensor.py:647: in backward
+    torch.autograd.backward(
+../../venv/lib/python3.12/site-packages/torch/autograd/__init__.py:354: in backward
+    _engine_run_backward(
+../../venv/lib/python3.12/site-packages/torch/autograd/graph.py:829: in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+../../venv/lib/python3.12/site-packages/torch/autograd/function.py:311: in apply
+    return user_fn(self, *args)
+           ^^^^^^^^^^^^^^^^^^^^
+fla/utils/_decorators.py:152: in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../venv/lib/python3.12/site-packages/torch/amp/autocast_mode.py:563: in decorate_bwd
+    return bwd(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^
+fla/ops/gated_delta_rule/chunk.py:362: in backward
+    dq, dk, dv, db, dg, dh0, dA_log, ddt_bias = chunk_gated_delta_rule_bwd(
+fla/ops/gated_delta_rule/chunk.py:217: in chunk_gated_delta_rule_bwd
+    dq, dk, dw, dg = chunk_bwd_dqkwg(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+q = tensor([[[[0.2183, 0.0036, 0.1419,  ..., 0.1356, 0.0181, 0.0948],
+          [0.2071, 0.0853, 0.0553,  ..., 0.0470, 0.0...],
+          [0.0982, 0.2469, 0.1433,  ..., 0.0441, 0.1627, 0.1161]]]],
+       device='cuda:0', grad_fn=<DivBackward0>)
+k = tensor([[[[0.2830, 0.0369, 0.1611,  ..., 0.0187, 0.1181, 0.1662],
+          [0.2512, 0.2131, 0.1765,  ..., 0.1983, 0.2...],
+          [0.0073, 0.0241, 0.0460,  ..., 0.0482, 0.0550, 0.1375]]]],
+       device='cuda:0', grad_fn=<DivBackward0>)
+v = tensor([[[[ 5.5723e-01,  1.4357e-01,  4.9200e-01,  ...,  4.2682e-01,
+            3.9229e-01,  5.2138e-01],
+          [...   [-1.1317e-01,  2.6796e-01,  2.1255e-01,  ...,  2.4124e-01,
+           -1.1385e-01, -2.1545e-01]]]], device='cuda:0')
+do = tensor([[[[ 1.4640, -0.3238,  0.7740,  ...,  0.9614,  0.9268,  0.3201],
+          [-0.5257, -0.5899, -0.7920,  ...,  0..., -1.7880, -2.6069],
+          [-1.8908, -0.3299,  0.0901,  ...,  1.2481,  1.8554, -0.5036]]]],
+       device='cuda:0')
+h = tensor([[[[[0., 0., 0.,  ..., 0., 0., 0.],
+           [0., 0., 0.,  ..., 0., 0., 0.],
+           [0., 0., 0.,  ..., 0....0., 0., 0.],
+           [0., 0., 0.,  ..., 0., 0., 0.],
+           [0., 0., 0.,  ..., 0., 0., 0.]]]]], device='cuda:0')
+dh = tensor([[[[[-1.7244e+00,  2.7508e-01, -8.8828e-01,  ...,  7.9338e-01,
+             8.2192e-01,  2.9902e-01],
+         ... [-5.0813e-01, -1.9734e-01, -8.7290e-01,  ..., -7.5333e-01,
+            -8.2728e-01, -5.1030e-01]]]]], device='cuda:0')
+w = tensor([[[[ 1.1090e-01,  1.4473e-02,  6.3110e-02,  ...,  7.3357e-03,
+            4.6295e-02,  6.5063e-02],
+          [...   [-1.2070e-15, -4.2154e-15, -2.6577e-15,  ..., -2.6494e-15,
+           -5.4661e-16,  7.0192e-16]]]], device='cuda:0')
+g = tensor([[[ -0.7837,  -0.4532,  -0.9499,  -0.8064],
+         [ -1.4656,  -1.3548,  -1.5937,  -1.3278],
+         [ -2.19...        [-41.9878, -45.2468, -44.3053, -43.6724],
+         [-42.5521, -45.9545, -44.8902, -44.2127]]], device='cuda:0')
+g_gamma = None
+dv = tensor([[[[ 1.5831e-01,  5.0422e-02,  1.1779e-01,  ...,  7.8108e-02,
+           -7.3688e-03, -1.3685e-02],
+          [...   [ 1.7279e-01, -1.4993e+00, -3.9821e-01,  ..., -7.6512e-02,
+           -7.1262e-01, -3.8126e-01]]]], device='cuda:0')
+scale = 0.1, state_v_first = False, cu_seqlens = None, chunk_size = 64
+chunk_indices = None
+
+    @dispatch('common')
+    def chunk_bwd_dqkwg(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        do: torch.Tensor,
+        h: torch.Tensor,
+        dh: torch.Tensor,
+        w: torch.Tensor | None = None,
+        g: torch.Tensor | None = None,
+        g_gamma: torch.Tensor | None = None,
+        dv: torch.Tensor | None = None,
+        scale: float | None = None,
+        state_v_first: bool = False,
+        cu_seqlens: torch.LongTensor | None = None,
+        chunk_size: int = 64,
+        chunk_indices: torch.LongTensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if g is not None and IS_NVIDIA_HOPPER and TRITON_ABOVE_3_4_0 and not TRITON_ABOVE_3_7_1:
+>           raise RuntimeError(
+                "Triton >= 3.4.0 and < 3.7.1 on Hopper GPUs produces incorrect results for "
+                "gated chunk_bwd_dqkwg (see #640). Please upgrade Triton to >= 3.7.1 or "
+                "install tilelang: `pip install tilelang`"
+            )
+E           RuntimeError: Triton >= 3.4.0 and < 3.7.1 on Hopper GPUs produces incorrect results for gated chunk_bwd_dqkwg (see #640). Please upgrade Triton to >= 3.7.1 or install tilelang: `pip install tilelang`
+
+fla/ops/common/chunk_o.py:705: RuntimeError
+=========================== short test summary info ============================
+FAILED tests/ops/test_gdn.py::test_chunk_with_chunk_size[B1-T64-H2-HV4-D32-scale0.1-gate1.0-torch.float32-chunk64]
+============================== 1 failed in 54.00s ==============================

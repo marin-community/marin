@@ -1,6 +1,14 @@
 # Progress
 
-## Current baseline
+## Current oracle-backed baseline
+
+The current executable dense path is a generated region plan around named
+QuACK/CODA epilogues and official FA3; it is not a synthesized-kernel result.
+The distributed MoE path similarly generates the relation and global schedule
+but borrows DeepEP transport and the standalone MoK grouped-GEMM primitive.
+These checkpoints establish semantics, boundaries, and oracle targets. Shuttle
+must replace complete workload-kernel calls with generated generic skeletons
+before claiming first-principles recovery.
 
 The compiler imports frozen StableHLO v1.14.1 artifacts and emits an inspectable execution plan. One combined program recovers:
 
@@ -97,3 +105,54 @@ The generated slot-wave implementation now executes the same relation directly. 
 The 16K source-order/no-sort ablation is inconclusive by construction: the canonical relation is already KV-monotone inside every selected slot, so it executes the same edge arrays and measures 4.018880 ms versus 4.017344 ms. The next KV-major experiment should use a deliberately non-monotone relation and introduce actual shared KV staging or cluster-level reuse. The current grouped CTAs do not share staged K/V, and eight wave boundaries plus global FP32 state traffic explain the remaining 1.68x gap to the 2.388208-ms query-major Seer smoke. Full candidate records are under `benchmarks/artifacts/routed_sparse_attention_h100_v0/slot_waves`.
 
 The distributed extension is deferred. Relation ownership and coalescing transfer, but the current DeepEP/MoE transport cannot carry structured FP32 attention states or KV-block payloads without a new backend adapter. That is significant new infrastructure, not a small reuse of the existing schedule, so the present conclusion remains single-H100. The full tile-lifetime suite passes 74 tests.
+
+## 2026-08-07: Seer delta closed
+
+- Accounted for the 1.629136-ms gap between the 16K Seer query-major baseline
+  and Shuttle's generated KV-major slot waves.
+- The generated schedule incurs at least 4.92 GB of global FP32 online-state
+  lifecycle traffic plus roughly 0.91 GB of extra Q reads.
+- At H100 bandwidth, those bytes predict 1.74--2.33 ms and explain the measured
+  gap without attributing it to relation metadata.
+- Closed tile-size tuning. The only useful follow-up sparse experiment is a
+  non-monotone relation with real cluster/shared-memory KV staging.
+- Began the Gated DeltaNet `StatefulScan` prototype on branch
+  `research/shuttle-stateful-scan`.
+
+## 2026-08-07: StatefulScan semantics and oracle crossover
+
+- Added generic ordered-state semantics, numerical contracts, exact affine
+  chunk composition, and recurrent/chunkwise execution skeletons.
+- Represented both scalar-decay Gated DeltaNet and per-channel-decay Kimi Delta
+  Attention without adding architecture-specific semantic operation types.
+- Independent recurrent and exact-affine chunk executors agree across nonzero
+  state, continuation, tail chunks, chunk sizes, decay regimes, scalar/per-key
+  diagonals, and bounded update ranks. The focused StatefulScan suite passes
+  55 tests; the repository-safe suite passes 1178 tests with 4 skips and 5
+  expected failures.
+- Measured the Qwen3-Next GDN core with pinned FLA oracles on H100. Matched
+  recurrent/chunk medians are 0.084960/0.515104 ms at T=64,
+  0.321792/0.532176 ms at T=256, and 3.940768/0.510624 ms at T=2048. The
+  empirical winner therefore changes with sequence length.
+- Both FLA forms are finite and repeat bitwise. Chunkwise final-state maximum
+  error is `5.543e-3` versus `5.364e-7` for recurrent, so the plan records
+  bounded reassociation explicitly.
+- FlashQLA imports and passes its signature test, but its first kernel JIT is
+  blocked by the holder's incomplete split CUDA toolkit. The exact failure is
+  preserved without changing the pin.
+- StableHLO frontend recovery remains incomplete: JAX emits `lax.scan` as a
+  structured `stablehlo.while` plus a private recurrence function, which the
+  current flat importer cannot read.
+- Added generic tensor-expression linearization and diagonal-plus-low-rank
+  recovery. Eighteen gate/diagonal/rank mutations recover the same factor
+  family without architecture-specific dispatch.
+- Generated and ran a generic recurrent Triton skeleton on H100 with neither
+  FLA nor FlashQLA installed. At `B1,T64,H32,K=V=128`, scalar-rank-1,
+  per-key-rank-1, and scalar-rank-2 medians are 0.138544, 0.138000, and
+  0.183376 ms. All are bitwise deterministic; maximum output/state errors are
+  `2.441e-4` and `1.863e-8`.
+- Derived exact bounded factored chunk summaries of the form
+  `D*S + U*(V^T*S + Z)`, including transformed reads and local outputs. The
+  GPU ordered-chunk skeleton remains to be generated and compared with FLA.
+- FSDP remains deferred until the generated ordered-chunk path executes and
+  the full preparation/materialization costs are measured.

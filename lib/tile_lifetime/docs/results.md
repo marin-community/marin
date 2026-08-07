@@ -1,5 +1,25 @@
 # Results and source versions
 
+## Synthesis boundary
+
+The dense and distributed-MoE numbers below are oracle-backed composition
+checkpoints, not end-to-end kernel-synthesis results. Dense execution calls
+named QuACK/CODA epilogues and official FA3. Distributed MoE derives its
+relation, buffers, receiver-local deterministic merge, worker allocation, and
+overlap, but uses a standalone MoK grouped-GEMM kernel plus DeepEP dispatch and
+`combine`. DeepEP `combine` performs reverse movement and fixed-rank
+accumulation together; it is deterministic and non-atomic but exceeds the
+strict transport-only boundary. The routed slot-wave attention body is
+Shuttle-owned rather than a Seer/FSA call, but is still hand-authored
+attention-specific Triton rather than generated from generic
+Relation/Fold/Contract semantics.
+
+These measurements remain correctness and performance targets. A result is
+called a synthesized kernel only when Shuttle emits it from generic semantic
+factors and reusable skeletons without invoking a complete workload kernel.
+The detailed audit is in
+`.agents/projects/tile_lifetime_compiler/synthesis_boundary_audit.md`.
+
 ## Environment
 
 - GPU model: NVIDIA H100 80GB HBM3
@@ -319,3 +339,118 @@ The pinned MIT Block-Sparse-Attention build is blocked by the H100 holder image 
 - The measured pos/frequency RoPE backend is specialized to canonical base-10000 tables; a general table-load QKV epilogue remains to be implemented.
 - The expert-parallel compiler currently models BF16 routed experts. MXFP8 is rejected until its weight and activation scale tensors are represented explicitly in the semantic and physical plans.
 - The selected 3.984-ms distributed plan is measured only for one BF16 MoE shape on one four-GB200 tray. MXFP8, larger token counts, profiler evidence for the remaining 0.37-ms oracle gap, and schedules that pipeline routed rows in chunks remain unmeasured.
+
+## Routed sparse-attention Seer delta
+
+The frozen 16K Shuttle KV-major slot-wave schedule measures 4.017344 ms versus
+2.388208 ms for the Seer query-major baseline, a 1.682-times ratio and
+1.629136-ms delta on the identical 996-edge relation.
+
+The difference is accounted for primarily by materialized online state. The
+eight Shuttle waves move at least 4.92 GB through the FP32
+`(max, sum-exp, weighted-value)` state lifecycle and reread about 0.91 GB more Q
+data than a resident query-major schedule. At 2.5--3.35 TB/s, those bytes imply
+about 1.74--2.33 ms, already enough to explain the measured gap. Relation
+metadata and launch latency are secondary.
+
+This comparison favors Seer's timed kernel because its 8-to-32-head K/V
+expansion is outside the timed region; Shuttle uses native GQA indexing. It
+still establishes the correct physical lesson: KV-major ordering without real
+shared KV staging does not compensate for spilling online state at every edge.
+
+No further tile-size sweep is planned. A future sparse iteration must use a
+non-monotone relation and actual cluster/shared-memory KV staging so it tests
+relation reorientation and payload reuse.
+
+## StatefulScan generality checkpoint
+
+Shuttle now represents ordered matrix-state programs with one generic
+`StatefulScan`: stable logical axes, typed persistent state, Map/Contract/Fold
+body primitives, an explicit finite-precision contract, and an optional chunk
+algebra. Scalar-decay Gated DeltaNet and per-key-channel Kimi Delta Attention
+both use this record. Neither adds an architecture-specific semantic node.
+
+For both programs, a token update is an affine state transform
+`S' = P S + H`. Exact full summaries compose as
+`(P2 P1, P2 H1 + H2)`, and prefix summaries emit every token result. Independent
+NumPy recurrent and exact-affine chunk executors agree for nonzero state, tail
+chunks, multiple chunk sizes, and distinct decay regimes. KDA changes the
+transition from scalar decay to a noncommuting diagonal-plus-rank-one form; it
+requires richer physical factors but not a new semantic primitive. The compact
+factored representation is not closed under unrestricted tree composition, so
+the legal physical form retains an ordered inter-chunk state scan.
+
+The first H100 backend experiment uses the Qwen3-Next core shape: BF16 Q/K/V,
+FP32 `[B,32,128,128]` state, 16 Q/K heads, 32 value heads, dimensions 128, and
+chunk size 64. The backend is pinned FLA revision
+`9c8e42e762fce087c27b673af4922795d9edb85e`.
+
+| Sequence length | FLA recurrent | FLA chunkwise | Measured winner |
+|---:|---:|---:|---|
+| 64 | 0.084960 ms | 0.515104 ms | recurrent |
+| 256 | 0.321792 ms | 0.532176 ms | recurrent |
+| 2048 | 3.940768 ms | 0.510624 ms | chunkwise |
+| 8192 | not measured | 0.703536 ms | chunkwise |
+
+Every timing record retains 50 CUDA-event samples. One-token recurrent medians
+are 0.073168, 0.070048, and 0.073728 ms at batches 1, 4, and 16. The matched
+measurements establish a genuine execution-form crossover between lengths 256
+and 2048 rather than two disjoint decode/prefill demonstrations.
+
+At length 64, both forms are finite and bitwise deterministic across repeats.
+Against Shuttle's independent source-ordered FP32 recurrence, recurrent maximum
+output/final-state absolute errors are `2.441e-4` and `5.364e-7`; chunkwise
+errors are `4.427e-4` and `5.543e-3`. The larger state deviation confirms that
+the chunk form should carry `bounded_reassociation`, not `source_ordered`, as
+its numerical contract.
+
+FlashQLA revision `050c6bbee9e03efbbfe41063fe4e33742c4a87cb`
+installed and passed its API-signature test, but its TileLang kernel JIT could
+not use the holder's split CUDA package set: `crt/host_config.h` was absent and
+there was no system toolkit. The exact failure is preserved without changing
+the pin. The successful FLA results used one H100 80GB HBM3, driver 595.71.05,
+Torch 2.8.0+cu128, CUDA runtime 12.8, Triton 3.4.0, and a 700 W power limit.
+Application clocks were unpinned.
+
+This oracle checkpoint validates semantic recovery, recurrent/chunk
+equivalence, numerical-policy tracking, and the existence of a shape-dependent
+performance crossover. FLA and FlashQLA remain oracle-only. Their measurements
+are under `benchmarks/artifacts/stateful_scan_h100_v0`.
+
+### Generated affine recurrent skeleton
+
+Shuttle now linearizes generic tensor expressions with respect to prior state,
+rejects nonlinear state dependence, and classifies diagonal and
+diagonal-plus-bounded-rank transitions. The analyzer is not a GDN/KDA pattern:
+the focused mutation suite varies scalar versus per-key diagonal decay, gate
+expressions `exp`, `sigmoid`, and clamped `softplus`, update ranks 1/2/4, and a
+post-update diagonal transform while retaining one recovered factor family.
+
+That recovery instantiates a generic Triton recurrent skeleton with BF16
+factors/output and FP32 state. The H100 environment contained neither FLA nor
+FlashQLA. At `B1,T64,H32,K=V=128`, 50-sample results are:
+
+| Recovered form | Physical choice | Median |
+|---|---:|---:|
+| Scalar diagonal, rank 1 | `block_v=8` | 0.157120 ms |
+| Scalar diagonal, rank 1 | `block_v=16` | 0.149424 ms |
+| Scalar diagonal, rank 1 | `block_v=32` | 0.138544 ms |
+| Per-key diagonal, rank 1 | `block_v=32` | 0.138000 ms |
+| Scalar diagonal, simultaneous rank 2 | `block_v=32` | 0.183376 ms |
+
+All cases are finite and bitwise deterministic. Maximum BF16 output error is
+`2.441e-4`; maximum FP32 final-state error is `1.863e-8`. The rank-two case
+computes every residual against the same decayed state and applies the summed
+correction, rather than silently changing the recurrence to sequential rank-one
+updates.
+
+This is the first clean StatefulScan kernel-synthesis result: the executable
+path contains no complete architecture kernel and survives nearby recurrence
+mutations. It is still a core-only result. Producer maps such as Q/K
+normalization and gate formation are outside timing, the structured
+`stablehlo.while` importer is not connected, and the compiler-owned ordered
+chunk kernel remains pending. Generic exact factored chunk summaries now match
+the recurrent executor for scalar/per-key diagonals, rank 1/3, tail chunks, and
+multiple chunk sizes. Raw generated-kernel distributions, deterministic hashes,
+source hashes, environment, and checksums are under
+`benchmarks/artifacts/stateful_scan_generated_h100`.
