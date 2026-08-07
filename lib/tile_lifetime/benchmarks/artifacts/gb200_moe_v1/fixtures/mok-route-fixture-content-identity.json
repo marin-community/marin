@@ -1,0 +1,32 @@
+{
+  "canonical_tensor_content_sha256": "f1b5d8b3a53372eca228261b48b7ad9cfe925f1f8083f9cae07f9a24713f6908",
+  "content_hash_framing": {
+    "array_order": [
+      "selected_experts",
+      "combine_weights"
+    ],
+    "per_array": [
+      "UTF-8 tensor name",
+      "NUL",
+      "UTF-8 NumPy dtype.str",
+      "NUL",
+      "rank as little-endian uint32",
+      "shape dimensions as little-endian int64",
+      "C-contiguous tensor bytes"
+    ]
+  },
+  "npz_container_sha256": {
+    "original": "6ffd9d42c0ae1da109503f3d3a5d6ec992ffdbb84f41b4cc6f0493f35f5c0dff",
+    "reserialized": "c143b12f2879430106d5013aea8e95ef0705ba8daaffa5eeb1ece49559217d38"
+  },
+  "receiver_assignment_counts": [
+    12281,
+    12281,
+    12349,
+    12241
+  ],
+  "tensor_byte_sha256": {
+    "combine_weights": "50503527ee9730863cfaf6e20522d06df55d9edb3f368d1b50730d6c47887581",
+    "selected_experts": "6257db509664f7eaea6796df1920290e75773c400404225d9992b95d28c2878c"
+  }
+}

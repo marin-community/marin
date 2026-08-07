@@ -1,0 +1,109 @@
+{
+  "dimensions": {
+    "exchange_implementation": [
+      "deepep",
+      "ragged_all_to_all"
+    ],
+    "exchange_workers": [
+      12,
+      16,
+      20,
+      24,
+      28,
+      32,
+      36,
+      40,
+      48,
+      56,
+      64,
+      80,
+      96
+    ],
+    "gate_up_layout": [
+      "concatenated_e_2i_k",
+      "interleaved_e_2i_k",
+      "separate_e_i_k"
+    ],
+    "materialization_schedule": [
+      "tile_flow_boundaries",
+      "coarse_activation_boundaries"
+    ],
+    "overlap_policy": [
+      "shared_with_async_dispatch",
+      "sequential"
+    ],
+    "segmented_contraction_implementation": [
+      "standalone_sm100_grouped_gemm",
+      "ragged_dot"
+    ]
+  },
+  "failed_or_pruned": [
+    {
+      "candidate": "native JAX ragged_all_to_all",
+      "reason": "segmentation fault on first execution on the measured JAX 0.11 toolchain"
+    },
+    {
+      "candidate": "XLA ragged_dot",
+      "reason": "95.100 ms component result was pruned before distributed composition"
+    }
+  ],
+  "measured": {
+    "distributed_gate_up_layouts": [
+      "concatenated_e_2i_k",
+      "separate_e_i_k"
+    ],
+    "exchange_workers": [
+      12,
+      16,
+      20,
+      24,
+      28,
+      32,
+      36,
+      40,
+      48,
+      56,
+      64,
+      80,
+      96
+    ],
+    "materialization_schedules": [
+      "coarse_activation_boundaries",
+      "tile_flow_boundaries"
+    ],
+    "overlap_policies": [
+      "shared_with_async_dispatch",
+      "sequential"
+    ]
+  },
+  "schema_version": 1,
+  "search_protocol": [
+    "sweep DeepEP communication workers with the initial separate gate/up layout",
+    "confirm the latency turn at 96 workers",
+    "compare concatenated and separate gate/up at 56 and 80 workers",
+    "repeat the lowest-latency correct candidate",
+    "retain sequential and coarse-materialization phases as ablations, not selection candidates"
+  ],
+  "selected": {
+    "exchange_implementation": "deepep",
+    "exchange_workers": 56,
+    "fingerprint_sha256": "faab29fa33fccc60df33ec7b5ec6bf631749cc82c96789765f65588935bd0b1d",
+    "gate_up_layout": "concatenated_e_2i_k",
+    "historical_confirmation_count": 2,
+    "historical_median_of_medians_ms": 3.983512043952942,
+    "materialization_schedule": "tile_flow_boundaries",
+    "overlap_policy": "shared_with_async_dispatch",
+    "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+  },
+  "selection_dataset": "raw/schema1 historical search runs; schema2 is a reproducibility replay only",
+  "selection_objective": "minimum median rank-maximum end-to-end latency among correct candidates",
+  "tie_breaker": "lower exchange-worker count, then lexicographic candidate fingerprint",
+  "unmeasured": [
+    {
+      "dimension": "gate_up_layout",
+      "reason": "receiver-local validation passed, but no distributed replay was run",
+      "value": "interleaved_e_2i_k"
+    }
+  ],
+  "workload": "gb200_moe_t2048_e384_top6_h7168_i3072_bf16"
+}

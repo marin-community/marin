@@ -244,13 +244,35 @@ Every rank in the four A/B runs and the selected-plan repeat matched compiler an
 
 The route fixture has two identities. The original NPZ container SHA256 is `6ffd9d42c0ae1da109503f3d3a5d6ec992ffdbb84f41b4cc6f0493f35f5c0dff`; reserializing the same seeded arrays on a replacement tray produced container SHA256 `c143b12f2879430106d5013aea8e95ef0705ba8daaffa5eeb1ece49559217d38`. The stable tensor-content SHA256 is `f1b5d8b3a53372eca228261b48b7ad9cfe925f1f8083f9cae07f9a24713f6908`. This hash frames each tensor's name, NumPy dtype string, little-endian rank and shape, and C-contiguous bytes in the order `selected_experts`, `combine_weights`. Both serializations produce receiver assignment counts `[12281,12281,12349,12241]`. `scratch/shuttle-generic-results/mok-route-fixture-content-identity.json` records the framing and per-tensor byte hashes.
 
+### Reproducibility snapshot
+
+The annotated tag `shuttle-gb200-moe-v1` seals the source and benchmark record. The generated replay itself uses Shuttle revision `3dd61fad063bae54ac5e337d8f1657264011d6ff`; the tag points to the later archival commit that adds the immutable artifacts and documentation without changing the measured implementation.
+
+The [snapshot manifest](../benchmarks/artifacts/gb200_moe_v1/manifest.json) pins DeepEP, MoK, ThunderKittens, CODA/QuACK, FA3, CUTLASS DSL, CUDA component versions, driver, target architecture, complete four-rank shape, dtypes, seeds, timing protocol, and SHA256 identities for every preserved input and result. The [candidate space](../benchmarks/artifacts/gb200_moe_v1/candidate_space.json) records the bounded search procedure, legal dimensions, unmeasured alternatives, failures, pruning reasons, and selected plan. The [benchmark cache](../benchmarks/artifacts/gb200_moe_v1/benchmark_cache.json) maps candidate fingerprints and timing phases to content-addressed raw runs.
+
+The historical snapshot contains 20 distributed run records. Each retains six 50-sample rank-maximum timing distributions, for 6,000 raw phase samples; the cache indexes 2,000 end-to-end selected/no-overlap samples. It includes the complete 12-to-96 communication-SM sweep, concatenated-versus-separate gate/up comparisons at 56 and 80 SMs, two selected-plan confirmations, and every sequential no-overlap measurement. Those runs predate telemetry capture, so their clocks are explicitly recorded as unknown rather than reconstructed.
+
+The telemetry replay adds per-rank and rank-maximum timing samples, a deliberately coarse activation-materialization phase, exact command lines, GPU UUIDs and topology, power limits, clock policy, observed clocks around each phase, extension/source hashes, deterministic output hashes for every rank, and four saved independent semantic fixtures. The pinned MoK 20-SM, minibatch-2048, macrobatch-65536 oracle is replayed under the same protocol with its raw distribution retained.
+
+| Replay variant | Median rank-maximum latency |
+|---|---:|
+| Shuttle, concatenated W13 with overlap | 3.9830 ms |
+| Shuttle, concatenated W13 without overlap | 4.0649 ms |
+| Shuttle, concatenated W13 with coarse materialization | 4.4348 ms |
+| Shuttle, separate gate/up with overlap | 4.0690 ms |
+| Tuned MoK oracle | 3.5617 ms |
+
+The fresh Shuttle result is 1.118× the MoK oracle. Overlap saves 2.02% against the otherwise matching sequential schedule, concatenated W13 saves 2.12% against separate gate/up, and coarse activation materialization costs 11.34% against the selected plan. Each Shuttle phase retains 50 rank-maximum samples and four per-rank 50-sample distributions; MoK retains 50 rank-maximum and per-rank samples after 100 warmups.
+
+Application-clock controls are deprecated on this GB200 system, so the replay records a cluster-default, unpinned policy rather than claiming locked clocks. Every benchmark telemetry capture reported 1950 MHz SM and 3996 MHz memory clocks on all four GPUs; the pre-benchmark idle snapshot reported 120 MHz SM. The advertised SM maximum is 2062 MHz, the power limit is 1200 W, and sampled draw ranged from 199.83 to 757.32 W. The raw records retain all four GPU UUIDs and the NV18 tray topology.
+
 ## Known limitations
 
 - The plan-driven runtime consumes an in-memory `RegionPlan`; durable JSON serialization and compiled-artifact caching are not implemented yet.
 - The complete debug block is recovered from one connected StableHLO fixture; recognition robustness across other JAX/StableHLO canonical forms remains unmeasured.
 - The FP32 prologue repeats the row scale for every K tile. The two explicit strip preparations cost about 14 microseconds together at sequence 2048; a reducer that directly emits the physical strip would remove those launches, while a true K-invariant row-vector path would address the remaining mainloop overhead.
 - The experimental transform is legal only for tile K=64. A K=128 test compiled but produced grossly incorrect results and must be rejected until its fragment mapping is repaired.
-- GPU clocks were not pinned, so small latency differences should be confirmed with profiler and clock data.
+- Historical H100 and first-pass GB200 measurements used unpinned clocks. The GB200 replay now preserves exact observed phase-boundary clocks and power telemetry, but application clocks remain deprecated and unlocked.
 - The JAX FA4 wrapper aborts in the ragged-TMA adapter on this toolchain; the physical Torch/CuTe kernel itself works.
 - The measured pos/frequency RoPE backend is specialized to canonical base-10000 tables; a general table-load QKV epilogue remains to be implemented.
 - The expert-parallel compiler currently models BF16 routed experts. MXFP8 is rejected until its weight and activation scale tensors are represented explicitly in the semantic and physical plans.

@@ -1,0 +1,69 @@
+{
+  "compile_seconds": 1.1278391529340297,
+  "component": "full",
+  "correctness_smoke": {
+    "dropped_assignments": 0,
+    "output_finite": true,
+    "output_max_abs": 0.0164794921875,
+    "output_mean": 0.0164794921875
+  },
+  "derived": {
+    "assignments_per_rank": 12288,
+    "deepep_assignment_capacity": 12349,
+    "deepep_assignment_overprovision": 1.0049641927083333,
+    "deepep_candidate_assignment_capacity": 49152,
+    "deepep_receive_capacity": 8192,
+    "global_tokens": 8192,
+    "local_experts": 96,
+    "logical_flops_per_rank": 1894080577536,
+    "ragged_receive_capacity": 12349,
+    "routed_weight_gib_per_rank": 11.8125,
+    "routes": {
+      "maximum_assignments_per_expert": 163,
+      "maximum_unique_experts_per_token": 6,
+      "mean_distinct_destination_ranks_per_token": 3.30126953125,
+      "minimum_assignments_per_expert": 96,
+      "minimum_unique_experts_per_token": 6
+    },
+    "shared_weight_gib_per_rank": 0.123046875
+  },
+  "environment": {
+    "deepep_cuda_arch": "sm_100",
+    "deepep_source_root": "/tmp/DeepEP",
+    "device_count": 4,
+    "device_kind": "NVIDIA GB200",
+    "git_revision": null,
+    "jax": "0.11.0",
+    "jax_triton": "0.3.1",
+    "jaxlib": "0.11.0",
+    "python": "3.12.13",
+    "ragged_dot_impl": "triton",
+    "triton": "3.6.0",
+    "xla_flags": ""
+  },
+  "implementation": "deepep",
+  "iterations": 50,
+  "route_fixture": {
+    "mode": "mok_fixture",
+    "sha256": "6ffd9d42c0ae1da109503f3d3a5d6ec992ffdbb84f41b4cc6f0493f35f5c0dff",
+    "source": "/tmp/mok_routes_t2048_e384_k6_seed1234_torch2.10.npz"
+  },
+  "shape": {
+    "capacity_factor": 1.0049641927083333,
+    "expert_parallel_size": 4,
+    "global_experts": 384,
+    "hidden_size": 7168,
+    "intermediate_size": 3072,
+    "local_tokens": 2048,
+    "top_k": 6
+  },
+  "timing": {
+    "local_tokens_per_second": 334195.68873914157,
+    "logical_tflops_per_rank": 309.0788882505247,
+    "maximum_ms": 6.159794051200151,
+    "mean_ms": 6.12513461150229,
+    "median_ms": 6.128146080300212,
+    "minimum_ms": 6.075058132410049
+  },
+  "warmup": 10
+}

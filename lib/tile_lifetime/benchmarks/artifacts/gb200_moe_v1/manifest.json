@@ -1,0 +1,339 @@
+{
+  "artifacts": {
+    "benchmark_cache.json": {
+      "bytes": 43492,
+      "sha256": "720c89a4cce21d13daf60cf4f60bbee744d99ce305f5f008ee7770a7a877164c"
+    },
+    "candidate_space.json": {
+      "bytes": 2937,
+      "sha256": "95652a602534aef4f959d2572430c1faee509f3bd2cc68b66f56b3af816461b9"
+    },
+    "fixtures/mok-route-fixture-content-identity.json": {
+      "bytes": 948,
+      "sha256": "c4dcb39a6453d80d15490f0adae54b0f50e637c3df427304b5ba6e0982e0544a"
+    },
+    "fixtures/mok_routes_t2048_e384_k6_seed1234_torch2.10-reserialized.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "d43c9dd0353b8fbde96ed7138c0a3bddf663f72e8a1e1467bb52c77f05bbe9c0"
+    },
+    "fixtures/mok_routes_t2048_e384_k6_seed1234_torch2.10-reserialized.npz.b64.part01": {
+      "bytes": 396493,
+      "sha256": "32d8fa7dd57f474b0a13d72bf2859b2b846c3ec02e40ea4704fb55c23fae1c7a"
+    },
+    "fixtures/mok_routes_t2048_e384_k6_seed1234_torch2.10-reserialized.npz.b64.part02": {
+      "bytes": 739,
+      "sha256": "48bf3b766096ccfcea67b792196228a3538916b3f487b1eef735709047bcf027"
+    },
+    "fixtures/schema2/semantic-fixture-concat-rank0.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "b6aeccd4f6d98a7c6883e95d56602eabba5c1ef5970317dfd376d10aa607b763"
+    },
+    "fixtures/schema2/semantic-fixture-concat-rank0.npz.b64.part01": {
+      "bytes": 142240,
+      "sha256": "ec1ba73f69b413ea8b3bff4872ea6cd1f8a31e6907771f4df485e30da0a8bbff"
+    },
+    "fixtures/schema2/semantic-fixture-concat-rank1.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "b9e8bd9fc5507b992571d927e4592c331f13bdfe62c06a4199909ffe6bebdd06"
+    },
+    "fixtures/schema2/semantic-fixture-concat-rank1.npz.b64.part01": {
+      "bytes": 142240,
+      "sha256": "b959c816f69a2a498fb6f139c308bd5decc225fd970c56523c9adccdad490418"
+    },
+    "fixtures/schema2/semantic-fixture-concat-rank2.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "5488a4fa5c40111876dcd698b3eb9c71949994f86698ef83e2ac98bfef8ca9c5"
+    },
+    "fixtures/schema2/semantic-fixture-concat-rank2.npz.b64.part01": {
+      "bytes": 142240,
+      "sha256": "3707338b9e53d4c9738439fb860b287429a86a7b98a88be9aa25b1bd254b74fc"
+    },
+    "fixtures/schema2/semantic-fixture-concat-rank3.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "1eb9b0564a8753f589180ff92929a3f936e278570dee4546b107bbc0ff7ef112"
+    },
+    "fixtures/schema2/semantic-fixture-concat-rank3.npz.b64.part01": {
+      "bytes": 142240,
+      "sha256": "f0397031f011f1bdf341cc56014aaaad3f295112b1cd92f1cfea84f5bba4c347"
+    },
+    "fixtures/schema2/semantic-fixture-separate-rank0.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "b6aeccd4f6d98a7c6883e95d56602eabba5c1ef5970317dfd376d10aa607b763"
+    },
+    "fixtures/schema2/semantic-fixture-separate-rank0.npz.b64.part01": {
+      "bytes": 142240,
+      "sha256": "ec1ba73f69b413ea8b3bff4872ea6cd1f8a31e6907771f4df485e30da0a8bbff"
+    },
+    "fixtures/schema2/semantic-fixture-separate-rank1.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "b9e8bd9fc5507b992571d927e4592c331f13bdfe62c06a4199909ffe6bebdd06"
+    },
+    "fixtures/schema2/semantic-fixture-separate-rank1.npz.b64.part01": {
+      "bytes": 142240,
+      "sha256": "b959c816f69a2a498fb6f139c308bd5decc225fd970c56523c9adccdad490418"
+    },
+    "fixtures/schema2/semantic-fixture-separate-rank2.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "5488a4fa5c40111876dcd698b3eb9c71949994f86698ef83e2ac98bfef8ca9c5"
+    },
+    "fixtures/schema2/semantic-fixture-separate-rank2.npz.b64.part01": {
+      "bytes": 142240,
+      "sha256": "3707338b9e53d4c9738439fb860b287429a86a7b98a88be9aa25b1bd254b74fc"
+    },
+    "fixtures/schema2/semantic-fixture-separate-rank3.npz.b64.part00": {
+      "bytes": 396493,
+      "sha256": "1eb9b0564a8753f589180ff92929a3f936e278570dee4546b107bbc0ff7ef112"
+    },
+    "fixtures/schema2/semantic-fixture-separate-rank3.npz.b64.part01": {
+      "bytes": 142240,
+      "sha256": "f0397031f011f1bdf341cc56014aaaad3f295112b1cd92f1cfea84f5bba4c347"
+    },
+    "raw/schema1/deepep-mok-distributed-concat-sms56-repeat.json": {
+      "bytes": 18123,
+      "sha256": "c737ee7597e1df01bc12d738032497988673138621bded6d811825537aab53ec"
+    },
+    "raw/schema1/deepep-mok-distributed-concat-sms56.json": {
+      "bytes": 18133,
+      "sha256": "bfab1c03ded93db40692525805e69d5f4fffda4e5ec650144609e5a777126850"
+    },
+    "raw/schema1/deepep-mok-distributed-concat-sms80.json": {
+      "bytes": 18135,
+      "sha256": "43160888895552b9ae6bec564717c6f688096da723cf85d9ad97b4fdc55f7fa9"
+    },
+    "raw/schema1/deepep-mok-distributed-rankmax-reference.json": {
+      "bytes": 18026,
+      "sha256": "acb0d605cb0909987b61ae35f89c685f6019cf9efdd63755e4e31a99f969cafa"
+    },
+    "raw/schema1/deepep-mok-distributed-rankmax.json": {
+      "bytes": 15222,
+      "sha256": "4dc020a01e0c12b5aeb4d25490653fdd3cbffdb8c596e75a4cb36d5e9d437167"
+    },
+    "raw/schema1/deepep-mok-distributed-separate-sms56.json": {
+      "bytes": 18086,
+      "sha256": "4b36ae1c0141bb6395e70740233f2df42a7267befc16bdc424537640d594b635"
+    },
+    "raw/schema1/deepep-mok-distributed-separate-sms80.json": {
+      "bytes": 18105,
+      "sha256": "2f7e62c88218d4e0b06d18d213f339567d2773cde5e41164a9ac8f5c16aafdef"
+    },
+    "raw/schema1/deepep-mok-distributed-sms12.json": {
+      "bytes": 17992,
+      "sha256": "9ebcc0c092a199e851f96a5ba1c0db33d87c98e918dd66f4de71bac6e4c1cdd6"
+    },
+    "raw/schema1/deepep-mok-distributed-sms16.json": {
+      "bytes": 17987,
+      "sha256": "90ed99a99fd945beb8fb4825c59f8b1e59b8d2acb26bcc6d499025c3b3ff20eb"
+    },
+    "raw/schema1/deepep-mok-distributed-sms20.json": {
+      "bytes": 18006,
+      "sha256": "90ec0e717caafa22482a9f47dd025ee31d02a8b850e08d81782772fbf6a92839"
+    },
+    "raw/schema1/deepep-mok-distributed-sms24.json": {
+      "bytes": 18030,
+      "sha256": "548fdd8abe6f04c277ae8bef7a3bed47b446d1141bff1541e43f1119b3009e40"
+    },
+    "raw/schema1/deepep-mok-distributed-sms28.json": {
+      "bytes": 18035,
+      "sha256": "d6c4d77812fe61fab1df6d237d08f173be0469b1c544105d5998fe9750ced599"
+    },
+    "raw/schema1/deepep-mok-distributed-sms32.json": {
+      "bytes": 18029,
+      "sha256": "9416a616f813aaffdbf5d9da1a47d7d8c66d43b825db48bd641cf01d3d11f514"
+    },
+    "raw/schema1/deepep-mok-distributed-sms36.json": {
+      "bytes": 18055,
+      "sha256": "eb24caaeb442c9dfa66b7ca8baa08566be4447b13281bb04029031e7a70260a4"
+    },
+    "raw/schema1/deepep-mok-distributed-sms40.json": {
+      "bytes": 18042,
+      "sha256": "977d84b1f05492a7e3840ad589ef725beb76fd17c25af92fc2546c7c9af905d6"
+    },
+    "raw/schema1/deepep-mok-distributed-sms48.json": {
+      "bytes": 18033,
+      "sha256": "8011bd3cc599785ab6f36da5dc7a3cbfac500020f0c1d60068e46b8447a5bbce"
+    },
+    "raw/schema1/deepep-mok-distributed-sms56.json": {
+      "bytes": 18071,
+      "sha256": "ed9c46543959e3d234c70c6b34819517cd51e657a8ebaceb45c06ac4bffab640"
+    },
+    "raw/schema1/deepep-mok-distributed-sms64.json": {
+      "bytes": 18060,
+      "sha256": "a0aae3c29328dfda4e0c4f0e5a4c74041fc756dd61e36232ff215ac50f9c4827"
+    },
+    "raw/schema1/deepep-mok-distributed-sms80.json": {
+      "bytes": 18072,
+      "sha256": "cf9466592b5606a026d3b0b20bbf0cac0bbeb0c94fab296e43355b3643a47bd8"
+    },
+    "raw/schema1/deepep-mok-distributed-sms96.json": {
+      "bytes": 18093,
+      "sha256": "e27f294723ead34fd6af4aa8820fe399961450aab958331b2686d5708230f119"
+    },
+    "raw/schema1/deepep-mok-local-concat-w13-interleaved.json": {
+      "bytes": 52679,
+      "sha256": "2ede2884e5735f800c20ef06ada2e382a8f0b130c2df32802087238f0563372c"
+    },
+    "raw/schema1/deepep-mok-local-concat-w13.json": {
+      "bytes": 36387,
+      "sha256": "493da6727854de790351577b6aa0bfdc413a3a76b0b5d134fa8203a2990bf534"
+    },
+    "raw/schema1/deepep-mok-local-explicit.json": {
+      "bytes": 30114,
+      "sha256": "36b1a2dad03c2efb313723d11a787ce7e682bee558c1686cee5d2fe2fe924488"
+    },
+    "raw/schema1/deepep-mok-local.json": {
+      "bytes": 12187,
+      "sha256": "54585690c0041750d5f098cdac6314cebef5fc1030b99fafffdd9851ab57a65b"
+    },
+    "raw/schema1/generic-deepep-global-cap-current.json": {
+      "bytes": 1987,
+      "sha256": "4c83a27747d3bf2f937b9531df1685b4206da3aaee3cf1e075765ea4dc350770"
+    },
+    "raw/schema1/generic-deepep-global-cap-exact-rerun.json": {
+      "bytes": 2066,
+      "sha256": "2684efc3a03be8017c713054ebe5a41c07ce41743b4b29e08628b054580aa7f3"
+    },
+    "raw/schema1/generic-deepep-global-cap-plus1.json": {
+      "bytes": 2001,
+      "sha256": "d3ce8155b72844a6d34f1b1e7043e11c3acfe88e190893dc14396d25af843e7a"
+    },
+    "raw/schema1/generic-deepep-global-cap-routed-exact-rerun.json": {
+      "bytes": 2072,
+      "sha256": "7bdf4587e71d0965ed77e19a92af021ae4fa301f6fade9796b0ead6a51ec424b"
+    },
+    "raw/schema1/generic-deepep-transport.json": {
+      "bytes": 2058,
+      "sha256": "90692c4d954d08c6bf0ac6fd7329c327f8d247fd6409b634545713584d6257b8"
+    },
+    "raw/schema1/generic-local-compact-exact-rerun.json": {
+      "bytes": 2080,
+      "sha256": "c08727b9ec543718f2a5b7bb5feed499286abf097d6075a08ee8a583e33588f9"
+    },
+    "raw/schema1/mok-gmm-probe-w13-full.json": {
+      "bytes": 3094,
+      "sha256": "aa17167ad7e88005c126e61dcaf5e9f9cb0091cce2c921a1a821e78b3e308369"
+    },
+    "raw/schema1/mok-gmm-probe-w2-full.json": {
+      "bytes": 2820,
+      "sha256": "d6b1a3b6f33bb458164b62564dbab7a035658ebac838c39954eb513d60523bc7"
+    },
+    "raw/schema1/mok-route-fixture-content-identity.json": {
+      "bytes": 948,
+      "sha256": "c4dcb39a6453d80d15490f0adae54b0f50e637c3df427304b5ba6e0982e0544a"
+    },
+    "raw/schema2/deepep-mok-distributed-concat-sms56.json": {
+      "bytes": 182740,
+      "sha256": "88c6c7356a1751ede84042b340a95019311ec22d8ec162be2cedd6adb4042916"
+    },
+    "raw/schema2/deepep-mok-distributed-separate-sms56.json": {
+      "bytes": 182583,
+      "sha256": "0154a326f828129e81ed0ff3abdf354c9412a86b54000642d896d97ab55d00c2"
+    },
+    "raw/schema2/mok-forward-sweep-selected.json": {
+      "bytes": 38480,
+      "sha256": "95796b1bfdd06109b578162f553cc724d9a061d78c3412d4cd56a7a3200c6c65"
+    },
+    "raw/schema2/probe-build.json": {
+      "bytes": 629,
+      "sha256": "ece38df9b4d0175f23a3f73e9ffe4ee38608e073b7320b2eed515da94578a235"
+    },
+    "raw/schema2/replay-provenance.txt": {
+      "bytes": 4383,
+      "sha256": "8cde9625aa0aad75390de3b65fabb35daf7f69bc5e3658c6f781c04ff6f47edb"
+    }
+  },
+  "correctness": {
+    "merge_order": "ascending route slot within owner, then ascending owner rank; no atomics",
+    "route_tensor_content_sha256": "f1b5d8b3a53372eca228261b48b7ad9cfe925f1f8083f9cae07f9a24713f6908",
+    "schema1_limit": "bitwise parity was recorded, but output tensors were not hashed",
+    "schema2_output_hashes": "stored per rank in replay run records",
+    "stablehlo_fixture": "../../../tests/fixtures/stablehlo/moe_region_v1_14_1.mlir.bc.b64"
+  },
+  "hardware": {
+    "compute_capability": "10.0",
+    "gpu": "NVIDIA GB200",
+    "historical_clock_policy": "cluster default; clocks and power telemetry were not captured",
+    "placement": "one four-GPU low-priority GB200 tray",
+    "replay_clock_policy": {
+      "advertised_max_sm_clock_mhz": 2062,
+      "detail": "raw/schema2 replay records contain per-GPU UUID and per-phase telemetry",
+      "memory_clock_mhz": 3996,
+      "policy": "cluster default, application clocks deprecated and unpinned",
+      "power_limit_watts": 1200,
+      "pre_benchmark_idle_sm_clock_mhz": 120,
+      "sampled_power_draw_watts": [
+        199.83,
+        757.32
+      ],
+      "timed_phase_telemetry_sm_clock_mhz": 1950
+    },
+    "replay_reservation": {
+      "cpu_cores": 8,
+      "host_memory_gb": 64,
+      "local_disk_gb": 100,
+      "priority": "batch"
+    },
+    "world_size": 4
+  },
+  "oracle": {
+    "communication_sms": 20,
+    "historical_latency_ms": 3.613,
+    "historical_tflops": 524.2,
+    "implementation": "Mixture-of-Kittens BF16 forward",
+    "macrobatch_size": 65536,
+    "minibatch_size": 2048,
+    "raw_replay": "raw/schema2/mok-forward-sweep-selected.json",
+    "replay_iterations": 50,
+    "replay_latency_ms": 3.56169593334198,
+    "replay_tflops": 531.7917680184346,
+    "replay_warmups": 100
+  },
+  "schema_version": 1,
+  "snapshot": {
+    "name": "Shuttle distributed BF16 MoE GB200 proof of life",
+    "shuttle_revision": "3dd61fad063bae54ac5e337d8f1657264011d6ff",
+    "shuttle_tag": "shuttle-gb200-moe-v1"
+  },
+  "sources": {
+    "coda_commit": "8fa88065e541f6a5b52fb400d94d4be02f18c543",
+    "coda_quack_commit": "02c7f69881737731173a6a009aeb6f032e449b61",
+    "consumer_prologue_patch_sha256": "40318b9b390e111c38f4838a50cf8913695c9f94142122b374bf09c220cfd9a1",
+    "consumer_prologue_quack_commit": "84ef91df9bec87c7e4938517234fafb07ef844dd",
+    "cutlass_dsl": "4.6.0",
+    "deepep_commit": "7febc6e25660af0f54d95dd781ecdcd62265ecca",
+    "flash_attention_commit": "3fa810570e17bb4354155bdb71d826eca6079208",
+    "marin_base_commit": "c26285a61654a9e6a9029cfdb3d018badc35d71c",
+    "mixture_of_kittens_commit": "3e1cf43ab93ad040afed52a45ab03cb490ffe4be",
+    "thunderkittens_commit": "1c3920d993404dd49a6d4c7267ea11d583bd5c68"
+  },
+  "toolchain": {
+    "cccl": "13.0.85",
+    "cuda_crt": "13.0.88",
+    "cuda_runtime_package": "13.0.96",
+    "cuda_toolkit_package": "13.0.2",
+    "nccl": "2.28.9",
+    "nvcc": "13.0.88",
+    "nvidia_driver": "595.71.05",
+    "nvvm": "13.0.88",
+    "ptxas": "13.0.88",
+    "python": "3.12.13",
+    "target": "sm100a",
+    "torch": "2.10.0+cu130",
+    "torch_cuda": "13.0"
+  },
+  "workload": {
+    "accumulation": "FP32 GEMM and fixed route-slot FP32 merge",
+    "benchmark_seed": 0,
+    "dtype": "bfloat16",
+    "global_experts": 384,
+    "hidden_size": 7168,
+    "intermediate_size": 3072,
+    "local_experts": 96,
+    "local_tokens": 2048,
+    "measured_iterations": 50,
+    "padding_quantum": 256,
+    "route_seed_by_rank": "1234 + rank in official MoK input generation",
+    "selection_metric": "median rank-maximum CUDA-event latency",
+    "top_k": 6,
+    "warmups": 10
+  }
+}

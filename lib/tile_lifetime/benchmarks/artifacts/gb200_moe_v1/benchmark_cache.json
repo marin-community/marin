@@ -1,0 +1,928 @@
+{
+  "entries": [
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-concat-sms56-repeat.json",
+      "artifact_sha256": "c737ee7597e1df01bc12d738032497988673138621bded6d811825537aab53ec",
+      "cache_key_sha256": "9f2a01da924065a7eab3722f22a2bd368963c1126d422fbe89cfdc2f58edffb7",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "faab29fa33fccc60df33ec7b5ec6bf631749cc82c96789765f65588935bd0b1d",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 3.9910080432891846,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "selected_confirmation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-concat-sms56-repeat.json",
+      "artifact_sha256": "c737ee7597e1df01bc12d738032497988673138621bded6d811825537aab53ec",
+      "cache_key_sha256": "ec5f9f6e4f716a240bd46109b96081314595fc15a69d1105f2e70c33e42b7ace",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "54e99c016335ca5824c67248cc0a13456ec6cee0f562f202db8d60b5b1d37146",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.052608013153076,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-concat-sms56.json",
+      "artifact_sha256": "bfab1c03ded93db40692525805e69d5f4fffda4e5ec650144609e5a777126850",
+      "cache_key_sha256": "4cad2fe5e4789cb5362841c323b332bf1a81e97537765134ec11364a7503c8c3",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "faab29fa33fccc60df33ec7b5ec6bf631749cc82c96789765f65588935bd0b1d",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 3.976016044616699,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "selected_confirmation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-concat-sms56.json",
+      "artifact_sha256": "bfab1c03ded93db40692525805e69d5f4fffda4e5ec650144609e5a777126850",
+      "cache_key_sha256": "dc40d562f4b908052df954a7959e824081d39eeaffe9af19d35fcffafb1df6ee",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "54e99c016335ca5824c67248cc0a13456ec6cee0f562f202db8d60b5b1d37146",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.053344011306763,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-concat-sms80.json",
+      "artifact_sha256": "43160888895552b9ae6bec564717c6f688096da723cf85d9ad97b4fdc55f7fa9",
+      "cache_key_sha256": "08dd5b728d98551190edc5a8a315d98ad2492877e9ea8d42a9ae1402169040da",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 80,
+        "fingerprint_sha256": "b9131c3d5f2560fe44646306169653f3c108ef0fdf78d3ef8a27ada5bd2046e3",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.0305280685424805,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-concat-sms80.json",
+      "artifact_sha256": "43160888895552b9ae6bec564717c6f688096da723cf85d9ad97b4fdc55f7fa9",
+      "cache_key_sha256": "2cac1cbc671a291010ec739b2343cb57433c341fe14e33fb265bd8c1c37048ce",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 80,
+        "fingerprint_sha256": "78882efe61483c4b7d5a16fb1daad5e7677739f1a68590fa7735b793ae793bca",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.008480072021484,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-rankmax-reference.json",
+      "artifact_sha256": "acb0d605cb0909987b61ae35f89c685f6019cf9efdd63755e4e31a99f969cafa",
+      "cache_key_sha256": "8ecfeef1143bb8395df5660eed1190a240c3a6526f37d95f4b05d5b5fe157601",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 24,
+        "fingerprint_sha256": "58f000bcb7a6ce44bbe20f8a45b420166005f1fa50e18aa9a5eab9d614fba20f",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.268191814422607,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-rankmax-reference.json",
+      "artifact_sha256": "acb0d605cb0909987b61ae35f89c685f6019cf9efdd63755e4e31a99f969cafa",
+      "cache_key_sha256": "31f29bbf92dfd675542a36f03295bc486feb1ede5bd176c47b2d599e94176fdd",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 24,
+        "fingerprint_sha256": "3edc948b24e01503eddfc4f726c27d3e3274a92346b02669a53687a86e68b9fd",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.478224039077759,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-rankmax.json",
+      "artifact_sha256": "4dc020a01e0c12b5aeb4d25490653fdd3cbffdb8c596e75a4cb36d5e9d437167",
+      "cache_key_sha256": "09cc58049dbcc9e96dd908a64f2c6d512a49cd0a0370223268d9dae52a25f0ba",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 24,
+        "fingerprint_sha256": "58f000bcb7a6ce44bbe20f8a45b420166005f1fa50e18aa9a5eab9d614fba20f",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.265904188156128,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-rankmax.json",
+      "artifact_sha256": "4dc020a01e0c12b5aeb4d25490653fdd3cbffdb8c596e75a4cb36d5e9d437167",
+      "cache_key_sha256": "37149eed4dc5e344de8be6998e2fefb73b3e530d6f796b0325f605b1297b99c7",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 24,
+        "fingerprint_sha256": "3edc948b24e01503eddfc4f726c27d3e3274a92346b02669a53687a86e68b9fd",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.478288173675537,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-separate-sms56.json",
+      "artifact_sha256": "4b36ae1c0141bb6395e70740233f2df42a7267befc16bdc424537640d594b635",
+      "cache_key_sha256": "916d41790b44178195a09a4048d72ac3afcba0c1e0466f53a01642fa3f98e3c0",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "9124f1e18c7fbaa81fdc336914e807be6882ecebcd58bb2e3882eebdef9b4ef6",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.079728126525879,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-separate-sms56.json",
+      "artifact_sha256": "4b36ae1c0141bb6395e70740233f2df42a7267befc16bdc424537640d594b635",
+      "cache_key_sha256": "7b5948df370384180e221a9dedccf0fa3891ed65fe7eb75c23a18dfb2cb643cf",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "57dad1b305135a597ffcb8b96f4fa463baa27e2252d0d697cbad4f64aae8c510",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.153632164001465,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-separate-sms80.json",
+      "artifact_sha256": "2f7e62c88218d4e0b06d18d213f339567d2773cde5e41164a9ac8f5c16aafdef",
+      "cache_key_sha256": "482ef074ccb389e804369f46af134da615085c41d04c0fc7bd694c4bda8cbfaa",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 80,
+        "fingerprint_sha256": "367e7f02711d54fe04198d27c000142c890de56842fabf8f6faf033bc445c93c",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.129839897155762,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-separate-sms80.json",
+      "artifact_sha256": "2f7e62c88218d4e0b06d18d213f339567d2773cde5e41164a9ac8f5c16aafdef",
+      "cache_key_sha256": "586575567f03206ed32f085c62253125540435376b243b1ec0eb0d997d4f6df5",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 80,
+        "fingerprint_sha256": "315feaa88232cc3bbad100e49b43fb51ba844ea04b9473a5de76fbcb7dcfe088",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.091599941253662,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms12.json",
+      "artifact_sha256": "9ebcc0c092a199e851f96a5ba1c0db33d87c98e918dd66f4de71bac6e4c1cdd6",
+      "cache_key_sha256": "eddadf8b694005f1ded9e44d061b0ee7a3b7415b3ccb078112861ae76c516ce4",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 12,
+        "fingerprint_sha256": "95f330eabab43b678ad4019ff974844e62793f5f290fb79fd984ec736874408e",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.900847911834717,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms12.json",
+      "artifact_sha256": "9ebcc0c092a199e851f96a5ba1c0db33d87c98e918dd66f4de71bac6e4c1cdd6",
+      "cache_key_sha256": "7c4a8aa7ca893c03d8a12ae6b9032b160b78333a0f58bacfd09d4aa166138cb8",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 12,
+        "fingerprint_sha256": "7692d466bf3c6f8cbca1ec136c77cacf76de9269ef561c4c45ab76ef2f200938",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 5.12335991859436,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms16.json",
+      "artifact_sha256": "90ed99a99fd945beb8fb4825c59f8b1e59b8d2acb26bcc6d499025c3b3ff20eb",
+      "cache_key_sha256": "b749ad0dd9c79b5a7c5a196cc59d94187e7ab8e850fbed951018ec998361578e",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 16,
+        "fingerprint_sha256": "6bea9006969c2e2d404eb013117599c1e55fcf136ba0c35d888cd42e562be94e",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.590271949768066,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms16.json",
+      "artifact_sha256": "90ed99a99fd945beb8fb4825c59f8b1e59b8d2acb26bcc6d499025c3b3ff20eb",
+      "cache_key_sha256": "80a04ff666493b2c7e0597a68037c7ed0af6f9e3dfb428ce30ab2e3eba622fa0",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 16,
+        "fingerprint_sha256": "cb7167c521982f28224d996632c1b40ebd42b4970d6c69cc9323fa8d7b62096a",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.816704034805298,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms20.json",
+      "artifact_sha256": "90ec0e717caafa22482a9f47dd025ee31d02a8b850e08d81782772fbf6a92839",
+      "cache_key_sha256": "14debc38ee95299a6f9fc0826eb90a13f35aa669275a5442e81d74ccc5e95acd",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 20,
+        "fingerprint_sha256": "15290f19e2cfa0a6f9dbf7f3676b6ebe534d2b1c7a4bd943163ef105e471f81e",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.396111965179443,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms20.json",
+      "artifact_sha256": "90ec0e717caafa22482a9f47dd025ee31d02a8b850e08d81782772fbf6a92839",
+      "cache_key_sha256": "da7f2e31bb34b95e54e63675f34c24c0020edd74c78380b6289c3daff8fc4035",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 20,
+        "fingerprint_sha256": "e6aceb17bd3129c9190706bc2ffcab6d5632ead53015fa7122f51a748c4f05b0",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.6091039180755615,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms24.json",
+      "artifact_sha256": "548fdd8abe6f04c277ae8bef7a3bed47b446d1141bff1541e43f1119b3009e40",
+      "cache_key_sha256": "b8b9e70055abf2b0e88e2c30912911eacd275f6d71154576add13ce31723fdb2",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 24,
+        "fingerprint_sha256": "58f000bcb7a6ce44bbe20f8a45b420166005f1fa50e18aa9a5eab9d614fba20f",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.2644641399383545,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms24.json",
+      "artifact_sha256": "548fdd8abe6f04c277ae8bef7a3bed47b446d1141bff1541e43f1119b3009e40",
+      "cache_key_sha256": "945fd59ca9a6265b26a77cecab3bf3c1cfff740aa0939443a9e193b85e4d6cba",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 24,
+        "fingerprint_sha256": "3edc948b24e01503eddfc4f726c27d3e3274a92346b02669a53687a86e68b9fd",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.482800006866455,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms28.json",
+      "artifact_sha256": "d6c4d77812fe61fab1df6d237d08f173be0469b1c544105d5998fe9750ced599",
+      "cache_key_sha256": "5970c76191deeaadb0f37fadcd4e3ea548f8cbf85fe22360537920cef175ea09",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 28,
+        "fingerprint_sha256": "bae829a6b7ccec73a3f6374f30887925a81738cf9a1d6bbff5c56115f027be50",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.172720193862915,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms28.json",
+      "artifact_sha256": "d6c4d77812fe61fab1df6d237d08f173be0469b1c544105d5998fe9750ced599",
+      "cache_key_sha256": "87e7073e8959db11ee88c213d3619f034229253d902a4fcd28abd61a5c64155a",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 28,
+        "fingerprint_sha256": "38f66d3635a31535eb12db5ffc8d451d2a1191693e5e1c9b091a91edf0ba7be5",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.389104127883911,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms32.json",
+      "artifact_sha256": "9416a616f813aaffdbf5d9da1a47d7d8c66d43b825db48bd641cf01d3d11f514",
+      "cache_key_sha256": "9088fff8f02292adc3435d7e510c033fe1fb7ce1fbd431c9a6af672fd2545081",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 32,
+        "fingerprint_sha256": "cc3b12d205f7e7d551c181895e8a073acd0d56faed42fdd7031eea9b43bc5925",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.128864049911499,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms32.json",
+      "artifact_sha256": "9416a616f813aaffdbf5d9da1a47d7d8c66d43b825db48bd641cf01d3d11f514",
+      "cache_key_sha256": "4a6070b4b8b694e0b5c26461e0df687fd416b43b420c9269faa84b6b85f96649",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 32,
+        "fingerprint_sha256": "20c844c51fab8e58ed65b42952a43f9a920cd25e829c1ea2fe802723c1ec6213",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.321408033370972,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms36.json",
+      "artifact_sha256": "eb24caaeb442c9dfa66b7ca8baa08566be4447b13281bb04029031e7a70260a4",
+      "cache_key_sha256": "bec3ef0ee99bf3f6c84abfb784ec8abce84c7a4a9bc314e198753a85228be1bf",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 36,
+        "fingerprint_sha256": "f5a08c9c5197260982bb91e0fa8e0f8b40f8bd32efc174123ea497f6f22c9a5c",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.117055892944336,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms36.json",
+      "artifact_sha256": "eb24caaeb442c9dfa66b7ca8baa08566be4447b13281bb04029031e7a70260a4",
+      "cache_key_sha256": "37b14636848eac1eccbf28dfccf6a283d7caf86b046b5b2eaf739e003c160cf2",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 36,
+        "fingerprint_sha256": "672aea80db09a56c8c2b57cfdaa0c99445ce8fec627bad1230aa0b589f9299bb",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.276063919067383,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms40.json",
+      "artifact_sha256": "977d84b1f05492a7e3840ad589ef725beb76fd17c25af92fc2546c7c9af905d6",
+      "cache_key_sha256": "830380792595c50837d3288bd8d200248188c83e78fdb4378b8eae085e4e70c7",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 40,
+        "fingerprint_sha256": "167fc87a32f86113b6fabfb0bf79582d1604b8c76aa9999dba0a2da12a7fcb69",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.087759971618652,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms40.json",
+      "artifact_sha256": "977d84b1f05492a7e3840ad589ef725beb76fd17c25af92fc2546c7c9af905d6",
+      "cache_key_sha256": "96bb932938af9b081d0e91caa81b174737ad19e35a4474ac95b188eadc8b2e61",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 40,
+        "fingerprint_sha256": "5ff37f30139d74ba7d9438bc01c42b45f2bdf5bdc40088caa3c44bd9dc066707",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.236655950546265,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms48.json",
+      "artifact_sha256": "8011bd3cc599785ab6f36da5dc7a3cbfac500020f0c1d60068e46b8447a5bbce",
+      "cache_key_sha256": "29420c989c515248ba680cf1bc35751f89ba93e66f52780e4ab1e1c26b1047d5",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 48,
+        "fingerprint_sha256": "10a66db9d65677b96785c3b909d8003c650fc9f085fa7b7e8fabbc689c111b52",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.031455993652344,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms48.json",
+      "artifact_sha256": "8011bd3cc599785ab6f36da5dc7a3cbfac500020f0c1d60068e46b8447a5bbce",
+      "cache_key_sha256": "798026222f6e5aee61307e4f2cb70680c3eda980f732322587145508abe1c188",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 48,
+        "fingerprint_sha256": "373d8436c71b03e5cfcf7ed1c48e3b5fbaaaf5ae6ccf00d723fc587f4b79a540",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.175519943237305,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms56.json",
+      "artifact_sha256": "ed9c46543959e3d234c70c6b34819517cd51e657a8ebaceb45c06ac4bffab640",
+      "cache_key_sha256": "f36e8fd90507c7307687fff881bbf90ad9a7ef16e9830c7baf90f483054556b5",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "9124f1e18c7fbaa81fdc336914e807be6882ecebcd58bb2e3882eebdef9b4ef6",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.0154078006744385,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms56.json",
+      "artifact_sha256": "ed9c46543959e3d234c70c6b34819517cd51e657a8ebaceb45c06ac4bffab640",
+      "cache_key_sha256": "28bca5119d7f4a34b8e54442666e5e0ffd74cd3ccb3b97f7d92e9278f4fd9356",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "57dad1b305135a597ffcb8b96f4fa463baa27e2252d0d697cbad4f64aae8c510",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.141599893569946,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms64.json",
+      "artifact_sha256": "a0aae3c29328dfda4e0c4f0e5a4c74041fc756dd61e36232ff215ac50f9c4827",
+      "cache_key_sha256": "9d0f58bb7e574f06311a3de0e8b36e077d54708528d4ca60b2e53c74d8b19ffb",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 64,
+        "fingerprint_sha256": "e5aa99e6bc6ad2a6ff22ccf184bb4b716128ea3159cfe3c1ccb821ef84b250f8",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.017887830734253,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms64.json",
+      "artifact_sha256": "a0aae3c29328dfda4e0c4f0e5a4c74041fc756dd61e36232ff215ac50f9c4827",
+      "cache_key_sha256": "fe22487cbef8344c2f2e781a9bc85c3970a41b63d5b58d3b888080d57248ec49",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 64,
+        "fingerprint_sha256": "6f7e6e09548d3b22dcede0913cfbdd66fc6a080b123d3c3762f03094906a08a4",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.107343912124634,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms80.json",
+      "artifact_sha256": "cf9466592b5606a026d3b0b20bbf0cac0bbeb0c94fab296e43355b3643a47bd8",
+      "cache_key_sha256": "eacc2dfb114baac0cee124d05122af72c867b4b301b61ab5806e98c68612f8eb",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 80,
+        "fingerprint_sha256": "367e7f02711d54fe04198d27c000142c890de56842fabf8f6faf033bc445c93c",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.01478385925293,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms80.json",
+      "artifact_sha256": "cf9466592b5606a026d3b0b20bbf0cac0bbeb0c94fab296e43355b3643a47bd8",
+      "cache_key_sha256": "e9679ad14cfe5a7976de0d1f785c890c72fd064c2b25569bf9a3e3608df1a86c",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 80,
+        "fingerprint_sha256": "315feaa88232cc3bbad100e49b43fb51ba844ea04b9473a5de76fbcb7dcfe088",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.089823961257935,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms96.json",
+      "artifact_sha256": "e27f294723ead34fd6af4aa8820fe399961450aab958331b2686d5708230f119",
+      "cache_key_sha256": "5a1adad5e87563d2a5b87a6560c09bbd62b479a41e9a6436b31afbf5d3e892e1",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 96,
+        "fingerprint_sha256": "25d8e40d3995ec177708826c958184df6e0bd79cdd8498021e9e901702e5959b",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.039520025253296,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema1/deepep-mok-distributed-sms96.json",
+      "artifact_sha256": "e27f294723ead34fd6af4aa8820fe399961450aab958331b2686d5708230f119",
+      "cache_key_sha256": "1d6272e310704343d43071a028e91e9029708b77f9a365508b19089e5386f677",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 96,
+        "fingerprint_sha256": "fbaf045cfd8cd5be616323b45400025b40282f472860e6ee9c426863a83e8b1d",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.0639519691467285,
+      "phase": "full_sequential",
+      "run_schema_version": 1,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema2/deepep-mok-distributed-concat-sms56.json",
+      "artifact_sha256": "88c6c7356a1751ede84042b340a95019311ec22d8ec162be2cedd6adb4042916",
+      "cache_key_sha256": "04dd8ecf85a42f4e4b225ed041a2751c633d70bc9fe5d7a628958805eab348b4",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "faab29fa33fccc60df33ec7b5ec6bf631749cc82c96789765f65588935bd0b1d",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 3.9829760789871216,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 2,
+      "sample_count": 50,
+      "selection_status": "selected_confirmation"
+    },
+    {
+      "artifact": "raw/schema2/deepep-mok-distributed-concat-sms56.json",
+      "artifact_sha256": "88c6c7356a1751ede84042b340a95019311ec22d8ec162be2cedd6adb4042916",
+      "cache_key_sha256": "ba515ec0fc0aa6dbedf1316d36a30d26d03d9152741ebc7093ca769c6b7f0097",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "54e99c016335ca5824c67248cc0a13456ec6cee0f562f202db8d60b5b1d37146",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.06492805480957,
+      "phase": "full_sequential",
+      "run_schema_version": 2,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema2/deepep-mok-distributed-concat-sms56.json",
+      "artifact_sha256": "88c6c7356a1751ede84042b340a95019311ec22d8ec162be2cedd6adb4042916",
+      "cache_key_sha256": "3a1d9ace7d67cc525b2817dc131ac4d277be6b99121ad097932e936ae5454d2c",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "acba4e1c6fa1a88cb7167ea30aa392f35f35d9949b3a69888b39dabdc2ffdfd0",
+        "gate_up_layout": "concatenated_e_2i_k",
+        "materialization_schedule": "coarse_activation_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.434815883636475,
+      "phase": "full_coarse_materialized_sequential",
+      "run_schema_version": 2,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema2/deepep-mok-distributed-separate-sms56.json",
+      "artifact_sha256": "0154a326f828129e81ed0ff3abdf354c9412a86b54000642d896d97ab55d00c2",
+      "cache_key_sha256": "94e40316e1d00450669a952c10694b6e8e1338a8769e78de45d56b9bd4517339",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "9124f1e18c7fbaa81fdc336914e807be6882ecebcd58bb2e3882eebdef9b4ef6",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "shared_with_async_dispatch",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.069040060043335,
+      "phase": "full_overlap_shared_with_async_dispatch",
+      "run_schema_version": 2,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema2/deepep-mok-distributed-separate-sms56.json",
+      "artifact_sha256": "0154a326f828129e81ed0ff3abdf354c9412a86b54000642d896d97ab55d00c2",
+      "cache_key_sha256": "d9fd9e625377e8d60c57444ff86713b42b80ae487fb3bd225d5d5645ffcf6ab6",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "57dad1b305135a597ffcb8b96f4fa463baa27e2252d0d697cbad4f64aae8c510",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "tile_flow_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.160752058029175,
+      "phase": "full_sequential",
+      "run_schema_version": 2,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    },
+    {
+      "artifact": "raw/schema2/deepep-mok-distributed-separate-sms56.json",
+      "artifact_sha256": "0154a326f828129e81ed0ff3abdf354c9412a86b54000642d896d97ab55d00c2",
+      "cache_key_sha256": "b1b166a5032108bd35d861a39dac23c9fd9d771558d8adb01537a38877a935cd",
+      "candidate": {
+        "exchange_implementation": "deepep",
+        "exchange_workers": 56,
+        "fingerprint_sha256": "4672ba777673e716d1cef3a779ab345dd1c9a314190e449059b8edc763370992",
+        "gate_up_layout": "separate_e_i_k",
+        "materialization_schedule": "coarse_activation_boundaries",
+        "overlap_policy": "sequential",
+        "segmented_contraction_implementation": "standalone_sm100_grouped_gemm"
+      },
+      "correctness": "passed",
+      "median_rank_max_ms": 4.5447678565979,
+      "phase": "full_coarse_materialized_sequential",
+      "run_schema_version": 2,
+      "sample_count": 50,
+      "selection_status": "measured_ablation"
+    }
+  ],
+  "schema_version": 1,
+  "selected_candidate_fingerprint_sha256": "faab29fa33fccc60df33ec7b5ec6bf631749cc82c96789765f65588935bd0b1d",
+  "selection_note": "Only measurements listed in entries participate in selection; failed, pruned, and unmeasured alternatives are recorded in candidate_space.json",
+  "workload_fingerprint_sha256": "230cb26c7bf47bd22241ff6305b4c688341b9691073a113c68b5cf26d7c5fe52"
+}

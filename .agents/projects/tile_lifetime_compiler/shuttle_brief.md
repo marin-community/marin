@@ -1,5 +1,9 @@
 # Shuttle: Prototype Brief and Big-Picture Specification
 
+Working goal: compile ordinary ML programs into competitive execution plans by deriving algebraic rewrites, tile lifetimes, layouts, materialization boundaries, and distributed schedules from program semantics. Expert kernels are reusable primitives and performance oracles, not hard-coded whole-program lowerings.
+
+The broader compiler thesis, provisional normal form, falsification criteria, and research sequence are defined in [Shuttle: Whole-Program Synthesis for Machine Learning Systems](whole_program_synthesis.md).
+
 ## 1. Mission
 
 Shuttle is an experimental compiler for high-performance ML programs.

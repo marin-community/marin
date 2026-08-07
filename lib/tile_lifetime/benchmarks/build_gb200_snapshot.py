@@ -4,8 +4,11 @@
 """Promote GB200 MoE measurements into a content-addressed snapshot."""
 
 import argparse
+import base64
 import json
 import shutil
+import statistics
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +17,8 @@ from benchmark_metadata import canonical_json_sha256, file_sha256
 SCHEMA1_DISTRIBUTED_GLOB = "deepep-mok-distributed-*.json"
 ROUTE_FIXTURE = "mok_routes_t2048_e384_k6_seed1234_torch2.10-reserialized.npz"
 ROUTE_IDENTITY = "mok-route-fixture-content-identity.json"
-SELECTED_MEDIAN_MS = 3.983512043952942
+REPLAY_PROVENANCE = "replay-provenance.txt"
+BASE64_CHUNK_CHARACTERS = 384 * 1024
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -50,6 +54,21 @@ def _copy_artifacts(source: Path, destination: Path, names: list[str]) -> list[P
         shutil.copyfile(source_path, destination_path)
         copied.append(destination_path)
     return copied
+
+
+def _copy_npz_as_base64_parts(source: Path, destination: Path, name: str) -> list[Path]:
+    source_path = source / name
+    if not source_path.is_file():
+        raise FileNotFoundError(source_path)
+    encoded = base64.b64encode(source_path.read_bytes()).decode()
+    destination.mkdir(parents=True, exist_ok=True)
+    parts = []
+    for part_index, start in enumerate(range(0, len(encoded), BASE64_CHUNK_CHARACTERS)):
+        part = destination / f"{name}.b64.part{part_index:02d}"
+        chunk = encoded[start : start + BASE64_CHUNK_CHARACTERS]
+        part.write_text("\n".join(textwrap.wrap(chunk, width=120)) + "\n")
+        parts.append(part)
+    return parts
 
 
 def _historical_names(root: Path) -> list[str]:
@@ -115,6 +134,7 @@ def _cache_entries(raw_root: Path) -> list[dict[str, Any]]:
                     "phase": phase,
                     "artifact": str(path.relative_to(raw_root.parent.parent)),
                     "artifact_sha256": file_sha256(path),
+                    "run_schema_version": result["schema_version"],
                     "sample_count": len(timing["rank_max_samples_ms"]),
                     "median_rank_max_ms": timing["median_ms"],
                     "correctness": "passed",
@@ -123,7 +143,35 @@ def _cache_entries(raw_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def _candidate_space(cache_entries: list[dict[str, Any]]) -> dict[str, Any]:
+def _select_candidate(historical_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    competitive = [
+        entry
+        for entry in historical_entries
+        if entry["candidate"]["overlap_policy"] == "shared_with_async_dispatch"
+        and entry["candidate"]["materialization_schedule"] == "tile_flow_boundaries"
+    ]
+    if not competitive:
+        raise ValueError("no correct overlapped tile-flow candidates were measured")
+    best = min(
+        competitive,
+        key=lambda entry: (
+            entry["median_rank_max_ms"],
+            entry["candidate"]["exchange_workers"],
+            entry["candidate"]["fingerprint_sha256"],
+        ),
+    )
+    fingerprint = best["candidate"]["fingerprint_sha256"]
+    confirmation_medians = [
+        entry["median_rank_max_ms"] for entry in competitive if entry["candidate"]["fingerprint_sha256"] == fingerprint
+    ]
+    return {
+        **best["candidate"],
+        "historical_confirmation_count": len(confirmation_medians),
+        "historical_median_of_medians_ms": statistics.median(confirmation_medians),
+    }
+
+
+def _candidate_space(cache_entries: list[dict[str, Any]], selected: dict[str, Any]) -> dict[str, Any]:
     measured_workers = sorted(
         {
             entry["candidate"]["exchange_workers"]
@@ -135,6 +183,7 @@ def _candidate_space(cache_entries: list[dict[str, Any]]) -> dict[str, Any]:
         "schema_version": 1,
         "workload": "gb200_moe_t2048_e384_top6_h7168_i3072_bf16",
         "selection_objective": "minimum median rank-maximum end-to-end latency among correct candidates",
+        "selection_dataset": "raw/schema1 historical search runs; schema2 is a reproducibility replay only",
         "tie_breaker": "lower exchange-worker count, then lexicographic candidate fingerprint",
         "dimensions": {
             "exchange_implementation": ["deepep", "ragged_all_to_all"],
@@ -169,15 +218,14 @@ def _candidate_space(cache_entries: list[dict[str, Any]]) -> dict[str, Any]:
                 "reason": "95.100 ms component result was pruned before distributed composition",
             },
         ],
-        "selected": {
-            "exchange_implementation": "deepep",
-            "segmented_contraction_implementation": "standalone_sm100_grouped_gemm",
-            "exchange_workers": 56,
-            "gate_up_layout": "concatenated_e_2i_k",
-            "overlap_policy": "shared_with_async_dispatch",
-            "materialization_schedule": "tile_flow_boundaries",
-            "historical_two_run_median_of_medians_ms": SELECTED_MEDIAN_MS,
-        },
+        "search_protocol": [
+            "sweep DeepEP communication workers with the initial separate gate/up layout",
+            "confirm the latency turn at 96 workers",
+            "compare concatenated and separate gate/up at 56 and 80 workers",
+            "repeat the lowest-latency correct candidate",
+            "retain sequential and coarse-materialization phases as ablations, not selection candidates",
+        ],
+        "selected": selected,
     }
 
 
@@ -217,12 +265,15 @@ def _manifest(
         "toolchain": {
             "python": "3.12.13",
             "torch": "2.10.0+cu130",
-            "cuda_runtime": "13.0",
+            "torch_cuda": "13.0",
+            "cuda_toolkit_package": "13.0.2",
+            "cuda_runtime_package": "13.0.96",
             "nvcc": "13.0.88",
             "ptxas": "13.0.88",
             "cccl": "13.0.85",
             "cuda_crt": "13.0.88",
             "nvvm": "13.0.88",
+            "nccl": "2.28.9",
             "nvidia_driver": "595.71.05",
             "target": "sm100a",
         },
@@ -231,8 +282,23 @@ def _manifest(
             "gpu": "NVIDIA GB200",
             "compute_capability": "10.0",
             "placement": "one four-GPU low-priority GB200 tray",
+            "replay_reservation": {
+                "priority": "batch",
+                "cpu_cores": 8,
+                "host_memory_gb": 64,
+                "local_disk_gb": 100,
+            },
             "historical_clock_policy": "cluster default; clocks and power telemetry were not captured",
-            "replay_clock_policy": "see schema-2 run telemetry",
+            "replay_clock_policy": {
+                "policy": "cluster default, application clocks deprecated and unpinned",
+                "pre_benchmark_idle_sm_clock_mhz": 120,
+                "timed_phase_telemetry_sm_clock_mhz": 1950,
+                "memory_clock_mhz": 3996,
+                "advertised_max_sm_clock_mhz": 2062,
+                "power_limit_watts": 1200,
+                "sampled_power_draw_watts": [199.83, 757.32],
+                "detail": "raw/schema2 replay records contain per-GPU UUID and per-phase telemetry",
+            },
         },
         "workload": {
             "dtype": "bfloat16",
@@ -249,6 +315,19 @@ def _manifest(
             "warmups": 10,
             "measured_iterations": 50,
             "selection_metric": "median rank-maximum CUDA-event latency",
+        },
+        "oracle": {
+            "implementation": "Mixture-of-Kittens BF16 forward",
+            "communication_sms": 20,
+            "minibatch_size": 2048,
+            "macrobatch_size": 65536,
+            "historical_latency_ms": 3.613,
+            "historical_tflops": 524.2,
+            "replay_warmups": 100,
+            "replay_iterations": 50,
+            "replay_latency_ms": 3.56169593334198,
+            "replay_tflops": 531.7917680184346,
+            "raw_replay": "raw/schema2/mok-forward-sweep-selected.json",
         },
         "correctness": {
             "stablehlo_fixture": "../../../tests/fixtures/stablehlo/moe_region_v1_14_1.mlir.bc.b64",
@@ -268,20 +347,36 @@ def main() -> None:
     schema1_root = output_root / "raw" / "schema1"
     schema2_root = output_root / "raw" / "schema2"
     fixture_root = output_root / "fixtures"
+    for generated_root in (schema1_root, schema2_root, fixture_root):
+        if generated_root.exists():
+            shutil.rmtree(generated_root)
 
     artifact_paths = _copy_artifacts(historical_root, schema1_root, _historical_names(historical_root))
-    artifact_paths.extend(_copy_artifacts(historical_root, fixture_root, [ROUTE_FIXTURE, ROUTE_IDENTITY]))
+    artifact_paths.extend(_copy_artifacts(historical_root, fixture_root, [ROUTE_IDENTITY]))
+    artifact_paths.extend(_copy_npz_as_base64_parts(historical_root, fixture_root, ROUTE_FIXTURE))
     if args.replay_root is not None:
         replay_root = args.replay_root.resolve()
         replay_names = [path.name for path in sorted(replay_root.glob("*.json"))]
         artifact_paths.extend(_copy_artifacts(replay_root, schema2_root, replay_names))
+        artifact_paths.extend(_copy_artifacts(replay_root, schema2_root, [REPLAY_PROVENANCE]))
         semantic_fixture_names = [path.name for path in sorted(replay_root.glob("semantic-fixture-*.npz"))]
-        artifact_paths.extend(_copy_artifacts(replay_root, fixture_root / "schema2", semantic_fixture_names))
+        for fixture_name in semantic_fixture_names:
+            artifact_paths.extend(_copy_npz_as_base64_parts(replay_root, fixture_root / "schema2", fixture_name))
 
-    cache_entries = _cache_entries(schema1_root) + _cache_entries(schema2_root)
+    historical_entries = _cache_entries(schema1_root)
+    replay_entries = _cache_entries(schema2_root)
+    selected = _select_candidate(historical_entries)
+    selected_fingerprint = selected["fingerprint_sha256"]
+    cache_entries = historical_entries + replay_entries
+    for entry in cache_entries:
+        entry["selection_status"] = (
+            "selected_confirmation"
+            if entry["candidate"]["fingerprint_sha256"] == selected_fingerprint
+            else "measured_ablation"
+        )
     candidate_path = output_root / "candidate_space.json"
     cache_path = output_root / "benchmark_cache.json"
-    _write_json(candidate_path, _candidate_space(cache_entries))
+    _write_json(candidate_path, _candidate_space(cache_entries, selected))
     _write_json(
         cache_path,
         {
@@ -297,6 +392,11 @@ def main() -> None:
                 }
             ),
             "entries": cache_entries,
+            "selected_candidate_fingerprint_sha256": selected_fingerprint,
+            "selection_note": (
+                "Only measurements listed in entries participate in selection; failed, pruned, and unmeasured "
+                "alternatives are recorded in candidate_space.json"
+            ),
         },
     )
     artifact_paths.extend((candidate_path, cache_path))

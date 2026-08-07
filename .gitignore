@@ -215,6 +215,9 @@ archive/
 # wandb logs
 wandb
 artifacts
+!lib/tile_lifetime/benchmarks/artifacts/
+!lib/tile_lifetime/benchmarks/artifacts/gb200_moe_v1/
+!lib/tile_lifetime/benchmarks/artifacts/gb200_moe_v1/**
 
 # Ignore generated credentials from google-github-actions/auth
 gha-creds-*.json

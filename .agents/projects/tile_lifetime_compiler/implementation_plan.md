@@ -1,6 +1,6 @@
 # Tile-Lifetime Compiler: First Vertical Slice
 
-The project mission, Flow model, and current first-principles MoE definition of done are defined in [Shuttle: Prototype Brief and Big-Picture Specification](shuttle_brief.md). When this historical implementation plan is narrower or uses older MoK-oriented wording, the Shuttle brief is authoritative.
+The project mission, Flow model, and current first-principles MoE definition of done are defined in [Shuttle: Prototype Brief and Big-Picture Specification](shuttle_brief.md). The long-term compiler model and research sequence are defined in [Shuttle: Whole-Program Synthesis for Machine Learning Systems](whole_program_synthesis.md). When this historical implementation plan is narrower or uses older MoK-oriented wording, those documents are authoritative.
 
 Status: implemented on 2026-08-05. This first vertical slice led to the connected dense-region compiler and executable H100 oracle documented in `lib/tile_lifetime/docs/progress.md`; recognizer variation remains future work.
 
