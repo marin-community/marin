@@ -390,13 +390,17 @@ Creating the secrets:
    from one identity. Reuse the token from Loom's `LOOM_DOTENV`
    (`LOOM_SLACK_BOT_TOKEN`; see `infra/loom`), then
    `echo -n "xoxb-..." | gcloud secrets create marin-grafana-slack-bot-token --project=hai-gcp-models --data-file=-`
-4. Point the bridge at the channel and make sure the bot is in it:
+4. Apply the `marin` GCP stack, which grants the deploy account IAM management on
+   that secret and the runtime account access to it (declared in
+   `infra/pulumi/src/iac/gcp/iam_data.yaml`). Without it the grafana deploy fails
+   granting the runtime account access, even once the value exists.
+5. Point the bridge at the channel and make sure the bot is in it:
    `pulumi config set marin-grafana:slack_alerts_channel <id>` using the channel
    id from `#marin-eng` → Copy link (`C…`), and `/invite @marinbot` there.
    `pulumi up` fails naming the missing key if this is skipped.
-5. (optional, enables email) Gmail app password for grafana@openathena.ai, then
+6. (optional, enables email) Gmail app password for grafana@openathena.ai, then
    `echo -n "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
-6. Send a test notification to `ops-critical` and confirm email arrives, one alert
+7. Send a test notification to `ops-critical` and confirm email arrives, one alert
    message lands in the channel, and its thread gains a triage-session link.
 
 ## Develop
@@ -518,8 +522,8 @@ so the merge-triggered deploy never blocks. The client id is already set, so
 enabling auth is one step (plus its permissions grant):
 
 ```bash
-# Add marin-grafana-github-app-private-key to secret_iam_secrets in
-# infra/permissions/Pulumi.hai-gcp-models.yaml and apply the permissions stack, then:
+# Its grants are already declared in infra/pulumi/src/iac/gcp/iam_data.yaml
+# (infra/permissions, which this used to name, is retired), so:
 gcloud secrets create marin-grafana-github-app-private-key \
   --project=hai-gcp-models --data-file=key.pem
 ```
