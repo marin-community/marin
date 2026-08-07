@@ -196,6 +196,13 @@ author: power
 
 ## Event Log
 
+### 2026-08-07 11:40 UTC - What a bisect rerun must budget, and how to read its job record
+
+- `preemptions=128` on the bisect job is kill accounting, not a restart storm. The three known-clean arms that trained for hundreds of steps and were simply stopped by me report the identical `preemptions=128` against 128 tasks, so the counter tracks tasks torn down rather than attempts lost. Do not read the bisect record as evidence the job was thrashing.
+- The job was stopped deliberately: `iris ... job stop /power/mhf-8rack-oldcode-20260807-coord` is in the session transcript. Nothing external ended it.
+- Where the time went is what matters for a rerun. Every teardown dump puts its rank inside XLA compilation, so the 51 minutes were genuinely spent compiling rather than waiting on placement or reinstalling dependencies. Neither `5e496b051` nor current hero code configures a JAX compilation cache, so nothing about the endpoint makes it uniquely cold.
+- Rerun requirement: budget well past 51 minutes of wall clock before step 0 and gate the run on step-0 arrival rather than on elapsed time, because the useful signal starts at step 17 and the compile is the whole cost until then. A run stopped during compilation returns nothing for the capacity it spends, which is what happened here.
+
 ### 2026-08-07 11:30 UTC - Watch state does not explain the non-reproduction
 
 - Checked the most obvious objection to the null result: watch stats were turned off for hero runs at `eb6a320a18`, while the wedging source `5e496b051` ran `watch=WatchConfig(interval=20)`. If the watch program variant were part of the hazard, disabling it would suppress the wedge and the null would be an artifact of my own change.
