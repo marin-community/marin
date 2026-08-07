@@ -92,10 +92,9 @@ class CompositeReader:
         """The caller's logical schema version for ``table``, or ``None`` if it holds no shards.
 
         A writer compares this against its own contract version to tell a fresh archive from one
-        whose rows predate the current row shape. A table with shards always has a ``_schema.json``
-        (the store writes it at registration), so a missing file there is a corrupt or foreign
-        archive and propagates rather than reading as "fresh" — which would skip the rebuild that a
-        contract change needs.
+        whose rows predate the current row shape. ``None`` means only that the table has no shards:
+        a table that has them but no ``_schema.json`` raises, because reading a corrupt archive as
+        "fresh" would skip the rebuild a contract change needs.
         """
         fs, _ = factory.url_to_fs(self.root)
         if not self._list_shards(fs, table):

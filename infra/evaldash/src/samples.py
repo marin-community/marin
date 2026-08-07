@@ -93,7 +93,8 @@ class SamplesResponse(BaseModel):
     primary_metric: str | None
     metric_columns: tuple[str, ...]
     # Every extraction filter this task stored samples under, and the one this page was drawn from.
-    # A task scored under a single filter reports an empty tuple and a null selection.
+    # A task scored under one named filter reports that one name and selects it; only a task whose
+    # rows carry no filter at all reports an empty tuple and a null selection.
     extraction_filters: tuple[str, ...]
     extraction_filter: str | None
     total: int

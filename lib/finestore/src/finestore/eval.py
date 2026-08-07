@@ -457,8 +457,9 @@ RESULTS_PREFIX = "results_"
 # The archive's own keys on a samples row, added at write time (not EvalSample fields): a sample is
 # unique within a run by its task, its document, the trial that produced it (for multi-attempt Harbor
 # runs), and the extraction filter that scored it (for lm-eval tasks that apply more than one).
-# evalchemy leaves ``trial_id`` empty (one attempt per document); a task with a single filter, or a
-# Harbor trial, leaves ``filter`` empty.
+# evalchemy leaves ``trial_id`` empty (one attempt per document). An lm-eval row names its filter
+# even when the task applies only one ("none"), so the column holds that name; a Harbor trial, or a
+# benchmark that reports no filter at all, leaves it empty.
 TRIAL_ID_COLUMN = "trial_id"
 FILTER_COLUMN = "filter"
 SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, FILTER_COLUMN)
@@ -704,45 +705,33 @@ def export_lm_eval_samples(
     return count
 
 
-def _replace_superseded_samples(out_path: str, superseded_prefix: Callable[[int], str] | None) -> None:
-    """Replace a samples table written under an older contract, or leave a current one alone.
+def stale_samples_version(out_path: str) -> int | None:
+    """The samples table's contract version when it predates the current one, else ``None``.
 
-    Rows an older contract left cannot collapse against the new ones, because the widened merge key
-    reads as null on their shards, so a version change has to replace them wholesale. An export at
-    the current version merges idempotently instead, because identical rows share a digest.
+    Rows an older contract left cannot collapse against new ones, because a widened merge key reads
+    as null on their shards, so a caller writing at the current version has to replace them
+    wholesale. A table already at the current version merges idempotently instead, because identical
+    rows share a digest.
     """
     stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is None or stored_version == SCHEMA_VERSION:
-        return
-    _preserve_and_drop_samples(out_path, superseded_prefix, stored_version)
+        return None
+    return stored_version
 
 
-def _preserve_and_drop_samples(
-    out_path: str, superseded_prefix: Callable[[int], str] | None, stored_version: int
+def preserve_and_replace_samples(
+    out_path: str, stored_version: int, superseded_prefix: Callable[[int], str] | None
 ) -> None:
-    """Copy the samples table out of the run, then drop it.
+    """Snapshot the samples table outside the run, then drop it.
 
-    The copy runs to completion and is size-verified before the drop, so a failure at any point
-    leaves either the original table or a full snapshot of it outside the run; an existing snapshot
-    is never overwritten. Nothing here is allowed to be the only copy of anything, so a caller with
-    nowhere to put the rows is refused rather than served.
-
-    Agentic samples come from Harbor, which writes no lm-eval source, so an lm-eval path that
-    replaced a table holding them would return a table missing that half. It stops instead.
+    The snapshot completes and is size-verified before the drop, so a failure at any point leaves
+    either the original table or a full copy of it; an existing snapshot is never overwritten.
+    Nothing here may be the only copy of anything, so a caller with nowhere to put the rows is
+    refused rather than served.
     """
-    reader = CompositeReader(out_path)
-    stored = reader.scan(ARCHIVE_SAMPLES_TABLE, columns=["kind"])
-    if stored is None:
-        return
-    agentic = sum(1 for kind in stored["kind"].to_pylist() if kind == SampleKind.AGENTIC)
-    if agentic:
-        raise ValueError(
-            f"{out_path} holds {agentic} agentic sample(s) that an lm-eval export cannot regenerate; "
-            "migrate the run instead of replacing its samples table"
-        )
     if superseded_prefix is None:
         raise ValueError(
-            f"{out_path} holds schema v{stored_version} samples that an export at v{SCHEMA_VERSION} has "
+            f"{out_path} holds schema v{stored_version} samples that a writer at v{SCHEMA_VERSION} has "
             "to replace; pass superseded_prefix to say where they are preserved first"
         )
     destination = superseded_prefix(stored_version)
@@ -754,6 +743,28 @@ def _preserve_and_drop_samples(
         destination,
     )
     replace_table(out_path, ARCHIVE_SAMPLES_TABLE, destination)
+
+
+def _replace_superseded_samples(out_path: str, superseded_prefix: Callable[[int], str] | None) -> None:
+    """Replace a samples table an lm-eval export supersedes, refusing one it cannot reproduce.
+
+    Agentic samples come from Harbor, which writes no lm-eval source, so an lm-eval path that
+    replaced a table holding them would leave a table missing that half. It stops instead; a
+    migration, whose legacy parquets do reproduce those rows, replaces the table directly.
+    """
+    stored_version = stale_samples_version(out_path)
+    if stored_version is None:
+        return
+    stored = CompositeReader(out_path).scan(ARCHIVE_SAMPLES_TABLE, columns=["kind"])
+    if stored is None:
+        return
+    agentic = sum(1 for kind in stored["kind"].to_pylist() if kind == SampleKind.AGENTIC)
+    if agentic:
+        raise ValueError(
+            f"{out_path} holds {agentic} agentic sample(s) that an lm-eval export cannot regenerate; "
+            "migrate the run instead of replacing its samples table"
+        )
+    preserve_and_replace_samples(out_path, stored_version, superseded_prefix)
 
 
 def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> int:
@@ -812,7 +823,7 @@ def rebuild_lm_eval_samples(
     # merged into: rows written under an older merge key would otherwise survive beside the new ones.
     stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is not None:
-        _preserve_and_drop_samples(out_path, superseded_prefix, stored_version)
+        preserve_and_replace_samples(out_path, stored_version, superseded_prefix)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:

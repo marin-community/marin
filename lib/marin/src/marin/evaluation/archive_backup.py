@@ -17,6 +17,7 @@ from rigging.filesystem import (
     get_bucket_location,
     load_cluster_config,
     marin_temp_bucket,
+    prefix_join,
     use_data_config,
 )
 
@@ -67,4 +68,4 @@ def superseded_samples_prefix(results_path: str, schema_version: int) -> str:
     Keyed by the version being replaced, so a run carried across two contract changes keeps a
     snapshot of each rather than overwriting the first.
     """
-    return f"{run_backup_prefix(results_path, SUPERSEDED_SAMPLES_KIND)}/v{schema_version}"
+    return prefix_join(run_backup_prefix(results_path, SUPERSEDED_SAMPLES_KIND), f"v{schema_version}")

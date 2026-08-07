@@ -34,17 +34,17 @@ from finestore.eval import (
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
-    SCHEMA_VERSION,
     TRIAL_ID_COLUMN,
     EvalSample,
     EvaluationStore,
     SampleKind,
     StepRecord,
+    preserve_and_replace_samples,
     sample_from_archive_row,
+    stale_samples_version,
     trajectory_step_rows,
 )
 from finestore.reader import CompositeReader
-from finestore.store import replace_table
 from marin.evaluation.archive_backup import legacy_archive_prefix, superseded_samples_prefix
 from marin.evaluation.records import list_records
 from rigging.filesystem import StoragePath, url_to_fs
@@ -203,19 +203,17 @@ def _legacy_sample_inventory(files: Iterable[LegacySampleFile]) -> tuple[int, di
 def _replace_stale_samples(results_path: str) -> None:
     """Clear a samples table written under an older contract, preserving it outside the run first.
 
-    The legacy parquets this migration reads are the complete source for the table, including the
-    agentic rows an lm-eval export could not reproduce, so replacing the whole table is sound here.
-    It is also necessary: rows written under a narrower merge key cannot collapse against the new
-    ones and would survive beside them as duplicates.
+    The legacy parquets this migration reads reproduce every row of the table, including the agentic
+    ones an lm-eval export cannot, so replacing it outright is sound here where an export refuses. It
+    is also necessary: rows written under a narrower merge key cannot collapse against the new ones
+    and would survive beside them as duplicates.
     """
-    stored_version = CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE)
-    if stored_version is None or stored_version == SCHEMA_VERSION:
+    stored_version = stale_samples_version(results_path)
+    if stored_version is None:
         return
-    destination = superseded_samples_prefix(results_path, stored_version)
-    logger.info(
-        "migration replaces %s samples at schema v%s, preserved at %s", results_path, stored_version, destination
+    preserve_and_replace_samples(
+        results_path, stored_version, lambda version: superseded_samples_prefix(results_path, version)
     )
-    replace_table(results_path, ARCHIVE_SAMPLES_TABLE, destination)
 
 
 def migrate_run(

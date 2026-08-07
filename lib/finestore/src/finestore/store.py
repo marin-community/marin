@@ -67,13 +67,15 @@ def copy_table(root: str, table: str, destination: str) -> int:
     copy must not overwrite it. Each copy's size is verified against its source before this returns,
     so a caller may treat success as licence to delete the originals.
     """
-    source_fs, source_root = factory.url_to_fs(prefix_join(root, table))
-    destination_fs, destination_root = factory.url_to_fs(destination)
-    if not source_fs.exists(source_root):
+    source_root = StoragePath(prefix_join(root, table))
+    source_fs, source_key = factory.url_to_fs(str(source_root))
+    destination_fs, _ = factory.url_to_fs(destination)
+    if not source_fs.exists(source_key):
         return 0
     copied = 0
-    for source in source_fs.find(source_root):
-        target = f"{destination_root.rstrip('/')}/{source[len(source_root) :].lstrip('/')}"
+    for source in source_fs.find(source_key):
+        relative = source[len(source_key) :].strip("/")
+        _, target = factory.url_to_fs(prefix_join(destination, relative))
         if destination_fs.exists(target):
             continue
         destination_fs.makedirs(target.rsplit("/", 1)[0], exist_ok=True)

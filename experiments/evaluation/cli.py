@@ -282,12 +282,10 @@ def _resolve_prefixes(prefixes: tuple[str, ...], results_paths: tuple[str, ...])
 
 
 def _backfill_one(results_path: str) -> SweepOutcome:
-    """Export one archive unless a completed export already brought it to the current contract.
-
-    Both halves matter: the version alone is stamped as soon as the new table is created, so an
-    export that died partway would otherwise read as current and never be retried.
-    """
+    """Export one archive unless a completed export already brought it to the current contract."""
     reader = CompositeReader(results_path)
+    # The version alone is stamped as soon as the new table is created, so an export that died
+    # partway would read as current and never be retried. The seal is what says it finished.
     if reader.schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION and reader.is_sealed():
         return SweepOutcome("already_current", "current")
     written = export_lm_eval_samples(
