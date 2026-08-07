@@ -73,13 +73,6 @@ from .conftest import (
 # =============================================================================
 
 
-@pytest.fixture
-def fresh_launch_provenance():
-    _capture_once.cache_clear()
-    yield
-    _capture_once.cache_clear()
-
-
 def _register_worker(state: ControllerTestState, worker_id: WorkerId) -> None:
     metadata = job_pb2.WorkerMetadata(
         hostname=str(worker_id),
@@ -792,8 +785,10 @@ def test_get_job_status_redacts_sensitive_env_vars(service):
 def test_sensitive_cli_env_value_absent_from_status_and_launch_provenance(
     service,
     monkeypatch,
-    fresh_launch_provenance,
+    request,
 ):
+    _capture_once.cache_clear()
+    request.addfinalizer(_capture_once.cache_clear)
     sentinel = "sentinel-wandb-value"
     argv = ["iris", "job", "run", "-e", "WANDB_API_KEY", sentinel, "--", "python", "train.py"]
     monkeypatch.setattr(sys, "argv", argv)
