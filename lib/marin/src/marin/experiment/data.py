@@ -31,6 +31,7 @@ from collections.abc import Callable, Mapping, Sequence
 import click
 from fray.types import ResourceConfig
 from levanter.data.text.datasets import DEFAULT_LM_DATA_SHUFFLE, BlockShuffleConfig, LmDataConfig, UrlDatasetSourceConfig
+from levanter.data.text.examples import PaddingTargetLoss
 from levanter.data.text.formats import TextLmDatasetFormat
 from rigging.filesystem import prefix_join
 
@@ -268,6 +269,7 @@ def mixture(
     *,
     validation: Sequence[ArtifactStep[TokenizedCache]] = (),
     shuffle: bool | BlockShuffleConfig = DEFAULT_LM_DATA_SHUFFLE,
+    padding_target_loss: PaddingTargetLoss = "mask",
 ) -> LmDataConfig:
     """Assemble an ``LmDataConfig`` from dataset handles.
 
@@ -279,6 +281,10 @@ def mixture(
     contribution is the sorted ``{name@version: weight}`` map; the tokenizer is determined by
     the chosen datasets and verified at run time. Call this inside a consumer's ``build_config``
     and pass the same handles as the step's ``deps`` so they materialize first.
+
+    ``padding_target_loss="include"`` includes positions whose next token is padding in
+    the loss. That changes the objective and loss scale; use it only when that behavior
+    is intentional.
     """
     handles = [*train, *validation]
     if not handles:
@@ -299,6 +305,7 @@ def mixture(
             cache_dir=None,
             shuffle=shuffle,
             permutation_type="feistel",
+            padding_target_loss=padding_target_loss,
         )
 
     components = {}
@@ -325,6 +332,7 @@ def mixture(
         cache_dir=None,
         shuffle=shuffle,
         permutation_type="feistel",
+        padding_target_loss=padding_target_loss,
     )
 
 
