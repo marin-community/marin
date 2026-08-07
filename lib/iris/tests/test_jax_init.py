@@ -536,6 +536,22 @@ def test_remote_cache_leaves_xla_flags_alone_without_gpus(tmp_path) -> None:
         assert "XLA_FLAGS" not in os.environ
 
 
+@pytest.mark.parametrize("mount", ["missing", "file-shadowed"])
+def test_remote_cache_skips_the_autotune_flag_when_the_mount_is_unusable(tmp_path, mount) -> None:
+    """No mount, or a file where the autotune dir belongs: skip the flag, don't abort JAX init."""
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        if mount == "missing":
+            scratch_cache_path = str(tmp_path / "never-mounted")
+        else:
+            (scratch_cache_dir / "xla").write_bytes(b"")
+            scratch_cache_path = str(scratch_cache_dir)
+        with patch.object(jax_init_module, "SCRATCH_CACHE_PATH", scratch_cache_path):
+            with patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"):
+                configure_jax_compilation_cache()
+
+        assert "XLA_FLAGS" not in os.environ
+
+
 def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
     """An operator-chosen autotune directory wins over the node mount."""
     with _isolated_jax_cache_config(), _gpu_task(tmp_path):

@@ -11,6 +11,7 @@ entry point bound into ``cutlass.jax.primitive``, the in-process
 
 import dataclasses
 import hashlib
+import importlib
 import sys
 import textwrap
 import types
@@ -142,6 +143,9 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
     for revision in ("original", "edited"):
         name = f"edited_launcher_{revision}"
         (module_dir / f"{name}.py").write_text(f"# revision: {revision}\n{source}")
+        # The import system caches each directory's listing against its mtime, so a
+        # second file written inside one mtime tick is invisible to the finder.
+        importlib.invalidate_caches()
         module = __import__(name)
         fake_cutlass.forget_process_state()
         install(cache)
@@ -174,4 +178,27 @@ def test_a_specification_that_reprs_an_address_is_not_stored(fake_cutlass, tmp_p
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), object())
 
     assert fake_cutlass.compiled == ["tile128-bf16"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unwritable_store_compiles_without_failing(fake_cutlass, tmp_path):
+    """The store follows the compilation cache dir, which a task may not be able to write."""
+    blocked = tmp_path / "file"
+    blocked.write_bytes(b"")
+    install(CutlassKernelCache(directory=str(blocked / "kernels")))
+
+    result = fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+
+    assert fake_cutlass.compiled == ["tile128-bf16"]
+    assert result.module == b"objectcode:tile128-bf16:FakeFunctionSpec(shape=(8, 16))"
+
+
+def test_install_is_a_noop_when_cutlass_jax_will_not_import(fake_cutlass, monkeypatch, tmp_path):
+    """A CPU task on the GPU image has the package but no CUDA bindings to import it with."""
+    monkeypatch.setitem(sys.modules, "cutlass.jax.primitive", None)
+
+    install(CutlassKernelCache(directory=str(tmp_path)))
+
+    # Nothing was patched, so the compile never reaches the store.
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
     assert list(tmp_path.iterdir()) == []

@@ -120,6 +120,10 @@ def _enable_node_local_xla_autotune_cache() -> None:
     so it stays out of the compilation cache key.
 
     GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
+
+    The mount arrives with the worker, and VM-cluster workers restart on their own
+    daily schedule. For up to a day after a rollout a task can land on a worker
+    whose mount is absent or unwritable; skip the cache there.
     """
     if TaskResources.from_environment().gpu_count == 0:
         return
@@ -133,7 +137,12 @@ def _enable_node_local_xla_autotune_cache() -> None:
         return
 
     autotune_dir = f"{SCRATCH_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
-    os.makedirs(autotune_dir, exist_ok=True)
+    try:
+        os.makedirs(autotune_dir, exist_ok=True)
+    except OSError as exc:
+        logger.info("XLA autotune cache disabled: cannot create %s: %s", autotune_dir, exc)
+        return
+
     os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
     logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
 
