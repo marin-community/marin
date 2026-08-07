@@ -62,10 +62,19 @@ HERO_FSDP_RUNTIME_ENV = {
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
-HERO_EXECUTION_TERMINATE_TIMEOUT = 60.0
+# The deadman is armed per execution, and at 2 racks the first `jit_train_step` execution
+# measured 261s: it carries ncclCommSplit across every rank, lazy CUDA module loading, and
+# a PGLE profile pass that a steady-state 18.5s step does not. 600s clears that first step
+# with margin while still ending a permanent wedge in ten minutes.
+HERO_EXECUTION_TERMINATE_TIMEOUT = 600.0
 HERO_SUPERVISOR_WALL_TIMEOUT = 12 * 60 * 60.0
+# Reporting pending thunks on timeout throws std::bad_alloc / std::length_error on a module
+# this size, replacing the abort diagnostic with an allocation error. Keep it off until that
+# is fixed upstream: an accurate "execution timed out" beats a corrupt thunk list.
+HERO_PROGRESS_TRACKING = 0
 HERO_DETECTION_CONFIG = DetectionConfig(
     execution_terminate_timeout_seconds=HERO_EXECUTION_TERMINATE_TIMEOUT,
+    progress_tracking=HERO_PROGRESS_TRACKING,
     enable_recoverability=False,
 )
 

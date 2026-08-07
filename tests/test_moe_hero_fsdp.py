@@ -78,3 +78,11 @@ def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypa
         train.run_grug(config)
 
         assert os.environ["XLA_FLAGS"] == explicit_flags
+
+
+def test_hero_detection_clears_the_measured_first_execution():
+    """The deadman must exceed a cold first execution or it fires before step 1 every run."""
+    measured_first_execution = 261.0
+    assert train.HERO_DETECTION_CONFIG.execution_terminate_timeout_seconds > measured_first_execution
+    # Thunk reporting throws std::bad_alloc on a module this size, destroying the diagnostic.
+    assert train.HERO_DETECTION_CONFIG.progress_tracking == 0
