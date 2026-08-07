@@ -1496,6 +1496,14 @@ secrets:
   - role: roles/secretmanager.secretAccessor
     members:
     - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
+- secret: marin-grafana-slack-bot-token
+  grants:
+  - role: projects/hai-gcp-models/roles/marinSecretIamManager
+    members:
+    - serviceAccount:marin-cd-cloud-run-deploy@hai-gcp-models.iam.gserviceaccount.com
+  - role: roles/secretmanager.secretAccessor
+    members:
+    - serviceAccount:marin-grafana@hai-gcp-models.iam.gserviceaccount.com
 - secret: marin-grafana-slack-webhook
   grants:
   - role: projects/hai-gcp-models/roles/marinSecretIamManager
