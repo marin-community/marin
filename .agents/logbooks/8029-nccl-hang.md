@@ -196,6 +196,14 @@ author: power
 
 ## Event Log
 
+### 2026-08-07 08:55 UTC - Node health sampling was underpowered; old-code bisect staged
+
+- Sampled 20 GPUs across five racks of the live allocation: zero correctable and uncorrectable row remaps, no pending or failed remaps, zero volatile ECC.
+- This does not distinguish the allocation from the wedging one. [wiki:85](https://echo.oa.dev/wiki/85) reports only 7 of 512 GPUs carried remaps (~1.4%), so drawing 20 and seeing none is the expected result either way. Deciding it properly needs all 512.
+- It would also not be decisive if it were powered: the incident records every remap and PCIe replay counter as unchanged from 22:20 through termination, so remaps are background state rather than a proximate cause.
+- Staged the decisive bisect endpoint instead: worktree at `5e496b051` (the wedging source) in `/tmp/wedge-old`. Config verified faithful — `watch=WatchConfig(interval=20)`, `expert_axis_size=1`, `replica_axis_size=dp_racks`, 1024 batch per rack, and no NCCL pin so it resolves the image default 2.28.9.
+- Not launched. It needs a venv sync for the old lockfile and a job swap, and capacity is contended. Priors also favour a null: #8029 records the wedge surviving changes to NCCL, image, process layout, collective structure, attention, MoE, data, layer count, MNNVL, NVLS, PGLE and overlap, and wiki:85 states no code or configuration changed for that incident. Run it when capacity is free; it is decisive either way, since a clean result closes the software question and a wedge localises the fix to the 58-commit window.
+
 ### 2026-08-07 08:40 UTC - Twelve racks will not schedule; capacity is contended
 
 - `mhf-12rack-1ppg-stock-20260807` held all 192 tasks in `building`/`SchedulingGated` behind Kueue for 30 minutes with zero placement (`pod does not have a host assigned`). Cancelled.
