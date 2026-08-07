@@ -10,14 +10,15 @@ from pathlib import Path
 
 import marin.inference.vllm_server as vllm_server
 import pytest
-from marin.inference.vllm_release import MARIN_VLLM_GPU_RELEASE
+from marin.external_dependencies import VLLM_GPU_RELEASE
+from marin.inference.vllm_release import vllm_gpu_wheel_for_architecture, vllm_gpu_wheel_provenance
 
-VERSION = MARIN_VLLM_GPU_RELEASE.version
-WHEEL = MARIN_VLLM_GPU_RELEASE.wheel_for_architecture("x86_64")
+VERSION = VLLM_GPU_RELEASE.version
+WHEEL = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, "x86_64")
 
 
 def _provenance() -> dict[str, object]:
-    return json.loads(json.dumps(dataclasses.asdict(MARIN_VLLM_GPU_RELEASE.provenance(WHEEL))))
+    return json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, WHEEL))))
 
 
 def _write_fake_vllm(

@@ -29,10 +29,14 @@ from rigging.telemetry.probes import nccl
 from rigging.telemetry.probes.runner import PeriodicProbe
 from rigging.telemetry.prometheus import PrometheusCollector, PrometheusScraper, prefixed_metric_snapshots
 
-from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import TPU_INFERENCE_FORK_REQUIREMENT, VLLM_FORK_REQUIREMENT, VLLM_GPU_RELEASE
 from marin.inference.config import WORKER_PYTHON_VERSION, InferenceModelConfig, VllmCompilationCacheMode
 from marin.inference.vllm_cache import VllmCompilationCache, VllmCompileIdentity
-from marin.inference.vllm_release import MARIN_VLLM_GPU_RELEASE
+from marin.inference.vllm_release import (
+    current_vllm_gpu_wheel,
+    vllm_gpu_wheel_provenance,
+    vllm_gpu_wheel_requirement,
+)
 
 logger = logging.getLogger(__name__)
 # Bounded tail for the failure path and diagnostics(); the full stream reaches the job log, so
@@ -151,11 +155,13 @@ class IsolatedCudaVllm:
 
     def _install(self) -> _CudaVllmInstall:
         if self.source is VllmType.MARIN_FORK:
-            wheel = MARIN_VLLM_GPU_RELEASE.wheel_for_current_platform()
-            provenance = json.dumps(dataclasses.asdict(MARIN_VLLM_GPU_RELEASE.provenance(wheel)), sort_keys=True)
+            wheel = current_vllm_gpu_wheel(VLLM_GPU_RELEASE)
+            provenance = json.dumps(
+                dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel)), sort_keys=True
+            )
             return _CudaVllmInstall(
-                requirement=wheel.requirement(),
-                torch_backend=MARIN_VLLM_GPU_RELEASE.torch_backend,
+                requirement=vllm_gpu_wheel_requirement(wheel),
+                torch_backend=VLLM_GPU_RELEASE.torch_backend,
                 executable="python",
                 executable_args=(str(Path(__file__).with_name("vllm_wheel_entrypoint.py")), provenance),
             )

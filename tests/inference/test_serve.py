@@ -20,6 +20,7 @@ from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -53,7 +54,11 @@ from marin.inference.levanter_backend import (
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
-from marin.inference.vllm_release import MARIN_VLLM_GPU_RELEASE
+from marin.inference.vllm_release import (
+    vllm_gpu_wheel_for_architecture,
+    vllm_gpu_wheel_provenance,
+    vllm_gpu_wheel_requirement,
+)
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -196,14 +201,14 @@ def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine)
     launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
     cmd = launcher.command()
     requirement = cmd[cmd.index("--from") + 1]
-    wheel = MARIN_VLLM_GPU_RELEASE.wheel_for_architecture(machine)
-    assert requirement == wheel.requirement()
+    wheel = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, machine)
+    assert requirement == vllm_gpu_wheel_requirement(wheel)
     assert requirement.startswith("vllm @ https://github.com/marin-community/vllm/releases/download/")
     assert "#sha256=" in requirement
-    assert cmd[cmd.index("--torch-backend") + 1] == MARIN_VLLM_GPU_RELEASE.torch_backend
+    assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
     python_index = cmd.index("python")
     assert Path(cmd[python_index + 1]).name == "vllm_wheel_entrypoint.py"
-    expected_provenance = json.loads(json.dumps(dataclasses.asdict(MARIN_VLLM_GPU_RELEASE.provenance(wheel))))
+    expected_provenance = json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
     assert json.loads(cmd[python_index + 2]) == expected_provenance
     env = launcher.env()
     assert "VLLM_USE_PRECOMPILED" not in env
