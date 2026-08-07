@@ -17,7 +17,7 @@ author: dlwh
 ## Current TL;DR
 
 - `GRUG-XEM-001` passed the d512 architecture gate on matched 1.44B-token runs in `us-central1`. Pairwise unscaled and `1/sqrt(g)` tying finished +0.02050 and +0.02203 Paloma macro loss above the 3.58622 untied control; middle-four variants finished +0.03817 and +0.04541, all inside their screening thresholds. Routing remained healthy and middle-four tying removed 50% of unique routed-expert parameters.
-- `GRUG-XEM-002` is running the layers 2-3 spectral-plus-prefit conversion in `us-central1` from the matched untied checkpoint. Calibration is committed; the current retry is in matching after two fixed sharding failures. No downstream artifact is being launched until matching commits.
+- `GRUG-XEM-002` completed the layers 2-3 spectral-plus-prefit conversion in `us-central1`. After 50M local-recovery and 200M preservation tokens, the student is +0.02611 validation loss and +0.02638 Paloma macro loss above the untied teacher. This recovers about two-thirds of the initial gap, but misses the +0.01-0.02 validation target and reaches the Paloma +0.03 bound only after the proposed 100M-token budget.
 - `GRUG-XEM-003` ports explicit expert banks and legacy-checkpoint migration into the array-stacked June 67B-A2B implementation. The selected no-copy teacher, data caches, eval caches, output bucket, and TPU resources are all in `us-central2`; no checkpoint payload has been read outside that region.
 - `GRUG-XEM-004` is the d768 scale comparison tracked in issue #8032. Its matched untied, two-anchor unscaled, and two-anchor `1/sqrt(g)` smoke configurations are ready on central1-only data and outputs.
 - The isolated branch is `research/grug-cross-layer-expert-merging` in `/tmp/marin-grug-xem`. It has not been pushed, and no PR exists.
@@ -32,19 +32,17 @@ author: dlwh
 
 ### Active
 
-- `GRUG-XEM-H4`: Functional matching plus shared-bank prefit can merge one adjacent middle-layer pair more efficiently than identity-ID conversion. Current test: layers 2-3 spectral-plus-prefit pipeline from the matched d512 untied checkpoint.
-- `GRUG-XEM-H5`: Covariance-aware finite-difference spectral matching materially improves immediate MoE error, validation-loss spike, or recovery tokens over native-state-only matching. Next test: compare saved identity, native-only, and spectral cost matrices on the same calibration artifact; drop spectral probes if they miss the stated 15%/20% gates.
+- `GRUG-XEM-H4`: Functional matching plus shared-bank prefit can merge one adjacent middle-layer pair with partial aggregate recovery. Current result: spectral-plus-prefit recovered about two-thirds of the teacher gap after 250M total recovery tokens, but did not pass the strict single-pair gate. Next test: compare against the tied-from-scratch reference before changing the recovery objective or expanding to two pairs.
 - `GRUG-XEM-H6`: A recent June 67B-A2B checkpoint admits a one-pair middle-layer merge without cross-region checkpoint or data movement. Next test: validate legacy schema migration locally, then dispatch a central2-only one-pair smoke from step 105149 after the d512 surgery gate passes.
 - `GRUG-XEM-H7`: The tied-minus-untied loss gap diminishes at d768 when four middle layers share one bank behind two-layer input and output anchors. Next test: matched d768 untied, unscaled-tied, and `1/sqrt(g)`-tied runs at `2.81e18` FLOPs.
 
 ### Blocked
 
-- `GRUG-XEM-H5`: Blocker: the shared spectral matching artifact has not committed. Resume when: the current matching retry succeeds, then launch the identity/native/spectral comparisons against the same artifact.
 - `GRUG-XEM-H6`: Blocker: d512 surgery has not passed and the June checkpoint adapter is not yet validated. Resume when: both gates pass.
 
 ### Falsified / Dead End
 
-- None.
+- `GRUG-XEM-H5`: Spectral matching missed its gate. Relative to native-only matching it improved the common assignment objective by 0.5%, Stage-A MoE loss by 1.1%, and the final combined spectral-plus-prefit recovery gap by 6-7%; none reaches the required 15%/20% margin. Keep spectral probes as diagnostics, not the production initializer.
 
 ### Promoted
 
@@ -420,3 +418,34 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
   Layer-2/layer-3 block NRMSE finished at 0.086370/0.221102. Routing entropy finished at 5.5314/5.5319, top-k teacher agreement at 0.9285/0.9099, and capacity overflow at zero. The controller succeeded without application failure or preemption. The output committed `.artifact.json` and a permanent step-1526 checkpoint with `manifest.ocdbt`, `merge_manifest.json`, and `metadata.json`.
 - Interpretation: recovery passes the final Paloma `+0.03` screening threshold at 200 million tokens but misses the stricter `+0.01` to `+0.02` validation-loss target and did not do so by the preferred 100-million-token horizon. Layer-3 MoE error continues downward, while layer-2 MoE error rises as its router adapts. The conversion is promising but does not pass the full single-pair surgery gate.
 - Next action: compare against the separately owned spectral-plus-prefit arm if it completes. Do not advance to two middle pairs until a recovery variant closes the remaining validation gap or the gate is explicitly revised.
+
+### 2026-08-07 16:50 - GRUG-XEM-002 spectral-plus-prefit recovery result
+
+- Hypothesis: Spectral assignment plus offline shared-bank prefit materially reduces one-pair conversion error and reaches the untied teacher within the 100-million-token recovery gate.
+- Commit Hash: `f54e315ff92084fd3f11b7d1935c7c982aa82ca3`; source teacher commit `884b213ff4`.
+- Commands:
+  - `iris --controller-url=http://localhost:10000 job summary /dlwh/grug-xem-merge-spectral-prefit-r4-20260806`
+  - `iris --controller-url=http://localhost:10000 job summary /dlwh/grug-xem-merge-spectral-prefit-r4-20260806/grug-train-grug-xem-spectral_prefit-stage-b-d512-l2-l3`
+  - `gcloud storage ls` and `gcloud storage cat` over the matching, prefit, conversion, Stage-A, and Stage-B roots under `gs://marin-us-central1/grug/expert_merge/d512/`.
+  - W&B API queries by exact display name and `config.run_id` for `grug-xem-spectral_prefit-stage-b-d512-l2-l3`.
+- Config: layers 2-3 share one 256-expert bank. Spectral matching used the common native-plus-tangent objective and Hungarian assignment. Offline prefit ran 2,000 AdamW steps at `1e-4`; Stage A trained only the bank for 50M tokens; Stage B trained the bank and affected routers for 200M tokens with CE, `lambda_moe=1.0`, and `lambda_KL=0.1`.
+- Result:
+
+  | Recovery point | Validation delta | Paloma macro delta | Paloma macro |
+  |---|---:|---:|---:|
+  | Converted, 0 tokens | +0.078243 | +0.079437 | 3.585186 |
+  | Stage A, 25M | +0.056781 | +0.057416 | 3.563165 |
+  | Stage A, 50M / Stage B initialization | +0.049134 | +0.049702 | 3.555451 |
+  | Stage B, 25M | +0.039620 | +0.040201 | 3.545950 |
+  | Stage B, 100M | +0.031165 | +0.031286 | 3.537036 |
+  | Stage B, 200M | +0.026114 | +0.026380 | 3.532129 |
+
+  The complete recovery trajectory closes 66.6% of the initial validation gap and 66.8% of the initial Paloma macro gap. At 200M Stage-B tokens, native-only matching is +0.028132 validation and +0.028137 Paloma macro; the combined spectral-plus-prefit branch leaves 7.2% and 6.2% smaller gaps. At the no-prefit Stage-A checkpoint, spectral improves native MoE loss by only 1.1%, and the common matching objective differs by 0.5%. Spectral matching therefore misses the 15% initialization gate.
+
+  Prefit has a clear initialization effect but a modest surviving end-to-end benefit. It lowers the spectral branch's token-0 validation spike from +0.192147 without prefit to +0.078243 and its 25M Stage-A validation gap from +0.072868 to +0.056781. The final 200M comparison cannot isolate prefit from spectral assignment, and its 6-7% advantage over native is below the gate.
+
+  Final aggregate routed-MoE NRMSE is 0.47533, with layer 2/3 at 0.33882/0.58059 and block-output NRMSE at 0.08804/0.21336. Router entropy is 5.531/5.532, capacity overflow is zero, top-1 teacher agreement is 0.9371/0.9119, and throughput is 285,452 tokens/s. Stage B trades some layer-2 fidelity for layer-3 improvement; aggregate MoE NRMSE plateaus even as validation quality continues to recover.
+
+  Iris reports the controller and Stage-B child succeeded with exit 0, zero failures, and zero preemptions. The final checkpoint contains `metadata.json`, `manifest.ocdbt`, and `merge_manifest.json` at `gs://marin-us-central1/grug/expert_merge/d512/spectral_prefit/stage-b/2026.08.06/checkpoints/step-1526/`. Artifact markers exist for matching, prefit, conversion, Stage A, and Stage B. The custom recovery worker did not create a W&B run; exact-name and config-ID queries returned no match, so the versioned GCS evaluation and training JSON files are the canonical metric record for this run.
+- Interpretation: the aggregate routed-MoE surgery is recoverable but does not pass the strict single-pair gate. It reaches the Paloma +0.03 bound only after 200M Stage-B tokens, twice the proposed budget, and never reaches the +0.01-0.02 validation target. Healthy routing rules out collapse as the limiting failure. Spectral probes do not justify their complexity; retain them only as diagnostics. Offline prefit helps the starting point and early recovery, but its final advantage is too small and confounded to support a production requirement.
+- Next action: do not expand to two middle pairs. Compare the final student with the pairwise tied-from-scratch reference to separate architectural from surgery loss, then test a simpler native initializer with aggregate layer-function distillation before revisiting assignment machinery.
