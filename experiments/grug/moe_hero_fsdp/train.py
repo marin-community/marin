@@ -67,7 +67,14 @@ XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 # a PGLE profile pass that a steady-state 18.5s step does not. 600s clears that first step
 # with margin while still ending a permanent wedge in ten minutes.
 HERO_EXECUTION_TERMINATE_TIMEOUT = 600.0
-HERO_SUPERVISOR_WALL_TIMEOUT = 12 * 60 * 60.0
+# The supervisor deadman bounds heartbeat staleness, not wall clock, and the trainer touches
+# the heartbeat every step (~35s at 8 racks). Thirty minutes is unambiguous while still
+# clearing the cold first execution. It only backstops wedges that stall outside an XLA
+# execution; the per-execution deadman above is the primary detector. Sizing matters for a
+# sweep, where every arm shares one allocation and a loose bound spends the rest of it.
+HERO_HEARTBEAT_DEADMAN = 30 * 60.0
+# First heartbeat trails process start by imports, data cache open, mesh init and compilation.
+HERO_STARTUP_TIMEOUT = 60 * 60.0
 # Reporting pending thunks on timeout throws std::bad_alloc / std::length_error on a module
 # this size, replacing the abort diagnostic with an allocation error. Keep it off until that
 # is fixed upstream: an accurate "execution timed out" beats a corrupt thunk list.
@@ -724,8 +731,8 @@ def _run_grug_supervised_local(config: GrugRunConfig) -> None:
         # The production loop does not yet emit the recovery heartbeat. Keep the
         # host watchdog outside the coordinator's 12-hour deadline; XLA's
         # per-execution deadman and ProgressWatchdog remain active in the child.
-        deadman_timeout=HERO_SUPERVISOR_WALL_TIMEOUT,
-        startup_timeout=HERO_SUPERVISOR_WALL_TIMEOUT,
+        deadman_timeout=HERO_HEARTBEAT_DEADMAN,
+        startup_timeout=HERO_STARTUP_TIMEOUT,
         max_restarts_per_run=0,
     ) as supervisor:
         result = supervisor.run(_run_grug_local, config, label=run_id)
@@ -782,8 +789,8 @@ def _run_grug_sweep_local(config: GrugAblationSweepConfig) -> None:
     outcomes: list[tuple[AblationSpec, RunResult]] = []
     with GPUHangSupervisor(
         detection=HERO_DETECTION_CONFIG,
-        deadman_timeout=HERO_SUPERVISOR_WALL_TIMEOUT,
-        startup_timeout=HERO_SUPERVISOR_WALL_TIMEOUT,
+        deadman_timeout=HERO_HEARTBEAT_DEADMAN,
+        startup_timeout=HERO_STARTUP_TIMEOUT,
         max_restarts_per_run=0,
     ) as supervisor:
         for arm, run in zip(config.arms, config.runs, strict=True):
