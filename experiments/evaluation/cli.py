@@ -30,6 +30,7 @@ from finestore.reader import CompositeReader
 from iris.cli.connect import open_iris_client
 from iris.rpc import job_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
+from marin.evaluation.archive_backup import superseded_samples_prefix
 from marin.evaluation.harbor.runner import canonical_served_name
 from marin.evaluation.hardware import Platform, default_platform
 from marin.evaluation.model_config import ModelConfig, load_model_config
@@ -279,7 +280,11 @@ def _backfill_one(results_path: str) -> SweepOutcome:
     """Export one archive unless it already matches the current contract."""
     if CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE) == SCHEMA_VERSION:
         return SweepOutcome("already_current", "current")
-    return SweepOutcome("exported", f"{export_lm_eval_samples(results_path)} sample(s)")
+    written = export_lm_eval_samples(
+        results_path,
+        superseded_prefix=lambda version: superseded_samples_prefix(results_path, version),
+    )
+    return SweepOutcome("exported", f"{written} sample(s)")
 
 
 def _sweep_archives(records: list, workers: int, work: Callable[[str], SweepOutcome], /) -> None:
@@ -345,7 +350,11 @@ def _rebuild_one(results_path: str) -> SweepOutcome:
     """Rebuild one archive from its preserved sources, or report that it has none."""
     if not preserved_sample_sources(results_path):
         return SweepOutcome("no_sources", "no preserved sources")
-    return SweepOutcome("rebuilt", f"{rebuild_lm_eval_samples(results_path)} sample(s)")
+    written = rebuild_lm_eval_samples(
+        results_path,
+        superseded_prefix=lambda version: superseded_samples_prefix(results_path, version),
+    )
+    return SweepOutcome("rebuilt", f"{written} sample(s)")
 
 
 def main() -> None:

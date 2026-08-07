@@ -22,7 +22,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Protocol
 
 import pyarrow as pa
-from rigging.filesystem import StoragePath, factory
+from rigging.filesystem import StoragePath, factory, prefix_join
 
 from finestore.compaction import compact
 from finestore.layout import (
@@ -56,6 +56,36 @@ DEFAULT_MAX_BUFFER_BYTES = 100 * 1024 * 1024
 def _default_writer_id() -> str:
     """A writer identity unique enough that two writers never share a key prefix."""
     return uuid.uuid4().hex
+
+
+def copy_table(root: str, table: str, destination: str) -> int:
+    """Copy every object of ``table`` under ``root`` to ``destination``; return the number copied.
+
+    The whole table directory is copied, ``_schema.json`` included, so the destination is a readable
+    table rather than a pile of shards. An object already at the destination is left as it is: a
+    snapshot taken before an earlier attempt is the more faithful copy, and re-running an interrupted
+    copy must not overwrite it. Each copy's size is verified against its source before this returns,
+    so a caller may treat success as licence to delete the originals.
+    """
+    source_fs, source_root = factory.url_to_fs(prefix_join(root, table))
+    destination_fs, destination_root = factory.url_to_fs(destination)
+    if not source_fs.exists(source_root):
+        return 0
+    copied = 0
+    for source in source_fs.find(source_root):
+        target = f"{destination_root.rstrip('/')}/{source[len(source_root) :].lstrip('/')}"
+        if destination_fs.exists(target):
+            continue
+        destination_fs.makedirs(target.rsplit("/", 1)[0], exist_ok=True)
+        with source_fs.open(source, "rb") as reader, destination_fs.open(target, "wb") as writer:
+            writer.write(reader.read())
+        written = destination_fs.info(target)["size"]
+        expected = source_fs.info(source)["size"]
+        if written != expected:
+            raise OSError(f"copy of {source} is {written} bytes, expected {expected}")
+        copied += 1
+    logger.info("finestore copied %d object(s) of table %s to %s", copied, table, destination)
+    return copied
 
 
 def drop_table(root: str, table: str) -> int:

@@ -21,7 +21,6 @@ them as mechanism-native artifacts and resume state.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import logging
 from collections.abc import Iterable
@@ -44,22 +43,14 @@ from finestore.eval import (
     trajectory_step_rows,
 )
 from finestore.reader import CompositeReader
+from marin.evaluation.archive_backup import legacy_archive_prefix
 from marin.evaluation.records import list_records
-from rigging.filesystem import (
-    StoragePath,
-    get_bucket_location,
-    load_cluster_config,
-    marin_temp_bucket,
-    url_to_fs,
-    use_data_config,
-)
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
 logger = logging.getLogger(__name__)
 
 _ARCHIVE_URI_PREFIX = "finestore://"
-_LEGACY_ARCHIVE_PREFIX = "eval-archive-legacy"
-_LEGACY_ARCHIVE_TTL_DAYS = 30
 _MIGRATION_WRITER_ID = "migrate"
 _OBJECT_CHECKSUM_KEYS = ("md5Hash", "md5", "ETag", "etag", "checksum")
 
@@ -417,37 +408,6 @@ def archive_legacy_sample_files(
         source.rm()
         logger.info("archived legacy sample %s", destination)
     return len(destinations)
-
-
-def legacy_archive_prefix(results_path: str) -> str:
-    """Return a collision-resistant, region-local 30-day prefix for one run's legacy Parquets."""
-    results = StoragePath(results_path)
-    run_name = results.parent.name if results.name == "results" else results.name
-    identity = hashlib.sha256(str(results).encode()).hexdigest()[:12]
-    prefix = f"{_LEGACY_ARCHIVE_PREFIX}/{run_name}-{identity}"
-    if results.scheme == "gs":
-        region = get_bucket_location(results.bucket)
-        config = load_cluster_config("marin")
-        bucket = config.region_buckets.get(region)
-        if bucket is None:
-            raise ValueError(f"no region-local GCS temp bucket is configured for region {region!r}")
-        # Iris clusters can bind a storage config without GCS region buckets. Use the canonical Marin
-        # data config explicitly so the helper cannot fall back to a non-lifecycle ``tmp/`` prefix.
-        with use_data_config(config):
-            destination = marin_temp_bucket(
-                _LEGACY_ARCHIVE_TTL_DAYS,
-                prefix=prefix,
-                source_prefix=f"gs://{bucket.name}",
-            )
-    else:
-        destination = marin_temp_bucket(
-            _LEGACY_ARCHIVE_TTL_DAYS,
-            prefix=prefix,
-            source_prefix=results_path,
-        )
-    if StoragePath(destination).scheme != results.scheme:
-        raise ValueError(f"could not resolve region-local temp storage for {results_path!r}: got {destination!r}")
-    return destination
 
 
 def migration_plan(results_path: str, *, legacy_source: str | None = None) -> MigrationPlan:

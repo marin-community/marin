@@ -30,7 +30,7 @@ import dataclasses
 import hashlib
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from enum import StrEnum
 
 import pyarrow as pa
@@ -38,10 +38,10 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel
 from rigging.filesystem import StoragePath, prefix_join
 
-from finestore.layout import BLOBS_TABLE, WRITER_COLUMN
+from finestore.layout import BLOBS_TABLE
 from finestore.reader import CompositeReader
 from finestore.schema import arrow_schema
-from finestore.store import DataStore, drop_table
+from finestore.store import DataStore, copy_table, drop_table
 
 logger = logging.getLogger(__name__)
 
@@ -640,7 +640,12 @@ class EvaluationStore:
         self.close()
 
 
-def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> int:
+def export_lm_eval_samples(
+    out_path: str,
+    *,
+    writer_id: str = "evalchemy",
+    superseded_prefix: Callable[[int], str] | None = None,
+) -> int:
     """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
 
     Returns the number of samples written. The source jsonl is kept as the mechanism's native
@@ -648,6 +653,10 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
     archive alone after a contract change. Re-running is idempotent: an unchanged source produces
     identical rows, which collapse on the merge key without conflict. A run with no sample source is
     left untouched.
+
+    Replacing a table written under an older contract needs somewhere to put the rows first.
+    ``superseded_prefix`` maps that stored version to a destination outside the run; without it an
+    export that would have to replace rows raises instead.
     """
     root = StoragePath(out_path)
     sources = list(StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob())
@@ -655,7 +664,7 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
         # With no source there is nothing to write, and nothing that could stand in for what is
         # already stored, so a run evaluated by another mechanism keeps the archive it has.
         return 0
-    _replace_superseded_samples(out_path, writer_id)
+    _replace_superseded_samples(out_path, superseded_prefix)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:
@@ -674,27 +683,56 @@ def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> in
     return count
 
 
-def _replace_superseded_samples(out_path: str, writer_id: str) -> None:
-    """Drop a samples table written under an older contract, refusing when it holds foreign rows.
+def _replace_superseded_samples(out_path: str, superseded_prefix: Callable[[int], str] | None) -> None:
+    """Replace a samples table written under an older contract, or leave a current one alone.
 
-    A re-export reads every sample source under the run, so it reproduces the table's complete
-    contents -- but only the part this writer contributed. Rows an older contract left cannot
-    collapse against the new ones, because the widened merge key reads as null on their shards, so a
-    version change has to replace them wholesale. Rows from another mechanism would not come back,
-    so the export stops instead of dropping them.
+    Rows an older contract left cannot collapse against the new ones, because the widened merge key
+    reads as null on their shards, so a version change has to replace them wholesale. An export at
+    the current version merges idempotently instead, because identical rows share a digest.
     """
-    reader = CompositeReader(out_path)
-    stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
+    stored_version = CompositeReader(out_path).schema_version(ARCHIVE_SAMPLES_TABLE)
     if stored_version is None or stored_version == SCHEMA_VERSION:
         return
-    stored = reader.scan(ARCHIVE_SAMPLES_TABLE, columns=[WRITER_COLUMN])
-    foreign = sorted({writer for writer in stored[WRITER_COLUMN].to_pylist() if writer != writer_id}) if stored else []
-    if foreign:
+    _preserve_and_drop_samples(out_path, superseded_prefix, stored_version)
+
+
+def _preserve_and_drop_samples(
+    out_path: str, superseded_prefix: Callable[[int], str] | None, stored_version: int
+) -> None:
+    """Copy the samples table out of the run, then drop it.
+
+    The copy runs to completion and is size-verified before the drop, so a failure at any point
+    leaves either the original table or a full snapshot of it outside the run; an existing snapshot
+    is never overwritten. Nothing here is allowed to be the only copy of anything, so a caller with
+    nowhere to put the rows is refused rather than served.
+
+    Agentic samples come from Harbor, which writes no lm-eval source, so an lm-eval path that
+    replaced a table holding them would return a table missing that half. It stops instead.
+    """
+    reader = CompositeReader(out_path)
+    stored = reader.scan(ARCHIVE_SAMPLES_TABLE, columns=["kind"])
+    if stored is None:
+        return
+    agentic = sum(1 for kind in stored["kind"].to_pylist() if kind == SampleKind.AGENTIC)
+    if agentic:
         raise ValueError(
-            f"{out_path} holds schema v{stored_version} samples from {foreign}, which an lm-eval "
-            "export cannot regenerate; rebuild the archive from its preserved sources instead"
+            f"{out_path} holds {agentic} agentic sample(s) that an lm-eval export cannot regenerate; "
+            "migrate the run instead of replacing its samples table"
         )
-    logger.info("rebuilding %s samples written under schema v%s at v%s", out_path, stored_version, SCHEMA_VERSION)
+    if superseded_prefix is None:
+        raise ValueError(
+            f"{out_path} holds schema v{stored_version} samples that an export at v{SCHEMA_VERSION} has "
+            "to replace; pass superseded_prefix to say where they are preserved first"
+        )
+    destination = superseded_prefix(stored_version)
+    copy_table(out_path, ARCHIVE_SAMPLES_TABLE, destination)
+    logger.info(
+        "replacing %s samples written under schema v%s at v%s, preserved at %s",
+        out_path,
+        stored_version,
+        SCHEMA_VERSION,
+        destination,
+    )
     drop_table(out_path, ARCHIVE_SAMPLES_TABLE)
 
 
@@ -732,13 +770,19 @@ def preserved_sample_sources(out_path: str) -> tuple[str, ...]:
     )
 
 
-def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int:
+def rebuild_lm_eval_samples(
+    out_path: str,
+    *,
+    writer_id: str = "rebuild",
+    superseded_prefix: Callable[[int], str] | None = None,
+) -> int:
     """Rebuild a run's ``samples`` table from the source artifacts preserved inside its archive.
 
     The inputs are the ``sources/`` blobs written by :func:`export_lm_eval_samples`, so this works on
     an archive whose surrounding results tree has been pruned. Returns the number of samples written.
     Check :func:`preserved_sample_sources` first: an archive holding none cannot be rebuilt this way
-    and raises.
+    and raises. ``superseded_prefix`` says where the rows being replaced are preserved, as in
+    :func:`export_lm_eval_samples`.
     """
     reader = CompositeReader(out_path)
     names = preserved_sample_sources(out_path)
@@ -746,7 +790,9 @@ def rebuild_lm_eval_samples(out_path: str, *, writer_id: str = "rebuild") -> int
         raise FileNotFoundError(f"archive at {out_path!r} preserves no sample sources to rebuild from")
     # The preserved sources are the complete input, so the existing rows are replaced rather than
     # merged into: rows written under an older merge key would otherwise survive beside the new ones.
-    drop_table(out_path, ARCHIVE_SAMPLES_TABLE)
+    stored_version = reader.schema_version(ARCHIVE_SAMPLES_TABLE)
+    if stored_version is not None:
+        _preserve_and_drop_samples(out_path, superseded_prefix, stored_version)
     store = EvaluationStore.open(out_path, writer_id=writer_id)
     count = 0
     try:

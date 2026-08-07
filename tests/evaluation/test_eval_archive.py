@@ -159,6 +159,11 @@ def _lm_eval_row(doc_id: int, extraction_filter: str, score: float, response: st
     }
 
 
+def _backup(tmp_path):
+    """Where a replaced samples table is preserved, keyed by the contract version being replaced."""
+    return lambda version: str(tmp_path / f"backup-v{version}")
+
+
 def _write_jsonl(results, rows: list[dict]):
     path = results / "gsm8k_5shot" / "model" / "samples_gsm8k_20260807.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,7 +218,7 @@ def test_export_preserves_its_sources_and_rebuilds_from_them(tmp_path):
     assert blob == source.read_bytes()
 
     source.unlink()
-    assert rebuild_lm_eval_samples(str(results)) == 2
+    assert rebuild_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path)) == 2
     assert CompositeReader(str(results)).scan("samples").num_rows == 2
 
 
@@ -245,7 +250,7 @@ def test_re_export_replaces_rows_written_under_an_older_contract(tmp_path):
     export_lm_eval_samples(str(results))
     _stamp_schema_version(results, 3)
 
-    assert export_lm_eval_samples(str(results)) == 2
+    assert export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path)) == 2
     assert CompositeReader(str(results)).scan("samples").num_rows == 2
 
 
@@ -259,7 +264,16 @@ def _stamp_schema_version(results, version: int) -> None:
 def _harbor_archive(results, version: int) -> None:
     """Leave a samples table from a mechanism that writes no lm-eval jsonl."""
     store = EvaluationStore.open(str(results), writer_id="harbor")
-    store.add_sample(_mcq("1", correct=True))
+    store.add_sample(
+        EvalSample(
+            task="tb2",
+            doc_id="1",
+            kind=SampleKind.AGENTIC,
+            trajectory_uri="finestore://blobs/t1/trajectory.json",
+            grading=Grading(method="harbor:verifier", metric="reward", score=1.0, passed=True),
+            correct=True,
+        )
+    )
     store.seal()
     store.close()
     _stamp_schema_version(results, version)
@@ -282,9 +296,52 @@ def test_export_refuses_to_replace_samples_from_another_mechanism(tmp_path):
     _harbor_archive(results, version=3)
     _write_jsonl(results, [_lm_eval_row(0, "flexible-extract", 1.0, "4")])
 
-    with pytest.raises(ValueError, match="harbor"):
+    with pytest.raises(ValueError, match="agentic"):
+        export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
+    assert CompositeReader(str(results)).scan("samples").num_rows == 1
+
+
+def test_replacing_a_table_preserves_it_outside_the_run_first(tmp_path):
+    # A contract change is the one moment the archive holds rows nothing else does. They go to the
+    # 30-day bucket before the drop, so a bad rebuild is recoverable rather than terminal.
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(0, "strict-match", 0.0, "[invalid]")])
+    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
+    _stamp_schema_version(results, 3)
+
+    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
+
+    preserved = CompositeReader(str(tmp_path / "backup-v3"))
+    assert preserved.scan("samples") is None  # the snapshot is the table itself, not a nested copy
+    assert (tmp_path / "backup-v3" / "_schema.json").exists()
+    assert list((tmp_path / "backup-v3").rglob("*.parquet"))
+
+
+def test_replacing_a_table_refuses_without_somewhere_to_preserve_it(tmp_path):
+    results = tmp_path / "run" / "results"
+    _write_jsonl(results, [_lm_eval_row(0, "strict-match", 0.0, "[invalid]")])
+    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
+    _stamp_schema_version(results, 3)
+
+    with pytest.raises(ValueError, match="superseded_prefix"):
         export_lm_eval_samples(str(results))
     assert CompositeReader(str(results)).scan("samples").num_rows == 1
+
+
+def test_an_existing_snapshot_is_never_overwritten(tmp_path):
+    # The first snapshot is the pristine one. A resumed or repeated replace must not put a degraded
+    # table on top of it.
+    results = tmp_path / "run" / "results"
+    backup = tmp_path / "backup-v3"
+    backup.mkdir()
+    (backup / "_schema.json").write_text('{"sentinel": true}')
+    _write_jsonl(results, [_lm_eval_row(0, "strict-match", 0.0, "[invalid]")])
+    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
+    _stamp_schema_version(results, 3)
+
+    export_lm_eval_samples(str(results), superseded_prefix=_backup(tmp_path))
+
+    assert json.loads((backup / "_schema.json").read_text()) == {"sentinel": True}
 
 
 def test_sweep_visits_an_archive_shared_by_several_runs_once(tmp_path):

@@ -155,8 +155,21 @@ to say it existed, so the writer refuses instead.
 Widening a merge key is a schema change. Rows written under the old key cannot
 collapse against rows written under the new one — the added column reads as null
 on the old shards — so a rebuild calls `drop_table(root, table)` first, and
-`export_lm_eval_samples` does this automatically when the stored
-`schema_version` differs from the current contract.
+`export_lm_eval_samples` does this when the stored `schema_version` differs from
+the current contract.
+
+Nothing a rebuild removes is allowed to be the only copy. `copy_table` snapshots
+the whole table directory, `_schema.json` included, to a destination outside the
+run and verifies each object's size before the drop, so a failure at any point
+leaves either the original or a complete copy. An object already at the
+destination is left alone: the earliest snapshot is the pristine one, and a
+resumed rebuild must not write a degraded table over it. Callers name that
+destination through `superseded_prefix`, and an export that would have to
+replace rows without one raises instead. `marin.evaluation.archive_backup`
+resolves it to a region-local 30-day bucket keyed by run and by the schema
+version being replaced, so a run carried across two contract changes keeps a
+snapshot of each. An export also refuses outright when the stored table holds
+agentic samples, which come from Harbor and no lm-eval source can regenerate.
 
 ## Preserved sources
 
