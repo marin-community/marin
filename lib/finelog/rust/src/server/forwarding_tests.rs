@@ -26,6 +26,7 @@ use super::*;
 use crate::proto::finelog::logging::LogServiceClient;
 
 const SOURCE_CLUSTER: &str = "cw-test";
+const TELEMETRY_ROW_BYTES: usize = 450;
 
 fn jwt_policy(cluster: &str) -> AuthPolicy {
     AuthPolicy::parse(
@@ -509,7 +510,7 @@ fn chunk_by_bytes_shrinks_an_estimate_that_encodes_over_budget() {
 #[test]
 fn one_telemetry_sized_read_turn_fits_one_parallel_wave() {
     let rows = FORWARD_BATCH_ROWS as usize;
-    let row = "x".repeat(450);
+    let row = "x".repeat(TELEMETRY_ROW_BYTES);
     let batch = RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
             "data",
@@ -816,7 +817,7 @@ async fn telemetry_sized_chunks_are_delivered_concurrently_without_loss() {
     write_string_rows(
         &fx.source,
         "telemetry",
-        vec!["x".repeat(450); FORWARD_BATCH_ROWS as usize],
+        vec!["x".repeat(TELEMETRY_ROW_BYTES); FORWARD_BATCH_ROWS as usize],
     )
     .await;
     fx.forward_from_start("telemetry");

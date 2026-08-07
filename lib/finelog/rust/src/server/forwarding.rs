@@ -279,7 +279,6 @@ pub struct Forwarder<T = HttpsTransport> {
     config: ForwardingConfig,
     /// Backlog size that emits a warning. It never changes the cursor.
     lag_warning_seqs: i64,
-    /// Namespaces whose current backlog warning has already been emitted.
     warned_lag: Mutex<HashSet<String>>,
     /// Namespaces already created on the hub this process, so `RegisterTable` runs at
     /// most once each.
