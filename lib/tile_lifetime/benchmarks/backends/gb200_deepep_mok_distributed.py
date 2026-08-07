@@ -814,7 +814,6 @@ def main() -> None:
         intermediate_size=args.intermediate_size,
         seed=args.seed,
         gate_up_layout=args.gate_up_layout,
-        fixture_output=args.semantic_fixture_output,
     )
     runtime.sequential()
     torch.cuda.synchronize(device)
@@ -888,6 +887,7 @@ def main() -> None:
         device=device,
         seed=args.seed,
         gate_up_layout=args.gate_up_layout,
+        fixture_output=args.semantic_fixture_output,
     )
     if not semantic_reference["passed"]:
         raise AssertionError(f"rank {rank} independent semantic reference failed: {semantic_reference}")
