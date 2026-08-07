@@ -34,6 +34,7 @@ from finestore.eval import (
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
+    SCHEMA_VERSION,
     TRIAL_ID_COLUMN,
     EvalSample,
     EvaluationStore,
@@ -43,7 +44,8 @@ from finestore.eval import (
     trajectory_step_rows,
 )
 from finestore.reader import CompositeReader
-from marin.evaluation.archive_backup import legacy_archive_prefix
+from finestore.store import replace_table
+from marin.evaluation.archive_backup import legacy_archive_prefix, superseded_samples_prefix
 from marin.evaluation.records import list_records
 from rigging.filesystem import StoragePath, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
@@ -198,6 +200,24 @@ def _legacy_sample_inventory(files: Iterable[LegacySampleFile]) -> tuple[int, di
     return rows, samples
 
 
+def _replace_stale_samples(results_path: str) -> None:
+    """Clear a samples table written under an older contract, preserving it outside the run first.
+
+    The legacy parquets this migration reads are the complete source for the table, including the
+    agentic rows an lm-eval export could not reproduce, so replacing the whole table is sound here.
+    It is also necessary: rows written under a narrower merge key cannot collapse against the new
+    ones and would survive beside them as duplicates.
+    """
+    stored_version = CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    if stored_version is None or stored_version == SCHEMA_VERSION:
+        return
+    destination = superseded_samples_prefix(results_path, stored_version)
+    logger.info(
+        "migration replaces %s samples at schema v%s, preserved at %s", results_path, stored_version, destination
+    )
+    replace_table(results_path, ARCHIVE_SAMPLES_TABLE, destination)
+
+
 def migrate_run(
     results_path: str,
     *,
@@ -206,6 +226,7 @@ def migrate_run(
 ) -> MigrationCounts:
     """Backfill one run's legacy sample parquets into its finestore archive. Safe to re-run."""
     sample_count = step_count = trajectory_count = missing_trajectory_count = 0
+    _replace_stale_samples(results_path)
     # Archive shards are named ``{seq}-{uid}.parquet`` under per-table subdirs, so the legacy
     # ``samples_*.parquet`` filter below never picks them up: a re-run reads only legacy sources.
     with EvaluationStore.open(results_path, writer_id=writer_id) as store:

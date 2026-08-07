@@ -107,6 +107,19 @@ def drop_table(root: str, table: str) -> int:
     return len(shards)
 
 
+def replace_table(root: str, table: str, destination: str) -> None:
+    """Snapshot ``table`` to ``destination``, then drop it, for a caller that can rewrite its rows.
+
+    This is the only sanctioned way to remove a table's contents. The snapshot completes and is
+    size-verified before anything is deleted, so a failure leaves either the original or a full copy
+    outside the run. A caller reaches for this after widening a merge key, because rows written under
+    the old key cannot collapse against rows written under the new one and would otherwise survive
+    beside them.
+    """
+    copy_table(root, table, destination)
+    drop_table(root, table)
+
+
 class MergeKeyConflict(ValueError):
     """Two rows in one writer session share a merge key but carry different payloads.
 

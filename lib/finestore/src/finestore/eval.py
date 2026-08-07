@@ -42,7 +42,7 @@ from rigging.filesystem import StoragePath, prefix_join
 from finestore.layout import BLOBS_TABLE
 from finestore.reader import CompositeReader
 from finestore.schema import arrow_schema
-from finestore.store import DataStore, copy_table, drop_table
+from finestore.store import DataStore, replace_table
 
 logger = logging.getLogger(__name__)
 
@@ -746,7 +746,6 @@ def _preserve_and_drop_samples(
             "to replace; pass superseded_prefix to say where they are preserved first"
         )
     destination = superseded_prefix(stored_version)
-    copy_table(out_path, ARCHIVE_SAMPLES_TABLE, destination)
     logger.info(
         "replacing %s samples written under schema v%s at v%s, preserved at %s",
         out_path,
@@ -754,7 +753,7 @@ def _preserve_and_drop_samples(
         SCHEMA_VERSION,
         destination,
     )
-    drop_table(out_path, ARCHIVE_SAMPLES_TABLE)
+    replace_table(out_path, ARCHIVE_SAMPLES_TABLE, destination)
 
 
 def _add_lm_eval_rows(store: EvaluationStore, filename: str, payload: bytes) -> int:

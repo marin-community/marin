@@ -30,9 +30,12 @@ from experiments.evaluation.migrate_archive import archive_sample_count
 
 logger = logging.getLogger(__name__)
 
-# The documents a task evaluated, and the keys that describe a task rather than score it.
-_DOCUMENT_COUNT = "sample_len"
-_STRUCTURAL_KEYS = frozenset({"name", "alias", _DOCUMENT_COUNT})
+# The documents a task evaluated: lm-eval reports "sample_len", evalchemy's chat-native benchmarks
+# report "num_total". A leaf task carrying neither is a shape this tool does not understand, and it
+# raises rather than reading the absence as an expectation of zero.
+_DOCUMENT_COUNT_KEYS = ("sample_len", "num_total")
+# Keys that describe a task rather than score it.
+_STRUCTURAL_KEYS = frozenset({"name", "alias", *_DOCUMENT_COUNT_KEYS})
 
 # Present only on an aggregate group row, so its absence identifies a leaf task.
 _GROUP_MARKER = "sample_count"
@@ -73,6 +76,15 @@ class RunVerification:
         return self.error is None and self.missing_rows == 0
 
 
+def _document_count(values: dict) -> int | None:
+    """The number of documents a leaf task evaluated, under whichever key its harness used."""
+    for key in _DOCUMENT_COUNT_KEYS:
+        count = values.get(key)
+        if isinstance(count, (int, float)):
+            return int(count)
+    return None
+
+
 def leaf_task_expectations(results_json: dict) -> dict[str, TaskExpectation]:
     """Per leaf task, the documents evaluated and the extraction filters that scored them."""
     expectations = {}
@@ -87,13 +99,13 @@ def leaf_task_expectations(results_json: dict) -> dict[str, TaskExpectation]:
             if metric.endswith("_stderr"):
                 continue
             filters.add(extraction_filter)
-        documents = values.get(_DOCUMENT_COUNT)
-        if not isinstance(documents, (int, float)):
-            continue
+        documents = _document_count(values)
+        if documents is None:
+            raise ValueError(f"leaf task {task!r} reports no document count; keys: {sorted(values)}")
         # evalchemy's chat-native benchmarks (MATH500, AIME24) apply no extraction filter, so their
         # metric keys carry no ",<filter>" suffix and the export stores the rows under the empty
         # filter. Reading that as "no expectation" made the check vacuous for 134 fleet runs.
-        expectations[task] = TaskExpectation(documents=int(documents), filters=tuple(sorted(filters)) or ("",))
+        expectations[task] = TaskExpectation(documents=documents, filters=tuple(sorted(filters)) or ("",))
     return expectations
 
 
