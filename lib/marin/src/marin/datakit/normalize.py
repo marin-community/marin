@@ -18,13 +18,13 @@ All discovered files are merged into a single output: main records land in
 
 import logging
 import os
-import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import dupekit
+import polars as pl
 import pyarrow as pa
 from fray.types import ResourceConfig
 from pydantic import BaseModel, ValidationInfo, model_validator
@@ -32,7 +32,8 @@ from rigging.filesystem import StoragePath, prefix_join, url_to_fs
 from zephyr import counters
 from zephyr.dataset import Dataset, ShardInfo
 from zephyr.execution import ZephyrContext
-from zephyr.readers import SUPPORTED_EXTENSIONS, load_file
+from zephyr.expr import col
+from zephyr.readers import SUPPORTED_EXTENSIONS, load_file, load_file_batch
 from zephyr.writers import ThreadedBatchWriter, write_parquet_file
 
 from marin.datakit import partition_filename
@@ -122,60 +123,126 @@ def _text_from_value(value: Any) -> str:
     return str(value)
 
 
-def _make_normalize_fn(
+# Rows per Arrow batch when loading non-Parquet inputs (JSONL/Vortex). Parquet
+# uses native row-group batches via ``load_file_batch``.
+_INPUT_BATCH_ROWS = 8192
+
+
+def _iter_input_batches(path: str) -> Iterator[pa.RecordBatch]:
+    """Yield Arrow record batches from one input file.
+
+    Parquet goes through ``load_file_batch`` (one batch per row group). Other
+    supported formats are loaded as dicts and packed into batches of
+    ``_INPUT_BATCH_ROWS`` so the rest of the pipeline can stay columnar.
+    """
+    if path.endswith(".parquet"):
+        yield from load_file_batch(path)
+        return
+
+    batch: list[dict[str, Any]] = []
+    for record in load_file(path):
+        batch.append(record)
+        if len(batch) >= _INPUT_BATCH_ROWS:
+            yield pa.RecordBatch.from_pylist(batch)
+            batch = []
+    if batch:
+        yield pa.RecordBatch.from_pylist(batch)
+
+
+def _as_text_series(series: pl.Series) -> pl.Series:
+    """Coerce a column to Utf8, decoding Binary with ``errors='replace'``."""
+    if series.dtype == pl.Binary:
+        return pl.Series(
+            (_text_from_value(v) if v is not None else None for v in series.to_list()),
+            dtype=pl.Utf8,
+        )
+    if series.dtype in (pl.Utf8, pl.String):
+        return series
+    return series.cast(pl.Utf8)
+
+
+def _make_normalize_batch_fn(
     text_field: str,
-    id_field: str,
+    id_field: str | None,
+    max_whitespace_run_chars: int,
     bare: bool = False,
     drop_fields: tuple[str, ...] = (),
-) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Return a record-level transform function.
+) -> Callable[[pa.RecordBatch], Iterator[pl.DataFrame]]:
+    """Return a batch transform: RecordBatch → zero or one normalized DataFrames.
 
-    The returned function:
-    1. Extracts ``text`` from *text_field*.
-    2. Generates a deterministic ``id`` via xxh3_128.
-    3. If *id_field* exists in the record, preserves it as ``source_id``.
-    4. Keeps all other columns unless *bare* is set or they are listed in
-       *drop_fields*.
+    Vectorized equivalent of the old per-record filter + normalize + whitespace
+    compaction path:
 
-    *bare* takes the strict path: drop every column that isn't ``id``,
-    ``text``, or ``source_id``. Use this for sources whose extra columns
-    vary across shards (e.g. starcoderdata's 87 language subdirs each
-    ship a different set of GitHub-meta columns, or proof-pile-2's
-    nested ``meta`` dict with optional-typed fields); the parquet writer
-    can't add columns mid-write and the reduce stage can't widen
-    null-vs-typed, so a uniform schema is the only safe option.
+    1. Drop rows with missing/blank ``text_field`` (count
+       ``normalize/empty_text_filtered``).
+    2. Compact over-long whitespace runs (count
+       ``COMPACTED_WHITESPACE_COUNTER`` for changed rows).
+    3. Generate deterministic ``id`` via xxh3_128 of the (possibly compacted)
+       text.
+    4. Rename *id_field* → ``source_id`` when present; keep other columns
+       unless *bare* or *drop_fields* removes them.
 
-    Records with missing or blank text must be filtered out before calling
-    the returned function.
+    *bare* keeps only ``id``, ``text``, and (when present) ``source_id`` —
+    required when extra columns vary across shards and would break a uniform
+    Parquet schema.
+
+    Yields nothing when every row in the batch is filtered out, so Scatter
+    never sees an empty frame missing the ``id`` routing column.
     """
+    whitespace_pattern = rf"(\s{{{max_whitespace_run_chars}}})\s+"
 
-    def normalize_record(record: dict[str, Any]) -> dict[str, Any]:
-        # --- text ---
-        text = _text_from_value(record[text_field])
+    def normalize_batch(batch: pa.RecordBatch) -> Iterator[pl.DataFrame]:
+        df = pl.from_arrow(batch)
+        assert isinstance(df, pl.DataFrame)
 
-        # --- source_id (skip silently if id_field absent) ---
-        source_id = record.get(id_field)
+        if text_field not in df.columns:
+            if df.height:
+                counters.pipeline.update_counter("normalize/empty_text_filtered", df.height)
+            return
 
-        # --- build output ---
-        out: dict[str, Any] = {}
+        text_raw = _as_text_series(df.get_column(text_field))
+        keep_mask = text_raw.is_not_null() & (text_raw.str.strip_chars() != "")
+        dropped = int((~keep_mask).sum())
+        if dropped:
+            counters.pipeline.update_counter("normalize/empty_text_filtered", dropped)
 
-        if not bare:
-            # Copy all original columns except the ones we're replacing
-            for k, v in record.items():
-                if k == id_field or k in drop_fields:
-                    continue
-                if k == text_field and text_field != "text":
-                    continue
-                out[k] = v
+        df = df.filter(keep_mask)
+        if df.height == 0:
+            return
 
-        out["id"] = generate_id(text)
-        out["text"] = text
-        if source_id is not None:
-            out["source_id"] = source_id
+        text = text_raw.filter(keep_mask)
+        compacted = text.str.replace_all(whitespace_pattern, "${1}")
+        changed = int((compacted != text).sum())
+        if changed:
+            counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, changed)
 
-        return out
+        texts = compacted.to_list()
+        ids = [generate_id(t) for t in texts]
+        has_source = id_field is not None and id_field in df.columns
 
-    return normalize_record
+        if bare:
+            out = pl.DataFrame({"id": ids, "text": pl.Series(texts, dtype=pl.Utf8)})
+            if has_source:
+                out = out.with_columns(df.get_column(id_field).alias("source_id"))
+            yield out
+            return
+
+        drop_cols = set(drop_fields)
+        if id_field is not None:
+            drop_cols.add(id_field)
+        if text_field != "text":
+            drop_cols.add(text_field)
+        keep_cols = [c for c in df.columns if c not in drop_cols]
+
+        out = df.select(keep_cols).with_columns(
+            pl.Series("text", texts, dtype=pl.Utf8),
+            pl.Series("id", ids, dtype=pl.Utf8),
+        )
+        if has_source:
+            out = out.with_columns(df.get_column(id_field).alias("source_id"))
+        yield out
+
+    return normalize_batch
 
 
 # Env var that ferries set on test/smoke runs to bound the input set on
@@ -249,27 +316,6 @@ def _discover_files(
 def _compute_total_bytes(file_paths: list[str]) -> int:
     """Sum the byte sizes of all *file_paths*."""
     return sum(StoragePath(path).size() for path in file_paths)
-
-
-def _make_whitespace_compactor(max_whitespace_run_chars: int) -> Callable[[dict[str, Any]], dict[str, Any]]:
-    """Return a map function that compacts consecutive whitespace runs exceeding the limit.
-
-    Any run of whitespace longer than *max_whitespace_run_chars* is truncated to
-    that length (preserving the original whitespace characters). Affected records
-    are counted via the ``COMPACTED_WHITESPACE_COUNTER`` Zephyr counter, and the
-    ``id`` is recomputed to reflect the new text.
-    """
-    pattern = re.compile(r"\s{" + str(max_whitespace_run_chars + 1) + r",}")
-
-    def compact(record: dict[str, Any]) -> dict[str, Any]:
-        text = record["text"]
-        compacted = pattern.sub(lambda m: m.group(0)[:max_whitespace_run_chars], text)
-        if len(compacted) != len(text):
-            counters.pipeline.update_counter(COMPACTED_WHITESPACE_COUNTER, 1)
-            record = {**record, "text": compacted, "id": generate_id(compacted)}
-        return record
-
-    return compact
 
 
 @dataclass
@@ -347,8 +393,20 @@ def _build_pipeline(
     drop_fields: tuple[str, ...] = (),
     output_schema: pa.Schema | None = None,
 ) -> Dataset:
-    """Build the Zephyr pipeline that normalizes *files* into *output_dir*."""
-    normalize_record = _make_normalize_fn(text_field, id_field, bare=bare, drop_fields=drop_fields)
+    """Build the Zephyr pipeline that normalizes *files* into *output_dir*.
+
+    Loads inputs as Arrow batches, normalizes each batch in Polars, then
+    hands the resulting DataFrames straight to ``group_by``. ``col("id")``
+    lets Scatter ingest each batch via ``write_batch`` (vectorized Polars
+    routing, no per-row Python conversion) — same pattern as fuzzy_dups.
+    """
+    normalize_batch = _make_normalize_batch_fn(
+        text_field,
+        id_field,
+        max_whitespace_run_chars,
+        bare=bare,
+        drop_fields=drop_fields,
+    )
 
     def dedup(_key: str, items: Iterator[dict[str, Any]]) -> Iterator[MainOutput | ExactDupSideOutput]:
         """Drop adjacent duplicate ids. Items arrive sorted by id via sort_by."""
@@ -365,25 +423,23 @@ def _build_pipeline(
         """Yield items unchanged; used when dedup is disabled."""
         yield from (MainOutput(data=item) for item in items)
 
-    def has_text(record: dict[str, Any]) -> bool:
-        text = record.get(text_field)
-        if text is None or _text_from_value(text).strip() == "":
-            counters.pipeline.update_counter("normalize/empty_text_filtered", 1)
-            return False
-        return True
-
     reducers: dict[DedupMode, Callable] = {DedupMode.EXACT: dedup, DedupMode.NONE: passthrough}
 
+    # Prefer Dataset.load_parquet(batch_mode=True) when every input is Parquet
+    # so the plan can use LoadFileOp; otherwise pack non-Parquet formats into
+    # Arrow batches via flat_map.
+    ds: Dataset
+    if files and all(path.endswith(".parquet") for path in files):
+        ds = Dataset.from_list(files).load_parquet(batch_mode=True)
+    else:
+        ds = Dataset.from_list(files).flat_map(_iter_input_batches)
+
     return (
-        Dataset.from_list(files)
-        .flat_map(load_file)
-        .filter(has_text)
-        .map(normalize_record)
-        .map(_make_whitespace_compactor(max_whitespace_run_chars))
+        ds.flat_map(normalize_batch)
         .group_by(
-            key=lambda r: r["id"],
+            key=col("id"),
             reducer=reducers[dedup_mode],
-            sort_by=lambda r: r["id"],
+            sort_by=col("id"),
             num_output_shards=num_shards,
         )
         .map_shard(_make_split_writer(output_dir, output_schema=output_schema))
