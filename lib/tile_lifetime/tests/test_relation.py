@@ -107,6 +107,34 @@ def test_relation_plan_marks_padding_and_keeps_it_out_of_inverse_dispatch() -> N
     np.testing.assert_array_equal(plan.inverse_dispatch(dispatched), np.repeat(payload[:, None, :], 2, axis=1))
 
 
+def test_relation_plan_preserves_invalid_edge_slots_without_dispatching_them() -> None:
+    plan = build_relation_plan(
+        np.array([[0, -1, -1], [1, 0, -1], [2, 0, 1]], dtype=np.int32),
+        np.ones((3, 3), dtype=np.float32),
+        edge_valid=np.array(
+            [[True, False, False], [True, True, False], [True, True, True]],
+            dtype=np.bool_,
+        ),
+        destination_rank_by_item=np.array([0, 0, 0], dtype=np.int32),
+        destination_local_item_by_item=np.array([0, 1, 2], dtype=np.int32),
+        padding_quantum=2,
+    )
+    destination_payload = np.arange(plan.destination_row_count, dtype=np.float32)
+
+    restored = plan.inverse_dispatch(destination_payload, fill_value=-np.inf)
+
+    assert plan.route_count == 6
+    assert plan.group_count.tolist() == [3, 2, 1]
+    assert restored.shape == (3, 3)
+    assert np.isneginf(restored[0, 1:]).all()
+    assert np.isneginf(restored[1, 2])
+    assert np.all(plan.route_to_destination_row[~plan.edge_valid.reshape(-1)] == -1)
+
+    assert plan.destination_edge_offsets.tolist() == [0, 3, 5, 6]
+    assert plan.grouped_source_item.tolist() == [0, 1, 2, 1, 2, 2]
+    assert plan.grouped_route_slot.tolist() == [0, 1, 1, 0, 2, 0]
+
+
 def test_relation_plan_rejects_capacity_overflow_before_payload_dispatch() -> None:
     with pytest.raises(RelationPlanError) as exc_info:
         build_relation_plan(

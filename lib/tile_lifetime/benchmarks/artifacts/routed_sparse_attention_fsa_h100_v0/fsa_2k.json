@@ -1,0 +1,515 @@
+{
+  "benchmark": "shuttle_routed_sparse_attention_fsa_kv_major_h100",
+  "buffers": {
+    "pinned_fsa_source_estimate": {
+      "accounting_scope": "Pinned FSA forward source allocations for one sequence. Partial buffers have head_tile=1 and are reused serially across query heads. Output, LSE, Q/K/V, allocator fragmentation, and temporary PyTorch indexing/cummax workspace are excluded.",
+      "adapter_input_index_bytes": 524288,
+      "allocated_kv_blocks": 16,
+      "denominator_partial_bytes": 100352,
+      "global_max_selected_tokens_per_nonzero_kv_block": 1536,
+      "internal_inverse_index_bytes": 672768,
+      "maxima_working_bytes": 262144,
+      "output_rescale_partial_bytes": 100352,
+      "partial_and_statistics_bytes": 6885376,
+      "weighted_value_partial_bytes": 6422528
+    },
+    "shuttle_declared_edge_partial_state_bytes": 212992000,
+    "shuttle_plan_scope": "One FP32 (max, denominator, weighted-value) state per block edge, query token, and query head"
+  },
+  "candidate": {
+    "executable_seam": "RelationPlan -> repeated token-level topk_idx -> pinned FSA public selected-attention call",
+    "semantic_mismatches": [
+      {
+        "adapter_effect": "Each generic edge is repeated across its query-block tokens and all KV heads.",
+        "mismatch": "Shuttle has one edge per query-block/selected-block pair; FSA accepts one selected-block list per query token and KV head.",
+        "seam": "relation_granularity"
+      },
+      {
+        "adapter_effect": "The timed FSA call reconstructs a private block-to-token relation, so it is a KV-major expert oracle rather than an execution of Shuttle's physical schedule.",
+        "mismatch": "FSA cannot consume RelationPlan grouped_route_indices, destination offsets, or inverse mapping.",
+        "seam": "orientation_input"
+      },
+      {
+        "adapter_effect": "The identical relation is duplicated across KV heads.",
+        "mismatch": "FSA permits a different selected relation per KV head; the Shuttle experiment is block-shared.",
+        "seam": "head_dependent_routing"
+      },
+      {
+        "adapter_effect": "The adapter rejects non-increasing selected-slot order instead of silently changing Shuttle's source-ordered floating-point merge contract.",
+        "mismatch": "Pinned FSA's online maxima are accumulated in ascending physical KV-block order and its input generator sorts top-k indices.",
+        "seam": "merge_order"
+      },
+      {
+        "adapter_effect": "This benchmark is restricted to causal self-attention with equal Q and KV lengths.",
+        "mismatch": "The public FSA entry point uses one shared Q/K/V cumulative-length vector and always runs its causal forward path.",
+        "seam": "causal_and_sequence_shape"
+      },
+      {
+        "adapter_effect": "Shuttle relation planning and adapter expansion are timed separately; FSA's internal planning, allocations, compute, and merge remain combined in the kernel sample.",
+        "mismatch": "The public FSA call does not expose separate inverse-plan, QK/PV, partial-state, or reduction timings.",
+        "seam": "timing_decomposition"
+      }
+    ],
+    "shuttle_kv_major_plan": "RoutedAttention orientation=kv_major\n  relation: query_blocks=16 selected_edges=100 kv_blocks=16\n  tiles: Q=128 KV=128 heads=32/8 dimension=128\n  tasks: stage_kv_block -> grouped_query_block_partial -> inverse_route_partial_state -> stable_query_partial_merge\n  event kv_incident_queries_complete: arrivals=(16, 10, 12, 10, 9, 7, 9, 5, 4, 6, 3, 3, 2, 2, 1, 1) granularity=KV block\n  event query_partials_ready: arrivals=(1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8) granularity=query_block\n  buffer resident_kv: capacity=2 bytes=1048576 reuse_after=kv_incident_queries_complete for buffer generation\n  buffer edge_partial_state: capacity=100 bytes=212992000 reuse_after=stable_query_partial_merge\n  score_tile_bytes: 2097152 (internal only)\n  partial_state_materialization_bytes: 212992000\n  online_state_materialization_bytes: 0\n  sequence_squared_materialization_bytes: 0\n  numerical_policy: source query block, then selected-slot FP32 partial merge without atomics"
+  },
+  "execution": {
+    "bitwise_deterministic_repeated_output": true,
+    "compile_and_first_run_seconds": 0.4153133686631918,
+    "correctness": {
+      "allclose_atol_0.03_rtol_0.03": true,
+      "checked_query_blocks": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        15
+      ],
+      "infinity_count": 0,
+      "maximum_absolute_error": 0.01851963996887207,
+      "mean_absolute_error": 0.00018009479390457273,
+      "nan_count": 0,
+      "p99_absolute_error": 0.0012205839157104492
+    },
+    "environment": {
+      "compute_capability": [
+        9,
+        0
+      ],
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "gpu_telemetry": {
+        "final": {
+          "field_errors": {},
+          "gpus": [
+            {
+              "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+              "clocks.applications.memory": "[Requested functionality has been deprecated]",
+              "clocks.current.graphics": "1830",
+              "clocks.current.memory": "2619",
+              "clocks.current.sm": "1830",
+              "clocks.max.graphics": "1980",
+              "clocks.max.memory": "2619",
+              "clocks.max.sm": "1980",
+              "driver_version": "595.71.05",
+              "index": "0",
+              "name": "NVIDIA H100 80GB HBM3",
+              "pci.bus_id": "00000000:19:00.0",
+              "persistence_mode": "Enabled",
+              "power.draw": "119.75",
+              "power.limit": "700.00",
+              "pstate": "P0",
+              "temperature.gpu": "24",
+              "uuid": "GPU-ff8f0705-e9c1-1799-eb57-c614154dbf3a"
+            },
+            {
+              "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+              "clocks.applications.memory": "[Requested functionality has been deprecated]",
+              "clocks.current.graphics": "345",
+              "clocks.current.memory": "2619",
+              "clocks.current.sm": "345",
+              "clocks.max.graphics": "1980",
+              "clocks.max.memory": "2619",
+              "clocks.max.sm": "1980",
+              "driver_version": "595.71.05",
+              "index": "1",
+              "name": "NVIDIA H100 80GB HBM3",
+              "pci.bus_id": "00000000:3B:00.0",
+              "persistence_mode": "Enabled",
+              "power.draw": "71.28",
+              "power.limit": "700.00",
+              "pstate": "P0",
+              "temperature.gpu": "22",
+              "uuid": "GPU-31a0b2e4-27c5-a709-db9f-83f6396a040d"
+            },
+            {
+              "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+              "clocks.applications.memory": "[Requested functionality has been deprecated]",
+              "clocks.current.graphics": "345",
+              "clocks.current.memory": "2619",
+              "clocks.current.sm": "345",
+              "clocks.max.graphics": "1980",
+              "clocks.max.memory": "2619",
+              "clocks.max.sm": "1980",
+              "driver_version": "595.71.05",
+              "index": "2",
+              "name": "NVIDIA H100 80GB HBM3",
+              "pci.bus_id": "00000000:4C:00.0",
+              "persistence_mode": "Enabled",
+              "power.draw": "70.27",
+              "power.limit": "700.00",
+              "pstate": "P0",
+              "temperature.gpu": "21",
+              "uuid": "GPU-64a067d3-fab3-08e3-c25a-1b67d2d01de0"
+            },
+            {
+              "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+              "clocks.applications.memory": "[Requested functionality has been deprecated]",
+              "clocks.current.graphics": "345",
+              "clocks.current.memory": "2619",
+              "clocks.current.sm": "345",
+              "clocks.max.graphics": "1980",
+              "clocks.max.memory": "2619",
+              "clocks.max.sm": "1980",
+              "driver_version": "595.71.05",
+              "index": "3",
+              "name": "NVIDIA H100 80GB HBM3",
+              "pci.bus_id": "00000000:5D:00.0",
+              "persistence_mode": "Enabled",
+              "power.draw": "70.31",
+              "power.limit": "700.00",
+              "pstate": "P0",
+              "temperature.gpu": "22",
+              "uuid": "GPU-cfae16f3-efe1-5969-7498-5c5aa48398c0"
+            },
+            {
+              "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+              "clocks.applications.memory": "[Requested functionality has been deprecated]",
+              "clocks.current.graphics": "345",
+              "clocks.current.memory": "2619",
+              "clocks.current.sm": "345",
+              "clocks.max.graphics": "1980",
+              "clocks.max.memory": "2619",
+              "clocks.max.sm": "1980",
+              "driver_version": "595.71.05",
+              "index": "4",
+              "name": "NVIDIA H100 80GB HBM3",
+              "pci.bus_id": "00000000:9B:00.0",
+              "persistence_mode": "Enabled",
+              "power.draw": "72.23",
+              "power.limit": "700.00",
+              "pstate": "P0",
+              "temperature.gpu": "23",
+              "uuid": "GPU-2fd8d3d5-85ec-7ff1-3ac7-aadb1e08a206"
+            },
+            {
+              "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+              "clocks.applications.memory": "[Requested functionality has been deprecated]",
+              "clocks.current.graphics": "345",
+              "clocks.current.memory": "2619",
+              "clocks.current.sm": "345",
+              "clocks.max.graphics": "1980",
+              "clocks.max.memory": "2619",
+              "clocks.max.sm": "1980",
+              "driver_version": "595.71.05",
+              "index": "5",
+              "name": "NVIDIA H100 80GB HBM3",
+              "pci.bus_id": "00000000:BB:00.0",
+              "persistence_mode": "Enabled",
+              "power.draw": "69.32",
+              "power.limit": "700.00",
+              "pstate": "P0",
+              "temperature.gpu": "23",
+              "uuid": "GPU-d906d015-4c46-6023-856f-2de74f6e0c20"
+            },
+            {
+              "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+              "clocks.applications.memory": "[Requested functionality has been deprecated]",
+              "clocks.current.graphics": "345",
+              "clocks.current.memory": "2619",
+              "clocks.current.sm": "345",
+              "clocks.max.graphics": "1980",
+              "clocks.max.memory": "2619",
+              "clocks.max.sm": "1980",
+              "driver_version": "595.71.05",
+              "index": "6",
+              "name": "NVIDIA H100 80GB HBM3",
+              "pci.bus_id": "00000000:CB:00.0",
+              "persistence_mode": "Enabled",
+              "power.draw": "71.10",
+              "power.limit": "700.00",
+              "pstate": "P0",
+              "temperature.gpu": "22",
+              "uuid": "GPU-823ba298-af2b-585d-d3be-919baa996b91"
+            },
+            {
+              "clocks.applications.graphics": "[Requested functionality has been deprecated]",
+              "clocks.applications.memory": "[Requested functionality has been deprecated]",
+              "clocks.current.graphics": "345",
+              "clocks.current.memory": "2619",
+              "clocks.current.sm": "345",
+              "clocks.max.graphics": "1980",
+              "clocks.max.memory": "2619",
+              "clocks.max.sm": "1980",
+              "driver_version": "595.71.05",
+              "index": "7",
+              "name": "NVIDIA H100 80GB HBM3",
+              "pci.bus_id": "00000000:DB:00.0",
+              "persistence_mode": "Enabled",
+              "power.draw": "73.20",
+              "power.limit": "700.00",
+              "pstate": "P0",
+              "temperature.gpu": "36",
+              "uuid": "GPU-58741e8b-345c-171a-c5ea-c9acfb62c006"
+            }
+          ],
+          "topology": {
+            "arguments": [
+              "nvidia-smi",
+              "topo",
+              "-m"
+            ],
+            "returncode": 0,
+            "stderr": "",
+            "stdout": "\u001b[4mGPU0\tGPU1\tGPU2\tGPU3\tGPU4\tGPU5\tGPU6\tGPU7\tNIC0\tNIC1\tNIC2\tNIC3\tNIC4\tNIC5\tNIC6\tNIC7\tNIC8\tNIC9\tNIC10\tNIC11\tNIC12\tNIC13\tNIC14\tNIC15\tNIC16\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m\nGPU0\t X \tNV18\tNV18\tNV18\tNV18\tNV18\tNV18\tNV18\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t0,2,4,6,8,10\t0\t\tN/A\nGPU1\tNV18\t X \tNV18\tNV18\tNV18\tNV18\tNV18\tNV18\tNODE\tPIX\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t0,2,4,6,8,10\t0\t\tN/A\nGPU2\tNV18\tNV18\t X \tNV18\tNV18\tNV18\tNV18\tNV18\tNODE\tNODE\tPIX\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t0,2,4,6,8,10\t0\t\tN/A\nGPU3\tNV18\tNV18\tNV18\t X \tNV18\tNV18\tNV18\tNV18\tNODE\tNODE\tNODE\tPIX\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t0,2,4,6,8,10\t0\t\tN/A\nGPU4\tNV18\tNV18\tNV18\tNV18\t X \tNV18\tNV18\tNV18\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t1,3,5,7,9,11\t1\t\tN/A\nGPU5\tNV18\tNV18\tNV18\tNV18\tNV18\t X \tNV18\tNV18\tSYS\tSYS\tSYS\tSYS\tNODE\tPIX\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t1,3,5,7,9,11\t1\t\tN/A\nGPU6\tNV18\tNV18\tNV18\tNV18\tNV18\tNV18\t X \tNV18\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tPIX\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t1,3,5,7,9,11\t1\t\tN/A\nGPU7\tNV18\tNV18\tNV18\tNV18\tNV18\tNV18\tNV18\t X \tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tNODE\tPIX\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t1,3,5,7,9,11\t1\t\tN/A\nNIC0\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\t X \tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC1\tNODE\tPIX\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tNODE\t X \tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC2\tNODE\tNODE\tPIX\tNODE\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\t X \tNODE\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC3\tNODE\tNODE\tNODE\tPIX\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tNODE\t X \tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\tSYS\t\t\t\t\nNIC4\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\t X \tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC5\tSYS\tSYS\tSYS\tSYS\tNODE\tPIX\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC6\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tPIX\tNODE\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC7\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tNODE\tPIX\tSYS\tSYS\tSYS\tSYS\tNODE\tNODE\tNODE\t X \tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\tNODE\t\t\t\t\nNIC8\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC9\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC10\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC11\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC12\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\tPIX\t\t\t\t\nNIC13\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\tPIX\t\t\t\t\nNIC14\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\tPIX\t\t\t\t\nNIC15\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \tPIX\t\t\t\t\nNIC16\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tSYS\tSYS\tSYS\tSYS\tPIX\tNODE\tNODE\tNODE\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\tPIX\t X \t\t\t\t\n\nLegend:\n\n  X    = Self\n  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)\n  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node\n  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)\n  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)\n  PIX  = Connection traversing at most a single PCIe bridge\n  NV#  = Connection traversing a bonded set of # NVLinks\n\nNIC Legend:\n\n  NIC0: ibp0\n  NIC1: ibp1\n  NIC2: ibp2\n  NIC3: ibp3\n  NIC4: ibp4\n  NIC5: ibp5\n  NIC6: ibp6\n  NIC7: ibp7\n  NIC8: mlx5_0\n  NIC9: mlx5_1\n  NIC10: mlx5_2\n  NIC11: mlx5_3\n  NIC12: mlx5_4\n  NIC13: mlx5_5\n  NIC14: mlx5_6\n  NIC15: mlx5_7\n  NIC16: mlx5_8"
+          }
+        }
+      },
+      "toolchain": {
+        "nvcc": {
+          "arguments": [
+            "nvcc",
+            "--version"
+          ],
+          "returncode": 127,
+          "stderr": "nvcc is not installed; FSA is Triton JIT and does not require it",
+          "stdout": ""
+        },
+        "platform": {
+          "arguments": [
+            "uname",
+            "-a"
+          ],
+          "returncode": 0,
+          "stderr": "",
+          "stdout": "Linux g83cc82 6.8.12-680-6063-coreweave-amd64-f81899c8 #1 SMP PREEMPT_DYNAMIC Fri Apr 25 14:33:53 UTC 2025 x86_64 GNU/Linux"
+        },
+        "ptxas": {
+          "arguments": [
+            "ptxas",
+            "--version"
+          ],
+          "returncode": 127,
+          "stderr": "ptxas is not on PATH; Triton resolved its packaged CUDA toolchain internally",
+          "stdout": ""
+        },
+        "python": "3.12.13 (main, Aug  5 2026, 01:10:24) [GCC 14.2.0]"
+      },
+      "torch": "2.8.0+cu128",
+      "torch_cuda": "12.8",
+      "triton": "3.4.0"
+    },
+    "hashes": {
+      "first_output_sha256": "960123ca20ff732962755775eafb63e75c27c0ed440e8cdfe029895824afd42e",
+      "key_sha256": "ec797ddd4cebd554221fc054ebad1e5a2d825b27c17ae30de4c8704aafa580d4",
+      "query_sha256": "bf40fdcdc84ff0dcf1b38affd61ea3687176ed6cbe9fdb7449e6c510cd41401b",
+      "timed_output_sha256": "960123ca20ff732962755775eafb63e75c27c0ed440e8cdfe029895824afd42e",
+      "value_sha256": "20b0b5598d01884d7d97d2a228f5da03624871c2d8cebb1623c547f7901e09f1"
+    },
+    "index_host_to_device_ms": 0.26022401452064514,
+    "kernel": {
+      "maximum_ms": 12.514543533325195,
+      "mean_ms": 12.252451944351197,
+      "median_ms": 12.240632057189941,
+      "minimum_ms": 12.023391723632812,
+      "samples_ms": [
+        12.460911750793457,
+        12.463968276977539,
+        12.243727684020996,
+        12.145536422729492,
+        12.372847557067871,
+        12.232735633850098,
+        12.253472328186035,
+        12.34779167175293,
+        12.309871673583984,
+        12.222399711608887,
+        12.27841567993164,
+        12.317968368530273,
+        12.237536430358887,
+        12.148256301879883,
+        12.1669921875,
+        12.099103927612305,
+        12.514543533325195,
+        12.097040176391602,
+        12.112527847290039,
+        12.023391723632812
+      ],
+      "scope": "FSA public selected-attention call, including FSA-private inverse-relation planning, allocations, QK/PV partial computation, and reduction",
+      "selected_qk_pv_flops": 26843545600,
+      "selected_qk_pv_tflops_at_median": 2.1929868878161853
+    },
+    "measured_peak_allocator_increment_bytes": 42087936,
+    "status": "ok"
+  },
+  "protocol": {
+    "clock_policy": "cluster_default_unpinned",
+    "command": {
+      "argv": [
+        "/tmp/shuttle-fsa/lib/tile_lifetime/benchmarks/h100_fsa_kv_major.py",
+        "--sequence-length",
+        "2048",
+        "--block-size",
+        "128",
+        "--selected-blocks",
+        "8",
+        "--query-heads",
+        "32",
+        "--key-value-heads",
+        "8",
+        "--head-dimension",
+        "128",
+        "--warmups",
+        "10",
+        "--repeats",
+        "20",
+        "--iterations",
+        "2",
+        "--planning-repeats",
+        "20",
+        "--correctness-blocks",
+        "8",
+        "--fsa-root",
+        "/tmp/shuttle-fsa/vendor/fsa",
+        "--shuttle-revision",
+        "9ba3888cb0f91e2cf54f2a182927f13e769be2c6",
+        "--json-output",
+        "/tmp/shuttle-fsa/fsa_2k.json"
+      ],
+      "environment": {
+        "NCCL_SOCKET_IFNAME": "^ibs,ibp,lo,docker,veth,cilium,lxc"
+      },
+      "shell": "/tmp/shuttle-fsa/lib/tile_lifetime/benchmarks/h100_fsa_kv_major.py --sequence-length 2048 --block-size 128 --selected-blocks 8 --query-heads 32 --key-value-heads 8 --head-dimension 128 --warmups 10 --repeats 20 --iterations 2 --planning-repeats 20 --correctness-blocks 8 --fsa-root /tmp/shuttle-fsa/vendor/fsa --shuttle-revision 9ba3888cb0f91e2cf54f2a182927f13e769be2c6 --json-output /tmp/shuttle-fsa/fsa_2k.json",
+      "working_directory": "/app"
+    },
+    "iterations": 2,
+    "kernel_selection_metric": "median CUDA-event milliseconds",
+    "planning_repeats": 20,
+    "repeats": 20,
+    "warmups": 10
+  },
+  "relation": {
+    "destination_degrees": [
+      16,
+      10,
+      12,
+      10,
+      9,
+      7,
+      9,
+      5,
+      4,
+      6,
+      3,
+      3,
+      2,
+      2,
+      1,
+      1
+    ],
+    "fsa_adapter_timing": {
+      "maximum_ms": 0.33942144364118576,
+      "mean_ms": 0.10557216592133045,
+      "median_ms": 0.07966253906488419,
+      "minimum_ms": 0.07819291204214096,
+      "samples_ms": [
+        0.33942144364118576,
+        0.3193160519003868,
+        0.09288359433412552,
+        0.08348096162080765,
+        0.08141342550516129,
+        0.08006580173969269,
+        0.07970072329044342,
+        0.07993541657924652,
+        0.07883086800575256,
+        0.07912144064903259,
+        0.07884111255407333,
+        0.08591637015342712,
+        0.07922574877738953,
+        0.07971655577421188,
+        0.07931049913167953,
+        0.07937196642160416,
+        0.078592449426651,
+        0.07962435483932495,
+        0.07819291204214096,
+        0.07848162204027176
+      ]
+    },
+    "fsa_indices_sha256": "7e9f0077dcef7207c767ce5552a90e8693259d8aa47fbc4d403d2846eecf4cac",
+    "merge_order": "source_item ascending, then route_slot ascending, FP32 accumulation",
+    "orientation": "block-shared generic relation adapted to FSA token input; FSA executes KV-major",
+    "relation_plan_sha256": "e36df4dc489c2f466a57e5de76ae90214c8e54331d67ab809ad373f38f9f83c5",
+    "relation_plan_timing": {
+      "maximum_ms": 0.44268369674682617,
+      "mean_ms": 0.22019827738404274,
+      "median_ms": 0.19892258569598198,
+      "minimum_ms": 0.19146502017974854,
+      "samples_ms": [
+        0.44268369674682617,
+        0.27909688651561737,
+        0.2568662166595459,
+        0.22865831851959229,
+        0.22170506417751312,
+        0.2089906483888626,
+        0.2054935321211815,
+        0.2010650932788849,
+        0.19678007811307907,
+        0.19665062427520752,
+        0.19675027579069138,
+        0.20866096019744873,
+        0.20265206694602966,
+        0.19665807485580444,
+        0.19401311874389648,
+        0.19146502017974854,
+        0.1960592344403267,
+        0.19355397671461105,
+        0.19264128059148788,
+        0.1935213804244995
+      ]
+    },
+    "semantic_boolean_mask_raw_sha256": "de4548c6b78a401b9188e4ec222c51394484d692a81c17101af8e239f5cfa003",
+    "source_degrees": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8,
+      8
+    ],
+    "token_edges_after_fsa_expansion": 102400,
+    "valid_block_edges": 100
+  },
+  "schema_version": 1,
+  "selected_work": {
+    "formula": "tail-aware 4 * sum_edges(query_block_tokens * kv_block_tokens) * query_heads * head_dimension",
+    "qk_plus_pv_flops": 26843545600
+  },
+  "shape": {
+    "causal": true,
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "key_value_block_size": 128,
+    "key_value_heads": 8,
+    "query_block_size": 128,
+    "query_heads": 32,
+    "selected_blocks": 8,
+    "sequence_length": 2048,
+    "value_dimension": 128
+  },
+  "source": {
+    "fsa": {
+      "declared_revision": "7ff144fd7ff485dc4220d439f31cc1708b64fef3",
+      "git_diff": "diff --git a/fsa/ops/FSA_topk_sparse_attention.py b/fsa/ops/FSA_topk_sparse_attention.py\nindex 9c63cdb..218dd6e 100644\n--- a/fsa/ops/FSA_topk_sparse_attention.py\n+++ b/fsa/ops/FSA_topk_sparse_attention.py\n@@ -206,7 +206,7 @@ def reduce_kernel(\n     acc_o = tl.zeros((BLOCK_SIZE_D,), dtype=tl.float32)\n     acc_o += last_acc_o\n \n-    lse_ptrs = (lse_ptr + pid_q_j * stride_lse_n,)\n+    lse_ptrs = lse_ptr + pid_q_j * stride_lse_n\n     # Load lse\n     lse = tl.load(lse_ptrs, mask=pid_q_j < total_len, other=float(\"-inf\"))\n \n",
+      "git_diff_returncode": 0,
+      "git_head": "7ff144fd7ff485dc4220d439f31cc1708b64fef3",
+      "git_head_returncode": 0,
+      "git_status": [
+        " M fsa/ops/FSA_topk_sparse_attention.py"
+      ],
+      "git_status_returncode": 0,
+      "root": "/tmp/shuttle-fsa/vendor/fsa"
+    },
+    "shuttle_revision": "9ba3888cb0f91e2cf54f2a182927f13e769be2c6"
+  },
+  "status": "ok"
+}

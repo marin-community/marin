@@ -5,6 +5,8 @@
 
 from dataclasses import dataclass
 
+import numpy as np
+
 from tile_lifetime.ir import DType, ScaledDotProductAttentionOp, TensorGraph
 from tile_lifetime.plan import (
     Attachment,
@@ -18,6 +20,73 @@ from tile_lifetime.plan import (
     StreamingAttentionSkeleton,
     TransformSkeleton,
 )
+
+
+@dataclass(frozen=True)
+class AttentionPartial:
+    """Mergeable exact-attention state over a subset of key/value positions."""
+
+    row_max: np.ndarray
+    row_sum_exp: np.ndarray
+    weighted_value_accumulator: np.ndarray
+
+
+def summarize_attention_partial(
+    query: np.ndarray,
+    key: np.ndarray,
+    value: np.ndarray,
+    *,
+    scale: float,
+    causal: bool = False,
+    query_positions: np.ndarray | None = None,
+    key_positions: np.ndarray | None = None,
+    query_valid: np.ndarray | None = None,
+    key_valid: np.ndarray | None = None,
+) -> AttentionPartial:
+    """Summarize one Q-by-KV block as online-softmax state."""
+    query, key, value = _validate_attention_block(query, key, value, scale)
+    query_position, key_position = _resolve_positions(
+        query.shape[0],
+        key.shape[0],
+        causal=causal,
+        query_positions=query_positions,
+        key_positions=key_positions,
+    )
+    scores = _attention_scores(query, key, scale)
+    resolved_query_valid = _resolve_token_validity(query_valid, query.shape[0], "query")
+    resolved_key_valid = _resolve_token_validity(key_valid, key.shape[0], "key")
+    score_valid = resolved_query_valid[:, None] & resolved_key_valid[None, :]
+    if causal:
+        score_valid &= query_position[:, None] >= key_position[None, :]
+    scores = np.where(score_valid[:, None, :], scores, -np.inf)
+    return _summarize_scores(scores, value, query.shape[1])
+
+
+def merge_attention_partials(left: AttentionPartial, right: AttentionPartial) -> AttentionPartial:
+    """Merge disjoint attention states after rescaling them to one row maximum."""
+    _validate_partial_pair(left, right)
+    row_max = np.maximum(left.row_max, right.row_max)
+    left_scale = _state_rescale(left.row_max, row_max, left.row_sum_exp)
+    right_scale = _state_rescale(right.row_max, row_max, right.row_sum_exp)
+    row_sum_exp = left_scale * left.row_sum_exp + right_scale * right.row_sum_exp
+    weighted_value_accumulator = (
+        left_scale[..., None] * left.weighted_value_accumulator
+        + right_scale[..., None] * right.weighted_value_accumulator
+    )
+    return AttentionPartial(
+        row_max=row_max,
+        row_sum_exp=row_sum_exp,
+        weighted_value_accumulator=weighted_value_accumulator,
+    )
+
+
+def finalize_attention_partial(partial: AttentionPartial) -> np.ndarray:
+    """Normalize a complete attention state, rejecting rows with an empty fold domain."""
+    empty_rows = partial.row_sum_exp <= 0
+    if np.any(empty_rows):
+        locations = np.argwhere(empty_rows)
+        raise ValueError(f"attention rows have no valid selected keys at indices {locations.tolist()}")
+    return partial.weighted_value_accumulator / partial.row_sum_exp[..., None]
 
 
 @dataclass(frozen=True)
@@ -261,3 +330,103 @@ def _materialized_attention_plan(operation: ScaledDotProductAttentionOp) -> Regi
             ),
         ),
     )
+
+
+def _summarize_scores(scores: np.ndarray, value: np.ndarray, query_head_count: int) -> AttentionPartial:
+    row_max = np.max(scores, axis=-1)
+    finite_rows = np.isfinite(row_max)
+    centered = np.full(scores.shape, -np.inf, dtype=np.float32)
+    centered[finite_rows] = scores[finite_rows] - row_max[finite_rows, None]
+    exponentials = np.exp(centered)
+    row_sum_exp = np.sum(exponentials, axis=-1)
+    head_map = _query_to_kv_head(query_head_count, value.shape[1])
+    expanded_value = value.astype(np.float32)[:, head_map, :]
+    weighted_value = np.einsum("qhk,khv->qhv", exponentials, expanded_value)
+    return AttentionPartial(
+        row_max=row_max,
+        row_sum_exp=row_sum_exp,
+        weighted_value_accumulator=weighted_value,
+    )
+
+
+def _state_rescale(old_max: np.ndarray, new_max: np.ndarray, old_sum: np.ndarray) -> np.ndarray:
+    scale = np.zeros(old_sum.shape, dtype=np.float32)
+    populated = old_sum > 0
+    scale[populated] = np.exp(old_max[populated] - new_max[populated])
+    return scale
+
+
+def _validate_partial_pair(left: AttentionPartial, right: AttentionPartial) -> None:
+    if left.row_max.shape != right.row_max.shape or left.row_sum_exp.shape != left.row_max.shape:
+        raise ValueError("attention partial statistics must have matching shapes")
+    if right.row_sum_exp.shape != right.row_max.shape:
+        raise ValueError("attention partial statistics must have matching shapes")
+    expected_value_shape = (*left.row_max.shape, left.weighted_value_accumulator.shape[-1])
+    if left.weighted_value_accumulator.shape != expected_value_shape:
+        raise ValueError("left weighted-value accumulator has incompatible shape")
+    if right.weighted_value_accumulator.shape != left.weighted_value_accumulator.shape:
+        raise ValueError("attention partial accumulators must have matching shapes")
+
+
+def _validate_attention_block(
+    query: np.ndarray, key: np.ndarray, value: np.ndarray, scale: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    query = np.asarray(query)
+    key = np.asarray(key)
+    value = np.asarray(value)
+    if query.ndim != 3 or key.ndim != 3 or value.ndim != 3:
+        raise ValueError("attention blocks must have shapes [token, head, feature]")
+    if key.shape[:2] != value.shape[:2]:
+        raise ValueError("key and value blocks must have matching token and head dimensions")
+    if query.shape[-1] != key.shape[-1]:
+        raise ValueError("query and key feature dimensions must match")
+    _query_to_kv_head(query.shape[1], key.shape[1])
+    if not np.isfinite(scale):
+        raise ValueError("attention scale must be finite")
+    return query, key, value
+
+
+def _resolve_positions(
+    query_count: int,
+    key_count: int,
+    *,
+    causal: bool,
+    query_positions: np.ndarray | None,
+    key_positions: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if query_positions is None:
+        query_positions = np.arange(query_count, dtype=np.int64)
+    else:
+        query_positions = np.asarray(query_positions)
+    if key_positions is None:
+        key_positions = np.arange(key_count, dtype=np.int64)
+    else:
+        key_positions = np.asarray(key_positions)
+    if query_positions.shape != (query_count,) or key_positions.shape != (key_count,):
+        raise ValueError("query and key positions must match their block token counts")
+    if causal and (
+        not np.issubdtype(query_positions.dtype, np.integer) or not np.issubdtype(key_positions.dtype, np.integer)
+    ):
+        raise ValueError("causal query and key positions must use integer indices")
+    return query_positions, key_positions
+
+
+def _resolve_token_validity(validity: np.ndarray | None, token_count: int, name: str) -> np.ndarray:
+    if validity is None:
+        return np.ones(token_count, dtype=np.bool_)
+    resolved = np.asarray(validity, dtype=np.bool_)
+    if resolved.shape != (token_count,):
+        raise ValueError(f"{name} token validity must have shape {(token_count,)}, got {resolved.shape}")
+    return resolved
+
+
+def _attention_scores(query: np.ndarray, key: np.ndarray, scale: float) -> np.ndarray:
+    head_map = _query_to_kv_head(query.shape[1], key.shape[1])
+    expanded_key = key.astype(np.float32)[:, head_map, :]
+    return np.einsum("qhd,khd->qhk", query.astype(np.float32), expanded_key) * np.float32(scale)
+
+
+def _query_to_kv_head(query_head_count: int, kv_head_count: int) -> np.ndarray:
+    if kv_head_count <= 0 or query_head_count % kv_head_count:
+        raise ValueError("query heads must map evenly onto KV heads")
+    return np.arange(query_head_count, dtype=np.int32) // (query_head_count // kv_head_count)

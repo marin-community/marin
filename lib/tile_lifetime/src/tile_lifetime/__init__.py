@@ -3,7 +3,13 @@
 
 """Research compiler for Transformer tile-lifetime execution plans."""
 
-from tile_lifetime.attention import compile_attention_region
+from tile_lifetime.attention import (
+    AttentionPartial,
+    compile_attention_region,
+    finalize_attention_partial,
+    merge_attention_partials,
+    summarize_attention_partial,
+)
 from tile_lifetime.compiler import RMSScalePlacement, compile_region
 from tile_lifetime.dense_region import compile_dense_transformer_region
 from tile_lifetime.expert_parallel import (
@@ -52,6 +58,20 @@ from tile_lifetime.relation import (
     RelationPlanError,
     build_expert_parallel_relation_plan,
     build_relation_plan,
+)
+from tile_lifetime.routed_attention import (
+    build_routed_attention_relation,
+    execute_kv_major_attention,
+    execute_query_major_attention,
+    make_causal_block_relation,
+    routed_attention_reference,
+)
+from tile_lifetime.routed_attention_plan import (
+    RoutedAttentionOrientation,
+    RoutedAttentionPhysicalPlan,
+    RoutedAttentionPlanConfig,
+    compile_bounded_kv_major_candidate,
+    compile_routed_attention_candidates,
 )
 from tile_lifetime.runtime import (
     PlanRuntimeError,

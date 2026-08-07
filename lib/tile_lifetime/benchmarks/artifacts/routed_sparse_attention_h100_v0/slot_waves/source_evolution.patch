@@ -1,0 +1,58 @@
+The selected M16/M32 runs predated the two bounded-search extensions below.
+Apply the first diff to reconstruct the source-order ablation scripts from the
+primary source. Apply the second diff to reconstruct the M64 ablation and final
+GPU-executed source. After measurement, the benchmark's local `operation`
+return annotation changed from `object` to `Any` to satisfy Pyrefly; this does
+not change execution. The manifest records both hashes.
+
+--- primary/lib/tile_lifetime/benchmarks/kv_major_slot_waves.py
++++ source-order/lib/tile_lifetime/benchmarks/kv_major_slot_waves.py
+@@
+ class SlotWaveSchedule:
+     selected_slot_count: int
++    edge_order: str
+     waves: tuple[SlotWave, ...]
+@@
+-def build_slot_wave_schedule(relation: RelationPlan, *, require_causal: bool = True) -> SlotWaveSchedule:
++def build_slot_wave_schedule(
++    relation: RelationPlan, *, require_causal: bool = True, edge_order: str = "kv_major"
++) -> SlotWaveSchedule:
++    if edge_order not in ("kv_major", "source"):
++        raise ValueError(f"unsupported slot-wave edge order: {edge_order}")
+@@
+-        order = np.lexsort((query_blocks, key_value_blocks))
++        order = (
++            np.lexsort((query_blocks, key_value_blocks)) if edge_order == "kv_major" else np.arange(query_blocks.size)
++        )
+@@
+         selected_slot_count=relation.route_slots,
++        edge_order=edge_order,
+@@
+         "selected_slot_count": schedule.selected_slot_count,
++        "edge_order": schedule.edge_order,
+
+--- primary/lib/tile_lifetime/benchmarks/h100_kv_major_slot_waves.py
++++ source-order/lib/tile_lifetime/benchmarks/h100_kv_major_slot_waves.py
+@@
+-    schedule = build_slot_wave_schedule(relation)
++    schedule = build_slot_wave_schedule(relation, edge_order=args.wave_order)
+@@
++    parser.add_argument("--wave-order", choices=("kv_major", "source"), default="kv_major")
+@@
++            "wave_order": args.wave_order,
+
+--- source-order/lib/tile_lifetime/benchmarks/triton_kv_major_slot_waves.py
++++ m64/lib/tile_lifetime/benchmarks/triton_kv_major_slot_waves.py
+@@
+-    if query_tile_size not in (16, 32) or query_tile_size > block_size:
+-        raise ValueError("query tile size must be 16 or 32 and no larger than the logical block")
++    if query_tile_size not in (16, 32, 64) or query_tile_size > block_size:
++        raise ValueError("query tile size must be 16, 32, or 64 and no larger than the logical block")
++
++    num_warps = 8 if query_tile_size == 64 else 4
+@@
+-            num_warps=4,
++            num_warps=num_warps,
+@@
+-        num_warps=4,
++        num_warps=num_warps,

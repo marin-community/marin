@@ -2,6 +2,10 @@
 
 Status: next prototype after the `shuttle-gb200-moe-v1` checkpoint.
 
+Research brief: [routed_sparse_attention_brief.md](routed_sparse_attention_brief.md).
+
+Background research and pinned oracle ledger: [routed_sparse_attention_background.md](routed_sparse_attention_background.md).
+
 ## Question
 
 Does Shuttle's existing runtime-relation machinery describe routed sparse computation in general, or did it accidentally encode MoE?
@@ -130,7 +134,11 @@ Benchmark against:
 
 - a dense masked reference for correctness only;
 - a straightforward query-major block-sparse implementation;
-- FlashMoBA or another pinned expert implementation if its supported shape and environment are reproducible.
+- query-major MIT Block-Sparse-Attention;
+- KV-major Flash Sparse Attention selected attention;
+- FlashMoBA's low-level precomputed-pattern attention API as a hybrid expert oracle.
+
+FlashMLA sparse prefill is a GB200 index-plane and roofline control, not the primary oracle: its one-KV-head MLA dimensions do not match the initial standard GQA workload.
 
 Only after the single-GPU plans work should KV-block placement be split across devices and `Reshard`/transport candidates introduced.
 

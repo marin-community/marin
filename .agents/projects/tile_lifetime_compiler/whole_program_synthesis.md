@@ -1925,6 +1925,10 @@ The goal is reproducibility sufficient to return to the result later.
 
 ## 45. Next experiment: routed sparse attention
 
+Active implementation brief: [routed_sparse_attention_brief.md](routed_sparse_attention_brief.md).
+
+Background research and oracle ledger: [routed_sparse_attention_background.md](routed_sparse_attention_background.md).
+
 This is the highest-priority next experiment.
 
 The concrete first-slice plan is tracked in [Routed Sparse Attention: RelationPlan Reuse Experiment](routed_sparse_attention_plan.md).

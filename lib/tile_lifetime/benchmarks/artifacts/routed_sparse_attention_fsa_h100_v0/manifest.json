@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "experiment": "routed_sparse_attention_fsa_h100_v0",
+  "recorded_date": "2026-08-07",
+  "shuttle_source": {
+    "branch": "research/shuttle-routed-sparse-attention",
+    "base_commit": "9ba3888cb0f91e2cf54f2a182927f13e769be2c6",
+    "adapter_commit_status": "uncommitted",
+    "adapter_path": "lib/tile_lifetime/benchmarks/h100_fsa_kv_major.py",
+    "adapter_size_bytes": 30246,
+    "adapter_sha256": "bdcbf4b2f12c00c2047459b69ed4aa28b1df1f5c64620450e67cfb522d08ec45",
+    "revision_note": "The raw JSON shuttle_revision field identifies the branch base commit. That commit does not contain the benchmark adapter. The adapter SHA256 in this manifest identifies the exact uncommitted file copied to and executed on the H100 holder."
+  },
+  "raw_artifacts": [
+    {
+      "path": "fsa_2k.json",
+      "size_bytes": 25560,
+      "sha256": "35c7346eb1a5b023a5488147ee2ae4068814809b0d06716e59c3b0cc3d2e937e"
+    },
+    {
+      "path": "fsa_16k_b128_k8.json",
+      "size_bytes": 27875,
+      "sha256": "a2f2ab138433e6404f459495b471ebe1a5df96524ae44d4beb4fad3300716fc4"
+    },
+    {
+      "path": "fsa_2k_pristine_failure.log",
+      "size_bytes": 4247,
+      "sha256": "647f669579eb6f713cc0fe5cdf685c7ffda911c58cfc931b925df54c632c1b93"
+    }
+  ]
+}

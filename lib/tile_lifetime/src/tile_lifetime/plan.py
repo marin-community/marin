@@ -140,7 +140,7 @@ class PersistentTaskPlacement(StrEnum):
 
 @dataclass(frozen=True)
 class PersistentTaskRole:
-    """One visible task in an expert-parallel persistent schedule."""
+    """One visible task in a bounded persistent schedule."""
 
     name: str
     placement: PersistentTaskPlacement
@@ -152,7 +152,7 @@ class PersistentTaskRole:
 
 @dataclass(frozen=True)
 class PersistentWorkerRole:
-    """A specialized worker group used by the persistent kernel."""
+    """A specialized worker group used by a persistent schedule."""
 
     name: str
     count: int
@@ -161,12 +161,29 @@ class PersistentWorkerRole:
 
 @dataclass(frozen=True)
 class ReadinessEvent:
-    """Global readiness counter connecting persistent tasks."""
+    """Counted, generation-scoped readiness connecting physical tasks."""
 
     name: str
     producers: tuple[str, ...]
     consumers: tuple[str, ...]
     granularity: str
+    required_arrivals: int | tuple[int, ...] | str = 1
+    generation: str = "region_invocation"
+    memory_order_scope: str = "device"
+
+
+@dataclass(frozen=True)
+class BoundedBuffer:
+    """Finite storage whose reuse is tied to consumer completion."""
+
+    name: str
+    item_domain: str
+    capacity_items: int
+    size_bytes: int
+    producer: str
+    consumers: tuple[str, ...]
+    reuse_after: str
+    placement: str
 
 
 @dataclass(frozen=True)

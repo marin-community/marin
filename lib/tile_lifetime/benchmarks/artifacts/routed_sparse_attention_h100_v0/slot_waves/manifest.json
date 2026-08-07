@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "branch": "research/shuttle-routed-sparse-attention",
+  "base_commit": "9ba3888cb0f91e2cf54f2a182927f13e769be2c6",
+  "source_status": "uncommitted benchmark implementation on the named branch; base_commit does not contain these files",
+  "source_evolution_patch": "source_evolution.patch",
+  "executed_source_sha256": {
+    "primary_m16_m32": {
+      "lib/tile_lifetime/benchmarks/h100_kv_major_slot_waves.py": "ec97f6803e1e7eb32cffa426d27e752d428ff6d4551d3147e6cc844782ad3946",
+      "lib/tile_lifetime/benchmarks/kv_major_slot_waves.py": "1f2d06bac0629c35139b023a647dd02dcc5c526f0ebc6716d35e7924104733e0",
+      "lib/tile_lifetime/benchmarks/triton_kv_major_slot_waves.py": "5534a9195d5e99316d963e347a01611cff0d48e448b21e529f6bfed67043cb22"
+    },
+    "source_order_ablation": {
+      "lib/tile_lifetime/benchmarks/h100_kv_major_slot_waves.py": "2477abb52e1384f245931803ab36c281a68d3a74cfe14019351d2f5a1156c7b1",
+      "lib/tile_lifetime/benchmarks/kv_major_slot_waves.py": "c2bc70952da37630823f2c33f44820c90f4699bc0ec4e52c4340684317eda03a",
+      "lib/tile_lifetime/benchmarks/triton_kv_major_slot_waves.py": "5534a9195d5e99316d963e347a01611cff0d48e448b21e529f6bfed67043cb22"
+    },
+    "m64_ablation": {
+      "lib/tile_lifetime/benchmarks/h100_kv_major_slot_waves.py": "2477abb52e1384f245931803ab36c281a68d3a74cfe14019351d2f5a1156c7b1",
+      "lib/tile_lifetime/benchmarks/kv_major_slot_waves.py": "c2bc70952da37630823f2c33f44820c90f4699bc0ec4e52c4340684317eda03a",
+      "lib/tile_lifetime/benchmarks/triton_kv_major_slot_waves.py": "cdcad66efb5eabdbd1c9d1a653c84758b8fb4acd262aedd6fedc38d9f2de659d"
+    },
+    "post_validation_worktree": {
+      "lib/tile_lifetime/benchmarks/h100_kv_major_slot_waves.py": "39ebb68f66ea7155223ba4d280596b687ec1f9cb209bc4c6dea4abe8334995ee",
+      "lib/tile_lifetime/benchmarks/kv_major_slot_waves.py": "c2bc70952da37630823f2c33f44820c90f4699bc0ec4e52c4340684317eda03a",
+      "lib/tile_lifetime/benchmarks/triton_kv_major_slot_waves.py": "cdcad66efb5eabdbd1c9d1a653c84758b8fb4acd262aedd6fedc38d9f2de659d"
+    }
+  },
+  "result_sha256": {
+    "slot-wave-16k-b128-k8-final.json": "4c4c31e653d27733279ae6f7e5594634badd449e3d4193910ab1bc4f3bc8c1af",
+    "slot-wave-16k-b128-k8-m32-source-order.json": "e91f138b4788f0b70cc1bb3e92c8758bd97da0334117ddc2d5ebfde68cede572",
+    "slot-wave-16k-b128-k8-m32.json": "b3567b2d1612f3eae9393795566213f06ad50ae7576e0b1070265f403dc7f511",
+    "slot-wave-2k-b128-k8-final.json": "05d93ff47397d13dc2150e9622f94584484899152392e220069c9805045a1b6e",
+    "slot-wave-2k-b128-k8-m32-confirm.json": "03869e62b488a3ad45e52ab99a9154fa15593cdb70a5efc35a5b23ce05831304",
+    "slot-wave-2k-b128-k8-m32.json": "d518877f4c2435eb8f9a8dfe15e911dc7659f29e00750623c0d63b729da2e6b6",
+    "slot-wave-2k-b128-k8-m64-w8.json": "0657df925345897b319ec21c37e85c18a2c149ee02a2c964ac3d7673782a04f8",
+    "slot-wave-2k-b128-k8.json": "554a037c6ae3ffa0a4aa8d3ea7603a90f756f2edc89758d95c257ba86ffa2549"
+  }
+}

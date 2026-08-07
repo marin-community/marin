@@ -16,12 +16,13 @@ author: dlwh
 
 ## Current TL;DR
 
-- Dense StableHLO recovery executes through CODA/QuACK and official FA3 on H100. The first generated GB200 receiver-local MoE composition now maps the generic relation into 256-padded MoK grouped GEMMs, generated SwiGLU, and deterministic pre-combine merge. It measures 3.455 ms versus 6.747 ms for the matching Torch sequence. Official DeepEP dispatch/combine, generated shared-expert compute, and rank-maximum overlap measurements are in progress.
+- Dense StableHLO recovery and the distributed GB200 MoE synthesis result are frozen at annotated local tag `shuttle-gb200-moe-v1`. Routed sparse attention now has exact CPU query-major/KV-major semantics and three measured H100 paths over the same relation: query-major Seer, KV-major FSA, and Shuttle's deterministic bounded slot waves. The selected Shuttle M32 candidate measures 4.017344 ms at 16K.
 
 ## Hypothesis Queue
 
 ### Active
 
+- `TLTC-RSA-003`: query-major and KV-major performance cross over as relation degree, KV reuse, padding, and partial-state traffic change. Next test: use a deliberately non-monotone relation and implement actual cross-query KV staging; current grouped CTAs do not share staged K/V.
 - `TLTC-005`: the semantic recognizer can tolerate ordinary JAX broadcast, multiply-order, and projection variations while rejecting near-misses with structured diagnostics. Next test: add permuted and illegal StableHLO fixtures.
 - `TLTC-002`: named layout contracts around fixed CuTe and attention skeletons are sufficient for the first full-region planner. Next test: inventory the layouts required by the local JAX/CuTe attention boundary.
 - `TLTC-003`: a direct Torch/CuTe or CODA boundary can execute expert Hopper kernels while the JAX adapter is repaired separately. Next test: benchmark official FA3/FA4 and CODA RMS on the reserved H100.
@@ -33,10 +34,15 @@ author: dlwh
 
 ### Falsified / Dead End
 
-- None.
+- `TLTC-RSA-004A`: source-order traversal isolates the benefit of per-wave KV sorting on the canonical fixture. It does not: source order is already KV-monotone in every slot, so the ablation executes identical edge arrays.
+- `TLTC-RSA-004B`: increasing the query tile from M32/four warps to M64/eight warps improves the first Triton kernel. At 2K it regresses from 0.502016 to 0.660096 ms.
 
 ### Promoted
 
+- `TLTC-RSA-001`: executable FP32 attention partial state and stable slot-order merge match an independently materialized selected-mask reference for causal GQA, uneven relation degree, padding, and a sequence tail.
+- `TLTC-RSA-002`: `RelationPlan` now drives both source traversal and compact destination-major offsets/sorted source identities. The full package suite passes without changing existing MoE behavior.
+- `TLTC-RSA-004`: an executable deterministic slot-wave plan consumes the generic relation directly, updates one FP32 online state per query without atomics or edge partials, and measures 4.017344 ms at 16K.
+- `TLTC-035`: the dense and distributed-MoE checkpoint is preserved with raw distributions, correctness fixtures, hashes, candidate records, pins, and hardware telemetry at annotated local tag `shuttle-gb200-moe-v1`.
 - `TLTC-001`: the semantic builder, legality rule, materialized fallback, numerical classification, and structured plan pass seven CPU tests. Evidence: entry `2026-08-05 22:35 - TLTC-001 first vertical slice`.
 - `TLTC-004`: the frozen StableHLO fixture compiles end-to-end into the delayed-RMS plan. Evidence: entry `2026-08-05 22:55 - TLTC-004 StableHLO semantic recovery`.
 - `TLTC-006`: ordinary JAX causal GQA StableHLO compiles into an FA3-style streaming skeleton, and a combined module recovers both CODA and FA3 plans. Evidence: entry `2026-08-06 - TLTC-006 CODA plus FA3 structural baseline`.
@@ -54,6 +60,36 @@ author: dlwh
 - 2026-08-06: use explicit FP32 round-to-nearest multiplication and addition for deterministic routed merge. FMA remains a measured numerical alternative but is not the selected exact-order path.
 
 ## Entry Log
+
+### 2026-08-06 - TLTC-RSA-001 routed sparse-attention start
+
+- Hypothesis: the relation/index machinery recovered for MoE is generic enough to drive query-block to KV-block traversal in both query-major and KV-major orientations; only the grouped QK/softmax/PV body and structured merge should be attention-specific.
+- Baseline: annotated local tag `shuttle-gb200-moe-v1`, peeled commit `9ba3888cb0f91e2cf54f2a182927f13e769be2c6`.
+- Branch: `research/shuttle-routed-sparse-attention`.
+- Scope: CPU semantics and relation reuse first, then one single-GPU BF16 backend; no major XLA integration and no distributed implementation unless transport reuse proves small.
+- Research sources: MoBA semantics first; FlashMoBA and FlashMLA as physical oracles; Quest for index-plane/payload-plane separation; FlashAttention for exact online-state algebra; NSA and SeerAttention as overfitting checks.
+- Durable brief: `.agents/projects/tile_lifetime_compiler/routed_sparse_attention_brief.md`.
+- Implementation plan: `.agents/projects/tile_lifetime_compiler/routed_sparse_attention_plan.md`.
+- Coordinating issue: none; this remains local until publication is requested.
+- Next action: implement an independent masked reference, structured partial state, query-major fold, and KV-major `RelationPlan` adapter with deterministic source-slot merge.
+
+### 2026-08-06 - TLTC-RSA-002 relation reuse and two executable orientations
+
+- Hypothesis: one binary relation plus exact online-softmax state is sufficient to execute both query-major and pure KV-major selected-block attention without a workload-specific route-plan type.
+- Commit Hash: uncommitted branch `research/shuttle-routed-sparse-attention`, based on `shuttle-gb200-moe-v1` peeled commit `9ba3888cb0f91e2cf54f2a182927f13e769be2c6`.
+- Config: CPU debug workload with sequence length 10 padded into three 4-token Q/KV blocks, four query heads, two KV heads, query/key dimension 8, value dimension 5, causal masking, source degrees `[1,2,3]`, destination degrees `[3,2,1]`, and destination padding quantum 2.
+- Result: the generic relation gained per-edge validity, `-1` invalid sentinels, invalid-slot inverse fill, valid-edge capacity accounting, and compact destination-major offsets/source identities/source slots. Existing all-valid MoE behavior remains unchanged.
+- Result: query-major keeps a query's FP32 `(max,sum,value)` state resident while visiting selected blocks. KV-major groups edges by KV block, produces one partial per valid edge, inverse-routes the three state fields independently, and merges in stable query-block/slot order without atomics.
+- Result: both orientations match the independently materialized selected-mask reference at `rtol=2e-6`, `atol=2e-6`; repeated KV-major output is bitwise deterministic; padded query-tail outputs are zero; duplicate selected blocks and empty fold domains are rejected.
+- Structural result: both physical candidates are emitted from the same relation with derived source/destination arrival counts, bounded buffers, worker roles, kernel regions, and byte estimates. The query-major plan materializes zero partial-state bytes. The initial two-kernel KV-major baseline explicitly materializes one FP32 state per valid edge. Neither materializes sequence-squared scores or probabilities.
+- Primary-shape estimate: at sequence 16384, Q/KV block 128, 32/8 heads, dimension 128, and top-k 8, the deterministic fixture contains 996 valid edges. The coarse pure-KV-major plan would materialize 2,121,400,320 bytes of FP32 partial state, versus zero partial-state bytes for query-major. This is an analytical warning and pruning signal, not a measured rejection of KV-major reuse.
+- Command: `uv run --frozen --package marin-tile-lifetime --group test pytest -q lib/tile_lifetime/tests`.
+- Result: the complete package suite passes 74 tests, including routed-attention and slot-wave behavior tests.
+- Command: `uv run --frozen --package marin-core --group lint pyrefly check lib/tile_lifetime/src`.
+- Result: zero type errors. Scoped repository pre-commit checks passed.
+- Generality accounting: relation ownership, grouping, padding, dispatch, inverse mapping, coalescing, and capacity were reused. Ragged validity and inverse fill generalized MoE machinery. Exact attention state and counted readiness fields are new generic machinery. Selected-block legality, causal/tail masking, and GQA mapping are workload-specific. Existing MoE worker-pool and event derivation did not transfer unchanged and must not be reported as reused.
+- Background research: H100 first. Use Block-Sparse-Attention as query-major standard-attention reference, Flash Sparse Attention for pure KV-major partial reduction, and FlashMoBA's precomputed-pattern API as a hybrid performance oracle. FlashMLA remains a GB200 index-plane/roofline control because its MLA shapes do not match standard GQA.
+- Next action: compile and smoke the pinned H100 oracles on one prerecorded 2K relation, then benchmark the same cached relation at sequence 16K.
 
 ### 2026-08-05 22:00 - TLTC-001 start
 
@@ -471,3 +507,53 @@ author: dlwh
 - Selection evidence: the selected fingerprint is computed from the preserved schema-1 search records rather than hard-coded. The cache contains the 12-to-96 worker sweep, no-overlap phases, separate/concatenated A/B runs, confirmation runs, and the schema-2 coarse-materialization replay. Schema-2 is an out-of-sample confirmation and does not participate in selection.
 - Validation: snapshot integrity tests verify every artifact digest, raw sample count, selected fingerprint, route content identity, output hashes, semantic fixture contents, and observed clock/power fields.
 - Next action: test whether `RelationPlan`, its two orientations, task derivation, buffer lifetimes, and readiness machinery transfer unchanged to a MoBA-like routed sparse-attention workload.
+
+### 2026-08-06 - TLTC-036 routed sparse-attention semantic and schedule slice
+
+- Result: one generic ragged `RelationPlan` now drives exact query-major and KV-major selected-block attention. The KV-major path groups by KV block, computes structured partials, inverse-routes all three state fields, and merges in stable query-block/selected-slot order without atomics.
+- State algebra: `AttentionPartial(max, sum_exp, weighted_value)` lives in the shared attention module rather than the routed-attention adapter. Its merge rescales both inputs to a common maximum, is associative over exact arithmetic, and retains explicit FP32 state.
+- Structural plan: both orientations emit task roles, worker roles, counted readiness, bounded buffers, kernel boundaries, and explicit materialization bytes. At sequence 16384, block 128, and top-k 8, the deterministic coarse KV-major candidate exposes approximately 2.12 GB of partial-state materialization; query-major retains state internally.
+- Backend boundary: `h100_routed_sparse_attention.py` converts the compiler relation into the pinned MIT Block-Sparse-Attention mask interface, checks selected query blocks against an independent exact reference, saves raw timing samples and output/relation hashes, and records both candidate dumps and complete GPU/toolchain metadata. This is the first executable query-major adapter; the generated KV-major candidate remains structural until an FSA-compatible physical adapter runs.
+- Validation: all 74 tile-lifetime tests pass; source Pyrefly reports zero errors; all scoped repository checks pass.
+- Infrastructure: the H100 holder had driver 595.71.05 but no system CUDA toolkit or PyTorch. Torch 2.7.1+cu128 and PyPI CUDA compiler components provided runtime headers/PTXAS but not the `nvcc` driver required by Block-Sparse-Attention. The exact pre-compilation failure is preserved. The holder was released after the fallback measurements.
+- Index-plane follow-up: the first H100 artifact reported 4.558 ms for synthetic routing plus relation construction, which is slower than the sparse kernel itself. Replacing per-edge Python row assignment and exchange dictionaries with stable vectorized grouping reduced the local compiler's 16K relation-plan construction to 0.331 ms median; deterministic synthetic routing itself takes 0.536 ms (0.869 ms combined). Future GPU artifacts record these phases separately; neither is hidden inside kernel timing.
+- H100 fallback: pinned SeerAttention `aba03e3...` at sequence 2048 measured 0.316752 ms and matched an independent source-ordered selected-block reference with maximum/mean/p99 errors `0.0078125`, `8.28e-5`, and `0.0009766`. At sequence 16384, 50 samples measured 2.388208 ms median/111.95 selected-work TFLOP/s versus 6.282496 ms for dense Torch causal GQA SDPA.
+- Limitation: Seer scans every causal KV block and mask-tests in-loop, so it does not validate compact selected-edge traversal. Its oracle adapter also expands K/V from 8 to 32 heads outside timing, adding 201,326,592 bytes and 52.05 ms at 16K. Raw distributions, hashes, pins, telemetry, script, and BSA build log are under `benchmarks/artifacts/routed_sparse_attention_h100_v0`.
+- Bounded KV-major candidate: process selected slots in ascending waves, grouping each wave by KV block. Each query appears at most once per wave, giving a unique state writer and deterministic FP32 online updates without atomics. At 16K this replaces 2,121,400,320 bytes of per-edge partial state with a 272,629,760-byte per-query online-state buffer (7.78x less capacity) and derives all per-slot/per-KV arrival counts from the relation.
+- Next action: make the KV-major candidate executable through a compact-edge primitive, beginning with FSA on a CUDA-devel H100 environment or a narrowly extracted Triton/CUDA grouped-QK/PV body. Prune the current 2.12-GB partial-state boundary by bounded forwarding rather than treating it as the intended schedule.
+
+### 2026-08-07 - TLTC-036 FSA KV-major oracle adapter
+
+- Hypothesis: Shuttle's exact block-shared `RelationPlan` can drive FSA's KV-major selected-attention oracle through a thin index adapter, exposing the backend gap without introducing an attention-specific relation type.
+- Commit Hash: uncommitted branch `research/shuttle-routed-sparse-attention`, based on `9ba3888cb0f91e2cf54f2a182927f13e769be2c6`.
+- Source: FSA `7ff144fd7ff485dc4220d439f31cc1708b64fef3`; PyTorch 2.8.0+cu128; Triton 3.4.0; driver 595.71.05; one H100 80GB HBM3 under cluster-default unpinned clocks.
+- Adapter: `h100_fsa_kv_major.py` reconstructs FSA int32 `[Hkv,T,topk]` indices from generic `RelationPlan` source, slot, destination, and validity fields. It repeats block-shared edges across query tokens and KV heads. FSA privately reconstructs the block-to-token orientation inside every timed public call and cannot accept Shuttle's grouped offsets or inverse map.
+- Pristine-source failure: Triton rejects `lse_ptrs = (lse_ptr + pid_q_j * stride_lse_n,)` because `tl.load` receives a singleton tuple. The executable checkout removes only the trailing comma. The pinned head, dirty status, complete diff, and pristine traceback are preserved; the patch changes neither pointer arithmetic nor schedule/math.
+- Config: BF16 causal self-attention, sequence 16384, Q/KV block 128, top-k 8, 32 query heads, 8 KV heads, head/value dimension 128, 996 relation edges, 10 warmups, 30 timed calls, and eight sampled query blocks for independent FP32 correctness.
+- Command: `CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/tmp/shuttle-fsa/lib/tile_lifetime/src:/tmp/shuttle-fsa/lib/tile_lifetime/benchmarks python /tmp/shuttle-fsa/lib/tile_lifetime/benchmarks/h100_fsa_kv_major.py --sequence-length 16384 --block-size 128 --selected-blocks 8 --query-heads 32 --key-value-heads 8 --head-dimension 128 --warmups 10 --repeats 30 --iterations 1 --planning-repeats 20 --correctness-blocks 8 --fsa-root /tmp/shuttle-fsa/vendor/fsa --shuttle-revision 9ba3888cb0f91e2cf54f2a182927f13e769be2c6 --json-output /tmp/shuttle-fsa/fsa_16k_b128_k8.json`.
+- Relation identity: raw Boolean mask SHA256 `b2a57606e303f8af4da0c8002ddea162f86625725696bca7f18b8072a8143427`, identical to the Seer query-major artifact. Expanded FSA index SHA256 is `2c919c9ae176dc4b4e7c76bc464f835f21693ae12c518ad60a347fa97daf0deb`.
+- Performance: the combined FSA public call measures 12.5392 ms median over 30 samples (`12.3622–13.0573` ms), or 21.322 selected-work TFLOP/s for 267,361,714,176 QK+PV FLOPs. The timing includes FSA's relation inversion, allocations, QK/PV partial work, and reduction; those phases are not separately exposed.
+- Correctness: maximum/mean/p99 absolute error against the sampled source-ordered FP32 reference is `0.0207922`/`0.000164022`/`0.00120181`; allclose at 0.03 passes; output has no NaN or infinity. First and final timed outputs are bitwise identical with SHA256 `0d711cf008f91f857a2241737ebb122b2336c5c1d128e885f2db3b6b47ae53f5`.
+- Planning: generic relation-plan median is 0.6411 ms. FSA index expansion median is 0.6226 ms, but its first four raw samples are `0.93–1.07` seconds; raw samples remain in the artifact.
+- Memory: source-visible FSA partial/statistics buffers account for 111,225,856 bytes and internal inverse indices for 20,865,024 bytes; measured peak allocator increment is 431,091,712 bytes. The coarse Shuttle plan declares 2,121,400,320 bytes by materializing all query-head edge states. FSA reuses one-head buffers serially.
+- Artifact: `lib/tile_lifetime/benchmarks/artifacts/routed_sparse_attention_fsa_h100_v0` contains the 2K correctness smoke, 16K result, pristine failure log, source patch, raw distributions, hashes, buffer accounting, and GPU telemetry.
+- Interpretation: the generic relation is sufficient at the semantic adapter boundary. The public FSA API does not validate direct reuse of Shuttle's destination-major index plane. Bounded state consumption is required before the generated KV-major candidate is competitive in memory.
+- Next action: compare the executable ascending-slot-wave kernel with FSA and Seer on the same 2K and 16K relations, then decide whether the next backend seam should accept compact destination groups or bounded slot waves.
+
+### 2026-08-07 - TLTC-RSA-004 executable bounded slot waves
+
+- Hypothesis: selected-slot waves can consume the generic destination-grouped relation with one deterministic FP32 state writer per query tile, avoiding atomics and all-edge partial materialization while remaining competitive enough to expose the next physical bottleneck.
+- Commit Hash: uncommitted implementation on branch `research/shuttle-routed-sparse-attention`, based on `9ba3888cb0f91e2cf54f2a182927f13e769be2c6`. The base commit does not contain the benchmark. The artifact manifest pins exact per-stage hashes for all three executed scripts and every raw JSON.
+- Command: `PYTHONPATH=/app/shuttle_slot_wave/lib/tile_lifetime/src:/app/shuttle_slot_wave/lib/tile_lifetime/benchmarks python lib/tile_lifetime/benchmarks/h100_kv_major_slot_waves.py --gpu --sequence-length 16384 --block-size 128 --selected-blocks 8 --query-tile-size 32 --warmups 10 --repeats 30 --correctness-blocks 8 --json-output artifacts/slot-wave-16k-b128-k8-final.json`.
+- Config: BF16 causal GQA, sequence 2K and 16K, block 128, top-k 8, 32 query heads, 8 KV heads, dimension 128, one H100 80GB HBM3, driver 595.71.05, PyTorch 2.8.0+cu128, Triton 3.4.0, cluster-default unpinned clocks. The 16K relation has 996 edges and Boolean SHA256 `b2a57606e303f8af4da0c8002ddea162f86625725696bca7f18b8072a8143427`.
+- Construction: launch one wave per selected slot. Sort each wave by KV block, then assign each edge/head/query-row tile to one Triton program. The program updates global FP32 maximum, denominator, and weighted-value state. No atomic or per-edge partial is used; one BF16 finalize follows eight waves.
+- Result: selected M32/four-warps measures 0.502016 ms at 2K and 4.017344 ms at 16K. The 16K 30-sample range is 4.011936–4.027776 ms, or 66.552 selected-work TFLOP/s. It is 1.68 times the 2.388208-ms Seer query-major smoke and 0.32 times the 12.5392-ms FSA public-call adapter.
+- Candidate selection: M16/four-warps measures 0.569072 ms at 2K; M32/four-warps measures 0.502016 ms; M64/eight-warps measures 0.660096 ms. M32 is selected. M64 is correct and deterministic but 31.5% slower than M32.
+- Correctness: eight sampled 16K query blocks have maximum/mean/p99 absolute error `0.00783062`/`0.000124260`/`0.000865310` against the independent source-ordered FP32 reference. There are no NaNs or infinities. Repeated BF16 output is bitwise identical with SHA256 `7fee4b9c61ea72736f203fad5ab212f1f31d9178f750bc967f8c8db2eeb66917`.
+- Memory: the schedule materializes 272,629,760 bytes of global per-query online state, 7.78 times less than the coarse 2,121,400,320-byte all-edge plan. It materializes zero edge partials and zero sequence-squared scores.
+- Negative result: source-order/no-sort measures 4.018880 ms versus 4.017344 ms for KV-major sorting, but the fixture is already KV-monotone within every selected slot. Both schedules have identical edge arrays and output hashes, so this is a no-op rather than a cache-locality result.
+- Interpretation: bounded deterministic state consumption transfers cleanly. Physical KV reuse does not yet transfer: destination-grouped edges remain independent CTAs and never stage one KV block for multiple query CTAs. Eight wave boundaries and global online-state traffic are the likely gap to query-major execution.
+- Distributed decision: defer distributed sparse attention. Generic ownership/coalescing concepts transfer, but the DeepEP/MoE adapter cannot transport structured FP32 attention state or KV-block payloads without a new backend adapter. That would be significant new infrastructure rather than a small reuse test.
+- Validation: all 74 tile-lifetime tests pass.
+- Artifact: `lib/tile_lifetime/benchmarks/artifacts/routed_sparse_attention_h100_v0/slot_waves` contains raw distributions, outputs/input hashes, exact source/result digests, source evolution, telemetry, complete plan dumps, and all candidate points.
+- Next action: use a deliberately non-monotone relation to measure grouping, then add actual shared KV staging or cluster-level reuse. Do not infer a sorting benefit from the canonical fixture.

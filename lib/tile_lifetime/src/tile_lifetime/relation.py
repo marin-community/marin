@@ -27,6 +27,7 @@ class RelationPlan:
     destination_count: int
     destination_rank_count: int
     merge_order: str
+    edge_valid: np.ndarray
     source_item: np.ndarray
     route_slot: np.ndarray
     destination_item: np.ndarray
@@ -56,12 +57,32 @@ class RelationPlan:
     @property
     def route_count(self) -> int:
         """Number of unpadded source-route assignments."""
-        return self.source_item_count * self.route_slots
+        return int(np.count_nonzero(self.edge_valid))
 
     @property
     def destination_row_count(self) -> int:
         """Number of padded rows across all destination groups."""
         return int(self.destination_row_to_route.shape[0])
+
+    @property
+    def destination_edge_offsets(self) -> np.ndarray:
+        """Offsets into the compact destination-major edge arrays."""
+        return np.concatenate((np.zeros(1, dtype=np.int32), np.cumsum(self.group_count, dtype=np.int32)))
+
+    @property
+    def grouped_route_indices(self) -> np.ndarray:
+        """Valid rectangular route indices in stable destination-major order."""
+        return self.destination_row_to_route[self.row_valid]
+
+    @property
+    def grouped_source_item(self) -> np.ndarray:
+        """Source identity for every compact destination-major edge."""
+        return self.source_item[self.grouped_route_indices]
+
+    @property
+    def grouped_route_slot(self) -> np.ndarray:
+        """Source-local slot for every compact destination-major edge."""
+        return self.route_slot[self.grouped_route_indices]
 
     def dispatch(self, payload: np.ndarray) -> np.ndarray:
         """Gather source payload into padded destination-group order."""
@@ -70,10 +91,16 @@ class RelationPlan:
         output[self.row_valid] = payload[self.row_source_item[self.row_valid]]
         return output
 
-    def inverse_dispatch(self, destination_payload: np.ndarray) -> np.ndarray:
+    def inverse_dispatch(self, destination_payload: np.ndarray, *, fill_value: int | float = 0) -> np.ndarray:
         """Restore destination-row payload to source-item, route-slot order."""
         _validate_payload(destination_payload, self.destination_row_count, "destination payload")
-        flat = destination_payload[self.route_to_destination_row]
+        flat = np.full(
+            (self.source_item_count * self.route_slots, *destination_payload.shape[1:]),
+            fill_value,
+            dtype=destination_payload.dtype,
+        )
+        valid_routes = np.flatnonzero(self.edge_valid.reshape(-1))
+        flat[valid_routes] = destination_payload[self.route_to_destination_row[valid_routes]]
         return flat.reshape(self.source_item_count, self.route_slots, *destination_payload.shape[1:])
 
     def weighted_merge(self, destination_payload: np.ndarray) -> np.ndarray:
@@ -83,6 +110,8 @@ class RelationPlan:
         output = np.zeros((self.source_item_count, *restored.shape[2:]), dtype=accumulation_dtype)
         for source_item in range(self.source_item_count):
             for route_slot in range(self.route_slots):
+                if not self.edge_valid[source_item, route_slot]:
+                    continue
                 output[source_item] += (
                     restored[source_item, route_slot].astype(accumulation_dtype) * self.weight[source_item, route_slot]
                 )
@@ -125,6 +154,7 @@ def build_relation_plan(
     destination_indices: np.ndarray,
     weights: np.ndarray,
     *,
+    edge_valid: np.ndarray | None = None,
     destination_rank_by_item: np.ndarray,
     destination_local_item_by_item: np.ndarray,
     padding_quantum: int,
@@ -134,11 +164,16 @@ def build_relation_plan(
     """Build a stable grouped relation from source indices and weights."""
     destination_indices = np.asarray(destination_indices)
     weights = np.asarray(weights, dtype=np.float32)
+    if edge_valid is None:
+        edge_valid = np.ones(destination_indices.shape, dtype=np.bool_)
+    else:
+        edge_valid = np.asarray(edge_valid, dtype=np.bool_)
     destination_rank_by_item = np.asarray(destination_rank_by_item)
     destination_local_item_by_item = np.asarray(destination_local_item_by_item)
     reasons = _relation_reasons(
         destination_indices,
         weights,
+        edge_valid,
         destination_rank_by_item,
         destination_local_item_by_item,
         padding_quantum=padding_quantum,
@@ -152,8 +187,12 @@ def build_relation_plan(
     source_item = np.repeat(np.arange(source_item_count, dtype=np.int32), route_slots)
     route_slot = np.tile(np.arange(route_slots, dtype=np.int32), source_item_count)
     destination_item = destination_indices.reshape(-1).astype(np.int32, copy=False)
-    destination_rank = destination_rank_by_item[destination_item].astype(np.int32, copy=False)
-    destination_local_item = destination_local_item_by_item[destination_item].astype(np.int32, copy=False)
+    flat_edge_valid = edge_valid.reshape(-1)
+    valid_route_indices = np.flatnonzero(flat_edge_valid)
+    destination_rank = np.full(destination_item.shape, -1, dtype=np.int32)
+    destination_local_item = np.full(destination_item.shape, -1, dtype=np.int32)
+    destination_rank[valid_route_indices] = destination_rank_by_item[destination_item[valid_route_indices]]
+    destination_local_item[valid_route_indices] = destination_local_item_by_item[destination_item[valid_route_indices]]
     flat_weight = weights.reshape(-1)
 
     group_order = np.lexsort((destination_local_item_by_item, destination_rank_by_item))
@@ -162,20 +201,25 @@ def build_relation_plan(
     group_count = np.zeros(group_order.shape[0], dtype=np.int32)
     group_index_by_destination = np.empty(group_order.shape[0], dtype=np.int32)
     group_index_by_destination[group_order] = np.arange(group_order.shape[0], dtype=np.int32)
-    np.add.at(group_count, group_index_by_destination[destination_item], 1)
+    np.add.at(group_count, group_index_by_destination[destination_item[valid_route_indices]], 1)
     group_padded_count = _round_up(group_count, padding_quantum)
     group_offset = np.concatenate((np.zeros(1, dtype=np.int32), np.cumsum(group_padded_count[:-1], dtype=np.int32)))
 
     row_count = int(np.sum(group_padded_count, dtype=np.int64))
     destination_row_to_route = np.full(row_count, -1, dtype=np.int32)
-    route_to_destination_row = np.empty(source_item.shape[0], dtype=np.int32)
-    next_row = group_offset.copy()
-    for route in range(source_item.shape[0]):
-        group = group_index_by_destination[destination_item[route]]
-        destination_row = next_row[group]
-        destination_row_to_route[destination_row] = route
-        route_to_destination_row[route] = destination_row
-        next_row[group] += 1
+    route_to_destination_row = np.full(source_item.shape[0], -1, dtype=np.int32)
+    valid_route_groups = group_index_by_destination[destination_item[valid_route_indices]]
+    stable_group_order = np.argsort(valid_route_groups, kind="stable")
+    grouped_routes = valid_route_indices[stable_group_order]
+    grouped_route_groups = valid_route_groups[stable_group_order]
+    compact_group_offset = np.concatenate((np.zeros(1, dtype=np.int32), np.cumsum(group_count[:-1], dtype=np.int32)))
+    within_group = np.arange(valid_route_indices.shape[0], dtype=np.int32) - np.repeat(
+        compact_group_offset,
+        group_count,
+    )
+    grouped_destination_rows = group_offset[grouped_route_groups] + within_group
+    destination_row_to_route[grouped_destination_rows] = grouped_routes
+    route_to_destination_row[grouped_routes] = grouped_destination_rows
 
     row_valid = destination_row_to_route >= 0
     row_source_item = np.full(row_count, -1, dtype=np.int32)
@@ -190,21 +234,17 @@ def build_relation_plan(
     row_destination_item[row_valid] = destination_item[valid_routes]
     row_weight[row_valid] = flat_weight[valid_routes]
 
-    exchange_pairs = np.stack((destination_rank, source_item), axis=1)
-    exchange_order = np.lexsort((exchange_pairs[:, 1], exchange_pairs[:, 0]))
-    ordered_pairs = exchange_pairs[exchange_order]
-    unique_pair_start = np.ones(ordered_pairs.shape[0], dtype=np.bool_)
-    unique_pair_start[1:] = np.any(ordered_pairs[1:] != ordered_pairs[:-1], axis=1)
-    unique_pairs = ordered_pairs[unique_pair_start]
-    pair_to_exchange_row = {(int(rank), int(item)): row for row, (rank, item) in enumerate(unique_pairs.tolist())}
-    route_to_exchange_row = np.fromiter(
-        (pair_to_exchange_row[(int(rank), int(item))] for rank, item in exchange_pairs),
-        dtype=np.int32,
-        count=source_item.shape[0],
-    )
+    exchange_pairs = np.stack((destination_rank[valid_route_indices], source_item[valid_route_indices]), axis=1)
+    if exchange_pairs.shape[0]:
+        unique_pairs, exchange_rows = np.unique(exchange_pairs, axis=0, return_inverse=True)
+        route_to_exchange_row = np.full(source_item.shape[0], -1, dtype=np.int32)
+        route_to_exchange_row[valid_route_indices] = exchange_rows.astype(np.int32, copy=False)
+    else:
+        unique_pairs = np.empty((0, 2), dtype=np.int32)
+        route_to_exchange_row = np.full(source_item.shape[0], -1, dtype=np.int32)
 
     _check_capacity(
-        destination_rank,
+        destination_rank[valid_route_indices],
         row_destination_rank,
         row_valid,
         rank_count=int(np.max(destination_rank_by_item)) + 1,
@@ -217,6 +257,7 @@ def build_relation_plan(
         destination_count=destination_rank_by_item.shape[0],
         destination_rank_count=int(np.max(destination_rank_by_item)) + 1,
         merge_order="source_item ascending, then route_slot ascending, FP32 accumulation",
+        edge_valid=edge_valid,
         source_item=source_item,
         route_slot=route_slot,
         destination_item=destination_item,
@@ -268,6 +309,7 @@ def build_expert_parallel_relation_plan(
 def _relation_reasons(
     destination_indices: np.ndarray,
     weights: np.ndarray,
+    edge_valid: np.ndarray,
     destination_rank_by_item: np.ndarray,
     destination_local_item_by_item: np.ndarray,
     *,
@@ -280,6 +322,8 @@ def _relation_reasons(
         reasons.append("destination indices must have shape [source_item, route_slot]")
     if weights.shape != destination_indices.shape:
         reasons.append("weights must match destination-index shape")
+    if edge_valid.shape != destination_indices.shape:
+        reasons.append("edge validity must match destination-index shape")
     if destination_rank_by_item.ndim != 1 or destination_local_item_by_item.shape != destination_rank_by_item.shape:
         reasons.append("destination ownership arrays must be one-dimensional and identically shaped")
     if padding_quantum <= 0:
@@ -292,7 +336,10 @@ def _relation_reasons(
         return tuple(reasons)
     if not np.issubdtype(destination_indices.dtype, np.integer):
         reasons.append("destination indices must have integer dtype")
-    if np.any(destination_indices < 0) or np.any(destination_indices >= destination_rank_by_item.shape[0]):
+    if destination_rank_by_item.shape[0] == 0:
+        reasons.append("destination ownership mapping must not be empty")
+    valid_destinations = destination_indices[edge_valid]
+    if np.any(valid_destinations < 0) or np.any(valid_destinations >= destination_rank_by_item.shape[0]):
         reasons.append("destination index is outside the ownership mapping")
     if np.any(destination_rank_by_item < 0) or np.any(destination_local_item_by_item < 0):
         reasons.append("destination ownership coordinates must be non-negative")
