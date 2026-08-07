@@ -2143,8 +2143,11 @@ def test_provisional_plateau_can_close_without_full_manifest_coverage() -> None:
             target_concurrency=3,
             minimum_seconds=30,
             minimum_generated_tokens=32_768,
-            required_request_ids=frozenset({"short", "medium", "long"}),
+            required_request_ids=frozenset(
+                {"short-0", "short-1", "medium-0", "medium-1", "long-0", "long-1"}
+            ),
             require_manifest_coverage=False,
+            required_cohorts=frozenset({"short", "medium", "long"}),
         )
     )
 
@@ -2154,11 +2157,16 @@ def test_provisional_plateau_can_close_without_full_manifest_coverage() -> None:
         generation_counter=1_000,
         prompt_counter=2_000,
     ) == "opened"
-    plateau.record_completion(request_id="short", cohort="short", completion_tokens=8_192, succeeded=True)
+    plateau.record_completion(request_id="short-0", cohort="short", completion_tokens=8_192, succeeded=True)
+    assert not plateau.ready_to_close(now=30, in_flight=3, generation_counter=33_768)
+    plateau.record_completion(request_id="medium-0", cohort="medium", completion_tokens=8_192, succeeded=True)
+    assert not plateau.ready_to_close(now=30, in_flight=3, generation_counter=33_768)
+    plateau.record_completion(request_id="long-0", cohort="long", completion_tokens=8_192, succeeded=True)
     assert plateau.ready_to_close(now=30, in_flight=3, generation_counter=33_768)
     result = plateau.close(now=30, in_flight=3, generation_counter=33_768, prompt_counter=4_000)
 
-    assert result["manifest"] == {"expected": 3, "observed": 1, "passed": False, "required": False}
+    assert result["manifest"] == {"expected": 6, "observed": 3, "passed": False, "required": False}
+    assert result["cohort_completions"] == {"long": 1, "medium": 1, "short": 1}
 
 
 def test_load_arm_samples_live_counter_before_slow_request_completes(

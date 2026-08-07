@@ -19,6 +19,7 @@ class PlateauRequirements:
     minimum_generated_tokens: int
     required_request_ids: frozenset[str]
     require_manifest_coverage: bool = True
+    required_cohorts: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if self.target_concurrency <= 0:
@@ -124,6 +125,7 @@ class PlateauWindow:
                 not self.requirements.require_manifest_coverage
                 or self.completed_request_ids == set(self.requirements.required_request_ids)
             )
+            and self.requirements.required_cohorts.issubset(self.cohort_completions)
             and self.failed_requests == 0
         )
 

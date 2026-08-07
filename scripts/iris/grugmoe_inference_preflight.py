@@ -3085,6 +3085,7 @@ def _run_rolling_health_arm(
         minimum_generated_tokens=minimum_generated_tokens,
         required_request_ids=required_request_ids,
         require_manifest_coverage=require_manifest_coverage,
+        required_cohorts=frozenset(str(request["cohort"]) for request in workload["requests"]),
     )
     plateau = PlateauWindow(requirements)
     gate = threading.Event()
