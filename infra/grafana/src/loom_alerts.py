@@ -1,16 +1,23 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Announce Grafana alerts in Slack and deliver them to Loom on that thread.
+"""Announce Grafana alerts in Slack, and for critical ones open Loom triage there.
 
-The bridge owns the Slack message rather than Grafana's own Slack contact point,
-because an incoming webhook answers with a bare `ok`: it never reveals the
-message timestamp, so Grafana cannot tell anyone which thread it posted to.
-Posting here yields the `channel`/`ts` that Loom needs to route the thread to the
-triage session, which is what lets the operator read status and steer in the same
-place the alert appeared.
+The bridge owns every Slack alert message rather than Grafana's own Slack contact
+point. For critical alerts that is load-bearing: an incoming webhook answers with
+a bare `ok` and never reveals the message timestamp, so Grafana cannot tell
+anyone which thread it posted to, while posting here yields the `channel`/`ts`
+that Loom needs to route the thread to the triage session. That is what lets the
+operator read status and steer in the same place the alert appeared.
 
-Slack is posted to first, so the alert reaches people even when Loom is
+`SlackAnnouncer` holds that Slack behavior on its own, so the two receivers
+differ only in what follows the announcement. `LoomAlertClient` opens a triage
+run on the thread it announced; `SlackAlertClient` announces and stops, which is
+what the fallback for malformed or unlabeled alerts wants — those have no
+incident to triage. Sharing the announcer keeps one channel, one credential, and
+one rendering, so alert text reaches Slack escaped either way.
+
+Slack is posted to first, so a critical alert reaches people even when Loom is
 unreachable — and that failure is reported into the thread rather than only into
 Grafana's delivery log. Announcements are deduplicated on alert identity: Grafana
 retries a failed webhook and re-notifies an unresolved alert every
@@ -26,7 +33,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx
-from config import LoomAlertConfig
+from config import LoomAlertConfig, SlackAlertConfig
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +119,136 @@ class ThreadLog:
         self._threads.pop(key, None)
 
 
+class SlackAnnouncer:
+    """Announce Grafana alert groups in one Slack channel, a thread per alert.
+
+    Owns the channel, the bot credential, and which thread announced which alert.
+    One instance serves one receiver; two receivers keep separate thread logs
+    because they see disjoint alert groups.
+    """
+
+    def __init__(self, slack: SlackAlertConfig) -> None:
+        self._slack = slack
+        # Alert identity to the thread announcing it. Keyed on identity rather
+        # than firing state so a resolution threads under the alert it resolves.
+        self._threads = ThreadLog(ttl=THREAD_TTL, max_entries=MAX_TRACKED_THREADS)
+
+    async def announce(
+        self,
+        client: httpx.AsyncClient,
+        payload: object,
+        firing: list[Mapping[str, object]],
+        thread_key: str,
+    ) -> SlackThread | None:
+        """Post the alert to Slack, or thread a re-notification under its original.
+
+        A Slack failure is logged and returns `None` rather than raising: for the
+        critical receiver, the triage session is worth opening even when the
+        announcement did not land.
+        """
+        tracked = self._threads.peek(thread_key)
+        if tracked is not None:
+            # Grafana retries a failed webhook within seconds, and re-notifies an
+            # unresolved alert on its repeat_interval. Both land here; only the
+            # second is news, so a quiet period separates them.
+            if time.monotonic() - tracked.posted_at >= RENOTIFY_QUIET_PERIOD:
+                await self.post(client, "Still firing.", thread=tracked.thread)
+                self._threads.mark_posted(thread_key)
+            return tracked.thread
+        thread = await self.post(client, _alert_card(payload, firing))
+        if thread is not None:
+            self._threads.put(thread_key, thread)
+        return thread
+
+    async def announce_resolution(
+        self,
+        client: httpx.AsyncClient,
+        payload: object,
+        thread_key: str,
+    ) -> None:
+        """Note a resolution under the thread that announced the alert.
+
+        Nothing is posted for an unknown thread: a resolution for an alert this
+        instance never announced has no conversation to join, and a bare
+        "resolved" in the channel reads as noise.
+        """
+        tracked = self._threads.peek(thread_key)
+        if tracked is None:
+            return
+        await self.post(
+            client,
+            f"Resolved — {_alert_title(payload, _all_alerts(payload))}.",
+            thread=tracked.thread,
+        )
+        self._threads.discard(thread_key)
+
+    async def post(
+        self,
+        client: httpx.AsyncClient,
+        text: str,
+        *,
+        thread: SlackThread | None = None,
+    ) -> SlackThread | None:
+        """Post to Slack, returning the resulting thread reference, or None on failure."""
+        body: dict[str, Any] = {
+            "channel": self._slack.channel,
+            "text": text,
+            "unfurl_links": False,
+        }
+        if thread is not None:
+            body["thread_ts"] = thread.thread_ts
+        try:
+            response = await client.post(
+                f"{SLACK_API_URL}/chat.postMessage",
+                json=body,
+                headers={"Authorization": f"Bearer {self._slack.bot_token}"},
+            )
+            response.raise_for_status()
+            result = response.json()
+        except (httpx.HTTPError, json.JSONDecodeError) as err:
+            logger.warning("Slack alert announcement failed: %s", err)
+            return None
+        # chat.postMessage reports its own failures in a 200 body.
+        if not isinstance(result, Mapping) or not result.get("ok"):
+            reason = result.get("error", "unknown error") if isinstance(result, Mapping) else "malformed response"
+            logger.warning("Slack rejected the alert announcement: %s", reason)
+            return None
+        ts = result.get("ts")
+        if not isinstance(ts, str) or not ts:
+            logger.warning("Slack accepted the alert announcement without a message ts")
+            return None
+        # A threaded reply keeps the root as the thread; only a new post opens one.
+        return thread or SlackThread(channel=self._slack.channel, thread_ts=ts)
+
+
+class SlackAlertClient:
+    """Announce a Grafana webhook in Slack, with no Loom leg.
+
+    The receiver for malformed or unlabeled alerts: they carry no severity to
+    route on and no incident to triage, so they are announced and left alone.
+    """
+
+    def __init__(
+        self,
+        config: LoomAlertConfig,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._http_timeout = config.http_timeout
+        self._transport = transport
+        self._announcer = SlackAnnouncer(config.slack)
+
+    async def announce(self, payload: object) -> SlackThread | None:
+        """Announce the group's firing alerts, or note its resolution."""
+        firing = _firing_alerts(payload)
+        thread_key = _thread_key(payload)
+        async with httpx.AsyncClient(timeout=self._http_timeout, transport=self._transport) as client:
+            if not firing:
+                await self._announcer.announce_resolution(client, payload, thread_key)
+                return None
+            return await self._announcer.announce(client, payload, firing, thread_key)
+
+
 class LoomAlertClient:
     """Announce a Grafana webhook in Slack and open a Loom run on that thread."""
 
@@ -122,11 +259,8 @@ class LoomAlertClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._config = config
-        self._slack = config.slack
         self._transport = transport
-        # Alert identity to the thread announcing it. Keyed on identity rather
-        # than firing state so a resolution threads under the alert it resolves.
-        self._threads = ThreadLog(ttl=THREAD_TTL, max_entries=MAX_TRACKED_THREADS)
+        self._announcer = SlackAnnouncer(config.slack)
 
     async def submit(self, payload: object) -> dict[str, Any] | None:
         """Announce the group in Slack, then create one Loom run for its firing alerts.
@@ -138,9 +272,9 @@ class LoomAlertClient:
         thread_key = _thread_key(payload)
         async with httpx.AsyncClient(timeout=self._config.http_timeout, transport=self._transport) as client:
             if not firing:
-                await self._announce_resolution(client, payload, thread_key)
+                await self._announcer.announce_resolution(client, payload, thread_key)
                 return None
-            thread = await self._announce(client, payload, firing, thread_key)
+            thread = await self._announcer.announce(client, payload, firing, thread_key)
             return await self._create_run(client, payload, firing, thread)
 
     async def _create_run(
@@ -226,7 +360,7 @@ class LoomAlertClient:
         fails and Grafana retries.
         """
         if thread is not None:
-            await self._post(client, f"No Loom triage session opened for this alert: {error}", thread=thread)
+            await self._announcer.post(client, f"No Loom triage session opened for this alert: {error}", thread=thread)
         return error
 
     async def _link_session(
@@ -239,93 +373,7 @@ class LoomAlertClient:
         session_id = run.get("session_id")
         if thread is None or not isinstance(session_id, str) or not session_id:
             return
-        await self._post(client, f"Triage session: {self._config.url}/s/{session_id}", thread=thread)
-
-    async def _announce(
-        self,
-        client: httpx.AsyncClient,
-        payload: object,
-        firing: list[Mapping[str, object]],
-        thread_key: str,
-    ) -> SlackThread | None:
-        """Post the alert to Slack, or thread a re-notification under its original.
-
-        A Slack failure is logged and returns `None` rather than raising: the
-        triage session is worth opening even when the announcement did not land.
-        """
-        tracked = self._threads.peek(thread_key)
-        if tracked is not None:
-            # Grafana retries a failed webhook within seconds, and re-notifies an
-            # unresolved alert on its repeat_interval. Both land here; only the
-            # second is news, so a quiet period separates them.
-            if time.monotonic() - tracked.posted_at >= RENOTIFY_QUIET_PERIOD:
-                await self._post(client, "Still firing.", thread=tracked.thread)
-                self._threads.mark_posted(thread_key)
-            return tracked.thread
-        thread = await self._post(client, _alert_card(payload, firing))
-        if thread is not None:
-            self._threads.put(thread_key, thread)
-        return thread
-
-    async def _announce_resolution(
-        self,
-        client: httpx.AsyncClient,
-        payload: object,
-        thread_key: str,
-    ) -> None:
-        """Note a resolution under the thread that announced the alert.
-
-        Nothing is posted for an unknown thread: a resolution for an alert this
-        instance never announced has no conversation to join, and a bare
-        "resolved" in the channel reads as noise.
-        """
-        tracked = self._threads.peek(thread_key)
-        if tracked is None:
-            return
-        await self._post(
-            client,
-            f"Resolved — {_alert_title(payload, _all_alerts(payload))}.",
-            thread=tracked.thread,
-        )
-        self._threads.discard(thread_key)
-
-    async def _post(
-        self,
-        client: httpx.AsyncClient,
-        text: str,
-        *,
-        thread: SlackThread | None = None,
-    ) -> SlackThread | None:
-        """Post to Slack, returning the resulting thread reference, or None on failure."""
-        body: dict[str, Any] = {
-            "channel": self._slack.channel,
-            "text": text,
-            "unfurl_links": False,
-        }
-        if thread is not None:
-            body["thread_ts"] = thread.thread_ts
-        try:
-            response = await client.post(
-                f"{SLACK_API_URL}/chat.postMessage",
-                json=body,
-                headers={"Authorization": f"Bearer {self._slack.bot_token}"},
-            )
-            response.raise_for_status()
-            result = response.json()
-        except (httpx.HTTPError, json.JSONDecodeError) as err:
-            logger.warning("Slack alert announcement failed: %s", err)
-            return None
-        # chat.postMessage reports its own failures in a 200 body.
-        if not isinstance(result, Mapping) or not result.get("ok"):
-            reason = result.get("error", "unknown error") if isinstance(result, Mapping) else "malformed response"
-            logger.warning("Slack rejected the alert announcement: %s", reason)
-            return None
-        ts = result.get("ts")
-        if not isinstance(ts, str) or not ts:
-            logger.warning("Slack accepted the alert announcement without a message ts")
-            return None
-        # A threaded reply keeps the root as the thread; only a new post opens one.
-        return thread or SlackThread(channel=self._slack.channel, thread_ts=ts)
+        await self._announcer.post(client, f"Triage session: {self._config.url}/s/{session_id}", thread=thread)
 
 
 def _all_alerts(payload: object) -> list[Mapping[str, object]]:

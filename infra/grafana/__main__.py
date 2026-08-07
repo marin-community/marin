@@ -93,13 +93,11 @@ def main() -> None:
     # Secret values stay hand-placed in Secret Manager; the component only grants the
     # runtime service account access. CW_READ_TOKEN is the CoreWeave read-role token
     # behind the k8s source; GF_DATABASE_PASSWORD is the grafana Postgres user's
-    # password; SLACK_ALERTS_WEBHOOK and GF_SMTP_PASSWORD feed the provisioned
-    # alerting contact points. GF_SMTP_PASSWORD and the GitHub App key are appended
-    # below only when present.
+    # password. GF_SMTP_PASSWORD, the GitHub App key, and the Slack bot token are
+    # appended below only when their feature is on.
     secrets = [
         SecretEnv(name="GF_DATABASE_PASSWORD", secret="cloudsql-grafana-password"),
         SecretEnv(name="CW_READ_TOKEN", secret="marin-grafana-cw-read-token"),
-        SecretEnv(name="SLACK_ALERTS_WEBHOOK", secret="marin-grafana-slack-webhook"),
     ]
     env = {
         "DATABASE_SOCKET_DIR": database_socket_dir,
@@ -117,8 +115,8 @@ def main() -> None:
         env["LOOM_ALERT_URL"] = loom_client.apply(lambda client: client["loomUrl"])
         env["LOOM_ALERT_PROFILE"] = loom_client.apply(lambda client: client["profile"])
         env["LOOM_ALERT_REPOSITORY"] = LOOM_ALERT_REPOSITORY
-        # The bridge is the only thing that announces critical alerts, so neither
-        # the channel nor the token is optional the way SMTP is: without them the
+        # The bridge is the only thing that announces alerts now, so neither the
+        # channel nor the token is optional the way SMTP is: without them the
         # container refuses to boot rather than dropping alerting silently. The
         # channel is a Slack id (`C…`) and @russbot must be a member of it.
         slack_alerts_channel = config.require("slack_alerts_channel")
