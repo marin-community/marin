@@ -120,7 +120,7 @@ def main() -> None:
         # The bridge is the only thing that announces critical alerts, so neither
         # the channel nor the token is optional the way SMTP is: without them the
         # container refuses to boot rather than dropping alerting silently. The
-        # channel is a Slack id (`C…`) and @marinbot must be a member of it.
+        # channel is a Slack id (`C…`) and @russbot must be a member of it.
         slack_alerts_channel = config.require("slack_alerts_channel")
         env["SLACK_ALERTS_CHANNEL"] = slack_alerts_channel
         secrets.append(SecretEnv(name="SLACK_ALERTS_BOT_TOKEN", secret=SLACK_BOT_TOKEN_SECRET))

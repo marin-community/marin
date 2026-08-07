@@ -235,8 +235,11 @@ class BridgeConfig:
             # The bridge is the only thing that announces critical alerts now that
             # Grafana's own Slack receiver is gone, so a missing token would take
             # alerting down silently. Fail the boot instead.
-            bot_token = os.environ.get("SLACK_ALERTS_BOT_TOKEN")
-            channel = os.environ.get("SLACK_ALERTS_CHANNEL")
+            # Both are stripped: a secret payload created from a shell pipeline
+            # usually carries a trailing newline, and it would otherwise reach an
+            # Authorization header and a request body verbatim.
+            bot_token = (os.environ.get("SLACK_ALERTS_BOT_TOKEN") or "").strip()
+            channel = (os.environ.get("SLACK_ALERTS_CHANNEL") or "").strip()
             if not bot_token or not channel:
                 raise ValueError(
                     "SLACK_ALERTS_BOT_TOKEN and SLACK_ALERTS_CHANNEL are required when LOOM_ALERT_URL is set"

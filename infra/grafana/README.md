@@ -298,7 +298,7 @@ timestamp. It then asks the Cloud Run metadata server for a Google-signed
 identity token for `https://loom.oa.dev`, exchanges it for a short-lived `ops`
 Loom token, and creates an idempotent run for `marin-community/marin` on the
 `operator` channel, naming that thread. Loom routes the thread to the triage
-session, so the session answers in the thread and an `@marinbot` reply there
+session, so the session answers in the thread and an `@russbot` reply there
 reaches it instead of launching a second session — see [Loom's
 slack-trigger docs](https://github.com/marin-community/loom/blob/main/docs/slack-trigger.md).
 The session link is threaded under the announcement.
@@ -385,7 +385,7 @@ Creating the secrets:
    `echo -n "<token>" | gcloud secrets create marin-grafana-cw-read-token --project=hai-gcp-models --data-file=-`
 2. Slack → incoming webhook for `#marin-eng`, then
    `echo -n "https://hooks.slack.com/..." | gcloud secrets create marin-grafana-slack-webhook --project=hai-gcp-models --data-file=-`
-3. The `@marinbot` bot-user token (`xoxb-…`) the bridge announces alerts with —
+3. The `@russbot` bot-user token (`xoxb-…`) the bridge announces alerts with —
    the same Slack app Loom posts as, so the announcement and Loom's replies come
    from one identity. Reuse the token from Loom's `LOOM_DOTENV`
    (`LOOM_SLACK_BOT_TOKEN`; see `infra/loom`), then
@@ -396,7 +396,7 @@ Creating the secrets:
    granting the runtime account access, even once the value exists.
 5. Point the bridge at the channel and make sure the bot is in it:
    `pulumi config set marin-grafana:slack_alerts_channel <id>` using the channel
-   id from `#marin-eng` → Copy link (`C…`), and `/invite @marinbot` there.
+   id from `#marin-eng` → Copy link (`C…`), and `/invite @russbot` there.
    `pulumi up` fails naming the missing key if this is skipped.
 6. (optional, enables email) Gmail app password for grafana@openathena.ai, then
    `echo -n "<app-password>" | gcloud secrets create marin-grafana-smtp-credentials --project=hai-gcp-models --data-file=-`
