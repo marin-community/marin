@@ -42,7 +42,8 @@ DEFAULT_HERO_STEPS = 25
 DEFAULT_WANDB_PROJECT = "marin_moe"
 HERO_FSDP_BATCH_SIZE = 1024
 HERO_NODES_PER_RACK = 16
-HERO_PROCESSES_PER_TASK = 1
+HERO_GPUS_PER_TASK = 4
+HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_TASK
 HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=30)
 # This must exceed XLA's 10-minute collective timeout.
@@ -107,7 +108,7 @@ def _build_hero_run(
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
-        count=4,
+        count=HERO_GPUS_PER_TASK,
         cpu=120,
         ram="850g",
         disk="1t",

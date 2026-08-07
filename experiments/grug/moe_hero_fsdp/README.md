@@ -79,6 +79,7 @@ by the one-day lifecycle policy.
   the scan.
 
 ### Systems (FSDP)
+- Each Iris task reserves one four-GPU GB200 node and starts one JAX process per GPU.
 - **One rack**: `expert_axis_size=1`, `replica_axis_size=1` → one 64-GPU `data` axis.
 - **Two racks**: `expert_axis_size=1`, `replica_axis_size=2` → two DP replicas, each with a
   64-GPU `data` axis. Model parameters are replicated across `replica_dcn` and FSDP-sharded only

@@ -101,7 +101,29 @@ author: power
 - Diagnostic control: Same XLA failsafe flags as the supervisor, direct trainer process, zero task retries.
 - Babysitter: Codex, two-minute cadence through first progress, then at most 15 minutes.
 
+### 2026-08-07 03:31 UTC - moe-hero-fsdp-nccl2307-2rack-clean-1000-20260807
+
+- Command: `uv run --frozen iris --cluster=marin job run --target-cluster cw-us-east-08a --priority production --no-wait --enable-extra-resources --cpu 2 --memory 8GB --disk 32GB --timeout 43200 --max-retries 0 --job-name moe-hero-fsdp-nccl2307-2rack-clean-1000-20260807-coord -e WANDB_API_KEY <set> -- python -m experiments.grug.moe_hero_fsdp.launch --run-id moe-hero-fsdp-nccl2307-2rack-clean-1000-20260807 --dp-racks 2 --num-steps 1000 --no-save-checkpoints --version 2026.08.07 --run`.
+- Job: `/power/moe-hero-fsdp-nccl2307-2rack-clean-1000-20260807-coord`; expected child `grug-train-moe-hero-fsdp-nccl2307-2rack-clean-1000-20260807`.
+- Git SHA: `1ac2c4331e55439932da32a614c04f912ed31df4`.
+- Dirty tree: No; the commit was pushed before submission.
+- Source bundle: Iris workspace bundle, 9.8 MB; no content ID was reported.
+- Hardware: 32 workers, four GB200 GPUs each, two NVL72 racks on `cw-us-east-08a`.
+- W&B: ID and display name `moe-hero-fsdp-nccl2307-2rack-clean-1000-20260807`, project `marin_moe`, group `moe-hero-fsdp`, resume `allow`.
+- Output root: `s3://marin-us-east-02a/marin/grug/moe-hero-fsdp-nccl2307-2rack-clean-1000-20260807/2026.08.07`.
+- Initialization: None.
+- Final step: 1000.
+- Checkpoint policy: Metrics only; no checkpoints.
+- Diagnostic control: Ordinary launcher with no supervisor, recovery XLA flags, environment ablation, or profiler/debugger attachment.
+- Babysitter: Codex, two-minute cadence through first progress, then at most 15 minutes.
+
 ## Event Log
+
+### 2026-08-07 03:47 UTC - Clean one-process-per-node control stopped
+
+- Result: The ordinary 2-rack trainer used 32 JAX processes for 128 GPUs and advanced through step 7 without `bad_alloc`, `length_error`, or a collective stall.
+- Decision: Stopped `/power/moe-hero-fsdp-nccl2307-2rack-clean-1000-20260807-coord`; it did not test the requested one-process-per-GPU topology.
+- Next: Set `processes_per_task=4` for each four-GPU Iris task and start the 2-rack supervised gate with XLA's 60-second execution deadman.
 
 ### 2026-08-07 02:11 UTC - Two-rack NCCL 2.30.7 gate completed
 

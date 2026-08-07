@@ -34,6 +34,7 @@ from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_fsdp.launch import (
     _SLIMPAJAMA_SHUFFLE,
     HERO_FSDP_BATCH_SIZE,
+    HERO_GPUS_PER_TASK,
     HERO_MIXED_PRECISION,
     HERO_NODES_PER_RACK,
     HERO_PROCESS_STALL_TIMEOUT,
@@ -133,7 +134,7 @@ def build_checkpoint_benchmark_run(
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
-        count=4,
+        count=HERO_GPUS_PER_TASK,
         cpu=120,
         ram="850g",
         disk="1t",

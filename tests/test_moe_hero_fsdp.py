@@ -5,6 +5,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from marin.execution.lazy import StepContext
+
 from experiments.grug.moe_hero_fsdp import launch, train
 
 
@@ -19,6 +21,20 @@ def test_build_hero_run_uses_run_id_argument(monkeypatch):
     )
 
     assert step.name == "grug/cli-run"
+
+
+def test_build_hero_run_starts_one_process_per_gpu():
+    step = launch.build_supervised_hero_run(
+        run_id="one-process-per-gpu",
+        dp_racks=2,
+        num_steps=1,
+        version="2026.08.07",
+    )
+
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+    train_resources = step.runtime_args["train_resources"]
+
+    assert config.processes_per_task == train_resources.device.chip_count() == 4
 
 
 def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypatch):
