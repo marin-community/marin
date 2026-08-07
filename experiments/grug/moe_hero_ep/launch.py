@@ -5,12 +5,14 @@
 
 import dataclasses
 import os
+from datetime import timedelta
 
 import click
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -21,6 +23,7 @@ from marin.experiment.cli import build_options
 from marin.experiment.data import mixture, tokenized
 from marin.experiment.namespacing import user_namespaced_name
 from marin.processing.tokenize.tokenize import TokenizedCache
+from rigging.filesystem import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
@@ -38,6 +41,7 @@ HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
 HERO_OFFLOAD_OPT_STATE = True
+HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -124,6 +128,10 @@ def build_hero_run(
     The overrides sweep expert count, expert width, routed top-k, and routing capacity from the
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
     comparable across a sweep. ``None`` keeps the hero value.
+
+    Two arguments do move those optimizer values, deliberately: ``batch_size`` and
+    ``schedule_steps`` both change the token budget the heuristic scales from. ``flavor`` also
+    changes the expert axis, so ``fsdp-nodrop`` runs on axis 1 rather than EP64.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -246,6 +254,18 @@ def build_hero_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
+            # Write under the step's output path. Levanter's default base path is pod-local, so a
+            # preempted run would find nothing to resume from and --save-checkpoints would buy
+            # nothing.
+            checkpointer=CheckpointerConfig(
+                base_path=prefix_join(ctx.output_path, "checkpoints"),
+                temporary_base_path=None,
+                save_interval=HERO_CHECKPOINT_INTERVAL,
+                keep=None,
+                append_run_id_to_base_path=False,
+                delete_old_temp_checkpoints=True,
+                keep_last_temporary_checkpoints=1,
+            ),
         )
         return GrugRunConfig(
             model=model,

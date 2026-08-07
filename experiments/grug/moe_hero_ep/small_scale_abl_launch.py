@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Small-scale hero-shape ablation: d768 / d1024 / d1280 on one EP64 rack each.
+"""Small-scale hero-shape ablation: d768 / d1024 / d1280 / d1536.
 
 Downsized copies of the ``moe_hero_ep`` hero shape (128 experts, top-4, two shared, SConv,
 hybrid GQA, ``fixed_all_to_all`` EP MoE) at the three small sweep widths, each trained to its 60x
@@ -10,7 +10,9 @@ evals (paloma + uncheatable every 1k), and per-size step counts match the Aug he
 (issue #7856) so these one-rack EP runs are comparable to the FSDP sweep points; only the
 width/depth/head split and the token budget shrink relative to the d6144 shape.
 
-Each ``--size`` submits one 1-rack (16 x GB200x4 = EP64) job.
+Each ``--size`` submits one job on the fleet ``--target`` names: a GB200 rack (EP64), 8 H100 nodes
+(EP64), or 2 H100 nodes (EP16). The expert axis spans the fleet, and it sets cell size, so the
+target is not just a hardware choice -- see the ``TARGETS`` comments.
 """
 
 import dataclasses
