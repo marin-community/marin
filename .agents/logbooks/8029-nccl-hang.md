@@ -177,6 +177,13 @@ author: power
 
 ## Event Log
 
+### 2026-08-07 06:50 UTC - Stock control flag provenance verified
+
+- Read from every python process in task 0 via `/proc/<pid>/environ`, excluding the probe's own pid.
+- Topology is `iris.hooks.multigpu_main --nproc 4` (pid 1) over four `_callable_runner.py` trainers (pids 815, 817, 819, 821), one JAX process per GPU. No `levanter.recovery.child` grandchild, so no supervisor layer.
+- Every trainer carries `XLA_FLAGS=--xla_gpu_enable_command_buffer= --xla_gpu_nccl_termination_timeout_seconds=600`, with no `xla_gpu_execution_terminate_timeout` and no `xla_gpu_execution_progress_tracking`.
+- The contrast against `mhf-8rack-1ppg-sup-base-20260807` is therefore the per-execution deadman, thunk reporting, and the supervisor parent, holding command buffers and the clique timeout equal.
+
 ### 2026-08-07 06:40 UTC - Driver and VBIOS unchanged since the historical wedges
 
 - `nvidia-smi` on the live eight-rack job reports driver `595.71.05` and VBIOS `97.00.B9.00.99` on every GB200 sampled.
