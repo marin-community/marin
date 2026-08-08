@@ -74,7 +74,25 @@ def scale_by_adamh(
             u_norm = _norm(u)
             new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
             new_p = _pin_sharding(new_p, p)
-            return new_p / _norm(new_p) * p_norm - p
+            new_p_norm = _norm(new_p)
+            # Diagnostic: buggy jnp.linalg.norm on the SAME sharded intermediate, in-context. Prints to the
+            # worker log only when it disagrees with the explicit sum-of-squares norm -- i.e. it directly
+            # measures the SPMD over-count (ratio) per 2-D param and confirms whether the sum fix holds.
+            linalg_norm = jnp.linalg.norm(new_p)
+            jax.lax.cond(
+                jnp.abs(linalg_norm / jnp.maximum(new_p_norm, 1e-10) - 1.0) > 0.05,
+                lambda: jax.debug.print(
+                    f"[hyperball-diag] shape={p.shape} p_norm={{a}} u_norm={{b}} new_p_norm_sum={{c}} "
+                    "new_p_norm_linalg={d} overcount_ratio={r}",
+                    a=p_norm,
+                    b=u_norm,
+                    c=new_p_norm,
+                    d=linalg_norm,
+                    r=linalg_norm / jnp.maximum(new_p_norm, 1e-10),
+                ),
+                lambda: None,
+            )
+            return new_p / new_p_norm * p_norm - p
 
         def scale_invariant_update(p, u):
             if p is None:
