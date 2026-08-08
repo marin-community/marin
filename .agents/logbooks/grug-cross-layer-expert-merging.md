@@ -449,3 +449,36 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
   Iris reports the controller and Stage-B child succeeded with exit 0, zero failures, and zero preemptions. The final checkpoint contains `metadata.json`, `manifest.ocdbt`, and `merge_manifest.json` at `gs://marin-us-central1/grug/expert_merge/d512/spectral_prefit/stage-b/2026.08.06/checkpoints/step-1526/`. Artifact markers exist for matching, prefit, conversion, Stage A, and Stage B. The custom recovery worker did not create a W&B run; exact-name and config-ID queries returned no match, so the versioned GCS evaluation and training JSON files are the canonical metric record for this run.
 - Interpretation: the aggregate routed-MoE surgery is recoverable but does not pass the strict single-pair gate. It reaches the Paloma +0.03 bound only after 200M Stage-B tokens, twice the proposed budget, and never reaches the +0.01-0.02 validation target. Healthy routing rules out collapse as the limiting failure. Spectral probes do not justify their complexity; retain them only as diagnostics. Offline prefit helps the starting point and early recovery, but its final advantage is too small and confounded to support a production requirement.
 - Next action: do not expand to two middle pairs. Compare the final student with the pairwise tied-from-scratch reference to separate architectural from surgery loss, then test a simpler native initializer with aggregate layer-function distillation before revisiting assignment machinery.
+
+### 2026-08-07 18:25 - GRUG-XEM-002 native aggregate-prefit recovery result
+
+- Hypothesis: Prefitting the native-assigned shared bank against each layer's complete routed MoE output gives a simpler and better recovery initializer than per-expert probe distillation.
+- Commit Hash: `5f1461ebb1530dc00cab2ef0753d66259726efb8`; source teacher commit `884b213ff4`.
+- Commands: `/dlwh/grug-xem-merge-native-aggregate-prefit-20260807` ran `experiments.grug.moe.launch_merge_recovery` with branch `native_aggregate_prefit`, version `2026.08.06`, `MARIN_PREFIX=gs://marin-us-central1`, and `--max-concurrent 1`. The fixed resubmit command is in `scratch/20260807-1646-native-aggregate-prefit-monitoring-state.json`. The launch relied on Iris secret injection; the submitted command contained no explicit credential argument.
+- Config: layers 2-3 share one 256-expert bank under the native Hungarian assignment. Aggregate prefit trained the shared bank against both source layers' complete routed MoE outputs. Conversion and recovery reused the completed central1 teacher, calibration, and matching artifacts. Stage A trained only the bank for 50M tokens. Stage B trained the bank and affected routers for 200M tokens with CE, `lambda_moe=1.0`, and `lambda_KL=0.1`.
+- Result: aggregate prefit early-stopped at step 700 after its best held-out loss of `0.388719` at step 200. Best held-out aggregate routed-MoE NRMSE was `0.303322` for layer 2 and `0.827910` for layer 3. Prefit, conversion, Stage A, Stage B, and the controller all succeeded with zero failures and zero preemptions.
+
+  | Recovery point | Aggregate validation delta | Aggregate Paloma delta | Native no-prefit validation/Paloma | Spectral-prefit validation/Paloma |
+  |---|---:|---:|---:|---:|
+  | Converted, 0 tokens | +0.109906 | +0.111230 | +0.186542 / +0.187500 | +0.078243 / +0.079437 |
+  | Stage A, 25M | +0.083993 | +0.083432 | — | +0.056781 / +0.057416 |
+  | Stage A, 50M / Stage B initialization | +0.286815 | +0.272560 | +0.067233 / +0.066467 | +0.049134 / +0.049702 |
+  | Stage B, 25M | +0.044332 | +0.044741 | +0.043983 / +0.044288 | +0.039620 / +0.040201 |
+  | Stage B, 100M | +0.034361 | +0.034409 | +0.034079 / +0.033993 | +0.031165 / +0.031286 |
+  | Stage B, 200M | +0.028228 | +0.028431 | +0.028132 / +0.028137 | +0.026114 / +0.026380 |
+
+  Aggregate prefit reduced the converted validation spike by 41.1% relative to native no-prefit, but remained 40.5% above spectral per-expert prefit. Its Stage-A last-batch local metrics looked competitive:
+
+  | Initializer | 50M MoE loss | MoE NRMSE L2/L3 | Block NRMSE L2/L3 |
+  |---|---:|---:|---:|
+  | Native aggregate prefit | 0.227605 | 0.272206 / 0.617344 | 0.070189 / 0.190765 |
+  | Native no prefit | 0.244239 | 0.268925 / 0.645102 | 0.069343 / 0.222910 |
+  | Spectral per-expert prefit | 0.222851 | 0.287350 / 0.602604 | 0.074094 / 0.216943 |
+
+  The aligned Stage-B token-0 evaluation shows that the final 25M Stage-A tokens caused a rollout/generalization failure that the local training batch metrics did not detect. The audit found no checkpoint or evaluator mismatch. Stage B's `init_checkpoint_dir` is the aggregate Stage-A checkpoint root, and its startup log resolved that root to the permanent step-382 checkpoint. Recovery initialization loads every parameter and pending QB leaf with partial loading disabled, resets only optimizer and step state, and evaluates token 0 before its first update. Stage A and Stage B have identical teacher, data config, batch size, seed, assignment, prefit flag, and affected layers. The Stage-A 25M evaluation was written at `00:01:02Z`, the step-382 metadata at `00:03:00Z`, and the Stage-B token-0 evaluation at `00:06:23Z`.
+
+  Stage B recovered from the regression within 25M tokens. At 200M, aggregate prefit was effectively tied with native no-prefit: its validation gap was larger by `0.000096` and its Paloma gap by `0.000295`. It remained behind spectral per-expert prefit by `0.002114` validation and `0.002052` Paloma. Final aggregate MoE NRMSE was `0.332497/0.606397`, block NRMSE was `0.086402/0.221530`, top-1 teacher agreement was `0.9364/0.9026`, top-k agreement was `0.9287/0.9100`, routing entropy was `5.5315/5.5319`, and capacity overflow was zero.
+
+  Permanent `.artifact.json` markers and final checkpoint metadata exist through Stage-B step 1526. The Stage-A and Stage-B artifact provenance records contain a redaction sentinel and no sensitive environment key or value. No W&B run was created by the custom recovery worker; the versioned GCS evaluation and training JSON files are the metric record.
+- Interpretation: aggregate layer-function prefit improves the native conversion starting point, but the benefit does not survive recovery. The frozen-router Stage-A objective can improve sampled local MoE and block NRMSE while making held-out language-model loss much worse. The final result gives no reason to replace spectral per-expert prefit or native no-prefit with this aggregate-prefit schedule.
+- Next action: do not expand to two middle pairs. Add aligned validation at the final Stage-A checkpoint and early-stop Stage A on held-out model loss before testing another distillation objective. A shorter aggregate Stage A or a loss that constrains block rollout may prevent the 25M-to-50M regression, but neither is supported by this run yet.
