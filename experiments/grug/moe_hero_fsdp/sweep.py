@@ -35,8 +35,8 @@ CLUSTER = "cw-us-east-08a"
 PROJECT = "marin-community/marin_moe"
 STEPS = 20
 WARMUP = 5  # first scored step
-# A screening wave scores 15 steps, enough to separate the multi-percent effects it is looking for.
-# The wrap-up wave is measuring the result that gets reported, so it takes 40.
+# 15 steps separates the multi-percent effects a screening wave looks for; the wrap-up waves that
+# produce the reported number take 40.
 WAVE_STEPS = {"final": 45, "final2": 45, "final3": 45, "final4": 45}
 PREFIX = "hs"  # hero sweep
 PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
@@ -73,10 +73,9 @@ BLOCK_FUSION_FLAGS = "--xla_gpu_experimental_enable_fusion_block_level_rewriter=
 # arena outside the client pool.
 USER_BUFFER_FLAGS = "--xla_gpu_enable_nccl_user_buffers=true"
 USER_BUFFER_POOL_MB = "2048"
-# Autotuning at its limit: exhaustive tiling search rather than the default heuristic shortlist, at
-# the highest autotune level. This buys compile time, which a 20-step run pays in full before the
-# scored window opens at step 5. `xla_gpu_experimental_autotune_cache_mode` is not settable here --
-# it takes no value form XLA_FLAGS accepts.
+# Exhaustive tiling search rather than the default heuristic shortlist, at the highest autotune
+# level. Costs compile time, which a 20-step run pays before the scored window opens at step 5.
+# `xla_gpu_experimental_autotune_cache_mode` takes no value XLA_FLAGS accepts, so it is untestable.
 EXHAUSTIVE_AUTOTUNE_FLAGS = "--xla_gpu_exhaustive_tiling_search=true --xla_gpu_autotune_level=5"
 # The components of `JAX_OPTIMIZATION_LEVEL=O1`, which measured -3.70% as a bundle. Its latency
 # hiding scheduler is separately measured at -4.22%, so the bundle's loss is accounted for and its
@@ -152,7 +151,7 @@ WAVES = {
         Arm("nvls", env={"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"}, note="NVLink SHARP"),
     ],
     # Wave 2: the two cheap code wins plus the activation-memory probe. `save_moe` already exists
-    # as a remat mode and the hero simply does not use it, so this arm costs no implementation.
+    # as a remat mode; the hero does not use it.
     "w2": [
         Arm("control"),
         Arm("shardsmall", args=["--small-param-sharding", "fsdp"], note="kill the per-layer all-reduce"),
@@ -414,9 +413,9 @@ WAVES = {
             note="fourth attempt; the first three never reached step 0",
         ),
     ],
-    # Wave 14: the last two ideas worth a rack. Every remaining latency-hiding and collective flag
-    # is dropped: six independent measurements agree that a 90.3% compute-busy step has nothing for
-    # that family to recover, so `p2ppermute` and `unrollcombine` were retired unrun.
+    # Wave 14: every remaining latency-hiding and collective flag is dropped. Six independent
+    # measurements agree that a 90.3% compute-busy step has nothing for that family to recover, so
+    # `p2ppermute` and `unrollcombine` were retired unrun.
     #
     # `doublebuffer` is a rerun. Its wave-12 attempt compiled for 22 minutes against the control's
     # 3.5, then lost every rank's coordinator connection at 24 minutes. That launch predates the
@@ -446,7 +445,7 @@ WAVES = {
             "batch1280",
             env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.93"},
             args=COMBINED_ARGS,
-            note="+25% sequences, 20 per device; the ceiling this headroom can reach",
+            note="+25% sequences, 20 per device",
             batch_size=1280,
         ),
     ],
@@ -471,7 +470,7 @@ WAVES = {
             "adoptedbatch",
             env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
             args=COMBINED_ARGS,
-            note="the adopted configuration plus the batch the freed HBM pays for",
+            note="batch 1152 under a 0.88 ceiling",
             batch_size=1152,
         ),
     ],

@@ -8,8 +8,8 @@ minutes of four racks. This traces ``next_token_loss`` under each arm's launcher
 shape, on CPU, through :func:`apply_hero_overrides` -- the same override path the launcher uses.
 
 ``jax.eval_shape`` never allocates and never launches a kernel, so it cannot catch a numerical or
-kernel-level fault. What it does cover is the Python: attribute names, config plumbing, remat
-policies, and partition specs, which is where every failure so far has been.
+kernel-level fault. It covers the Python -- attribute names, config plumbing, remat policies,
+partition specs -- which is where every failure so far has been.
 
 Usage
 -----
