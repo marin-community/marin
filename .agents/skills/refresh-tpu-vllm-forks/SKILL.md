@@ -190,20 +190,16 @@ are temporary and must be replaced by the landed fork `main` SHA.
 
 Also make only fork-stack update changes needed in Marin:
 
-- remove any old `vllm-tpu==0.19.0` path;
-- make `marin-core[vllm]` own the TPU-vLLM runtime stack;
-- keep shared Marin workspace dependencies aligned by default. When the refresh
-  requires a new version of packages shared with training/test stacks
-  (`jax`, `jaxlib`, `libtpu`, `transformers`, `torch`, etc.), first update all
-  relevant Marin workspace consumers together, including `marin-core`,
-  `marin-levanter`, and `marin-fray`, then validate the unified graph;
-- do not add resolver conflicts or package splits that isolate serving from
-  training/test profiles unless the unified monorepo update has been attempted,
-  the failure is understood, and the PR or blocker issue explains why the split
-  is necessary and how it should be removed later;
-- preserve worker/eval paths that intentionally combine `tpu` and `vllm`
-  extras, unless refreshed-stack validation proves they must change;
-- set `VLLM_TARGET_DEVICE=tpu` for TPU source-build workers.
+- keep the stack isolated. It resolves entirely inside the `uvx` env built from
+  the two forks, so its `jax`, `jaxlib`, `libtpu`, and `torch` versions come from
+  the forks' own dependencies. A refresh updates only
+  `config/external/vllm/tpu-forks.toml` and the regenerated
+  `external_dependencies.py`; it does not touch `marin-core`, `marin-levanter`,
+  or `marin-fray`, and it must not reintroduce a workspace `vllm`/`tpu-inference`
+  dependency or a `vllm` extra;
+- respect the migration nuances: hold torch at the revision the fork's
+  `upstream_base` builds against, and do not advance `vllm` past the
+  `tpu-inference` known-good commit.
 
 Do not bundle unrelated usability, cleanup, or refactor work. Log those
 separately if found.

@@ -65,17 +65,3 @@ def dependency_groups_for_resources(
     if dependency_groups is not None:
         return dependency_groups
     return extras_for_resources(resources)
-
-
-def env_vars_for_dependency_groups(
-    resources: ResourceConfig,
-    dependency_groups: list[str],
-    env_vars: dict[str, str] | None,
-) -> dict[str, str]:
-    """Return environment variables required by the selected dependency groups.
-
-    No dependency group currently needs group-specific environment variables (the forked TPU
-    vLLM sets ``VLLM_TARGET_DEVICE`` itself from its isolated uvx launcher), so this normalizes
-    the caller's overrides into a fresh dict. The seam stays so groups can add env vars later.
-    """
-    return dict(env_vars or {})

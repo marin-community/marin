@@ -20,7 +20,6 @@ from marin.inference.config import (
 )
 from marin.inference.vllm_backend import vllm_launcher
 from marin.inference.vllm_server import VllmEnvironment
-from marin.training.run_environment import env_vars_for_dependency_groups
 
 
 def run_one_query(
@@ -177,10 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.local:
-        local_env = env_vars_for_dependency_groups(resources, dependency_groups, env_vars)
         os.environ.update(env_vars)
-        for key, value in local_env.items():
-            os.environ.setdefault(key, value)
 
         for i in range(args.repeat):
             start = time.time()
@@ -226,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         environment=create_environment(
             extras=dependency_groups,
             pip_packages=(),
-            env_vars=env_vars_for_dependency_groups(resources, dependency_groups, env_vars),
+            env_vars=env_vars,
         ),
     )
     job = client.submit(job_request)

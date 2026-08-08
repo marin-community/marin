@@ -30,7 +30,6 @@ from marin.inference.config import (
     VllmEngineConfig,
     VllmLauncherType,
 )
-from marin.training.run_environment import env_vars_for_dependency_groups
 
 from experiments.evals.lm_eval_suite import lm_eval_suite
 
@@ -71,11 +70,7 @@ def qwen3_inference_config(
             worker_resources=worker_resources,
             worker_environment=create_environment(
                 extras=worker_extras,
-                env_vars=env_vars_for_dependency_groups(
-                    worker_resources,
-                    list(worker_extras),
-                    dict(worker_env_vars),
-                ),
+                env_vars=dict(worker_env_vars),
             ),
         ),
         instances=1,

@@ -148,7 +148,8 @@ def _resolve_serving_plan(
     ``vllm`` and ``levanter`` arrive carrying the knobs the user set; what is decided here is which
     of them serves, and where its runtime comes from. Levanter computes in the worker venv, so that
     venv carries the accelerator's JAX and nothing else; vLLM runs as a subprocess, either from the
-    workspace lock or from an isolated uv-tool env.
+    vllm on the worker's PATH (a GPU task image) or from an isolated uv-tool env (the TPU forks or
+    the CUDA fork/upstream release).
     """
     if vllm_source is VllmSource.MARIN_FORK and (gpu is None or backend != "vllm"):
         raise click.ClickException("--vllm-source marin-fork requires --gpu with the vLLM backend.")
