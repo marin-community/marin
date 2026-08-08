@@ -427,12 +427,14 @@ def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
                 kernel_deadlock_reason="CPUSoftLockup",
                 node_pool="cpu-erapids",
                 compute_class="default",
+                gpu_model="NVIDIA H100 80GB HBM3",
                 rack="14",
                 rack_name="dh1-r014-us-east-02a",
                 rack_slot="dh1-r014-node-01",
                 node_state="production",
                 ib_fabric="US-EAST-02A-FAB14",
                 ib_speed="800G",
+                gpu_driver="595.71.05",
             )
         ]
     }
@@ -443,7 +445,7 @@ def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
             "instance_type": "cd-gp-i64-erapids",
             "node_pool": "cpu-erapids",
             "compute_class": "default",
-            "gpu_model": "",
+            "gpu_model": "NVIDIA H100 80GB HBM3",
             "gpu_capacity": 0,
             "rack": "14",
             "rack_name": "dh1-r014-us-east-02a",
@@ -451,7 +453,7 @@ def test_nodes_report_coreweave_kernel_deadlock_and_pending_reboot():
             "node_state": "production",
             "ib_fabric": "US-EAST-02A-FAB14",
             "ib_speed": "800G",
-            "gpu_driver": "",
+            "gpu_driver": "595.71.05",
             "ready": True,
             "unschedulable": True,
             "cordon_reason": "KernelDeadlock,NLCCPendingExitProduction",
