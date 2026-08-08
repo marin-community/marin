@@ -44,10 +44,9 @@ def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
     sites — expert chunks, scanned layers, the repeated backward postprocess —
     onto one compile.
 
-    The stamped identity names the kernel within one source revision: the factory's
-    qualified name and its keyword arguments. Keyword arguments carry the whole kernel
-    configuration; the positional argument is the CuTe module bundle, a singleton that
-    configures nothing. :func:`_kernel_key` adds the revision.
+    The stamped identity is the factory's qualified name and its keyword arguments, which
+    carry the whole kernel configuration; the positional argument is the CuTe module bundle,
+    a singleton that configures nothing.
     """
 
     @functools.lru_cache(maxsize=None)
@@ -140,18 +139,9 @@ def install(cache: PersistentKvCache) -> None:
 
 
 def _kernel_key(fn: Any, spec: Any) -> str | None:
-    """Return the store key for a kernel, or ``None`` if it cannot be named stably.
+    """Hash the kernel identity, the launch tree hash, the specification, and the device.
 
-    The launch tree hash stands for every source input at once, since a launcher rarely holds
-    its whole kernel in its own file and since the lockfile that pins CuTeDSL, QuACK, and
-    FlashAttention is itself tracked. It is content-addressed rather than a commit hash, so it
-    survives rebases and amends that do not change content, and it is sensitive to uncommitted
-    edits. In a bundle with no checkout it comes from ``MARIN_PROVENANCE``, stamped by the
-    submitting client.
-
-    Launchers built outside :func:`cute_launcher_factory` carry no identity, a launch with no
-    tree hash has no source identity to key on, and a specification whose ``repr`` embeds an
-    object address would key on the address and miss forever. All three fall back to compiling.
+    ``None`` when any of those is missing or unstable, which falls back to compiling.
     """
     identity = getattr(fn, _KERNEL_IDENTITY_ATTR, None)
     if identity is None:

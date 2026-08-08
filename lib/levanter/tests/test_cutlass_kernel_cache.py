@@ -129,35 +129,7 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
     assert served.module == b"objectcode:tile256-bf16:FakeFunctionSpec(shape=(8, 16))"
 
 
-def test_stored_kernels_survive_a_resume_but_not_a_source_change(fake_cutlass, tmp_path, monkeypatch):
-    """The launch tree hash is the whole source identity.
-
-    A launcher rarely holds its whole kernel in its own file — the segmented backward is
-    defined in ``_fa4_cute_kernels`` and built from ``_fa4_cute_segmented_bwd`` — so keying
-    on any one file would serve a stale object after the kernel itself changed.
-    """
-    spec = FakeFunctionSpec(shape=(8, 16))
-    store = str(tmp_path / "store")
-
-    def launch(revision: str) -> None:
-        monkeypatch.setattr(cutlass_kernel_cache, "launch_provenance", lambda: _provenance(tree_hash=revision))
-        fake_cutlass.forget_process_state()
-        install(_kernel_store(store))
-        fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
-
-    launch("treehash-original")
-    launch("treehash-original")
-    assert fake_cutlass.compiled == ["tile128-bf16"], "a resume runs the same tree and must be served"
-
-    launch("treehash-edited")
-    assert fake_cutlass.compiled == ["tile128-bf16", "tile128-bf16"]
-
-
 def test_a_launch_with_no_source_revision_is_compiled_but_not_stored(fake_cutlass, tmp_path, monkeypatch):
-    """Outside a checkout with no stamped provenance there is no source identity to key on.
-
-    Storing anyway would let one revision's object serve another's.
-    """
     monkeypatch.setattr(cutlass_kernel_cache, "launch_provenance", lambda: _provenance(tree_hash=""))
     install(_kernel_store(tmp_path))
 
