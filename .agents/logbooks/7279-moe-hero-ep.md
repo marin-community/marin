@@ -1097,3 +1097,32 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Decision: The one-seed result supports the E192 hypothesis. The held-out gain is consistent and
   grows over the last three evaluations, but it is small. Run at least one more matched seed before
   selecting E192 for a larger training run.
+
+### 2026-08-08 12:18 UTC - MHEP-157 to MHEP-160 memory-scheduler watch gates ready
+
+- Goal: Make the MHEP-131 shape report full gradient and parameter norms without changing its
+  model, batch, routing capacity, or allocator. Test compiler memory controls before changing the
+  training step.
+- Common config: d6144; 48 layers; 192 experts; latent dimension 3072 with RMSNorm; expert width
+  5504; top-4; capacity factor 2.0; batch 1024; sequence length 4096; EP64 `fixed_all_to_all`;
+  one 64-GPU GB200 rack; pinned-host optimizer state; CUDA async allocator; five steps on the
+  2000-step schedule; and full gradient and parameter norms on every step. Eval, profiles,
+  checkpoints, retries, and an explicit client memory fraction are disabled.
+- MHEP-157 sets `JAX_MEMORY_FITTING_EFFORT=1.0` and `JAX_MEMORY_FITTING_LEVEL=O3`. JAX 0.10.1
+  accepts both values. The defaults are 0.0 and O2.
+- MHEP-158 sets `--xla_gpu_enable_latency_hiding_scheduler=false`. OpenXLA states that disabling
+  latency hiding can reduce memory use by giving up compute and communication overlap. The EP
+  runtime default is true.
+- MHEP-159 lowers `--xla_gpu_experimental_parallel_collective_overlap_limit` from 4 to 1. This
+  limits the number of collectives that the scheduler can overlap.
+- MHEP-160 sets `--xla_gpu_enable_analytical_sol_latency_estimator=false`. OpenXLA lists this as a
+  memory control because the estimator tries to maximize compute and communication overlap.
+- Unsupported controls: This JAX/XLA build rejects `--xla_latency_hiding_scheduler_rerun=5` and
+  `--xla_memory_scheduler=kBrkga` during local backend startup. Do not spend a rack on them.
+- Run IDs: `mhep-157-w10-ep-e192-i5504-cf2p00-fullwatch-fit-o3-p32755-20260808`,
+  `mhep-158-w10-ep-e192-i5504-cf2p00-fullwatch-lhs-off-p32756-20260808`,
+  `mhep-159-w10-ep-e192-i5504-cf2p00-fullwatch-overlap1-p32757-20260808`, and
+  `mhep-160-w10-ep-e192-i5504-cf2p00-fullwatch-sol-off-p32758-20260808`.
+- Decision rule: A method passes only if all five steps finish and W&B receives 38 finite gradient
+  norm metrics and 38 finite parameter norm metrics. Stop on the first deterministic compile or
+  NCCL memory failure. Keep a successful compiler control for a longer throughput check.
