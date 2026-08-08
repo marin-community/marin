@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import rigging.cache as cache_module
-from rigging.cache import PersistentKvCache, flush_background_writes, marin_kv_cache
+from rigging.cache import PersistentKvCache, flush_background_writes, marin_kv_cache, sync_kv_cache
 
 
 def test_store_then_load_round_trips_bytes(tmp_path):
@@ -110,3 +110,34 @@ def test_marin_kv_cache_omits_the_node_local_tier_off_cluster(tmp_path, monkeypa
 
     assert (remote / "p" / "k.o").read_bytes() == b"v"
     assert cache.load("k") == b"v"
+
+
+def test_sync_kv_cache_stages_remote_files_down_and_mirrors_new_ones_up(tmp_path):
+    """A synced directory starts warm from the object store and mirrors new files back."""
+    remote, local = tmp_path / "remote", tmp_path / "local"
+    remote.mkdir()
+    (remote / "a.txt").write_bytes(b"one")
+
+    handle = sync_kv_cache(remote=lambda: str(remote), local=str(local))
+    assert (local / "a.txt").read_bytes() == b"one"
+
+    # Tamper with the staged-down file to prove it is not re-uploaded, and write a
+    # new one the way the consumer (XLA) would.
+    (remote / "a.txt").write_bytes(b"tampered")
+    (local / "b.txt").write_bytes(b"two")
+    handle.close()
+
+    assert (remote / "b.txt").read_bytes() == b"two"
+    assert (remote / "a.txt").read_bytes() == b"tampered"
+
+
+def test_sync_kv_cache_mirrors_nested_files_up_when_the_remote_starts_empty(tmp_path):
+    """An absent object-store directory is tolerated; nested local files still mirror up."""
+    remote, local = tmp_path / "remote", tmp_path / "local"
+
+    handle = sync_kv_cache(remote=lambda: str(remote), local=str(local))
+    (local / "sub").mkdir(parents=True)
+    (local / "sub" / "k").write_bytes(b"v")
+    handle.close()
+
+    assert (remote / "sub" / "k").read_bytes() == b"v"

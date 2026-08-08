@@ -25,13 +25,17 @@ a cache at import time before the active cluster config is available. An
 unreachable directory — a mount that has not arrived, a location the task cannot
 write — degrades to the next tier with a warning rather than failing the caller.
 
-A whole compiler cache directory that a non-Python consumer manages — vLLM's or
-XLA's on-disk caches — is a different shape (a mirrored tree, not a keyed value)
-and belongs behind a separate directory-sync primitive rather than this one.
+A whole compiler cache directory that a non-Python consumer manages — XLA's
+on-disk autotune cache, which its C++ opens directly — is a different shape (a
+mirrored tree, not a keyed value). :class:`SyncedDirectory` covers that: it
+mirrors a local directory to and from an object store so the consumer keeps
+opening a local path while the contents persist across nodes.
 """
 
 import atexit
 import logging
+import os
+import pathlib
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -45,6 +49,8 @@ logger = logging.getLogger(__name__)
 # store reclaims a key that stops being written after this many days.
 _CACHE_TTL_DAYS = 30
 _BACKGROUND_WRITERS = 4
+# How often a SyncedDirectory mirrors newly written files up while a run is live.
+_SYNC_FLUSH_INTERVAL = 120.0
 
 _background_lock = threading.Lock()
 _background_executor: ThreadPoolExecutor | None = None
@@ -57,11 +63,20 @@ def _submit_background_write(write: Callable[[], None]) -> Future:
     with _background_lock:
         if _background_executor is None:
             _background_executor = ThreadPoolExecutor(_BACKGROUND_WRITERS, thread_name_prefix="kv-cache-write")
-            atexit.register(flush_background_writes)
+            atexit.register(_shutdown_background_writes)
         future = _background_executor.submit(write)
         _pending_writes.add(future)
     future.add_done_callback(_forget_pending_write)
     return future
+
+
+def _shutdown_background_writes() -> None:
+    """Drain pending writes and close the pool cleanly at process exit."""
+    flush_background_writes()
+    with _background_lock:
+        executor = _background_executor
+    if executor is not None:
+        executor.shutdown(wait=True)
 
 
 def _forget_pending_write(future: Future) -> None:
@@ -201,3 +216,93 @@ def marin_kv_cache(prefix: str, *, suffix: str = "") -> PersistentKvCache:
         remote=lambda: marin_temp_bucket(_CACHE_TTL_DAYS, prefix),
         suffix=suffix,
     )
+
+
+class SyncedDirectory:
+    """Mirror a whole local directory to an object-store directory, both ways.
+
+    A consumer that can only open a local path — XLA's per-fusion autotune cache,
+    which its C++ opens through ``tsl::Env`` and cannot point at an object store —
+    is the case :class:`PersistentKvCache` does not cover: the contents are a
+    mirrored tree, not keyed values a caller serializes. On construction this
+    stages the object-store directory down into the local one so the consumer
+    starts warm, then mirrors newly written files back up on a daemon thread and
+    once more at process exit. A file already staged down is not re-uploaded.
+
+    Every transfer is best-effort: an unreachable object store degrades to a
+    node-local directory with a warning rather than failing the caller. The remote
+    directory resolves on first use, so this is safe to build before the active
+    cluster config loads.
+    """
+
+    def __init__(self, remote: Callable[[], str], local: str, *, flush_interval: float = _SYNC_FLUSH_INTERVAL) -> None:
+        self._remote = remote
+        self._local = local
+        self._flush_interval = flush_interval
+        self._flush_lock = threading.Lock()
+        self._uploaded: set[tuple[str, int]] = set()
+        os.makedirs(local, exist_ok=True)
+        self._stage_down()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="synced-dir-mirror", daemon=True)
+        self._thread.start()
+        atexit.register(self.close)
+
+    def flush(self) -> None:
+        """Upload every local file not already mirrored up."""
+        base = pathlib.Path(self._local)
+        with self._flush_lock:
+            remote_root = StoragePath(self._remote())
+            for path in sorted(base.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(base).as_posix()
+                fingerprint = (relative, path.stat().st_size)
+                if fingerprint in self._uploaded:
+                    continue
+                target = remote_root / relative
+                try:
+                    target.parent.mkdirs()
+                    target.upload_from(str(path))
+                except OSError as exc:
+                    logger.warning("synced cache upload failed for %s: %s", relative, exc)
+                    return
+                self._uploaded.add(fingerprint)
+
+    def close(self) -> None:
+        """Stop the mirror thread and flush a final time."""
+        if self._stop.is_set():
+            return
+        atexit.unregister(self.close)
+        self._stop.set()
+        self._thread.join()
+        self.flush()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._flush_interval):
+            self.flush()
+
+    def _stage_down(self) -> None:
+        remote_root = StoragePath(self._remote())
+        try:
+            if not remote_root.exists():
+                return
+            for parent, _dirs, files in remote_root.walk():
+                for name in files:
+                    remote_file = parent / name
+                    relative = remote_file.relative_to(remote_root)
+                    local_file = pathlib.Path(self._local) / relative
+                    local_file.parent.mkdir(parents=True, exist_ok=True)
+                    remote_file.download_to(str(local_file))
+                    self._uploaded.add((pathlib.PurePosixPath(relative).as_posix(), local_file.stat().st_size))
+        except OSError as exc:
+            logger.warning("synced cache stage-down failed, starting cold: %s", exc)
+
+
+def sync_kv_cache(remote: Callable[[], str], local: str) -> SyncedDirectory:
+    """Stage the object-store directory ``remote`` into ``local`` and mirror it back.
+
+    Returns the :class:`SyncedDirectory` handle so a caller may flush or close it
+    explicitly; it also mirrors periodically and once on process exit.
+    """
+    return SyncedDirectory(remote, local)

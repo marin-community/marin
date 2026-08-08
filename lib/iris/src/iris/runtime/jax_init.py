@@ -17,7 +17,9 @@ from enum import StrEnum
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.filesystem import marin_prefix, prefix_join
+from rigging.cache import sync_kv_cache
+from rigging.filesystem import marin_prefix, marin_temp_bucket, prefix_join
+from rigging.provenance import LAUNCH_PROVENANCE_ENV, launch_provenance
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
@@ -36,6 +38,9 @@ logger = logging.getLogger(__name__)
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
+# Object-store home for the node-local XLA autotune cache, namespaced per build.
+_XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
+_XLA_AUTOTUNE_TTL_DAYS = 30
 # JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
 # preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
 # GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
@@ -109,15 +114,17 @@ def configure_jax_compilation_cache() -> None:
 
     if "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
         jax.config.update("jax_persistent_cache_enable_xla_caches", "none")
-    _enable_node_local_xla_autotune_cache()
+    _enable_xla_autotune_cache()
 
 
-def _enable_node_local_xla_autotune_cache() -> None:
-    """Point XLA's per-fusion autotune cache at the node-local Iris cache mount.
+def _enable_xla_autotune_cache() -> None:
+    """Point XLA's per-fusion autotune cache at the node-local mount and mirror it remotely.
 
     Goes through ``XLA_FLAGS`` because JAX derives this path from the compilation
     cache dir, which is remote. The flag is on ``xla_flags_to_exclude_from_cache_key``,
-    so it stays out of the compilation cache key.
+    so it stays out of the compilation cache key. XLA opens the directory from C++
+    through ``tsl::Env``, which cannot read an object store, so the live directory
+    is always node-local and :func:`_mirror_xla_autotune_cache` syncs it.
 
     GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
 
@@ -145,6 +152,27 @@ def _enable_node_local_xla_autotune_cache() -> None:
 
     os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
     logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
+    _mirror_xla_autotune_cache(autotune_dir)
+
+
+def _mirror_xla_autotune_cache(local_dir: str) -> None:
+    """Mirror the node-local XLA autotune cache to and from object storage.
+
+    Namespaces the object-store directory by the launch's tree hash, so a build's
+    autotune results are shared across its nodes and reclaimed once the build ages
+    out of the temp prefix. A no-op off a real launch — no published provenance —
+    where the cache stays node-local.
+    """
+    if not os.environ.get(LAUNCH_PROVENANCE_ENV):
+        return
+    tree_hash = launch_provenance().tree_hash
+    if not tree_hash:
+        return
+    sync_kv_cache(
+        remote=lambda: prefix_join(marin_temp_bucket(_XLA_AUTOTUNE_TTL_DAYS, _XLA_AUTOTUNE_REMOTE_PREFIX), tree_hash),
+        local=local_dir,
+    )
+    logger.info("XLA autotune cache mirrored to object storage under %s", tree_hash)
 
 
 # An endpoint name that has not been registered yet surfaces differently across

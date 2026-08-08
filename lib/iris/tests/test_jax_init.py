@@ -418,6 +418,9 @@ def _isolated_jax_cache_config():
             os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
             os.environ.pop("XLA_FLAGS", None)
             os.environ.pop("IRIS_TASK_RESOURCES", None)
+            # Off a real launch by default, so the autotune cache stays node-local
+            # and never reaches for object storage.
+            os.environ.pop("MARIN_PROVENANCE", None)
             _read_iris_resource_proto.cache_clear()
             yield
     finally:
@@ -560,6 +563,40 @@ def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
             configure_jax_compilation_cache()
 
         assert os.environ["XLA_FLAGS"] == "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+
+
+def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path) -> None:
+    """A launched GPU task syncs the node-local autotune dir to a per-build temp prefix."""
+    calls: list[tuple[str, str]] = []
+
+    def _record(*, remote, local) -> None:
+        calls.append((remote(), local))
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        with (
+            patch.object(jax_init_module, "sync_kv_cache", _record),
+            patch.object(jax_init_module, "launch_provenance", lambda: MagicMock(tree_hash="tree123")),
+            patch.object(jax_init_module, "marin_temp_bucket", lambda ttl_days, prefix: f"gs://bkt/tmp/{prefix}"),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    assert calls == [("gs://bkt/tmp/xla-per-fusion-autotune/tree123", f"{scratch_cache_dir}/xla/per-fusion-autotune")]
+
+
+def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -> None:
+    """Off a real launch (no MARIN_PROVENANCE), the autotune cache never reaches object storage."""
+    calls: list[dict] = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        with (
+            patch.object(jax_init_module, "sync_kv_cache", lambda **kwargs: calls.append(kwargs)),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    assert calls == []
 
 
 def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:
