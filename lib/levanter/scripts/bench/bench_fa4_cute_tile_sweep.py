@@ -18,7 +18,7 @@ from unittest.mock import patch
 import jax
 import jax.numpy as jnp
 import numpy as np
-from levanter.grug.attention import AttentionMask
+from levanter.grug.attention import AttentionMask, reference_attention
 from levanter.grug.attention import _fa4_cute as fa4_cute
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
 
@@ -75,6 +75,51 @@ def _max_diff(a, b) -> float:
     return float(jnp.max(jnp.abs(a.astype(jnp.float32) - b.astype(jnp.float32))))
 
 
+def _check_against_float32_reference(config: Flash4CuteKernelConfig, window: int | None, seq_len: int) -> str:
+    """Compare a candidate against the float32 reference at the tolerances the GPU tests use.
+
+    Timing runs at hero shapes, where bf16 gradients are large enough that an absolute
+    difference between two tile configurations says nothing about correctness. This is the
+    check that decides whether a configuration is usable.
+    """
+    key = jax.random.key(11)
+    q = jax.random.normal(key, (1, seq_len, 8, 128), dtype=jnp.bfloat16)
+    k = jax.random.normal(jax.random.fold_in(key, 1), (1, seq_len, 2, 128), dtype=jnp.bfloat16)
+    v = jax.random.normal(jax.random.fold_in(key, 2), (1, seq_len, 2, 128), dtype=jnp.bfloat16)
+    cotangent = jax.random.normal(jax.random.fold_in(key, 3), q.shape, dtype=jnp.bfloat16)
+    segment_ids = _segment_ids(1, seq_len, 3)
+    mask = AttentionMask.causal(sliding_window=window).with_segment_ids(segment_ids)
+
+    def fa4_loss(q_arg, k_arg, v_arg):
+        out = fa4_cute.gpu_fa4_cute_attention(q_arg, k_arg, v_arg, mask)
+        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    def ref_loss(q_arg, k_arg, v_arg):
+        out = reference_attention(q_arg, k_arg, v_arg, mask, logits_dtype=jnp.float32)
+        return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32))
+
+    expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    expected_grads = jax.jit(jax.grad(ref_loss, argnums=(0, 1, 2)))(q, k, v)
+    with patch.object(fa4_cute, "_segmented_kernel_config", lambda head_dim: config):
+        actual = jax.jit(fa4_cute.gpu_fa4_cute_attention)(q, k, v, mask)
+        actual_grads = jax.jit(jax.grad(fa4_loss, argnums=(0, 1, 2)))(q, k, v)
+
+    failures = []
+    for name, got, want in [
+        ("out", actual, expected),
+        ("dq", actual_grads[0], expected_grads[0]),
+        ("dk", actual_grads[1], expected_grads[1]),
+        ("dv", actual_grads[2], expected_grads[2]),
+    ]:
+        try:
+            np.testing.assert_allclose(
+                np.asarray(got, dtype=np.float32), np.asarray(want, dtype=np.float32), atol=7e-2, rtol=7e-2
+            )
+        except AssertionError:
+            failures.append(name)
+    return "ok" if not failures else "FAIL:" + ",".join(failures)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--batch", type=int, default=32, help="Per-GPU batch; the hero runs 32.")
@@ -86,7 +131,12 @@ def main() -> None:
     parser.add_argument("--sliding-window", type=int, default=512)
     parser.add_argument("--steps", type=int, default=20)
     parser.add_argument("--warmup", type=int, default=5)
-    parser.add_argument("--tolerance", type=float, default=2e-2)
+    parser.add_argument(
+        "--check-seq-len",
+        type=int,
+        default=512,
+        help="Sequence length for the float32 reference check; the reference is quadratic in it.",
+    )
     args = parser.parse_args()
 
     if jax.default_backend() != "gpu":
@@ -150,11 +200,11 @@ def main() -> None:
                 continue
             diff = max([_max_diff(out, ref_out)] + [_max_diff(g, r) for g, r in zip(grads, ref_grads)])
             speedup = (ref_fwd + ref_bwd) / (fwd + bwd)
-            flag = "" if diff <= args.tolerance else "  MISMATCH"
+            verdict = _check_against_float32_reference(config, window, args.check_seq_len)
             print(
                 f"{str(config.forward_tile):>14} {str(config.backward_tile):>14} {config.num_threads:>4} "
                 f"{fwd * 1e3:8.3f} {bwd * 1e3:8.3f} {(fwd + bwd) * 1e3:9.3f} {speedup:7.2f}x "
-                f"{diff:9.2e}{flag}"
+                f"{diff:9.2e} {verdict}"
             )
 
 
