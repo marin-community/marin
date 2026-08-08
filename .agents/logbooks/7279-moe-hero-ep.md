@@ -1712,3 +1712,19 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - If MHEP-194 passes with all 76 finite norm fields at step 0, run a matched 200-step overlap-2
   arm with the same profile window. If it fails, keep overlap limit 1 and use the baseline profile
   to select the next safe optimization.
+
+### 2026-08-08 14:52 UTC - The capacity-1.3 model-size search is complete
+
+- MHEP-192 used 128 experts, width 8,832, and capacity factor 1.3. The compiler estimated a
+  193.89 GiB rematerialized program against a 169.74 GiB target.
+- The first NCCL all-to-all failed from CUDA out of memory before step 1. The coordinator was
+  stopped immediately. It used production priority and zero retries.
+- Result: Width 8,704 is the exact E128 maximum on the tested 128-wide grid. It has 506.411 B
+  total parameters and 28.965 B active parameters. Width 8,832 is the adjacent failed point.
+- The E192 maximum is width 6,272, with 546.292 B total and 24.680 B active parameters. It is
+  7.87% larger by total parameter count. The E128 maximum is 17.36% larger by active parameter
+  count.
+- Select the E192 width-6,272 model as the primary model. It wins the requested total-parameter
+  objective, matches the user's expert-count preference, and the completed d768 comparison gave
+  E192 lower held-out loss than E128. Keep E128 width 8,704 as the maximum-active-parameter
+  alternative.
