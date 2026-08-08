@@ -58,8 +58,7 @@ logger = logging.getLogger(__name__)
 HERO_FSDP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "1",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
-    # NVLink SHARP. Measured within the sweep's noise on its own, and carried by the combined
-    # configuration that measured +3.31% end to end.
+    # NVLink SHARP. Below the sweep's resolution alone; carried by the combined configuration.
     "NCCL_ALGO": "NVLS,Ring",
     "NCCL_NVLS_ENABLE": "1",
 }

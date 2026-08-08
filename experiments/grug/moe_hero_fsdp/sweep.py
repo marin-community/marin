@@ -41,14 +41,9 @@ WAVE_STEPS = {"final": 45, "final2": 45, "final3": 45, "final4": 45}
 PREFIX = "hs"  # hero sweep
 PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 
-# The configuration adopted after wave 4: FSDP-sharded small parameters, the gate/up interleave
-# moved ahead of its all-gather, and NVLink SHARP for collectives.
-#
-# Both are now the hero's own defaults -- the interleave unconditionally, since the two orders give
-# identical results and the local-shard one is strictly cheaper. `--small-param-sharding fsdp` stays
-# spelled out because every wave below was run when it was not. The pre-adoption hero is no longer
-# expressible as an arm, so the early waves' `control` describes what was measured, not what
-# re-running them today would produce.
+# The configuration adopted after wave 4, now the hero's own default. The pre-adoption hero is no
+# longer expressible as an arm, so the early waves' `control` records what was measured rather than
+# what re-running it today would produce.
 COMBINED_ENV = {"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"}
 COMBINED_ARGS = ["--small-param-sharding", "fsdp"]
 # Wave 5 measured expert_chunks=2 at +1.63% on the unmodified hero. Wave 7 suggests it does not
@@ -98,11 +93,8 @@ _COMBINE_COLLECTIVES = ("all_gather", "all_reduce", "reduce_scatter")
 def _combine_threshold_flags(nbytes):
     """Raise the size at which XLA stops merging collectives, from the 31.5 MB default.
 
-    The usual sizing rule is one transformer layer's worth, so link bandwidth is not wasted on small
-    buffers. Here one layer's FSDP shard is 231 MB, which the 512 MB setting already cleared while
-    measuring -3.37%. All 48 layers run inside a single `jax.scan`, so there is nothing to merge
-    across layers whatever the threshold; expect this to pay only alongside a flag that unrolls the
-    loop.
+    One layer's FSDP shard is 231 MB, already cleared by the 512 MB setting that measured -3.37%.
+    All 48 layers run inside a single `jax.scan`, so nothing merges across layers at any threshold.
     """
     return " ".join(f"--xla_gpu_{c}_combine_threshold_bytes={nbytes}" for c in _COMBINE_COLLECTIVES)
 
@@ -483,12 +475,10 @@ WAVES = {
             batch_size=1152,
         ),
     ],
-    # The wrap-up, second attempt. `control` and `adoptedbatch` both lost their windows above.
-    #
-    # `adoptedbatch` settled at 40 s/step against its siblings' 17, with peak at 155.8 GiB under a
-    # 162.2 GiB ceiling. Main's one-process-per-GPU topology raised the baseline peak from 137.2 to
-    # 141.2 GiB, so batch 1152 now runs close enough to the 0.88 limit for XLA's rematerialization
-    # to start buying memory with recompute. 0.93 restores the slack and is already proven safe.
+    # The wrap-up, second attempt. `control` and `adoptedbatch` both lost their windows above, and
+    # `adoptedbatch` ran at 40 s/step against its siblings' 17: merged main raised the baseline peak
+    # from 137.2 to 141.2 GiB, so batch 1152 sits close enough to the 0.88 limit for XLA's
+    # rematerialization to start buying memory with recompute. Retried at 0.93 for the slack.
     "final2": [
         Arm("control", note="the hero as it was before this sweep"),
         Arm("control2", note="byte-identical to control; measures placement variance in-window"),
@@ -506,15 +496,11 @@ WAVES = {
             batch_size=1152,
         ),
     ],
-    # Batch 1152 does not fit. At 0.93 it clears four steps at a healthy 19 s and then dies inside
-    # `jit_train_step` asking for a single 131.94 GiB block, having already touched 171.4 GiB -- the
-    # whole 0.93 ceiling. The allocator pool is 167.4 GiB reserved against 25.7 GiB live at that
-    # point, so the request fails on fragmentation rather than on a slow climb in working set. Only
-    # one rank raises; the other fifteen sit in the shutdown barrier for its full five minutes and
-    # then report `INTERNAL`, which is what hides the real error.
+    # Batch 1152 at 0.93 dies at step 4 inside `jit_train_step`. Batch 1088 is the remaining step:
+    # +6.25% tokens, well clear of the 0.78% placement variance.
     #
-    # 1088 is the remaining step. It adds 6.25% tokens, and 6.25% clears the 0.78% placement
-    # variance by enough that a single paired reading settles it.
+    # Only one rank raises. The other fifteen sit in the shutdown barrier for its full five minutes
+    # and then report `INTERNAL` with no traceback.
     "final3": [
         Arm(
             "control",
@@ -530,22 +516,13 @@ WAVES = {
             batch_size=1088,
         ),
     ],
-    # Wave 3's control crashed at step 4 at batch 1024, which is the shape that had just run 40 clean
-    # steps -- so the failure belongs to the 0.93 ceiling, not to the batch. XLA sizes the
-    # `jit_train_step` temp buffer to whatever allocator limit it is handed; at 0.93 it plans a single
-    # 122 GiB slab that cannot coexist with resident parameters and optimizer state.
-    #
-    # 0.88 plans a buffer that fits -- batch 1152 ran there, at 40 s/step -- so both arms hold the
-    # ceiling there and vary only the batch.
-    #
-    # It does not fit, and the reason retires the whole batch-size question on merged `main`. 0.88
-    # fails with the *same* 122.10 GiB request as 0.93, so the allocation is a fixed requirement of
-    # the un-rematerialized program rather than something sized to the ceiling. Peak against the
-    # allocator limit is what decides whether `HloRematerialization` runs at all: the hero clears
-    # 138.22 GiB post-merge and only survives because that pass is shrinking it. Any ceiling high
-    # enough to switch the pass off exposes an allocation the pool cannot serve. Batch 1152 at 0.88
-    # is the exception that shows the rule -- its 153.14 GiB peak keeps remat engaged, so it runs,
-    # at 40 s/step.
+    # Dead end. 0.88 and 0.93 both fail at batch 1024 with the same 122.10 GiB `jit_train_step`
+    # request, so the allocation is a fixed requirement of the un-rematerialized program rather than
+    # something sized to the ceiling. Peak against the allocator limit decides whether
+    # `HloRematerialization` runs; post-merge the hero clears 138.22 GiB and survives only because
+    # that pass shrinks it. Any ceiling high enough to switch it off exposes an allocation the pool
+    # cannot serve. Batch 1152 runs at 0.88 only because its 153.14 GiB peak keeps remat engaged, at
+    # 40 s/step.
     "final4": [
         Arm(
             "control",

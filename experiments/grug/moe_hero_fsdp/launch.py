@@ -197,11 +197,7 @@ class _HeroRunParts:
 
 @dataclasses.dataclass(frozen=True)
 class HeroOverrides:
-    """The hero performance knobs a sweep varies; ``None`` keeps the hero value.
-
-    Iris ships the local worktree, so every rack in a parallel sweep runs one code state. Each knob
-    is therefore a launcher flag rather than an edit, and a sweep varies one per arm.
-    """
+    """The hero performance knobs a sweep varies; ``None`` keeps the hero value."""
 
     expert_chunks: int | None = None
     small_param_sharding: SmallParamSharding | None = None
