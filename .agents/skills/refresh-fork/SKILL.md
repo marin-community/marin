@@ -19,10 +19,10 @@ the exception: it is marin-native (no upstream), so its refresh only advances to
 its own latest `main`.
 
 Refresh one fork, or one atomic `group`, at a time. A `group` refreshes as a unit:
-its sections rebase onto the same date-stamped base and re-pin in one PR. The
-vllm/tpu-inference pair is grouped because the TPU launcher installs both pins at
-once and vllm's base derives from the tpu-inference release; splitting them could
-pin a mixed, unblessed stack. A weekly coordinator that walks the descriptor in
+its sections refresh together on one date-stamped run and re-pin in one PR (each
+still rebases onto its own base). The vllm/tpu-inference pair is grouped because the
+TPU launcher installs both pins at once and vllm's base derives from the
+tpu-inference release; splitting them could pin a mixed, unblessed stack. A weekly coordinator that walks the descriptor in
 `depends_on` order is planned but not yet built; today a human runs it for a single
 fork or group.
 
@@ -76,10 +76,10 @@ git -C <fork> remote add upstream <upstream>
 git -C <fork> fetch --tags origin upstream
 ```
 
-- Keep two top-appended Markdown logs in the scratch dir: `notes-summary.md`
-  (decisions, selected bases, branch SHAs, validation outcomes, final result) and
-  `sharp-edges.md` (surprising failures, compatibility traps, memorable fixes).
-  Curate for major learnings; skip routine transcripts.
+- Keep working notes as you go — decisions, selected bases, branch SHAs, validation
+  outcomes, and sharp edges (surprising failures, compatibility traps). They feed the
+  PR body: base-selection evidence and the carry/drop/fix table in `<details>`, and
+  the unresolved risks above the fold.
 
 A marin-native fork (no `upstream`, `base_select = fork_main`) has nothing to rebase
 onto: skip base selection and the rebase, advance to its own latest `main` (see
