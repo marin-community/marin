@@ -151,16 +151,20 @@ def build_hero_run(
     if capacity_factor is not None and sharding.moe_implementation == "scatter":
         raise ValueError(f"flavor {flavor!r} never drops, so --capacity-factor has no effect")
 
-    # The optimizer heuristic scales learning rate, adam_lr, and epsilon from a token budget
-    # (`num_train_steps * batch * seq`), so `schedule_steps` sets the budget the schedule is built
-    # for while `num_steps` sets how far the run actually goes. Passing the step count for a 1T-token
-    # budget and stopping after a few thousand steps trains the head of that schedule at the peak
-    # learning rate a 1T run would use, instead of the much larger rate a few-thousand-step budget
-    # would pick. Default keeps the two equal, which is the previous behavior.
+    # `schedule_steps` sets the whole learning-rate schedule; `num_steps` sets how far the run goes.
+    # Both matter, and they enter in different places. The optimizer heuristic scales learning rate,
+    # adam_lr, and epsilon from a token budget (`num_train_steps * batch * seq`), which fixes the
+    # peak. Warmup and decay are *fractions* of `TrainerConfig.num_train_steps`, so that field has to
+    # carry the schedule length too -- passing `num_steps` there warms up in `0.01 * num_steps` and
+    # decays to `min_lr_ratio` by the end of the short run, which is a whole miniature schedule
+    # rather than the head of a long one. Default keeps the two equal, which is the previous behavior.
     if schedule_steps is not None and schedule_steps <= 0:
         raise ValueError(f"schedule_steps must be positive, got {schedule_steps}")
+    if schedule_steps is not None and schedule_steps < num_steps:
+        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
+    total_schedule_steps = schedule_steps if schedule_steps is not None else num_steps
     model, optimizer = build_hero_configs(
-        num_train_steps=schedule_steps if schedule_steps is not None else num_steps,
+        num_train_steps=total_schedule_steps,
         batch_size=batch_size,
     )
     overrides = {
@@ -226,7 +230,7 @@ def build_hero_run(
             id=run_id,
             seed=0,
             train_batch_size=batch_size,
-            num_train_steps=num_steps,
+            num_train_steps=total_schedule_steps,
             profiler=ProfilerConfig(
                 enabled=profile_steps > 0,
                 start_step=profile_start_step,
@@ -284,6 +288,7 @@ def build_hero_run(
             eval=(
                 GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None
             ),
+            stop_after_steps=num_steps,
             processes_per_task=HERO_PROCESSES_PER_TASK,
         )
 

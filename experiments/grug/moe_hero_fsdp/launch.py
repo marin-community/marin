@@ -103,6 +103,7 @@ def _hero_run_config(
     wandb_project: str,
     slim: ArtifactStep[TokenizedCache],
     run_mode: GrugRunMode,
+    schedule_steps: int | None = None,
     validation: list[ArtifactStep[TokenizedCache]] | None = None,
     eval_every: int = 0,
     watch_interval: int = HERO_WATCH_INTERVAL,
@@ -114,12 +115,17 @@ def _hero_run_config(
     ``profile_start_step`` captures an XPlane trace over ``profile_num_steps`` steps from a single
     process and uploads it to the temp-bucket XProf store; leave it ``None`` to disable profiling.
     ``watch_interval`` re-enables the grad/param norm dumps every N steps and defaults to off.
+    ``schedule_steps`` sizes the learning-rate schedule; the run still stops after ``num_steps``.
     """
+    if schedule_steps is not None and schedule_steps < num_steps:
+        raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
     trainer = TrainerConfig(
         id=run_id,
         seed=0,
         train_batch_size=batch_size,
-        num_train_steps=num_steps,
+        # Warmup and decay are fractions of this field, so it carries the whole schedule length.
+        # `stop_after_steps` below is what actually bounds the run.
+        num_train_steps=schedule_steps if schedule_steps is not None else num_steps,
         profiler=ProfilerConfig(
             enabled=profile_start_step is not None,
             start_step=profile_start_step or 0,
@@ -169,6 +175,7 @@ def _hero_run_config(
         # Off by default so a throughput run stays a throughput run. Turn it on to make a run
         # scoreable: comparing configs needs held-out loss, not train loss.
         eval=(GrugEvalConfig(steps_per_eval=eval_every, eval_ema=False, compute_bpb=True) if eval_every > 0 else None),
+        stop_after_steps=num_steps,
         processes_per_task=HERO_PROCESSES_PER_TASK,
         run_mode=run_mode,
     )
@@ -310,6 +317,7 @@ def build_hero_run(
             wandb_project=wandb_project,
             slim=slim,
             run_mode=run_mode,
+            schedule_steps=schedule_steps,
             validation=validation,
             eval_every=eval_every,
             watch_interval=watch_interval,
