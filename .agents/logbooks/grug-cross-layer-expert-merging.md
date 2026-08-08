@@ -514,3 +514,26 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Validation: 21 focused tests pass across the recovery objective, launch graph, and runtime checkpoint path. The runtime test selects the best of two Paloma checkpoints, distinguishes a requested 15-token horizon from 16 processed tokens, and verifies Stage B restores the selected path. Changed-file lint and Pyrefly report no errors. An independent review found no remaining blocker.
 - Reproducibility: issue #8032 defines Stage A and Stage B, the four arms, exact gate, launch template, regional dependencies, and output roots. A reader given no session context returned PASS after two repair rounds. All checkpoints, caches, outputs, and v5p-8 children remain in `us-central1`.
 - Next action: lower all four graphs from the pushed commit, verify empty Stage-A roots and reused central1 dependencies, then launch and babysit the four controllers. Do not launch Stage B until the complete matched result selects a treatment under the fixed gate.
+
+### 2026-08-07 22:36 - GRUG-XEM-005 throughput-gate correction
+
+- Correction: the launch entry incorrectly made 80% of control throughput a promotion veto. That conflicts with the experiment constraint that TPU time is available while cross-region data and checkpoint movement are the cost to avoid. Throughput remains a reported diagnostic but no longer blocks promotion. The held-out quality, MoE-fit, per-layer NRMSE, exact frozen-routing, and zero-overflow gates are unchanged. This correction was recorded before the KL and CE+KL arms completed; all experiment payloads remain in `us-central1`.
+
+### 2026-08-07 22:42 - GRUG-XEM-005 validation-aligned Stage-A result
+
+- Hypothesis: A small CE or teacher-logit KL term during frozen-router bank-only recovery improves held-out rollout quality relative to routed-MoE distillation alone.
+- Commit Hash: launch `cd7a220d2b`; implementation `2f440eee114d35771b0b529d342140dae254164f`; source teacher `884b213ff4`.
+- Commands: four central1 controllers ran `experiments.grug.moe.launch_merge_recovery` with branches `native_local_selected`, `native_local_ce`, `native_local_kl`, and `native_local_ce_kl`, stage `local`, version `2026.08.06`, and maximum concurrency 1. Monitoring state is `scratch/20260807-2220-stagea-matrix-monitoring-state.json`.
+- Result: every selector chose the final step 382, which corresponds to 50,069,504 processed tokens for the 50M request.
+
+  | Stage-A objective | Micro validation delta | Paloma macro delta | MoE loss | MoE NRMSE L2/L3 | Tokens/s |
+  |---|---:|---:|---:|---:|---:|
+  | MoE-only | +0.067233 | +0.064075 | 0.244239 | 0.268925 / 0.645102 | 907,177 |
+  | +0.05 CE | +0.052840 | +0.048003 | 0.246119 | 0.265491 / 0.649424 | 430,179 |
+  | +0.1 KL | +0.050560 | +0.045887 | 0.244659 | 0.268216 / 0.646048 | 376,735 |
+  | +0.05 CE + 0.1 KL | +0.048862 | +0.044407 | 0.247440 | 0.265816 / 0.651324 | 286,700 |
+
+  CE+KL improves the control's Paloma gap by 0.019668 and its micro-validation gap by 0.018371, exceeding the 0.01 thresholds. Its MoE loss is 1.31% higher, layer-2 NRMSE is 0.00311 lower, and layer-3 NRMSE is 0.00622 higher, all inside the fixed fit gates. Top-1 and top-4 teacher route agreement are exactly 1.0, capacity overflow is zero, and all losses are finite. All four held-out trajectories improved monotonically across the 12.58M, 25.03M, 37.62M, and 50.07M processed-token evaluations.
+- Interpretation: model-preservation supervision during frozen-router Stage A materially improves rollout quality without sacrificing local shared-bank fit. CE+KL is the quality winner and passes the promotion gate. KL alone retains most of the gain at higher throughput, but TPU time is not a veto for this experiment. The result supports shared-bank distillation as the operative conversion step; it does not revive expert-level spectral matching.
+- Operations: all four controllers and children succeeded. The KL child recovered automatically from one ordinary TPU preemption. Every final checkpoint, selector, evaluation/training JSON, and `.artifact.json` is present. No HBM/OOM signature appeared, no W&B run was configured, and GCS JSON is the canonical metric source. All inputs, outputs, compute, and provenance paths remain in `us-central1`; no explicit credential appears in provenance.
+- Next action: launch only the CE+KL Stage-B preservation branch from its selected step-382 checkpoint. Evaluate requested 50M Stage-B tokens for the 100M-total gate, then 100M and 200M Stage-B tokens only if recovery remains stable. Do not launch any other Stage-B arm.
