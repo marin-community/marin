@@ -10,7 +10,7 @@ from pathlib import Path
 
 import click
 
-from marin.external_dependencies import VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import VLLM_TPU_RELEASE
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
     LevanterEngineConfig,
@@ -129,7 +129,7 @@ def local(
             hbm_utilization=hbm_utilization,
         )
     if backend == "vllm" and launcher_type is VllmLauncherType.TPU:
-        click.echo(f"Using pinned TPU vLLM {VLLM_FORK_REQUIREMENT}")
+        click.echo(f"Using pinned TPU vLLM pair {VLLM_TPU_RELEASE.release_tag}")
     with local_inference(model_config, engine, host=host, port=port) as session:
         click.echo(f"OpenAI endpoint: {session.model.endpoint.base_url}")
         click.echo("Press Ctrl-C to stop.")

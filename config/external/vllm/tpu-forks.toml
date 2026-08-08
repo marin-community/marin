@@ -1,8 +1,7 @@
-# Marin's forked TPU vLLM stack (vllm + tpu-inference). These run from an isolated uvx env
-# (marin.inference.vllm_server.IsolatedTpuVllm), not the workspace lock, and are surfaced as
-# VLLM_FORK_REQUIREMENT / TPU_INFERENCE_FORK_REQUIREMENT in marin.external_dependencies by
-# config/update-external.py. Refresh these SHAs via .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
-# `upstream_base` is the upstream commit each fork tip is compared against.
+# Marin's forked TPU vLLM source pins. They are surfaced as VLLM_FORK_REQUIREMENT /
+# TPU_INFERENCE_FORK_REQUIREMENT by config/update-external.py and refreshed through
+# .agents/skills/refresh-tpu-vllm-forks/SKILL.md. TPU serving consumes the exact wheel pair in
+# tpu-release.toml. `upstream_base` is the upstream commit each fork tip is compared against.
 
 [vllm]
 repository = "https://github.com/marin-community/vllm.git"
