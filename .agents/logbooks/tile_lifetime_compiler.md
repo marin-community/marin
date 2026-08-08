@@ -1418,7 +1418,9 @@ author: dlwh
 - The naive payload is 59.48 times slower than Shuttle's 3.702272-ms generated
   payload and 83.26 times slower than MSA's 2.644624-ms payload. It executes
   256 eager group/chunk bodies and lacks tile residency, online Fold state,
-  fusion, and producer-consumer pipelining.
+  fusion, and producer-consumer pipelining. These are scale comparisons: the
+  naive run uses the materialized-reference relation rather than the shared
+  generated/MSA relation at the documented underfilled/tied rows.
 - The replacement pod resolved Torch 2.13.0+cu130 instead of pinned 2.10.0, so
   this result is preserved as a semantic scale reference and is excluded from
   acceptance ratios. Raw data, harness, telemetry, and checksums are stored in

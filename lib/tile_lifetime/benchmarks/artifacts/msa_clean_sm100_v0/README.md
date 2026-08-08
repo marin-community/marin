@@ -89,6 +89,12 @@ match the preserved materialized semantic reference and repeated outputs are
 bitwise identical. This is 59.48 times Shuttle's 3.702272-ms exact-relation
 payload and 83.26 times official MSA's 2.644624-ms payload.
 
+The naive run uses the materialized-reference route hash `18886bcb...`, not the
+shared generated/oracle selector hash `5d669570...`; the difference is confined
+to the underfilled causal rows and cutoff tie described above. The ratios are
+therefore scale comparisons at the same shape and selected-count boundary, not
+matched acceptance ratios.
+
 The implementation runs four KV groups by 64 query chunks, hence 256 eager
 loop bodies. Each chunk gathers 2,048 selected tokens per query and separately
 materializes scores, probabilities, and PV work. It has no KV tile residency,

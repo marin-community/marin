@@ -569,9 +569,10 @@ times slower than Shuttle and 83.26 times slower than MSA. The reference runs
 256 eager group/chunk bodies and materializes FP32 scores and probabilities;
 it has no KV residency, online state, fusion, or pipeline. The replacement pod
 used Torch 2.13.0 rather than the pinned 2.10.0 environment, so this is an
-order-of-magnitude control rather than acceptance evidence. Raw samples,
-memory telemetry, hashes, and the reference harness are preserved in the MSA
-artifact.
+order-of-magnitude control rather than acceptance evidence. It also uses the
+materialized-reference relation, which differs from the shared generated/MSA
+relation only on the documented underfilled/tied rows. Raw samples, memory
+telemetry, hashes, and the reference harness are preserved in the MSA artifact.
 
 The isolated generated and oracle score paths produce the same bitwise-stable
 route hash. Both differ from a materialized Torch reference in 61,446 slots
