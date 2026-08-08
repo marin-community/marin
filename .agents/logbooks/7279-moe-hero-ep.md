@@ -1806,3 +1806,197 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   is the only tested performance change that both keeps full norms and improves the selected
   model. MHEP-195 confirmed that XLA used measured latency data for a profile-guided recompile,
   and MHEP-196 confirmed the 200-step throughput result.
+
+### 2026-08-08 16:27 UTC - Selected-model capacity boundary sweep ready
+
+- Question: Find the maximum capacity factor for the selected E192, width-6,272 model while it
+  sends full gradient and parameter norms to W&B.
+- Code snapshot: `f639c264e`.
+- Common config: EP64 on 64 GB200 GPUs in 16 nodes; d6144; 48 layers; LatentMoE latent dimension
+  3,072; 192 experts; expert width 6,272; top-k 4; batch 1,024; sequence length 4,096; five steps
+  on the 2,000-step schedule; full inline norms every step; pinned-host optimizer state;
+  `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`; collective overlap limit 1; automatic PGLE with three
+  profile runs; no XProf; no explicit memory fraction; production priority; and zero retries.
+- Known bounds: Capacity 1.30 passes. Capacity 1.50 fails before step 1 from an NCCL CUDA OOM.
+- Coarse arms: MHEP-197 uses capacity 1.35 and port 32795. MHEP-198 uses capacity 1.40 and port
+  32796. MHEP-199 uses capacity 1.45 and port 32797.
+- Command template: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority production --cpu 2
+  --memory 8GB --disk 32GB --timeout 28800 --max-retries 0 --job-name <run>-coord
+  -e WANDB_API_KEY <secret> -e WANDB_PROJECT rav_moe -e WANDB_ENTITY marin-community
+  -e IRIS_PORT_JAX <port> -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async -e JAX_ENABLE_PGLE true
+  -e JAX_PGLE_PROFILING_RUNS 3 -- python -m experiments.grug.moe_hero_ep.launch
+  --run-id <run> --num-steps 5 --schedule-steps 2000 --watch-interval 1
+  --version 2026.08.08 --run --num-experts 192 --intermediate-dim 6272
+  --num-experts-per-token 4 --latent-dim 3072 --capacity-factor <capacity> --batch-size 1024`.
+- Decision rule: A capacity factor passes only when all five steps finish and W&B receives all 76
+  finite norm fields on every step. Stop an OOM or a retry immediately. Refine the highest pass
+  and lowest failure until their difference is at most 0.01.
+
+### 2026-08-08 16:34 UTC - Capacity 1.35 fails and sets the coarse upper bound
+
+- MHEP-197 used capacity factor 1.35. XLA reported a 195.29 GiB rematerialized program against its
+  171.87 GiB target. NCCL then reported a CUDA OOM before step 1. The coordinator was stopped.
+- MHEP-198 and MHEP-199 each recorded one child failure and entered a second gang attempt. Their
+  coordinators were stopped immediately. The capacity-1.35 failure makes their higher capacity
+  factors unnecessary for the boundary.
+- Automatic PGLE reported empty-trace warnings during these new compilations. This warning does
+  not change the memory result, but the final capacity result must keep this runtime caveat.
+- New bounds: Capacity 1.30 passes and capacity 1.35 fails. MHEP-200, MHEP-201, and MHEP-202 will
+  test capacity factors 1.32, 1.33, and 1.34 with the same common config.
+
+### 2026-08-08 16:44 UTC - The decimal boundary is 1.33 pass and 1.34 fail
+
+- MHEP-200 at capacity factor 1.32 and MHEP-201 at capacity factor 1.33 each completed all five
+  steps. Iris reports all 16 workers as succeeded, with zero failures and zero preemptions.
+- W&B has five rows for each passing arm. Each row has all 76 norm fields, and all 380 norm values
+  per arm are finite.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-200-w35-ep-e192-i6272-cf1p32-pgle3-fullwatch-p32798-20260808
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-201-w35-ep-e192-i6272-cf1p33-pgle3-fullwatch-p32799-20260808
+- MHEP-202 at capacity factor 1.34 reported an NCCL CUDA OOM before step 1. Its coordinator was
+  stopped. The decimal boundary is therefore 1.33 pass and 1.34 fail.
+- The fixed all-to-all router uses `ceil(capacity_factor * 262144 / 192)`. Thus, factors 1.33 and
+  1.34 select integer cell capacities 1,816 and 1,830. Thirteen untested cell capacities remain.
+- MHEP-203, MHEP-204, and MHEP-205 test cell capacities 1,819, 1,823, and 1,827. Their capacity
+  factors are 1.331909180, 1.334838867, and 1.337768555. This integer search can find the true
+  routing-buffer boundary instead of a decimal approximation.
+
+### 2026-08-08 17:04 UTC - The selected-model cell boundary closes at 1,829
+
+- MHEP-205 completed all five steps at cell capacity 1,827. MHEP-207 completed all five steps at
+  cell capacity 1,829. Iris reports all 16 workers succeeded for both runs, with zero failures and
+  zero preemptions.
+- W&B received all 76 norm fields on every step in both passing runs. All 380 norm values per run
+  were finite.
+- MHEP-207 used capacity factor 1.339233398438. The fixed router maps every factor through
+  1.339599609375 to the same cell capacity of 1,829. Capacity factor 1.34 maps to cell capacity
+  1,830, and MHEP-202 failed there from NCCL CUDA out of memory.
+- MHEP-203 at cell 1,819 and MHEP-206 at cell 1,828 also failed from CUDA out of memory during a
+  later PGLE compile. MHEP-204 entered a second gang attempt after one failure and was stopped.
+  These lower failures are not a monotonic capacity boundary because the larger cells 1,827 and
+  1,829 completed. All of these runs reported empty PGLE trace warnings.
+- Result: Cell capacity 1,829 is the highest confirmed buffer shape. Capacity factor
+  1.339599609375 is its mathematical upper endpoint. Use capacity factor 1.33 when a memory margin
+  is more important than the last 13 routing rows.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-205-w36-ep-e192-i6272-cell1827-pgle3-fullwatch-p32803-20260808
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-207-w36-ep-e192-i6272-cell1829-pgle3-fullwatch-p32805-20260808
+- MHEP-208 is the requested 200-step capacity-1.33 confirmation. It keeps automatic PGLE, full
+  norms every step, production priority, and zero retries. It reached step 5 and remains active.
+  Run ID: `mhep-208-w37-ep-e192-i6272-cf1p33-200step-pgle3-fullwatch-p32806-20260808`.
+
+### 2026-08-08 17:04 UTC - Top-6 capacity maximum sweep starts
+
+- Question: Find the maximum capacity factor that fits full watch for EP64, d6144, 48 layers,
+  latent dimension 3,072, 192 experts, expert width 4,608, top-k 6, sequence length 4,096, and
+  batch size 1,024.
+- MHEP-154 is the known pass at capacity factor 1.42 and cell capacity 2,909. It completed five
+  steps and sent all 380 finite norm values to W&B.
+- MHEP-209, MHEP-210, and MHEP-211 test capacity factors 1.6, 1.8, and 2.0. Their cell capacities
+  are 3,277, 3,687, and 4,096. The arms use five steps, full norms every step, the CUDA async
+  allocator, collective overlap limit 1, no explicit memory fraction, production priority, and
+  zero retries.
+- PGLE is off for this memory sweep. The selected-model boundary showed non-monotonic OOM results
+  when automatic PGLE collected empty traces. A pass or failure without PGLE gives a cleaner
+  full-watch capacity boundary. Refine the highest pass after the coarse arms finish.
+
+### 2026-08-08 17:22 UTC - Top-6 capacity search changes from maximum to optimal
+
+- MHEP-209, MHEP-210, and MHEP-211 completed five steps at capacity factors 1.6, 1.8, and 2.0.
+  W&B received all 76 norm fields on every step. All 380 norm values per run were finite.
+- Their last-three-step means were 230,425, 221,329, and 210,178 raw tokens/s. Mean drop fractions
+  were 6.1668%, 4.5698%, and 3.5134%. Drop-adjusted rates were 216,228, 211,258, and 202,805
+  tokens/s. Mean losses were 11.021320, 11.019033, and 11.017584.
+- Capacity factor 1.6 dominates 1.8 and 2.0 for the current short-run proxy. Raising capacity from
+  1.6 to 2.0 lowers mean loss by 0.034% but lowers drop-adjusted throughput by 6.21%.
+- MHEP-209 completed W&B but had one pod preemption during teardown. Its coordinator was stopped
+  after the complete result. MHEP-210 and MHEP-211 succeeded on all 16 workers.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-209-w38-ep-e192-i4608-k6-cf1p60-fullwatch-p32807-20260808
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-210-w38-ep-e192-i4608-k6-cf1p80-fullwatch-p32808-20260808
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-211-w38-ep-e192-i4608-k6-cf2p00-fullwatch-p32809-20260808
+- The requested maximum search was canceled. MHEP-212 and MHEP-214 had each entered a second gang
+  attempt. MHEP-213 was still on its first attempt. All three coordinators were stopped.
+- Issue #8062 selects EP on target-scale TPS, projected target-budget loss, a d2048 win, smooth
+  context extension, and clean gradient and loss curves. Its small-scale protocol requires fixed
+  capacity and complete parameter and gradient norms every 10 steps. A five-step memory maximum
+  does not optimize that decision.
+- MHEP-215, MHEP-216, and MHEP-217 are matched 200-step arms at capacity factors 1.3, 1.4, and 1.5.
+  They use the exact top-6 model, no PGLE, norms every 10 steps, production priority, and zero
+  retries. Compare last-50 raw throughput, drop fraction, drop-adjusted throughput, and loss. Use
+  this test only to select the capacity factor that advances to the issue's scale and context
+  gates.
+
+### 2026-08-08 17:32 UTC - Two-rack selected-model gate starts
+
+- Question: Does the selected capacity-1.33 model run on two racks with data parallelism across
+  racks and full parameter and gradient norms?
+- Commit `aa98ec794` adds an explicit data-parallel rack count to the EP launcher. The two-rack
+  mesh is `(replica_dcn=2, data=1, expert=64, model=1)` and requests 32 GB200 nodes.
+- MHEP-218 uses the selected E192, width-6,272, top-k-4, latent-3,072 model. It uses capacity 1.33,
+  sequence length 4,096, global batch 2,048, five steps on the 2,000-step schedule, full inline
+  norms every step, automatic PGLE with three profile runs, the CUDA async allocator, no explicit
+  client memory fraction, production priority, and zero retries.
+- Run ID: `mhep-218-w41-ep-dp2-e192-i6272-cf1p33-pgle3-fullwatch-p32816-20260808`.
+- Iris parent: `/rav/mhep-218-w41-ep-dp2-e192-i6272-cf1p33-pgle3-fullwatch-p32816-20260808-coord`.
+
+### 2026-08-08 17:45 UTC - Two-rack selected-model gate passes
+
+- MHEP-218 completed all five steps. Iris reports all 32 workers succeeded, with zero failures and
+  zero preemptions.
+- W&B has five metric rows. Each row has all 76 parameter and gradient norm fields. All 380 norm
+  values are finite.
+- The two-rack program and its PGLE recompile each reported a 192.34 GiB rematerialized estimate
+  against the 171.87 GiB target. Both programs ran without a CUDA OOM.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-218-w41-ep-dp2-e192-i6272-cf1p33-pgle3-fullwatch-p32816-20260808
+
+### 2026-08-08 17:45 UTC - Selected-model eval and checkpoint run starts
+
+- MHEP-219 was submitted with Paloma evaluation every 100 steps. It was stopped before training
+  after the requested interval changed to 10 steps.
+- MHEP-220 uses the selected one-rack model at capacity 1.33. It runs 200 training steps on the
+  2,000-step schedule, Paloma evaluation every 10 steps, full inline norms every step, and the
+  15-minute checkpoint interval. It keeps automatic PGLE with three profile runs, the CUDA async
+  allocator, no explicit client memory fraction, production priority, and zero retries.
+- Run ID: `mhep-220-w42-ep-e192-i6272-cf1p33-200step-eval10-ckpt-fullwatch-p32818-20260808`.
+- Iris parent: `/rav/mhep-220-w42-ep-e192-i6272-cf1p33-200step-eval10-ckpt-fullwatch-p32818-20260808-coord`.
+
+### 2026-08-08 17:56 UTC - Eval run restarts without PGLE
+
+- MHEP-220 sent all 76 finite norm values at each of its first nine logged steps. Its first
+  Paloma evaluation started at step 10, but the evaluation compile failed with
+  `ALREADY_EXISTS: Another profiling session active`. Automatic PGLE caused a second profiler
+  session during the evaluation compile. The coordinator was stopped after the fatal error.
+- MHEP-221 keeps the same selected model, capacity 1.33, 200 training steps, Paloma evaluation
+  every 10 steps, full norms every step, checkpoints, CUDA async allocator, production priority,
+  and zero retries. PGLE is disabled to remove the profiler conflict.
+- Run ID: `mhep-221-w43-ep-e192-i6272-cf1p33-200step-eval10-ckpt-fullwatch-nopgle-p32819-20260808`.
+- Iris parent: `/rav/mhep-221-w43-ep-e192-i6272-cf1p33-200step-eval10-ckpt-fullwatch-nopgle-p32819-20260808-coord`.
+
+### 2026-08-08 18:14 UTC - Evaluation-only PGLE guard test starts
+
+- The tagged evaluation callback now disables automatic PGLE only while it compiles and runs
+  evaluation programs. The surrounding training program keeps automatic PGLE enabled. A focused
+  regression test verifies both the evaluation state and restoration of the training state.
+- MHEP-222 tests the guard for 12 training steps with Paloma at step 10, full parameter and
+  gradient norms every step, automatic PGLE with three profile runs, and checkpoints every five
+  minutes plus the final checkpoint.
+- Run ID: `mhep-222-w44-ep-e192-i6272-cf1p33-12step-eval10-ckpt5-pgle3-fullwatch-p32820-20260808`.
+- Iris parent: `/rav/mhep-222-w44-ep-e192-i6272-cf1p33-12step-eval10-ckpt5-pgle3-fullwatch-p32820-20260808-coord`.
+- MHEP-221 started its first checkpoint at step 40. Its array error check passed, but one task
+  exited before the save was committed. Iris restarted the gang automatically. The run has one
+  failure and no preemptions. Keep it active while its restart and checkpoint state are checked.
+
+### 2026-08-08 18:35 UTC - Eval PGLE guard passes; checkpoint staging exhausts host memory
+
+- MHEP-222 completed its step-10 Paloma evaluation with automatic PGLE enabled for training. It
+  passed the MHEP-220 failure point and did not report a second profiling session. The guard works.
+- The step-10 temporary checkpoint then started. Task 11 attempt 0 stopped during pageable-host
+  shard transfer. Kubernetes reports `OOMKilled`; Iris reports exit 137 (`SIGKILL`), one failure,
+  and no preemption. The other tasks then lost JAX coordination.
+- The task cgroup limit is 850 GiB on a host with about 956 GiB of physical memory. The restarted
+  task used about 334 GiB before checkpoint staging. `XLA_PYTHON_CLIENT_MEM_FRACTION` controls GPU
+  memory and cannot raise this host limit.
+- MHEP-221 failed in the same checkpoint phase. Its failure is now also consistent with host-memory
+  exhaustion. Keep MHEP-221 active as requested.
+- The current checkpoint wrapper bounds retained memory across checkpoint saves, but one save can
+  still stage all local shards at the same time. Limit per-save transfer concurrency before using
+  a larger host-memory request as the main fix.

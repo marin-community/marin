@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -29,6 +30,17 @@ def test_full_bank_top_k_is_rejected_before_launch():
     # the 16-node gang is allocated.
     with pytest.raises(ValueError, match="must be < num_experts"):
         launch.build_hero_run(run_id="full-bank", dp_racks=1, num_steps=1, num_experts_per_token=128, version="dev")
+
+
+def test_checkpoint_interval_must_be_positive():
+    with pytest.raises(ValueError, match="checkpoint_interval must be positive"):
+        launch.build_hero_run(
+            run_id="bad-checkpoint-interval",
+            dp_racks=1,
+            num_steps=1,
+            checkpoint_interval=timedelta(0),
+            version="dev",
+        )
 
 
 def test_expert_bank_override_must_divide_the_expert_axis():
