@@ -9,12 +9,15 @@ import textwrap
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jmp
 import numpy as np
 import pytest
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
+from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, small_scale_abl_launch, train
 
@@ -246,3 +249,58 @@ def test_latent_dim_above_hidden_is_rejected():
     # A latent wider than the hidden dim adds communication instead of removing it.
     with pytest.raises(ValueError, match="latent_dim must be in"):
         _latent_config(latent_dim=99999)
+
+
+class _TinyWatchModel(eqx.Module):
+    weight: jax.Array
+
+    def next_token_loss(
+        self,
+        tokens,
+        loss_weight,
+        *,
+        mask,
+        reduction,
+        logsumexp_weight,
+        return_router_metrics,
+    ):
+        del mask, reduction, logsumexp_weight, return_router_metrics
+        error = self.weight * tokens.astype(self.weight.dtype) - loss_weight
+        return jnp.mean(error**2), {}
+
+
+def test_diagnostic_watch_stats_match_direct_gradient_and_parameter_norms():
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    batch = SimpleNamespace(
+        tokens=jnp.array([1, 3], dtype=jnp.int32),
+        loss_weight=jnp.array([0.5, 1.0]),
+        attn_mask=None,
+    )
+    mp = jmp.get_policy("params=float32,compute=float32,output=float32")
+    watch = WatchConfig(interval=1)
+
+    actual = train._compute_diagnostic_watch_stats(params, batch, mp, None, watch)
+    grads = jax.grad(
+        lambda model: model.next_token_loss(
+            batch.tokens,
+            batch.loss_weight,
+            mask=batch.attn_mask,
+            reduction="mean",
+            logsumexp_weight=None,
+            return_router_metrics=True,
+        )[0]
+    )(params)
+    expected = compute_watch_stats(
+        watch_targets=watch.watch_targets,
+        include_norms=watch.include_norms,
+        include_per_parameter_norms=watch.include_per_parameter_norms,
+        include_histogram=watch.include_histograms,
+        split_scan_layers=watch.split_scan_layers,
+        params=params,
+        grads=grads,
+        model_tree_type=type(params),
+    )
+
+    assert actual.keys() == expected.keys()
+    for key in actual:
+        np.testing.assert_allclose(actual[key], expected[key])

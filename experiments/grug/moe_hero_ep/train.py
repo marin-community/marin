@@ -6,7 +6,8 @@ import functools
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 
 import equinox as eqx
 import jax
@@ -63,6 +64,13 @@ _XLA_FLAG_DEFAULTS = (
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
 
 
+class WatchMode(StrEnum):
+    """Where a watched training step computes gradient and parameter statistics."""
+
+    INLINE = "inline"
+    DIAGNOSTIC = "diagnostic"
+
+
 def _apply_hero_ep_runtime_defaults() -> None:
     os.environ.update(HERO_EP_RUNTIME_ENV)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
@@ -84,6 +92,9 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    # A diagnostic watch repeats forward and backward in a separate executable. It costs compute,
+    # but it does not keep the gradient tree live through the optimizer update.
+    watch_mode: WatchMode = WatchMode.INLINE
     # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
@@ -371,6 +382,55 @@ def _drop_metrics(
     }
 
 
+def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
+    def loss_fn(model):
+        compute_params = mp.cast_to_compute(model)
+        return compute_params.next_token_loss(
+            batch.tokens,
+            batch.loss_weight,
+            mask=batch.attn_mask,
+            reduction="mean",
+            logsumexp_weight=z_loss,
+            return_router_metrics=True,
+        )
+
+    return jax.value_and_grad(loss_fn, has_aux=True)(params)
+
+
+def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig):
+    (_, _), grads = _loss_and_grads(params, batch, mp, z_loss)
+    return compute_watch_stats(
+        watch_targets=watch_config.watch_targets,
+        include_norms=watch_config.include_norms,
+        include_per_parameter_norms=watch_config.include_per_parameter_norms,
+        include_histogram=watch_config.include_histograms,
+        split_scan_layers=watch_config.split_scan_layers,
+        params=params,
+        grads=grads,
+        model_tree_type=type(params),
+    )
+
+
+def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
+    watch_targets = (
+        tuple(t.strip() for t in watch_config.watch_targets.split(","))
+        if isinstance(watch_config.watch_targets, str)
+        else tuple(watch_config.watch_targets)
+    )
+    unsupported_targets = set(watch_targets) - {"grads", "params"}
+    if unsupported_targets:
+        raise ValueError(f"diagnostic watch does not support targets {sorted(unsupported_targets)}")
+    diagnostic_watch_config = replace(watch_config, watch_targets=list(watch_targets))
+    z_loss = z_loss_weight if z_loss_weight > 0 else None
+
+    @jax.jit
+    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
+        params = _apply_qb_betas(params, pending_qb_betas)
+        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
+
+    return diagnostic_watch_step
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -400,18 +460,7 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
-        def loss_fn(params):
-            compute_params = mp.cast_to_compute(params)
-            return compute_params.next_token_loss(
-                batch.tokens,
-                batch.loss_weight,
-                mask=batch.attn_mask,
-                reduction="mean",
-                logsumexp_weight=z_loss,
-                return_router_metrics=True,
-            )
-
-        (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
+        (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = (
             _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
@@ -474,12 +523,21 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
+    diagnostic_watch_step = None
+    inline_watch_config = watch_config if watch_config.is_enabled else None
+    if watch_config.is_enabled and config.trainer.watch_mode == WatchMode.DIAGNOSTIC:
+        diagnostic_watch_step = _make_diagnostic_watch_step(
+            trainer.mp,
+            z_loss_weight=config.trainer.z_loss_weight,
+            watch_config=watch_config,
+        )
+        inline_watch_config = None
     train_step = _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
         ema_beta=config.trainer.ema_beta,
-        watch_config=watch_config if watch_config.is_enabled else None,
+        watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
     )
 
@@ -615,7 +673,18 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                if compute_watch and diagnostic_watch_step is not None:
+                    watch_stats = diagnostic_watch_step(state.params, batch, state.pending_qb_betas)
+                    jax.block_until_ready(watch_stats)
+                else:
+                    watch_stats = None
+                state, metrics, inline_watch_stats = train_step(
+                    state,
+                    batch,
+                    compute_watch=compute_watch and diagnostic_watch_step is None,
+                )
+                if inline_watch_stats is not None:
+                    watch_stats = inline_watch_stats
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])

@@ -27,7 +27,7 @@ from rigging.filesystem import prefix_join
 
 from experiments.datasets.paloma import paloma_datasets
 from experiments.grug.moe_hero_ep.heuristic import build_hero_configs
-from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, run_grug
+from experiments.grug.moe_hero_ep.train import GrugEvalConfig, GrugRunConfig, GrugTrainerConfig, WatchMode, run_grug
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -122,6 +122,7 @@ def build_hero_run(
     eval_every: int = 0,
     save_checkpoints: bool = False,
     watch_interval: int = HERO_WATCH_INTERVAL,
+    watch_mode: WatchMode = WatchMode.INLINE,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -200,6 +201,7 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
+        watch_mode=watch_mode,
         # A 25-step throughput gate does not need checkpoints, and writing the offloaded optimizer
         # state costs more than the gate itself. A multi-thousand-step run on a contended rack does:
         # without this, every preemption restarts from step 0, so a run longer than the mean time
@@ -388,6 +390,13 @@ def build_hero_run(
     help="Steps between gradient and parameter norm logs. 0 disables norm logging.",
 )
 @click.option(
+    "--watch-mode",
+    type=click.Choice([mode.value for mode in WatchMode]),
+    default=WatchMode.INLINE.value,
+    show_default=True,
+    help="Compute norms in the training step or in a separate forward and backward diagnostic step.",
+)
+@click.option(
     "--profile-steps",
     type=click.IntRange(min=0),
     default=0,
@@ -423,6 +432,7 @@ def main(
     save_checkpoints: bool,
     eval_every: int,
     watch_interval: int,
+    watch_mode: str,
     profile_steps: int,
     profile_start_step: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -441,6 +451,7 @@ def main(
         save_checkpoints=save_checkpoints,
         eval_every=eval_every,
         watch_interval=watch_interval,
+        watch_mode=WatchMode(watch_mode),
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
     )

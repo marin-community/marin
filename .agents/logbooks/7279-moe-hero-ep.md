@@ -1126,3 +1126,36 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Decision rule: A method passes only if all five steps finish and W&B receives 38 finite gradient
   norm metrics and 38 finite parameter norm metrics. Stop on the first deterministic compile or
   NCCL memory failure. Keep a successful compiler control for a longer throughput check.
+
+### 2026-08-08 12:25 UTC - MHEP-161 separate diagnostic watch gate ready
+
+- Hypothesis: Full watch fails because the gradient tree has the optimizer and the norm reduction
+  as concurrent consumers. A separate diagnostic executable can compute the same forward,
+  backward, gradient norms, and parameter norms without an optimizer update. After its scalar
+  outputs resolve, the known-good no-watch training executable runs and can free gradients as the
+  optimizer consumes them.
+- Implementation: `--watch-mode diagnostic` selects the separate executable. `inline` remains the
+  default. The diagnostic uses the same pre-update parameters, pending QB router biases, batch,
+  mixed-precision policy, loss, and z-loss as the following training step. Metric names and values
+  use the existing `compute_watch_stats` path. The mode supports gradient and parameter targets.
+- Cost: A watched step repeats forward and backward. Interval 1 is a fit gate and should be close
+  to twice the step cost. Interval 10 is the intended training setting and adds about 10 percent
+  forward and backward work before any compiler overlap effects.
+- Local checks: The diagnostic statistics match direct gradient and parameter statistics on a
+  small differentiable model. The new test passes. The changed-file pre-commit checks pass.
+- Run ID: `mhep-161-w11-ep-e192-i5504-cf2p00-fullwatch-diagnostic-p32759-20260808`.
+- Common config and decision rule match MHEP-157 to MHEP-160. No compiler memory controls are set,
+  so this arm isolates the separate diagnostic executable.
+
+### 2026-08-08 12:32 UTC - A collective-overlap limit of one fits MHEP-131
+
+- MHEP-159 completed all five steps with the exact MHEP-131 model and full watch on every step.
+- W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics. The final
+  loss was 10.5244 at step 4.
+- The run reported 230,051 tokens/s. The 200-step MHEP-131 no-watch baseline reported 233,418
+  tokens/s. This short comparison puts the full-watch arm 1.44% below the no-watch baseline.
+- Result: `--xla_gpu_experimental_parallel_collective_overlap_limit=1` removes the observed memory
+  failure without a model or allocator change. A longer matched run is necessary for a stable
+  throughput cost.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-159-w10-ep-e192-i5504-cf2p00-fullwatch-overlap1-p32757-20260808
+- MHEP-157, MHEP-158, and MHEP-160 were still active at this result time.
