@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import subprocess
-import sys
-import textwrap
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
+from jax.sharding import AxisType, Mesh, reshard
+from jax.sharding import PartitionSpec as P
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.attention import AttentionMask
 
@@ -97,54 +98,31 @@ def test_thd_base_mask_requires_segment_ids():
 
 
 def test_thd_base_mask_derives_metadata_under_batch_sharding():
-    """The derivation vmaps a per-row scan, which cannot carry the batch sharding.
+    """The derivation vmaps a per-row scan, which cannot carry the batch sharding through.
 
-    Deriving straight from batch-sharded segment ids fails resource-axis resolution
-    ("is not found in mesh: ()"), which only reproduces on a real multi-device mesh.
+    Deriving straight from batch-sharded segment ids fails resource-axis resolution with
+    "is not found in mesh: ()", because under vmap the abstract mesh is empty. One device is
+    enough to catch it: what matters is that the batch spec names three mesh axes, not how many
+    devices back them. The kernel then takes the metadata sharding from the tokens, so the
+    batch sharding also has to survive the round trip rather than stay replicated.
     """
-    env = os.environ.copy()
-    env["JAX_PLATFORMS"] = "cpu"
-    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
-    script = """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        from jax.sharding import AxisType, Mesh, PartitionSpec as P, reshard
-
-        from experiments.grug.moe_hero_fsdp import model
-
-        mesh = Mesh(
-            np.asarray(jax.devices()).reshape(2, 2, 2, 1),
-            ("replica_dcn", "data", "expert", "model"),
-            axis_types=(AxisType.Explicit,) * 4,
-        )
-        eos_id = 128001
-        tokens = jax.random.randint(jax.random.key(0), (8, 64), 0, 1000).at[:, ::11].set(eos_id)
-        starts = (jnp.roll(tokens, 1, axis=1).at[:, 0].set(0) == eos_id).astype(jnp.int32)
-        segment_ids = jnp.cumsum(starts, axis=1)
-
-        batch = ("replica_dcn", "data", "expert")
-        with jax.set_mesh(mesh):
-            sharded = reshard(segment_ids, P(batch, None))
-            build = jax.jit(lambda ids: model._thd_base_mask((ids, ids), None, max_segments=16))
-            metadata = build(sharded).thd_segment_metadata
-
-        # EOS at position p opens a segment at p+1, so six EOS give seven documents.
-        assert metadata.segment_lengths.shape == (8, 16)
-        np.testing.assert_array_equal(np.asarray(metadata.num_segments), np.full(8, 7))
-
-        # gpu_fa4_thd takes the metadata sharding from the tokens, so replicated metadata makes its
-        # own segment-length select mismatch. The batch sharding has to survive the derivation.
-        assert metadata.segment_lengths.sharding.spec == P(batch, None), metadata.segment_lengths.sharding
-        assert metadata.num_segments.sharding.spec == P(batch), metadata.num_segments.sharding
-    """
-
-    result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1),
+        ("replica_dcn", "data", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 4,
     )
+    tokens = jax.random.randint(jax.random.key(0), (4, 44), 0, 1000).at[:, ::11].set(EOS_ID)
+    starts = (jnp.roll(tokens, 1, axis=1).at[:, 0].set(0) == EOS_ID).astype(jnp.int32)
+    segment_ids = jnp.cumsum(starts, axis=1)
+    batch = ("replica_dcn", "data", "expert")
 
-    assert result.returncode == 0, result.stderr
+    with jax.set_mesh(mesh):
+        sharded = reshard(segment_ids, P(batch, None))
+        build = jax.jit(lambda ids: model._thd_base_mask((ids, ids), None, max_segments=16))
+        metadata = build(sharded).thd_segment_metadata
+
+    # EOS at position p opens a segment at p+1, so four EOS in 44 tokens give five documents.
+    assert metadata.segment_lengths.shape == (4, 16)
+    np.testing.assert_array_equal(np.asarray(metadata.num_segments), np.full(4, 5))
+    assert metadata.segment_lengths.sharding.spec == P(batch, None)
+    assert metadata.num_segments.sharding.spec == P(batch)
