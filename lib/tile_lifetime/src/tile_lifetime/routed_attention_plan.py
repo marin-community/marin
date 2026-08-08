@@ -16,6 +16,7 @@ from tile_lifetime.plan import (
     ReadinessEvent,
 )
 from tile_lifetime.relation import RelationPlan
+from tile_lifetime.streaming_attention import AttentionScoreAxis, StreamingAttentionProgram
 
 
 class RoutedAttentionOrientation(StrEnum):
@@ -109,6 +110,187 @@ class RoutedAttentionPhysicalPlan:
             )
         )
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class RoutedStreamingAttentionCompilation:
+    """One semantic online-attention program scheduled over a sparse relation."""
+
+    program: StreamingAttentionProgram
+    relation: RelationPlan
+    candidates: tuple[RoutedAttentionPhysicalPlan, RoutedAttentionPhysicalPlan]
+
+
+@dataclass(frozen=True)
+class QueryMajorBlockIndexPlan:
+    """Compact block lists derived from the source-major relation orientation."""
+
+    block_count: np.ndarray
+    block_index: np.ndarray
+
+
+@dataclass(frozen=True)
+class BoundedKVReuseWave:
+    """Fixed-capacity right-major tasks for one source-order relation slot."""
+
+    selected_slot: int
+    key_value_block: np.ndarray
+    query_block: np.ndarray
+    query_count: np.ndarray
+
+    @property
+    def task_count(self) -> int:
+        """Number of independently schedulable right-resource tasks."""
+        return int(self.key_value_block.size)
+
+    @property
+    def edge_count(self) -> int:
+        """Number of relation edges covered by the tasks."""
+        return int(np.sum(self.query_count))
+
+
+@dataclass(frozen=True)
+class BoundedKVReusePlan:
+    """Deterministic slot waves with bounded query consumers per staged KV block."""
+
+    source_item_count: int
+    destination_count: int
+    route_slots: int
+    query_capacity_per_task: int
+    waves: tuple[BoundedKVReuseWave, ...]
+
+    @property
+    def task_count(self) -> int:
+        """Total physical task count across every selected-slot wave."""
+        return sum(wave.task_count for wave in self.waves)
+
+    @property
+    def edge_count(self) -> int:
+        """Total relation edges covered by every selected-slot wave."""
+        return sum(wave.edge_count for wave in self.waves)
+
+
+def bounded_kv_reuse_plan(relation: RelationPlan, *, query_capacity_per_task: int) -> BoundedKVReusePlan:
+    """Group each relation slot by right resource without changing source order.
+
+    Slot waves serialize the only updates that may target the same query state.
+    Within one wave every source occurs at most once, so right-major tasks can
+    write their query states directly without atomics.  Large right-side groups
+    are split into bounded tasks; each task may stage its right resource once
+    and reuse it for at most ``query_capacity_per_task`` consumers.
+    """
+    if query_capacity_per_task <= 0:
+        raise ValueError("query capacity per KV-reuse task must be positive")
+
+    waves = []
+    for selected_slot in range(relation.route_slots):
+        source = np.flatnonzero(relation.edge_valid[:, selected_slot]).astype(np.int32, copy=False)
+        route = source * relation.route_slots + selected_slot
+        destination = relation.destination_item[route].astype(np.int32, copy=False)
+        order = np.lexsort((source, destination))
+        source = source[order]
+        destination = destination[order]
+
+        task_destinations: list[int] = []
+        task_queries: list[np.ndarray] = []
+        start = 0
+        while start < destination.size:
+            stop = start + 1
+            while stop < destination.size and destination[stop] == destination[start]:
+                stop += 1
+            for chunk_start in range(start, stop, query_capacity_per_task):
+                chunk = source[chunk_start : min(chunk_start + query_capacity_per_task, stop)]
+                task_destinations.append(int(destination[start]))
+                task_queries.append(chunk)
+            start = stop
+
+        query_block = np.full(
+            (len(task_queries), query_capacity_per_task),
+            -1,
+            dtype=np.int32,
+        )
+        query_count = np.empty(len(task_queries), dtype=np.int32)
+        for task_index, chunk in enumerate(task_queries):
+            query_block[task_index, : chunk.size] = chunk
+            query_count[task_index] = chunk.size
+        wave = BoundedKVReuseWave(
+            selected_slot=selected_slot,
+            key_value_block=np.asarray(task_destinations, dtype=np.int32),
+            query_block=query_block,
+            query_count=query_count,
+        )
+        if wave.edge_count != source.size:
+            raise ValueError(f"slot {selected_slot} lost relation edges: {wave.edge_count} != {source.size}")
+        valid_queries = wave.query_block[wave.query_block >= 0]
+        if np.unique(valid_queries).size != valid_queries.size:
+            raise ValueError(f"slot {selected_slot} assigns one query state to multiple physical tasks")
+        waves.append(wave)
+
+    plan = BoundedKVReusePlan(
+        source_item_count=relation.source_item_count,
+        destination_count=relation.destination_count,
+        route_slots=relation.route_slots,
+        query_capacity_per_task=query_capacity_per_task,
+        waves=tuple(waves),
+    )
+    if plan.edge_count != relation.route_count:
+        raise ValueError(f"bounded KV reuse lost relation edges: {plan.edge_count} != {relation.route_count}")
+    return plan
+
+
+def query_major_block_index_plan(relation: RelationPlan) -> QueryMajorBlockIndexPlan:
+    """Lower a generic relation to compact per-source destination block lists.
+
+    This is an index-plane lowering only.  It preserves source-local route-slot
+    order and does not attach attention semantics or select a named kernel.
+    """
+    destination = relation.destination_item.reshape(relation.source_item_count, relation.route_slots)
+    block_count = np.count_nonzero(relation.edge_valid, axis=1).astype(np.int32)
+    block_index = np.zeros_like(destination, dtype=np.int32)
+    for source in range(relation.source_item_count):
+        valid_destinations = destination[source, relation.edge_valid[source]]
+        block_index[source, : valid_destinations.shape[0]] = valid_destinations
+    return QueryMajorBlockIndexPlan(block_count=block_count, block_index=block_index)
+
+
+def compile_routed_streaming_attention_candidates(
+    program: StreamingAttentionProgram,
+    relation: RelationPlan,
+    config: RoutedAttentionPlanConfig,
+) -> RoutedStreamingAttentionCompilation:
+    """Schedule derived Contract/Map/Fold attention in both relation orientations."""
+    query = program.qk.inputs[0]
+    key = program.qk.inputs[1]
+    value = program.pv.inputs[1]
+    query_axis = next((axis for axis in query.axes if axis.label == AttentionScoreAxis.QUERY.value), None)
+    key_axis = next((axis for axis in key.axes if axis.label == AttentionScoreAxis.KEY.value), None)
+    query_head_axis = next((axis for axis in query.axes if axis.label == AttentionScoreAxis.HEAD.value), None)
+    key_value_head_axis = next((axis for axis in key.axes if axis.label == "key_value_head"), None)
+    if query_axis is None or key_axis is None or query_head_axis is None or key_value_head_axis is None:
+        raise ValueError("routed attention requires explicit query, key, and head axes")
+    expected_query_length = relation.source_item_count * config.query_block_size
+    minimum_key_length = relation.destination_count * config.key_value_block_size
+    reasons = []
+    if query_axis.extent != expected_query_length:
+        reasons.append(f"query extent {query_axis.extent} does not equal relation blocks x tile {expected_query_length}")
+    if key_axis.extent < minimum_key_length:
+        reasons.append(f"key extent {key_axis.extent} is smaller than relation destination span {minimum_key_length}")
+    if query_head_axis.extent != config.query_heads:
+        reasons.append("semantic query-head count does not match the physical candidate")
+    if key_value_head_axis.extent != config.key_value_heads:
+        reasons.append("semantic key/value-head count does not match the physical candidate")
+    if query.axes[-1].extent != config.head_dimension or key.axes[-1].extent != config.head_dimension:
+        reasons.append("semantic Q/K feature dimensions do not match the physical candidate")
+    if value.axes[-1].extent != config.value_dimension:
+        reasons.append("semantic value dimension does not match the physical candidate")
+    if program.schedule.query_tile_size != config.query_block_size:
+        reasons.append("semantic query tile does not match the relation block size")
+    if program.schedule.key_value_tile_size != config.key_value_block_size:
+        reasons.append("semantic K/V tile does not match the relation block size")
+    if reasons:
+        raise ValueError("; ".join(reasons))
+    candidates = compile_routed_attention_candidates(relation, config)
+    return RoutedStreamingAttentionCompilation(program=program, relation=relation, candidates=candidates)
 
 
 def compile_routed_attention_candidates(
@@ -317,10 +499,14 @@ def _kv_major_plan(relation: RelationPlan, config: RoutedAttentionPlanConfig) ->
 
 
 def compile_bounded_kv_major_candidate(
-    relation: RelationPlan, config: RoutedAttentionPlanConfig
+    relation: RelationPlan,
+    config: RoutedAttentionPlanConfig,
+    *,
+    query_capacity_per_task: int = 2,
 ) -> RoutedAttentionPhysicalPlan:
-    """Emit deterministic KV-major slot waves with one writer per query state."""
+    """Emit deterministic KV-major slot waves with bounded right-resource reuse."""
     _validate_config(relation, config)
+    reuse_plan = bounded_kv_reuse_plan(relation, query_capacity_per_task=query_capacity_per_task)
     state_bytes = (
         relation.source_item_count
         * config.query_block_size
@@ -355,9 +541,11 @@ def compile_bounded_kv_major_candidate(
     ]
     kernel_regions: list[tuple[str, ...]] = [("initialize_query_online_state",)]
     for selected_slot in range(relation.route_slots):
-        valid_slot_edges = relation.edge_valid[:, selected_slot]
-        slot_edge_count = int(np.count_nonzero(valid_slot_edges))
-        slot_group_counts = _slot_group_counts(relation, selected_slot)
+        wave = reuse_plan.waves[selected_slot]
+        slot_group_counts = tuple(
+            int(np.count_nonzero(wave.key_value_block == destination))
+            for destination in range(relation.destination_count)
+        )
         task_name = f"slot_{selected_slot}_kv_major_qk_pv_merge"
         input_event = f"slot_{selected_slot}_state_ready"
         output_event = f"slot_{selected_slot + 1}_state_ready"
@@ -392,7 +580,7 @@ def compile_bounded_kv_major_candidate(
                         ),
                     ),
                     granularity="selected-slot wave",
-                    required_arrivals=slot_edge_count,
+                    required_arrivals=wave.task_count,
                     generation=f"selected_slot_{selected_slot}",
                 ),
             )
@@ -443,17 +631,10 @@ def compile_bounded_kv_major_candidate(
         output_materialization_bytes=_output_bytes(relation, config),
         kernel_regions=tuple(kernel_regions),
         numerical_policy=(
-            "ascending selected-slot FP32 online updates; one query-state writer per wave; no atomic accumulation"
+            "ascending selected-slot FP32 online updates; bounded right-resource reuse; "
+            "one query-state writer per wave; no atomic accumulation"
         ),
     )
-
-
-def _slot_group_counts(relation: RelationPlan, selected_slot: int) -> tuple[int, ...]:
-    counts = np.zeros(relation.destination_count, dtype=np.int32)
-    valid_sources = np.flatnonzero(relation.edge_valid[:, selected_slot])
-    destinations = relation.destination_item[valid_sources * relation.route_slots + selected_slot]
-    np.add.at(counts, destinations, 1)
-    return tuple(int(value) for value in counts)
 
 
 def _worker_roles(config: RoutedAttentionPlanConfig) -> tuple[PersistentWorkerRole, ...]:

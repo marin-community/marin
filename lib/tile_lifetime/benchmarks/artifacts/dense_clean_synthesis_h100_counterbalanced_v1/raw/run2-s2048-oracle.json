@@ -1,0 +1,190 @@
+{
+  "benchmark": {
+    "alternating_variant_order": true,
+    "iterations_per_sample": 10,
+    "measurements": {
+      "consumer_prologue": {
+        "maximum_ms": 1.9051488876342773,
+        "mean_ms": 1.5667033608754475,
+        "median_ms": 1.5394879817962646,
+        "minimum_ms": 1.4456800460815429,
+        "samples_ms": [
+          1.4456800460815429,
+          1.526534366607666,
+          1.5506815910339355,
+          1.507084846496582,
+          1.5076736450195312,
+          1.5174559593200683,
+          1.543452835083008,
+          1.4942048072814942,
+          1.5333760261535645,
+          1.5017919540405273,
+          1.556704044342041,
+          1.5081631660461425,
+          1.5535552024841308,
+          1.5184703826904298,
+          1.5492480278015137,
+          1.8492864608764648,
+          1.9051488876342773,
+          1.69901123046875,
+          1.7179391860961915,
+          1.6037727355957032,
+          1.5983903884887696,
+          1.5530847549438476,
+          1.560921573638916,
+          1.5233792304992675,
+          1.5496671676635743,
+          1.5146623611450196,
+          1.537177562713623,
+          1.5161375999450684,
+          1.5417984008789063,
+          1.516646385192871
+        ]
+      },
+      "delayed_epilogue": {
+        "maximum_ms": 1.9034624099731445,
+        "mean_ms": 1.5441822973887125,
+        "median_ms": 1.523838424682617,
+        "minimum_ms": 1.463590431213379,
+        "samples_ms": [
+          1.4675647735595703,
+          1.4782848358154297,
+          1.545798397064209,
+          1.4779583930969238,
+          1.5078368186950684,
+          1.4711071968078613,
+          1.5199551582336426,
+          1.463590431213379,
+          1.5333696365356446,
+          1.4774911880493165,
+          1.547100830078125,
+          1.476153564453125,
+          1.532102394104004,
+          1.4858240127563476,
+          1.5239904403686524,
+          1.7316160202026367,
+          1.9034624099731445,
+          1.675507164001465,
+          1.6863616943359374,
+          1.5831168174743653,
+          1.608937644958496,
+          1.5341119766235352,
+          1.531721591949463,
+          1.4810239791870117,
+          1.5486335754394531,
+          1.48887357711792,
+          1.523686408996582,
+          1.4732128143310548,
+          1.5374112129211426,
+          1.509663963317871
+        ]
+      },
+      "materialized_torch": {
+        "maximum_ms": 2.473676872253418,
+        "mean_ms": 2.1037850761413575,
+        "median_ms": 2.0772687911987306,
+        "minimum_ms": 2.0091903686523436,
+        "samples_ms": [
+          2.0110496520996093,
+          2.0128448486328123,
+          2.08606071472168,
+          2.068124771118164,
+          2.085878372192383,
+          2.062940788269043,
+          2.052073669433594,
+          2.0091903686523436,
+          2.0664608001708986,
+          2.0305759429931642,
+          2.0850336074829103,
+          2.0757984161376952,
+          2.0787391662597656,
+          2.0421056747436523,
+          2.1520832061767576,
+          2.2350431442260743,
+          2.473676872253418,
+          2.332921600341797,
+          2.239472007751465,
+          2.18887996673584,
+          2.159331130981445,
+          2.0995552062988283,
+          2.082419204711914,
+          2.0188512802124023,
+          2.0814176559448243,
+          2.0412288665771485,
+          2.059503936767578,
+          2.0204896926879883,
+          2.092060852050781,
+          2.069740867614746
+        ]
+      }
+    },
+    "repeats": 30,
+    "variant_order": [
+      "consumer_prologue",
+      "delayed_epilogue",
+      "materialized_torch"
+    ],
+    "warmups": 10
+  },
+  "benchmark_boundary": {
+    "excluded": [],
+    "included": [
+      "QKV projection and RoPE",
+      "causal exact GQA attention",
+      "output projection and residual/RMS partial Fold",
+      "RMS reduction",
+      "gate/up projection and SwiGLU",
+      "down projection and residual/RMS partial Fold",
+      "RMS reduction",
+      "next QKV projection and RoPE"
+    ],
+    "semantic_body": "manual CODA/QuACK plus fa4_cute"
+  },
+  "correctness": {
+    "bitwise_deterministic_output_sha256": {
+      "consumer_prologue": {
+        "next_qkv": "6c761e79976f442689f50875da8c0edbf2fec1d155ba8b3b125ca9bd71ba3b5c",
+        "x2": "ff20a5b32e8e4a2f90d6f83db860de2a517b6421f7aee26cc90e6d4978f23c90"
+      },
+      "delayed_epilogue": {
+        "next_qkv": "9bb3a98e2adb115ae92286b89368cb92638fb0c60506f8f40f3567b8015949d2",
+        "x2": "aec37488c980d894ea144244f21206a1215250dfc7c8ddbae99ab3c4b9af328e"
+      },
+      "materialized_torch": {
+        "next_qkv": "aa90924d88990dc87715fbfe659d8f1ac2e10cc719b3b6904ec8bca108ba9c12",
+        "x2": "0283bed7ed039f86badf153f488dee474695358bb0b163b598b8cd6104424d7f"
+      }
+    },
+    "prologue_vs_delayed_next_qkv_max_abs": 0.03125,
+    "prologue_vs_delayed_next_qkv_mean_abs": 0.002429501386359334,
+    "prologue_vs_delayed_x2_max_abs": 0.03125,
+    "prologue_vs_delayed_x2_mean_abs": 0.001601125462912023
+  },
+  "environment": {
+    "cutlass_dsl": "4.6.1",
+    "flash_attn_4": "4.0.0b16",
+    "gpu_telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1470, 2619",
+    "torch": "2.14.0.dev20260807+cu130",
+    "torch_cuda": "13.0"
+  },
+  "role": "expert_oracle_only",
+  "run_id": "run2-oracle-first",
+  "schema_version": 1,
+  "sources": {
+    "attention_oracle": "fa4_cute",
+    "attention_oracle_revision": "flash-attn-4-4.0.0b16",
+    "quack_revision": "84ef91df9bec87c7e4938517234fafb07ef844dd",
+    "shuttle_revision": null
+  },
+  "workload": {
+    "accumulation_dtype": "float32",
+    "batch": 1,
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "hidden": 4096,
+    "intermediate": 14336,
+    "key_value_heads": 8,
+    "query_heads": 32,
+    "sequence": 2048
+  }
+}

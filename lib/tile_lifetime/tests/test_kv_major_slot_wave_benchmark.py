@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,11 @@ BENCHMARK = Path(__file__).resolve().parents[1] / "benchmarks" / "h100_kv_major_
 
 def test_slot_wave_planning_cli_preserves_edges_order_and_attention_semantics(tmp_path: Path) -> None:
     output = tmp_path / "slot-waves.json"
+    environment = os.environ.copy()
+    package_source = str(BENCHMARK.parents[1] / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (package_source, environment.get("PYTHONPATH", "")) if part
+    )
     subprocess.run(
         [
             sys.executable,
@@ -32,6 +38,7 @@ def test_slot_wave_planning_cli_preserves_edges_order_and_attention_semantics(tm
         ],
         check=True,
         capture_output=True,
+        env=environment,
         text=True,
     )
 

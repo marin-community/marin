@@ -1,0 +1,44 @@
+{
+  "artifact": "dense_clean_synthesis_h100_counterbalanced_v1",
+  "benchmark_boundary": {
+    "excluded": [],
+    "included": [
+      "QKV Contract and generated RoPE Map",
+      "causal exact GQA generated streaming Fold",
+      "output Contract and residual/RMS partial Fold",
+      "RMS reduction",
+      "gate/up Contract and generated SwiGLU Map",
+      "down Contract and residual/RMS partial Fold",
+      "RMS reduction",
+      "next QKV Contract and generated RoPE Map"
+    ]
+  },
+  "environment": {
+    "attention_oracle": "flash-attn-4 CuTe 4.0.0b16",
+    "cutlass_dsl": "4.6.1",
+    "cuda": "13.0",
+    "driver": "595.71.05",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "gpu_uuid": "GPU-88e0fc65-8ac3-0652-e749-e2c520f9645b",
+    "jax": "0.11.0",
+    "jaxlib": "0.11.0",
+    "power_limit_watts": 700,
+    "quack": "0.6.1",
+    "torch": "2.14.0.dev20260807+cu130"
+  },
+  "generated_path": {
+    "attention": "generated SM90 QK/online-Fold/PV skeleton",
+    "gemm": "generated scalar/tile AST around generic QuACK/CuTe mainloop",
+    "official_fa3_selected": false,
+    "named_transformer_epilogue_selected": false
+  },
+  "oracle_path": {
+    "attention": "flash-attn-4 CuTe expert kernel",
+    "gemm": "hand-composed named QuACK/CODA epilogues",
+    "role": "expert_oracle_only"
+  },
+  "source_revisions": {
+    "quack": "84ef91df9bec87c7e4938517234fafb07ef844dd plus quack_fp32_row_scale.patch",
+    "shuttle_base": "4fba36752bdbfd28ad9a0ea8dee121bb382b21c9 plus dirty clean-synthesis sources"
+  }
+}

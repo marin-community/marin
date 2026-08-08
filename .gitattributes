@@ -1,2 +1,5 @@
 # Built artifact of lib/marin/src/marin/inference/dashboard (npm run build).
 lib/marin/src/marin/inference/quick_serve_dashboard.html linguist-generated=true
+
+# Immutable benchmark captures may contain binary payloads and source-exact whitespace.
+lib/tile_lifetime/benchmarks/artifacts/** -whitespace linguist-generated=true

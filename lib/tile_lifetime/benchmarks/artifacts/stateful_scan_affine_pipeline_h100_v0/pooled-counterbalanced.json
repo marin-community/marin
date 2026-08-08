@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "boundary": {
+    "batch_size": 1,
+    "sequence_length": 2048,
+    "heads": 32,
+    "key_dimension": 128,
+    "value_dimension": 128,
+    "update_rank": 1,
+    "decay_axes": "scalar",
+    "chunk_size": 64,
+    "block_v": 32,
+    "input_family": "delta_rule"
+  },
+  "protocol": {
+    "independent_runs": 2,
+    "warmups_per_run": 10,
+    "samples_per_implementation_per_run": 50,
+    "run_one_first_implementation": "generated",
+    "run_two_first_implementation": "oracle",
+    "warmup_and_measured_pairs_alternate": true
+  },
+  "generated": {
+    "pooled_median_ms": 0.4658240079879761,
+    "sample_count": 100
+  },
+  "oracle": {
+    "name": "FLA chunk_gated_delta_rule",
+    "revision": "9c8e42e762fce087c27b673af4922795d9edb85e",
+    "pooled_median_ms": 0.4243039935827255,
+    "sample_count": 100
+  },
+  "generated_to_oracle_ratio": 1.0978544039962128,
+  "targets": {
+    "completion_ratio": 1.2,
+    "completion_ms": 0.5091647922992706,
+    "stretch_ratio": 1.1,
+    "stretch_ms": 0.4667343929409981,
+    "completion_pass": true,
+    "stretch_pass": true
+  },
+  "correctness": {
+    "output_maximum_absolute_error": 0.00048828125,
+    "output_mean_absolute_error": 0.00005270477049634792,
+    "final_state_maximum_absolute_error": 0.00031542591750621796,
+    "final_state_mean_absolute_error": 0.000044483465899247676,
+    "stablehlo_sha256": "417852499eed3f1dcc4b270d73c3922b1c0a5e5071951c78879319d41a65730a"
+  },
+  "raw_records": [
+    "raw/counterbalanced/stateful-counterbalanced-1.json",
+    "raw/counterbalanced/stateful-counterbalanced-2.json"
+  ]
+}

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND, GemmProgram, compile_gemm_program
 from tile_lifetime.ir import DType
 from tile_lifetime.plan import (
     Attachment,
@@ -20,6 +21,7 @@ from tile_lifetime.plan import (
     RegionPlan,
     StreamingAttentionSkeleton,
 )
+from tile_lifetime.tile_program import TilePrimitive, TileProgramError, TileProgramStage
 
 
 class RuntimeDiagnosticCode(StrEnum):
@@ -119,6 +121,7 @@ EXPECTED_SKELETON_TYPES = (
     GemmSkeleton,
 )
 H100_GEMM_TILE_SHAPE = (128, 256, 64)
+GENERATED_STREAMING_BACKEND = "h100_streaming_contract_fold"
 
 
 def validate_region_plan(plan: RegionPlan) -> None:
@@ -166,17 +169,14 @@ def validate_region_plan(plan: RegionPlan) -> None:
         diagnostics,
         first_qkv,
         index=0,
-        backends=("quack_sm90_rope_posfreq",),
         input_layout="bsh_contiguous",
         output_layout="fa3_bshd_last_dimension_contiguous",
-        prologue=(),
-        epilogue=("partition_qkv_segment_views_bshd", "pairwise_rope_q", "pairwise_rope_k"),
         cluster_shape=_qkv_cluster_shape(first_qkv.shape[1]),
     )
     _expect(
         diagnostics,
         attention.backend,
-        "official_flashattention_3_hopper",
+        GENERATED_STREAMING_BACKEND,
         code=RuntimeDiagnosticCode.BACKEND_CONTRACT,
         index=1,
         field="backend",
@@ -201,11 +201,13 @@ def validate_region_plan(plan: RegionPlan) -> None:
         diagnostics,
         attention.attachments,
         (
-            "scale_and_causal_mask",
-            "online_softmax_max_sum_output_update",
-            "normalize_online_output",
+            "score_map",
+            "domain_restriction",
+            "online_fold_update",
+            "fold_finalize",
         ),
         (
+            AttachmentSite.ATTENTION_SCORE_TRANSFORM,
             AttachmentSite.ATTENTION_SCORE_TRANSFORM,
             AttachmentSite.ATTENTION_ONLINE_UPDATE,
             AttachmentSite.ATTENTION_OUTPUT_TRANSFORM,
@@ -225,7 +227,6 @@ def validate_region_plan(plan: RegionPlan) -> None:
         not supported_attention_shape
         or attention.query_block_size != expected_query_block
         or attention.key_value_block_size != expected_key_value_block
-        or not attention.causal
         or not math.isclose(attention.scale, attention.head_dimension**-0.5, rel_tol=1e-6)
         or attention.pipeline_stages != 2
         or attention.producer_threads != 32
@@ -235,17 +236,14 @@ def validate_region_plan(plan: RegionPlan) -> None:
         or not attention.intra_warpgroup_overlap
         or not attention.persistent_scheduler
         or attention.register_estimate != (168 if attention.head_dimension == 128 else None)
-        or attention.online_state
-        != (
-            f"{attention.output}.online.max",
-            f"{attention.output}.online.sum",
-            f"{attention.output}.online.output",
-        )
+        or len(attention.online_state) != 3
+        or attention.attachments[2].outputs != attention.online_state
+        or attention.attachments[3].inputs != (attention.online_state[2], attention.online_state[1])
     ):
         diagnostics.append(
             RuntimeDiagnostic(
                 code=RuntimeDiagnosticCode.RESOURCE_CONTRACT,
-                message="attention physical schedule does not match a supported measured FA3 contract",
+                message="streaming Contract/Fold schedule does not match a supported SM90 configuration",
                 skeleton_index=1,
                 field="physical_schedule",
             )
@@ -254,56 +252,42 @@ def validate_region_plan(plan: RegionPlan) -> None:
         diagnostics,
         output_projection,
         index=2,
-        backends=("coda_cute_h100",),
         input_layout="row_major_mk",
         output_layout="row_major_mn",
-        prologue=(),
-        epilogue=("residual_add", "multiply_gamma", "partial_sum_square"),
         cluster_shape=(1, 1, 1),
     )
     _validate_reduction(diagnostics, mlp_reduction, index=3)
 
-    gate_is_prologue = gate_up.backend == "quack_sm90_fp32_a_transform_swiglu_dead_preact"
-    gate_is_epilogue = gate_up.backend == "quack_sm90_rstd_swiglu_dead_preact"
+    gate_program = _compile_gemm(diagnostics, gate_up, index=4)
+    gate_is_prologue = _has_primitive(gate_program, TileProgramStage.PREPARATION, TilePrimitive.SCALE_ROW)
+    gate_is_epilogue = _has_primitive(gate_program, TileProgramStage.FINALIZATION, TilePrimitive.SCALE_ROW)
     _validate_gemm(
         diagnostics,
         gate_up,
         index=4,
-        backends=("quack_sm90_fp32_a_transform_swiglu_dead_preact", "quack_sm90_rstd_swiglu_dead_preact"),
         input_layout="row_major_mk",
         output_layout="row_major_mn",
-        prologue=("scale_row",) if gate_is_prologue else (),
-        epilogue=("pairwise_swiglu",) if gate_is_prologue else ("scale_row", "pairwise_swiglu"),
         cluster_shape=_wide_projection_cluster_shape(gate_up.shape[1]),
     )
     _validate_gemm(
         diagnostics,
         down,
         index=5,
-        backends=("coda_cute_h100",),
         input_layout="row_major_mk",
         output_layout="row_major_mn",
-        prologue=(),
-        epilogue=("residual_add", "multiply_gamma", "partial_sum_square"),
         cluster_shape=(1, 1, 1),
     )
     _validate_reduction(diagnostics, next_reduction, index=6)
 
-    next_is_prologue = next_qkv.backend == "quack_sm90_fp32_a_transform_rope_posfreq"
-    next_is_epilogue = next_qkv.backend == "quack_sm90_rstd_rope_posfreq"
+    next_program = _compile_gemm(diagnostics, next_qkv, index=7)
+    next_is_prologue = _has_primitive(next_program, TileProgramStage.PREPARATION, TilePrimitive.SCALE_ROW)
+    next_is_epilogue = _has_primitive(next_program, TileProgramStage.FINALIZATION, TilePrimitive.SCALE_ROW)
     _validate_gemm(
         diagnostics,
         next_qkv,
         index=7,
-        backends=("quack_sm90_fp32_a_transform_rope_posfreq", "quack_sm90_rstd_rope_posfreq"),
         input_layout="row_major_mk",
         output_layout="fa3_bshd_last_dimension_contiguous",
-        prologue=("scale_row", "alias_reshape_bsh") if next_is_prologue else ("alias_reshape_bsh",),
-        epilogue=(
-            ("partition_qkv_segment_views_bshd", "pairwise_rope_q", "pairwise_rope_k")
-            if next_is_prologue
-            else ("scale_row", "partition_qkv_segment_views_bshd", "pairwise_rope_q", "pairwise_rope_k")
-        ),
         cluster_shape=_qkv_cluster_shape(next_qkv.shape[1]),
     )
     if gate_is_prologue != next_is_prologue or gate_is_epilogue != next_is_epilogue:
@@ -417,21 +401,18 @@ def _validate_gemm(
     skeleton: GemmSkeleton,
     *,
     index: int,
-    backends: tuple[str, ...],
     input_layout: str,
     output_layout: str,
-    prologue: tuple[str, ...],
-    epilogue: tuple[str, ...],
     cluster_shape: tuple[int, int, int],
 ) -> None:
-    if skeleton.backend not in backends:
+    if skeleton.backend != GENERIC_H100_GEMM_BACKEND:
         diagnostics.append(
             RuntimeDiagnostic(
                 code=RuntimeDiagnosticCode.BACKEND_CONTRACT,
                 message=f"skeleton {index} backend {skeleton.backend!r} is unsupported",
                 skeleton_index=index,
                 field="backend",
-                expected=repr(backends),
+                expected=repr(GENERIC_H100_GEMM_BACKEND),
                 actual=repr(skeleton.backend),
             )
         )
@@ -451,22 +432,7 @@ def _validate_gemm(
         index=index,
         field="output_layout",
     )
-    _validate_attachment_ops(
-        diagnostics,
-        skeleton.prologue,
-        prologue,
-        (AttachmentSite.GEMM_PROLOGUE,) * len(prologue),
-        index=index,
-        field="prologue",
-    )
-    _validate_attachment_ops(
-        diagnostics,
-        skeleton.epilogue,
-        epilogue,
-        (AttachmentSite.GEMM_EPILOGUE,) * len(epilogue),
-        index=index,
-        field="epilogue",
-    )
+    _compile_gemm(diagnostics, skeleton, index=index)
     if skeleton.accumulation_dtype is not DType.FP32:
         diagnostics.append(
             RuntimeDiagnostic(
@@ -489,6 +455,25 @@ def _validate_gemm(
                 field="physical_config",
             )
         )
+
+
+def _compile_gemm(diagnostics: list[RuntimeDiagnostic], skeleton: GemmSkeleton, *, index: int) -> GemmProgram | None:
+    try:
+        return compile_gemm_program(skeleton)
+    except TileProgramError as error:
+        diagnostics.append(
+            RuntimeDiagnostic(
+                code=RuntimeDiagnosticCode.ATTACHMENT_CONTRACT,
+                message=f"skeleton {index} tile program is invalid: {error}",
+                skeleton_index=index,
+                field="tile_program",
+            )
+        )
+        return None
+
+
+def _has_primitive(program: GemmProgram | None, stage: TileProgramStage, primitive: TilePrimitive) -> bool:
+    return program is not None and primitive in program.tile_program.primitives_at(stage)
 
 
 def _validate_reduction(
@@ -579,15 +564,15 @@ def _validate_materializations(plan: RegionPlan, diagnostics: list[RuntimeDiagno
         skeleton = plan.skeletons[index]
         assert isinstance(skeleton, GemmSkeleton)
         packed = records.get(skeleton.output)
-        alias_names = (
-            *skeleton.epilogue[-2].outputs,
-            *skeleton.epilogue[-1].outputs,
-            skeleton.epilogue[-3].outputs[2],
-        )
+        try:
+            alias_names = compile_gemm_program(skeleton).stored_values
+        except TileProgramError:
+            alias_names = ()
         aliases = tuple(records.get(name) for name in alias_names)
         if (
             packed is None
             or packed.disposition is not MaterializationDisposition.MATERIALIZE
+            or len(alias_names) != 3
             or any(
                 alias is None
                 or alias.disposition is not MaterializationDisposition.ALIAS

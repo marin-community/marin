@@ -1,0 +1,67 @@
+{
+  "artifact": "stateful_scan_generated_chunk_h100",
+  "schema_version": 1,
+  "environment": {
+    "cuda_runtime": "12.8",
+    "driver": "595.71.05",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "gpu_count_reserved": 8,
+    "gpu_count_used": 1,
+    "hostname": "g849b94",
+    "power_limit_watts": 700,
+    "python": "3.12.13",
+    "torch": "2.8.0+cu128",
+    "triton": "3.4.0"
+  },
+  "revisions": {
+    "fla_oracle": "9c8e42e762fce087c27b673af4922795d9edb85e",
+    "shuttle_checkout": "4fba36752bdbfd28ad9a0ea8dee121bb382b21c9"
+  },
+  "run_source_sha256": {
+    "h100_generated_chunk_scan.py": "91e440197264442a7d45dcb01c14e8d47b3f9187c54b01fa6908c6e5e2bf89a0",
+    "stateful_scan_recovery.py": "a92e487727cec8004832d9eb78fa4e96e808309aaa4c0f20a4209a014884bbdc",
+    "test_stateful_scan.py": "61680cfb65fc238d249274873757e0c7f4f27a7c54837ec4dc91fe0c01c436d6",
+    "triton_factored_chunk_scan.py": "cf9c6f20635e2347e277e94c9bf427e262b082316981c32af0d7f6d4d3f46d38"
+  },
+  "candidate_policy": {
+    "block_v": [32, 64],
+    "chunk_size": [16, 32, 64],
+    "preparation": ["eager_fp32", "compiled_fp32_tf32", "compiled_bf16_contractions"],
+    "selection": "minimum_combined_median"
+  },
+  "primary_shape": {
+    "batch_size": 1,
+    "sequence_length": 2048,
+    "heads": 32,
+    "key_dimension": 128,
+    "value_dimension": 128,
+    "update_rank": 1,
+    "diagonal": "scalar",
+    "factor_dtype": "bf16",
+    "state_dtype": "fp32"
+  },
+  "selected": {
+    "file": "t2048_c16_bf16prep.json",
+    "chunk_size": 16,
+    "block_v": 32,
+    "preparation_median_ms": 0.6655679941177368,
+    "execution_median_ms": 0.34003201127052307,
+    "combined_median_ms": 0.984495997428894,
+    "materialized_bytes": 84410368,
+    "numerical_contract": "bounded_reassociation"
+  },
+  "comparison": {
+    "fla_chunk_median_ms": 0.5106240212917328,
+    "target_1_2x_ms": 0.6127488255500793,
+    "combined_over_fla": 1.9280252326132261,
+    "execution_over_fla": 0.6659146399151753
+  },
+  "external_kernel_packages": {
+    "fla": "absent",
+    "flash_qla": "absent"
+  },
+  "holder_cleanup": {
+    "active_session_after_release": false,
+    "job_state": "killed"
+  }
+}

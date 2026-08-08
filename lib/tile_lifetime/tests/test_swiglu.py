@@ -12,6 +12,7 @@ from tile_lifetime import (
     TransformSkeleton,
     compile_swiglu_region,
 )
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.plan import AttachmentSite, NumericalEquivalence
 
 TOKENS = 8
@@ -62,7 +63,7 @@ def test_separate_gate_up_projections_fuse_pairwise_swiglu() -> None:
     gate_up = plan.skeletons[0]
     assert isinstance(gate_up, GemmSkeleton)
     assert gate_up.shape == (TOKENS, 2 * INTERMEDIATE, HIDDEN)
-    assert gate_up.backend == "quack_sm90_swiglu_dead_preact"
+    assert gate_up.backend == GENERIC_H100_GEMM_BACKEND
     assert gate_up.output_layout == "row_major_mn_pair_reduced"
     assert gate_up.weight == "interleave_adjacent(gate_weight,up_weight)"
     assert [(attachment.operation, attachment.site) for attachment in gate_up.epilogue] == [

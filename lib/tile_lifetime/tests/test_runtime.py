@@ -90,20 +90,16 @@ def test_runtime_dispatches_connected_plan_in_dependency_order(placement: RMSSca
 
     result = execute_region_plan(plan, _inputs(plan), backend)
 
-    gate_name = (
-        "gate_up_consumer_prologue_rms_scale_pairwise_swiglu"
-        if placement is RMSScalePlacement.CONSUMER_PROLOGUE
-        else "gate_up_consumer_epilogue_rms_scale_pairwise_swiglu"
-    )
+    gate_name = f"contract_{placement.value}_row_scale_pairwise_map"
     assert backend.calls == [
-        ("gemm", "qkv.qkv_rope"),
-        ("attention", "attention.streaming_attention"),
-        ("gemm", "projected.residual_rms_partials"),
-        ("reduction", "mlp_input.combine_rms_partials"),
+        ("gemm", "contract_partition_pairwise_linear_maps"),
+        ("attention", "streaming_normalized_weighted_fold"),
+        ("gemm", "contract_maps_and_fold_partials"),
+        ("reduction", "combine_fold_partials"),
         ("gemm", gate_name),
-        ("gemm", "down.residual_rms_partials"),
-        ("reduction", "next_input.combine_rms_partials"),
-        ("gemm", "next_qkv.qkv_rope"),
+        ("gemm", "contract_maps_and_fold_partials"),
+        ("reduction", "combine_fold_partials"),
+        ("gemm", "contract_partition_pairwise_linear_maps"),
     ]
     assert result.bindings["x_bsh"].handle == result.bindings["x"].handle
     assert result.bindings["attention_flat"].handle == result.bindings["attention"].handle
@@ -139,11 +135,15 @@ def test_runtime_validates_primary_shape_contract_and_reduces_one_partial_per_n_
 
     assert plan.skeletons[0].cluster_shape == (1, 2, 1)
     assert plan.skeletons[4].cluster_shape == (1, 2, 1)
-    assert plan.materialization("x1_rms_partials").shape == (config.tokens, config.hidden // 256)
-    assert plan.materialization("x2_rms_partials").shape == (config.tokens, config.hidden // 256)
+    first_reduction = plan.skeletons[3]
+    second_reduction = plan.skeletons[6]
+    assert isinstance(first_reduction, ReductionSkeleton)
+    assert isinstance(second_reduction, ReductionSkeleton)
+    assert plan.materialization(first_reduction.input).shape == (config.tokens, config.hidden // 256)
+    assert plan.materialization(second_reduction.input).shape == (config.tokens, config.hidden // 256)
     allocation_shapes = {spec.name: spec.shape for spec in backend.allocations}
-    assert allocation_shapes["x1_inverse_rms"] == (config.tokens,)
-    assert allocation_shapes["x2_inverse_rms"] == (config.tokens,)
+    assert allocation_shapes[first_reduction.output] == (config.tokens,)
+    assert allocation_shapes[second_reduction.output] == (config.tokens,)
 
 
 def test_runtime_rejects_unsupported_backend_layout_attachment_and_resources() -> None:
@@ -157,7 +157,7 @@ def test_runtime_rejects_unsupported_backend_layout_attachment_and_resources() -
         (
             replace(first, epilogue=(bad_attachment, *first.epilogue[1:])),
             RuntimeDiagnosticCode.ATTACHMENT_CONTRACT,
-            "epilogue",
+            "tile_program",
         ),
         (replace(first, cluster_shape=(2, 1, 1)), RuntimeDiagnosticCode.RESOURCE_CONTRACT, "physical_config"),
     )

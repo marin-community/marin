@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic region planning for the first tile-lifetime prototype."""
+"""Deterministic planning from erased Contract/Map/Fold semantics."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from tile_lifetime.dense_algebra import DenseSemanticErasureError, erase_dense_semantics
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.ir import (
     DType,
     LinearOp,
@@ -28,145 +30,278 @@ from tile_lifetime.plan import (
     RewriteExplanation,
     TransformSkeleton,
 )
+from tile_lifetime.semantic_erasure import (
+    ErasedTensorProgram,
+    validate_erased_tensor_program,
+    validate_plan_semantic_erasure,
+)
+from tile_lifetime.tensor_program import (
+    ContractPrimitive,
+    FoldPrimitive,
+    FoldReducer,
+    MapPrimitive,
+    ProgramValue,
+    ScalarExpression,
+    ScalarExpressionKind,
+    TensorAxis,
+)
 
 
 @dataclass(frozen=True)
-class _RMSRegion:
-    producer_gemm: LinearOp
-    residual_add: ResidualAddOp
-    rms_norm: RMSNormOp
-    consumer_gemm: LinearOp
-    residual: str
+class _FoldScaleContractRegion:
+    producer_contract: ContractPrimitive
+    tile_add: MapPrimitive
+    forwarded_input: ProgramValue
+    squared: MapPrimitive
+    partial_fold: FoldPrimitive
+    row_finalize: MapPrimitive
+    feature_scale: MapPrimitive
+    feature_vector: ProgramValue
+    normalized_scale: MapPrimitive
+    consumer_contract: ContractPrimitive
 
 
-class RMSScalePlacement(StrEnum):
-    """Physical placement of the inverse-RMS row scale around the consumer GEMM."""
+class GenericDensePlanningError(ValueError):
+    """No legal generic Fold/Map/Contract placement was found."""
+
+    def __init__(self, reasons: tuple[str, ...]):
+        super().__init__("; ".join(reasons))
+        self.reasons = reasons
+
+
+class RowScalePlacement(StrEnum):
+    """Physical placement of a row scalar around a right contraction."""
 
     CONSUMER_EPILOGUE = "consumer_epilogue"
     CONSUMER_PROLOGUE = "consumer_prologue"
+
+
+RMSScalePlacement = RowScalePlacement
 
 
 def compile_region(
     graph: TensorGraph,
     *,
     numerical_policy: NumericalPolicy,
-    rms_scale_placement: RMSScalePlacement = RMSScalePlacement.CONSUMER_EPILOGUE,
+    rms_scale_placement: RowScalePlacement = RowScalePlacement.CONSUMER_EPILOGUE,
 ) -> RegionPlan:
-    """Compile a semantic graph into a bounded tile-lifetime execution plan."""
-    candidate, rejection_reasons = _find_rms_region(graph, numerical_policy=numerical_policy)
-    if candidate is None:
-        return _materialized_fallback(graph, rejection_reasons=rejection_reasons)
-    return _rms_plan(candidate, scale_placement=rms_scale_placement)
+    """Erase frontend names, then compile generic algebra or retain a fallback."""
+    erased: ErasedTensorProgram | None = None
+    try:
+        erased = erase_dense_semantics(graph)
+        return compile_erased_dense_program(
+            erased,
+            numerical_policy=numerical_policy,
+            scale_placement=rms_scale_placement,
+        )
+    except DenseSemanticErasureError as error:
+        return _materialized_fallback(graph, rejection_reasons=(str(error),))
+    except GenericDensePlanningError as error:
+        assert erased is not None
+        return replace(
+            _materialized_fallback(graph, rejection_reasons=error.reasons),
+            semantic_erasure_report=erased.report,
+        )
 
 
-def _find_rms_region(
-    graph: TensorGraph, *, numerical_policy: NumericalPolicy
-) -> tuple[_RMSRegion | None, tuple[str, ...]]:
-    rms_operations = tuple(operation for operation in graph.operations if isinstance(operation, RMSNormOp))
-    if len(rms_operations) != 1:
-        return None, (f"expected one RMSNorm operation, found {len(rms_operations)}",)
+def compile_erased_dense_program(
+    erased: ErasedTensorProgram,
+    *,
+    numerical_policy: NumericalPolicy,
+    scale_placement: RowScalePlacement = RowScalePlacement.CONSUMER_EPILOGUE,
+) -> RegionPlan:
+    """Select placements using only generic dataflow and algebraic properties."""
+    validate_erased_tensor_program(erased)
+    region, reasons = _find_fold_scale_contract_region(
+        erased.program.operations,
+        numerical_policy=numerical_policy,
+    )
+    if region is None:
+        raise GenericDensePlanningError(reasons)
+    plan = replace(
+        _fold_scale_contract_plan(region, scale_placement=scale_placement),
+        semantic_erasure_report=erased.report,
+    )
+    validate_plan_semantic_erasure(plan)
+    return plan
 
-    rms_norm = rms_operations[0]
+
+def _find_fold_scale_contract_region(
+    operations: tuple[ContractPrimitive | MapPrimitive | FoldPrimitive, ...],
+    *,
+    numerical_policy: NumericalPolicy,
+) -> tuple[_FoldScaleContractRegion | None, tuple[str, ...]]:
+    producer_by_value = {operation.output.name: operation for operation in operations}
+    consumers_by_value: dict[str, list[ContractPrimitive | MapPrimitive | FoldPrimitive]] = {}
+    for operation in operations:
+        operation_inputs = operation.inputs if not isinstance(operation, FoldPrimitive) else (operation.input,)
+        for value in operation_inputs:
+            consumers_by_value.setdefault(value.name, []).append(operation)
+
     reasons: list[str] = []
-    residual_add = graph.producer(rms_norm.input)
-    if not isinstance(residual_add, ResidualAddOp):
-        reasons.append("RMSNorm input is not produced by a residual addition")
-        return None, tuple(reasons)
+    for consumer in (operation for operation in operations if isinstance(operation, ContractPrimitive)):
+        if len(consumer.inputs) != 2 or len(consumer.reduction_axes) != 1:
+            continue
+        activation = consumer.inputs[0]
+        normalized_scale = producer_by_value.get(activation.name)
+        if not _is_binary_map(normalized_scale, ScalarExpressionKind.MULTIPLY):
+            continue
+        assert isinstance(normalized_scale, MapPrimitive)
+        reduction_axis = consumer.reduction_axes[0]
+        row_axes = tuple(axis for axis in activation.axes if axis != reduction_axis)
+        scale_operands = _operands_by_axes(normalized_scale.inputs, activation.axes, row_axes)
+        if scale_operands is None:
+            reasons.append(
+                "row-scalar axes do not equal the unreduced consumer axes; the Fold reduction axis is incompatible"
+            )
+            continue
+        feature_scaled_value, row_scalar_value = scale_operands
 
-    producer_gemm, residual = _producer_gemm_and_residual(graph, residual_add)
-    if producer_gemm is None or residual is None:
-        reasons.append("residual addition does not combine one GEMM output with one residual tensor")
+        row_finalize = producer_by_value.get(row_scalar_value.name)
+        if not isinstance(row_finalize, MapPrimitive) or row_finalize.output.axes != row_axes:
+            reasons.append("row scalar is not produced by a generic Map")
+            continue
+        if len(row_finalize.inputs) != 1:
+            reasons.append("row-scalar Map requires unavailable non-fold inputs")
+            continue
+        partial_fold = producer_by_value.get(row_finalize.inputs[0].name)
+        if not isinstance(partial_fold, FoldPrimitive) or partial_fold.reducer is not FoldReducer.SUM:
+            reasons.append("row-scalar Map is not fed by an associative sum Fold")
+            continue
+        if partial_fold.reduction_axes != (reduction_axis,):
+            reasons.append("Fold axis is not the consumer Contract reduction axis")
+            continue
+        if partial_fold.accumulation_dtype not in {DType.FP32, DType.FP64}:
+            reasons.append("partial Fold must accumulate in FP32 or FP64")
+            continue
 
-    consumers = graph.consumers(rms_norm.output)
-    if len(consumers) != 1:
-        reasons.append(f"normalized activation has {len(consumers)} consumers; delayed scaling requires exactly one")
-        consumer_gemm = None
-    else:
-        consumer_gemm = consumers[0]
-        if not isinstance(consumer_gemm, LinearOp) or consumer_gemm.input != rms_norm.output:
-            reasons.append("normalized activation's only consumer is not a right-multiplication GEMM")
-            consumer_gemm = None
+        squared = producer_by_value.get(partial_fold.input.name)
+        if not _is_square_map(squared):
+            reasons.append("sum Fold input is not a generic pointwise square")
+            continue
+        assert isinstance(squared, MapPrimitive)
+        fold_source = squared.inputs[0]
 
-    if rms_norm.axis != len(rms_norm.input.shape) - 1:
-        reasons.append("RMSNorm reduction axis is not the consumer GEMM reduction dimension")
-    if rms_norm.reduction_dtype not in {DType.FP32, DType.FP64}:
-        reasons.append("RMSNorm partial reduction must accumulate in FP32 or FP64")
-    if numerical_policy is NumericalPolicy.BITWISE_EXACT:
-        reasons.append("delayed scaling reorders finite-precision rounding under the bitwise-exact policy")
+        feature_scale = producer_by_value.get(feature_scaled_value.name)
+        if not _is_binary_map(feature_scale, ScalarExpressionKind.MULTIPLY):
+            reasons.append("full activation is not produced by a generic feature-scale Map")
+            continue
+        assert isinstance(feature_scale, MapPrimitive)
+        feature_operands = _operands_by_axes(feature_scale.inputs, fold_source.axes, (reduction_axis,))
+        if feature_operands is None or feature_operands[0] != fold_source:
+            reasons.append("feature-scale Map does not multiply the Fold source by a reduction-axis vector")
+            continue
+        feature_vector = feature_operands[1]
 
-    if reasons or producer_gemm is None or residual is None or consumer_gemm is None:
-        return None, tuple(reasons)
-    return _RMSRegion(producer_gemm, residual_add, rms_norm, consumer_gemm, residual), ()
+        tile_add = producer_by_value.get(fold_source.name)
+        if not _is_binary_map(tile_add, ScalarExpressionKind.ADD):
+            reasons.append("Fold source is not produced by a tile-local binary add")
+            continue
+        assert isinstance(tile_add, MapPrimitive)
+        producer_candidates = tuple((value, producer_by_value.get(value.name)) for value in tile_add.inputs)
+        contract_inputs = tuple(
+            (value, producer)
+            for value, producer in producer_candidates
+            if isinstance(producer, ContractPrimitive) and producer.output == value
+        )
+        if len(contract_inputs) != 1:
+            reasons.append("tile-local add does not combine exactly one Contract result with one forwarded input")
+            continue
+        producer_contract = contract_inputs[0][1]
+        assert isinstance(producer_contract, ContractPrimitive)
+        forwarded_input = next(value for value in tile_add.inputs if value != producer_contract.output)
+
+        activation_consumers = consumers_by_value.get(normalized_scale.output.name, [])
+        if activation_consumers != [consumer]:
+            reasons.append(
+                f"scaled activation has {len(activation_consumers)} consumers; placement requires exactly one"
+            )
+            continue
+        if numerical_policy is NumericalPolicy.BITWISE_EXACT:
+            reasons.append("tile-lifetime placement changes finite-precision rounding under bitwise-exact policy")
+            continue
+        return (
+            _FoldScaleContractRegion(
+                producer_contract=producer_contract,
+                tile_add=tile_add,
+                forwarded_input=forwarded_input,
+                squared=squared,
+                partial_fold=partial_fold,
+                row_finalize=row_finalize,
+                feature_scale=feature_scale,
+                feature_vector=feature_vector,
+                normalized_scale=normalized_scale,
+                consumer_contract=consumer,
+            ),
+            (),
+        )
+    if not reasons:
+        reasons.append("no Contract/Map/Fold subgraph exposes a legal row-scalar placement")
+    return None, tuple(dict.fromkeys(reasons))
 
 
-def _producer_gemm_and_residual(graph: TensorGraph, residual_add: ResidualAddOp) -> tuple[LinearOp | None, str | None]:
-    left_producer = graph.producer(residual_add.left)
-    right_producer = graph.producer(residual_add.right)
-    if isinstance(left_producer, LinearOp) and right_producer is None:
-        return left_producer, residual_add.right.name
-    if isinstance(right_producer, LinearOp) and left_producer is None:
-        return right_producer, residual_add.left.name
-    return None, None
-
-
-def _rms_plan(region: _RMSRegion, *, scale_placement: RMSScalePlacement) -> RegionPlan:
-    first = region.producer_gemm
-    norm = region.rms_norm
-    second = region.consumer_gemm
-    scaled_residual = f"{region.residual_add.output.name}_times_{norm.gamma.name}"
-    partials = f"{region.residual_add.output.name}_rms_partials"
-    inverse_rms = f"{region.residual_add.output.name}_inverse_rms"
-    normalized_for_gemm = f"{scaled_residual}_times_{inverse_rms}"
+def _fold_scale_contract_plan(
+    region: _FoldScaleContractRegion,
+    *,
+    scale_placement: RowScalePlacement,
+) -> RegionPlan:
+    first = region.producer_contract
+    second = region.consumer_contract
+    fold_source = region.squared.inputs[0]
+    scaled_value = region.feature_scale.output
+    partials = f"{fold_source.name}_fold_partials"
+    row_scalar = region.row_finalize.output
+    normalized_for_gemm = f"{scaled_value.name}_times_{row_scalar.name}"
 
     gemm_0 = GemmSkeleton(
-        name="gemm_residual_rms_partials",
-        input=first.input.name,
-        weight=first.weight.name,
-        output=scaled_residual,
-        shape=(first.output.shape[0], first.output.shape[1], first.input.shape[1]),
+        name="contract_with_maps_and_fold_partials",
+        input=first.inputs[0].name,
+        weight=first.inputs[1].name,
+        output=scaled_value.name,
+        shape=(first.output.shape[0], first.output.shape[1], first.inputs[0].shape[1]),
         accumulation_dtype=first.accumulation_dtype,
-        backend="coda_cute_h100",
+        backend=GENERIC_H100_GEMM_BACKEND,
         input_layout="row_major_mk",
         output_layout="row_major_mn",
         epilogue=(
             Attachment(
-                operation="residual_add",
+                operation="add",
                 site=AttachmentSite.GEMM_EPILOGUE,
-                inputs=(first.output.name, region.residual),
-                outputs=(region.residual_add.output.name,),
+                inputs=(first.output.name, region.forwarded_input.name),
+                outputs=(region.tile_add.output.name,),
             ),
             Attachment(
-                operation="multiply_gamma",
+                operation="multiply",
                 site=AttachmentSite.GEMM_EPILOGUE,
-                inputs=(region.residual_add.output.name, norm.gamma.name),
-                outputs=(scaled_residual,),
+                inputs=(region.tile_add.output.name, region.feature_vector.name),
+                outputs=(scaled_value.name,),
             ),
             Attachment(
                 operation="partial_sum_square",
                 site=AttachmentSite.GEMM_EPILOGUE,
-                inputs=(region.residual_add.output.name,),
+                inputs=(fold_source.name,),
                 outputs=(partials,),
             ),
         ),
     )
     reduction = ReductionSkeleton(
-        name="combine_rms_partials",
+        name="combine_fold_partials",
         input=partials,
-        output=inverse_rms,
-        operator=f"rsqrt(sum / {norm.input.shape[norm.axis]} + {norm.epsilon})",
-        reduction_dtype=norm.reduction_dtype,
+        output=row_scalar.name,
+        operator=_render_scalar_expression(region.row_finalize.expression, {region.partial_fold.output.name: "sum"}),
+        reduction_dtype=region.partial_fold.accumulation_dtype,
     )
     consumer_prologue = ()
     consumer_epilogue = ()
-    consumer_name = "gemm_delayed_rms_scale"
+    consumer_name = "contract_delayed_row_scale"
     prologue_cluster_shape = (1, 2 if second.output.shape[1] >= 16_384 else 1, 1)
-    if scale_placement is RMSScalePlacement.CONSUMER_PROLOGUE:
-        consumer_name = "gemm_prologue_rms_scale"
+    if scale_placement is RowScalePlacement.CONSUMER_PROLOGUE:
+        consumer_name = "contract_prepared_row_scale"
         consumer_prologue = (
             Attachment(
                 operation="scale_row",
                 site=AttachmentSite.GEMM_PROLOGUE,
-                inputs=(scaled_residual, inverse_rms),
+                inputs=(scaled_value.name, row_scalar.name),
                 outputs=(normalized_for_gemm,),
             ),
         )
@@ -175,26 +310,24 @@ def _rms_plan(region: _RMSRegion, *, scale_placement: RMSScalePlacement) -> Regi
             Attachment(
                 operation="scale_row",
                 site=AttachmentSite.GEMM_EPILOGUE,
-                inputs=(second.output.name, inverse_rms),
+                inputs=(second.output.name, row_scalar.name),
                 outputs=(second.output.name,),
             ),
         )
 
     gemm_1 = GemmSkeleton(
         name=consumer_name,
-        input=scaled_residual,
-        weight=second.weight.name,
+        input=scaled_value.name,
+        weight=second.inputs[1].name,
         output=second.output.name,
-        shape=(second.output.shape[0], second.output.shape[1], second.input.shape[1]),
+        shape=(second.output.shape[0], second.output.shape[1], second.inputs[0].shape[1]),
         accumulation_dtype=second.accumulation_dtype,
-        backend=(
-            "quack_sm90_fp32_a_transform" if scale_placement is RMSScalePlacement.CONSUMER_PROLOGUE else "coda_cute_h100"
-        ),
+        backend=GENERIC_H100_GEMM_BACKEND,
         input_layout="row_major_mk",
         output_layout="row_major_mn",
-        physical_tile_shape=(128, 256, 64) if scale_placement is RMSScalePlacement.CONSUMER_PROLOGUE else None,
-        cluster_shape=prologue_cluster_shape if scale_placement is RMSScalePlacement.CONSUMER_PROLOGUE else None,
-        pingpong=False if scale_placement is RMSScalePlacement.CONSUMER_PROLOGUE else None,
+        physical_tile_shape=(128, 256, 64) if scale_placement is RowScalePlacement.CONSUMER_PROLOGUE else None,
+        cluster_shape=prologue_cluster_shape if scale_placement is RowScalePlacement.CONSUMER_PROLOGUE else None,
+        pingpong=False if scale_placement is RowScalePlacement.CONSUMER_PROLOGUE else None,
         prologue=consumer_prologue,
         epilogue=consumer_epilogue,
     )
@@ -208,40 +341,40 @@ def _rms_plan(region: _RMSRegion, *, scale_placement: RMSScalePlacement) -> Regi
             reason="consumed by residual and RMS-partial attachments before the first GEMM tile is stored",
         ),
         MaterializationRecord(
-            value=region.residual_add.output.name,
-            shape=region.residual_add.output.shape,
-            dtype=region.residual_add.output.dtype,
+            value=region.tile_add.output.name,
+            shape=region.tile_add.output.shape,
+            dtype=region.tile_add.output.dtype,
             disposition=MaterializationDisposition.EPILOGUE_ONLY,
             reason="replaced by the gamma-scaled representation consumed by the next GEMM",
         ),
         MaterializationRecord(
-            value=norm.output.name,
-            shape=norm.output.shape,
-            dtype=norm.output.dtype,
+            value=region.normalized_scale.output.name,
+            shape=region.normalized_scale.output.shape,
+            dtype=region.normalized_scale.output.dtype,
             disposition=(
                 MaterializationDisposition.PROLOGUE_ONLY
-                if scale_placement is RMSScalePlacement.CONSUMER_PROLOGUE
+                if scale_placement is RowScalePlacement.CONSUMER_PROLOGUE
                 else MaterializationDisposition.EPILOGUE_ONLY
             ),
             reason=(
                 "represented by an on-chip BF16 row-scale transform before the consumer WGMMA"
-                if scale_placement is RMSScalePlacement.CONSUMER_PROLOGUE
+                if scale_placement is RowScalePlacement.CONSUMER_PROLOGUE
                 else "inverse-RMS scaling is delayed through the following right-multiplication"
             ),
         ),
         MaterializationRecord(
-            value=scaled_residual,
-            shape=norm.output.shape,
-            dtype=norm.output.dtype,
+            value=scaled_value.name,
+            shape=scaled_value.shape,
+            dtype=scaled_value.dtype,
             disposition=MaterializationDisposition.MATERIALIZE,
             reason="cross-skeleton activation consumed by the second GEMM mainloop",
         ),
         MaterializationRecord(
             value=partials,
-            shape=(norm.output.shape[0],),
-            dtype=norm.reduction_dtype,
+            shape=region.partial_fold.output.shape,
+            dtype=region.partial_fold.accumulation_dtype,
             disposition=MaterializationDisposition.PARTIAL_REDUCTION_ONLY,
-            reason="small per-row RMS statistic buffer",
+            reason="small per-row partial Fold buffer",
         ),
         MaterializationRecord(
             value=second.output.name,
@@ -251,17 +384,17 @@ def _rms_plan(region: _RMSRegion, *, scale_placement: RMSScalePlacement) -> Regi
             reason="region output",
         ),
     )
-    if scale_placement is RMSScalePlacement.CONSUMER_PROLOGUE:
-        rewrite_name = "scale_rms_in_consumer_gemm_prologue"
+    if scale_placement is RowScalePlacement.CONSUMER_PROLOGUE:
+        rewrite_name = "place_row_scalar_in_consumer_contract_preparation"
         transformed_consumer = (
-            f"{normalized_for_gemm} = bf16({scaled_residual} * {inverse_rms}) inside the GEMM prologue",
-            f"{second.output.name} = {normalized_for_gemm} @ {second.weight.name}",
+            f"{normalized_for_gemm} = bf16({scaled_value.name} * {row_scalar.name}) inside Contract preparation",
+            f"{second.output.name} = contract({normalized_for_gemm}, {second.inputs[1].name})",
         )
         semantic_properties = (
-            "residual addition is tile-local",
-            "gamma multiplication is tile-local",
-            "sum of squares decomposes into tile partials",
-            "inverse RMS is a row scalar available before the consumer WGMMA",
+            "binary add Map is tile-local",
+            "feature-vector multiply Map is tile-local",
+            "sum Fold over pointwise squares decomposes into tile partials",
+            "Fold finalization produces a row scalar available before the consumer mainloop",
         )
         estimated_benefit = (
             "eliminates the materialized normalized activation while retaining source-like pre-GEMM scaling; "
@@ -273,15 +406,16 @@ def _rms_plan(region: _RMSRegion, *, scale_placement: RMSScalePlacement) -> Regi
             "prologue can still introduce an additional BF16 rounding"
         )
     else:
-        rewrite_name = "delay_rms_row_scale_through_gemm"
+        rewrite_name = "move_row_scalar_through_right_contract"
         transformed_consumer = (
-            f"{second.output.name} = scale_row({scaled_residual} @ {second.weight.name}, {inverse_rms})",
+            f"{second.output.name} = scale_row("
+            f"contract({scaled_value.name}, {second.inputs[1].name}), {row_scalar.name})",
         )
         semantic_properties = (
-            "residual addition is tile-local",
-            "gamma multiplication is tile-local",
-            "sum of squares decomposes into tile partials",
-            "inverse RMS is a row scalar",
+            "binary add Map is tile-local",
+            "feature-vector multiply Map is tile-local",
+            "sum Fold over pointwise squares decomposes into tile partials",
+            "Fold finalization produces a row scalar",
             "row scaling commutes with right multiplication over real arithmetic",
         )
         estimated_benefit = "eliminates the materialized normalized activation and its full-tensor normalization kernel"
@@ -294,22 +428,23 @@ def _rms_plan(region: _RMSRegion, *, scale_placement: RMSScalePlacement) -> Regi
         name=rewrite_name,
         applied=True,
         original_fragment=(
-            f"{first.output.name} = {first.input.name} @ {first.weight.name}",
-            f"{region.residual_add.output.name} = {first.output.name} + {region.residual}",
-            f"{norm.output.name} = rms_norm({region.residual_add.output.name}, {norm.gamma.name})",
-            f"{second.output.name} = {norm.output.name} @ {second.weight.name}",
+            f"{first.output.name} = contract({first.inputs[0].name}, {first.inputs[1].name})",
+            f"{region.tile_add.output.name} = map_add({first.output.name}, {region.forwarded_input.name})",
+            f"{region.partial_fold.output.name} = fold_sum(map_square({fold_source.name}))",
+            f"{row_scalar.name} = map({_render_scalar_expression(region.row_finalize.expression)})",
+            f"{second.output.name} = contract({region.normalized_scale.output.name}, {second.inputs[1].name})",
         ),
         transformed_fragment=(
-            f"{scaled_residual}, {partials} = gemm_epilogue_residual_rms_partials(...)",
-            f"{inverse_rms} = combine_rms_partials({partials})",
+            f"{scaled_value.name}, {partials} = contract_finalization_maps_and_partial_fold(...) ",
+            f"{row_scalar.name} = fold_finalize({partials})",
             *transformed_consumer,
         ),
         semantic_properties=semantic_properties,
         legality_checks=(
-            "RMS reduction covers the GEMM reduction dimension",
-            "normalized activation has exactly one consumer",
-            "consumer is a right-multiplication GEMM",
-            "RMS partials accumulate in FP32 or FP64",
+            "sum Fold covers the consumer Contract reduction dimension",
+            "scaled activation has exactly one consumer",
+            "consumer is a two-input right contraction",
+            "partial Fold accumulates in FP32 or FP64",
             "numerical policy permits reordered finite-precision rounding",
         ),
         estimated_benefit=estimated_benefit,
@@ -317,6 +452,71 @@ def _rms_plan(region: _RMSRegion, *, scale_placement: RMSScalePlacement) -> Regi
         numerical_effect=numerical_effect,
     )
     return RegionPlan(skeletons=(gemm_0, reduction, gemm_1), materializations=materializations, rewrites=(explanation,))
+
+
+def _is_binary_map(
+    operation: ContractPrimitive | MapPrimitive | FoldPrimitive | None,
+    kind: ScalarExpressionKind,
+) -> bool:
+    return (
+        isinstance(operation, MapPrimitive)
+        and operation.expression.kind is kind
+        and len(operation.expression.operands) == 2
+        and all(operand.kind is ScalarExpressionKind.INPUT for operand in operation.expression.operands)
+    )
+
+
+def _is_square_map(operation: ContractPrimitive | MapPrimitive | FoldPrimitive | None) -> bool:
+    if not _is_binary_map(operation, ScalarExpressionKind.MULTIPLY):
+        return False
+    assert isinstance(operation, MapPrimitive)
+    left, right = operation.expression.operands
+    return left.input_name == right.input_name and len(operation.inputs) == 1
+
+
+def _operands_by_axes(
+    operands: tuple[ProgramValue, ...],
+    full_axes: tuple[TensorAxis, ...],
+    broadcast_axes: tuple[TensorAxis, ...],
+) -> tuple[ProgramValue, ProgramValue] | None:
+    full = tuple(value for value in operands if value.axes == full_axes)
+    broadcast = tuple(value for value in operands if value.axes == broadcast_axes)
+    if len(full) != 1 or len(broadcast) != 1:
+        return None
+    return full[0], broadcast[0]
+
+
+def _render_scalar_expression(
+    expression: ScalarExpression,
+    input_aliases: dict[str, str] | None = None,
+    parent_precedence: int = 0,
+) -> str:
+    aliases = input_aliases or {}
+    if expression.kind is ScalarExpressionKind.INPUT:
+        assert expression.input_name is not None
+        return aliases.get(expression.input_name, expression.input_name)
+    if expression.kind is ScalarExpressionKind.CONSTANT:
+        assert expression.constant is not None
+        return str(expression.constant)
+    if expression.kind is ScalarExpressionKind.RSQRT:
+        return f"rsqrt({_render_scalar_expression(expression.operands[0], aliases)})"
+    if expression.kind in {ScalarExpressionKind.EXP, ScalarExpressionKind.TANH}:
+        return f"{expression.kind.value}({_render_scalar_expression(expression.operands[0], aliases)})"
+    operator = {
+        ScalarExpressionKind.ADD: ("+", 10),
+        ScalarExpressionKind.SUBTRACT: ("-", 10),
+        ScalarExpressionKind.MULTIPLY: ("*", 20),
+        ScalarExpressionKind.DIVIDE: ("/", 20),
+        ScalarExpressionKind.LESS_EQUAL: ("<=", 5),
+    }.get(expression.kind)
+    if operator is not None:
+        symbol, precedence = operator
+        left = _render_scalar_expression(expression.operands[0], aliases, precedence)
+        right = _render_scalar_expression(expression.operands[1], aliases, precedence + 1)
+        rendered = f"{left} {symbol} {right}"
+        return f"({rendered})" if precedence < parent_precedence else rendered
+    operands = tuple(_render_scalar_expression(operand, aliases) for operand in expression.operands)
+    return f"select({', '.join(operands)})"
 
 
 def _materialized_fallback(graph: TensorGraph, *, rejection_reasons: tuple[str, ...]) -> RegionPlan:

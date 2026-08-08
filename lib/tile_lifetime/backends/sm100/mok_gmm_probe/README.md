@@ -23,16 +23,30 @@ with compiler-produced relation metadata:
 
 - `padded_pack_bf16_out` expands coalesced receive rows into 256-padded,
   expert-contiguous rows;
+- `fixed_capacity_relation_plan_out` constructs destination-group row maps,
+  per-group counts, and ordered edge weights from runtime relation edges. One
+  CTA owns each equal-capacity group and scans edges in source/slot order; no
+  semantic value is atomically accumulated;
 - `swiglu_bf16_out` applies BF16-output SwiGLU to gate and up matrices;
 - `fixed_route_merge_out` accumulates received routes in ascending route-slot
   order with explicit FP32 round-to-nearest multiplication and addition;
 - `fixed_route_merge_fma_out` is the deterministic FMA comparison; and
 - `fixed_route_merge_shared_out` is an owner-local diagnostic that merges one
-  source-rank slice and adds precomputed shared output.
+  source-rank slice and adds precomputed shared output; and
+- `fixed_rank_merge_shared_out` executes a generic ordered fold over returned
+  rank partials plus a source-local base value. It consumes a compiler-built
+  `[partition, source_item]` row map, uses FP32 additions in ascending partition
+  order, and does not use atomics.
 
 None of these entrypoints implements communication, CLC work redistribution,
 or a full MoE forward pass. `fixed_route_merge_shared_out` cannot replace a
 cross-rank DeepEP combine.
+
+`fixed_rank_merge_shared_out` can replace the reduction portion of that
+combine only when a separate payload-only reverse transport has already
+returned every rank partial. The distributed benchmark uses
+`all_to_all_single` for that clean boundary; DeepEP remains the forward payload
+transport.
 
 Build and run it through the benchmark driver:
 

@@ -1,0 +1,4 @@
+Block-Sparse-Attention 49d6c39e4dc0303442cda3bb758b3925d4399c49
+status:
+submodules:
+ a75b4ac483166189a45290783cb0a18af5ff0ea5 csrc/cutlass (a75b4ac)

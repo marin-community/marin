@@ -1,0 +1,55 @@
+{
+  "acceptance": {
+    "completion_target_ratio": 1.2,
+    "passes": true,
+    "pooled_oracle_median_ms": 3.6450560092926025,
+    "pooled_ratio": 1.134994907601302,
+    "pooled_shuttle_median_ms": 4.137120008468628,
+    "samples_per_implementation": 60,
+    "stretch_target_ratio": 1.1
+  },
+  "candidate": {
+    "deepep_sms": 56,
+    "fingerprint_sha256": "471921443713a18236bea4a0df7244ecb016511c88d38326e2e342ef80aebb35",
+    "gate_up_layout": "concatenated_e_2i_k",
+    "relation_plan": "stable_warp_prefix",
+    "semantic_fold_vector_width_bf16": 2
+  },
+  "correctness": {
+    "all_device_relations_exact": true,
+    "all_outputs_repeat_bitwise": true,
+    "maximum_absolute_error_against_mok": 0.0001220703125,
+    "maximum_mean_absolute_error_against_mok": 2.667012722668005e-06,
+    "semantic_atomics": 0
+  },
+  "runs": [
+    {
+      "file": "raw/x2-final-run1.json",
+      "launch_order": "shuttle_first",
+      "oracle_median_ms": 3.6450560092926025,
+      "ratio": 1.132049551318827,
+      "samples_per_implementation": 30,
+      "shuttle_median_ms": 4.126384019851685
+    },
+    {
+      "file": "raw/x2-final-run2.json",
+      "launch_order": "oracle_first",
+      "oracle_median_ms": 3.6420480012893677,
+      "ratio": 1.1368153399450958,
+      "samples_per_implementation": 30,
+      "shuttle_median_ms": 4.140336036682129
+    }
+  ],
+  "schema_version": 1,
+  "superseded_scalar_fold_pooled_result": {
+    "files": [
+      "raw/final-run1.json",
+      "raw/final-run2.json"
+    ],
+    "oracle_median_ms": 3.6316319704055786,
+    "ratio": 1.2017253485608435,
+    "samples_per_implementation": 60,
+    "shuttle_median_ms": 4.364224195480347
+  }
+}
+

@@ -1,0 +1,190 @@
+{
+  "benchmark": {
+    "alternating_variant_order": true,
+    "iterations_per_sample": 10,
+    "measurements": {
+      "consumer_prologue": {
+        "maximum_ms": 3.9713279724121096,
+        "mean_ms": 3.364148483276367,
+        "median_ms": 3.298419189453125,
+        "minimum_ms": 3.044780731201172,
+        "samples_ms": [
+          3.044780731201172,
+          3.2082496643066407,
+          3.2677345275878906,
+          3.205209732055664,
+          3.26824951171875,
+          3.149567985534668,
+          3.2963390350341797,
+          3.9713279724121096,
+          3.8719295501708983,
+          3.2601951599121093,
+          3.3004993438720702,
+          3.1802112579345705,
+          3.241747283935547,
+          3.1971296310424804,
+          3.328543853759766,
+          3.574163055419922,
+          3.7246719360351563,
+          3.4680160522460937,
+          3.4598655700683594,
+          3.2301441192626954,
+          3.3624191284179688,
+          3.2292606353759767,
+          3.2540096282958983,
+          3.3027488708496096,
+          3.3991168975830077,
+          3.5087745666503904,
+          3.596540832519531,
+          3.407622528076172,
+          3.399270248413086,
+          3.216115188598633
+        ]
+      },
+      "delayed_epilogue": {
+        "maximum_ms": 3.7368927001953125,
+        "mean_ms": 3.2403487904866535,
+        "median_ms": 3.248489570617676,
+        "minimum_ms": 2.969481658935547,
+        "samples_ms": [
+          3.0339616775512694,
+          3.0582656860351562,
+          3.205027389526367,
+          2.9828447341918944,
+          3.2737663269042967,
+          2.993040084838867,
+          3.2457374572753905,
+          3.7368927001953125,
+          3.620268630981445,
+          3.1810815811157225,
+          3.237456130981445,
+          2.969481658935547,
+          3.251241683959961,
+          3.0264896392822265,
+          3.2878654479980467,
+          3.2654750823974608,
+          3.707328033447266,
+          3.32108154296875,
+          3.3950878143310548,
+          3.010758399963379,
+          3.2757278442382813,
+          3.0718751907348634,
+          3.171766471862793,
+          3.033283233642578,
+          3.4057567596435545,
+          3.3148193359375,
+          3.472880172729492,
+          3.2681278228759765,
+          3.342793655395508,
+          3.050281524658203
+        ]
+      },
+      "materialized_torch": {
+        "maximum_ms": 4.684288024902344,
+        "mean_ms": 4.206534919738769,
+        "median_ms": 4.19923038482666,
+        "minimum_ms": 3.900908660888672,
+        "samples_ms": [
+          4.258092880249023,
+          4.103187179565429,
+          4.151724624633789,
+          4.008992004394531,
+          4.21814079284668,
+          3.989430236816406,
+          4.3123329162597654,
+          4.684288024902344,
+          4.343545532226562,
+          4.160793685913086,
+          4.093312072753906,
+          3.9204128265380858,
+          4.201839828491211,
+          4.006288146972656,
+          4.196620941162109,
+          4.125379180908203,
+          4.670614242553711,
+          4.3845470428466795,
+          4.314390563964844,
+          4.121615982055664,
+          4.23639030456543,
+          4.121846389770508,
+          4.07116470336914,
+          3.900908660888672,
+          4.41321907043457,
+          4.309292984008789,
+          4.397462463378906,
+          4.25579833984375,
+          4.233132934570312,
+          3.9912830352783204
+        ]
+      }
+    },
+    "repeats": 30,
+    "variant_order": [
+      "consumer_prologue",
+      "delayed_epilogue",
+      "materialized_torch"
+    ],
+    "warmups": 10
+  },
+  "benchmark_boundary": {
+    "excluded": [],
+    "included": [
+      "QKV projection and RoPE",
+      "causal exact GQA attention",
+      "output projection and residual/RMS partial Fold",
+      "RMS reduction",
+      "gate/up projection and SwiGLU",
+      "down projection and residual/RMS partial Fold",
+      "RMS reduction",
+      "next QKV projection and RoPE"
+    ],
+    "semantic_body": "manual CODA/QuACK plus fa4_cute"
+  },
+  "correctness": {
+    "bitwise_deterministic_output_sha256": {
+      "consumer_prologue": {
+        "next_qkv": "3a7b8b7411c5fdf4464516cc1b16d29cea35e11c2527bee0c980a185228cab17",
+        "x2": "632f6de1d98e58540297c7961c880c0f342686ce34ac2a280422f3d767f3f718"
+      },
+      "delayed_epilogue": {
+        "next_qkv": "058d3bb3d1850e2047d4b937d38b64ce6f5a5e898af8846a1ec701303ef04460",
+        "x2": "d9a4025113a4b0470cf615b735a2e0e61ca05e11a69541eb1eedc75c33490885"
+      },
+      "materialized_torch": {
+        "next_qkv": "05fba1fa86a8d6cc395ccccfcb9156eed3ab9109ff29eacdeccf191bdd9739f7",
+        "x2": "d54961ff6989f9dc22394ed300bc3155834fb03917b9d8ccbfb547123cba1742"
+      }
+    },
+    "prologue_vs_delayed_next_qkv_max_abs": 0.03125,
+    "prologue_vs_delayed_next_qkv_mean_abs": 0.0024822745472192764,
+    "prologue_vs_delayed_x2_max_abs": 0.03125,
+    "prologue_vs_delayed_x2_mean_abs": 0.001635266002267599
+  },
+  "environment": {
+    "cutlass_dsl": "4.6.1",
+    "flash_attn_4": "4.0.0b16",
+    "gpu_telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1695, 2619",
+    "torch": "2.14.0.dev20260807+cu130",
+    "torch_cuda": "13.0"
+  },
+  "role": "expert_oracle_only",
+  "run_id": "run1-generated-first",
+  "schema_version": 1,
+  "sources": {
+    "attention_oracle": "fa4_cute",
+    "attention_oracle_revision": "flash-attn-4-4.0.0b16",
+    "quack_revision": "84ef91df9bec87c7e4938517234fafb07ef844dd",
+    "shuttle_revision": null
+  },
+  "workload": {
+    "accumulation_dtype": "float32",
+    "batch": 1,
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "hidden": 4096,
+    "intermediate": 14336,
+    "key_value_heads": 8,
+    "query_heads": 32,
+    "sequence": 4096
+  }
+}

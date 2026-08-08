@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Recover an explicit Mixture-of-Kittens-style expert-parallel program."""
+"""Build the opaque Mixture-of-Kittens comparison oracle.
+
+This module is deliberately excluded from Shuttle synthesis paths. It exists
+only to describe and validate the pinned complete-kernel baseline.
+"""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -17,11 +21,11 @@ from tile_lifetime.ir import (
     WeightedExpertCombineOp,
 )
 from tile_lifetime.plan import (
-    ExpertParallelMoESkeleton,
     MaterializationDisposition,
     MaterializationRecord,
     NumericalEquivalence,
     NumericalPolicy,
+    OpaqueMoKOracleSkeleton,
     PaddedExpertSchedule,
     PersistentTaskPlacement,
     PersistentTaskRole,
@@ -44,8 +48,8 @@ class MoERoutedPrecision(StrEnum):
 
 
 @dataclass(frozen=True)
-class MoKCompilerConfig:
-    """Finite physical choices exposed by the first MoK skeleton family."""
+class MoKOracleConfig:
+    """Finite physical choices exposed by the pinned complete MoK oracle."""
 
     expert_parallel_size: int
     communication_sm_count: int = 40
@@ -72,13 +76,13 @@ class _MoERegion:
     combine: WeightedExpertCombineOp
 
 
-def compile_mok_expert_parallel_region(
+def compile_mok_oracle_region(
     graph: TensorGraph,
     *,
-    config: MoKCompilerConfig,
+    config: MoKOracleConfig,
     numerical_policy: NumericalPolicy,
 ) -> RegionPlan:
-    """Compile one bounded shared-plus-routed MoE forward region."""
+    """Build an oracle-backed plan that must not be counted as synthesis."""
     region = _recover_region(graph)
     reasons = _legality_reasons(region, config=config, numerical_policy=numerical_policy)
     if reasons:
@@ -138,7 +142,7 @@ def _recover_region(graph: TensorGraph) -> _MoERegion:
 def _legality_reasons(
     region: _MoERegion,
     *,
-    config: MoKCompilerConfig,
+    config: MoKOracleConfig,
     numerical_policy: NumericalPolicy,
 ) -> tuple[str, ...]:
     tokens, hidden = region.shared.input.shape
@@ -194,7 +198,7 @@ def _legality_reasons(
     return tuple(reasons)
 
 
-def _build_plan(region: _MoERegion, *, config: MoKCompilerConfig) -> RegionPlan:
+def _build_plan(region: _MoERegion, *, config: MoKOracleConfig) -> RegionPlan:
     tokens, hidden = region.shared.input.shape
     top_k = region.router.top_k
     local_experts, intermediate, _ = region.routed.gate_weight.shape
@@ -225,7 +229,7 @@ def _build_plan(region: _MoERegion, *, config: MoKCompilerConfig) -> RegionPlan:
     events = _readiness_events(prefix)
     tasks = _task_roles(region, names=names, events=events)
     gemm_k = 64 if config.routed_precision is MoERoutedPrecision.BF16 else 128
-    skeleton = ExpertParallelMoESkeleton(
+    skeleton = OpaqueMoKOracleSkeleton(
         name="persistent_shared_routed_expert_forward",
         input=region.shared.input.name,
         output=region.combine.output.name,

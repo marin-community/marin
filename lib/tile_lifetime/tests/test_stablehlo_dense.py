@@ -14,6 +14,7 @@ from tile_lifetime import (
     TransformSkeleton,
     compile_stablehlo_dense_transformer_region,
 )
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.reference import DENSE_REGION_INPUT_NAMES, DenseDebugConfig, export_debug_dense_region
 from tile_lifetime.semantic_recovery import recover_dense_transformer_region
 from tile_lifetime.stablehlo_import import ConcatenateAttributes, SliceAttributes, import_stablehlo
@@ -124,5 +125,5 @@ def test_public_dense_stablehlo_path_exposes_delayed_rms_alternative() -> None:
     next_qkv = plan.skeletons[7]
     assert isinstance(gate_up, GemmSkeleton)
     assert isinstance(next_qkv, GemmSkeleton)
-    assert gate_up.backend == "quack_sm90_rstd_swiglu_dead_preact"
-    assert next_qkv.backend == "quack_sm90_rstd_rope_posfreq"
+    assert gate_up.backend == GENERIC_H100_GEMM_BACKEND
+    assert next_qkv.backend == GENERIC_H100_GEMM_BACKEND

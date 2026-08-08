@@ -4,7 +4,14 @@
 import numpy as np
 import pytest
 
-from tile_lifetime import RelationPlanError, build_relation_plan
+from tile_lifetime import (
+    DType,
+    RelationPlanError,
+    build_partitioned_merge_rows,
+    build_relation_plan,
+    compile_ordered_relation_fold,
+)
+from tile_lifetime.tile_program import TilePrimitive
 
 
 def _relation_plan():
@@ -163,3 +170,56 @@ def test_relation_plan_dump_is_compact_and_inspectable() -> None:
             "  rank=1 item=1 count=2 padded=2 offset=6",
         )
     )
+
+
+def test_partitioned_merge_rows_preserve_explicit_partition_order_without_reduction() -> None:
+    rows = build_partitioned_merge_rows(
+        np.array([0, 2, 3, 1, 3], dtype=np.int64),
+        np.array([3, 2], dtype=np.int64),
+        source_item_count=4,
+    )
+
+    np.testing.assert_array_equal(
+        rows,
+        np.array(
+            [
+                [0, -1, 1, 2],
+                [-1, 3, -1, 4],
+            ],
+            dtype=np.int64,
+        ),
+    )
+
+
+def test_partitioned_merge_rows_reject_duplicate_partition_contributions() -> None:
+    with pytest.raises(RelationPlanError, match="partition 0 contains duplicate source items"):
+        build_partitioned_merge_rows(
+            np.array([1, 1], dtype=np.int64),
+            np.array([2], dtype=np.int64),
+            source_item_count=2,
+        )
+
+
+def test_ordered_relation_fold_is_synthesized_from_generic_tile_primitives() -> None:
+    fold = compile_ordered_relation_fold(
+        partition_count=4,
+        accumulation_dtype=DType.FP32,
+        output_dtype=DType.BF16,
+    )
+
+    assert fold.order == "partition ascending, explicit round-to-nearest FP32 add"
+    assert tuple(operation.primitive for operation in fold.tile_program.operations) == (
+        TilePrimitive.LOAD_STATE,
+        TilePrimitive.LOAD_TILE,
+        TilePrimitive.ADD,
+        TilePrimitive.LOAD_TILE,
+        TilePrimitive.ADD,
+        TilePrimitive.LOAD_TILE,
+        TilePrimitive.ADD,
+        TilePrimitive.LOAD_TILE,
+        TilePrimitive.ADD,
+        TilePrimitive.CONVERT,
+        TilePrimitive.STORE,
+    )
+    assert fold.tile_program.operations[1].attributes == (("partition", "0"),)
+    assert fold.tile_program.operations[7].attributes == (("partition", "3"),)

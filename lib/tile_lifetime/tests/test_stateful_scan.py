@@ -1,6 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+from dataclasses import replace
+from pathlib import Path
+
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -9,6 +14,7 @@ from tile_lifetime import (
     ChunkSummaryRepresentation,
     DType,
     LogicalAxis,
+    SemanticErasureError,
     StatefulScanExecutionForm,
     StateTransitionStructure,
     TensorExpressionKind,
@@ -27,9 +33,22 @@ from tile_lifetime import (
     recover_affine_state_update,
     recurrent_gated_delta_reference,
     recurrent_kimi_delta_reference,
+    solve_factored_affine_chunk,
+    stateful_scan_scheduling_keys,
     summarize_factored_affine_chunk,
+    validate_stateful_scan_semantic_erasure,
 )
 from tile_lifetime.delta_rule_reference import delta_rule_update_expression
+from tile_lifetime.stablehlo_scan_recovery import compile_stablehlo_stateful_scan
+from tile_lifetime.stateful_scan_reference import (
+    STATEFUL_SCAN_INPUT_NAMES,
+    ScanDecayAxes,
+    StatefulScanDebugConfig,
+    export_debug_stateful_scan,
+    stateful_scan_region,
+)
+
+STABLEHLO_SCAN_FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "stateful_scan_v1_14_1.mlir.bc.b64"
 
 
 def _inputs(
@@ -149,11 +168,18 @@ def test_gated_delta_scan_recovers_generic_update_and_bounded_candidates():
 
 
 def test_recurrent_gated_delta_matches_direct_source_order_reference():
-    inputs = _inputs()
+    query, key, value, log_decay, beta = _inputs()
     initial_state = np.random.default_rng(7).normal(size=(2, 3, 5, 7)).astype(np.float32) * 0.1
 
-    expected_output, expected_state = _direct_recurrence(*inputs, initial_state)
-    output, state = recurrent_gated_delta_reference(*inputs, initial_state=initial_state)
+    expected_output, expected_state = _direct_recurrence(query, key, value, log_decay, beta, initial_state)
+    output, state = recurrent_gated_delta_reference(
+        query,
+        key,
+        value,
+        log_decay,
+        beta,
+        initial_state=initial_state,
+    )
 
     np.testing.assert_allclose(output, expected_output, rtol=2e-6, atol=2e-6)
     np.testing.assert_allclose(state, expected_state, rtol=2e-6, atol=2e-6)
@@ -280,6 +306,137 @@ def test_affine_recovery_reuses_one_factor_family_across_nearby_recurrences(
         "affine_scan_chunk_64",
     )
     assert {candidate.maximum_update_rank for candidate in candidates} == {update_rank}
+
+
+@pytest.mark.parametrize(
+    ("decay_axes", "update_rank", "expected_diagonal_extents"),
+    [
+        (ScanDecayAxes.SCALAR, 1, (1, 2)),
+        (ScanDecayAxes.KEY, 2, (1, 2, 8)),
+    ],
+)
+def test_natural_stablehlo_while_recovers_one_generic_affine_scan_family(
+    decay_axes: ScanDecayAxes,
+    update_rank: int,
+    expected_diagonal_extents: tuple[int, ...],
+) -> None:
+    config = StatefulScanDebugConfig(decay_axes=decay_axes, update_rank=update_rank)
+
+    compilation = compile_stablehlo_stateful_scan(
+        export_debug_stateful_scan(config),
+        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        chunk_sizes=(2, 4),
+    )
+
+    assert compilation.program.scan_inputs == ("query", "key", "value", "log_decay", "beta")
+    assert compilation.program.state_input == "state_prev"
+    assert compilation.program.state_output == "state_next"
+    assert compilation.recovered_update.transition_structure is StateTransitionStructure.DIAGONAL_PLUS_LOW_RANK
+    assert compilation.recovered_update.maximum_low_rank == update_rank
+    assert tuple(axis.extent for axis in compilation.recovered_update.diagonal_scale_axes) == expected_diagonal_extents
+    assert tuple(candidate.execution_form for candidate in compilation.candidates) == (
+        StatefulScanExecutionForm.RECURRENT,
+        StatefulScanExecutionForm.CHUNKWISE,
+        StatefulScanExecutionForm.CHUNKWISE,
+    )
+    assert tuple(candidate.maximum_update_rank for candidate in compilation.candidates) == (update_rank,) * 3
+    assert compilation.semantic_erasure_report.is_clean
+    assert compilation.semantic_erasure_report.source_semantics == (
+        "stablehlo.while",
+        "stablehlo.tensor_expression_body",
+    )
+    assert compilation.semantic_erasure_report.scheduling_keys == stateful_scan_scheduling_keys(
+        compilation.program,
+        compilation.recovered_update,
+    )
+    assert all(
+        token not in key.lower()
+        for key in compilation.semantic_erasure_report.scheduling_keys
+        for token in ("gated_deltanet", "gdn", "kimi", "mamba")
+    )
+    validate_stateful_scan_semantic_erasure(compilation)
+
+
+def test_stateful_scan_erasure_validator_rejects_named_or_stale_scheduling_keys() -> None:
+    compilation = compile_stablehlo_stateful_scan(
+        base64.b64decode(STABLEHLO_SCAN_FIXTURE.read_text()),
+        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        chunk_sizes=(2,),
+    )
+
+    named_report = replace(
+        compilation.semantic_erasure_report,
+        scheduling_keys=(*compilation.semantic_erasure_report.scheduling_keys, "gdn_chunk_forward"),
+    )
+    with pytest.raises(SemanticErasureError, match="retains named semantics"):
+        validate_stateful_scan_semantic_erasure(replace(compilation, semantic_erasure_report=named_report))
+
+    stale_report = replace(compilation.semantic_erasure_report, scheduling_keys=("scan:stale",))
+    with pytest.raises(SemanticErasureError, match="do not match"):
+        validate_stateful_scan_semantic_erasure(replace(compilation, semantic_erasure_report=stale_report))
+
+
+def test_frozen_stablehlo_while_fixture_recovers_without_invoking_jax_export() -> None:
+    compilation = compile_stablehlo_stateful_scan(
+        base64.b64decode(STABLEHLO_SCAN_FIXTURE.read_text()),
+        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        chunk_sizes=(2,),
+    )
+
+    assert compilation.program.ordered_axis.extent == 4
+    assert compilation.recovered_update.transition_structure is StateTransitionStructure.DIAGONAL_PLUS_LOW_RANK
+    assert compilation.recovered_update.maximum_low_rank == 1
+
+
+def test_natural_stablehlo_scan_factors_execute_the_exported_recurrence() -> None:
+    config = StatefulScanDebugConfig(sequence=5, key_dimension=4, value_dimension=6, update_rank=2)
+    compilation = compile_stablehlo_stateful_scan(
+        export_debug_stateful_scan(config),
+        input_names=STATEFUL_SCAN_INPUT_NAMES,
+        chunk_sizes=(2,),
+    )
+    rng = np.random.default_rng(19)
+    query = rng.normal(size=(config.batch, config.sequence, config.heads, config.key_dimension)).astype(np.float32)
+    key = rng.normal(
+        size=(config.batch, config.sequence, config.heads, config.update_rank, config.key_dimension)
+    ).astype(np.float32)
+    value = rng.normal(
+        size=(config.batch, config.sequence, config.heads, config.update_rank, config.value_dimension)
+    ).astype(np.float32)
+    log_decay = -np.abs(rng.normal(size=(config.batch, config.sequence, config.heads))).astype(np.float32)
+    beta = rng.uniform(
+        0.05,
+        0.8,
+        size=(config.batch, config.sequence, config.heads, config.update_rank),
+    ).astype(np.float32)
+    initial_state = rng.normal(size=(config.batch, config.heads, config.key_dimension, config.value_dimension)).astype(
+        np.float32
+    )
+    query_bf16 = np.asarray(jnp.asarray(query, dtype=jnp.bfloat16), dtype=np.float32)
+    key_bf16 = np.asarray(jnp.asarray(key, dtype=jnp.bfloat16), dtype=np.float32)
+    value_bf16 = np.asarray(jnp.asarray(value, dtype=jnp.bfloat16), dtype=np.float32)
+
+    natural_output, natural_state = stateful_scan_region(config)(
+        jnp.asarray(query_bf16, dtype=jnp.bfloat16),
+        jnp.asarray(key_bf16, dtype=jnp.bfloat16),
+        jnp.asarray(value_bf16, dtype=jnp.bfloat16),
+        jnp.asarray(log_decay),
+        jnp.asarray(beta),
+        jnp.asarray(initial_state),
+    )
+    generated_output, generated_state = execute_recurrent_factored_affine(
+        query_bf16,
+        np.broadcast_to(np.exp(log_decay, dtype=np.float32)[..., None], query_bf16.shape),
+        key_bf16,
+        key_bf16,
+        value_bf16,
+        beta,
+        initial_state,
+    )
+
+    assert compilation.recovered_update.maximum_low_rank == 2
+    np.testing.assert_allclose(generated_output, np.asarray(natural_output), rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(generated_state, np.asarray(natural_state), rtol=2e-5, atol=2e-5)
 
 
 def test_affine_recovery_rejects_nonlinear_prior_state_dependency():
@@ -411,6 +568,41 @@ def test_generic_factored_chunk_summary_handles_nearby_recurrences(
 
     np.testing.assert_allclose(np.concatenate(outputs, axis=1), expected_output, rtol=3e-5, atol=3e-5)
     np.testing.assert_allclose(state, expected_state, rtol=3e-5, atol=3e-5)
+
+
+@pytest.mark.parametrize("update_rank", [1, 3])
+@pytest.mark.parametrize("diagonal_mode", ["scalar", "key"])
+def test_factored_chunk_solve_matches_ordered_summary(update_rank: int, diagonal_mode: str):
+    rng = np.random.default_rng(41)
+    batch, length, heads, key_dimension, value_dimension = 2, 5, 3, 6, 7
+    read = rng.normal(size=(batch, length, heads, key_dimension)).astype(np.float32)
+    left = rng.normal(size=(batch, length, heads, update_rank, key_dimension)).astype(np.float32) * 0.15
+    right = rng.normal(size=(batch, length, heads, update_rank, key_dimension)).astype(np.float32) * 0.15
+    additive = rng.normal(size=(batch, length, heads, update_rank, value_dimension)).astype(np.float32)
+    scale = rng.uniform(0.05, 0.8, size=(batch, length, heads, update_rank)).astype(np.float32)
+    if diagonal_mode == "scalar":
+        scalar = rng.uniform(0.7, 1.0, size=(batch, length, heads, 1)).astype(np.float32)
+        diagonal = np.broadcast_to(scalar, read.shape).copy()
+    else:
+        diagonal = rng.uniform(0.7, 1.0, size=read.shape).astype(np.float32)
+    initial_state = rng.normal(size=(batch, heads, key_dimension, value_dimension)).astype(np.float32) * 0.05
+
+    ordered = summarize_factored_affine_chunk(read, diagonal, left, right, additive, scale)
+    solved = solve_factored_affine_chunk(read, diagonal, left, right, additive, scale)
+    for field in (
+        "diagonal",
+        "low_rank_left",
+        "low_rank_right",
+        "additive_coefficients",
+        "transformed_read",
+        "local_output",
+    ):
+        np.testing.assert_allclose(getattr(solved, field), getattr(ordered, field), rtol=3e-5, atol=3e-5)
+
+    ordered_output, ordered_state = apply_factored_affine_chunk(ordered, initial_state)
+    solved_output, solved_state = apply_factored_affine_chunk(solved, initial_state)
+    np.testing.assert_allclose(solved_output, ordered_output, rtol=3e-5, atol=3e-5)
+    np.testing.assert_allclose(solved_state, ordered_state, rtol=3e-5, atol=3e-5)
 
 
 def test_kimi_delta_recurrent_matches_direct_per_channel_decay_reference():

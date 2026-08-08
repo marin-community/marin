@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 from tile_lifetime import (
     DType,
     GemmSkeleton,
@@ -12,7 +14,17 @@ from tile_lifetime import (
     TensorGraph,
     TransformSkeleton,
     compile_dense_transformer_region,
+    compile_erased_dense_transformer_region,
+    compile_gemm_program,
+    erase_dense_transformer_semantics,
+    pairwise_product_expression,
+    pairwise_silu_product_expression,
+    validate_plan_semantic_erasure,
 )
+from tile_lifetime.dense_flow import FlowMap, FlowMapIteration
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
+from tile_lifetime.quack_gemm_codegen import generate_quack_gemm
+from tile_lifetime.tensor_program import deserialize_scalar_expression
 
 BATCH = 1
 SEQUENCE = 128
@@ -131,16 +143,20 @@ def test_dense_transformer_region_composes_expected_skeletons() -> None:
         GemmSkeleton,
     ]
     assert [skeleton.name for skeleton in plan.skeletons] == [
-        "qkv.qkv_rope",
-        "attention.streaming_attention",
-        "projected.residual_rms_partials",
-        "mlp_input.combine_rms_partials",
-        "gate_up_consumer_prologue_rms_scale_pairwise_swiglu",
-        "down.residual_rms_partials",
-        "next_input.combine_rms_partials",
-        "next_qkv.qkv_rope",
+        "contract_partition_pairwise_linear_maps",
+        "streaming_normalized_weighted_fold",
+        "contract_maps_and_fold_partials",
+        "combine_fold_partials",
+        "contract_consumer_prologue_row_scale_pairwise_map",
+        "contract_maps_and_fold_partials",
+        "combine_fold_partials",
+        "contract_partition_pairwise_linear_maps",
     ]
     assert not any(isinstance(skeleton, TransformSkeleton) for skeleton in plan.skeletons)
+    assert plan.semantic_erasure_report is not None
+    assert plan.semantic_erasure_report.is_clean
+    assert len(plan.semantic_erasure_report.scheduling_keys) == 36
+    validate_plan_semantic_erasure(plan)
 
 
 def test_dense_transformer_region_attaches_all_memory_bound_operations() -> None:
@@ -158,27 +174,27 @@ def test_dense_transformer_region_attaches_all_memory_bound_operations() -> None
     assert isinstance(down_projection, GemmSkeleton)
     assert isinstance(next_qkv, GemmSkeleton)
     assert [attachment.operation for attachment in output_projection.epilogue] == [
-        "residual_add",
-        "multiply_gamma",
+        "add",
+        "multiply",
         "partial_sum_square",
     ]
     assert [attachment.operation for attachment in gate_up.prologue] == ["scale_row"]
-    assert [attachment.operation for attachment in gate_up.epilogue] == ["pairwise_swiglu"]
+    assert [attachment.operation for attachment in gate_up.epilogue] == ["pairwise_map"]
     assert [attachment.operation for attachment in down_projection.epilogue] == [
-        "residual_add",
-        "multiply_gamma",
+        "add",
+        "multiply",
         "partial_sum_square",
     ]
-    assert [attachment.operation for attachment in next_qkv.prologue] == ["scale_row", "alias_reshape_bsh"]
+    assert [attachment.operation for attachment in next_qkv.prologue] == ["scale_row", "view"]
     assert [attachment.operation for attachment in next_qkv.epilogue] == [
-        "partition_qkv_segment_views_bshd",
-        "pairwise_rope_q",
-        "pairwise_rope_k",
+        "partition",
+        "pairwise_linear_map",
+        "pairwise_linear_map",
     ]
-    assert gate_up.backend == "quack_sm90_fp32_a_transform_swiglu_dead_preact"
+    assert gate_up.backend == GENERIC_H100_GEMM_BACKEND
     assert gate_up.physical_tile_shape == (128, 256, 64)
     assert gate_up.cluster_shape == (1, 1, 1)
-    assert next_qkv.backend == "quack_sm90_fp32_a_transform_rope_posfreq"
+    assert next_qkv.backend == GENERIC_H100_GEMM_BACKEND
     assert next_qkv.physical_tile_shape == (128, 256, 64)
     assert next_qkv.cluster_shape == (1, 1, 1)
 
@@ -202,19 +218,49 @@ def test_dense_transformer_region_can_delay_rms_scale_in_consumer_epilogues() ->
     assert output_projection.cluster_shape == (1, 1, 1)
     assert down_projection.physical_tile_shape == (128, 256, 64)
     assert down_projection.cluster_shape == (1, 1, 1)
-    assert gate_up.backend == "quack_sm90_rstd_swiglu_dead_preact"
+    assert gate_up.backend == GENERIC_H100_GEMM_BACKEND
     assert gate_up.prologue == ()
-    assert [attachment.operation for attachment in gate_up.epilogue] == ["scale_row", "pairwise_swiglu"]
-    assert next_qkv.backend == "quack_sm90_rstd_rope_posfreq"
-    assert [attachment.operation for attachment in next_qkv.prologue] == ["alias_reshape_bsh"]
+    assert [attachment.operation for attachment in gate_up.epilogue] == ["scale_row", "pairwise_map"]
+    assert next_qkv.backend == GENERIC_H100_GEMM_BACKEND
+    assert [attachment.operation for attachment in next_qkv.prologue] == ["view"]
     assert [attachment.operation for attachment in next_qkv.epilogue] == [
         "scale_row",
-        "partition_qkv_segment_views_bshd",
-        "pairwise_rope_q",
-        "pairwise_rope_k",
+        "partition",
+        "pairwise_linear_map",
+        "pairwise_linear_map",
     ]
     assert plan.materialization("mlp_input").disposition is MaterializationDisposition.EPILOGUE_ONLY
     assert plan.materialization("next_input").disposition is MaterializationDisposition.EPILOGUE_ONLY
+
+
+def test_full_dense_pairwise_semantic_mutation_uses_the_same_generator() -> None:
+    erased = erase_dense_transformer_semantics(_dense_llama_region())
+    pairwise = next(
+        operation
+        for operation in erased.operations
+        if isinstance(operation, FlowMap)
+        and operation.iteration is FlowMapIteration.ADJACENT_PAIR
+        and operation.expressions == (pairwise_silu_product_expression(),)
+    )
+    mutated_map = replace(pairwise, expressions=(pairwise_product_expression(),))
+    mutated = erased.with_operations(
+        tuple(mutated_map if operation is pairwise else operation for operation in erased.operations)
+    )
+
+    plan = compile_erased_dense_transformer_region(
+        mutated,
+        row_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+    )
+
+    skeleton = plan.skeletons[4]
+    assert isinstance(skeleton, GemmSkeleton)
+    assert skeleton.epilogue[-1].operation == "pairwise_map"
+    expression = deserialize_scalar_expression(dict(skeleton.epilogue[-1].attributes)["expression_ast"])
+    assert expression == pairwise_product_expression()
+    source = generate_quack_gemm(compile_gemm_program(skeleton)).source
+    assert "left_0 * right_0" in source
+    assert "swiglu" not in source
+    validate_plan_semantic_erasure(plan)
 
 
 def test_dense_transformer_region_materialization_boundaries_are_explicit() -> None:

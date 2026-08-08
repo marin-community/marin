@@ -5,6 +5,7 @@
 
 from dataclasses import dataclass
 
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.ir import (
     LinearOp,
     PairwiseSwiGLUOp,
@@ -150,7 +151,7 @@ def _swiglu_plan(region: _SwiGLURegion) -> RegionPlan:
         output=activation.output.name,
         shape=(activation.output.shape[0], region.mainloop_output_width, region.input.shape[1]),
         accumulation_dtype=first_projection.accumulation_dtype,
-        backend="quack_sm90_swiglu_dead_preact",
+        backend=GENERIC_H100_GEMM_BACKEND,
         input_layout="row_major_mk",
         output_layout="row_major_mn_pair_reduced",
         epilogue=(
@@ -169,7 +170,7 @@ def _swiglu_plan(region: _SwiGLURegion) -> RegionPlan:
         output=down.output.name,
         shape=(down.output.shape[0], down.output.shape[1], down.input.shape[1]),
         accumulation_dtype=down.accumulation_dtype,
-        backend="coda_cute_h100",
+        backend=GENERIC_H100_GEMM_BACKEND,
         input_layout="row_major_mk",
         output_layout="row_major_mn",
     )

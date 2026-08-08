@@ -7,17 +7,27 @@ import numpy as np
 import pytest
 
 from tile_lifetime import (
+    DType,
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,
+    StreamingTileSchedule,
+    apply_causal_score_mask,
+    apply_tanh_softcap,
+    bounded_kv_reuse_plan,
+    build_attention_tensor_program,
     build_routed_attention_relation,
     compile_bounded_kv_major_candidate,
     compile_routed_attention_candidates,
+    compile_routed_streaming_attention_candidates,
+    derive_streaming_attention,
     execute_kv_major_attention,
     execute_query_major_attention,
     finalize_attention_partial,
     make_causal_block_relation,
     merge_attention_partials,
+    query_major_block_index_plan,
     routed_attention_reference,
+    scaled_score_map,
     summarize_attention_partial,
 )
 
@@ -172,6 +182,48 @@ def test_kv_major_relation_reuses_generic_grouping_and_inverse_mapping() -> None
     assert relation.inverse_dispatch(relation.dispatch(np.arange(3)[:, None])).shape == (3, 3, 1)
 
 
+def test_non_monotone_relation_preserves_source_slots_and_both_orientations() -> None:
+    query, key, value, _, _ = _inputs()
+    selected_blocks = np.array(
+        [
+            [0, -1, -1],
+            [1, 0, -1],
+            [2, 0, 1],
+        ],
+        dtype=np.int32,
+    )
+    edge_valid = selected_blocks >= 0
+    relation = build_routed_attention_relation(selected_blocks, edge_valid=edge_valid, padding_quantum=2)
+    index_plan = query_major_block_index_plan(relation)
+
+    assert index_plan.block_count.tolist() == [1, 2, 3]
+    assert index_plan.block_index.tolist() == [[0, 0, 0], [1, 0, 0], [2, 0, 1]]
+    assert relation.grouped_source_item.tolist() == [0, 1, 2, 1, 2, 2]
+
+    query_major = execute_query_major_attention(
+        query,
+        key,
+        value,
+        selected_blocks,
+        edge_valid=edge_valid,
+        scale=0.5,
+        causal=True,
+        sequence_length=10,
+    )
+    kv_major = execute_kv_major_attention(
+        query,
+        key,
+        value,
+        selected_blocks,
+        edge_valid=edge_valid,
+        scale=0.5,
+        causal=True,
+        padding_quantum=2,
+        sequence_length=10,
+    )
+    np.testing.assert_allclose(query_major, kv_major, rtol=2e-6, atol=2e-6)
+
+
 def test_routed_attention_rejects_duplicate_selected_blocks() -> None:
     query, key, value, _, _ = _inputs()
     selected_blocks = np.array([[0, 0], [0, 1], [1, 2]], dtype=np.int32)
@@ -243,8 +295,78 @@ def test_routed_attention_candidates_derive_readiness_and_materialization_from_o
     assert bounded.partial_state_materialization_bytes == 0
     assert bounded.online_state_materialization_bytes == 3 * 4 * 4 * 7 * 4
     assert bounded.event("slot_0_state_ready").required_arrivals == 3
-    assert bounded.event("slot_1_state_ready").required_arrivals == 3
+    assert bounded.event("slot_1_state_ready").required_arrivals == 2
     assert bounded.event("slot_2_state_ready").required_arrivals == 2
     assert bounded.event("slot_3_state_ready").required_arrivals == 1
     assert bounded.event("slot_2_kv_groups_complete").required_arrivals == (0, 1, 0)
     assert "no atomic accumulation" in bounded.numerical_policy
+
+
+def test_bounded_kv_reuse_groups_nonmonotone_relation_without_duplicate_writers() -> None:
+    selected_blocks = np.array(
+        [
+            [0, -1, -1],
+            [1, 0, -1],
+            [0, 2, 1],
+            [1, 3, 0],
+        ],
+        dtype=np.int32,
+    )
+    relation = build_routed_attention_relation(selected_blocks, edge_valid=selected_blocks >= 0)
+
+    paired = bounded_kv_reuse_plan(relation, query_capacity_per_task=2)
+    scalar = bounded_kv_reuse_plan(relation, query_capacity_per_task=1)
+
+    assert paired.edge_count == scalar.edge_count == relation.route_count
+    assert paired.task_count < scalar.task_count
+    assert paired.waves[0].key_value_block.tolist() == [0, 1]
+    assert paired.waves[0].query_block.tolist() == [[0, 2], [1, 3]]
+    assert paired.waves[0].query_count.tolist() == [2, 2]
+    for wave in paired.waves:
+        valid_queries = wave.query_block[wave.query_block >= 0]
+        assert len(valid_queries) == len(set(valid_queries.tolist()))
+
+
+@pytest.mark.parametrize("softcap", [None, 0.7])
+def test_relation_candidates_are_derived_from_generic_streaming_semantics(softcap: float | None) -> None:
+    _, _, _, selected_blocks, edge_valid = _inputs()
+    relation = build_routed_attention_relation(selected_blocks, edge_valid=edge_valid)
+    score_map = apply_causal_score_mask(scaled_score_map(0.5))
+    if softcap is not None:
+        score_map = apply_tanh_softcap(score_map, softcap)
+    source = build_attention_tensor_program(
+        batch_size=1,
+        query_length=12,
+        key_length=12,
+        query_heads=4,
+        key_value_heads=2,
+        key_dimension=8,
+        value_dimension=5,
+        score_map=score_map,
+        input_dtype=DType.BF16,
+    )
+    streamed = derive_streaming_attention(
+        source,
+        schedule=StreamingTileSchedule(query_tile_size=4, key_value_tile_size=4, pipeline_depth=2),
+    )
+    config = RoutedAttentionPlanConfig(
+        query_block_size=4,
+        key_value_block_size=4,
+        query_heads=4,
+        key_value_heads=2,
+        head_dimension=8,
+        value_dimension=5,
+        buffer_depth=2,
+        transfer_workers=1,
+        matrix_workers=2,
+        reduction_workers=1,
+    )
+
+    compilation = compile_routed_streaming_attention_candidates(streamed, relation, config)
+
+    assert compilation.program.score_map.expression == score_map.expression
+    assert compilation.relation is relation
+    assert [candidate.orientation for candidate in compilation.candidates] == [
+        RoutedAttentionOrientation.QUERY_MAJOR,
+        RoutedAttentionOrientation.KV_MAJOR,
+    ]

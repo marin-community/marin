@@ -1,0 +1,96 @@
+{
+  "compile_seconds": 2.915301132015884,
+  "cuda_runtime": "12.8",
+  "deterministic": true,
+  "deterministic_output_hashes": [
+    "9e1771101071002d49c09522b992add3a8a8f573f657f0a7939effa220bdc52a",
+    "9e1771101071002d49c09522b992add3a8a8f573f657f0a7939effa220bdc52a",
+    "9e1771101071002d49c09522b992add3a8a8f573f657f0a7939effa220bdc52a"
+  ],
+  "extraction_package": "flash-attn-4==4.0.0b16",
+  "extraction_source_sha256": {
+    "flash_fwd.py": "dec41cc35c28ee122c9808238dd97c482edfe22c2817697c2df44e5dfa46a222",
+    "flash_fwd_sm90.py": "4dcf8ecabc518888aad8a677de2279348b03bc278ccdb78f356f453fedb5f3f4"
+  },
+  "gqa_head_group_size": 4,
+  "hardware": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00 W, 1830 MHz, 2619 MHz",
+  "median_ms": 0.23769600689411163,
+  "minimum_ms": 0.23683199286460876,
+  "name": "shuttle_generated_sm90_streaming_contract_fold",
+  "official_fa3_oracle_revision": "3fa810570e17bb4354155bdb71d826eca6079208",
+  "pinned_fa3_oracle_ms": 0.21,
+  "ratio_to_pinned_fa3": 1.1318857471148174,
+  "sampled_maximum_absolute_error": 0.015625,
+  "sampled_mean_absolute_error": 0.00012076267739757895,
+  "sampled_rows": [
+    0,
+    1,
+    127,
+    128,
+    2048,
+    4095
+  ],
+  "samples_ms": [
+    0.24825599789619446,
+    0.24111999571323395,
+    0.2391359955072403,
+    0.23846399784088135,
+    0.23887999355793,
+    0.23737600445747375,
+    0.2391040027141571,
+    0.2377600073814392,
+    0.23759999871253967,
+    0.23814399540424347,
+    0.23759999871253967,
+    0.23683199286460876,
+    0.23792000114917755,
+    0.23744000494480133,
+    0.23695999383926392,
+    0.2369920015335083,
+    0.23827199637889862,
+    0.2383359968662262,
+    0.23759999871253967,
+    0.23747199773788452,
+    0.23763200640678406,
+    0.23763200640678406,
+    0.23731200397014618,
+    0.23747199773788452,
+    0.2380480021238327,
+    0.23948800563812256,
+    0.23718400299549103,
+    0.23891200125217438,
+    0.23718400299549103,
+    0.2385600060224533
+  ],
+  "schedule": {
+    "intra_warpgroup_overlap": true,
+    "pack_gqa": true,
+    "pv_register_source": true,
+    "q_in_registers": false,
+    "stages": 2,
+    "threads": 384,
+    "tile_m": 128,
+    "tile_n": 128
+  },
+  "score_map": {
+    "causal": true,
+    "scale": 0.08838834764831843,
+    "softcap": null
+  },
+  "semantic_source": "Contract -> scalar Map -> max/sum Fold -> Contract -> normalize Map",
+  "shape": {
+    "batch": 1,
+    "head_dimension": 128,
+    "key_value_heads": 8,
+    "query_heads": 32,
+    "sequence": 4096
+  },
+  "shuttle_backend_sha256": {
+    "cute_streaming_base.py": "44505e6d9291ad20f12e61707aee430eda932664618e2a3aaaba7d6bc6e190eb",
+    "cute_streaming_emitter.py": "019b68ce76d9b6bb2cfb2808a0c7021903a06ba816c6ee778f391874565f6d19",
+    "cute_streaming_sm90.py": "c2b7089d99ee8b9a6a300ed2b41a563dcac124d9f1fbd21acfb7e300ecd8cfeb"
+  },
+  "torch": "2.11.0+cu128",
+  "uses_official_attention_interface": false,
+  "warmups": 20
+}

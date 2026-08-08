@@ -1,0 +1,172 @@
+{
+  "benchmark": {
+    "attention_backend": "generated_sm90",
+    "interleaved_order": true,
+    "iterations_per_sample": 10,
+    "measurements": {
+      "consumer_epilogue": {
+        "median_ms": 3.3848400115966797,
+        "minimum_ms": 3.2748897552490233,
+        "samples_ms": [
+          3.3038944244384765,
+          3.3753921508789064,
+          3.3234752655029296,
+          3.300089645385742,
+          3.2991294860839844,
+          3.3068031311035155,
+          3.301279830932617,
+          3.3317569732666015,
+          3.4171905517578125,
+          3.3947391510009766,
+          3.4245601654052735,
+          4.029670333862304,
+          3.989535903930664,
+          3.8738208770751954,
+          3.4007583618164063,
+          3.3810657501220702,
+          3.293395233154297,
+          3.2748897552490233,
+          3.3666751861572264,
+          3.321503829956055,
+          3.3217342376708983,
+          3.297615814208984,
+          3.388614273071289,
+          3.4093696594238283,
+          3.5401153564453125,
+          3.6563968658447266,
+          3.7744895935058596,
+          3.721094512939453,
+          3.562918472290039,
+          3.46033935546875
+        ]
+      },
+      "consumer_prologue": {
+        "median_ms": 3.414814376831055,
+        "minimum_ms": 3.2043872833251954,
+        "samples_ms": [
+          3.2043872833251954,
+          3.445743942260742,
+          3.4455486297607423,
+          3.367379379272461,
+          3.3658977508544923,
+          3.3947967529296874,
+          3.3725505828857423,
+          3.393510437011719,
+          3.4254432678222657,
+          3.4300289154052734,
+          3.3464191436767576,
+          4.162521743774414,
+          4.115142440795898,
+          3.6721248626708984,
+          3.5149887084960936,
+          3.404185485839844,
+          3.392720031738281,
+          3.3674015045166015,
+          3.3943424224853516,
+          3.3795360565185546,
+          3.361977767944336,
+          3.390067291259766,
+          3.3725631713867186,
+          3.467356872558594,
+          3.5088737487792967,
+          3.7972320556640624,
+          3.8624767303466796,
+          3.696303939819336,
+          3.6576702117919924,
+          3.4691200256347656
+        ]
+      }
+    },
+    "repeats": 30,
+    "warmups": 10
+  },
+  "comparison": {
+    "generated_delayed_ratio": 1.125279259174428,
+    "historical_manual_oracle_ms": 3.008
+  },
+  "correctness": {
+    "bitwise_deterministic_output_sha256": {
+      "consumer_epilogue": {
+        "next_qkv": "b32d24aed08060fe04654bdaeb5569ab23b26bbde3057cc5b8b80788331fd163",
+        "x2": "6bfc72cdb3b45e6185e4c86b84269ad5d1ab73c564c5e32d6420fb176594ffe8"
+      },
+      "consumer_prologue": {
+        "next_qkv": "b765296b1df6aeea37d6c22f009f61d41765ae4b18c37e10fa41e6448c4c3d7f",
+        "x2": "4fe3c221f240c40360e13868b198083242c6ed752a929aa1122421ff858c8cd4"
+      }
+    },
+    "prologue_vs_delayed_next_qkv_max_abs": 0.03125,
+    "prologue_vs_delayed_next_qkv_mean_abs": 0.002481885254383087,
+    "prologue_vs_delayed_x2_max_abs": 0.03125,
+    "prologue_vs_delayed_x2_mean_abs": 0.001633747247979045
+  },
+  "environment": {
+    "cutlass_dsl": "4.6.1",
+    "flash_attn_4": "4.0.0b16",
+    "gpu_telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1425, 2619",
+    "torch": "2.13.0+cu130",
+    "torch_cuda": "13.0"
+  },
+  "generated_path_manifest": {
+    "attention_backend": "generated_sm90",
+    "attention_programs": {
+      "consumer_epilogue": {
+        "streaming_normalized_weighted_fold": {
+          "program_sha256": "60a30e782ec215fc796600b3bd14c9bef668bf5b82979b553ee87b9d417a3394",
+          "schedule": "H100StreamingSchedule(tile_m=128, tile_n=128, stages=2, threads=384, pack_gqa=True, q_in_registers=False, intra_warpgroup_overlap=True, pv_register_source=True)"
+        }
+      },
+      "consumer_prologue": {
+        "streaming_normalized_weighted_fold": {
+          "program_sha256": "60a30e782ec215fc796600b3bd14c9bef668bf5b82979b553ee87b9d417a3394",
+          "schedule": "H100StreamingSchedule(tile_m=128, tile_n=128, stages=2, threads=384, pack_gqa=True, q_in_registers=False, intra_warpgroup_overlap=True, pv_register_source=True)"
+        }
+      }
+    },
+    "gemm_backends": [
+      "h100_gemm_tile_program"
+    ],
+    "generated_gemm_source_sha256": [
+      "01e9c68da0b188caeb1baa075ffed36a305c0c20d8f17e223ce4b7e970de0928",
+      "1c8c97d079ce00ce9fe0ecebf75b1fd3104a49b5f358857bf34e7785cef7dd9c",
+      "70e95d4fdfb3b2b35555b818bbb353d53a49cbf0cd5be9766d4a45eb9da0ca8f",
+      "b958f275f71f0512a2c5e7ec8937d37287a552b33762508da564b204bf14ee81",
+      "f32be0770ee49424cc9d6f62ba992750db062b68b287f4f46bafdb0abae14447",
+      "fee9fd659bed936f8ecf2db0462642866d8a839fae8e6e2d1260527c76e1927b"
+    ],
+    "named_gemm_callback_selected": false,
+    "official_fa3_oracle_selected": false
+  },
+  "schema_version": 1,
+  "sources": {
+    "generated_source_sha256": [
+      "01e9c68da0b188caeb1baa075ffed36a305c0c20d8f17e223ce4b7e970de0928",
+      "1c8c97d079ce00ce9fe0ecebf75b1fd3104a49b5f358857bf34e7785cef7dd9c",
+      "70e95d4fdfb3b2b35555b818bbb353d53a49cbf0cd5be9766d4a45eb9da0ca8f",
+      "b958f275f71f0512a2c5e7ec8937d37287a552b33762508da564b204bf14ee81",
+      "f32be0770ee49424cc9d6f62ba992750db062b68b287f4f46bafdb0abae14447",
+      "fee9fd659bed936f8ecf2db0462642866d8a839fae8e6e2d1260527c76e1927b"
+    ],
+    "implementation_file_sha256": {
+      "backends/h100/cute_streaming_emitter.py": "019b68ce76d9b6bb2cfb2808a0c7021903a06ba816c6ee778f391874565f6d19",
+      "backends/h100/cute_streaming_sm90.py": "c2b7089d99ee8b9a6a300ed2b41a563dcac124d9f1fbd21acfb7e300ecd8cfeb",
+      "benchmarks/h100_plan_runtime.py": "cf449d1fb0827a751df1fade418a60e40aabbe21b890b3ee7765d0132a3457ab",
+      "src/tile_lifetime/h100_streaming_lowering.py": "9e6e7516313837ca35ff5560fea6b6fd51714b7767abd2fb294cdcf65cb0a6b9",
+      "src/tile_lifetime/quack_gemm_codegen.py": "0d08e8b5c17ccadd2a2ece3e4f8fb460b78b9e2919309a931bca56d582204006"
+    },
+    "quack_patch_sha256": "40318b9b390e111c38f4838a50cf8913695c9f94142122b374bf09c220cfd9a1",
+    "quack_revision": "84ef91df9bec87c7e4938517234fafb07ef844dd",
+    "shuttle_revision": "dirty-dense-name-erasure",
+    "stablehlo_sha256": "64c244dc4e551ad8a63e7091b56db6d6a33695649da138a8f8e0fda83cf64a5b"
+  },
+  "workload": {
+    "accumulation_dtype": "float32",
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "hidden": 4096,
+    "intermediate": 14336,
+    "key_value_heads": 8,
+    "query_heads": 32,
+    "sequence": 4096
+  }
+}

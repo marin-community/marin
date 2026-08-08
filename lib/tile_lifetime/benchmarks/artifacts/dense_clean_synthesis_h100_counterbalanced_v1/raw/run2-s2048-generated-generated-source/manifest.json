@@ -1,0 +1,30 @@
+{
+  "attention_backend": "generated_sm90",
+  "attention_programs": {
+    "consumer_epilogue": {
+      "streaming_normalized_weighted_fold": {
+        "program_sha256": "70c10b49407f0d9a3caeafd0c38abf79a1d6ced7ed81a38efed261ce79f504dd",
+        "schedule": "H100StreamingSchedule(tile_m=128, tile_n=128, stages=2, threads=384, pack_gqa=True, q_in_registers=False, intra_warpgroup_overlap=True, pv_register_source=True)"
+      }
+    },
+    "consumer_prologue": {
+      "streaming_normalized_weighted_fold": {
+        "program_sha256": "70c10b49407f0d9a3caeafd0c38abf79a1d6ced7ed81a38efed261ce79f504dd",
+        "schedule": "H100StreamingSchedule(tile_m=128, tile_n=128, stages=2, threads=384, pack_gqa=True, q_in_registers=False, intra_warpgroup_overlap=True, pv_register_source=True)"
+      }
+    }
+  },
+  "gemm_backends": [
+    "h100_gemm_tile_program"
+  ],
+  "generated_gemm_source_sha256": [
+    "01e9c68da0b188caeb1baa075ffed36a305c0c20d8f17e223ce4b7e970de0928",
+    "1c8c97d079ce00ce9fe0ecebf75b1fd3104a49b5f358857bf34e7785cef7dd9c",
+    "70e95d4fdfb3b2b35555b818bbb353d53a49cbf0cd5be9766d4a45eb9da0ca8f",
+    "b958f275f71f0512a2c5e7ec8937d37287a552b33762508da564b204bf14ee81",
+    "f32be0770ee49424cc9d6f62ba992750db062b68b287f4f46bafdb0abae14447",
+    "fee9fd659bed936f8ecf2db0462642866d8a839fae8e6e2d1260527c76e1927b"
+  ],
+  "named_gemm_callback_selected": false,
+  "official_fa3_oracle_selected": false
+}

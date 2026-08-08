@@ -5,13 +5,13 @@ import pytest
 
 from tile_lifetime import (
     DType,
-    ExpertParallelMoESkeleton,
     MoELegalityError,
     MoERoutedPrecision,
-    MoKCompilerConfig,
+    MoKOracleConfig,
     NumericalPolicy,
+    OpaqueMoKOracleSkeleton,
     TensorGraph,
-    compile_mok_expert_parallel_region,
+    compile_mok_oracle_region,
 )
 from tile_lifetime.plan import PersistentTaskPlacement
 
@@ -64,10 +64,10 @@ def _moe_region(
     return graph
 
 
-def test_compile_mok_region_recovers_explicit_gb200_oracle_structure() -> None:
-    plan = compile_mok_expert_parallel_region(
+def test_compile_mok_oracle_region_recovers_explicit_gb200_oracle_structure() -> None:
+    plan = compile_mok_oracle_region(
         _moe_region(),
-        config=MoKCompilerConfig(
+        config=MoKOracleConfig(
             expert_parallel_size=4,
             communication_sm_count=20,
             minibatch_size=2048,
@@ -79,7 +79,7 @@ def test_compile_mok_region_recovers_explicit_gb200_oracle_structure() -> None:
 
     assert len(plan.skeletons) == 1
     skeleton = plan.skeletons[0]
-    assert isinstance(skeleton, ExpertParallelMoESkeleton)
+    assert isinstance(skeleton, OpaqueMoKOracleSkeleton)
     assert (skeleton.global_experts, skeleton.local_experts, skeleton.shared_experts) == (384, 96, 1)
     assert skeleton.top_k == 6
     assert skeleton.routed_precision == "bf16"
@@ -140,9 +140,9 @@ def test_compile_mok_region_recovers_explicit_gb200_oracle_structure() -> None:
     assert plan.rewrites[0].applied
 
 
-def test_compile_mok_region_rejects_mxfp8_without_scale_tensor_semantics() -> None:
+def test_compile_mok_oracle_region_rejects_mxfp8_without_scale_tensor_semantics() -> None:
     with pytest.raises(MoELegalityError) as exc_info:
-        compile_mok_expert_parallel_region(
+        compile_mok_oracle_region(
             _moe_region(
                 tokens=512,
                 hidden=256,
@@ -151,16 +151,16 @@ def test_compile_mok_region_rejects_mxfp8_without_scale_tensor_semantics() -> No
                 local_experts=4,
                 top_k=2,
             ),
-            config=MoKCompilerConfig(expert_parallel_size=4, routed_precision=MoERoutedPrecision.MXFP8),
+            config=MoKOracleConfig(expert_parallel_size=4, routed_precision=MoERoutedPrecision.MXFP8),
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         )
 
     assert exc_info.value.reasons == ("MXFP8 scale tensor semantics are not modeled by the first MoK compiler slice",)
 
 
-def test_compile_mok_region_validates_every_shared_and_routed_weight_dtype() -> None:
+def test_compile_mok_oracle_region_validates_every_shared_and_routed_weight_dtype() -> None:
     with pytest.raises(MoELegalityError) as exc_info:
-        compile_mok_expert_parallel_region(
+        compile_mok_oracle_region(
             _moe_region(
                 tokens=512,
                 hidden=256,
@@ -171,7 +171,7 @@ def test_compile_mok_region_validates_every_shared_and_routed_weight_dtype() -> 
                 shared_up_dtype=DType.FP32,
                 routed_down_dtype=DType.FP32,
             ),
-            config=MoKCompilerConfig(expert_parallel_size=4),
+            config=MoKOracleConfig(expert_parallel_size=4),
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         )
 
@@ -181,11 +181,11 @@ def test_compile_mok_region_validates_every_shared_and_routed_weight_dtype() -> 
     )
 
 
-def test_compile_mok_region_reports_all_physical_legality_failures() -> None:
+def test_compile_mok_oracle_region_reports_all_physical_legality_failures() -> None:
     with pytest.raises(MoELegalityError) as exc_info:
-        compile_mok_expert_parallel_region(
+        compile_mok_oracle_region(
             _moe_region(tokens=768, global_experts=384, local_experts=96),
-            config=MoKCompilerConfig(
+            config=MoKOracleConfig(
                 expert_parallel_size=8,
                 communication_sm_count=23,
                 minibatch_size=1000,
@@ -202,15 +202,15 @@ def test_compile_mok_region_reports_all_physical_legality_failures() -> None:
     assert any("macrobatch size" in reason for reason in reasons)
 
 
-def test_compile_mok_region_rejects_unmodeled_consumer() -> None:
+def test_compile_mok_oracle_region_rejects_unmodeled_consumer() -> None:
     graph = _moe_region(tokens=512, hidden=256, intermediate=256, global_experts=16, local_experts=4, top_k=2)
     output = graph.values[-1]
     graph.view(output, shape=output.shape, name="observed_output")
 
     with pytest.raises(MoELegalityError) as exc_info:
-        compile_mok_expert_parallel_region(
+        compile_mok_oracle_region(
             graph,
-            config=MoKCompilerConfig(expert_parallel_size=4),
+            config=MoKOracleConfig(expert_parallel_size=4),
             numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
         )
 

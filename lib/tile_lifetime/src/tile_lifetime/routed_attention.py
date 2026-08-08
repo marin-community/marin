@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact routed-attention semantics over a generic binary relation."""
+"""Exact computation over a selected binary relation and normalized Fold state."""
+
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -12,6 +14,81 @@ from tile_lifetime.attention import (
     summarize_attention_partial,
 )
 from tile_lifetime.relation import RelationPlan, build_relation_plan
+
+
+@dataclass(frozen=True)
+class IndexDomainRestriction:
+    """One generic affine predicate limiting an index domain."""
+
+    left_axis: str
+    right_axis: str
+    predicate: str
+
+    def __post_init__(self) -> None:
+        if self.predicate not in {"left_greater_equal_right", "all"}:
+            raise ValueError(f"unsupported index-domain predicate {self.predicate!r}")
+
+
+@dataclass(frozen=True)
+class RelationSelectionProgram:
+    """Generic Contract, domain restriction, and top-k relation construction."""
+
+    left_input: str
+    right_input: str
+    left_count: int
+    right_count: int
+    feature_count: int
+    selected_count: int
+    restriction: IndexDomainRestriction
+    accumulation_dtype: str = "fp32"
+
+    def __post_init__(self) -> None:
+        if (
+            min(
+                self.left_count,
+                self.right_count,
+                self.feature_count,
+                self.selected_count,
+            )
+            <= 0
+        ):
+            raise ValueError("relation selection dimensions must be positive")
+        if self.selected_count > self.right_count:
+            raise ValueError("relation selection count exceeds the right domain")
+
+
+def execute_relation_selection(
+    program: RelationSelectionProgram,
+    inputs: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Execute generic relation selection with deterministic descending top-k."""
+    try:
+        left = np.asarray(inputs[program.left_input], dtype=np.float32)
+        right = np.asarray(inputs[program.right_input], dtype=np.float32)
+    except KeyError as error:
+        raise ValueError(f"missing relation-selection input {error.args[0]!r}") from error
+    if left.shape != (program.left_count, program.feature_count):
+        raise ValueError(
+            f"left relation metadata has shape {left.shape}, expected " f"{(program.left_count, program.feature_count)}"
+        )
+    if right.shape != (program.right_count, program.feature_count):
+        raise ValueError(
+            f"right relation metadata has shape {right.shape}, expected "
+            f"{(program.right_count, program.feature_count)}"
+        )
+    score = left @ right.T
+    validity = np.ones(score.shape, dtype=np.bool_)
+    if program.restriction.predicate == "left_greater_equal_right":
+        validity &= np.arange(program.right_count)[None, :] <= np.arange(program.left_count)[:, None]
+    score = np.where(validity, score, -np.inf)
+    # Stable descending sort makes tie behavior deterministic without atomics.
+    selected = np.argsort(-score, axis=1, kind="stable")[:, : program.selected_count].astype(np.int32)
+    selected_valid = np.take_along_axis(validity, selected, axis=1)
+    if np.any(~selected_valid):
+        # Early rows in a causal relation can contain fewer legal right items.
+        # Invalid slots are explicit Relation edges rather than padded duplicates.
+        selected = np.where(selected_valid, selected, -1)
+    return selected, selected_valid
 
 
 def make_causal_block_relation(

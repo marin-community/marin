@@ -144,6 +144,37 @@ class GatherAttributes:
     slice_sizes: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class CallAttributes:
+    """Callee of a context-independent ``func.call`` operation."""
+
+    callee: str
+
+
+@dataclass(frozen=True)
+class DynamicSliceAttributes:
+    """Static result sizes of a dynamic slice."""
+
+    slice_sizes: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class StableHLORegion:
+    """One structured-operation region using function-local value identifiers."""
+
+    arguments: tuple[int, ...]
+    outputs: tuple[int, ...]
+    operations: tuple["StableHLOOperation", ...]
+
+
+@dataclass(frozen=True)
+class WhileAttributes:
+    """Condition and body regions of a source ``stablehlo.while``."""
+
+    condition: StableHLORegion
+    body: StableHLORegion
+
+
 StableHLOAttributes = (
     NoAttributes
     | DotAttributes
@@ -157,6 +188,9 @@ StableHLOAttributes = (
     | ConcatenateAttributes
     | CompositeAttributes
     | GatherAttributes
+    | CallAttributes
+    | DynamicSliceAttributes
+    | WhileAttributes
 )
 
 
@@ -204,12 +238,48 @@ class StableHLOGraph:
         return tuple(operation for operation in self.operations if value_id in operation.inputs)
 
 
+@dataclass(frozen=True)
+class StableHLOFunction:
+    """One public or transitively called StableHLO function."""
+
+    name: str
+    graph: StableHLOGraph
+
+
+@dataclass(frozen=True)
+class StableHLOProgram:
+    """An entry graph and the private functions reachable from it."""
+
+    entry: str
+    functions: tuple[StableHLOFunction, ...]
+
+    def function(self, name: str) -> StableHLOFunction:
+        """Return one reachable function by symbol name."""
+        matches = tuple(function for function in self.functions if function.name == name)
+        if len(matches) != 1:
+            raise KeyError(f"expected one StableHLO function named {name!r}, found {len(matches)}")
+        return matches[0]
+
+
 def import_stablehlo(artifact: bytes, *, input_names: tuple[str, ...] | None = None) -> StableHLOGraph:
     """Import one static, single-block function from portable StableHLO bytecode."""
     with ir.Context() as context:
         stablehlo.register_dialect(context)
         module = stablehlo.deserialize_portable_artifact(context, artifact)
         return _import_module(module, input_names=input_names)
+
+
+def import_stablehlo_program(artifact: bytes, *, input_names: tuple[str, ...] | None = None) -> StableHLOProgram:
+    """Import an entry function plus reachable calls and structured ``while`` regions.
+
+    This path is intentionally separate from :func:`import_stablehlo`: ordinary
+    feed-forward importers retain their compact flat graph, while ordered-state
+    recovery gets the region and call structure emitted by ``jax.lax.scan``.
+    """
+    with ir.Context() as context:
+        stablehlo.register_dialect(context)
+        module = stablehlo.deserialize_portable_artifact(context, artifact)
+        return _import_program(module, input_names=input_names)
 
 
 def _import_module(module: ir.Module, *, input_names: tuple[str, ...] | None) -> StableHLOGraph:
@@ -281,6 +351,243 @@ def _import_module(module: ir.Module, *, input_names: tuple[str, ...] | None) ->
         values=tuple(values),
         operations=tuple(operations),
     )
+
+
+_STRUCTURED_SUPPORTED_OPERATIONS = SUPPORTED_OPERATIONS | frozenset(
+    {
+        "func.call",
+        "stablehlo.dynamic_slice",
+        "stablehlo.dynamic_update_slice",
+        "stablehlo.while",
+    }
+)
+
+
+def _import_program(module: ir.Module, *, input_names: tuple[str, ...] | None) -> StableHLOProgram:
+    function_operations = {
+        _function_name(operation.operation): operation.operation
+        for operation in module.body.operations
+        if operation.operation.name == "func.func"
+    }
+    public_names = tuple(
+        name
+        for name, operation in function_operations.items()
+        if str(operation.attributes.get("sym_visibility", '"public"')) != '"private"'
+    )
+    if len(public_names) != 1:
+        raise StableHLOImportError(f"expected one public function, found {len(public_names)}")
+    entry = public_names[0]
+    reachable = _reachable_function_names(entry, function_operations)
+    functions = tuple(
+        StableHLOFunction(
+            name=name,
+            graph=_import_structured_function(
+                function_operations[name],
+                input_names=input_names if name == entry else None,
+            ),
+        )
+        for name in reachable
+    )
+    return StableHLOProgram(entry=entry, functions=functions)
+
+
+def _function_name(operation: ir.Operation) -> str:
+    return ir.StringAttr(operation.attributes["sym_name"]).value
+
+
+def _reachable_function_names(entry: str, functions: dict[str, ir.Operation]) -> tuple[str, ...]:
+    pending = [entry]
+    ordered: list[str] = []
+    while pending:
+        name = pending.pop()
+        if name in ordered:
+            continue
+        try:
+            operation = functions[name]
+        except KeyError as error:
+            raise StableHLOImportError(f"call references missing function @{name}") from error
+        ordered.append(name)
+        callees = _called_function_names(operation)
+        pending.extend(reversed(tuple(callee for callee in callees if callee not in ordered)))
+    return tuple(ordered)
+
+
+def _called_function_names(operation: ir.Operation) -> tuple[str, ...]:
+    names: list[str] = []
+
+    def visit_region(region: ir.Region) -> None:
+        for block in region.blocks:
+            for nested_view in block.operations:
+                nested = nested_view.operation
+                if nested.name == "func.call":
+                    callee = _callee_name(nested)
+                    if callee not in names:
+                        names.append(callee)
+                for child in nested.regions:
+                    visit_region(child)
+
+    for region in operation.regions:
+        visit_region(region)
+    return tuple(names)
+
+
+def _callee_name(operation: ir.Operation) -> str:
+    return str(operation.attributes["callee"]).removeprefix("@")
+
+
+def _import_structured_function(
+    function: ir.Operation,
+    *,
+    input_names: tuple[str, ...] | None,
+) -> StableHLOGraph:
+    if len(function.regions) != 1 or len(function.regions[0].blocks) != 1:
+        raise StableHLOImportError(f"function @{_function_name(function)} must contain one block")
+    block = function.regions[0].blocks[0]
+    if input_names is not None and len(input_names) != len(block.arguments):
+        raise StableHLOImportError(
+            f"received {len(input_names)} input names for a function with {len(block.arguments)} arguments"
+        )
+
+    values: list[StableHLOValue] = []
+    value_ids: dict[ir.Value, int] = {}
+    operation_count = [0]
+    input_ids = _import_block_arguments(
+        block,
+        values=values,
+        value_ids=value_ids,
+        names=input_names,
+    )
+    operations, output_ids = _import_structured_block_operations(
+        block,
+        values=values,
+        value_ids=value_ids,
+        operation_count=operation_count,
+        terminator="func.return",
+    )
+    return StableHLOGraph(
+        inputs=input_ids,
+        outputs=output_ids,
+        values=tuple(values),
+        operations=operations,
+    )
+
+
+def _import_block_arguments(
+    block: ir.Block,
+    *,
+    values: list[StableHLOValue],
+    value_ids: dict[ir.Value, int],
+    names: tuple[str, ...] | None,
+) -> tuple[int, ...]:
+    input_ids: list[int] = []
+    for index, argument in enumerate(block.arguments):
+        name = names[index] if names is not None else f"arg{index}"
+        imported = _import_value(argument, value_id=len(values), name=name)
+        values.append(imported)
+        value_ids[argument] = imported.id
+        input_ids.append(imported.id)
+    return tuple(input_ids)
+
+
+def _import_structured_block_operations(
+    block: ir.Block,
+    *,
+    values: list[StableHLOValue],
+    value_ids: dict[ir.Value, int],
+    operation_count: list[int],
+    terminator: str,
+) -> tuple[tuple[StableHLOOperation, ...], tuple[int, ...]]:
+    operations: list[StableHLOOperation] = []
+    output_ids: tuple[int, ...] | None = None
+    for operation_view in block.operations:
+        operation = operation_view.operation
+        if operation.name == terminator:
+            output_ids = tuple(
+                _lookup_value_id(value_ids, operand, operation=operation) for operand in operation.operands
+            )
+            continue
+        if operation.name not in _STRUCTURED_SUPPORTED_OPERATIONS:
+            raise StableHLOImportError(f"unsupported operation {operation.name} at {operation.location}")
+        operations.append(
+            _import_structured_operation(
+                operation,
+                values=values,
+                value_ids=value_ids,
+                operation_count=operation_count,
+            )
+        )
+    if output_ids is None:
+        raise StableHLOImportError(f"block has no {terminator} operation")
+    return tuple(operations), output_ids
+
+
+def _import_structured_operation(
+    operation: ir.Operation,
+    *,
+    values: list[StableHLOValue],
+    value_ids: dict[ir.Value, int],
+    operation_count: list[int],
+) -> StableHLOOperation:
+    imported_outputs: list[int] = []
+    for result in operation.results:
+        imported = _import_value(result, value_id=len(values), name=f"v{len(values)}")
+        values.append(imported)
+        value_ids[result] = imported.id
+        imported_outputs.append(imported.id)
+
+    operation_id = operation_count[0]
+    operation_count[0] += 1
+    if operation.name == "stablehlo.while":
+        if len(operation.regions) != 2:
+            raise StableHLOImportError(f"while at {operation.location} must have condition and body regions")
+        condition = _import_structured_region(
+            operation.regions[0],
+            values=values,
+            value_ids=value_ids,
+            operation_count=operation_count,
+        )
+        body = _import_structured_region(
+            operation.regions[1],
+            values=values,
+            value_ids=value_ids,
+            operation_count=operation_count,
+        )
+        attributes: StableHLOAttributes = WhileAttributes(condition=condition, body=body)
+    elif operation.name == "func.call":
+        attributes = CallAttributes(callee=_callee_name(operation))
+    elif operation.name == "stablehlo.dynamic_slice":
+        attributes = DynamicSliceAttributes(slice_sizes=tuple(ir.DenseI64ArrayAttr(operation.attributes["slice_sizes"])))
+    else:
+        attributes = _import_attributes(operation)
+    return StableHLOOperation(
+        id=operation_id,
+        kind=operation.name.removeprefix("stablehlo.").removeprefix("func."),
+        inputs=tuple(_lookup_value_id(value_ids, operand, operation=operation) for operand in operation.operands),
+        outputs=tuple(imported_outputs),
+        attributes=attributes,
+        source_location=str(operation.location),
+    )
+
+
+def _import_structured_region(
+    region: ir.Region,
+    *,
+    values: list[StableHLOValue],
+    value_ids: dict[ir.Value, int],
+    operation_count: list[int],
+) -> StableHLORegion:
+    if len(region.blocks) != 1:
+        raise StableHLOImportError("structured StableHLO regions must contain one block")
+    block = region.blocks[0]
+    arguments = _import_block_arguments(block, values=values, value_ids=value_ids, names=None)
+    operations, outputs = _import_structured_block_operations(
+        block,
+        values=values,
+        value_ids=value_ids,
+        operation_count=operation_count,
+        terminator="stablehlo.return",
+    )
+    return StableHLORegion(arguments=arguments, outputs=outputs, operations=operations)
 
 
 def _import_value(value: ir.Value, *, value_id: int, name: str) -> StableHLOValue:

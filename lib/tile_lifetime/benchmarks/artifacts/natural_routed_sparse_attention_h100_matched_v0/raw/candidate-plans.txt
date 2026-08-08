@@ -1,0 +1,26 @@
+RoutedAttention orientation=query_major
+  relation: query_blocks=128 selected_edges=996 kv_blocks=128
+  tiles: Q=128 KV=128 heads=32/8 dimension=128
+  tasks: load_query_block -> stream_selected_kv -> qk_online_update_pv -> finalize_query
+  event query_selected_edges_complete: arrivals=count=128, min=1, median=8.0, max=8, total=996 granularity=query_block
+  buffer staged_kv: capacity=3 bytes=1572864 reuse_after=qk_online_update_pv completion for buffer generation
+  buffer online_state: capacity=3 bytes=6389760 reuse_after=finalize_query
+  score_tile_bytes: 2097152 (internal only)
+  partial_state_materialization_bytes: 0
+  online_state_materialization_bytes: 0
+  sequence_squared_materialization_bytes: 0
+  numerical_policy: stable selected-slot FP32 online update; bounded reassociation within QK/PV tiles
+
+RoutedAttention orientation=kv_major
+  relation: query_blocks=128 selected_edges=996 kv_blocks=128
+  tiles: Q=128 KV=128 heads=32/8 dimension=128
+  tasks: stage_kv_block -> grouped_query_block_partial -> inverse_route_partial_state -> stable_query_partial_merge
+  event kv_incident_queries_complete: arrivals=count=128, min=0, median=5.5, max=31, total=996 granularity=KV block
+  event query_partials_ready: arrivals=count=128, min=1, median=8.0, max=8, total=996 granularity=query_block
+  buffer resident_kv: capacity=3 bytes=1572864 reuse_after=kv_incident_queries_complete for buffer generation
+  buffer edge_partial_state: capacity=996 bytes=2121400320 reuse_after=stable_query_partial_merge
+  score_tile_bytes: 2097152 (internal only)
+  partial_state_materialization_bytes: 2121400320
+  online_state_materialization_bytes: 0
+  sequence_squared_materialization_bytes: 0
+  numerical_policy: source query block, then selected-slot FP32 partial merge without atomics

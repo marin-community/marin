@@ -2,14 +2,16 @@
 
 ## Synthesis boundary
 
-The dense and distributed-MoE numbers below are oracle-backed composition
-checkpoints, not end-to-end kernel-synthesis results. Dense execution calls
-named QuACK/CODA epilogues and official FA3. Distributed MoE derives its
-relation, buffers, receiver-local deterministic merge, worker allocation, and
-overlap, but uses a standalone MoK grouped-GEMM kernel plus DeepEP dispatch and
-`combine`. DeepEP `combine` performs reverse movement and fixed-rank
-accumulation together; it is deterministic and non-atomic but exceeds the
-strict transport-only boundary. The routed slot-wave attention body is
+The dense numbers below are oracle-backed composition checkpoints rather than
+end-to-end kernel-synthesis results. Dense execution calls named QuACK/CODA
+epilogues and official FA3. The historical distributed-MoE result uses DeepEP
+`combine`, which performs reverse movement and fixed-rank accumulation
+together. The accepted natural-boundary MoE result starts from runtime router
+logits and top-k, generates its receiver `RelationPlan`, uses DeepEP only for
+forward payload dispatch, returns payloads with `all_to_all_single`, and runs a
+generated rank-ordered Fold and shared Map. The standalone MoK-derived grouped
+GEMM is treated as an allowed segmented-contraction skeleton. The routed
+slot-wave attention body is
 Shuttle-owned rather than a Seer/FSA call, but is still hand-authored
 attention-specific Triton rather than generated from generic
 Relation/Fold/Contract semantics.
@@ -169,6 +171,38 @@ At sequence 2048, the plan-driven prologue and delayed variants measured minimum
 
 The measured `rope_posfreq` specialization accepts only canonical Llama base-10000 RoPE tables. The H100 backend validates that contract once before entering the timed hot path; arbitrary dynamic sine/cosine inputs require a table-load epilogue specialization rather than being silently ignored.
 
+### Clean generated dense path
+
+The accepted replacement no longer dispatches the named QuACK/CODA semantic
+epilogues or official FA3 used by the historical plan above. Ordinary JAX
+StableHLO erases into 36 generic `Map`, `Contract`, `Fold`, and
+`DomainRestriction` operations. Scalar/tile AST generation supplies Contract
+preparation, finalization, auxiliary RMS partials, RoPE, and SwiGLU around the
+generic QuACK/CuTe mainloop. A generated SM90 streaming skeleton supplies the
+QK, normalized-exponential state, and PV body.
+
+| Sequence | RMS policy | Shuttle median | Matched oracle | Ratio |
+|---:|---|---:|---:|---:|
+| 2,048 | source-ordered prologue | 1.705818 ms | 1.523838 ms | 1.119422x |
+| 2,048 | delayed epilogue | 1.650502 ms | 1.523838 ms | 1.083122x |
+| 4,096 | source-ordered prologue | 3.478322 ms | 3.253411 ms | 1.069131x |
+| 4,096 | delayed epilogue | 3.390837 ms | 3.253411 ms | 1.042240x |
+
+These are pooled medians from two independent 30-sample captures; process
+order is generated-first in run 1 and oracle-first in run 2. All four
+candidates pass the 1.20-times completion ratio, and three pass the 1.10-times
+stretch target. They also remain below the conservative completion thresholds
+derived from the earlier official-FA3 manual oracle.
+
+Generated component outputs are bitwise equal to their primitive oracles
+except for the direct scalar-AST SiLU expression, whose maximum BF16-rounded
+difference is 0.125. Replacing `SiLU(left) * right` with `left * right` changes
+emitted arithmetic through the same generator. Final raw samples, generated
+source, hashes, and dependency lineage are under
+`benchmarks/artifacts/dense_clean_synthesis_h100_counterbalanced_v1`; the
+earlier `dense_clean_synthesis_h100_20260807` checkpoint retains the focused
+component comparison and mutation evidence.
+
 ## Mixture-of-Kittens follow-on
 
 The pinned Mixture-of-Kittens implementation targets SM100/SM103 rather than H100. Its forward megakernel combines shared and routed expert gate/up GEMMs, SwiGLU, down GEMMs, dispatch/combine communication, readiness events, and a persistent task scheduler. It is used to establish an expert-parallel correctness/performance oracle and to inspect useful physical constraints, not as a complete compiler backend. Generated first-principles plans will be compared on low-priority B200 capacity and reported separately from the H100 dense results.
@@ -262,7 +296,85 @@ Concatenation reduced overlap latency by `0.1037` ms (`2.54%`) at 56 SMs and `0.
 
 Every rank in the four A/B runs and the selected-plan repeat matched compiler and DeepEP transport metadata exactly. Outputs were finite, sequential and overlapped paths were bitwise equal, and the overlapped output repeated bitwise. An independent small four-rank source-ordered Torch reference passed with maximum absolute error `0.0001220703125`.
 
+### Clean payload return and generated merge
+
+The clean candidate separates payload movement from semantic reduction. DeepEP
+dispatch moves routed inputs to expert owners. After generated packing,
+standalone grouped W13/W2, generated SwiGLU, and the shared-expert branch,
+`all_to_all_single` returns owner partials without reducing them. A generated
+CUDA kernel folds owner ranks in ascending order with explicit FP32
+multiply/add, adds the shared output, and converts to BF16. It uses no atomics
+and does not call DeepEP `combine` or the complete MoK forward event graph.
+
+| Phase | First 30-sample median | Confirmation median |
+|---|---:|---:|
+| Routed compute after dispatch | 3.555584 ms | 3.536016 ms |
+| Generated shared expert | 0.242464 ms | 0.240784 ms |
+| Payload return plus generated merge | 0.365168 ms | 0.368576 ms |
+| Clean sequential region | 4.229424 ms | 4.175808 ms |
+| Clean overlapped region | 4.082608 ms | 4.142576 ms |
+| DeepEP-combine control | 4.085024 ms | 4.044240 ms |
+| DeepEP combine plus shared bias component | 0.271072 ms | 0.274544 ms |
+
+The first clean run is `1.1463x` the frozen `3.561696`-ms MoK replay. The
+confirmation is `1.1631x`; their median of medians is `4.112592` ms, or
+`1.1547x` the replay. Both satisfy the `1.2x` supplied-route target. The first
+run's clean overlap is 3.47% faster than its matching clean sequential
+schedule. Payload-only return plus generated merge costs 0.094096 ms more than
+the DeepEP combine component in that run.
+
+All four generated rank outputs are bitwise equal to the DeepEP-combine control
+and bitwise stable across repeats. The per-rank semantic fixture SHA256 values
+also match across both complete runs. The [clean boundary artifact](../benchmarks/artifacts/gb200_moe_clean_merge_v0/README.md)
+contains both raw distributions, stdout and build logs, the exact executed
+sources, package and hardware pins, route and semantic fixtures, and validated
+checksums. This is a synthesized distributed schedule at a supplied-route
+boundary. Router/top-k execution and index-plan construction are not included
+in the measured region.
+
 The route fixture has two identities. The original NPZ container SHA256 is `6ffd9d42c0ae1da109503f3d3a5d6ec992ffdbb84f41b4cc6f0493f35f5c0dff`; reserializing the same seeded arrays on a replacement tray produced container SHA256 `c143b12f2879430106d5013aea8e95ef0705ba8daaffa5eeb1ece49559217d38`. The stable tensor-content SHA256 is `f1b5d8b3a53372eca228261b48b7ad9cfe925f1f8083f9cae07f9a24713f6908`. This hash frames each tensor's name, NumPy dtype string, little-endian rank and shape, and C-contiguous bytes in the order `selected_experts`, `combine_weights`. Both serializations produce receiver assignment counts `[12281,12281,12349,12241]`. `scratch/shuttle-generic-results/mok-route-fixture-content-identity.json` records the framing and per-tensor byte hashes.
+
+### Natural StableHLO boundary and generated index plane
+
+The accepted path no longer begins from the route fixture above. An ordinary
+JAX MoE StableHLO artifact lowers to generic `Contract`, selection, `Relation`,
+`SegmentedContract`, `Map`, and `Fold` operations. At runtime the benchmark
+executes the BF16 router Contract, top-k, and FP32 normalized route-weight
+Maps/Fold. DeepEP dispatches the resulting payload and relation edges. A
+generated fixed-capacity GPU kernel then constructs receiver-local counts,
+padded source rows, edge destination rows, and ordered edge weights.
+
+The matched MoK path executes the identical router/top-k/route-weight frontend
+before MoK schedule construction and its complete BF16 forward. Two independent
+captures counterbalance launch order and contain 30 rank-maximum samples per
+implementation:
+
+| Capture | Launch order | Shuttle | MoK | Ratio |
+|---|---|---:|---:|---:|
+| Run 1 | Shuttle first | 4.126384 ms | 3.645056 ms | 1.132050x |
+| Run 2 | Oracle first | 4.140336 ms | 3.642048 ms | 1.136815x |
+| Pooled 60 samples | Counterbalanced | 4.137120 ms | 3.645056 ms | 1.134995x |
+
+The pooled result passes the 1.20-times completion gate and misses the
+1.10-times stretch target. A prior 60-sample scalar-Fold candidate pooled to
+4.364224 ms versus 3.631632 ms, or 1.201725 times, and remains preserved as a
+negative result. Vectorizing the generic deterministic route-slot and rank
+Folds over BF16 pairs reduced Shuttle latency by 0.227104 ms. Each component
+still performs explicit FP32 round-to-nearest multiply and add in fixed slot or
+rank order.
+
+All four device-generated relations match the independent relation exactly,
+with zero overflow. Repeated Shuttle outputs are bitwise equal. Maximum error
+against MoK is `0.0001220703125`; the largest rank mean error is
+`2.667012722668005e-06`. The generated relation and Fold source contains no
+semantic atomic operation. DeepEP internal readiness counters remain transport
+control and do not accumulate semantic values or choose their order. Neither
+DeepEP semantic combine nor MoK forward appears in the accepted Shuttle path.
+
+The [natural-boundary artifact](../benchmarks/artifacts/gb200_moe_natural_boundary_v0/README.md)
+contains both accepted distributions, every earlier candidate and failed
+capture, source snapshots, semantic fixtures, revisions, hardware telemetry,
+the DeepEP build patch, and validated checksums.
 
 ### Reproducibility snapshot
 
@@ -328,6 +440,49 @@ Distributed sparse attention is deliberately deferred. `RelationPlan` ownership,
 
 The pinned MIT Block-Sparse-Attention build is blocked by the H100 holder image rather than a measured source incompatibility: driver 595.71.05 is present, but the image has no CUDA toolkit or `nvcc`; PyPI CUDA 12.8 packages provide PTXAS and headers but not the compiler driver. The exact build traceback, source revisions, adapter script, raw distributions, hashes, GPU metadata, and reproduction commands are preserved in `benchmarks/artifacts/routed_sparse_attention_h100_v0`.
 
+### Natural matched query-major synthesis
+
+A later clean path starts from ordinary JAX rather than a relation fixture. The
+matched boundary includes the FP32 router metadata Contract, causal domain
+restriction, sorted top-k and RelationPlan construction, selected exact
+attention with native GQA, and BF16 output on both Shuttle and the pinned MIT
+Block-Sparse-Attention oracle paths. QKV and output projections are excluded
+symmetrically.
+
+At S=16,384, block 128, top-8, Hq/Hkv=32/8, and D=128, two counterbalanced
+30-sample captures have pooled medians:
+
+| Implementation | Pooled median |
+|---|---:|
+| Generated Shuttle query-major | 0.617584 ms |
+| Matched expert oracle | 1.423632 ms |
+
+The ratio is 0.433809 times. This is not an acceptance ratio because the
+comparison kernel is SM80-oriented. Generated versus oracle maximum/mean differences are
+0.00390625/0.0000652, and both outputs repeat bitwise. The oracle is an
+SM80-style implementation compiled for SM90, so the result establishes a
+matched buildable control. Performance acceptance requires an exactly matched
+FlashMoBA H100 comparison or, if that interface cannot match, a local benchmark
+of the current Hopper-enabled MIT Block-Sparse-Attention implementation.
+
+The earlier fixed-order captures freeze the 1.424720-ms oracle target and remain
+in the artifact. The counterbalanced captures confirm the result without
+moving that target. Every warmup and measured pair records its launch order.
+
+The physical KV-major gate is also complete. The generated slot-wave schedule
+groups a non-monotone relation by KV block within each selected slot, stages
+one KV-head block in 65,536 bytes of dynamic shared memory, and reuses it for a
+bounded query group. It replaces the coarse 2.12-GB edge-state design with one
+272,629,760-byte query-state buffer and zero per-edge partial-state bytes. The
+capacity-two schedule covers 996 edges with 671 tasks, is deterministic, and
+differs from query-major by at most 0.015625.
+
+The first KV-major body uses CUDA-core QK/PV and measures 107.879105 ms versus
+0.574656 ms query-major in the same process. This closes the structural
+relation-orientation test but is not a competitive physical candidate.
+Query-major remains selected. Evidence is under
+`benchmarks/artifacts/natural_routed_sparse_attention_h100_matched_v0`.
+
 ## Known limitations
 
 - The plan-driven runtime consumes an in-memory `RegionPlan`; durable JSON serialization and compiled-artifact caching are not implemented yet.
@@ -340,7 +495,7 @@ The pinned MIT Block-Sparse-Attention build is blocked by the H100 holder image 
 - The expert-parallel compiler currently models BF16 routed experts. MXFP8 is rejected until its weight and activation scale tensors are represented explicitly in the semantic and physical plans.
 - The selected 3.984-ms distributed plan is measured only for one BF16 MoE shape on one four-GB200 tray. MXFP8, larger token counts, profiler evidence for the remaining 0.37-ms oracle gap, and schedules that pipeline routed rows in chunks remain unmeasured.
 
-## Routed sparse-attention Seer delta
+## Historical routed sparse-attention Seer delta
 
 The frozen 16K Shuttle KV-major slot-wave schedule measures 4.017344 ms versus
 2.388208 ms for the Seer query-major baseline, a 1.682-times ratio and
@@ -358,9 +513,10 @@ expansion is outside the timed region; Shuttle uses native GQA indexing. It
 still establishes the correct physical lesson: KV-major ordering without real
 shared KV staging does not compensate for spilling online state at every edge.
 
-No further tile-size sweep is planned. A future sparse iteration must use a
-non-monotone relation and actual cluster/shared-memory KV staging so it tests
-relation reorientation and payload reuse.
+The next iteration followed this recommendation: it used a non-monotone
+relation and generated shared-memory KV staging. That experiment established
+legal bounded reuse and deterministic state updates, but its CUDA-core body
+measured 107.879105 ms. Query-major remains the selected implementation.
 
 ## StatefulScan generality checkpoint
 
@@ -412,6 +568,74 @@ the pin. The successful FLA results used one H100 80GB HBM3, driver 595.71.05,
 Torch 2.8.0+cu128, CUDA runtime 12.8, Triton 3.4.0, and a 700 W power limit.
 Application clocks were unpinned.
 
+### Generated ordered factored chunks
+
+Shuttle now derives the ordered chunk form directly from the recovered affine
+factors. A masked triangular solve produces diagonal, low-rank, additive,
+transformed-read, and local-output factors for each chunk. The GPU skeleton
+then applies these factors in source chunk order while retaining an FP32 state
+value block. This path contains no FLA, FlashQLA, GDN, or KDA kernel call and
+uses the explicit `bounded_reassociation` numerical contract.
+
+At B1, T2048, H32, K=V=128, scalar rank one, the selected C16/BV32 candidate
+measures 0.665568 ms preparation, 0.340032 ms execution, and 0.984496 ms
+combined. The complete path is 1.928x the pinned FLA chunk oracle and therefore
+does not meet the 1.2x target. The isolated ordered execution is 0.666x the
+oracle. The 84,410,368-byte summary materialization and its preparation are the
+specific performance deficit.
+
+The primary output and state repeat bitwise, with maximum absolute errors of
+`4.883e-4` and `2.840e-4` against Shuttle's generated source-ordered recurrent
+skeleton. A per-key-diagonal, rank-two mutation also executes deterministically.
+All repeated samples and candidate ablations are stored in
+`benchmarks/artifacts/stateful_scan_generated_chunk_h100`.
+
+### Matched generated affine chunk pipeline
+
+The next implementation replaces the C16 materialization-heavy path with a
+generic chunk-64 affine pipeline and a four-by-four block triangular inverse
+over 16-wide subblocks. It still derives its factors from the ordinary JAX
+`stablehlo.while` recurrence and contains no FLA/GDN/KDA execution call.
+
+The first comparison to the historical 0.510624-ms FLA record was not accepted
+under the updated benchmark-boundary policy. A same-process audit feeds
+identical BF16 Q/K/V and FP32 log-decay, beta, and initial state to both
+implementations, disables Q/K normalization, sets query scale to one, and
+alternates launch order over 50 samples.
+
+| Implementation | Median | Minimum | Maximum |
+|---|---:|---:|---:|
+| Generated Shuttle | 0.466752 ms | 0.457216 ms | 0.471424 ms |
+| Pinned FLA `9c8e42e` | 0.420528 ms | 0.395712 ms | 0.459552 ms |
+
+The ratio is 1.1099 times, within the 1.2-times target. Maximum/mean absolute
+output error is `4.8828125e-4`/`5.270477e-5`; final-state error is
+`3.154259e-4`/`4.448347e-5`. Both generated outputs repeat bitwise, as do all
+scalar/per-key and rank-one/rank-two mutation cases.
+
+Two independent confirmation captures then counterbalanced every warmup and
+measured pair and reversed the initial implementation order. Pooled across 100
+samples per implementation, Shuttle measures 0.465824 ms and FLA measures
+0.424304 ms, a 1.097854-times ratio. This is the accepted performance
+denominator and passes both the 1.20-times completion target and the reported
+1.10-times stretch target. The original single-capture record above remains as
+superseded evidence.
+
+Profiling made the last optimization mechanical: the factor transform spent
+68.99% of preparation GPU time recomputing the 64-token diagonal prefix for
+four K=32 tiles. A K=64 tile reduced preparation from 0.407440 to 0.281424 ms
+without changing recovered semantics or mutation behavior. Complete evidence
+is under `benchmarks/artifacts/stateful_scan_affine_pipeline_h100_v0`.
+
+The natural StableHLO compiler emits and validates a machine-readable
+semantic-erasure report before enumerating recurrent or chunkwise candidates.
+`stablehlo.while` and its tensor-expression body lower to generic `Scan`,
+`Map`, and `Contract`; scheduling keys contain only structural properties.
+Named or stale keys are rejected in tests, and the exact report for the
+measured artifact reproduces from its stored StableHLO. Together with the
+matched performance, mutation, correctness, and determinism evidence, this
+closes the current StatefulScan core acceptance row.
+
 This oracle checkpoint validates semantic recovery, recurrent/chunk
 equivalence, numerical-policy tracking, and the existence of a shape-dependent
 performance crossover. FLA and FlashQLA remain oracle-only. Their measurements
@@ -444,13 +668,13 @@ computes every residual against the same decayed state and applies the summed
 correction, rather than silently changing the recurrence to sequential rank-one
 updates.
 
-This is the first clean StatefulScan kernel-synthesis result: the executable
+This was the first clean StatefulScan kernel-synthesis result: the executable
 path contains no complete architecture kernel and survives nearby recurrence
-mutations. It is still a core-only result. Producer maps such as Q/K
-normalization and gate formation are outside timing, the structured
-`stablehlo.while` importer is not connected, and the compiler-owned ordered
-chunk kernel remains pending. Generic exact factored chunk summaries now match
-the recurrent executor for scalar/per-key diagonals, rank 1/3, tail chunks, and
-multiple chunk sizes. Raw generated-kernel distributions, deterministic hashes,
-source hashes, environment, and checksums are under
+mutations. The later matched chunk-pipeline result above connects the natural
+`stablehlo.while` importer and generated ordered chunk path. Producer maps such
+as Q/K normalization and gate formation remain outside the frozen core
+boundary. Generic exact factored chunk summaries match the recurrent executor
+for scalar/per-key diagonals, rank 1/3, tail chunks, and multiple chunk sizes.
+Raw generated-kernel distributions, deterministic hashes, source hashes,
+environment, and checksums are under
 `benchmarks/artifacts/stateful_scan_generated_h100`.

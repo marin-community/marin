@@ -8,6 +8,14 @@ from dataclasses import dataclass
 import numpy as np
 
 from tile_lifetime.expert_parallel_plan import ExpertParallelPlan
+from tile_lifetime.ir import DType
+from tile_lifetime.tile_program import (
+    TileOp,
+    TilePrimitive,
+    TileProgram,
+    TileProgramStage,
+    optimize_tile_program,
+)
 
 
 class RelationPlanError(ValueError):
@@ -16,6 +24,86 @@ class RelationPlanError(ValueError):
     def __init__(self, reasons: tuple[str, ...]):
         self.reasons = reasons
         super().__init__("; ".join(reasons))
+
+
+@dataclass(frozen=True)
+class OrderedRelationFoldProgram:
+    """Compiler-owned ordered reduction over returned relation partitions."""
+
+    partition_count: int
+    accumulation_dtype: DType
+    output_dtype: DType
+    order: str
+    tile_program: TileProgram
+
+
+def compile_ordered_relation_fold(
+    *,
+    partition_count: int,
+    accumulation_dtype: DType,
+    output_dtype: DType,
+) -> OrderedRelationFoldProgram:
+    """Compile base-plus-partials addition from generic tile primitives."""
+    if partition_count <= 0:
+        raise ValueError("relation fold requires at least one partition")
+    operations: list[TileOp] = [
+        TileOp(
+            TilePrimitive.LOAD_STATE,
+            TileProgramStage.FINALIZATION,
+            ("base",),
+            ("accumulator.0",),
+            (("dtype", accumulation_dtype.value),),
+        )
+    ]
+    accumulator = "accumulator.0"
+    for partition in range(partition_count):
+        partial = f"partial.{partition}"
+        loaded = f"partial.{partition}.loaded"
+        next_accumulator = f"accumulator.{partition + 1}"
+        operations.extend(
+            (
+                TileOp(
+                    TilePrimitive.LOAD_TILE,
+                    TileProgramStage.FINALIZATION,
+                    (partial,),
+                    (loaded,),
+                    (("partition", str(partition)),),
+                ),
+                TileOp(
+                    TilePrimitive.ADD,
+                    TileProgramStage.FINALIZATION,
+                    (accumulator, loaded),
+                    (next_accumulator,),
+                    (("rounding", "rn"),),
+                ),
+            )
+        )
+        accumulator = next_accumulator
+    operations.extend(
+        (
+            TileOp(
+                TilePrimitive.CONVERT,
+                TileProgramStage.FINALIZATION,
+                (accumulator,),
+                ("output.converted",),
+                (("dtype", output_dtype.value), ("rounding", "rn")),
+            ),
+            TileOp(
+                TilePrimitive.STORE,
+                TileProgramStage.FINALIZATION,
+                ("output.converted",),
+                ("output",),
+            ),
+        )
+    )
+    program = optimize_tile_program(tuple(operations), required_outputs=("output",))
+    return OrderedRelationFoldProgram(
+        partition_count=partition_count,
+        accumulation_dtype=accumulation_dtype,
+        output_dtype=output_dtype,
+        order="partition ascending, explicit round-to-nearest FP32 add",
+        tile_program=program,
+    )
 
 
 @dataclass(frozen=True)
@@ -304,6 +392,54 @@ def build_expert_parallel_relation_plan(
         max_routes_per_rank=plan.capacity.receiver_assignment_capacity,
         max_padded_rows_per_rank=plan.capacity.padded_local_capacity,
     )
+
+
+def build_partitioned_merge_rows(
+    returned_source_items: np.ndarray,
+    partition_counts: np.ndarray,
+    *,
+    source_item_count: int,
+) -> np.ndarray:
+    """Map one unique partial per partition/source pair to its returned row.
+
+    The resulting ``[partition, source_item]`` table is a physical input to an
+    ordered compiler fold. Missing contributions are encoded as ``-1``. This
+    function only plans indices; it does not perform a semantic reduction.
+    """
+    returned_source_items = np.asarray(returned_source_items)
+    partition_counts = np.asarray(partition_counts)
+    reasons: list[str] = []
+    if returned_source_items.ndim != 1:
+        reasons.append("returned source items must be one-dimensional")
+    if partition_counts.ndim != 1:
+        reasons.append("partition counts must be one-dimensional")
+    if source_item_count <= 0:
+        reasons.append("source item count must be positive")
+    if reasons:
+        raise RelationPlanError(tuple(reasons))
+    if not np.issubdtype(returned_source_items.dtype, np.integer):
+        reasons.append("returned source items must have integer dtype")
+    if not np.issubdtype(partition_counts.dtype, np.integer):
+        reasons.append("partition counts must have integer dtype")
+    if np.any(partition_counts < 0):
+        reasons.append("partition counts must be non-negative")
+    if int(np.sum(partition_counts, dtype=np.int64)) != returned_source_items.shape[0]:
+        reasons.append("partition counts do not cover the returned source-item rows")
+    if np.any(returned_source_items < 0) or np.any(returned_source_items >= source_item_count):
+        reasons.append("returned source item is outside the source domain")
+    if reasons:
+        raise RelationPlanError(tuple(reasons))
+
+    rows = np.full((partition_counts.shape[0], source_item_count), -1, dtype=np.int64)
+    offset = 0
+    for partition, count_value in enumerate(partition_counts):
+        count = int(count_value)
+        source_items = returned_source_items[offset : offset + count]
+        if np.unique(source_items).shape[0] != count:
+            raise RelationPlanError((f"partition {partition} contains duplicate source items",))
+        rows[partition, source_items] = np.arange(offset, offset + count, dtype=np.int64)
+        offset += count
+    return rows
 
 
 def _relation_reasons(

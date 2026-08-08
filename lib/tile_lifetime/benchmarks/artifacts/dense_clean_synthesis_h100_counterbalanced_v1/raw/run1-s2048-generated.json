@@ -1,0 +1,172 @@
+{
+  "benchmark": {
+    "attention_backend": "generated_sm90",
+    "interleaved_order": true,
+    "iterations_per_sample": 10,
+    "measurements": {
+      "consumer_epilogue": {
+        "median_ms": 1.650502395629883,
+        "minimum_ms": 1.5661279678344726,
+        "samples_ms": [
+          1.5661279678344726,
+          1.6139007568359376,
+          1.6206464767456055,
+          1.6841695785522461,
+          1.6799007415771485,
+          1.662268829345703,
+          1.6204704284667968,
+          1.648806381225586,
+          1.641484832763672,
+          1.6461023330688476,
+          1.6499231338500977,
+          1.652569580078125,
+          1.651081657409668,
+          1.647273635864258,
+          1.6305919647216798,
+          1.6160991668701172,
+          1.6300479888916015,
+          1.6306943893432617,
+          1.6272991180419922,
+          1.6300544738769531,
+          1.6651424407958983,
+          1.6529279708862306,
+          1.7764671325683594,
+          1.9384735107421875,
+          2.0041696548461916,
+          2.00549430847168,
+          1.9743040084838868,
+          1.9055583953857422,
+          1.7891359329223633,
+          1.7728960037231445
+        ]
+      },
+      "consumer_prologue": {
+        "median_ms": 1.7072463989257813,
+        "minimum_ms": 1.5934304237365722,
+        "samples_ms": [
+          1.5934304237365722,
+          1.6563936233520509,
+          1.6544992446899414,
+          1.7279008865356444,
+          1.7289535522460937,
+          1.690540885925293,
+          1.6709823608398438,
+          1.706550407409668,
+          1.6890239715576172,
+          1.703104019165039,
+          1.6970111846923828,
+          1.7044511795043946,
+          1.7100223541259765,
+          1.7079584121704101,
+          1.7079423904418944,
+          1.670924758911133,
+          1.6783199310302734,
+          1.6883840560913086,
+          1.6764703750610352,
+          1.6857791900634767,
+          1.7088127136230469,
+          1.7095552444458009,
+          1.7437023162841796,
+          2.072127914428711,
+          2.078156852722168,
+          2.0612255096435548,
+          2.052432060241699,
+          1.927881622314453,
+          1.8643680572509767,
+          1.8092512130737304
+        ]
+      }
+    },
+    "repeats": 30,
+    "warmups": 10
+  },
+  "comparison": {
+    "generated_delayed_ratio": 1.1335089592952978,
+    "historical_manual_oracle_ms": 1.4561
+  },
+  "correctness": {
+    "bitwise_deterministic_output_sha256": {
+      "consumer_epilogue": {
+        "next_qkv": "eab51ce3dd52c9d3e759822f73ff2f7224028d79d99a136ed21dda1fdbb27d8c",
+        "x2": "952652b0824f0514268e7e09c26af4ffbdb639206a34405e44b78fc363ffbbd1"
+      },
+      "consumer_prologue": {
+        "next_qkv": "a28d8efc1715fe1c3000547fa9e2c2675ecac34c002031a85b3c41d36e62b0ed",
+        "x2": "7974ba2fbaa4c1fe15d570f9ee33d06eeb1b3c614bb8b4498e1e8fc9d5bd87bc"
+      }
+    },
+    "prologue_vs_delayed_next_qkv_max_abs": 0.03125,
+    "prologue_vs_delayed_next_qkv_mean_abs": 0.002431064611300826,
+    "prologue_vs_delayed_x2_max_abs": 0.03125,
+    "prologue_vs_delayed_x2_mean_abs": 0.0016013248823583126
+  },
+  "environment": {
+    "cutlass_dsl": "4.6.1",
+    "flash_attn_4": "4.0.0b16",
+    "gpu_telemetry": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00, 1455, 2619",
+    "torch": "2.14.0.dev20260807+cu130",
+    "torch_cuda": "13.0"
+  },
+  "generated_path_manifest": {
+    "attention_backend": "generated_sm90",
+    "attention_programs": {
+      "consumer_epilogue": {
+        "streaming_normalized_weighted_fold": {
+          "program_sha256": "70c10b49407f0d9a3caeafd0c38abf79a1d6ced7ed81a38efed261ce79f504dd",
+          "schedule": "H100StreamingSchedule(tile_m=128, tile_n=128, stages=2, threads=384, pack_gqa=True, q_in_registers=False, intra_warpgroup_overlap=True, pv_register_source=True)"
+        }
+      },
+      "consumer_prologue": {
+        "streaming_normalized_weighted_fold": {
+          "program_sha256": "70c10b49407f0d9a3caeafd0c38abf79a1d6ced7ed81a38efed261ce79f504dd",
+          "schedule": "H100StreamingSchedule(tile_m=128, tile_n=128, stages=2, threads=384, pack_gqa=True, q_in_registers=False, intra_warpgroup_overlap=True, pv_register_source=True)"
+        }
+      }
+    },
+    "gemm_backends": [
+      "h100_gemm_tile_program"
+    ],
+    "generated_gemm_source_sha256": [
+      "01e9c68da0b188caeb1baa075ffed36a305c0c20d8f17e223ce4b7e970de0928",
+      "1c8c97d079ce00ce9fe0ecebf75b1fd3104a49b5f358857bf34e7785cef7dd9c",
+      "70e95d4fdfb3b2b35555b818bbb353d53a49cbf0cd5be9766d4a45eb9da0ca8f",
+      "b958f275f71f0512a2c5e7ec8937d37287a552b33762508da564b204bf14ee81",
+      "f32be0770ee49424cc9d6f62ba992750db062b68b287f4f46bafdb0abae14447",
+      "fee9fd659bed936f8ecf2db0462642866d8a839fae8e6e2d1260527c76e1927b"
+    ],
+    "named_gemm_callback_selected": false,
+    "official_fa3_oracle_selected": false
+  },
+  "schema_version": 1,
+  "sources": {
+    "generated_source_sha256": [
+      "01e9c68da0b188caeb1baa075ffed36a305c0c20d8f17e223ce4b7e970de0928",
+      "1c8c97d079ce00ce9fe0ecebf75b1fd3104a49b5f358857bf34e7785cef7dd9c",
+      "70e95d4fdfb3b2b35555b818bbb353d53a49cbf0cd5be9766d4a45eb9da0ca8f",
+      "b958f275f71f0512a2c5e7ec8937d37287a552b33762508da564b204bf14ee81",
+      "f32be0770ee49424cc9d6f62ba992750db062b68b287f4f46bafdb0abae14447",
+      "fee9fd659bed936f8ecf2db0462642866d8a839fae8e6e2d1260527c76e1927b"
+    ],
+    "implementation_file_sha256": {
+      "backends/h100/cute_streaming_emitter.py": "019b68ce76d9b6bb2cfb2808a0c7021903a06ba816c6ee778f391874565f6d19",
+      "backends/h100/cute_streaming_sm90.py": "c2b7089d99ee8b9a6a300ed2b41a563dcac124d9f1fbd21acfb7e300ecd8cfeb",
+      "benchmarks/h100_plan_runtime.py": "cf449d1fb0827a751df1fade418a60e40aabbe21b890b3ee7765d0132a3457ab",
+      "src/tile_lifetime/h100_streaming_lowering.py": "9e6e7516313837ca35ff5560fea6b6fd51714b7767abd2fb294cdcf65cb0a6b9",
+      "src/tile_lifetime/quack_gemm_codegen.py": "0d08e8b5c17ccadd2a2ece3e4f8fb460b78b9e2919309a931bca56d582204006"
+    },
+    "quack_patch_sha256": "40318b9b390e111c38f4838a50cf8913695c9f94142122b374bf09c220cfd9a1",
+    "quack_revision": "84ef91df9bec87c7e4938517234fafb07ef844dd",
+    "shuttle_revision": "dirty-dense-confirm",
+    "stablehlo_sha256": "1854970748d800e305ed3c49563041938c9708f7b959f969a5fef48f0c7a7db9"
+  },
+  "workload": {
+    "accumulation_dtype": "float32",
+    "dtype": "bfloat16",
+    "head_dimension": 128,
+    "hidden": 4096,
+    "intermediate": 14336,
+    "key_value_heads": 8,
+    "query_heads": 32,
+    "sequence": 2048
+  }
+}

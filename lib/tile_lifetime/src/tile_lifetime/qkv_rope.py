@@ -6,6 +6,7 @@
 from dataclasses import dataclass
 
 from tile_lifetime.attention import compile_attention_region, select_hopper_attention_config
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.ir import QKVProjectionOp, RoPEOp, ScaledDotProductAttentionOp, TensorGraph
 from tile_lifetime.plan import (
     Attachment,
@@ -95,7 +96,7 @@ def _fused_plan(graph: TensorGraph, region: _QKVRoPEAttentionRegion) -> RegionPl
         output=projection.output.name,
         shape=(batch * sequence, projection.weight.shape[1], hidden),
         accumulation_dtype=projection.accumulation_dtype,
-        backend="coda_cute_h100",
+        backend=GENERIC_H100_GEMM_BACKEND,
         input_layout="bsh_contiguous",
         output_layout=config.input_layout,
         epilogue=(

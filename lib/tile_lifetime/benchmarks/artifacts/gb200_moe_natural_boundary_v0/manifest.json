@@ -1,0 +1,43 @@
+{
+  "artifact": "gb200_moe_natural_boundary_v0",
+  "benchmark": "four_rank_deepep_compiler_relation_mok_primitives",
+  "hardware": {
+    "clock_policy": "cluster_default_unpinned",
+    "gpu_count": 4,
+    "gpu_model": "NVIDIA GB200",
+    "nvidia_driver": "595.71.05",
+    "observed_memory_clock_mhz": 3996,
+    "observed_sm_clock_mhz": 1950,
+    "power_limit_watts_per_gpu": 1200
+  },
+  "primary_evidence": [
+    "raw/x2-final-run1.json",
+    "raw/x2-final-run2.json",
+    "pooled-summary.json"
+  ],
+  "revisions": {
+    "cuda": "13.0.88",
+    "deepep": "7febc6e25660af0f54d95dd781ecdcd62265ecca",
+    "mok": "3e1cf43ab93ad040afed52a45ab03cb490ffe4be",
+    "nccl": "2.28.9",
+    "pytorch": "2.10.0+cu130",
+    "shuttle_base": "4fba36752bdbfd28ad9a0ea8dee121bb382b21c9",
+    "thunderkittens": "1c3920d993404dd49a6d4c7267ea11d583bd5c68"
+  },
+  "schema_version": 1,
+  "shape": {
+    "global_experts": 384,
+    "hidden_size": 7168,
+    "intermediate_size": 3072,
+    "local_tokens": 2048,
+    "top_k": 6,
+    "world_size": 4
+  },
+  "source_hashes": {
+    "benchmark_sha256": "7f89f1325ed43094aad901563f1918b91e5ac5215432428b06dd234c08dc240b",
+    "probe_binary_sha256": "95b51cfc0080502547f78d7ed9340b36d225ca86351bc77dd12f179d30d286e6",
+    "probe_source_sha256": "198f0223923a62135ead7766b8e644445576dd63627aedcffafe70ec48990b8d",
+    "stablehlo_portable_artifact_sha256": "8de1fb6d4e63488219008eb363dbb53bd83a8d46bd22c2c2d42f9bed74389126"
+  },
+  "status": "accepted"
+}

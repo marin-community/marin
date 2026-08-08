@@ -1,0 +1,62 @@
+{
+  "artifact": "stateful_scan_affine_pipeline_h100_v0",
+  "accepted_boundary": {
+    "inputs": [
+      "q",
+      "k",
+      "v",
+      "log_decay",
+      "beta",
+      "initial_state"
+    ],
+    "outputs": [
+      "output",
+      "final_state"
+    ],
+    "qk_normalization": "none",
+    "query_scale": 1.0
+  },
+  "generated_median_ms": 0.4658240079879761,
+  "oracle": {
+    "called_by_generated_path": false,
+    "median_ms": 0.4243039935827255,
+    "name": "fla_chunk_gated_delta_rule",
+    "revision": "9c8e42e762fce087c27b673af4922795d9edb85e"
+  },
+  "ratio": 1.0978544039962128,
+  "counterbalanced_confirmation": {
+    "summary": "pooled-counterbalanced.json",
+    "generated_pooled_median_ms": 0.4658240079879761,
+    "oracle_pooled_median_ms": 0.4243039935827255,
+    "ratio": 1.0978544039962128,
+    "completion_target_ms": 0.5091647922992706,
+    "stretch_target_ms": 0.4667343929409981,
+    "generated_sample_count": 100,
+    "oracle_sample_count": 100,
+    "run_one_first_implementation": "generated",
+    "run_two_first_implementation": "oracle",
+    "warmups_per_run": 10,
+    "samples_per_run": 50,
+    "alternating_warmup_and_measured_pairs": true
+  },
+  "semantic_erasure_report": "semantic_erasure_report.json",
+  "shuttle_revision": "4fba36752bdbfd28ad9a0ea8dee121bb382b21c9+matched-fla-blockk64-dirty",
+  "stablehlo_sha256": "417852499eed3f1dcc4b270d73c3922b1c0a5e5071951c78879319d41a65730a",
+  "legacy_single_capture": {
+    "generated_median_ms": 0.46675199270248413,
+    "oracle_median_ms": 0.42052799463272095,
+    "ratio": 1.1099189558358276,
+    "stablehlo_sha256": "b29264bbf50276785eecf79a26917be08a1f91906092222113a9ec34bf2875c2"
+  },
+  "status": {
+    "correct": true,
+    "deterministic": true,
+    "generic_physical_generation": true,
+    "matched_boundary": true,
+    "natural_frontend": true,
+    "name_erasure_report": true,
+    "opaque_semantic_kernel_in_generated_path": false,
+    "within_1_2x": true,
+    "within_1_1x_counterbalanced": true
+  }
+}

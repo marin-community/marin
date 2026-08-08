@@ -8,6 +8,7 @@ from enum import StrEnum
 
 from tile_lifetime.ir import DType
 from tile_lifetime.plan import MaterializationRecord, RewriteExplanation
+from tile_lifetime.tile_program import TileProgram
 
 
 class ExpertParallelStageKind(StrEnum):
@@ -81,6 +82,21 @@ class ExpertMaterializationSchedule(StrEnum):
 
     TILE_FLOW_BOUNDARIES = "tile_flow_boundaries"
     COARSE_ACTIVATION_BOUNDARIES = "coarse_activation_boundaries"
+
+
+class TransportSemantics(StrEnum):
+    """Semantic work performed by one communication implementation."""
+
+    PAYLOAD_PERMUTATION = "payload_permutation"
+    PAYLOAD_PERMUTATION_AND_REDUCTION = "payload_permutation_and_reduction"
+
+
+@dataclass(frozen=True)
+class TransportSelection:
+    """Physical transport choice and the semantic work it subsumes."""
+
+    implementation: str
+    semantics: TransportSemantics
 
 
 @dataclass(frozen=True)
@@ -194,6 +210,9 @@ class ExpertParallelSchedule:
     pipelines: tuple[PipelineDepth, ...]
     exchange_implementation: str
     exchange_implementation_candidates: tuple[str, ...]
+    forward_transport: TransportSelection
+    reverse_transport: TransportSelection
+    merge_implementation: str
     segmented_contraction_implementation: str
     segmented_contraction_candidates: tuple[str, ...]
     exchange_worker_candidates: tuple[int, ...]
@@ -259,6 +278,7 @@ class ExpertParallelPlan:
     selected_exchange_projection: ExchangeRelationProjection
     gate_up_layout: GateUpLayoutContract
     schedule: ExpertParallelSchedule
+    merge_program: TileProgram
     stages: tuple[ExpertParallelStage, ...]
     tile_flows: tuple[TileFlowEdge, ...]
     buffers: tuple[BufferLifetime, ...]

@@ -1,0 +1,45 @@
+{
+  "source_semantics": [
+    "stablehlo.while",
+    "stablehlo.tensor_expression_body"
+  ],
+  "lowering_steps": [
+    {
+      "source_semantic": "stablehlo.while",
+      "generic_primitives": [
+        "Scan"
+      ]
+    },
+    {
+      "source_semantic": "stablehlo.tensor_expression_body",
+      "generic_primitives": [
+        "Map",
+        "Contract"
+      ]
+    }
+  ],
+  "scheduling_keys": [
+    "scan:ordered_extent=2048:state_rank=4:inputs=5:outputs=1:numerical=source_ordered",
+    "transition:structure=diagonal_plus_low_rank:diagonal_rank=2:maximum_update_rank=1",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=2:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "contract:inputs=2:reduction_rank=1",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=2:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=2:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "contract:inputs=2:reduction_rank=1",
+    "map:inputs=2:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "map:inputs=1:reduction_rank=0",
+    "contract:inputs=2:reduction_rank=1"
+  ],
+  "validation_errors": []
+}

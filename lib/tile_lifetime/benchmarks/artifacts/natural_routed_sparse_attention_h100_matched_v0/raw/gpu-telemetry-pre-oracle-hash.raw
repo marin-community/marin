@@ -1,0 +1,413 @@
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:41.551479377Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:41.567, NVIDIA H100 80GB HBM3, 595.71.05, 72.99, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:41.677759297Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:41.694, NVIDIA H100 80GB HBM3, 595.71.05, 72.98, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:41.804093438Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:41.820, NVIDIA H100 80GB HBM3, 595.71.05, 72.97, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:41.929276291Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:41.945, NVIDIA H100 80GB HBM3, 595.71.05, 72.98, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:42.056633720Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:42.073, NVIDIA H100 80GB HBM3, 595.71.05, 73.01, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:42.183245892Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:42.199, NVIDIA H100 80GB HBM3, 595.71.05, 73.00, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:42.309142488Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:42.325, NVIDIA H100 80GB HBM3, 595.71.05, 72.98, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:42.434203803Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:42.450, NVIDIA H100 80GB HBM3, 595.71.05, 72.98, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:42.559536615Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:42.575, NVIDIA H100 80GB HBM3, 595.71.05, 72.97, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:42.685290417Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:42.702, NVIDIA H100 80GB HBM3, 595.71.05, 72.99, 700.00, 345, 2619, 0, 0
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:42.820323993Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:42.852, NVIDIA H100 80GB HBM3, 595.71.05, 72.97, 700.00, 345, 2619, 0, 1
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:42.989840234Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:43.006, NVIDIA H100 80GB HBM3, 595.71.05, 73.02, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:43.115418456Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:43.130, NVIDIA H100 80GB HBM3, 595.71.05, 73.34, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:43.240041685Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:43.256, NVIDIA H100 80GB HBM3, 595.71.05, 73.95, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:43.366244090Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:43.380, NVIDIA H100 80GB HBM3, 595.71.05, 74.28, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:43.489006598Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:43.505, NVIDIA H100 80GB HBM3, 595.71.05, 74.54, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:43.614111115Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:43.630, NVIDIA H100 80GB HBM3, 595.71.05, 74.87, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:43.739504976Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:43.755, NVIDIA H100 80GB HBM3, 595.71.05, 75.47, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:43.864387304Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:43.878, NVIDIA H100 80GB HBM3, 595.71.05, 75.76, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:43.986735809Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:44.003, NVIDIA H100 80GB HBM3, 595.71.05, 76.06, 700.00, 795, 2619, 0, 4
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:44.112136626Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:44.134, NVIDIA H100 80GB HBM3, 595.71.05, 76.05, 700.00, 795, 2619, 0, 37
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:44.242050405Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:44.257, NVIDIA H100 80GB HBM3, 595.71.05, 85.40, 700.00, 1830, 2619, 5, 813
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:44.365496606Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:44.382, NVIDIA H100 80GB HBM3, 595.71.05, 89.92, 700.00, 1830, 2619, 5, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:44.498989155Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:44.515, NVIDIA H100 80GB HBM3, 595.71.05, 94.96, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:44.623460926Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:44.639, NVIDIA H100 80GB HBM3, 595.71.05, 103.93, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:44.747770633Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:44.763, NVIDIA H100 80GB HBM3, 595.71.05, 109.26, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:44.871024338Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:44.885, NVIDIA H100 80GB HBM3, 595.71.05, 114.04, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:44.992909868Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:45.008, NVIDIA H100 80GB HBM3, 595.71.05, 117.98, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:45.115929297Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:45.131, NVIDIA H100 80GB HBM3, 595.71.05, 122.65, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:45.239334578Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:45.261, NVIDIA H100 80GB HBM3, 595.71.05, 123.76, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:45.380208433Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:45.396, NVIDIA H100 80GB HBM3, 595.71.05, 123.75, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:45.504106701Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:45.519, NVIDIA H100 80GB HBM3, 595.71.05, 123.74, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:45.626867117Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:45.642, NVIDIA H100 80GB HBM3, 595.71.05, 123.76, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:45.749511940Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:45.764, NVIDIA H100 80GB HBM3, 595.71.05, 123.76, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:45.872133854Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:45.887, NVIDIA H100 80GB HBM3, 595.71.05, 123.76, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:45.994679554Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.009, NVIDIA H100 80GB HBM3, 595.71.05, 123.78, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:46.117112203Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.132, NVIDIA H100 80GB HBM3, 595.71.05, 123.78, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:46.239538348Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.255, NVIDIA H100 80GB HBM3, 595.71.05, 123.79, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:46.363585986Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.378, NVIDIA H100 80GB HBM3, 595.71.05, 123.79, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:46.486559128Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.502, NVIDIA H100 80GB HBM3, 595.71.05, 123.83, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:46.610260524Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.625, NVIDIA H100 80GB HBM3, 595.71.05, 123.83, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:46.733475614Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.748, NVIDIA H100 80GB HBM3, 595.71.05, 123.84, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:46.856518616Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.871, NVIDIA H100 80GB HBM3, 595.71.05, 123.83, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:46.979563005Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:46.995, NVIDIA H100 80GB HBM3, 595.71.05, 123.81, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:47.102348166Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:47.117, NVIDIA H100 80GB HBM3, 595.71.05, 123.83, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:47.225562835Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:47.241, NVIDIA H100 80GB HBM3, 595.71.05, 123.88, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:47.348685591Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:47.364, NVIDIA H100 80GB HBM3, 595.71.05, 123.87, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:47.471589862Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:47.486, NVIDIA H100 80GB HBM3, 595.71.05, 123.86, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:47.594004753Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:47.609, NVIDIA H100 80GB HBM3, 595.71.05, 123.84, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:47.718523839Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:47.734, NVIDIA H100 80GB HBM3, 595.71.05, 123.83, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:47.842841036Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:47.858, NVIDIA H100 80GB HBM3, 595.71.05, 123.86, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:47.965972025Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:47.981, NVIDIA H100 80GB HBM3, 595.71.05, 123.90, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:48.089445509Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:48.104, NVIDIA H100 80GB HBM3, 595.71.05, 123.89, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:48.211974547Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:48.227, NVIDIA H100 80GB HBM3, 595.71.05, 123.90, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:48.334642493Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:48.349, NVIDIA H100 80GB HBM3, 595.71.05, 123.90, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:48.456176698Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:48.471, NVIDIA H100 80GB HBM3, 595.71.05, 123.92, 700.00, 1830, 2619, 0, 961
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:48.579074489Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:48.595, NVIDIA H100 80GB HBM3, 595.71.05, 123.94, 700.00, 1830, 2619, 0, 1059
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:48.702988304Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:48.718, NVIDIA H100 80GB HBM3, 595.71.05, 123.96, 700.00, 1830, 2619, 0, 1061
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:48.826448203Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:48.842, NVIDIA H100 80GB HBM3, 595.71.05, 124.09, 700.00, 1830, 2619, 1, 1061
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:48.950043902Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:48.966, NVIDIA H100 80GB HBM3, 595.71.05, 124.18, 700.00, 1830, 2619, 1, 1161
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:49.074240947Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:49.089, NVIDIA H100 80GB HBM3, 595.71.05, 124.25, 700.00, 1830, 2619, 4, 1161
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:49.197345081Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:49.212, NVIDIA H100 80GB HBM3, 595.71.05, 124.25, 700.00, 1830, 2619, 4, 1419
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:49.321586750Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:49.337, NVIDIA H100 80GB HBM3, 595.71.05, 146.76, 700.00, 1830, 2619, 23, 2187
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:49.445008594Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:49.461, NVIDIA H100 80GB HBM3, 595.71.05, 166.92, 700.00, 1830, 2619, 0, 2187
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:49.569309631Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:49.585, NVIDIA H100 80GB HBM3, 595.71.05, 166.99, 700.00, 1830, 2619, 0, 2187
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:49.693927616Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:49.710, NVIDIA H100 80GB HBM3, 595.71.05, 167.87, 700.00, 1830, 2619, 0, 2187
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:49.818220148Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:49.834, NVIDIA H100 80GB HBM3, 595.71.05, 167.77, 700.00, 1830, 2619, 0, 2187
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:49.942592060Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:49.959, NVIDIA H100 80GB HBM3, 595.71.05, 166.91, 700.00, 1830, 2619, 0, 2187
++ sleep 0.1
++ true
++ date -u +%Y-%m-%dT%H:%M:%S.%NZ
+2026-08-07T23:30:50.067121742Z
++ nvidia-smi --query-gpu=timestamp,name,driver_version,power.draw,power.limit,clocks.current.sm,clocks.current.memory,utilization.gpu,memory.used --format=csv,noheader,nounits
+2026/08/07 23:30:50.089, NVIDIA H100 80GB HBM3, 595.71.05, 168.49, 700.00, 1830, 2619, 0, 0

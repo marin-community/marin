@@ -1,0 +1,43 @@
+{
+  "status": "harness_ready_measurement_pending",
+  "shuttle_entry": "ordinary JAX routed_attention_region",
+  "shuttle_pipeline": [
+    "StableHLO import",
+    "generic router Contract",
+    "generic block-domain restriction",
+    "generic top-k Relation construction",
+    "runtime RelationPlan index plane",
+    "generated QK/online-Fold/PV SM90 streaming skeleton"
+  ],
+  "timed_boundary": {
+    "included": [
+      "router metadata Contract",
+      "causal block restriction",
+      "top-k selection and relation index forwarding",
+      "selected exact attention"
+    ],
+    "excluded": [
+      "QKV projection",
+      "output projection"
+    ]
+  },
+  "oracle_requirement": {
+    "same_semantics": true,
+    "same_precision": "BF16 Q/K/V with FP32 routing and accumulation",
+    "same_shape": "sequence/block/selected-block/head dimensions must match",
+    "same_timed_boundary": true,
+    "must_include": [
+      "identical router metadata Contract",
+      "identical causal block restriction",
+      "identical top-k/index-plane work"
+    ],
+    "implemented_harness": "--include-block-sparse-oracle wraps pinned Block-Sparse-Attention in the identical metadata Contract, causal block restriction, top-k, and dynamic relation-mask boundary"
+  },
+  "legacy_comparison": {
+    "name": "Seer historical relation checkpoint",
+    "median_ms": 2.388208,
+    "matched_boundary": false,
+    "reason": "The preserved number starts from a precomputed relation and uses different GQA preprocessing."
+  },
+  "acceptance_target": "generated end-to-end median <= 1.20 * a newly measured matched expert oracle median"
+}

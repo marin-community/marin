@@ -1,0 +1,192 @@
+{
+  "benchmark": "shuttle_natural_routed_streaming_attention_sm90",
+  "source": "ordinary JAX -> StableHLO -> Relation/Contract/Map/DomainRestriction/Fold",
+  "configuration": {
+    "sequence": 256,
+    "block": 64,
+    "slots": 4,
+    "router_dimension": 16,
+    "seed": 1701,
+    "warmups": 2,
+    "repeats": 4,
+    "include_block_sparse_oracle": false,
+    "include_kv_major": true,
+    "kv_query_capacity": 2,
+    "include_kv_capacity_mutation": true,
+    "json_output": "/tmp/kv-small.json"
+  },
+  "hardware": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00 W, 1830 MHz, 2619 MHz",
+  "torch": "2.11.0+cu130",
+  "compile_seconds": 3.222352210432291,
+  "kv_major_compile_seconds": 36.7106920927763,
+  "samples_ms": [
+    0.13814400136470795,
+    0.11984000355005264,
+    0.11449600011110306,
+    0.11193600296974182
+  ],
+  "median_ms": 0.11716800183057785,
+  "minimum_ms": 0.11193600296974182,
+  "maximum_ms": 0.13814400136470795,
+  "mean_ms": 0.12110400199890137,
+  "measurement_protocol": {
+    "name": "single_implementation_sequential",
+    "variants": [
+      "generated"
+    ],
+    "warmup_launch_orders": [
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ]
+    ],
+    "sample_launch_orders": [
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ]
+    ],
+    "timing": "separate CUDA events per launch; each end event is synchronized before the next launch"
+  },
+  "kv_major": {
+    "orientation": "kv_major_slot_waves",
+    "query_capacity_per_task": 2,
+    "task_count": 7,
+    "edge_count": 10,
+    "wave_task_counts": [
+      2,
+      2,
+      2,
+      1
+    ],
+    "samples_ms": [
+      1.8101760149002075,
+      1.644063949584961,
+      1.6385279893875122,
+      1.6345280408859253
+    ],
+    "median_ms": 1.6412959694862366,
+    "minimum_ms": 1.6345280408859253,
+    "maximum_ms": 1.8101760149002075,
+    "mean_ms": 1.6818239986896515,
+    "query_major_to_kv_major_ratio": 0.07138749135371004,
+    "maximum_absolute_difference_from_query_major": 0.0078125,
+    "mean_absolute_difference_from_query_major": 0.00017189390200655907,
+    "deterministic": true,
+    "output_sha256": "c66291d83016d83c1e313af7c59b572031860d49ad418d56310dabcd7b1b15ea",
+    "generated_source_sha256": "1f4e8e3b0fa704eb0de0c30353629898d4906df2d682865905e7300583c7a711",
+    "physical_plan": "RoutedAttention orientation=kv_major_slot_waves\n  relation: query_blocks=4 selected_edges=10 kv_blocks=4\n  tiles: Q=64 KV=64 heads=32/8 dimension=128\n  tasks: initialize_query_online_state -> slot_0_kv_major_qk_pv_merge -> slot_1_kv_major_qk_pv_merge -> slot_2_kv_major_qk_pv_merge -> slot_3_kv_major_qk_pv_merge -> finalize_query\n  event slot_0_state_ready: arrivals=4 granularity=query_block\n  event slot_0_kv_groups_complete: arrivals=(2, 0, 0, 0) granularity=KV block\n  event slot_1_state_ready: arrivals=2 granularity=selected-slot wave\n  event slot_1_kv_groups_complete: arrivals=(0, 2, 0, 0) granularity=KV block\n  event slot_2_state_ready: arrivals=2 granularity=selected-slot wave\n  event slot_2_kv_groups_complete: arrivals=(0, 0, 1, 1) granularity=KV block\n  event slot_3_state_ready: arrivals=2 granularity=selected-slot wave\n  event slot_3_kv_groups_complete: arrivals=(0, 0, 1, 0) granularity=KV block\n  event slot_4_state_ready: arrivals=1 granularity=selected-slot wave\n  buffer staged_kv: capacity=3 bytes=786432 reuse_after=all incident queries for the KV block and slot complete\n  buffer query_online_state: capacity=4 bytes=4259840 reuse_after=finalize_query\n  score_tile_bytes: 524288 (internal only)\n  partial_state_materialization_bytes: 0\n  online_state_materialization_bytes: 4259840\n  sequence_squared_materialization_bytes: 0\n  numerical_policy: ascending selected-slot FP32 online updates; bounded right-resource reuse; one query-state writer per wave; no atomic accumulation",
+    "partial_state_materialization_bytes": 0,
+    "online_state_materialization_bytes": 4259840,
+    "shared_kv_bytes_per_cta": 32768,
+    "source_order": "ascending selected slot; one query-state writer per wave; no atomics",
+    "right_resource_reuse": "one CTA stages one KV-head block in dynamic shared memory and reuses it for a bounded query group",
+    "mutation": {
+      "query_capacity_per_task": 1,
+      "task_count": 10,
+      "samples_ms": [
+        1.186400055885315,
+        1.1637120246887207,
+        1.1585919857025146,
+        1.1650559902191162
+      ],
+      "median_ms": 1.1643840074539185,
+      "maximum_absolute_difference": 0.0,
+      "mean_absolute_difference": 0.0,
+      "output_sha256": "c66291d83016d83c1e313af7c59b572031860d49ad418d56310dabcd7b1b15ea",
+      "same_generated_source": true
+    }
+  },
+  "max_absolute_error": 0.007645606994628906,
+  "mean_absolute_error": 0.00027722353115677834,
+  "deterministic": true,
+  "output_sha256": "d4b7ff24fe35e17c129792dfef5455afa63858bdaf0baf1a10cd0c227cf837a7",
+  "relation_sha256": "07b62d48930796d9d33659d62791cdf6f44002ddfc8cad5fea1295e8b7f0ca84",
+  "semantic_erasure": {
+    "source_semantics": [
+      "top_k",
+      "selected_exact_attention",
+      "normalized_exponential",
+      "causal_predicate"
+    ],
+    "lowering_steps": [
+      {
+        "source_semantic": "top_k",
+        "generic_primitives": [
+          "Contract",
+          "DomainRestriction",
+          "Relation"
+        ]
+      },
+      {
+        "source_semantic": "selected_exact_attention",
+        "generic_primitives": [
+          "RelationPlan",
+          "Contract",
+          "Map",
+          "Fold",
+          "DomainRestriction"
+        ]
+      },
+      {
+        "source_semantic": "normalized_exponential",
+        "generic_primitives": [
+          "Map",
+          "Fold"
+        ]
+      },
+      {
+        "source_semantic": "causal_predicate",
+        "generic_primitives": [
+          "DomainRestriction"
+        ]
+      }
+    ],
+    "scheduling_keys": [
+      "relation_selection:left_rank=2:right_rank=2:selected=4:accumulate=fp32",
+      "domain_restriction:binary_affine_index_predicate",
+      "relation_plan:runtime_binary_edges:dual_orientation",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:select(less_equal(input,input),multiply(input,constant),constant)",
+      "fold:maximum:reduction_rank=1:accumulate=fp32",
+      "map:subtract(input,input)",
+      "map:exp(input)",
+      "fold:sum:reduction_rank=1:accumulate=fp32",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:divide(input,input)"
+    ],
+    "validation_errors": []
+  },
+  "launch_manifest": {
+    "generated_path": [
+      "generic router Contract",
+      "generic top-k Relation index generation",
+      "generated SM90 QK/online-Fold/PV streaming skeleton"
+    ],
+    "expert_oracle_semantic_kernels": []
+  },
+  "benchmark_boundary": {
+    "included": [
+      "router Contract",
+      "top-k/index plane",
+      "selected exact attention"
+    ],
+    "excluded": [
+      "QKV projection",
+      "output projection"
+    ],
+    "oracle_requirement": "must include the identical router Contract and top-k/index plane",
+    "legacy_seer_2_388208_ms_is_matched": false
+  },
+  "matched_expert_oracle": null
+}

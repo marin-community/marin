@@ -851,7 +851,12 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**", "lib/haliax/**", "lib/**/vendor/**"],
+        exclude_patterns=[
+            "lib/levanter/**",
+            "lib/haliax/**",
+            "lib/**/vendor/**",
+            "lib/tile_lifetime/benchmarks/artifacts/**",
+        ],
         checks=[
             check_ruff,
             check_black,
@@ -874,6 +879,7 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*"],
+        exclude_patterns=["lib/tile_lifetime/benchmarks/artifacts/**"],
         checks=[
             check_large_files,
             check_python_ast,
@@ -881,6 +887,15 @@ PRECOMMIT_CONFIGS = [
             check_toml_yaml,
             check_trailing_whitespace,
             check_eof_newline,
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["lib/tile_lifetime/benchmarks/artifacts/**/*"],
+        checks=[
+            check_large_files,
+            check_python_ast,
+            check_merge_conflicts,
+            check_toml_yaml,
         ],
     ),
     PrecommitConfig(

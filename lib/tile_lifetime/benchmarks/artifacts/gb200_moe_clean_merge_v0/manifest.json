@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "scope": "payload_only_reverse_transport_and_generated_deterministic_merge",
+  "candidate_fingerprint_sha256": "471921443713a18236bea4a0df7244ecb016511c88d38326e2e342ef80aebb35",
+  "source": {
+    "shuttle_revision": "4fba36752bdbfd28ad9a0ea8dee121bb382b21c9+clean-merge-dirty",
+    "benchmark_source_sha256": "0fc0a0f0925531534c3423b0a4e9e183a8d25df020657330be22cd0e7df3b8b4",
+    "probe_source_sha256": "d76a0878d9e23d04230610db2a696e98bf11d7231b485605271731a4713b33c5",
+    "probe_extension_sha256": "d910769087f0cac145f7dde4a0709f6d3ceb4e6fa5327e82c5d297090e5d2e12",
+    "deepep_commit": "7febc6e25660af0f54d95dd781ecdcd62265ecca",
+    "mok_commit": "3e1cf43ab93ad040afed52a45ab03cb490ffe4be",
+    "thunderkittens_commit": "1c3920d993404dd49a6d4c7267ea11d583bd5c68"
+  },
+  "environment": {
+    "gpu_count": 4,
+    "gpu": "NVIDIA GB200",
+    "driver": "595.71.05",
+    "clock_policy": "cluster_default_unpinned",
+    "observed_sm_clock_mhz": 1950,
+    "observed_memory_clock_mhz": 3996,
+    "maximum_sm_clock_mhz": 2062,
+    "power_limit_watts": 1200,
+    "python": "3.12.13",
+    "torch": "2.10.0+cu130",
+    "cuda_toolkit": "13.0.2",
+    "cuda_nvcc": "13.0.88",
+    "nccl": "2.28.9"
+  },
+  "workload": {
+    "tokens_per_rank": 2048,
+    "global_experts": 384,
+    "local_experts": 96,
+    "top_k": 6,
+    "hidden_size": 7168,
+    "intermediate_size": 3072,
+    "dtype": "bf16",
+    "gate_up_layout": "concatenated_e_2i_k",
+    "deepep_sms": 56,
+    "warmups": 10,
+    "samples": 30
+  },
+  "result": {
+    "oracle_median_ms": 3.56169593334198,
+    "first_clean_overlap_median_ms": 4.082607984542847,
+    "first_ratio_to_oracle": 1.1462539365936522,
+    "confirmation_clean_overlap_median_ms": 4.142575979232788,
+    "confirmation_ratio_to_oracle": 1.1630908580524901,
+    "median_of_medians_ms": 4.112591981887817,
+    "median_of_medians_ratio_to_oracle": 1.154672397323071
+  },
+  "correctness": {
+    "generated_matches_deepep_combine_control_bitwise": true,
+    "generated_repeat_bitwise": true,
+    "uses_atomics": false,
+    "semantic_fixture_repeat_sha256_matches": true
+  },
+  "checksums": "SHA256SUMS"
+}

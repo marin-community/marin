@@ -670,3 +670,459 @@ author: dlwh
 - Decision: replace the stale TLTC-043 FSDP next action. Generate the ordered
   factored-chunk physical path and include factor-preparation/materialization
   costs before moving to FSDP.
+
+### 2026-08-07 10:45 PDT - TLTC-045 natural StableHLO StatefulScan recovery
+
+- Added a structured StableHLO importer separate from the flat feed-forward
+  path. It preserves `stablehlo.while` condition/body regions, uses
+  function-local stable value identifiers, and imports only private functions
+  transitively reached through `func.call`.
+- Added an ordinary JAX `lax.scan` reference whose source is only tensor/state
+  math: decay, two contractions, bounded-rank correction, state update, and
+  readout. The exported program contains the normal JAX while, dynamic-index,
+  recurrence-call, and dynamic-update structure.
+- Recovery identifies the carried state and emitted scan value from dataflow,
+  resolves source input names, derives logical-axis equivalence from
+  StableHLO broadcast/transpose/dot dimension numbers, rebuilds generic tensor
+  expressions, and invokes the existing affine-state analysis.
+- Mutation evidence: scalar decay with rank one and per-key decay with rank two
+  recover one `DIAGONAL_PLUS_LOW_RANK` family with maximum ranks one and two.
+  They produce the same recurrent/chunk candidate generator without a GDN/KDA
+  symbol match.
+- Numerical evidence: random BF16 rank-two source inputs execute through the
+  generated recurrent factor skeleton and match the ordinary JAX scan output
+  and final state within `2e-5` absolute/relative tolerance.
+- Validation command:
+  `uv run --frozen --package marin-tile-lifetime --group test pytest lib/tile_lifetime/tests/test_stateful_scan.py -q`.
+  Result: 62 passed. Targeted Pyrefly reports zero errors.
+
+### 2026-08-07 10:45 PDT - TLTC-046 generated chunk gap isolated
+
+- Generated chunk execution at `B1,T2048,H32,K=V=128`, scalar rank one,
+  chunk 16 and value block 32 measures 0.340032 ms, versus the pinned FLA chunk
+  oracle at 0.510624 ms.
+- Compiler-owned BF16 summary preparation measures 0.665568 ms. Combined
+  latency is 0.984496 ms, or 1.928 times FLA, so this path does not meet the
+  1.2-times goal.
+- The materialized generic summary is 84,410,368 bytes. Preparation and that
+  materialization, not the ordered scan executor, are the measured blocker.
+- Primary output/final-state maximum errors are `4.883e-4`/`2.840e-4`; a
+  per-key rank-two mutation is also deterministic with `4.883e-4`/`2.668e-4`
+  maximum errors.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/stateful_scan_generated_chunk_h100`
+  contains 50-sample distributions, deterministic hashes, source pins, and
+  validated checksums. The H100 holder was released and verified killed.
+- Decision: fuse summary preparation with consumption or forward a smaller
+  summary. Do not spend another iteration on chunk-size/value-block tuning.
+
+### 2026-08-07 10:49 PDT - TLTC-047 clean distributed MoE return and merge
+
+- Hypothesis: replacing DeepEP's combined reverse-transport/reduction boundary
+  with payload-only return plus a generated rank-ordered fold will remain
+  within 1.2 times the pinned MoK oracle.
+- Commit Hash: executed dirty source based on
+  `4fba36752bdbfd28ad9a0ea8dee121bb382b21c9`; the exact benchmark and probe
+  sources are preserved with SHA256
+  `662cc027286f8363dc08fe813d54e4842748c97ba4d86e989b7d48593e93030f`
+  and `d76a0878d9e23d04230610db2a696e98bf11d7231b485605271731a4713b33c5`.
+- Command: `/tmp/mok-route-env/bin/torchrun --standalone --nproc-per-node=4
+  lib/tile_lifetime/benchmarks/backends/gb200_deepep_mok_distributed.py
+  --route-fixture
+  /tmp/mok_routes_t2048_e384_k6_seed1234_torch2.10-reserialized.npz
+  --probe-extension
+  /tmp/mok-gmm-probe-clean-merge-cu130/_mok_gmm_probe.cpython-312-aarch64-linux-gnu.so
+  --mok-root /tmp/mixture-of-kittens-fixture-source --deepep-root
+  /tmp/DeepEP --shuttle-revision
+  4fba36752bdbfd28ad9a0ea8dee121bb382b21c9+clean-merge-dirty
+  --clock-policy cluster_default_unpinned --deepep-sms 56
+  --gate-up-layout concatenated_e_2i_k --warmup 10 --iterations 30`.
+- Config: four GB200 ranks; 2,048 tokens/rank; 384 global and 96 local
+  experts; top-6; hidden 7,168; intermediate 3,072; BF16; concatenated W13;
+  DeepEP dispatch with 56 communication SMs; payload-only
+  `all_to_all_single` return; generated ascending-owner FP32 merge plus shared
+  add; no atomics. Driver 595.71.05, Torch 2.10.0+cu130, CUDA toolkit 13.0.2,
+  NCCL 2.28.9, 1,200-W limit, cluster-default clocks observed at 1,950-MHz SM
+  and 3,996-MHz memory during benchmark boundaries.
+- Result: the first clean overlap median is 4.082608 ms over 30 samples,
+  1.1463 times the frozen 3.561696-ms MoK replay. The confirmation is
+  4.142576 ms and 1.1631 times the replay. Their median of medians is
+  4.112592 ms, or 1.1547 times the replay. Both meet the 1.2-times target.
+- Phase result: first-run routed compute after dispatch is 3.555584 ms,
+  generated shared expert is 0.242464 ms, payload return plus generated merge
+  is 0.365168 ms, and the matching clean sequential region is 4.229424 ms.
+  The DeepEP combine component is 0.271072 ms, making the clean return/merge
+  boundary 0.094096 ms slower in isolation.
+- Correctness: generated output is bitwise equal to the historical
+  DeepEP-combine control on every rank, repeats bitwise, remains finite, and
+  uses no atomic accumulation. All four semantic fixture SHA256 values repeat
+  exactly across the two complete runs.
+- Interpretation: this removes the semantic-reduction contamination from
+  DeepEP `combine`. The result is a synthesized distributed schedule at a
+  supplied-route boundary. The MoK-derived grouped GEMM is an allowed
+  segmented-contraction skeleton. Router/top-k and index-plan construction
+  remain outside timing.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/gb200_moe_clean_merge_v0` contains
+  both raw distributions, logs, exact executed sources, package/hardware pins,
+  route and semantic fixtures, manifest, and validated SHA256 checksums. The
+  original copied bundle is under
+  `scratch/shuttle-generic-results/clean-merge-20260807`.
+- Infrastructure: holder `/dlwh/dev-gpu-dlwh-shuttle-clean-merge` was released;
+  Iris reports `killed`, `dev_gpu status` has no active session, and the pod is
+  gone.
+
+### 2026-08-07 12:54 PDT - TLTC-048 natural-source compiler paths connected
+
+- Added `compile_stablehlo_expert_parallel_region`, connecting the frozen
+  ordinary JAX MoE StableHLO fixture through semantic recovery to the generic
+  expert-parallel plan. The public test observes payload-only forward/reverse
+  transports and the generated deterministic merge rather than testing a
+  private helper.
+- Added `compile_routed_streaming_attention_candidates`, which validates
+  relation block extents, head mappings, contraction dimensions, and tile
+  contracts before deriving query-major and KV-major schedules from a generic
+  `StreamingAttentionProgram`.
+- Mutation coverage applies both causal-only and causal-plus-tanh-softcap score
+  maps through the same relation scheduler. Neither path dispatches on a
+  workload kernel name.
+- Validation: all 161 package tests pass; targeted Pyrefly for the new MoE and
+  relation-planning paths reports zero errors; `git diff --check` passes.
+- The package-wide Pyrefly check initially found 67 errors only in the
+  concurrently active optional SM90 CuTe extraction: missing local
+  CUDA/CUTLASS/QuACK/FA3 modules and copied upstream nullable annotations. The
+  extraction was moved from the typed core package into `backends/h100`; the
+  complete source-and-test Pyrefly check now reports zero errors.
+- Renamed the older opaque MoK compiler entry point and plan node to
+  `compile_mok_oracle_region` and `OpaqueMoKOracleSkeleton`. The clean generic
+  expert-parallel path remains `compile_stablehlo_expert_parallel_region`;
+  package users can no longer mistake the complete MoK call contract for a
+  synthesis result.
+
+### 2026-08-07 - TLTC-049 clean-synthesis acceptance frozen
+
+- Added the canonical acceptance specification at
+  `.agents/projects/tile_lifetime_compiler/clean_synthesis_acceptance.md`.
+- A proof point now requires all six gates together: ordinary high-level
+  frontend, named-semantic erasure into generic algebra, generic physical code
+  generation, no opaque semantic kernel, numerical correctness, and latency no
+  greater than 1.2 times an equivalent expert oracle.
+- Clarified the dense RMS result: its generated `SCALE_ROW -> BF16 CONVERT ->
+  GEMM` A-fragment path is primitive-driven and clean at the physical layer,
+  but `_find_rms_region` and `_rms_plan` remain a named macro rewrite. Dense
+  therefore still fails the specification's semantic-erasure gate.
+- Revalidated the active package while GPU work continued: 166 tests pass,
+  Pyrefly reports zero source/test errors, and the scoped diff check passes.
+
+### 2026-08-07 - TLTC-050 acceptance targets made boundary-exact
+
+- Made semantic-name erasure a machine-checked stage boundary with a required
+  lowering report and a structural ban on workload-specific schedule dispatch
+  keys.
+- Required a benchmark-boundary manifest and symmetric inclusion of frontend,
+  indexing, layout conversion, transport, and postprocessing work.
+- Reclassified MoK's 3.613-ms result and Seer's 2.388-ms result as provisional
+  post-routing/kernel checkpoints. Final acceptance uses newly measured
+  natural-program oracle boundaries with identical included work.
+- Added helper-level lineage requirements for FlashAttention-derived code.
+  Removing the public entry point is insufficient if an internal softmax,
+  attention-state, or mask helper still hides the semantic Fold/Map/domain
+  program.
+- Added the matched benchmark boundary as a separate required column in the
+  four-workload acceptance matrix.
+
+### 2026-08-07 - TLTC-050 generated routed SM90 streaming backend
+
+- Added a query-major SM90 emitter that consumes
+  `RoutedStreamingAttentionCompilation`, derives compact block lists from the
+  generic `RelationPlan`, and instantiates the compiler-owned
+  QK/online-state/PV skeleton. It does not call Seer, FSA, or another named
+  sparse-attention entry point.
+- The physical skeleton uses TMA global-to-shared K/V movement and a
+  three-stage circular shared-memory pipeline. It does not yet implement TMA
+  multicast or a physical KV-major cluster schedule.
+- At causal BF16 GQA `S=16384`, `Hq/Hkv=32/8`, `D=128`, block 128, top-8, a
+  deliberately non-monotone 996-edge relation measures 0.491984 ms over 30
+  samples. It is deterministic and has sampled FP32-reference maximum/mean
+  absolute error 0.008165/0.000179.
+- The same generated path on the historical Seer relation measures 0.492512
+  ms versus the preserved Seer baseline at 2.388208 ms, 4.85 times faster.
+  The main known reasons are selected-edge rather than dense-causal-block
+  traversal and native GQA rather than K/V head expansion.
+- A mutation changes the relation, scale from `2^-3.5` to 0.125, and adds tanh
+  softcap 16 through the same generator. It measures 0.618176 ms, remains
+  deterministic, and has 0.007996 maximum sampled-reference error.
+- Backend-neutral query-major and KV-major executions agree for a deliberately
+  non-monotone relation. Only query-major is physically executable in this
+  checkpoint; the current unbounded KV-major plan would materialize about
+  2.12 GB of partial state at 16K.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/generated_routed_streaming_attention_h100_v0`
+  contains all raw samples, hashes, plans, generality accounting, and verified
+  source/data manifests. The dense generated SM90 artifact now also has a
+  verified manifest.
+- Acceptance status is partial: physical generation, mutation, numerical,
+  determinism, and performance gates pass, but the benchmark still constructs
+  the generic relation and streaming program directly. Natural MoBA-like JAX
+  frontend recovery and named-semantic erasure remain open.
+
+### 2026-08-07 - TLTC-052 matched StatefulScan target passed
+
+- Replaced the naive 64-row triangular solve with a generic four-by-four block
+  inverse over 16-wide tensor-core-friendly subblocks. The complete generated
+  path remains `AffineIntraChunkPrepare -> AffineStateScan -> AffineReadout`
+  and contains no FLA/GDN/KDA call.
+- The first blocked result measured 0.579872 ms against the historical
+  0.510624-ms FLA record, apparently 1.136 times the oracle. The stricter
+  acceptance audit rejected that ratio because the denominator came from a
+  different process and input boundary.
+- Added a matched delta-rule benchmark mode. Pinned FLA and Shuttle receive the
+  identical BF16 Q/K/V, FP32 log-decay/beta/initial-state boundary, with Q/K
+  normalization disabled and query scale one. FLA is loaded only by the oracle
+  harness.
+- The first interleaved matched run exposed 0.595696 ms generated versus
+  0.434368 ms FLA, or 1.371 times. Profiling assigned 68.99% of preparation
+  GPU time to `_affine_transform_factors`, which recomputed the 64-token
+  diagonal prefix for four K=32 tiles.
+- Increasing the generic preparation K tile to 64 reduced preparation from
+  0.407440 to 0.281424 ms. The final 50-sample interleaved result is 0.466752
+  ms generated versus 0.420528 ms FLA, or **1.1099 times**, passing the matched
+  1.2-times target.
+- Output maximum/mean error versus FLA is `4.8828125e-4`/`5.270477e-5`; final
+  state error is `3.154259e-4`/`4.448347e-5`. Scalar/per-key decay crossed with
+  rank-one/rank-two mutations remains finite and bitwise deterministic.
+- Raw distributions, StableHLO, source hashes, hardware telemetry, mutation
+  records, manifest, and validated checksums are under
+  `benchmarks/artifacts/stateful_scan_affine_pipeline_h100_v0`.
+- The one-H100 batch-priority holder was released and its temporary fresh-Iris
+  worktree was removed. Formal integration with the shared name-erasure report
+  remains the only open StatefulScan acceptance bookkeeping item.
+
+### 2026-08-07 - TLTC-053 natural routed-attention frontend
+
+- Added an ordinary JAX selected-attention source with a metadata Contract,
+  causal block-domain predicate, top-k, selected K/V gathers, QK, normalized
+  exponential, and PV. The accepted compiler test uses a frozen StableHLO
+  fixture rather than a manually assembled relation or streaming program.
+- Recovery erases the source into generic `RelationSelectionProgram`,
+  `RelationPlan`, `Contract`, `Map`, `DomainRestriction`, and `Fold` structure.
+  The shared `SemanticErasureReport` validator runs before physical candidate
+  enumeration and reports no named scheduling keys.
+- Runtime metadata mutation changes the selected relation without changing the
+  generated streaming body or the query-major/KV-major candidate family. The
+  generic online reference matches the natural JAX source within 0.016 maximum
+  and 0.002 mean absolute error.
+- Added `h100_natural_routed_streaming_attention.py`, which includes the router
+  Contract and GPU top-k/index forwarding in the timed generated path. The
+  benchmark-boundary manifest explicitly rejects the old 2.388208-ms Seer
+  number as unmatched.
+- Existing 0.491984-ms generated SM90 measurements remain backend-only until
+  the new harness and an equivalent expert boundary are measured. The complete
+  package passes 176 tests, the source/test type check reports zero errors, and
+  touched Python files pass Ruff.
+
+### 2026-08-07 - TLTC-053 clean-synthesis targets revised
+
+- Kept 1.20 times a matched natural expert boundary as the completion gate for
+  every workload and added 1.10 times as a reported stretch target. Stretch is
+  not required to complete the milestone.
+- Dense must pass both established primary sequence lengths rather than one
+  favorable shape. The completion thresholds are 1.7472 ms at sequence 2,048
+  and 3.6096 ms at sequence 4,096; the stretch thresholds are 1.6016 and
+  3.3088 ms.
+- Replaced the rounded MoK component checkpoint with the frozen supplied-route
+  replay: 3.561696 ms, giving provisional completion/stretch checkpoints of
+  4.274035/3.917866 ms. Final MoE acceptance still requires a newly measured
+  matched natural-program boundary.
+- Left sparse attention without a final absolute target because the current
+  Shuttle and Seer timings do not execute equivalent work. Its target freezes
+  only after both paths share the natural router, relation, GQA representation,
+  and output boundary.
+- Froze the matched StatefulScan oracle at 0.420528 ms, with completion/stretch
+  targets of 0.504634/0.462581 ms. The generated 0.466752-ms result passes the
+  completion gate at 1.1099 times and narrowly misses stretch.
+
+### 2026-08-07 - TLTC-054 StatefulScan name-erasure gate closed
+
+- Added a shared `SemanticErasureReport` to the natural
+  `stablehlo.while` compiler path. The report lowers the source to generic
+  `Scan`, `Map`, and `Contract` structure and derives scheduling keys from
+  ordered extent, state rank, primitive arity, affine transition structure,
+  and numerical policy.
+- The validator runs before physical candidate enumeration and rejects both
+  workload-named scheduling keys and reports that do not match the recovered
+  generic program.
+- The focused StatefulScan suite passes 64 tests, including scalar/per-key and
+  rank-one/rank-two natural-source mutations through the same report and
+  generator.
+- Preserved the exact T=2048 erasure report in
+  `benchmarks/artifacts/stateful_scan_affine_pipeline_h100_v0`; it reproduces
+  from the stored StableHLO and its checksum validates. The artifact status now
+  records all StatefulScan acceptance gates as passing.
+
+### 2026-08-07 - TLTC-055 dense clean-synthesis path passes both shapes
+
+- Replaced the named RMS macro scheduling path with semantic erasure from the
+  ordinary JAX StableHLO fixture into 36 generic `Map`, `Contract`, `Fold`, and
+  `DomainRestriction` operations. The shared validator runs before the generic
+  eight-skeleton planner enumerates candidates.
+- Generated Contract scalar/tile ASTs now emit residual/RMS partials,
+  source-ordered row scaling, delayed scaling, RoPE, and SwiGLU arithmetic
+  directly around the generic QuACK/CuTe mainloop. The measured attention path
+  uses Shuttle's generated SM90 QK/online-Fold/PV skeleton, not official FA3.
+- At S=2,048, prologue/delayed policies measure 1.6872/1.6339 ms versus the
+  1.4561-ms oracle, or 1.159/1.122 times. At S=4,096 they measure
+  3.4148/3.3848 ms versus 3.0080 ms, or 1.135/1.125 times. Every candidate
+  passes the 1.20-times ratio at both required shapes.
+- The same generator changes pairwise SwiGLU to pairwise product from a
+  semantic AST mutation. Raw distributions, generated sources, dependency
+  lineage, and hashes are under
+  `benchmarks/artifacts/dense_clean_synthesis_h100_20260807`.
+- The captures predate the newly frozen two-independent-run policy. One
+  counterbalanced confirmation per shape remains before final statistical
+  acceptance; older named-hook/FA3 runs cannot serve as that confirmation.
+
+### 2026-08-07 - TLTC-056 natural routed-attention matched target frozen
+
+- Matched ordinary-JAX boundaries now include router metadata contraction,
+  causal restriction, sorted top-k and index forwarding, selected exact
+  attention with native GQA, and BF16 output on both Shuttle and pinned MIT
+  Block-Sparse-Attention paths.
+- Two independent 30-sample captures have pooled medians 0.584304 ms for
+  generated query-major Shuttle and 1.424720 ms for the oracle, or 0.410118
+  times. The target is frozen at 1.709664 ms for completion and 1.567192 ms for
+  stretch. Output maximum/mean difference is 0.00390625/0.0000652, and both
+  outputs repeat bitwise.
+- The oracle is an SM80-style implementation compiled for SM90; it is the
+  strongest matching buildable oracle currently wired to the boundary, not a
+  Hopper state-of-the-art claim.
+- Both captures measured generated execution before the oracle and therefore
+  predate the new counterbalanced-launch rule. Preserve their denominator as
+  the frozen target, but require a counterbalanced confirmation before final
+  statistical acceptance.
+- Proof C remains structurally open: the KV-major candidate must execute with
+  bounded right-resource K/V staging and deterministic online-state return and
+  merge. The structural 2.12-GB edge-state materialization does not pass.
+
+### 2026-08-07 16:52 PDT - TLTC-057 natural MoE boundary accepted
+
+- Hypothesis: vectorizing the generic deterministic route-slot and rank Folds
+  over BF16 pairs will move the matched natural-source MoE boundary below the
+  1.20-times completion target without changing source order or introducing
+  semantic atomics.
+- Commit hash: Shuttle base
+  `4fba36752bdbfd28ad9a0ea8dee121bb382b21c9`; measured source remained a
+  dirty prototype and is snapshotted in the artifact.
+- Command: four-rank `torchrun` of
+  `benchmarks/backends/gb200_deepep_mok_distributed.py` with
+  `--routing-source natural_stablehlo`, the primary T2048/H7168/I3072/E384/K6
+  StableHLO fixture, `--deepep-sms 56`, concatenated W13, 10 warmups, 30
+  samples, and launch orders `shuttle_first` then `oracle_first`. Exact argv
+  and environment are stored in both accepted JSON records.
+- Config: 4 x GB200, BF16, cluster-default unpinned clocks, observed 1950 MHz
+  SM and 3996 MHz memory, 1200 W power limit. MoK is
+  `3e1cf43ab93ad040afed52a45ab03cb490ffe4be`; DeepEP is
+  `7febc6e25660af0f54d95dd781ecdcd62265ecca`; ThunderKittens is
+  `1c3920d993404dd49a6d4c7267ea11d583bd5c68`; CUDA is 13.0.88 and driver is
+  595.71.05.
+- Result (`replicated`): the two runs measure 4.126384/4.140336 ms for Shuttle
+  and 3.645056/3.642048 ms for matched MoK. Pooled medians over 60 samples are
+  4.137120 and 3.645056 ms, or 1.134995 times. A preserved scalar-Fold pair
+  pooled to 1.201725 times. The BF16x2 change reduces Shuttle latency by
+  0.227104 ms.
+- Correctness: all eight accepted per-rank relation checks are exact with zero
+  overflow. Generated outputs repeat bitwise. Maximum/mean errors against MoK
+  are `0.0001220703125` and at most `2.667012722668005e-06`. The generated
+  relation and Fold source has zero semantic atomic operations.
+- Interpretation: distributed MoE passes the clean-synthesis completion gate
+  at the natural JAX/StableHLO boundary. The accepted Shuttle path does not use
+  MoK forward or DeepEP semantic combine. It misses the 1.10-times stretch
+  target by 0.034995 ratio points and trails MoK by 0.492064 ms.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/gb200_moe_natural_boundary_v0`.
+- Next action: preserve this result; do not spend another MoE tuning iteration
+  before the open dense confirmation and sparse KV-major structural proof.
+
+### 2026-08-07 17:00 PDT - TLTC-058 dense counterbalanced boundary accepted
+
+- Added raw-sample JSON output to the hand-composed dense oracle harness and a
+  selectable FlashAttention-4 CuTe expert body. Named QuACK/CODA and CuTe
+  attention remain oracle-only; the generated path continues to use erased
+  algebra, generated Contract ASTs, and generated SM90 streaming attention.
+- Config: one H100 80GB, driver 595.71.05, 700 W, Torch
+  2.14.0.dev20260807+cu130, CUTLASS DSL 4.6.1, FlashAttention-4 4.0.0b16,
+  QuACK `84ef91df9bec87c7e4938517234fafb07ef844dd` plus the recorded FP32 row-scale
+  patch. Application clocks were unpinned.
+- Protocol: two independent captures at each of S=2,048 and S=4,096, ten
+  warmups, 30 samples, ten region iterations per sample. Run 1 launches the
+  generated process before the oracle process; run 2 reverses the order.
+- Pooled S=2,048 medians are 1.705818 ms source-ordered, 1.650502 ms delayed,
+  and 1.523838 ms oracle, or 1.119422/1.083122 times.
+- Pooled S=4,096 medians are 3.478322 ms source-ordered, 3.390837 ms delayed,
+  and 3.253411 ms oracle, or 1.069131/1.042240 times.
+- Both policies pass completion at both required shapes. Delayed scaling passes
+  the 1.10-times stretch target at both; source-ordered scaling passes stretch
+  at 4,096 and misses at 2,048. Every generated output hash repeats within and
+  across captures.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/dense_clean_synthesis_h100_counterbalanced_v1`.
+  Every file is covered by a verified portable checksum manifest.
+- The H100 holder was released immediately after copying the evidence; the
+  temporary current-main Iris worktree used only for reservation was removed.
+
+### 2026-08-07 18:12 PDT - TLTC-059 sparse counterbalance and bounded KV-major
+
+- Repeated the natural sparse-attention boundary with two independent
+  30-sample paired captures. Every pair alternates generated→oracle and
+  oracle→generated, and the JSON preserves every warmup and sample order.
+- Pooled medians are 0.617584 ms for generated query-major Shuttle and
+  1.423632 ms for pinned MIT Block-Sparse-Attention, or 0.433809 times. The
+  1.424720-ms frozen oracle target was not moved. Both paths repeat bitwise;
+  maximum/mean output differences remain 0.00390625/0.0000652.
+- Added a generic `BoundedKVReusePlan`. Each selected-slot wave groups by the
+  right resource, splits incident consumers into fixed-capacity tasks, and
+  proves one query-state writer per wave. Readiness counts now derive from
+  physical tasks rather than relation edges.
+- Generated and executed a CUDA H100 structural skeleton. One CTA stages a
+  KV-head block into dynamic shared memory and reuses it for a bounded query
+  group, performs the QK/normalized-exponential/PV Fold, and writes directly to
+  the source-owned global state without atomics or edge partials.
+- At S=16,384, block 128, top-8, Hq/Hkv=32/8, D=128, capacity two covers 996
+  non-monotone edges with 671 tasks. It uses 65,536 bytes of shared K/V per CTA,
+  272,629,760 bytes of global state, and zero edge-partial bytes. Output is
+  deterministic with 0.015625/0.00006397 maximum/mean difference from
+  query-major.
+- The first structural kernel measures 107.879105 ms versus 0.574656 ms
+  query-major. Capacity one uses the same generated source, creates 996 tasks,
+  produces bitwise-identical output, and measures 103.355042 ms. The current
+  gap is CUDA-core QK/PV, global state traffic, and the lack of TMA/WGMMA or
+  cluster multicast, not relation planning or correctness.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/natural_routed_sparse_attention_h100_matched_v0`.
+  The H100 holder remains live temporarily for a requested StatefulScan
+  confirmation capture.
+
+### 2026-08-07 18:22 PDT - TLTC-060 clean-synthesis milestone audit
+
+- Repeated the matched StatefulScan boundary in two independent captures on
+  one H100 with pinned FLA `9c8e42e`, Torch 2.8.0+cu128, and Triton 3.4.0.
+  Each run contains ten warmup pairs and 50 measured pairs; launch order
+  alternates within the run and the initial implementation reverses between
+  runs.
+- Pooled medians are 0.465824 ms for generated Shuttle and 0.424304 ms for
+  FLA, or 1.097854 times. This passes both the 1.20-times completion target and
+  the 1.10-times stretch target. Output/final-state maximum errors remain
+  `4.883e-4`/`3.154e-4`, and every generated mutation repeats bitwise.
+- The accepted StableHLO hash is
+  `417852499eed3f1dcc4b270d73c3922b1c0a5e5071951c78879319d41a65730a`;
+  the prior single-capture export remains labeled as legacy evidence.
+- Final package validation passed 179 tests, Pyrefly with zero errors, and
+  Ruff. Dense, natural MoE, routed sparse attention, and StatefulScan artifact
+  checksum manifests all verify.
+- The final acceptance matrix records worst required-shape dense ratio
+  1.119422 times, natural MoE 1.134995 times, routed sparse attention 0.433809
+  times, and StatefulScan 1.097854 times. All four workloads satisfy natural
+  frontend, name erasure, generic physical generation, mutation, correctness,
+  matched-boundary, and 1.20-times gates.
+- Released the last H100 holder at 18:22 PDT and removed its temporary Iris
+  worktree.

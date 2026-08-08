@@ -17,9 +17,12 @@ from tile_lifetime import (
     ReadinessGranularity,
     TensorGraph,
     TileStorage,
+    TransportSelection,
+    TransportSemantics,
     build_expert_parallel_relation_plan,
     compile_expert_parallel_region,
 )
+from tile_lifetime.tile_program import TilePrimitive
 
 
 def _global_moe_region(
@@ -108,6 +111,28 @@ def test_generic_ep_lowering_exposes_atomic_global_to_local_dataflow() -> None:
     assert exchange_workers.workers == 56
     assert plan.schedule.exchange_implementation == "deepep"
     assert plan.schedule.exchange_implementation_candidates == ("deepep", "ragged_all_to_all")
+    assert plan.schedule.forward_transport == TransportSelection(
+        "deepep_dispatch",
+        TransportSemantics.PAYLOAD_PERMUTATION,
+    )
+    assert plan.schedule.reverse_transport == TransportSelection(
+        "all_to_all_single",
+        TransportSemantics.PAYLOAD_PERMUTATION,
+    )
+    assert plan.schedule.merge_implementation == "generated_source_ordered_fold"
+    assert tuple(operation.primitive for operation in plan.merge_program.operations) == (
+        TilePrimitive.LOAD_STATE,
+        TilePrimitive.LOAD_TILE,
+        TilePrimitive.ADD,
+        TilePrimitive.LOAD_TILE,
+        TilePrimitive.ADD,
+        TilePrimitive.LOAD_TILE,
+        TilePrimitive.ADD,
+        TilePrimitive.LOAD_TILE,
+        TilePrimitive.ADD,
+        TilePrimitive.CONVERT,
+        TilePrimitive.STORE,
+    )
     assert plan.schedule.segmented_contraction_implementation == "standalone_sm100_grouped_gemm"
     assert plan.schedule.segmented_contraction_candidates == ("standalone_sm100_grouped_gemm", "ragged_dot")
     assert plan.schedule.exchange_worker_candidates == (12, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 80, 96)
@@ -211,6 +236,10 @@ def test_generic_ep_lowering_rejects_local_weight_semantics_and_invalid_schedule
                 exchange_workers=0,
                 exchange_worker_candidates=(12, 56),
                 exchange_implementation="unknown_exchange",
+                reverse_transport=TransportSelection(
+                    "deepep_combine",
+                    TransportSemantics.PAYLOAD_PERMUTATION_AND_REDUCTION,
+                ),
                 segmented_contraction_implementation="unknown_contraction",
                 overlap_policy_candidates=(ExpertOverlapPolicy.SEQUENTIAL,),
                 materialization_schedule_candidates=(ExpertMaterializationSchedule.COARSE_ACTIVATION_BOUNDARIES,),
@@ -223,6 +252,7 @@ def test_generic_ep_lowering_rejects_local_weight_semantics_and_invalid_schedule
     assert any("segment padding must be positive" in reason for reason in reasons)
     assert any("worker pool" in reason for reason in reasons)
     assert any("selected exchange implementation" in reason for reason in reasons)
+    assert any("reverse transport must only permute payload" in reason for reason in reasons)
     assert any("selected segmented contraction" in reason for reason in reasons)
     assert any("selected exchange worker count" in reason for reason in reasons)
     assert any("selected overlap policy" in reason for reason in reasons)

@@ -7,8 +7,9 @@ from pathlib import Path
 from tile_lifetime.ir import DType
 from tile_lifetime.pipeline import (
     compile_stablehlo_attention_region,
-    compile_stablehlo_coda_fa3_program,
+    compile_stablehlo_rms_attention_program,
     compile_stablehlo_rms_region,
+    compile_stablehlo_streaming_attention_program,
 )
 from tile_lifetime.plan import (
     GemmSkeleton,
@@ -17,8 +18,10 @@ from tile_lifetime.plan import (
     ReductionSkeleton,
     StreamingAttentionSkeleton,
 )
+from tile_lifetime.semantic_erasure import validate_plan_semantic_erasure
 from tile_lifetime.semantic_recovery import recover_attention_region, recover_rms_region
 from tile_lifetime.stablehlo_import import CompareAttributes, DotAttributes, ReductionAttributes, import_stablehlo
+from tile_lifetime.streaming_attention import StreamingTileSchedule
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "rms_region_v1_14_1.mlir.bc.b64"
 ATTENTION_FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "causal_gqa_attention_v1_14_1.mlir.bc.b64"
@@ -86,6 +89,9 @@ def test_recover_and_compile_stablehlo_rms_region_selects_delayed_scale_plan() -
     assert [type(skeleton) for skeleton in plan.skeletons] == [GemmSkeleton, ReductionSkeleton, GemmSkeleton]
     assert plan.materialization("normalized").disposition is MaterializationDisposition.EPILOGUE_ONLY
     assert plan.rewrites[0].applied
+    assert plan.semantic_erasure_report is not None
+    assert plan.semantic_erasure_report.is_clean
+    validate_plan_semantic_erasure(plan)
 
 
 def test_import_stablehlo_preserves_attention_axes_and_causal_comparison() -> None:
@@ -139,8 +145,25 @@ def test_recover_and_compile_stablehlo_attention_selects_streaming_gqa_plan() ->
     assert not any(record.shape[-2:] == (5, 5) for record in plan.activation_materializations)
 
 
+def test_stablehlo_attention_lowers_to_backend_neutral_streaming_program() -> None:
+    program = compile_stablehlo_streaming_attention_program(
+        base64.b64decode(ATTENTION_FIXTURE.read_text()),
+        input_names=ATTENTION_INPUT_NAMES,
+        output_name="attention_output",
+        schedule=StreamingTileSchedule(query_tile_size=64, key_value_tile_size=128, pipeline_depth=2),
+    )
+
+    assert program.qk.inputs[0].shape == (1, 5, 6, 64)
+    assert program.qk.inputs[1].shape == (1, 5, 2, 64)
+    assert program.pv.inputs[1].shape == (1, 5, 2, 64)
+    assert program.qk.index_maps_for_input(1)[0].divisor == 3
+    assert program.pv.index_maps_for_input(1)[0].divisor == 3
+    assert program.schedule == StreamingTileSchedule(64, 128, 2)
+    assert not hasattr(program, "backend")
+
+
 def test_compile_one_stablehlo_program_recovers_coda_and_fa3() -> None:
-    plan = compile_stablehlo_coda_fa3_program(
+    plan = compile_stablehlo_rms_attention_program(
         base64.b64decode(PROGRAM_FIXTURE.read_text()),
         input_names=PROGRAM_INPUT_NAMES,
         rms_output_name="rms_output",
@@ -156,7 +179,7 @@ def test_compile_one_stablehlo_program_recovers_coda_and_fa3() -> None:
         StreamingAttentionSkeleton,
     ]
     assert [rewrite.name for rewrite in plan.rewrites] == [
-        "delay_rms_row_scale_through_gemm",
+        "move_row_scalar_through_right_contract",
         "stream_exact_attention",
     ]
     assert all(rewrite.applied for rewrite in plan.rewrites)

@@ -23,6 +23,29 @@ class NumericalEquivalence(StrEnum):
     ALGEBRAICALLY_EXACT = "algebraically_exact"
 
 
+@dataclass(frozen=True)
+class SemanticLoweringStep:
+    """One named frontend construct erased into generic semantic primitives."""
+
+    source_semantic: str
+    generic_primitives: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SemanticErasureReport:
+    """Machine-readable evidence that scheduling consumed only generic algebra."""
+
+    source_semantics: tuple[str, ...]
+    lowering_steps: tuple[SemanticLoweringStep, ...]
+    scheduling_keys: tuple[str, ...]
+    validation_errors: tuple[str, ...] = ()
+
+    @property
+    def is_clean(self) -> bool:
+        """Whether the erased program passed structural name-erasure validation."""
+        return not self.validation_errors
+
+
 class AttachmentSite(StrEnum):
     """Tile lifetime where an operation executes."""
 
@@ -54,6 +77,7 @@ class Attachment:
     site: AttachmentSite
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
+    attributes: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -257,8 +281,8 @@ class PaddedExpertSchedule:
 
 
 @dataclass(frozen=True)
-class ExpertParallelMoESkeleton:
-    """Explicit shared-and-routed expert program for a persistent kernel family."""
+class OpaqueMoKOracleSkeleton:
+    """Complete MoK kernel contract retained only as a comparison oracle."""
 
     name: str
     input: str
@@ -317,7 +341,7 @@ ExecutionSkeleton = (
     | StreamingAttentionSkeleton
     | TransformSkeleton
     | StatefulScanSkeleton
-    | ExpertParallelMoESkeleton
+    | OpaqueMoKOracleSkeleton
 )
 
 
@@ -356,6 +380,7 @@ class RegionPlan:
     skeletons: tuple[ExecutionSkeleton, ...]
     materializations: tuple[MaterializationRecord, ...]
     rewrites: tuple[RewriteExplanation, ...]
+    semantic_erasure_report: SemanticErasureReport | None = None
 
     @property
     def activation_materializations(self) -> tuple[MaterializationRecord, ...]:

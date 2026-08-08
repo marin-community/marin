@@ -1,0 +1,376 @@
+{
+  "benchmark": "shuttle_natural_routed_streaming_attention_sm90",
+  "source": "ordinary JAX -> StableHLO -> Relation/Contract/Map/DomainRestriction/Fold",
+  "configuration": {
+    "sequence": 16384,
+    "block": 128,
+    "slots": 8,
+    "router_dimension": 64,
+    "seed": 1701,
+    "warmups": 10,
+    "repeats": 30,
+    "include_block_sparse_oracle": false,
+    "include_kv_major": true,
+    "kv_query_capacity": 2,
+    "include_kv_capacity_mutation": true,
+    "json_output": "/tmp/kv-primary.json"
+  },
+  "hardware": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00 W, 1830 MHz, 2619 MHz",
+  "torch": "2.11.0+cu130",
+  "compile_seconds": 4.2595654502511024,
+  "kv_major_compile_seconds": 0.05596775282174349,
+  "samples_ms": [
+    0.6132479906082153,
+    0.5934079885482788,
+    0.5797759890556335,
+    0.5756160020828247,
+    0.5802559852600098,
+    0.5826560258865356,
+    0.5763840079307556,
+    0.5742080211639404,
+    0.5748479962348938,
+    0.5753920078277588,
+    0.5771520137786865,
+    0.5724160075187683,
+    0.5750719904899597,
+    0.5743680000305176,
+    0.5752320289611816,
+    0.5722560286521912,
+    0.5744640231132507,
+    0.575872004032135,
+    0.5735679864883423,
+    0.5729600191116333,
+    0.5726079940795898,
+    0.572767972946167,
+    0.5718399882316589,
+    0.5728960037231445,
+    0.5754560232162476,
+    0.5725439786911011,
+    0.572767972946167,
+    0.5751680135726929,
+    0.5719680190086365,
+    0.5724160075187683
+  ],
+  "median_ms": 0.5746560096740723,
+  "minimum_ms": 0.5718399882316589,
+  "maximum_ms": 0.6132479906082153,
+  "mean_ms": 0.5766528030236562,
+  "measurement_protocol": {
+    "name": "single_implementation_sequential",
+    "variants": [
+      "generated"
+    ],
+    "warmup_launch_orders": [
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ]
+    ],
+    "sample_launch_orders": [
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ],
+      [
+        "generated"
+      ]
+    ],
+    "timing": "separate CUDA events per launch; each end event is synchronized before the next launch"
+  },
+  "kv_major": {
+    "orientation": "kv_major_slot_waves",
+    "query_capacity_per_task": 2,
+    "task_count": 671,
+    "edge_count": 996,
+    "wave_task_counts": [
+      86,
+      87,
+      86,
+      81,
+      86,
+      82,
+      84,
+      79
+    ],
+    "samples_ms": [
+      108.17766571044922,
+      107.9629135131836,
+      107.84102630615234,
+      107.86124420166016,
+      107.81206512451172,
+      107.91136169433594,
+      107.79170989990234,
+      107.92829132080078,
+      107.89315032958984,
+      107.8780517578125,
+      107.8629150390625,
+      108.10726165771484,
+      107.93106842041016,
+      107.78768157958984,
+      107.84652709960938,
+      107.87017822265625,
+      107.9037094116211,
+      108.07532501220703,
+      107.84601593017578,
+      107.80611419677734,
+      107.89884948730469,
+      107.88015747070312,
+      107.95206451416016,
+      108.08016204833984,
+      107.82825469970703,
+      107.86268615722656,
+      107.8581771850586,
+      107.83049774169922,
+      107.98655700683594,
+      107.90995025634766
+    ],
+    "median_ms": 107.87910461425781,
+    "minimum_ms": 107.78768157958984,
+    "maximum_ms": 108.17766571044922,
+    "mean_ms": 107.90605443318685,
+    "query_major_to_kv_major_ratio": 0.005326851865603295,
+    "maximum_absolute_difference_from_query_major": 0.015625,
+    "mean_absolute_difference_from_query_major": 6.397410470526665e-05,
+    "deterministic": true,
+    "output_sha256": "a06d6577a81b8379dad618882ae845f62d9ddeb049c69bc1c473e2858fcf7447",
+    "generated_source_sha256": "1f4e8e3b0fa704eb0de0c30353629898d4906df2d682865905e7300583c7a711",
+    "physical_plan": "RoutedAttention orientation=kv_major_slot_waves\n  relation: query_blocks=128 selected_edges=996 kv_blocks=128\n  tiles: Q=128 KV=128 heads=32/8 dimension=128\n  tasks: initialize_query_online_state -> slot_0_kv_major_qk_pv_merge -> slot_1_kv_major_qk_pv_merge -> slot_2_kv_major_qk_pv_merge -> slot_3_kv_major_qk_pv_merge -> slot_4_kv_major_qk_pv_merge -> slot_5_kv_major_qk_pv_merge -> slot_6_kv_major_qk_pv_merge -> slot_7_kv_major_qk_pv_merge -> finalize_query\n  event slot_0_state_ready: arrivals=128 granularity=query_block\n  event slot_0_kv_groups_complete: arrivals=count=128, min=0, median=0.0, max=4, total=86 granularity=KV block\n  event slot_1_state_ready: arrivals=86 granularity=selected-slot wave\n  event slot_1_kv_groups_complete: arrivals=count=128, min=0, median=1.0, max=4, total=87 granularity=KV block\n  event slot_2_state_ready: arrivals=87 granularity=selected-slot wave\n  event slot_2_kv_groups_complete: arrivals=count=128, min=0, median=0.5, max=4, total=86 granularity=KV block\n  event slot_3_state_ready: arrivals=86 granularity=selected-slot wave\n  event slot_3_kv_groups_complete: arrivals=count=128, min=0, median=0.0, max=3, total=81 granularity=KV block\n  event slot_4_state_ready: arrivals=81 granularity=selected-slot wave\n  event slot_4_kv_groups_complete: arrivals=count=128, min=0, median=1.0, max=3, total=86 granularity=KV block\n  event slot_5_state_ready: arrivals=86 granularity=selected-slot wave\n  event slot_5_kv_groups_complete: arrivals=count=128, min=0, median=0.0, max=3, total=82 granularity=KV block\n  event slot_6_state_ready: arrivals=82 granularity=selected-slot wave\n  event slot_6_kv_groups_complete: arrivals=count=128, min=0, median=1.0, max=3, total=84 granularity=KV block\n  event slot_7_state_ready: arrivals=84 granularity=selected-slot wave\n  event slot_7_kv_groups_complete: arrivals=count=128, min=0, median=0.5, max=3, total=79 granularity=KV block\n  event slot_8_state_ready: arrivals=79 granularity=selected-slot wave\n  buffer staged_kv: capacity=3 bytes=1572864 reuse_after=all incident queries for the KV block and slot complete\n  buffer query_online_state: capacity=128 bytes=272629760 reuse_after=finalize_query\n  score_tile_bytes: 2097152 (internal only)\n  partial_state_materialization_bytes: 0\n  online_state_materialization_bytes: 272629760\n  sequence_squared_materialization_bytes: 0\n  numerical_policy: ascending selected-slot FP32 online updates; bounded right-resource reuse; one query-state writer per wave; no atomic accumulation",
+    "partial_state_materialization_bytes": 0,
+    "online_state_materialization_bytes": 272629760,
+    "shared_kv_bytes_per_cta": 65536,
+    "source_order": "ascending selected slot; one query-state writer per wave; no atomics",
+    "right_resource_reuse": "one CTA stages one KV-head block in dynamic shared memory and reuses it for a bounded query group",
+    "mutation": {
+      "query_capacity_per_task": 1,
+      "task_count": 996,
+      "samples_ms": [
+        103.53218841552734,
+        103.35123443603516,
+        103.43036651611328,
+        103.4000015258789,
+        103.41241455078125,
+        103.40092468261719,
+        103.31465911865234,
+        103.44316864013672,
+        103.34627532958984,
+        103.34700775146484,
+        103.37840270996094,
+        103.33763122558594,
+        103.30790710449219,
+        103.35456085205078,
+        103.35552215576172,
+        103.42025756835938,
+        103.40230560302734,
+        103.34559631347656,
+        103.32345581054688,
+        103.39615631103516,
+        103.33526611328125,
+        103.31219482421875,
+        103.32659149169922,
+        103.34345245361328,
+        103.38658905029297,
+        103.37510681152344,
+        103.36380767822266,
+        103.33356475830078,
+        103.40105438232422,
+        103.33782196044922
+      ],
+      "median_ms": 103.35504150390625,
+      "maximum_absolute_difference": 0.0,
+      "mean_absolute_difference": 0.0,
+      "output_sha256": "a06d6577a81b8379dad618882ae845f62d9ddeb049c69bc1c473e2858fcf7447",
+      "same_generated_source": true
+    }
+  },
+  "max_absolute_error": 0.007902860641479492,
+  "mean_absolute_error": 0.00017903203843161464,
+  "deterministic": true,
+  "output_sha256": "e9399766068941b3b60329760c04b576c79cec38fd036c8cbdfe43cdf8da3a83",
+  "relation_sha256": "0a2a06781755f5f577237a2e48c810cb160fd88db3295835458350f47ad61cbb",
+  "semantic_erasure": {
+    "source_semantics": [
+      "top_k",
+      "selected_exact_attention",
+      "normalized_exponential",
+      "causal_predicate"
+    ],
+    "lowering_steps": [
+      {
+        "source_semantic": "top_k",
+        "generic_primitives": [
+          "Contract",
+          "DomainRestriction",
+          "Relation"
+        ]
+      },
+      {
+        "source_semantic": "selected_exact_attention",
+        "generic_primitives": [
+          "RelationPlan",
+          "Contract",
+          "Map",
+          "Fold",
+          "DomainRestriction"
+        ]
+      },
+      {
+        "source_semantic": "normalized_exponential",
+        "generic_primitives": [
+          "Map",
+          "Fold"
+        ]
+      },
+      {
+        "source_semantic": "causal_predicate",
+        "generic_primitives": [
+          "DomainRestriction"
+        ]
+      }
+    ],
+    "scheduling_keys": [
+      "relation_selection:left_rank=2:right_rank=2:selected=8:accumulate=fp32",
+      "domain_restriction:binary_affine_index_predicate",
+      "relation_plan:runtime_binary_edges:dual_orientation",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:select(less_equal(input,input),multiply(input,constant),constant)",
+      "fold:maximum:reduction_rank=1:accumulate=fp32",
+      "map:subtract(input,input)",
+      "map:exp(input)",
+      "fold:sum:reduction_rank=1:accumulate=fp32",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:divide(input,input)"
+    ],
+    "validation_errors": []
+  },
+  "launch_manifest": {
+    "generated_path": [
+      "generic router Contract",
+      "generic top-k Relation index generation",
+      "generated SM90 QK/online-Fold/PV streaming skeleton"
+    ],
+    "expert_oracle_semantic_kernels": []
+  },
+  "benchmark_boundary": {
+    "included": [
+      "router Contract",
+      "top-k/index plane",
+      "selected exact attention"
+    ],
+    "excluded": [
+      "QKV projection",
+      "output projection"
+    ],
+    "oracle_requirement": "must include the identical router Contract and top-k/index plane",
+    "legacy_seer_2_388208_ms_is_matched": false
+  },
+  "matched_expert_oracle": null
+}

@@ -1,0 +1,59 @@
+{
+  "artifact": "dense_clean_synthesis_h100_counterbalanced_v1",
+  "capture_protocol": {
+    "iterations_per_sample": 10,
+    "run_1_process_order": [
+      "generated",
+      "oracle"
+    ],
+    "run_2_process_order": [
+      "oracle",
+      "generated"
+    ],
+    "runs": 2,
+    "samples_per_implementation_per_run": 30,
+    "warmups_per_implementation_per_run": 10
+  },
+  "sequences": {
+    "2048": {
+      "completion_target_ms": 1.8286061096191404,
+      "delayed_epilogue": {
+        "passes_1_10x_stretch": true,
+        "passes_1_20x_completion": true,
+        "pooled_median_ms": 1.650502395629883,
+        "ratio": 1.0831216544323898
+      },
+      "matched_oracle_pooled_median_ms": 1.523838424682617,
+      "source_ordered_prologue": {
+        "passes_1_10x_stretch": false,
+        "passes_1_20x_completion": true,
+        "pooled_median_ms": 1.7058176040649413,
+        "ratio": 1.1194215714964837
+      },
+      "stretch_target_ms": 1.6762222671508789
+    },
+    "4096": {
+      "completion_target_ms": 3.904093551635742,
+      "delayed_epilogue": {
+        "passes_1_10x_stretch": true,
+        "passes_1_20x_completion": true,
+        "pooled_median_ms": 3.3908369064331056,
+        "ratio": 1.0422404673204846
+      },
+      "matched_oracle_pooled_median_ms": 3.253411293029785,
+      "source_ordered_prologue": {
+        "passes_1_10x_stretch": true,
+        "passes_1_20x_completion": true,
+        "pooled_median_ms": 3.478321647644043,
+        "ratio": 1.0691306245527927
+      },
+      "stretch_target_ms": 3.578752422332764
+    }
+  },
+  "status": {
+    "both_required_shapes_pass_completion": true,
+    "counterbalanced_process_order": true,
+    "opaque_semantic_kernel_in_generated_path": false,
+    "raw_samples_preserved": true
+  }
+}

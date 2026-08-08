@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-07",
+  "benchmark": "shuttle_natural_routed_streaming_attention_sm90",
+  "shuttle_revision": "4fba36752bdbfd28ad9a0ea8dee121bb382b21c9",
+  "configuration": {
+    "sequence": 16384,
+    "block": 128,
+    "slots": 8,
+    "router_dimension": 64,
+    "query_heads": 32,
+    "key_value_heads": 8,
+    "head_dimension": 128,
+    "warmups": 10,
+    "repeats": 30,
+    "seed": 1701
+  },
+  "boundary": {
+    "matched": true,
+    "included": [
+      "router Contract",
+      "top-k/index plane",
+      "selected exact attention"
+    ],
+    "excluded": [
+      "QKV projection",
+      "output projection"
+    ],
+    "legacy_seer_denominator_used": false
+  },
+  "generated": {
+    "median_ms": 0.5804959833621979,
+    "minimum_ms": 0.5774719715118408,
+    "maximum_ms": 0.5995839834213257,
+    "mean_ms": 0.5822613338629404,
+    "deterministic": true,
+    "output_sha256": "e9399766068941b3b60329760c04b576c79cec38fd036c8cbdfe43cdf8da3a83"
+  },
+  "oracle": {
+    "name": "MIT Block-Sparse-Attention",
+    "revision": "49d6c39e4dc0303442cda3bb758b3925d4399c49",
+    "cutlass_revision": "a75b4ac483166189a45290783cb0a18af5ff0ea5",
+    "median_ms": 1.426256000995636,
+    "minimum_ms": 1.4008959531784058,
+    "maximum_ms": 1.4636800289154053,
+    "mean_ms": 1.4284064054489136,
+    "deterministic": true,
+    "output_sha256": "86d62d4d69acf008eb073c029da0810c524d4e6ce1abdfc5d5735d326e70c1b3"
+  },
+  "generated_to_oracle_ratio": 0.40700686479633896,
+  "counterbalanced_confirmation": {
+    "protocol": "30 alternating generated/oracle launch pairs per run; even pairs reverse launch order",
+    "independent_runs": 2,
+    "generated_sample_count": 60,
+    "oracle_sample_count": 60,
+    "generated_pooled_median_ms": 0.6175839900970459,
+    "oracle_pooled_median_ms": 1.423632025718689,
+    "generated_to_oracle_ratio": 0.4338087222962495,
+    "frozen_oracle_target_ms": 1.4247199892997742,
+    "completion_threshold_ms": 1.709663987159729,
+    "stretch_threshold_ms": 1.5671919882297518,
+    "raw_records": [
+      "raw/counterbalanced/sparse-counterbalanced-1.json",
+      "raw/counterbalanced/sparse-counterbalanced-2.json"
+    ]
+  },
+  "bounded_kv_major": {
+    "orientation": "kv_major_slot_waves",
+    "query_capacity_per_task": 2,
+    "task_count": 671,
+    "relation_edges": 996,
+    "median_ms": 107.87910461425781,
+    "query_major_median_ms_in_same_process": 0.5746560096740723,
+    "slowdown_over_query_major": 187.72814135441413,
+    "shared_kv_bytes_per_cta": 65536,
+    "global_online_state_bytes": 272629760,
+    "edge_partial_materialization_bytes": 0,
+    "maximum_absolute_difference_from_query_major": 0.015625,
+    "mean_absolute_difference_from_query_major": 0.00006397410470526665,
+    "deterministic": true,
+    "output_sha256": "a06d6577a81b8379dad618882ae845f62d9ddeb049c69bc1c473e2858fcf7447",
+    "generated_source_sha256": "1f4e8e3b0fa704eb0de0c30353629898d4906df2d682865905e7300583c7a711",
+    "capacity_one_mutation": {
+      "task_count": 996,
+      "median_ms": 103.35504150390625,
+      "maximum_absolute_difference": 0.0,
+      "same_generated_source": true
+    },
+    "raw_record": "raw/kv-major/kv-primary.json"
+  },
+  "correctness": {
+    "sampled_reference_max_absolute_error": 0.007902860641479492,
+    "sampled_reference_mean_absolute_error": 0.00017903203843161464,
+    "generated_oracle_max_absolute_difference": 0.00390625,
+    "generated_oracle_mean_absolute_difference": 0.00006517220754176378,
+    "relation_sha256": "0a2a06781755f5f577237a2e48c810cb160fd88db3295835458350f47ad61cbb"
+  },
+  "semantic_fixture": {
+    "path": "raw/natural-routed-attention.stablehlo",
+    "sha256": "3ec7c0fef9266ac78223e96d26e229fb5ee874f3931eabae7fe83e25a0ea3cf3"
+  },
+  "candidate_set": [
+    "query_major",
+    "kv_major"
+  ],
+  "selected_candidate": "query_major",
+  "acceptance": {
+    "natural_frontend": true,
+    "semantic_erasure_validation_passed": true,
+    "generated_query_major_body": true,
+    "matched_performance_within_1_2x": true,
+    "generated_deterministic": true,
+    "oracle_deterministic": true,
+    "both_orientations_execute_on_h100": true,
+    "counterbalanced_measurement_complete": true,
+    "bounded_kv_major_uses_shared_kv_reuse": true,
+    "bounded_kv_major_edge_partial_materialization_bytes": 0,
+    "proof_c_fully_complete": true
+  },
+  "hardware": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "driver": "595.71.05",
+    "power_limit_watts": 700,
+    "observed_sm_clock_mhz": 1830,
+    "observed_memory_clock_mhz": 2619
+  },
+  "toolchain": {
+    "torch": "2.11.0+cu130",
+    "cuda_nvcc": "13.0.88 for the frozen target; 13.1.115 for the counterbalanced confirmation and KV-major run",
+    "gcc": "13.3.0",
+    "cutlass_dsl": "4.5.2",
+    "flash_attn_4": "4.0.0b16",
+    "quack_kernels": "0.5.0"
+  },
+  "raw_record": "raw/s16384-b128-k8-matched.json",
+  "raw_record_sha256": "27bb6e84dff934eef6cabff05ae92037ec9348076889eb29d7ac262c5430e368"
+}

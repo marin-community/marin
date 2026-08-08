@@ -7,7 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from tile_lifetime import DType, MoESemanticRecoveryError, recover_stablehlo_moe_region
+from tile_lifetime import (
+    DType,
+    ExpertParallelConfig,
+    ExpertParallelStageKind,
+    MoESemanticRecoveryError,
+    NumericalPolicy,
+    TransportSemantics,
+    compile_stablehlo_expert_parallel_region,
+    recover_stablehlo_moe_region,
+)
 from tile_lifetime.ir import (
     LinearOp,
     RoutedExpertMLPOp,
@@ -29,6 +38,9 @@ from tile_lifetime.stablehlo_import import (
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "moe_region_v1_14_1.mlir.bc.b64"
+PRIMARY_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "stablehlo" / "moe_primary_t2048_h7168_i3072_e384_k6_v1_14_1.mlir.bc.b64"
+)
 
 
 def _fixture_artifact() -> bytes:
@@ -80,6 +92,46 @@ def test_public_stablehlo_path_recovers_global_semantic_moe_region() -> None:
     assert routed.expert_indices == router.expert_indices
     assert recovered.source_operation_ids == tuple(range(70))
     assert all(operation.source_location is not None for operation in recovered.graph.operations)
+
+
+def test_public_stablehlo_path_compiles_generic_expert_parallel_plan() -> None:
+    plan = compile_stablehlo_expert_parallel_region(
+        _fixture_artifact(),
+        input_names=MOE_REGION_INPUT_NAMES,
+        gemm_accumulation_dtype=DType.FP32,
+        config=ExpertParallelConfig(
+            expert_parallel_size=2,
+            segment_padding=2,
+            minibatch_size=8,
+            macrobatch_size=8,
+        ),
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+
+    assert plan.route_relation.token_count == 8
+    assert plan.route_relation.slots_per_token == 2
+    assert plan.ownership.global_expert_count == 4
+    assert plan.ownership.local_expert_count == 2
+    assert plan.schedule.forward_transport.semantics is TransportSemantics.PAYLOAD_PERMUTATION
+    assert plan.schedule.reverse_transport.semantics is TransportSemantics.PAYLOAD_PERMUTATION
+    assert plan.schedule.merge_implementation == "generated_source_ordered_fold"
+    assert plan.stage(ExpertParallelStageKind.WEIGHTED_SCATTER_REDUCE).outputs == ("moe_output.routed_scatter_output",)
+
+
+def test_primary_benchmark_fixture_compiles_without_route_metadata() -> None:
+    plan = compile_stablehlo_expert_parallel_region(
+        base64.b64decode(PRIMARY_FIXTURE.read_text()),
+        input_names=MOE_REGION_INPUT_NAMES,
+        gemm_accumulation_dtype=DType.FP32,
+        config=ExpertParallelConfig(expert_parallel_size=4),
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+    )
+
+    assert plan.route_relation.token_count == 2048
+    assert plan.route_relation.slots_per_token == 6
+    assert plan.ownership.global_expert_count == 384
+    assert plan.ownership.local_expert_count == 96
+    assert plan.schedule.merge_implementation == "generated_source_ordered_fold"
 
 
 def test_parameterized_moe_export_keeps_global_weights_as_inputs() -> None:

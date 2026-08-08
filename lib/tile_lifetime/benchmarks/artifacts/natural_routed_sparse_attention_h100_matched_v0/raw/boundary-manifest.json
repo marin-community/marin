@@ -1,0 +1,24 @@
+{
+  "name": "natural routed sparse attention matched boundary",
+  "included": [
+    "router Contract",
+    "top-k/index plane",
+    "selected exact attention"
+  ],
+  "excluded": [
+    "QKV projection",
+    "output projection"
+  ],
+  "source": "ordinary JAX serialized StableHLO",
+  "generated_index_plane": "router metadata Contract -> causal DomainRestriction -> sorted top-k -> compact RelationPlan block lists",
+  "oracle_index_plane": "same router metadata Contract -> causal DomainRestriction -> sorted top-k -> equivalent dense block mask required by oracle interface",
+  "payload_semantics": "BF16 causal exact attention, Q heads 32, KV heads 8, dimension 128, scale 128^-0.5",
+  "output": "BF16 [1,16384,32,128]",
+  "selected_candidate": "query_major",
+  "candidate_set": [
+    "query_major",
+    "kv_major"
+  ],
+  "legacy_seer_denominator_used": false,
+  "matched_oracle_revision": "49d6c39e4dc0303442cda3bb758b3925d4399c49"
+}

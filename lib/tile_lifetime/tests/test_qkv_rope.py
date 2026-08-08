@@ -13,6 +13,7 @@ from tile_lifetime import (
     TransformSkeleton,
     compile_qkv_rope_attention_region,
 )
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 
 BATCH = 1
 SEQUENCE = 128
@@ -70,7 +71,7 @@ def test_qkv_rope_plan_feeds_selected_fa3_layout_without_conversion() -> None:
     attention = plan.skeletons[1]
     assert isinstance(qkv, GemmSkeleton)
     assert isinstance(attention, StreamingAttentionSkeleton)
-    assert qkv.backend == "coda_cute_h100"
+    assert qkv.backend == GENERIC_H100_GEMM_BACKEND
     assert qkv.shape == (BATCH * SEQUENCE, 768, HIDDEN)
     assert qkv.output_layout == attention.input_layout == "fa3_bshd_last_dimension_contiguous"
     assert [attachment.operation for attachment in qkv.epilogue] == [

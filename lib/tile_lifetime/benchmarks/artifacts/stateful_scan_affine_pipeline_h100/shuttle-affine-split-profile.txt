@@ -1,0 +1,19 @@
+----------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------
+                              Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls
+----------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------
+         _affine_transform_factors         0.00%       0.000us         0.00%       0.000us       0.000us     289.921us        50.84%     289.921us     289.921us             1
+                _affine_state_scan         0.00%       0.000us         0.00%       0.000us       0.000us      82.592us        14.48%      82.592us      82.592us             1
+          _affine_block_inverse_64         0.00%       0.000us         0.00%       0.000us       0.000us      75.680us        13.27%      75.680us      75.680us             1
+                   _affine_readout         0.00%       0.000us         0.00%       0.000us       0.000us      70.528us        12.37%      70.528us      70.528us             1
+            _affine_solve_additive         0.00%       0.000us         0.00%       0.000us       0.000us      19.296us         3.38%      19.296us      19.296us             1
+        _affine_interaction_matrix         0.00%       0.000us         0.00%       0.000us       0.000us      19.040us         3.34%      19.040us      19.040us             1
+       _affine_apply_inverse_right         0.00%       0.000us         0.00%       0.000us       0.000us      10.624us         1.86%      10.624us      10.624us             1
+    Memcpy DtoD (Device -> Device)         0.00%       0.000us         0.00%       0.000us       0.000us       2.528us         0.44%       2.528us       2.528us             1
+                   cudaMemcpyAsync         2.01%      41.911us        84.64%       1.764ms       1.764ms       0.000us         0.00%       0.000us       0.000us             1
+           Activity Buffer Request        82.63%       1.722ms        82.63%       1.722ms       1.722ms       0.000us         0.00%       0.000us       0.000us             1
+                  cuLaunchKernelEx         2.42%      50.409us         2.42%      50.409us       7.201us       0.000us         0.00%       0.000us       0.000us             7
+             cudaDeviceSynchronize        12.94%     269.721us        12.94%     269.721us     269.721us       0.000us         0.00%       0.000us       0.000us             1
+----------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------
+Self CPU time total: 2.084ms
+Self CUDA time total: 570.209us
+

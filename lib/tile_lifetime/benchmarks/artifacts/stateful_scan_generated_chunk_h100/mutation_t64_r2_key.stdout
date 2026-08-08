@@ -1,0 +1,131 @@
+{
+  "configuration": {
+    "batch_size": 1,
+    "block_v": 32,
+    "chunk_size": 16,
+    "decay_axes": "key",
+    "heads": 2,
+    "key_dimension": 128,
+    "preparation_backend": "compile",
+    "seed": 1234,
+    "sequence_length": 64,
+    "update_rank": 2,
+    "value_dimension": 128
+  },
+  "correctness": {
+    "output": {
+      "finite": true,
+      "maximum_absolute_error": 0.00048828125,
+      "maximum_relative_error": 29.283870697021484,
+      "mean_absolute_error": 4.0010483644437045e-05
+    },
+    "output_bitwise_repeat": true,
+    "output_sha256": "518320df9929ff2e5e44207cd9a5b6165a906ce60ae0bdfc437ae031d07a2c07",
+    "reference": "compiler_owned_source_ordered_recurrent_skeleton",
+    "state": {
+      "finite": true,
+      "maximum_absolute_error": 0.00026677176356315613,
+      "maximum_relative_error": 53.109474182128906,
+      "mean_absolute_error": 3.878587449435145e-05
+    },
+    "state_bitwise_repeat": true,
+    "state_sha256": "5a826c7d6c90d128de7962903b20f7f0c7b252a3a261e2eb8cf0c012c566630f"
+  },
+  "environment": {
+    "compute_capability": [
+      9,
+      0
+    ],
+    "cuda_runtime": "12.8",
+    "driver_and_clocks": "595.71.05, 1830 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W\n595.71.05, 345 MHz, 2619 MHz, 700.00 W",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "hostname": "g849b94",
+    "python": "3.12.13",
+    "torch": "2.8.0+cu128",
+    "triton": "3.4.0"
+  },
+  "physical_summary": {
+    "chunk_count": 4,
+    "materialized_bytes": 266240,
+    "numerical_contract": "bounded_reassociation",
+    "summary_rank": 32
+  },
+  "recovery": {
+    "diagonal_scale_axes": [
+      "batch",
+      "head",
+      "key"
+    ],
+    "maximum_low_rank": 2,
+    "term_signatures": [
+      [
+        "multiply"
+      ],
+      [
+        "multiply",
+        "contract[key]",
+        "multiply",
+        "contract[update_rank]"
+      ]
+    ],
+    "transition_structure": "diagonal_plus_low_rank"
+  },
+  "schema_version": 1,
+  "shuttle_revision": "4fba36752bdbfd28ad9a0ea8dee121bb382b21c9",
+  "timing": {
+    "combined": {
+      "maximum_ms": 0.47385600209236145,
+      "mean_ms": 0.44652160108089445,
+      "median_ms": 0.4421599954366684,
+      "minimum_ms": 0.4246079921722412,
+      "samples_ms": [
+        0.4498879909515381,
+        0.4403199851512909,
+        0.46803200244903564,
+        0.43881601095199585,
+        0.4440000057220459,
+        0.4246079921722412,
+        0.47385600209236145,
+        0.43584001064300537,
+        0.43727999925613403,
+        0.45257601141929626
+      ]
+    },
+    "execution": {
+      "maximum_ms": 0.062111999839544296,
+      "mean_ms": 0.052476799860596654,
+      "median_ms": 0.05129599943757057,
+      "minimum_ms": 0.049056001007556915,
+      "samples_ms": [
+        0.056671999394893646,
+        0.062111999839544296,
+        0.05209600180387497,
+        0.05084799975156784,
+        0.049247998744249344,
+        0.0517439991235733,
+        0.05331199988722801,
+        0.04950400069355965,
+        0.049056001007556915,
+        0.050175998359918594
+      ]
+    },
+    "preparation": {
+      "maximum_ms": 0.4044800102710724,
+      "mean_ms": 0.3525248020887375,
+      "median_ms": 0.34172800183296204,
+      "minimum_ms": 0.33446401357650757,
+      "samples_ms": [
+        0.4044800102710724,
+        0.359360009431839,
+        0.3551360070705414,
+        0.34198400378227234,
+        0.33446401357650757,
+        0.36768001317977905,
+        0.34147199988365173,
+        0.33855998516082764,
+        0.34143999218940735,
+        0.34067198634147644
+      ]
+    }
+  }
+}

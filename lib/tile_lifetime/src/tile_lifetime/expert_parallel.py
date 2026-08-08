@@ -3,7 +3,7 @@
 
 """First-principles lowering of a semantic MoE region into generic EP stages."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import ceil, isfinite
 
 from tile_lifetime.expert_parallel_plan import (
@@ -26,6 +26,8 @@ from tile_lifetime.expert_parallel_plan import (
     RouteRelation,
     TileFlowEdge,
     TileStorage,
+    TransportSelection,
+    TransportSemantics,
     WorkerPool,
 )
 from tile_lifetime.ir import (
@@ -44,6 +46,7 @@ from tile_lifetime.plan import (
     NumericalPolicy,
     RewriteExplanation,
 )
+from tile_lifetime.relation import compile_ordered_relation_fold
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,19 @@ class ExpertParallelConfig:
     exchange_pipeline_depth: int = 4
     exchange_implementation: str = "deepep"
     exchange_implementation_candidates: tuple[str, ...] = ("deepep", "ragged_all_to_all")
+    forward_transport: TransportSelection = field(
+        default_factory=lambda: TransportSelection(
+            "deepep_dispatch",
+            TransportSemantics.PAYLOAD_PERMUTATION,
+        )
+    )
+    reverse_transport: TransportSelection = field(
+        default_factory=lambda: TransportSelection(
+            "all_to_all_single",
+            TransportSemantics.PAYLOAD_PERMUTATION,
+        )
+    )
+    merge_implementation: str = "generated_source_ordered_fold"
     segmented_contraction_implementation: str = "standalone_sm100_grouped_gemm"
     segmented_contraction_candidates: tuple[str, ...] = ("standalone_sm100_grouped_gemm", "ragged_dot")
     exchange_row_mode: ExchangeRowMode = ExchangeRowMode.COALESCED_TOKEN_OWNER
@@ -226,6 +242,12 @@ def _legality_reasons(
         reasons.append("at least one exchange implementation candidate is required")
     elif config.exchange_implementation not in config.exchange_implementation_candidates:
         reasons.append("selected exchange implementation must be one of the declared candidates")
+    if config.forward_transport.semantics is not TransportSemantics.PAYLOAD_PERMUTATION:
+        reasons.append("forward transport must only permute payload; semantic reduction belongs to a compiler stage")
+    if config.reverse_transport.semantics is not TransportSemantics.PAYLOAD_PERMUTATION:
+        reasons.append("reverse transport must only permute payload; semantic reduction belongs to a compiler stage")
+    if not config.merge_implementation:
+        reasons.append("merge implementation must be explicit")
     if not config.segmented_contraction_candidates:
         reasons.append("at least one segmented-contraction candidate is required")
     elif config.segmented_contraction_implementation not in config.segmented_contraction_candidates:
@@ -328,6 +350,11 @@ def _build_plan(region: _Region, *, config: ExpertParallelConfig) -> ExpertParal
         ),
     )
     schedule = _schedule(config)
+    merge_program = compile_ordered_relation_fold(
+        partition_count=config.expert_parallel_size,
+        accumulation_dtype=DType.FP32,
+        output_dtype=region.combine.output.dtype,
+    ).tile_program
     names = _names(prefix)
     stages = _stages(region, names=names, exchange_projection=selected_exchange_projection, gate_up=gate_up_layout)
     tile_flows = _tile_flows(
@@ -352,6 +379,7 @@ def _build_plan(region: _Region, *, config: ExpertParallelConfig) -> ExpertParal
         selected_exchange_projection=selected_exchange_projection,
         gate_up_layout=gate_up_layout,
         schedule=schedule,
+        merge_program=merge_program,
         stages=stages,
         tile_flows=tile_flows,
         buffers=buffers,
@@ -407,6 +435,9 @@ def _schedule(config: ExpertParallelConfig) -> ExpertParallelSchedule:
         ),
         exchange_implementation=config.exchange_implementation,
         exchange_implementation_candidates=config.exchange_implementation_candidates,
+        forward_transport=config.forward_transport,
+        reverse_transport=config.reverse_transport,
+        merge_implementation=config.merge_implementation,
         segmented_contraction_implementation=config.segmented_contraction_implementation,
         segmented_contraction_candidates=config.segmented_contraction_candidates,
         exchange_worker_candidates=config.exchange_worker_candidates,

@@ -4,21 +4,43 @@
 """Benchmark a hand-composed QuACK/CODA plus official-FA3 dense region."""
 
 import argparse
+import hashlib
+import importlib.metadata
+import json
 import math
 import statistics
+import subprocess
 from collections.abc import Callable
+from enum import StrEnum
+from pathlib import Path
 
 import torch
-from flash_attn_interface import flash_attn_func
 from quack.epilogue.library import rms_partial_epi, rstd_swiglu_epi, swiglu_mod
 from quack.epilogue.rotary import make_interleaved_inv_freq, rope_posfreq_epi, rstd_rope_posfreq_epi
 from quack.operand_transform import a_transform, transform_a_operand
 from quack.rms_final_reduce import _rms_final_reduce_out
 
+try:
+    from flash_attn_interface import flash_attn_func as official_fa3_func
+except ModuleNotFoundError:
+    official_fa3_func = None
+
+try:
+    from flash_attn.cute import flash_attn_func as fa4_cute_func
+except ModuleNotFoundError:
+    fa4_cute_func = None
+
 TensorFunction = Callable[[], object]
 TILE_M = 128
 TILE_N = 256
 TILE_K = 64
+
+
+class AttentionOracle(StrEnum):
+    """Expert attention body used only by the hand-composed oracle."""
+
+    OFFICIAL_FA3 = "official_fa3"
+    FA4_CUTE = "fa4_cute"
 
 
 @a_transform(vec_size=8, args={"inverse_rms": "colvec_ktile_fp32"})
@@ -30,13 +52,18 @@ def _attention_output(value: torch.Tensor | tuple[torch.Tensor, ...]) -> torch.T
     return value[0] if isinstance(value, tuple) else value
 
 
+def _tensor_sha256(tensor: torch.Tensor) -> str:
+    payload = tensor.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _benchmark_variants(
     variants: tuple[tuple[str, TensorFunction], ...],
     *,
     warmups: int,
     repeats: int,
     iterations: int,
-) -> dict[str, tuple[float, float]]:
+) -> dict[str, dict[str, float | list[float]]]:
     for _ in range(warmups):
         for _, function in variants:
             function()
@@ -54,7 +81,16 @@ def _benchmark_variants(
             end.record()
             end.synchronize()
             samples[name].append(start.elapsed_time(end) / iterations)
-    return {name: (statistics.median(values), min(values)) for name, values in samples.items()}
+    return {
+        name: {
+            "samples_ms": values,
+            "median_ms": statistics.median(values),
+            "minimum_ms": min(values),
+            "maximum_ms": max(values),
+            "mean_ms": statistics.mean(values),
+        }
+        for name, values in samples.items()
+    }
 
 
 def main() -> None:
@@ -71,7 +107,25 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--profile-phases", action="store_true")
+    parser.add_argument(
+        "--attention-oracle",
+        type=AttentionOracle,
+        choices=tuple(AttentionOracle),
+        default=AttentionOracle.OFFICIAL_FA3,
+    )
+    parser.add_argument("--json-output", type=Path)
+    parser.add_argument("--run-id")
+    parser.add_argument("--shuttle-revision")
+    parser.add_argument("--quack-revision")
+    parser.add_argument("--attention-oracle-revision")
     args = parser.parse_args()
+
+    attention_function = {
+        AttentionOracle.OFFICIAL_FA3: official_fa3_func,
+        AttentionOracle.FA4_CUTE: fa4_cute_func,
+    }[args.attention_oracle]
+    if attention_function is None:
+        raise RuntimeError(f"requested attention oracle {args.attention_oracle.value!r} is unavailable")
 
     assert torch.cuda.is_available()
     if args.hidden % TILE_K:
@@ -159,7 +213,7 @@ def main() -> None:
             args.batch, args.sequence, args.kv_heads, args.head_dimension
         )
         value = packed_qkv[:, query_key_width:].view(args.batch, args.sequence, args.kv_heads, args.head_dimension)
-        return _attention_output(flash_attn_func(query, key, value, causal=True)).view(tokens, args.hidden)
+        return _attention_output(attention_function(query, key, value, causal=True)).view(tokens, args.hidden)
 
     def output_projection_and_rms(attention: torch.Tensor) -> None:
         rms_partial_epi.gemm(
@@ -330,6 +384,21 @@ def main() -> None:
         ("delayed_epilogue", delayed_region),
         ("materialized_torch", materialized_region),
     )
+    deterministic_hashes: dict[str, dict[str, str]] = {}
+    for name, function in variants:
+        first = function()
+        first_hashes = {
+            "x2": _tensor_sha256(first[0]),
+            "next_qkv": _tensor_sha256(first[1]),
+        }
+        second = function()
+        second_hashes = {
+            "x2": _tensor_sha256(second[0]),
+            "next_qkv": _tensor_sha256(second[1]),
+        }
+        if first_hashes != second_hashes:
+            raise AssertionError(f"manual dense oracle variant {name!r} is not bitwise deterministic")
+        deterministic_hashes[name] = first_hashes
     measurements = _benchmark_variants(
         variants,
         warmups=args.warmups,
@@ -337,8 +406,80 @@ def main() -> None:
         iterations=args.iterations,
     )
     for name, _ in variants:
-        median_ms, minimum_ms = measurements[name]
+        median_ms = float(measurements[name]["median_ms"])
+        minimum_ms = float(measurements[name]["minimum_ms"])
         print(f"  {name}: median_ms={median_ms:.4f} min_ms={minimum_ms:.4f}")
+
+    if args.json_output is not None:
+        telemetry = subprocess.check_output(
+            (
+                "nvidia-smi",
+                "--query-gpu=name,driver_version,power.limit,clocks.current.sm,clocks.current.memory",
+                "--format=csv,noheader,nounits",
+                "--id=0",
+            ),
+            text=True,
+        ).strip()
+        payload = {
+            "schema_version": 1,
+            "run_id": args.run_id,
+            "role": "expert_oracle_only",
+            "workload": {
+                "batch": args.batch,
+                "sequence": args.sequence,
+                "hidden": args.hidden,
+                "intermediate": args.intermediate,
+                "query_heads": args.query_heads,
+                "key_value_heads": args.kv_heads,
+                "head_dimension": args.head_dimension,
+                "dtype": "bfloat16",
+                "accumulation_dtype": "float32",
+            },
+            "benchmark_boundary": {
+                "included": [
+                    "QKV projection and RoPE",
+                    "causal exact GQA attention",
+                    "output projection and residual/RMS partial Fold",
+                    "RMS reduction",
+                    "gate/up projection and SwiGLU",
+                    "down projection and residual/RMS partial Fold",
+                    "RMS reduction",
+                    "next QKV projection and RoPE",
+                ],
+                "excluded": [],
+                "semantic_body": f"manual CODA/QuACK plus {args.attention_oracle.value}",
+            },
+            "benchmark": {
+                "warmups": args.warmups,
+                "repeats": args.repeats,
+                "iterations_per_sample": args.iterations,
+                "variant_order": [name for name, _ in variants],
+                "alternating_variant_order": True,
+                "measurements": measurements,
+            },
+            "correctness": {
+                "bitwise_deterministic_output_sha256": deterministic_hashes,
+                "prologue_vs_delayed_x2_max_abs": x2_difference.max().item(),
+                "prologue_vs_delayed_x2_mean_abs": x2_difference.mean().item(),
+                "prologue_vs_delayed_next_qkv_max_abs": qkv_difference.max().item(),
+                "prologue_vs_delayed_next_qkv_mean_abs": qkv_difference.mean().item(),
+            },
+            "sources": {
+                "shuttle_revision": args.shuttle_revision,
+                "quack_revision": args.quack_revision,
+                "attention_oracle_revision": args.attention_oracle_revision,
+                "attention_oracle": args.attention_oracle.value,
+            },
+            "environment": {
+                "gpu_telemetry": telemetry,
+                "torch": torch.__version__,
+                "torch_cuda": torch.version.cuda,
+                "cutlass_dsl": importlib.metadata.version("nvidia-cutlass-dsl"),
+                "flash_attn_4": importlib.metadata.version("flash-attn-4"),
+            },
+        }
+        args.json_output.parent.mkdir(parents=True, exist_ok=True)
+        args.json_output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
     if args.profile_phases:
         attention_for_profile = qkv_attention()
@@ -366,7 +507,8 @@ def main() -> None:
             iterations=args.iterations,
         )
         for name, _ in phase_variants:
-            median_ms, minimum_ms = phase_measurements[name]
+            median_ms = float(phase_measurements[name]["median_ms"])
+            minimum_ms = float(phase_measurements[name]["minimum_ms"])
             print(f"  phase_{name}: median_ms={median_ms:.4f} min_ms={minimum_ms:.4f}")
 
 

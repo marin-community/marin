@@ -1,0 +1,30 @@
+{
+  "attention_backend": "generated_sm90",
+  "attention_programs": {
+    "consumer_epilogue": {
+      "attention.streaming_attention": {
+        "program_sha256": "60a30e782ec215fc796600b3bd14c9bef668bf5b82979b553ee87b9d417a3394",
+        "schedule": "H100StreamingSchedule(tile_m=128, tile_n=128, stages=2, threads=384, pack_gqa=True, q_in_registers=False, intra_warpgroup_overlap=True, pv_register_source=True)"
+      }
+    },
+    "consumer_prologue": {
+      "attention.streaming_attention": {
+        "program_sha256": "60a30e782ec215fc796600b3bd14c9bef668bf5b82979b553ee87b9d417a3394",
+        "schedule": "H100StreamingSchedule(tile_m=128, tile_n=128, stages=2, threads=384, pack_gqa=True, q_in_registers=False, intra_warpgroup_overlap=True, pv_register_source=True)"
+      }
+    }
+  },
+  "gemm_backends": [
+    "h100_gemm_tile_program"
+  ],
+  "generated_gemm_source_sha256": [
+    "1fd72392c85360baf5e6a3280a64754526df71f4406d84cb99d0e1419a1aded2",
+    "709c44df9b36204d3437471a85179151ec28cd801fcb70aaa8bc1b1b4cf0c857",
+    "8c0e5b7c6edff1703194020df6c9636de5425ba0c3d4b75b477d0f28705bde5f",
+    "9351b5351655d99d3463bc370f9375410e81bb9621e0c0995948ea13db04b15d",
+    "c942a4a45f7f670a193fe43c8b6f0d00aaa7fbc873c9eacf135e55dbaee28e34",
+    "ef88c30f36f2af6e4cf3b97219563504d07b89711b4828b03cb15f5e03b822a3"
+  ],
+  "named_gemm_callback_selected": false,
+  "official_fa3_oracle_selected": false
+}

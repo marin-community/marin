@@ -1,0 +1,23 @@
+CUDA 13 compiler
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Wed_Aug_20_01:58:59_PM_PDT_2025
+Cuda compilation tools, release 13.0, V13.0.88
+Build cuda_13.0.r13.0/compiler.36424714_0
+
+CUDA 12.8 compiler retained for compatibility attempt
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Fri_Feb_21_20:23:50_PST_2025
+Cuda compilation tools, release 12.8, V12.8.93
+Build cuda_12.8.r12.8/compiler.35583870_0
+
+Desired=Unknown/Install/Remove/Purge/Hold
+| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend
+|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)
+||/ Name           Version      Architecture Description
++++-==============-============-============-=================================
+ii  cuda-nvcc-12-8 12.8.93-1    amd64        CUDA nvcc
+ii  cuda-nvcc-13-0 13.0.88-1    amd64        CUDA nvcc
+ii  g++-13         13.3.0-16    amd64        GNU C++ compiler
+ii  gcc-13         13.3.0-16    amd64        GNU C compiler

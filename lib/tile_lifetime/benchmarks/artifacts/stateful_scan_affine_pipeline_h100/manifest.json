@@ -1,0 +1,60 @@
+{
+  "artifact": "stateful_scan_affine_pipeline_h100",
+  "schema_version": 1,
+  "revisions": {
+    "shuttle_checkout": "4fba36752bdbfd28ad9a0ea8dee121bb382b21c9",
+    "fla_oracle": "9c8e42e762fce087c27b673af4922795d9edb85e"
+  },
+  "environment": {
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "gpu_count_reserved": 1,
+    "gpu_count_used": 1,
+    "driver": "595.71.05",
+    "cuda_runtime": "12.8",
+    "torch": "2.8.0+cu128",
+    "triton": "3.4.0",
+    "power_limit_watts": 700,
+    "hostname": "g83d0f6"
+  },
+  "semantic_source": {
+    "form": "ordinary JAX lax.scan exported as StableHLO while",
+    "fixture": "natural_scan.stablehlo.mlir.bc",
+    "source_operation_count": 19,
+    "transition_structure": "diagonal_plus_low_rank"
+  },
+  "candidate_policy": {
+    "physical_stages": [
+      "affine_intra_chunk_prepare",
+      "affine_state_scan",
+      "affine_readout"
+    ],
+    "preserved_candidates": [
+      "chunk16_recomputed_factors",
+      "chunk64_naive_row_inverse",
+      "chunk64_monolithic_block_inverse",
+      "chunk64_k_loop_monolithic_block_inverse",
+      "chunk64_split_block_inverse"
+    ],
+    "selection": "minimum correct deterministic combined median",
+    "named_recurrent_dispatch": false,
+    "external_kernel_imported": false
+  },
+  "selected": {
+    "file": "shuttle-affine-split-primary.json",
+    "chunk_size": 64,
+    "block_v": 32,
+    "preparation_median_ms": 0.42291200160980225,
+    "state_scan_median_ms": 0.08936000242829323,
+    "readout_median_ms": 0.06969600170850754,
+    "combined_median_ms": 0.5797759890556335,
+    "combined_over_oracle": 1.1354263898297734,
+    "preparation_bytes": 76021760,
+    "forwarded_bytes": 50331648,
+    "numerical_contract": "bounded_reassociation"
+  },
+  "comparison": {
+    "fla_chunk_median_ms": 0.5106240212917328,
+    "target_1_2x_ms": 0.6127488255500793,
+    "passes_target": true
+  }
+}

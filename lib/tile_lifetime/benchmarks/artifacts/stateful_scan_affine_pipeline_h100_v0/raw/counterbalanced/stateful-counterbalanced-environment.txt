@@ -1,0 +1,8 @@
+FLA 9c8e42e762fce087c27b673af4922795d9edb85e
+benchmark d4be4c2e0526c9d9dd818699f22795d44fc420856057610b3a9ec76675fc395b  /app/lib/tile_lifetime/benchmarks/h100_affine_chunk_pipeline.py
+torch 2.8.0+cu128
+torch_cuda 12.8
+triton 3.4.0
+jax 0.10.1
+numpy 2.5.1
+NVIDIA H100 80GB HBM3, 595.71.05, 700.00 W, 345 MHz, 2619 MHz

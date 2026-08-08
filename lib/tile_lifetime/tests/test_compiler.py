@@ -1,8 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
+
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from tile_lifetime import (
     DType,
@@ -15,9 +18,19 @@ from tile_lifetime import (
     TensorGraph,
     TransformSkeleton,
     compile_attention_region,
+    compile_erased_dense_program,
+    compile_gemm_program,
     compile_region,
+    erase_dense_semantics,
+    execute_tensor_program,
+    validate_erased_tensor_program,
+    validate_plan_semantic_erasure,
 )
+from tile_lifetime.gemm_program import GENERIC_H100_GEMM_BACKEND
 from tile_lifetime.plan import NumericalEquivalence
+from tile_lifetime.semantic_erasure import SemanticErasureError
+from tile_lifetime.tensor_program import MapPrimitive, ScalarExpressionKind, scalar_binary, scalar_constant
+from tile_lifetime.tile_program import TilePrimitive, TileProgramStage
 
 
 def _rms_region(
@@ -58,16 +71,25 @@ def test_compile_region_legal_rms_region_delays_scale() -> None:
 
     assert [type(skeleton) for skeleton in plan.skeletons] == [GemmSkeleton, ReductionSkeleton, GemmSkeleton]
     assert [attachment.operation for attachment in plan.skeletons[0].epilogue] == [
-        "residual_add",
-        "multiply_gamma",
+        "add",
+        "multiply",
         "partial_sum_square",
     ]
     assert [attachment.operation for attachment in plan.skeletons[2].epilogue] == ["scale_row"]
-    assert plan.skeletons[2].backend == "coda_cute_h100"
+    assert plan.skeletons[2].backend == GENERIC_H100_GEMM_BACKEND
     assert plan.materialization("normalized").disposition is MaterializationDisposition.EPILOGUE_ONLY
     assert plan.rewrites[0].applied
     assert plan.sequence_squared_materializations == ()
     assert plan.rewrites[0].numerical_equivalence is NumericalEquivalence.ALGEBRAICALLY_EXACT
+    generated = compile_gemm_program(plan.skeletons[0])
+    assert generated.tile_program.primitives_at(TileProgramStage.FINALIZATION) == (
+        TilePrimitive.ADD,
+        TilePrimitive.MULTIPLY,
+        TilePrimitive.PARTIAL_SUM_SQUARE,
+        TilePrimitive.CONVERT,
+        TilePrimitive.STORE,
+        TilePrimitive.STORE,
+    )
 
 
 def test_compile_region_can_scale_rms_in_consumer_prologue() -> None:
@@ -79,14 +101,14 @@ def test_compile_region_can_scale_rms_in_consumer_prologue() -> None:
 
     consumer = plan.skeletons[2]
     assert isinstance(consumer, GemmSkeleton)
-    assert consumer.backend == "quack_sm90_fp32_a_transform"
+    assert consumer.backend == GENERIC_H100_GEMM_BACKEND
     assert consumer.physical_tile_shape == (128, 256, 64)
     assert consumer.cluster_shape == (1, 1, 1)
     assert consumer.pingpong is False
     assert [attachment.operation for attachment in consumer.prologue] == ["scale_row"]
     assert consumer.epilogue == ()
     assert plan.materialization("normalized").disposition is MaterializationDisposition.PROLOGUE_ONLY
-    assert plan.rewrites[0].name == "scale_rms_in_consumer_gemm_prologue"
+    assert plan.rewrites[0].name == "place_row_scalar_in_consumer_contract_preparation"
     assert "BF16 conversion before WGMMA" in plan.rewrites[0].numerical_effect
 
 
@@ -127,6 +149,82 @@ def test_compile_region_bitwise_policy_uses_materialized_fallback() -> None:
     assert not plan.rewrites[0].applied
     assert plan.rewrites[0].numerical_equivalence is NumericalEquivalence.BITWISE_EXACT
     assert any("bitwise-exact" in reason for reason in plan.rewrites[0].rejection_reasons)
+
+
+def test_dense_frontend_names_erase_before_candidate_selection() -> None:
+    plan = compile_region(_rms_region(), numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER)
+
+    report = plan.semantic_erasure_report
+    assert report is not None
+    assert "RMSNormOp" in report.source_semantics
+    assert report.is_clean
+    assert all("rms" not in key.lower() for key in report.scheduling_keys)
+    assert {primitive for step in report.lowering_steps for primitive in step.generic_primitives} == {
+        "Contract",
+        "Fold",
+        "Map",
+    }
+    validate_plan_semantic_erasure(plan)
+
+
+def test_erased_dense_program_matches_independent_materialized_reference() -> None:
+    erased = erase_dense_semantics(_rms_region())
+    rng = np.random.default_rng(19)
+    inputs = {value.name: rng.normal(size=value.shape).astype(np.float32) for value in erased.program.inputs}
+
+    actual = execute_tensor_program(erased.program, inputs)["output"]
+    summed = inputs["x"] @ inputs["weight_0"] + inputs["residual"]
+    inverse = np.reciprocal(np.sqrt(np.mean(np.square(summed), axis=-1, keepdims=True) + 1e-6))
+    expected = (summed * inputs["gamma"] * inverse) @ inputs["weight_1"]
+
+    difference = np.abs(actual - expected)
+    assert float(np.max(difference)) < 2e-5
+    assert float(np.mean(difference)) < 2e-6
+
+
+def test_changed_row_scalar_expression_uses_same_generic_placement() -> None:
+    erased = erase_dense_semantics(_rms_region())
+    row_finalize = next(
+        operation
+        for operation in erased.program.operations
+        if isinstance(operation, MapPrimitive) and operation.expression.kind is ScalarExpressionKind.RSQRT
+    )
+    changed_finalize = replace(
+        row_finalize,
+        expression=scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            row_finalize.expression,
+            scalar_constant(0.5),
+        ),
+    )
+    changed_operations = tuple(
+        changed_finalize if operation is row_finalize else operation for operation in erased.program.operations
+    )
+    changed = erased.with_program(replace(erased.program, operations=changed_operations))
+
+    plan = compile_erased_dense_program(
+        changed,
+        numerical_policy=NumericalPolicy.ALLOW_ROUNDING_REORDER,
+        scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+    )
+
+    assert [type(skeleton) for skeleton in plan.skeletons] == [GemmSkeleton, ReductionSkeleton, GemmSkeleton]
+    reduction = plan.skeletons[1]
+    assert isinstance(reduction, ReductionSkeleton)
+    assert reduction.operator.endswith("* 0.5")
+    assert [attachment.operation for attachment in plan.skeletons[2].prologue] == ["scale_row"]
+    validate_plan_semantic_erasure(plan)
+
+
+def test_semantic_erasure_validator_rejects_named_scheduling_key() -> None:
+    erased = erase_dense_semantics(_rms_region())
+    contaminated = replace(
+        erased,
+        report=replace(erased.report, scheduling_keys=("rmsnorm_before_gemm",)),
+    )
+
+    with pytest.raises(SemanticErasureError, match="retains named semantics"):
+        validate_erased_tensor_program(contaminated)
 
 
 def test_delayed_rms_scale_is_real_exact_but_changes_bf16_rounding() -> None:

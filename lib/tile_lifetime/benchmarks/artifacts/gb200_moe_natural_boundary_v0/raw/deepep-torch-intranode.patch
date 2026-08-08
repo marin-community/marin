@@ -1,0 +1,58 @@
+diff --git a/deep_ep/__init__.py b/deep_ep/__init__.py
+index f09f54a..0c5d598 100644
+--- a/deep_ep/__init__.py
++++ b/deep_ep/__init__.py
+@@ -3,8 +3,6 @@ import torch
+ 
+ from .utils import EventOverlap
+ from .buffer import Buffer
+-from .hybrid_ep_buffer import HybridEPBuffer
+ 
+ # noinspection PyUnresolvedReferences
+ from deep_ep_cpp import Config
+-from hybrid_ep_cpp import HybridEpConfigInstance
+diff --git a/setup.py b/setup.py
+index d30d25e..ef8cfe8 100644
+--- a/setup.py
++++ b/setup.py
+@@ -170,10 +170,12 @@ def get_extension_hybrid_ep_cpp():
+     return extension_hybrid_ep_cpp
+ 
+ def get_extension_deep_ep_cpp():
+-    disable_nvshmem = False
++    disable_nvshmem = os.getenv('DEEPEP_DISABLE_NVSHMEM', '0') == '1'
+     nvshmem_dir = os.getenv('NVSHMEM_DIR', None)
+     nvshmem_host_lib = 'libnvshmem_host.so'
+-    if nvshmem_dir is None:
++    if disable_nvshmem:
++        nvshmem_dir = None
++    elif nvshmem_dir is None:
+         try:
+             nvshmem_dir = importlib.util.find_spec("nvidia.nvshmem").submodule_search_locations[0]
+             nvshmem_host_lib = get_nvshmem_host_lib_name(nvshmem_dir)
+@@ -192,6 +194,9 @@ def get_extension_deep_ep_cpp():
+     nvcc_flags = ['-O3', '-Xcompiler', '-O3']
+     sources = ['csrc/deep_ep.cpp', 'csrc/kernels/runtime.cu', 'csrc/kernels/layout.cu', 'csrc/kernels/intranode.cu']
+     include_dirs = ['csrc/']
++    cuda_cccl_include = os.getenv('CUDA_CCCL_INCLUDE')
++    if cuda_cccl_include:
++        include_dirs.append(cuda_cccl_include)
+     library_dirs = []
+     nvcc_dlink = []
+     extra_link_args = ['-lcuda']
+@@ -285,10 +290,11 @@ if __name__ == '__main__':
+         install_requires=[
+             'pynvml',
+         ],
+-        ext_modules=[
+-            get_extension_deep_ep_cpp(),
+-            get_extension_hybrid_ep_cpp()
+-        ],
++        ext_modules=(
++            [get_extension_deep_ep_cpp()]
++            if os.getenv('DEEPEP_BUILD_INTRANODE_ONLY', '0') == '1'
++            else [get_extension_deep_ep_cpp(), get_extension_hybrid_ep_cpp()]
++        ),
+         cmdclass={
+             'build_ext': BuildExtension
+         },

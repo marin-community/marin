@@ -1,0 +1,179 @@
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+{
+  "benchmark": "shuttle_natural_routed_streaming_attention_sm90",
+  "source": "ordinary JAX -> StableHLO -> Relation/Contract/Map/DomainRestriction/Fold",
+  "configuration": {
+    "sequence": 16384,
+    "block": 128,
+    "slots": 8,
+    "router_dimension": 64,
+    "seed": 1701,
+    "warmups": 10,
+    "repeats": 30,
+    "include_block_sparse_oracle": true,
+    "json_output": "/tmp/natural-sparse-matched-run/raw/s16384-b128-k8-matched.json"
+  },
+  "hardware": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00 W, 1830 MHz, 2619 MHz",
+  "torch": "2.11.0+cu130",
+  "compile_seconds": 4.158982429653406,
+  "samples_ms": [
+    0.5995839834213257,
+    0.5903360247612,
+    0.589792013168335,
+    0.5842239856719971,
+    0.5822719931602478,
+    0.5791680216789246,
+    0.5813120007514954,
+    0.5847679972648621,
+    0.5786880254745483,
+    0.5797759890556335,
+    0.5784000158309937,
+    0.5794240236282349,
+    0.5836799740791321,
+    0.5814080238342285,
+    0.5903360247612,
+    0.5805119872093201,
+    0.5816959738731384,
+    0.5847679972648621,
+    0.579584002494812,
+    0.5798079967498779,
+    0.5789440274238586,
+    0.5804799795150757,
+    0.5834879875183105,
+    0.5776960253715515,
+    0.5804799795150757,
+    0.5774719715118408,
+    0.579039990901947,
+    0.5823040008544922,
+    0.5787519812583923,
+    0.5796480178833008
+  ],
+  "median_ms": 0.5804959833621979,
+  "minimum_ms": 0.5774719715118408,
+  "maximum_ms": 0.5995839834213257,
+  "mean_ms": 0.5822613338629404,
+  "max_absolute_error": 0.007902860641479492,
+  "mean_absolute_error": 0.00017903203843161464,
+  "deterministic": true,
+  "output_sha256": "e9399766068941b3b60329760c04b576c79cec38fd036c8cbdfe43cdf8da3a83",
+  "relation_sha256": "0a2a06781755f5f577237a2e48c810cb160fd88db3295835458350f47ad61cbb",
+  "semantic_erasure": {
+    "source_semantics": [
+      "top_k",
+      "selected_exact_attention",
+      "normalized_exponential",
+      "causal_predicate"
+    ],
+    "lowering_steps": [
+      {
+        "source_semantic": "top_k",
+        "generic_primitives": [
+          "Contract",
+          "DomainRestriction",
+          "Relation"
+        ]
+      },
+      {
+        "source_semantic": "selected_exact_attention",
+        "generic_primitives": [
+          "RelationPlan",
+          "Contract",
+          "Map",
+          "Fold",
+          "DomainRestriction"
+        ]
+      },
+      {
+        "source_semantic": "normalized_exponential",
+        "generic_primitives": [
+          "Map",
+          "Fold"
+        ]
+      },
+      {
+        "source_semantic": "causal_predicate",
+        "generic_primitives": [
+          "DomainRestriction"
+        ]
+      }
+    ],
+    "scheduling_keys": [
+      "relation_selection:left_rank=2:right_rank=2:selected=8:accumulate=fp32",
+      "domain_restriction:binary_affine_index_predicate",
+      "relation_plan:runtime_binary_edges:dual_orientation",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:select(less_equal(input,input),multiply(input,constant),constant)",
+      "fold:maximum:reduction_rank=1:accumulate=fp32",
+      "map:subtract(input,input)",
+      "map:exp(input)",
+      "fold:sum:reduction_rank=1:accumulate=fp32",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:divide(input,input)"
+    ],
+    "validation_errors": []
+  },
+  "launch_manifest": {
+    "generated_path": [
+      "generic router Contract",
+      "generic top-k Relation index generation",
+      "generated SM90 QK/online-Fold/PV streaming skeleton"
+    ],
+    "expert_oracle_semantic_kernels": []
+  },
+  "benchmark_boundary": {
+    "included": [
+      "router Contract",
+      "top-k/index plane",
+      "selected exact attention"
+    ],
+    "excluded": [
+      "QKV projection",
+      "output projection"
+    ],
+    "oracle_requirement": "must include the identical router Contract and top-k/index plane",
+    "legacy_seer_2_388208_ms_is_matched": false
+  },
+  "matched_expert_oracle": {
+    "implementation": "pinned Block-Sparse-Attention expert oracle",
+    "revision": "49d6c39e4dc0303442cda3bb758b3925d4399c49",
+    "samples_ms": [
+      1.4636800289154053,
+      1.4589760303497314,
+      1.445631980895996,
+      1.4293760061264038,
+      1.4273920059204102,
+      1.4275840520858765,
+      1.4251199960708618,
+      1.4619519710540771,
+      1.4549440145492554,
+      1.434399962425232,
+      1.4183039665222168,
+      1.4288320541381836,
+      1.4174400568008423,
+      1.4115840196609497,
+      1.415168046951294,
+      1.4533120393753052,
+      1.4308799505233765,
+      1.416640043258667,
+      1.4129279851913452,
+      1.4151999950408936,
+      1.4598400592803955,
+      1.4304640293121338,
+      1.430783987045288,
+      1.4117759466171265,
+      1.4243199825286865,
+      1.4071680307388306,
+      1.4090880155563354,
+      1.4008959531784058,
+      1.4138239622116089,
+      1.414687991142273
+    ],
+    "median_ms": 1.426256000995636,
+    "maximum_absolute_difference_from_generated": 0.00390625,
+    "mean_absolute_difference_from_generated": 6.517220754176378e-05,
+    "deterministic": true,
+    "output_sha256": "86d62d4d69acf008eb073c029da0810c524d4e6ce1abdfc5d5735d326e70c1b3",
+    "generated_to_oracle_ratio": 0.40700686479633896,
+    "matched_boundary": true
+  }
+}
