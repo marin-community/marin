@@ -9,6 +9,8 @@ Levanter projects only each prompt's last hidden state. vLLM receives the exact
 token IDs through its OpenAI completions endpoint, with one concurrent request
 pinned to each data-parallel rank. The PP=2 vLLM case is a two-task Iris gang:
 task 0 owns pipeline stage 0 and task 1 owns pipeline stage 1.
+The TPU-vLLM case uses one v6e-8 and records each prompt independently so one
+request failure does not hide later numerical results.
 """
 
 import logging
@@ -25,7 +27,7 @@ import requests
 from haliax import Axis
 from jax.sharding import PartitionSpec as P
 from levanter.models.snowball import SnowballLMHeadModel
-from marin.inference.backend import ModelSpec
+from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
 from marin.inference.config import LevanterEngineConfig, VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.iris_vllm import (
     iris_vllm_followers,
@@ -41,14 +43,21 @@ from rigging.timing import Duration, ExponentialBackoff
 from tests.cluster.vllm.backend_parity import (
     NextTokenObservation,
     NextTokenParity,
+    ParityCaseFailure,
+    ParityReport,
     assert_same_rank_repeatability,
     cross_rank_diagnostic,
     parity_from_logprob_row,
+    persist_and_validate_bounded_report,
 )
 from tests.cluster.vllm.snowball import (
     BATCH_SIZE,
     MAX_PROBABILITY_ERROR,
     SNOWBALL,
+    SNOWBALL_TPU,
+    TPU_PROMPT_FIXTURE_URL,
+    TPU_VLLM_MAX_PROBABILITY_ERROR_BY_BUCKET,
+    TPU_VLLM_RETURNED_LOGPROBS,
     RepresentativeCase,
     RepresentativeGolden,
     pad_prompt_batch,
@@ -61,6 +70,7 @@ RUNTIME_TIMEOUT = 30 * 60.0
 HTTP_CONNECT_TIMEOUT = 30.0
 HTTP_READ_TIMEOUT = 5 * 60.0
 GPU_COUNT = 8
+TPU_CHIP_COUNT = 8
 MAX_MODEL_LEN = 32768
 MAX_NUM_BATCHED_TOKENS = 512
 RETURNED_LOGPROBS = 50
@@ -231,6 +241,8 @@ def _request_vllm_case(
     case: RepresentativeCase,
     rank: int,
     request_id: str,
+    *,
+    returned_logprobs: int = RETURNED_LOGPROBS,
 ) -> NextTokenObservation:
     context = f"case={case.id} rank={rank} request={request_id}"
     assert len(case.prompt_token_ids) + 1 <= MAX_MODEL_LEN, context
@@ -247,7 +259,7 @@ def _request_vllm_case(
                 "add_special_tokens": False,
                 "temperature": 0.0,
                 "max_tokens": 1,
-                "logprobs": RETURNED_LOGPROBS,
+                "logprobs": returned_logprobs,
                 "return_tokens_as_token_ids": True,
                 "return_token_ids": True,
             },
@@ -438,3 +450,73 @@ def score_vllm_against_goldens(
         if not launch.is_leader:
             notify_iris_vllm_stopped(launch)
             return
+
+
+def score_tpu_vllm_against_goldens(
+    goldens: tuple[RepresentativeGolden, ...],
+    report_uri: str,
+) -> None:
+    """Serve the regional export on one v6e-8 and persist all reachable cases."""
+    prompt_fixture = read_prompt_fixture(goldens, fixture_url=TPU_PROMPT_FIXTURE_URL)
+    spec = ModelSpec(
+        weights=SNOWBALL_TPU.export_uri,
+        api_model=SNOWBALL_TPU.model_name,
+        num_chips=TPU_CHIP_COUNT,
+        tensor_parallel_size=TPU_CHIP_COUNT,
+        dtype="bfloat16",
+        max_model_len=MAX_MODEL_LEN,
+        chat_template_content=None,
+    )
+    backend = VllmBackend(
+        VllmEngineConfig(
+            launcher=VllmLauncherType.TPU,
+            max_num_batched_tokens=MAX_NUM_BATCHED_TOKENS,
+            max_num_seqs=1,
+            extra_args=(
+                "--max-logprobs",
+                str(TPU_VLLM_RETURNED_LOGPROBS),
+                "--no-enable-prefix-caching",
+            ),
+        )
+    )
+
+    observations: list[NextTokenObservation] = []
+    case_failures: list[ParityCaseFailure] = []
+    with backend.serve(spec) as served:
+        completions_url = f"{served.base_url}{OPENAI_API_SUFFIX}/completions"
+        for batch in prompt_fixture.batches:
+            for case in batch.cases:
+                try:
+                    observations.append(
+                        _request_vllm_case(
+                            completions_url,
+                            served.model_id,
+                            case,
+                            0,
+                            f"tpu-{case.id}",
+                            returned_logprobs=TPU_VLLM_RETURNED_LOGPROBS,
+                        )
+                    )
+                except Exception as error:
+                    case_failures.append(
+                        ParityCaseFailure(
+                            case_id=case.id,
+                            backend_rank=0,
+                            error=f"{type(error).__name__}: {error}",
+                        )
+                    )
+
+    persist_and_validate_bounded_report(
+        ParityReport(
+            backend="vllm-tpu",
+            observations=tuple(observations),
+            case_failures=tuple(case_failures),
+        ),
+        report_uri,
+        {case.id: case.top_logprobs for case in goldens},
+        {
+            case.id: (batch.max_tokens, TPU_VLLM_MAX_PROBABILITY_ERROR_BY_BUCKET[batch.max_tokens])
+            for batch in prompt_fixture.batches
+            for case in batch.cases
+        },
+    )

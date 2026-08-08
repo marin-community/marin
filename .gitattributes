@@ -1,2 +1,3 @@
 # Built artifact of lib/marin/src/marin/inference/dashboard (npm run build).
 lib/marin/src/marin/inference/quick_serve_dashboard.html linguist-generated=true
+tests/cluster/vllm/resources/snowball_levanter_tpu_golden.json linguist-generated=true
