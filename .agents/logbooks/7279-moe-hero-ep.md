@@ -1008,3 +1008,25 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   enabled.
 - Decision rule: The exact target fits only if all five steps finish and W&B receives finite
   gradient and parameter norms.
+
+### 2026-08-08 10:25 UTC - The 437.58 B full-watch model passes
+
+- MHEP-151, MHEP-152, and MHEP-153 completed all five steps with finite losses. Each W&B run has
+  38 gradient norm metrics and 38 parameter norm metrics.
+- Final losses at step 4 are 10.5670 for width 4,096, 10.5501 for width 4,608, and 10.5396 for
+  width 4,992.
+- The width-4,992 compile warned that rematerialization could reduce the program from 184.44 GiB
+  to 178.36 GiB against a 165.23 GiB target. Execution still finished all five watched steps.
+- Result: 437.58 B total and 22.42 B active parameters is the largest confirmed full-watch EP64
+  model. The known failed upper bound stays 481.1 B at width 5,504.
+
+### 2026-08-08 10:25 UTC - MHEP-155 midpoint watch gate ready
+
+- Goal: Narrow the full-watch size boundary between the successful width-4,992 model and the
+  failed width-5,504 model.
+- Code snapshot: `799fbb937`.
+- Candidate: 192 experts at width 5,248, with 459.32 B total and 22.87 B active parameters. All
+  other MHEP-153 settings stay fixed.
+- Run ID: `mhep-155-w8-ep-e192-i5248-cf2p00-fullwatch-p32753-20260808`.
+- Decision rule: The candidate fits only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics.
