@@ -21,6 +21,7 @@ from tile_lifetime.expert_parallel_plan import (
     ExpertSegmentContract,
     GateUpLayoutContract,
     GateUpPhysicalLayout,
+    MapFoldSemantics,
     PipelineDepth,
     ReadinessGranularity,
     RouteRelation,
@@ -47,6 +48,13 @@ from tile_lifetime.plan import (
     RewriteExplanation,
 )
 from tile_lifetime.relation import compile_ordered_relation_fold
+from tile_lifetime.tensor_program import (
+    ScalarExpressionKind,
+    scalar_binary,
+    scalar_constant,
+    scalar_input,
+    scalar_unary,
+)
 
 
 @dataclass(frozen=True)
@@ -379,12 +387,53 @@ def _build_plan(region: _Region, *, config: ExpertParallelConfig) -> ExpertParal
         selected_exchange_projection=selected_exchange_projection,
         gate_up_layout=gate_up_layout,
         schedule=schedule,
+        map_fold_semantics=_map_fold_semantics(),
         merge_program=merge_program,
         stages=stages,
         tile_flows=tile_flows,
         buffers=buffers,
         materializations=materializations,
         rewrites=(_explanation(region, config=config),),
+    )
+
+
+def _map_fold_semantics() -> MapFoldSemantics:
+    left = scalar_input("left")
+    right = scalar_input("right")
+    sigmoid = scalar_binary(
+        ScalarExpressionKind.DIVIDE,
+        scalar_constant(1.0),
+        scalar_binary(
+            ScalarExpressionKind.ADD,
+            scalar_constant(1.0),
+            scalar_unary(
+                ScalarExpressionKind.EXP,
+                scalar_binary(ScalarExpressionKind.MULTIPLY, scalar_constant(-1.0), left),
+            ),
+        ),
+    )
+    return MapFoldSemantics(
+        pair_map=scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            scalar_binary(ScalarExpressionKind.MULTIPLY, left, sigmoid),
+            right,
+        ),
+        fold_contribution=scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            scalar_input("value"),
+            scalar_input("weight"),
+        ),
+        fold_update=scalar_binary(
+            ScalarExpressionKind.ADD,
+            scalar_input("state"),
+            scalar_input("contribution"),
+        ),
+        post_fold_map=scalar_binary(
+            ScalarExpressionKind.ADD,
+            scalar_input("folded"),
+            scalar_input("base"),
+        ),
+        explicit_rounding_functions=frozenset({"fold_contribution", "fold_update"}),
     )
 
 

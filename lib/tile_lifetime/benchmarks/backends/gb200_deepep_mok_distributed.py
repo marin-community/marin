@@ -31,6 +31,7 @@ from backends.gb200_deepep_mok_local import (  # noqa: E402  # pyrefly: ignore[m
     _git_revision,
     _load_routes,
     _local_route_plan,
+    _validate_generated_map_fold_extension,
 )
 from benchmark_metadata import (  # noqa: E402  # pyrefly: ignore[missing-import]
     canonical_json_sha256,
@@ -48,9 +49,12 @@ from gb200_mok_gmm_probe import (  # noqa: E402  # pyrefly: ignore[missing-impor
 from tile_lifetime import (  # noqa: E402
     DType,
     ExpertParallelConfig,
+    ExpertParallelPlan,
+    ExpertParallelStageKind,
     NumericalPolicy,
     compile_stablehlo_expert_parallel_region,
 )
+from tile_lifetime.cuda_map_fold_codegen import shuttle_map_fold_program  # noqa: E402
 from tile_lifetime.moe_reference import MOE_REGION_INPUT_NAMES  # noqa: E402
 from tile_lifetime.relation import build_partitioned_merge_rows  # noqa: E402
 
@@ -180,21 +184,29 @@ class NaturalRouterRuntime:
         self,
         x: torch.Tensor,
         *,
-        global_experts: int,
-        top_k: int,
+        plan: ExpertParallelPlan,
         seed: int,
     ) -> None:
         self.x = x
-        self.top_k = top_k
+        self.plan = plan
+        relation = plan.route_relation
+        if relation.token_count != x.shape[0]:
+            raise ValueError(f"recovered Relation expects {relation.token_count} tokens, runtime has {x.shape[0]}")
+        plan.stage(ExpertParallelStageKind.ROUTE_RELATION)
+        self.top_k = relation.slots_per_token
         torch.manual_seed(seed)
         self.weight = torch.empty(
-            (global_experts, x.shape[1]),
+            (relation.global_expert_count, x.shape[1]),
             dtype=torch.bfloat16,
             device=x.device,
         ).normal_(0.0, 1.0 / math.sqrt(x.shape[1]))
-        self.logits = torch.empty((x.shape[0], global_experts), dtype=torch.bfloat16, device=x.device)
-        self.top_values = torch.empty((x.shape[0], top_k), dtype=torch.bfloat16, device=x.device)
-        self.expert_indices = torch.empty((x.shape[0], top_k), dtype=torch.int64, device=x.device)
+        self.logits = torch.empty(
+            (x.shape[0], relation.global_expert_count),
+            dtype=torch.bfloat16,
+            device=x.device,
+        )
+        self.top_values = torch.empty((x.shape[0], self.top_k), dtype=torch.bfloat16, device=x.device)
+        self.expert_indices = torch.empty((x.shape[0], self.top_k), dtype=torch.int64, device=x.device)
 
     def __call__(self) -> tuple[torch.Tensor, torch.Tensor]:
         torch.mm(self.x, self.weight.T, out=self.logits)
@@ -210,7 +222,7 @@ class NaturalRouterRuntime:
         return self.expert_indices, route_weights
 
 
-def _compile_natural_stablehlo_plan(args: argparse.Namespace) -> dict[str, Any]:
+def _compile_natural_stablehlo_plan(args: argparse.Namespace) -> tuple[ExpertParallelPlan, dict[str, Any]]:
     """Validate that the benchmark shape enters through ordinary JAX StableHLO."""
     assert args.stablehlo_fixture is not None
     artifact = base64.b64decode(args.stablehlo_fixture.read_text())
@@ -232,15 +244,19 @@ def _compile_natural_stablehlo_plan(args: argparse.Namespace) -> dict[str, Any]:
     )
     if observed != expected:
         raise ValueError(f"StableHLO plan shape {observed} does not match benchmark {expected}")
-    return {
-        "portable_artifact_sha256": file_sha256(args.stablehlo_fixture),
-        "semantic_input": "ordinary JAX shared-plus-routed MoE",
-        "semantic_operations": ["Contract", "selection", "Relation", "SegmentedContract", "Map", "Fold"],
-        "physical_stage_count": len(plan.stages),
-        "forward_transport": plan.schedule.forward_transport.implementation,
-        "reverse_transport": plan.schedule.reverse_transport.implementation,
-        "merge": plan.schedule.merge_implementation,
-    }
+    return (
+        plan,
+        {
+            "portable_artifact_sha256": file_sha256(args.stablehlo_fixture),
+            "semantic_input": "ordinary JAX shared-plus-routed MoE",
+            "semantic_operations": ["Contract", "selection", "Relation", "SegmentedContract", "Map", "Fold"],
+            "runtime_lineage": "router shapes and route Relation are read from the recovered StableHLO plan",
+            "physical_stage_count": len(plan.stages),
+            "forward_transport": plan.schedule.forward_transport.implementation,
+            "reverse_transport": plan.schedule.reverse_transport.implementation,
+            "merge": plan.schedule.merge_implementation,
+        },
+    )
 
 
 def _legalize_transport_order(
@@ -495,13 +511,13 @@ class DistributedPhysicalRuntime:
         if self.gate_up_layout == GateUpLayout.CONCATENATED_E_2I_K:
             assert self.gate_up_weights is not None
             self.module.grouped_gemm_out(self.padded_x, self.gate_up_weights, self.padded_counts, self.gate_up)
-            self.module.swiglu_row_halves_bf16_out(self.gate_up, self.swiglu)
+            self.module.row_halves_pair_map_bf16_out(self.gate_up, self.swiglu)
         else:
             self.module.grouped_gemm_out(self.padded_x, self.gate_weights, self.padded_counts, self.gate)
             self.module.grouped_gemm_out(self.padded_x, self.up_weights, self.padded_counts, self.up)
-            self.module.swiglu_bf16_out(self.gate, self.up, self.swiglu)
+            self.module.adjacent_pair_map_bf16_out(self.gate, self.up, self.swiglu)
         self.module.grouped_gemm_out(self.swiglu, self.down_weights, self.padded_counts, self.down)
-        self.module.fixed_route_merge_out(
+        self.module.indexed_weighted_ordered_fold_bf16_out(
             self.down,
             self.deep_route_padded_rows,
             self.deep_route_weights,
@@ -517,11 +533,11 @@ class DistributedPhysicalRuntime:
                 self.shared_counts,
                 self.shared_gate_up,
             )
-            self.module.swiglu_row_halves_bf16_out(self.shared_gate_up, self.shared_swiglu)
+            self.module.row_halves_pair_map_bf16_out(self.shared_gate_up, self.shared_swiglu)
         else:
             self.module.grouped_gemm_out(self.x, self.shared_gate_weights, self.shared_counts, self.shared_gate)
             self.module.grouped_gemm_out(self.x, self.shared_up_weights, self.shared_counts, self.shared_up)
-            self.module.swiglu_bf16_out(self.shared_gate, self.shared_up, self.shared_swiglu)
+            self.module.adjacent_pair_map_bf16_out(self.shared_gate, self.shared_up, self.shared_swiglu)
         self.module.grouped_gemm_out(
             self.shared_swiglu,
             self.shared_down_weights,
@@ -545,7 +561,7 @@ class DistributedPhysicalRuntime:
             output_split_sizes=self.reverse_receive_counts,
             input_split_sizes=self.reverse_send_counts,
         )
-        self.module.fixed_rank_merge_shared_out(
+        self.module.partitioned_ordered_fold_base_map_bf16_out(
             self.returned_rank_partials,
             self.rank_token_rows,
             self.shared_output,
@@ -614,7 +630,7 @@ class DistributedPhysicalRuntime:
                 self.gate_up,
             )
             self.coarse_gate_up.copy_(self.gate_up)
-            self.module.swiglu_row_halves_bf16_out(self.coarse_gate_up, self.swiglu)
+            self.module.row_halves_pair_map_bf16_out(self.coarse_gate_up, self.swiglu)
         else:
             self.module.grouped_gemm_out(
                 self.coarse_padded_x,
@@ -630,7 +646,7 @@ class DistributedPhysicalRuntime:
             )
             self.coarse_gate.copy_(self.gate)
             self.coarse_up.copy_(self.up)
-            self.module.swiglu_bf16_out(self.coarse_gate, self.coarse_up, self.swiglu)
+            self.module.adjacent_pair_map_bf16_out(self.coarse_gate, self.coarse_up, self.swiglu)
         self.coarse_swiglu.copy_(self.swiglu)
         self.module.grouped_gemm_out(
             self.coarse_swiglu,
@@ -639,7 +655,7 @@ class DistributedPhysicalRuntime:
             self.down,
         )
         self.coarse_down.copy_(self.down)
-        self.module.fixed_route_merge_out(
+        self.module.indexed_weighted_ordered_fold_bf16_out(
             self.coarse_down,
             self.deep_route_padded_rows,
             self.deep_route_weights,
@@ -658,7 +674,7 @@ class DistributedPhysicalRuntime:
                 self.shared_gate_up,
             )
             self.coarse_shared_gate_up.copy_(self.shared_gate_up)
-            self.module.swiglu_row_halves_bf16_out(self.coarse_shared_gate_up, self.shared_swiglu)
+            self.module.row_halves_pair_map_bf16_out(self.coarse_shared_gate_up, self.shared_swiglu)
         else:
             self.module.grouped_gemm_out(
                 self.coarse_shared_x,
@@ -674,7 +690,7 @@ class DistributedPhysicalRuntime:
             )
             self.coarse_shared_gate.copy_(self.shared_gate)
             self.coarse_shared_up.copy_(self.shared_up)
-            self.module.swiglu_bf16_out(self.coarse_shared_gate, self.coarse_shared_up, self.shared_swiglu)
+            self.module.adjacent_pair_map_bf16_out(self.coarse_shared_gate, self.coarse_shared_up, self.shared_swiglu)
         self.coarse_shared_swiglu.copy_(self.shared_swiglu)
         self.module.grouped_gemm_out(
             self.coarse_shared_swiglu,
@@ -992,20 +1008,18 @@ def main() -> None:
 
     deep_ep.Buffer.set_num_sms(args.deepep_sms)
     buffer = deep_ep.Buffer(dist.group.WORLD, args.buffer_bytes, explicitly_destroy=True)
-    natural_frontend = (
+    natural_compilation = (
         _compile_natural_stablehlo_plan(args) if args.routing_source is RoutingSource.NATURAL_STABLEHLO else None
     )
+    natural_plan = natural_compilation[0] if natural_compilation is not None else None
+    natural_frontend = natural_compilation[1] if natural_compilation is not None else None
     torch.manual_seed(args.seed + rank)
     x = torch.empty((args.local_tokens, args.hidden_size), dtype=torch.bfloat16, device=device).normal_(0.0, 0.1)
-    router = NaturalRouterRuntime(
-        x,
-        global_experts=args.global_experts,
-        top_k=args.top_k,
-        seed=args.seed + 30_000,
-    )
+    router = NaturalRouterRuntime(x, plan=natural_plan, seed=args.seed + 30_000) if natural_plan is not None else None
     source_start = rank * args.local_tokens
     source_end = source_start + args.local_tokens
     if args.routing_source is RoutingSource.NATURAL_STABLEHLO:
+        assert router is not None
         local_topk_idx, local_topk_weights = router()
         gathered_experts = torch.empty(
             (args.local_tokens * world_size, args.top_k),
@@ -1089,6 +1103,10 @@ def main() -> None:
         raise AssertionError(f"rank {rank} transport legalization failed: {mapping}")
 
     module = _load_extension(args.probe_extension.resolve())
+    selected_map_fold_program = shuttle_map_fold_program(
+        natural_plan.map_fold_semantics if natural_plan is not None else None
+    )
+    map_fold_program_sha256 = _validate_generated_map_fold_extension(module, selected_map_fold_program)
     runtime = DistributedPhysicalRuntime(
         module,
         deep_ep,
@@ -1187,6 +1205,7 @@ def main() -> None:
             )[0]
 
         def run_mok_natural_end_to_end() -> torch.Tensor:
+            assert router is not None
             expert_indices, route_weights = router()
             return run_mok_post_route(expert_indices, route_weights)
 
@@ -1208,6 +1227,7 @@ def main() -> None:
     torch.cuda.synchronize(device)
     repeated_generated_overlap_output = runtime.last_output.clone()
     if args.routing_source is RoutingSource.NATURAL_STABLEHLO:
+        assert router is not None
         runtime.generated_natural_end_to_end(router)
         torch.cuda.synchronize(device)
         natural_generated_output = runtime.last_output.clone()
@@ -1285,7 +1305,7 @@ def main() -> None:
         "full_coarse_materialized_sequential": runtime.coarse_materialized_sequential,
     }
     if args.routing_source is RoutingSource.NATURAL_STABLEHLO:
-        assert mok_oracle is not None and mok_oracle_post_route is not None
+        assert router is not None and mok_oracle is not None and mok_oracle_post_route is not None
         phases.update(
             {
                 "natural_router_contract_topk_fold": router,
@@ -1427,13 +1447,24 @@ def main() -> None:
                 "probe_source_sha256": file_sha256(
                     Path(__file__).resolve().parents[2] / "backends" / "sm100" / "mok_gmm_probe" / "mok_gmm_probe.cu"
                 ),
+                "generated_map_fold_program_sha256": map_fold_program_sha256,
+                "generated_map_fold_include_sha256": file_sha256(
+                    Path(__file__).resolve().parents[2]
+                    / "backends"
+                    / "sm100"
+                    / "mok_gmm_probe"
+                    / "generated_map_fold.inc"
+                ),
+                "generated_map_fold_generator_sha256": file_sha256(
+                    Path(__file__).resolve().parents[2] / "src" / "tile_lifetime" / "cuda_map_fold_codegen.py"
+                ),
             },
             "routing_frontend": {
                 "source": args.routing_source.value,
                 "route_fixture_path": str(args.route_fixture) if args.route_fixture is not None else None,
                 "route_fixture_sha256": fixture_sha256,
                 "natural_stablehlo": natural_frontend,
-                "router_weight_sha256": _tensor_sha256(router.weight),
+                "router_weight_sha256": _tensor_sha256(router.weight) if router is not None else None,
                 "selected_experts_sha256": canonical_json_sha256(selected_experts.tolist()),
                 "route_weights_sha256": framed_tensor_sha256(
                     str(combine_weights.dtype),
@@ -1481,11 +1512,16 @@ def main() -> None:
                     "torch.distributed.all_to_all_single payload return",
                 ],
                 "generated_shuttle_kernels": [
-                    "fixed-capacity runtime RelationPlan",
-                    "SwiGLU Map",
-                    "route-slot Fold",
-                    "rank-ordered Fold plus shared Map",
+                    "fixed-capacity runtime RelationPlan skeleton",
+                    "generic adjacent-pair Map skeleton with generated ScalarExpression",
+                    "generic indexed ordered-Fold skeleton with generated contribution/update expressions",
+                    "generic partitioned ordered-Fold plus base-Map skeleton with generated expressions",
                 ],
+                "semantic_body_generation": {
+                    "selected_program_sha256": map_fold_program_sha256,
+                    "compile_guard": "generated CUDA include must exactly match selected Map/Fold IR before build",
+                    "runtime_guard": "loaded extension exports and matches selected Map/Fold IR digest",
+                },
                 "atomic_audit": {
                     "generated_relation_plan": (
                         "none; stable warp-prefix placement and one deterministic overflow value per group"

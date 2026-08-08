@@ -28,8 +28,6 @@ from quack import sm90_utils
 
 from flash_attn.cute.cute_dsl_utils import assume_tensor_aligned
 from flash_attn.cute import utils
-from flash_attn.cute.mask import AttentionMask
-from flash_attn.cute.softmax import Softmax, apply_score_mod_inner
 from flash_attn.cute.seqlen_info import SeqlenInfoQK
 from flash_attn.cute.block_info import BlockInfo
 from flash_attn.cute.block_sparsity import BlockSparseTensors
@@ -50,6 +48,8 @@ from flash_attn.cute.tile_scheduler import (
 )
 from cutlass.cute import FastDivmodDivisor
 
+from .cute_domain_restriction import DomainRestriction
+from .cute_normalized_exp import NormalizedExpFoldState, apply_score_map_inner
 from .cute_streaming_base import ShuttleStreamingAttentionBase
 
 
@@ -350,7 +350,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         tile_sched_params = TileScheduler.to_underlying_arguments(tile_sched_args)
         grid_dim = TileScheduler.get_grid_shape(tile_sched_params)
         softmax_scale_log2, softmax_scale = utils.compute_softmax_scale_log2(
-            softmax_scale, self.score_mod
+            softmax_scale, self.score_map
         )
         window_size_left = Int32(window_size_left) if window_size_left is not None else None
         window_size_right = Int32(window_size_right) if window_size_right is not None else None
@@ -568,13 +568,13 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
             ),
             # Don't need to pass in tile_mn because we won't access offset_padded
         )
-        AttentionMaskCls = partial(
-            AttentionMask,
+        DomainRestrictionCls = partial(
+            DomainRestriction,
             self.tile_m,
             self.tile_n,
-            window_size_left=window_size_left,
-            window_size_right=window_size_right,
-            qhead_per_kvhead_packgqa=self.qhead_per_kvhead if const_expr(self.pack_gqa) else 1,
+            window_left=window_size_left,
+            window_right=window_size_right,
+            head_group_size=self.qhead_per_kvhead if const_expr(self.pack_gqa) else 1,
         )
         TileSchedulerCls = partial(TileScheduler.create, tile_sched_params)
 
@@ -632,7 +632,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                 softmax_scale,
                 block_info,
                 SeqlenInfoCls,
-                AttentionMaskCls,
+                DomainRestrictionCls,
                 TileSchedulerCls,
                 blocksparse_tensors,
                 aux_tensors,
@@ -960,7 +960,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         softmax_scale: Optional[Float32],
         block_info: BlockInfo,
         SeqlenInfoCls: Callable,
-        AttentionMaskCls: Callable,
+        DomainRestrictionCls: Callable,
         TileSchedulerCls: Callable,
         blocksparse_tensors: Optional[BlockSparseTensors],
         aux_tensors: Optional[list],
@@ -1003,10 +1003,10 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
 
         tile_scheduler = TileSchedulerCls()
         work_tile = tile_scheduler.initial_work_tile_info()
-        softmax = Softmax.create(
+        softmax = NormalizedExpFoldState.create(
             softmax_scale_log2,
             num_rows=acc_O.shape[0][0] * acc_O.shape[1],
-            softmax_scale=softmax_scale,
+            score_scale=softmax_scale,
         )
 
         # For RescaleOBeforeGemm: persistent scores_scale across iterations
@@ -1071,9 +1071,9 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                     else FastDivmodDivisor(seqlen.seqlen_k),
                 )
 
-            mask = AttentionMaskCls(seqlen)
+            mask = DomainRestrictionCls(domain_info=seqlen)
             mask_fn = partial(
-                mask.apply_mask,
+                mask.apply,
                 batch_idx=batch_idx,
                 head_idx=head_idx,
                 m_block=m_block,
@@ -1083,10 +1083,10 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                 aux_tensors=aux_tensors,
                 fastdiv_mods=fastdiv_mods,
             )
-            score_mod_fn = None
-            if const_expr(self.score_mod is not None):
-                score_mod_fn = partial(
-                    self.apply_score_mod,
+            score_map_fn = None
+            if const_expr(self.score_map is not None):
+                score_map_fn = partial(
+                    self.apply_score_map,
                     thr_mma_qk,
                     batch_idx,
                     head_idx,
@@ -1096,7 +1096,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                     fastdiv_mods=fastdiv_mods,
                 )
             mma_one_n_block = partial(
-                mma_one_n_block_all, seqlen=seqlen, softmax=softmax, score_mod_fn=score_mod_fn
+                mma_one_n_block_all, seqlen=seqlen, softmax=softmax, score_map_fn=score_map_fn
             )
             n_block_min, n_block_max = block_info.get_n_block_min_max(seqlen, m_block)
             pipeline_q.consumer_wait_w_index_phase(0, q_consumer_phase)
@@ -1120,8 +1120,8 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                         n_block=n_block_max - 1,
                         seqlen=seqlen,
                         kv_consumer_state=kv_consumer_state,
-                        mask_fn=partial(mask_fn, mask_mod=self.mask_mod),
-                        score_mod_fn=score_mod_fn,
+                        mask_fn=partial(mask_fn, mask_mod=self.domain_predicate),
+                        score_mod_fn=score_map_fn,
                         is_first_block=True,
                     )
                 else:
@@ -1132,7 +1132,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                         seqlen=seqlen,
                         mma_pv_fn=partial(mma_pv_fn, zero_init=True),
                         is_first_n_block=True,
-                        mask_fn=partial(mask_fn, mask_mod=self.mask_mod, mask_seqlen=True),
+                        mask_fn=partial(mask_fn, mask_mod=self.domain_predicate, mask_seqlen=True),
                     )
                     O_should_accumulate = True
                 # if cute.arch.thread_idx()[0] == 128: cute.printf("m_block = {}, n_block_max = {}, n_block_min = {}", m_block, n_block_max, n_block_min)
@@ -1151,7 +1151,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                             n_block=n_block_max - 1 - n_tile,
                             seqlen=seqlen,
                             mma_pv_fn=partial(mma_pv_fn, zero_init=not O_should_accumulate),
-                            mask_fn=partial(mask_fn, mask_mod=self.mask_mod, mask_seqlen=False),
+                            mask_fn=partial(mask_fn, mask_mod=self.domain_predicate, mask_seqlen=False),
                         )
                         O_should_accumulate = True
                     n_block_max = cutlass.min(n_block_max, n_block_min_causal_local_mask)
@@ -1166,7 +1166,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                         n_block=n_block_max - 1 - n_tile,
                         seqlen=seqlen,
                         mma_pv_fn=partial(mma_pv_fn, zero_init=not O_should_accumulate),
-                        mask_fn=partial(mask_fn, mask_mod=self.mask_mod, mask_seqlen=False),
+                        mask_fn=partial(mask_fn, mask_mod=self.domain_predicate, mask_seqlen=False),
                     )
                     O_should_accumulate = True
                 # Separate iterations with local masking on the left
@@ -1178,7 +1178,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                             n_block=n_block_max - 1 - n_tile,
                             seqlen=seqlen,
                             mma_pv_fn=partial(mma_pv_fn, zero_init=not O_should_accumulate),
-                            mask_fn=partial(mask_fn, mask_mod=self.mask_mod, mask_seqlen=False),
+                            mask_fn=partial(mask_fn, mask_mod=self.domain_predicate, mask_seqlen=False),
                         )
                         O_should_accumulate = True
                 # Release Q pipeline so the producer can load the next tile's Q
@@ -1209,9 +1209,9 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                     process_first_half_block,
                     process_last_half_block,
                     mask_fn,
-                    score_mod_fn,
+                    score_map_fn,
                     O_should_accumulate,
-                    self.mask_mod,
+                    self.domain_predicate,
                     fastdiv_mods,
                     self.intra_wg_overlap,
                     self.warp_scheduler_barrier_sync,
@@ -1244,8 +1244,8 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                         sink_val[r] = Float32(learnable_sink[q_head_idx])
 
             # normalize acc_O by row_sum and calculate the lse
-            row_scale = softmax.finalize(sink_val=sink_val)
-            softmax.rescale_O(acc_O, row_scale)
+            row_scale = softmax.finalize(output_scale=self.output_scale, extra_logit=sink_val)
+            softmax.rescale_weighted_accumulator(acc_O, row_scale)
 
             # ///////////////////////////////////////////////////////////////////////////////
             # Epilogue
@@ -1278,7 +1278,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         pipeline_k,
         tOrP: cute.Tensor,
         smem_copy_params: SimpleNamespace,
-        softmax: Softmax,
+        softmax: NormalizedExpFoldState,
         seqlen: SeqlenInfoQK,
         scores_scale: Optional[cute.Tensor] = None,
         acc_O: Optional[cute.Tensor] = None,
@@ -1301,7 +1301,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         # however, masking is being applied anyway, so essentially no perf hit
         mask_fn(acc_S, n_block=n_block, mask_seqlen=True)
 
-        row_scale = softmax.online_softmax(acc_S, is_first=is_first_block)
+        row_scale = softmax.update(acc_S, is_first=is_first_block)
 
         tOrP_acc = layout_utils.reshape_acc_to_frgA(acc_S)
         tOrP_cur = (
@@ -1333,14 +1333,14 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         mma_pv_fn: Callable,
         zero_init: bool,
         scores_scale: Optional[cute.Tensor] = None,
-        softmax: Optional[Softmax] = None,
+        softmax: Optional[NormalizedExpFoldState] = None,
         acc_O: Optional[cute.Tensor] = None,
     ):
         """Processes the final PV GEMM when using intra-warpgroup-overlap"""
 
         # For RescaleOBeforeGemm: rescale O before the final PV GEMM
         if const_expr(self.rescale_O_before_gemm):
-            softmax.rescale_O(acc_O, scores_scale)
+            softmax.rescale_weighted_accumulator(acc_O, scores_scale)
 
         pipeline_v.consumer_wait(kv_consumer_state, pipeline_v.consumer_try_wait(kv_consumer_state))
         mma_pv_fn(B_idx=kv_consumer_state.index, zero_init=zero_init, wg_wait=0)
@@ -1360,10 +1360,10 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         acc_O: cute.Tensor,
         tOrP: cute.Tensor,
         smem_copy_params: SimpleNamespace,
-        softmax: Softmax,
+        softmax: NormalizedExpFoldState,
         seqlen: SeqlenInfoQK,
         scores_scale: Optional[cute.Tensor] = None,  # not used
-        score_mod_fn: Optional[Callable] = None,
+        score_map_fn: Optional[Callable] = None,
         mask_fn: Optional[Callable] = None,
         is_first_n_block: cutlass.Constexpr = False,
         check_inf: cutlass.Constexpr = True,
@@ -1376,12 +1376,12 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         pipeline_k.consumer_release(smem_pipe_read)
 
         # handle score mods and masking
-        if const_expr(score_mod_fn is not None):
-            score_mod_fn(acc_S, n_block=n_block, seqlen=seqlen)
+        if const_expr(score_map_fn is not None):
+            score_map_fn(acc_S, n_block=n_block, seqlen=seqlen)
         if const_expr(mask_fn is not None):
             mask_fn(acc_S=acc_S, n_block=n_block)
 
-        row_scale = softmax.online_softmax(acc_S, is_first=is_first_n_block, check_inf=check_inf)
+        row_scale = softmax.update(acc_S, is_first=is_first_n_block, check_inf=check_inf)
         # if cute.arch.thread_idx()[0] == 0: cute.print_tensor(layout_utils.reshape_acc_to_mn(acc_S))
         tOrP_acc = layout_utils.reshape_acc_to_frgA(acc_S)
         tOrP_cur = (
@@ -1397,7 +1397,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         if const_expr(not self.mma_pv_is_rs):
             tPrP = smem_copy_params.smem_thr_copy_P.retile(tOrP_cur)
             cute.copy(smem_copy_params.smem_thr_copy_P, tPrP, smem_copy_params.tPsP)
-        softmax.rescale_O(acc_O, row_scale)
+        softmax.rescale_weighted_accumulator(acc_O, row_scale)
         if const_expr(not self.mma_pv_is_rs):
             # Fence and barrier to make sure smem store is visible to WGMMA
             cute.arch.fence_view_async_shared()
@@ -1422,10 +1422,10 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         acc_O: cute.Tensor,
         tOrP: cute.Tensor,
         smem_copy_params: SimpleNamespace,
-        softmax: Softmax,
+        softmax: NormalizedExpFoldState,
         seqlen: SeqlenInfoQK,
         scores_scale: Optional[cute.Tensor] = None,
-        score_mod_fn: Optional[Callable] = None,
+        score_map_fn: Optional[Callable] = None,
         mask_fn: Optional[Callable] = None,
         check_inf: cutlass.Constexpr = True,
     ):
@@ -1437,7 +1437,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         acc_S = mma_qk_fn(B_idx=smem_pipe_read.index, wg_wait=-1)
         # RescaleOBeforeGemm: rescale O while QK GEMM is in flight, before PV GEMM
         if const_expr(self.rescale_O_before_gemm):
-            softmax.rescale_O(acc_O, scores_scale)
+            softmax.rescale_weighted_accumulator(acc_O, scores_scale)
         pipeline_v.consumer_wait(smem_pipe_read_v, pipeline_v.consumer_try_wait(smem_pipe_read_v))
         # O += P @ V
         mma_pv_fn(B_idx=smem_pipe_read_v.index, wg_wait=-1)
@@ -1446,13 +1446,13 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         pipeline_k.consumer_release(smem_pipe_read)
 
         # handle score mods and masking
-        if const_expr(score_mod_fn is not None):
-            score_mod_fn(acc_S, n_block=n_block, seqlen=seqlen)
+        if const_expr(score_map_fn is not None):
+            score_map_fn(acc_S, n_block=n_block, seqlen=seqlen)
         if const_expr(mask_fn is not None):
             mask_fn(acc_S=acc_S, n_block=n_block)
         # if cute.arch.thread_idx()[0] == 128: cute.print_tensor(layout_utils.reshape_acc_to_mn(acc_S))
 
-        row_scale = softmax.online_softmax(acc_S, check_inf=check_inf)
+        row_scale = softmax.update(acc_S, check_inf=check_inf)
         warpgroup.wait_group(0)
         pipeline_v.consumer_release(smem_pipe_read_v)
         tOrP_acc = layout_utils.reshape_acc_to_frgA(acc_S)
@@ -1470,7 +1470,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
             tPrP = smem_copy_params.smem_thr_copy_P.retile(tOrP_cur)
             cute.copy(smem_copy_params.smem_thr_copy_P, tPrP, smem_copy_params.tPsP)
         if const_expr(not self.rescale_O_before_gemm):
-            softmax.rescale_O(acc_O, row_scale)
+            softmax.rescale_weighted_accumulator(acc_O, row_scale)
         if const_expr(self.rescale_O_before_gemm):
             scores_scale.store(row_scale.load())
         if const_expr(not self.mma_pv_is_rs):
@@ -1490,7 +1490,7 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
                 )
 
     @cute.jit
-    def apply_score_mod(
+    def apply_score_map(
         self,
         thr_mma_qk,
         batch_idx,
@@ -1508,10 +1508,10 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
         cS = cute.domain_offset((m_block * self.tile_m, n_block * self.tile_n), cS)
         tScS = thr_mma_qk.partition_C(cS)
 
-        apply_score_mod_inner(
+        apply_score_map_inner(
             acc_S,
             tScS,
-            self.score_mod,
+            self.score_map,
             batch_idx,
             head_idx,
             softmax_scale,
@@ -1520,8 +1520,8 @@ class ShuttleStreamingAttentionSm90(ShuttleStreamingAttentionBase):
             aux_tensors,
             fastdiv_mods,
             seqlen_info=seqlen,
-            constant_q_idx=None,
-            qhead_per_kvhead=self.qhead_per_kvhead if const_expr(self.pack_gqa) else 1,
+            constant_query_idx=None,
+            head_group_size=self.qhead_per_kvhead if const_expr(self.pack_gqa) else 1,
         )
 
     def warp_scheduler_barrier_sync(self):

@@ -8,6 +8,7 @@ from enum import StrEnum
 
 from tile_lifetime.ir import DType
 from tile_lifetime.plan import MaterializationRecord, RewriteExplanation
+from tile_lifetime.tensor_program import ScalarExpression
 from tile_lifetime.tile_program import TileProgram
 
 
@@ -235,6 +236,17 @@ class ExpertParallelStage:
 
 
 @dataclass(frozen=True)
+class MapFoldSemantics:
+    """Backend-neutral scalar bodies assigned to generic Map/Fold skeletons."""
+
+    pair_map: ScalarExpression
+    fold_contribution: ScalarExpression
+    fold_update: ScalarExpression
+    post_fold_map: ScalarExpression
+    explicit_rounding_functions: frozenset[str]
+
+
+@dataclass(frozen=True)
 class TileFlowEdge:
     """A logical tiled value flowing between expert-parallel stages."""
 
@@ -278,6 +290,7 @@ class ExpertParallelPlan:
     selected_exchange_projection: ExchangeRelationProjection
     gate_up_layout: GateUpLayoutContract
     schedule: ExpertParallelSchedule
+    map_fold_semantics: MapFoldSemantics
     merge_program: TileProgram
     stages: tuple[ExpertParallelStage, ...]
     tile_flows: tuple[TileFlowEdge, ...]

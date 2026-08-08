@@ -10,6 +10,12 @@ namespace tile_lifetime::mok_gmm_probe {
 using combiner = dispatch_mlp_swiglu_combiner<4, utils::RoutedPrecision::BF16>;
 using config = combiner::config;
 
+#include "generated_map_fold.inc"
+
+static const char *generated_map_fold_program_sha256() {
+    return SHUTTLE_MAP_FOLD_PROGRAM_SHA256;
+}
+
 struct globals {
     combiner::routed_activation_gl activations;
     combiner::routed_weight_gl weights;
@@ -151,9 +157,9 @@ static void grouped_gemm_out(
     kittens::py::launch_kernel<config, globals, grouped_gemm_kernel>(g);
 }
 
-static __global__ void swiglu_bf16x2_kernel(
-    const __nv_bfloat162 *gate,
-    const __nv_bfloat162 *up,
+static __global__ void adjacent_pair_map_bf16x2_kernel(
+    const __nv_bfloat162 *left,
+    const __nv_bfloat162 *right,
     __nv_bfloat162 *output,
     int64_t pairs
 ) {
@@ -161,41 +167,41 @@ static __global__ void swiglu_bf16x2_kernel(
     if (index >= pairs) {
         return;
     }
-    const float2 gate_values = __bfloat1622float2(gate[index]);
-    const float2 up_values = __bfloat1622float2(up[index]);
-    const float output_0 = gate_values.x / (1.0f + expf(-gate_values.x)) * up_values.x;
-    const float output_1 = gate_values.y / (1.0f + expf(-gate_values.y)) * up_values.y;
+    const float2 left_values = __bfloat1622float2(left[index]);
+    const float2 right_values = __bfloat1622float2(right[index]);
+    const float output_0 = generated_pair_map(left_values.x, right_values.x);
+    const float output_1 = generated_pair_map(left_values.y, right_values.y);
     output[index] = __floats2bfloat162_rn(output_0, output_1);
 }
 
-static void swiglu_bf16_out(const at::Tensor &gate, const at::Tensor &up, const at::Tensor &output) {
-    TORCH_CHECK(gate.is_cuda() && up.is_cuda() && output.is_cuda(), "all tensors must be CUDA tensors");
-    TORCH_CHECK(gate.is_contiguous() && up.is_contiguous() && output.is_contiguous(),
+static void adjacent_pair_map_bf16_out(const at::Tensor &left, const at::Tensor &right, const at::Tensor &output) {
+    TORCH_CHECK(left.is_cuda() && right.is_cuda() && output.is_cuda(), "all tensors must be CUDA tensors");
+    TORCH_CHECK(left.is_contiguous() && right.is_contiguous() && output.is_contiguous(),
                 "all tensors must be contiguous");
-    TORCH_CHECK(gate.scalar_type() == at::kBFloat16 && up.scalar_type() == at::kBFloat16
+    TORCH_CHECK(left.scalar_type() == at::kBFloat16 && right.scalar_type() == at::kBFloat16
                     && output.scalar_type() == at::kBFloat16,
-                "gate, up, and output must be BF16");
-    TORCH_CHECK(gate.sizes() == up.sizes() && gate.sizes() == output.sizes(),
-                "gate, up, and output must have identical shapes");
-    TORCH_CHECK(gate.device() == up.device() && gate.device() == output.device(),
+                "left, right, and output must be BF16");
+    TORCH_CHECK(left.sizes() == right.sizes() && left.sizes() == output.sizes(),
+                "left, right, and output must have identical shapes");
+    TORCH_CHECK(left.device() == right.device() && left.device() == output.device(),
                 "all tensors must be on the same device");
-    TORCH_CHECK(gate.numel() % 2 == 0, "SwiGLU tensors must contain an even number of elements");
+    TORCH_CHECK(left.numel() % 2 == 0, "pair-map tensors must contain an even number of elements");
 
     constexpr int threads = 256;
-    const int64_t pairs = gate.numel() / 2;
+    const int64_t pairs = left.numel() / 2;
     const int blocks = static_cast<int>((pairs + threads - 1) / threads);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    swiglu_bf16x2_kernel<<<blocks, threads, 0, stream>>>(
-        reinterpret_cast<const __nv_bfloat162 *>(gate.data_ptr<at::BFloat16>()),
-        reinterpret_cast<const __nv_bfloat162 *>(up.data_ptr<at::BFloat16>()),
+    adjacent_pair_map_bf16x2_kernel<<<blocks, threads, 0, stream>>>(
+        reinterpret_cast<const __nv_bfloat162 *>(left.data_ptr<at::BFloat16>()),
+        reinterpret_cast<const __nv_bfloat162 *>(right.data_ptr<at::BFloat16>()),
         reinterpret_cast<__nv_bfloat162 *>(output.data_ptr<at::BFloat16>()),
         pairs
     );
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-static __global__ void swiglu_row_halves_bf16x2_kernel(
-    const __nv_bfloat162 *gate_up,
+static __global__ void row_halves_pair_map_bf16x2_kernel(
+    const __nv_bfloat162 *pairs,
     __nv_bfloat162 *output,
     int rows,
     int intermediate_pairs
@@ -207,24 +213,24 @@ static __global__ void swiglu_row_halves_bf16x2_kernel(
     }
     const int row = static_cast<int>(index / intermediate_pairs);
     const int pair = static_cast<int>(index % intermediate_pairs);
-    const int64_t gate_index = static_cast<int64_t>(row) * 2 * intermediate_pairs + pair;
-    const int64_t up_index = gate_index + intermediate_pairs;
-    const float2 gate_values = __bfloat1622float2(gate_up[gate_index]);
-    const float2 up_values = __bfloat1622float2(gate_up[up_index]);
-    const float output_0 = gate_values.x / (1.0f + expf(-gate_values.x)) * up_values.x;
-    const float output_1 = gate_values.y / (1.0f + expf(-gate_values.y)) * up_values.y;
+    const int64_t left_index = static_cast<int64_t>(row) * 2 * intermediate_pairs + pair;
+    const int64_t right_index = left_index + intermediate_pairs;
+    const float2 left_values = __bfloat1622float2(pairs[left_index]);
+    const float2 right_values = __bfloat1622float2(pairs[right_index]);
+    const float output_0 = generated_pair_map(left_values.x, right_values.x);
+    const float output_1 = generated_pair_map(left_values.y, right_values.y);
     output[index] = __floats2bfloat162_rn(output_0, output_1);
 }
 
-static void swiglu_row_halves_bf16_out(const at::Tensor &gate_up, const at::Tensor &output) {
-    TORCH_CHECK(gate_up.is_cuda() && output.is_cuda(), "all tensors must be CUDA tensors");
-    TORCH_CHECK(gate_up.is_contiguous() && output.is_contiguous(), "all tensors must be contiguous");
-    TORCH_CHECK(gate_up.scalar_type() == at::kBFloat16 && output.scalar_type() == at::kBFloat16,
-                "gate_up and output must be BF16");
-    TORCH_CHECK(gate_up.dim() == 2 && output.dim() == 2, "gate_up and output must be rank 2");
-    TORCH_CHECK(gate_up.size(0) == output.size(0), "gate_up and output row counts must match");
-    TORCH_CHECK(gate_up.size(1) == 2 * output.size(1), "gate_up width must be twice the output width");
-    TORCH_CHECK(gate_up.device() == output.device(), "gate_up and output must be on the same device");
+static void row_halves_pair_map_bf16_out(const at::Tensor &pairs, const at::Tensor &output) {
+    TORCH_CHECK(pairs.is_cuda() && output.is_cuda(), "all tensors must be CUDA tensors");
+    TORCH_CHECK(pairs.is_contiguous() && output.is_contiguous(), "all tensors must be contiguous");
+    TORCH_CHECK(pairs.scalar_type() == at::kBFloat16 && output.scalar_type() == at::kBFloat16,
+                "pairs and output must be BF16");
+    TORCH_CHECK(pairs.dim() == 2 && output.dim() == 2, "pairs and output must be rank 2");
+    TORCH_CHECK(pairs.size(0) == output.size(0), "pairs and output row counts must match");
+    TORCH_CHECK(pairs.size(1) == 2 * output.size(1), "pairs width must be twice the output width");
+    TORCH_CHECK(pairs.device() == output.device(), "pairs and output must be on the same device");
     TORCH_CHECK(output.size(1) % 2 == 0, "output width must be even");
 
     constexpr int threads = 256;
@@ -233,8 +239,8 @@ static void swiglu_row_halves_bf16_out(const at::Tensor &gate_up, const at::Tens
     const int64_t elements = static_cast<int64_t>(rows) * intermediate_pairs;
     const int blocks = static_cast<int>((elements + threads - 1) / threads);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    swiglu_row_halves_bf16x2_kernel<<<blocks, threads, 0, stream>>>(
-        reinterpret_cast<const __nv_bfloat162 *>(gate_up.data_ptr<at::BFloat16>()),
+    row_halves_pair_map_bf16x2_kernel<<<blocks, threads, 0, stream>>>(
+        reinterpret_cast<const __nv_bfloat162 *>(pairs.data_ptr<at::BFloat16>()),
         reinterpret_cast<__nv_bfloat162 *>(output.data_ptr<at::BFloat16>()),
         rows,
         intermediate_pairs
@@ -446,10 +452,10 @@ static void fixed_capacity_relation_plan_out(
 }
 
 template <bool explicit_rounding>
-static __global__ void fixed_route_merge_kernel(
-    const __nv_bfloat162 *expert_output,
-    const int64_t *route_rows,
-    const float *route_weights,
+static __global__ void indexed_weighted_ordered_fold_bf16x2_kernel(
+    const __nv_bfloat162 *values,
+    const int64_t *row_indices,
+    const float *weights,
     __nv_bfloat162 *output,
     int tokens,
     int topk,
@@ -465,74 +471,80 @@ static __global__ void fixed_route_merge_kernel(
     float2 value = make_float2(0.0f, 0.0f);
     #pragma unroll 1
     for (int route_slot = 0; route_slot < topk; ++route_slot) {
-        const int64_t route_index = static_cast<int64_t>(token) * topk + route_slot;
-        const int64_t expert_row = route_rows[route_index];
-        if (expert_row >= 0) {
-            const float2 route_value = __bfloat1622float2(
-                expert_output[expert_row * hidden_pairs + feature_pair]
+        const int64_t fold_index = static_cast<int64_t>(token) * topk + route_slot;
+        const int64_t value_row = row_indices[fold_index];
+        if (value_row >= 0) {
+            const float2 item = __bfloat1622float2(
+                values[value_row * hidden_pairs + feature_pair]
             );
-            const float weight = route_weights[route_index];
+            const float weight = weights[fold_index];
             if constexpr (explicit_rounding) {
-                value.x = __fadd_rn(value.x, __fmul_rn(route_value.x, weight));
-                value.y = __fadd_rn(value.y, __fmul_rn(route_value.y, weight));
+                value.x = generated_fold_update(value.x, generated_fold_contribution(item.x, weight));
+                value.y = generated_fold_update(value.y, generated_fold_contribution(item.y, weight));
             } else {
-                value.x += route_value.x * weight;
-                value.y += route_value.y * weight;
+                value.x = generated_fold_update_relaxed(
+                    value.x,
+                    generated_fold_contribution_relaxed(item.x, weight)
+                );
+                value.y = generated_fold_update_relaxed(
+                    value.y,
+                    generated_fold_contribution_relaxed(item.y, weight)
+                );
             }
         }
     }
     output[index] = __floats2bfloat162_rn(value.x, value.y);
 }
 
-static void fixed_route_merge_out_impl(
-    const at::Tensor &expert_output,
-    const at::Tensor &route_rows,
-    const at::Tensor &route_weights,
+static void indexed_weighted_ordered_fold_bf16_out_impl(
+    const at::Tensor &values,
+    const at::Tensor &row_indices,
+    const at::Tensor &weights,
     const at::Tensor &output,
     bool explicit_rounding
 ) {
-    TORCH_CHECK(expert_output.is_cuda() && route_rows.is_cuda() && route_weights.is_cuda() && output.is_cuda(),
+    TORCH_CHECK(values.is_cuda() && row_indices.is_cuda() && weights.is_cuda() && output.is_cuda(),
                 "all tensors must be CUDA tensors");
-    TORCH_CHECK(expert_output.is_contiguous() && route_rows.is_contiguous() && route_weights.is_contiguous()
+    TORCH_CHECK(values.is_contiguous() && row_indices.is_contiguous() && weights.is_contiguous()
                     && output.is_contiguous(),
                 "all tensors must be contiguous");
-    TORCH_CHECK(expert_output.scalar_type() == at::kBFloat16 && output.scalar_type() == at::kBFloat16,
-                "expert_output and output must be BF16");
-    TORCH_CHECK(route_rows.scalar_type() == at::kLong, "route_rows must be int64");
-    TORCH_CHECK(route_weights.scalar_type() == at::kFloat, "route_weights must be FP32");
-    TORCH_CHECK(expert_output.dim() == 2 && route_rows.dim() == 2 && route_weights.dim() == 2
+    TORCH_CHECK(values.scalar_type() == at::kBFloat16 && output.scalar_type() == at::kBFloat16,
+                "values and output must be BF16");
+    TORCH_CHECK(row_indices.scalar_type() == at::kLong, "row_indices must be int64");
+    TORCH_CHECK(weights.scalar_type() == at::kFloat, "weights must be FP32");
+    TORCH_CHECK(values.dim() == 2 && row_indices.dim() == 2 && weights.dim() == 2
                     && output.dim() == 2,
-                "invalid tensor ranks for fixed route merge");
-    TORCH_CHECK(route_rows.sizes() == route_weights.sizes(), "route rows and weights must have identical shapes");
-    TORCH_CHECK(output.size(0) == route_rows.size(0), "output token count must match route metadata");
-    TORCH_CHECK(output.size(1) == expert_output.size(1), "hidden dimensions must match");
+                "invalid tensor ranks for indexed ordered Fold");
+    TORCH_CHECK(row_indices.sizes() == weights.sizes(), "row indices and weights must have identical shapes");
+    TORCH_CHECK(output.size(0) == row_indices.size(0), "output rows must match Fold metadata");
+    TORCH_CHECK(output.size(1) == values.size(1), "feature dimensions must match");
     TORCH_CHECK(output.size(1) % 2 == 0, "hidden dimension must be even for BF16x2 merge");
-    TORCH_CHECK(expert_output.device() == route_rows.device() && expert_output.device() == route_weights.device()
-                    && expert_output.device() == output.device(),
+    TORCH_CHECK(values.device() == row_indices.device() && values.device() == weights.device()
+                    && values.device() == output.device(),
                 "all tensors must be on the same device");
 
     constexpr int threads = 256;
     const int tokens = static_cast<int>(output.size(0));
-    const int topk = static_cast<int>(route_rows.size(1));
+    const int topk = static_cast<int>(row_indices.size(1));
     const int hidden_pairs = static_cast<int>(output.size(1) / 2);
     const int64_t elements = static_cast<int64_t>(tokens) * hidden_pairs;
     const int blocks = static_cast<int>((elements + threads - 1) / threads);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     if (explicit_rounding) {
-        fixed_route_merge_kernel<true><<<blocks, threads, 0, stream>>>(
-            reinterpret_cast<const __nv_bfloat162 *>(expert_output.data_ptr<at::BFloat16>()),
-            route_rows.data_ptr<int64_t>(),
-            route_weights.data_ptr<float>(),
+        indexed_weighted_ordered_fold_bf16x2_kernel<true><<<blocks, threads, 0, stream>>>(
+            reinterpret_cast<const __nv_bfloat162 *>(values.data_ptr<at::BFloat16>()),
+            row_indices.data_ptr<int64_t>(),
+            weights.data_ptr<float>(),
             reinterpret_cast<__nv_bfloat162 *>(output.data_ptr<at::BFloat16>()),
             tokens,
             topk,
             hidden_pairs
         );
     } else {
-        fixed_route_merge_kernel<false><<<blocks, threads, 0, stream>>>(
-            reinterpret_cast<const __nv_bfloat162 *>(expert_output.data_ptr<at::BFloat16>()),
-            route_rows.data_ptr<int64_t>(),
-            route_weights.data_ptr<float>(),
+        indexed_weighted_ordered_fold_bf16x2_kernel<false><<<blocks, threads, 0, stream>>>(
+            reinterpret_cast<const __nv_bfloat162 *>(values.data_ptr<at::BFloat16>()),
+            row_indices.data_ptr<int64_t>(),
+            weights.data_ptr<float>(),
             reinterpret_cast<__nv_bfloat162 *>(output.data_ptr<at::BFloat16>()),
             tokens,
             topk,
@@ -542,30 +554,30 @@ static void fixed_route_merge_out_impl(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-static void fixed_route_merge_out(
-    const at::Tensor &expert_output,
-    const at::Tensor &route_rows,
-    const at::Tensor &route_weights,
+static void indexed_weighted_ordered_fold_bf16_out(
+    const at::Tensor &values,
+    const at::Tensor &row_indices,
+    const at::Tensor &weights,
     const at::Tensor &output
 ) {
-    fixed_route_merge_out_impl(expert_output, route_rows, route_weights, output, true);
+    indexed_weighted_ordered_fold_bf16_out_impl(values, row_indices, weights, output, true);
 }
 
-static void fixed_route_merge_fma_out(
-    const at::Tensor &expert_output,
-    const at::Tensor &route_rows,
-    const at::Tensor &route_weights,
+static void indexed_weighted_ordered_fold_relaxed_bf16_out(
+    const at::Tensor &values,
+    const at::Tensor &row_indices,
+    const at::Tensor &weights,
     const at::Tensor &output
 ) {
-    fixed_route_merge_out_impl(expert_output, route_rows, route_weights, output, false);
+    indexed_weighted_ordered_fold_bf16_out_impl(values, row_indices, weights, output, false);
 }
 
-static __global__ void fixed_route_merge_shared_kernel(
-    const __nv_bfloat16 *expert_output,
-    const int64_t *route_rows,
-    const float *route_weights,
-    const int64_t *source_receiver_rows,
-    const __nv_bfloat16 *shared_output,
+static __global__ void indirect_weighted_fold_base_map_kernel(
+    const __nv_bfloat16 *values,
+    const int64_t *row_indices,
+    const float *weights,
+    const int64_t *source_rows,
+    const __nv_bfloat16 *base,
     __nv_bfloat16 *output,
     int tokens,
     int topk,
@@ -578,70 +590,75 @@ static __global__ void fixed_route_merge_shared_kernel(
     }
     const int token = static_cast<int>(index / hidden);
     const int feature = static_cast<int>(index % hidden);
-    const int64_t receiver_row = source_receiver_rows[token];
-    float routed_value = 0.0f;
-    if (receiver_row >= 0) {
+    const int64_t source_row = source_rows[token];
+    float folded = 0.0f;
+    if (source_row >= 0) {
         #pragma unroll 1
         for (int route_slot = 0; route_slot < topk; ++route_slot) {
-            const int64_t route_index = receiver_row * topk + route_slot;
-            const int64_t expert_row = route_rows[route_index];
-            if (expert_row >= 0) {
-                const float route_value = __bfloat162float(expert_output[expert_row * hidden + feature]);
-                routed_value = __fadd_rn(routed_value, __fmul_rn(route_value, route_weights[route_index]));
+            const int64_t fold_index = source_row * topk + route_slot;
+            const int64_t value_row = row_indices[fold_index];
+            if (value_row >= 0) {
+                const float item = __bfloat162float(values[value_row * hidden + feature]);
+                folded = generated_fold_update(
+                    folded,
+                    generated_fold_contribution(item, weights[fold_index])
+                );
             }
         }
     }
-    const __nv_bfloat16 routed_bf16 = __float2bfloat16_rn(routed_value);
-    const float combined_value = __bfloat162float(routed_bf16) + __bfloat162float(shared_output[index]);
+    const __nv_bfloat16 folded_bf16 = __float2bfloat16_rn(folded);
+    const float combined_value = generated_post_fold_map(
+        __bfloat162float(folded_bf16),
+        __bfloat162float(base[index])
+    );
     output[index] = __float2bfloat16_rn(combined_value);
 }
 
-static void fixed_route_merge_shared_out(
-    const at::Tensor &expert_output,
-    const at::Tensor &route_rows,
-    const at::Tensor &route_weights,
-    const at::Tensor &source_receiver_rows,
-    const at::Tensor &shared_output,
+static void indirect_weighted_fold_base_map_out(
+    const at::Tensor &values,
+    const at::Tensor &row_indices,
+    const at::Tensor &weights,
+    const at::Tensor &source_rows,
+    const at::Tensor &base,
     const at::Tensor &output
 ) {
-    TORCH_CHECK(expert_output.is_cuda() && route_rows.is_cuda() && route_weights.is_cuda()
-                    && source_receiver_rows.is_cuda() && shared_output.is_cuda() && output.is_cuda(),
+    TORCH_CHECK(values.is_cuda() && row_indices.is_cuda() && weights.is_cuda()
+                    && source_rows.is_cuda() && base.is_cuda() && output.is_cuda(),
                 "all tensors must be CUDA tensors");
-    TORCH_CHECK(expert_output.is_contiguous() && route_rows.is_contiguous() && route_weights.is_contiguous()
-                    && source_receiver_rows.is_contiguous() && shared_output.is_contiguous() && output.is_contiguous(),
+    TORCH_CHECK(values.is_contiguous() && row_indices.is_contiguous() && weights.is_contiguous()
+                    && source_rows.is_contiguous() && base.is_contiguous() && output.is_contiguous(),
                 "all tensors must be contiguous");
-    TORCH_CHECK(expert_output.scalar_type() == at::kBFloat16 && shared_output.scalar_type() == at::kBFloat16
+    TORCH_CHECK(values.scalar_type() == at::kBFloat16 && base.scalar_type() == at::kBFloat16
                     && output.scalar_type() == at::kBFloat16,
-                "expert_output, shared_output, and output must be BF16");
-    TORCH_CHECK(route_rows.scalar_type() == at::kLong && source_receiver_rows.scalar_type() == at::kLong,
-                "route_rows and source_receiver_rows must be int64");
-    TORCH_CHECK(route_weights.scalar_type() == at::kFloat, "route_weights must be FP32");
-    TORCH_CHECK(expert_output.dim() == 2 && route_rows.dim() == 2 && route_weights.dim() == 2
-                    && source_receiver_rows.dim() == 1 && shared_output.dim() == 2 && output.dim() == 2,
-                "invalid tensor ranks for fixed route merge and shared add");
-    TORCH_CHECK(route_rows.sizes() == route_weights.sizes(), "route rows and weights must have identical shapes");
-    TORCH_CHECK(output.sizes() == shared_output.sizes(), "output and shared_output must have identical shapes");
-    TORCH_CHECK(output.size(0) == source_receiver_rows.size(0),
-                "output token count must match source_receiver_rows");
-    TORCH_CHECK(output.size(1) == expert_output.size(1), "hidden dimensions must match");
-    TORCH_CHECK(expert_output.device() == route_rows.device() && expert_output.device() == route_weights.device()
-                    && expert_output.device() == source_receiver_rows.device()
-                    && expert_output.device() == shared_output.device() && expert_output.device() == output.device(),
+                "values, base, and output must be BF16");
+    TORCH_CHECK(row_indices.scalar_type() == at::kLong && source_rows.scalar_type() == at::kLong,
+                "row_indices and source_rows must be int64");
+    TORCH_CHECK(weights.scalar_type() == at::kFloat, "weights must be FP32");
+    TORCH_CHECK(values.dim() == 2 && row_indices.dim() == 2 && weights.dim() == 2
+                    && source_rows.dim() == 1 && base.dim() == 2 && output.dim() == 2,
+                "invalid tensor ranks for indirect ordered Fold and base Map");
+    TORCH_CHECK(row_indices.sizes() == weights.sizes(), "row indices and weights must have identical shapes");
+    TORCH_CHECK(output.sizes() == base.sizes(), "output and base must have identical shapes");
+    TORCH_CHECK(output.size(0) == source_rows.size(0), "output rows must match source_rows");
+    TORCH_CHECK(output.size(1) == values.size(1), "feature dimensions must match");
+    TORCH_CHECK(values.device() == row_indices.device() && values.device() == weights.device()
+                    && values.device() == source_rows.device()
+                    && values.device() == base.device() && values.device() == output.device(),
                 "all tensors must be on the same device");
 
     constexpr int threads = 256;
     const int tokens = static_cast<int>(output.size(0));
-    const int topk = static_cast<int>(route_rows.size(1));
+    const int topk = static_cast<int>(row_indices.size(1));
     const int hidden = static_cast<int>(output.size(1));
     const int64_t elements = static_cast<int64_t>(tokens) * hidden;
     const int blocks = static_cast<int>((elements + threads - 1) / threads);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    fixed_route_merge_shared_kernel<<<blocks, threads, 0, stream>>>(
-        reinterpret_cast<const __nv_bfloat16 *>(expert_output.data_ptr<at::BFloat16>()),
-        route_rows.data_ptr<int64_t>(),
-        route_weights.data_ptr<float>(),
-        source_receiver_rows.data_ptr<int64_t>(),
-        reinterpret_cast<const __nv_bfloat16 *>(shared_output.data_ptr<at::BFloat16>()),
+    indirect_weighted_fold_base_map_kernel<<<blocks, threads, 0, stream>>>(
+        reinterpret_cast<const __nv_bfloat16 *>(values.data_ptr<at::BFloat16>()),
+        row_indices.data_ptr<int64_t>(),
+        weights.data_ptr<float>(),
+        source_rows.data_ptr<int64_t>(),
+        reinterpret_cast<const __nv_bfloat16 *>(base.data_ptr<at::BFloat16>()),
         reinterpret_cast<__nv_bfloat16 *>(output.data_ptr<at::BFloat16>()),
         tokens,
         topk,
@@ -650,10 +667,10 @@ static void fixed_route_merge_shared_out(
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
-static __global__ void fixed_rank_merge_shared_kernel(
-    const __nv_bfloat162 *rank_partials,
-    const int64_t *rank_token_rows,
-    const __nv_bfloat162 *shared_output,
+static __global__ void partitioned_ordered_fold_base_map_bf16x2_kernel(
+    const __nv_bfloat162 *partials,
+    const int64_t *partition_rows,
+    const __nv_bfloat162 *base,
     __nv_bfloat162 *output,
     int ranks,
     int tokens,
@@ -666,59 +683,63 @@ static __global__ void fixed_rank_merge_shared_kernel(
     }
     const int token = static_cast<int>(index / hidden_pairs);
     const int feature_pair = static_cast<int>(index % hidden_pairs);
-    float2 value = __bfloat1622float2(shared_output[index]);
+    float2 value = make_float2(0.0f, 0.0f);
     #pragma unroll 1
     for (int rank = 0; rank < ranks; ++rank) {
-        const int64_t row = rank_token_rows[static_cast<int64_t>(rank) * tokens + token];
+        const int64_t row = partition_rows[static_cast<int64_t>(rank) * tokens + token];
         if (row >= 0) {
             const float2 partial = __bfloat1622float2(
-                rank_partials[row * hidden_pairs + feature_pair]
+                partials[row * hidden_pairs + feature_pair]
             );
-            value.x = __fadd_rn(value.x, partial.x);
-            value.y = __fadd_rn(value.y, partial.y);
+            value.x = generated_fold_update(value.x, partial.x);
+            value.y = generated_fold_update(value.y, partial.y);
         }
     }
-    output[index] = __floats2bfloat162_rn(value.x, value.y);
+    const float2 base_value = __bfloat1622float2(base[index]);
+    output[index] = __floats2bfloat162_rn(
+        generated_post_fold_map(value.x, base_value.x),
+        generated_post_fold_map(value.y, base_value.y)
+    );
 }
 
-static void fixed_rank_merge_shared_out(
-    const at::Tensor &rank_partials,
-    const at::Tensor &rank_token_rows,
-    const at::Tensor &shared_output,
+static void partitioned_ordered_fold_base_map_bf16_out(
+    const at::Tensor &partials,
+    const at::Tensor &partition_rows,
+    const at::Tensor &base,
     const at::Tensor &output
 ) {
-    TORCH_CHECK(rank_partials.is_cuda() && rank_token_rows.is_cuda() && shared_output.is_cuda()
+    TORCH_CHECK(partials.is_cuda() && partition_rows.is_cuda() && base.is_cuda()
                     && output.is_cuda(),
                 "all tensors must be CUDA tensors");
-    TORCH_CHECK(rank_partials.is_contiguous() && rank_token_rows.is_contiguous() && shared_output.is_contiguous()
+    TORCH_CHECK(partials.is_contiguous() && partition_rows.is_contiguous() && base.is_contiguous()
                     && output.is_contiguous(),
                 "all tensors must be contiguous");
-    TORCH_CHECK(rank_partials.scalar_type() == at::kBFloat16 && shared_output.scalar_type() == at::kBFloat16
+    TORCH_CHECK(partials.scalar_type() == at::kBFloat16 && base.scalar_type() == at::kBFloat16
                     && output.scalar_type() == at::kBFloat16,
-                "rank_partials, shared_output, and output must be BF16");
-    TORCH_CHECK(rank_token_rows.scalar_type() == at::kLong, "rank_token_rows must be int64");
-    TORCH_CHECK(rank_partials.dim() == 2 && rank_token_rows.dim() == 2 && shared_output.dim() == 2
+                "partials, base, and output must be BF16");
+    TORCH_CHECK(partition_rows.scalar_type() == at::kLong, "partition_rows must be int64");
+    TORCH_CHECK(partials.dim() == 2 && partition_rows.dim() == 2 && base.dim() == 2
                     && output.dim() == 2,
-                "invalid tensor ranks for fixed rank merge and shared add");
-    TORCH_CHECK(output.sizes() == shared_output.sizes(), "output and shared_output must have identical shapes");
-    TORCH_CHECK(rank_token_rows.size(1) == output.size(0), "rank_token_rows token count must match output");
-    TORCH_CHECK(rank_partials.size(1) == output.size(1), "hidden dimensions must match");
+                "invalid tensor ranks for partitioned ordered Fold and base Map");
+    TORCH_CHECK(output.sizes() == base.sizes(), "output and base must have identical shapes");
+    TORCH_CHECK(partition_rows.size(1) == output.size(0), "partition_rows item count must match output");
+    TORCH_CHECK(partials.size(1) == output.size(1), "feature dimensions must match");
     TORCH_CHECK(output.size(1) % 2 == 0, "hidden dimension must be even for BF16x2 merge");
-    TORCH_CHECK(rank_partials.device() == rank_token_rows.device() && rank_partials.device() == shared_output.device()
-                    && rank_partials.device() == output.device(),
+    TORCH_CHECK(partials.device() == partition_rows.device() && partials.device() == base.device()
+                    && partials.device() == output.device(),
                 "all tensors must be on the same device");
 
     constexpr int threads = 256;
-    const int ranks = static_cast<int>(rank_token_rows.size(0));
+    const int ranks = static_cast<int>(partition_rows.size(0));
     const int tokens = static_cast<int>(output.size(0));
     const int hidden_pairs = static_cast<int>(output.size(1) / 2);
     const int64_t elements = static_cast<int64_t>(tokens) * hidden_pairs;
     const int blocks = static_cast<int>((elements + threads - 1) / threads);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    fixed_rank_merge_shared_kernel<<<blocks, threads, 0, stream>>>(
-        reinterpret_cast<const __nv_bfloat162 *>(rank_partials.data_ptr<at::BFloat16>()),
-        rank_token_rows.data_ptr<int64_t>(),
-        reinterpret_cast<const __nv_bfloat162 *>(shared_output.data_ptr<at::BFloat16>()),
+    partitioned_ordered_fold_base_map_bf16x2_kernel<<<blocks, threads, 0, stream>>>(
+        reinterpret_cast<const __nv_bfloat162 *>(partials.data_ptr<at::BFloat16>()),
+        partition_rows.data_ptr<int64_t>(),
+        reinterpret_cast<const __nv_bfloat162 *>(base.data_ptr<at::BFloat16>()),
         reinterpret_cast<__nv_bfloat162 *>(output.data_ptr<at::BFloat16>()),
         ranks,
         tokens,
@@ -731,6 +752,10 @@ static void fixed_rank_merge_shared_out(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     module.def(
+        "generated_map_fold_program_sha256",
+        &tile_lifetime::mok_gmm_probe::generated_map_fold_program_sha256
+    );
+    module.def(
         "grouped_gemm_out",
         &tile_lifetime::mok_gmm_probe::grouped_gemm_out,
         pybind11::arg("activations"),
@@ -739,16 +764,16 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
         pybind11::arg("output")
     );
     module.def(
-        "swiglu_bf16_out",
-        &tile_lifetime::mok_gmm_probe::swiglu_bf16_out,
-        pybind11::arg("gate"),
-        pybind11::arg("up"),
+        "adjacent_pair_map_bf16_out",
+        &tile_lifetime::mok_gmm_probe::adjacent_pair_map_bf16_out,
+        pybind11::arg("left"),
+        pybind11::arg("right"),
         pybind11::arg("output")
     );
     module.def(
-        "swiglu_row_halves_bf16_out",
-        &tile_lifetime::mok_gmm_probe::swiglu_row_halves_bf16_out,
-        pybind11::arg("gate_up"),
+        "row_halves_pair_map_bf16_out",
+        &tile_lifetime::mok_gmm_probe::row_halves_pair_map_bf16_out,
+        pybind11::arg("pairs"),
         pybind11::arg("output")
     );
     module.def(
@@ -770,37 +795,37 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
         pybind11::arg("overflow")
     );
     module.def(
-        "fixed_route_merge_out",
-        &tile_lifetime::mok_gmm_probe::fixed_route_merge_out,
-        pybind11::arg("expert_output"),
-        pybind11::arg("route_rows"),
-        pybind11::arg("route_weights"),
+        "indexed_weighted_ordered_fold_bf16_out",
+        &tile_lifetime::mok_gmm_probe::indexed_weighted_ordered_fold_bf16_out,
+        pybind11::arg("values"),
+        pybind11::arg("row_indices"),
+        pybind11::arg("weights"),
         pybind11::arg("output")
     );
     module.def(
-        "fixed_route_merge_fma_out",
-        &tile_lifetime::mok_gmm_probe::fixed_route_merge_fma_out,
-        pybind11::arg("expert_output"),
-        pybind11::arg("route_rows"),
-        pybind11::arg("route_weights"),
+        "indexed_weighted_ordered_fold_relaxed_bf16_out",
+        &tile_lifetime::mok_gmm_probe::indexed_weighted_ordered_fold_relaxed_bf16_out,
+        pybind11::arg("values"),
+        pybind11::arg("row_indices"),
+        pybind11::arg("weights"),
         pybind11::arg("output")
     );
     module.def(
-        "fixed_route_merge_shared_out",
-        &tile_lifetime::mok_gmm_probe::fixed_route_merge_shared_out,
-        pybind11::arg("expert_output"),
-        pybind11::arg("route_rows"),
-        pybind11::arg("route_weights"),
-        pybind11::arg("source_receiver_rows"),
-        pybind11::arg("shared_output"),
+        "indirect_weighted_fold_base_map_out",
+        &tile_lifetime::mok_gmm_probe::indirect_weighted_fold_base_map_out,
+        pybind11::arg("values"),
+        pybind11::arg("row_indices"),
+        pybind11::arg("weights"),
+        pybind11::arg("source_rows"),
+        pybind11::arg("base"),
         pybind11::arg("output")
     );
     module.def(
-        "fixed_rank_merge_shared_out",
-        &tile_lifetime::mok_gmm_probe::fixed_rank_merge_shared_out,
-        pybind11::arg("rank_partials"),
-        pybind11::arg("rank_token_rows"),
-        pybind11::arg("shared_output"),
+        "partitioned_ordered_fold_base_map_bf16_out",
+        &tile_lifetime::mok_gmm_probe::partitioned_ordered_fold_base_map_bf16_out,
+        pybind11::arg("partials"),
+        pybind11::arg("partition_rows"),
+        pybind11::arg("base"),
         pybind11::arg("output")
     );
 }

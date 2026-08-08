@@ -91,125 +91,154 @@ def compile_erased_dense_transformer_region(
 
 
 def _recover_erased_region(operations) -> _ErasedDenseRegion:
-    if len(operations) != 36:
-        raise ValueError(f"dense Flow planner expects 36 generic operations, found {len(operations)}")
-    expected_types = (
-        FlowMap,
-        FlowContract,
-        FlowMap,
-        FlowMap,
-        FlowMap,
-        FlowContract,
-        FlowMap,
-        FlowDomainRestriction,
-        FlowFold,
-        FlowMap,
-        FlowMap,
-        FlowFold,
-        FlowContract,
-        FlowMap,
-        FlowMap,
-        FlowContract,
-        FlowMap,
-        FlowMap,
-        FlowFold,
-        FlowMap,
-        FlowMap,
-        FlowMap,
-        FlowContract,
-        FlowMap,
-        FlowContract,
-        FlowMap,
-        FlowMap,
-        FlowFold,
-        FlowMap,
-        FlowMap,
-        FlowMap,
-        FlowMap,
-        FlowContract,
-        FlowMap,
-        FlowMap,
-        FlowMap,
+    producer_by_value = {output.name: operation for operation in operations for output in _operation_outputs(operation)}
+    consumers_by_value: dict[str, list[object]] = {}
+    for operation in operations:
+        for input_value in _operation_inputs(operation):
+            consumers_by_value.setdefault(input_value.name, []).append(operation)
+
+    score_domain = _one(
+        (operation for operation in operations if isinstance(operation, FlowDomainRestriction)),
+        "normalized weighted Fold domain restriction",
     )
-    for index, (operation, expected_type) in enumerate(zip(operations, expected_types, strict=True)):
-        if not isinstance(operation, expected_type):
-            raise ValueError(
-                f"dense Flow operation {index} is {type(operation).__name__}, expected {expected_type.__name__}"
-            )
-    (
-        input_view,
-        initial_projection,
-        initial_partition,
-        initial_pair_q,
-        initial_pair_k,
-        score_contract,
-        score_map,
-        score_domain,
-        maximum_fold,
-        center_map,
-        exponential_map,
-        sum_fold,
-        value_contract,
-        normalize_map,
-        attention_view,
-        output_contract,
-        first_add,
-        first_square,
-        first_fold,
-        first_row_finalize,
-        first_feature_scale,
-        first_normalized_scale,
-        gate_contract,
-        pairwise_map,
-        down_contract,
-        second_add,
-        second_square,
-        second_fold,
-        second_row_finalize,
-        second_feature_scale,
-        second_normalized_scale,
-        next_view,
-        next_projection,
-        next_partition,
-        next_pair_q,
-        next_pair_k,
-    ) = operations
-    assert isinstance(input_view, FlowMap)
-    assert isinstance(initial_projection, FlowContract)
-    assert isinstance(initial_partition, FlowMap)
-    assert isinstance(initial_pair_q, FlowMap)
-    assert isinstance(initial_pair_k, FlowMap)
-    assert isinstance(score_contract, FlowContract)
-    assert isinstance(score_map, FlowMap)
-    assert isinstance(score_domain, FlowDomainRestriction)
-    assert isinstance(maximum_fold, FlowFold)
-    assert isinstance(center_map, FlowMap)
-    assert isinstance(exponential_map, FlowMap)
-    assert isinstance(sum_fold, FlowFold)
-    assert isinstance(value_contract, FlowContract)
-    assert isinstance(normalize_map, FlowMap)
-    assert isinstance(attention_view, FlowMap)
-    assert isinstance(output_contract, FlowContract)
-    assert isinstance(first_add, FlowMap)
-    assert isinstance(first_square, FlowMap)
-    assert isinstance(first_fold, FlowFold)
-    assert isinstance(first_row_finalize, FlowMap)
-    assert isinstance(first_feature_scale, FlowMap)
-    assert isinstance(first_normalized_scale, FlowMap)
-    assert isinstance(gate_contract, FlowContract)
-    assert isinstance(pairwise_map, FlowMap)
-    assert isinstance(down_contract, FlowContract)
-    assert isinstance(second_add, FlowMap)
-    assert isinstance(second_square, FlowMap)
-    assert isinstance(second_fold, FlowFold)
-    assert isinstance(second_row_finalize, FlowMap)
-    assert isinstance(second_feature_scale, FlowMap)
-    assert isinstance(second_normalized_scale, FlowMap)
-    assert isinstance(next_view, FlowMap)
-    assert isinstance(next_projection, FlowContract)
-    assert isinstance(next_partition, FlowMap)
-    assert isinstance(next_pair_q, FlowMap)
-    assert isinstance(next_pair_k, FlowMap)
+    score_map = _producer(producer_by_value, score_domain.input, FlowMap, "score Map")
+    score_contract = _producer(producer_by_value, score_map.inputs[0], FlowContract, "score Contract")
+    maximum_fold = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(score_domain.output.name, ())
+            if isinstance(operation, FlowFold) and operation.reducer.value == "maximum"
+        ),
+        "maximum Fold",
+    )
+    center_map = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(score_domain.output.name, ())
+            if isinstance(operation, FlowMap) and maximum_fold.output in operation.inputs
+        ),
+        "center Map",
+    )
+    exponential_map = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(center_map.outputs[0].name, ())
+            if isinstance(operation, FlowMap)
+            and any(expression.kind is ScalarExpressionKind.EXP for expression in operation.expressions)
+        ),
+        "exponential Map",
+    )
+    sum_fold = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(exponential_map.outputs[0].name, ())
+            if isinstance(operation, FlowFold) and operation.reducer.value == "sum"
+        ),
+        "sum Fold",
+    )
+    value_contract = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(exponential_map.outputs[0].name, ())
+            if isinstance(operation, FlowContract)
+        ),
+        "weighted-value Contract",
+    )
+    normalize_map = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(value_contract.output.name, ())
+            if isinstance(operation, FlowMap) and sum_fold.output in operation.inputs
+        ),
+        "normalized weighted Fold finalization",
+    )
+
+    initial_pair_q = _producer(producer_by_value, score_contract.inputs[0], FlowMap, "query pair Map")
+    initial_pair_k = _producer(producer_by_value, score_contract.inputs[1], FlowMap, "key pair Map")
+    if any(operation.iteration is not FlowMapIteration.ADJACENT_PAIR for operation in (initial_pair_q, initial_pair_k)):
+        raise ValueError("score Contract inputs are not produced by adjacent-pair Maps")
+    query_partition_output = _one(
+        (
+            input_value
+            for input_value in initial_pair_q.inputs
+            if isinstance(producer_by_value.get(input_value.name), FlowMap)
+            and producer_by_value[input_value.name].iteration is FlowMapIteration.PARTITION
+        ),
+        "query projection partition output",
+    )
+    key_partition_output = _one(
+        (
+            input_value
+            for input_value in initial_pair_k.inputs
+            if isinstance(producer_by_value.get(input_value.name), FlowMap)
+            and producer_by_value[input_value.name].iteration is FlowMapIteration.PARTITION
+        ),
+        "key projection partition output",
+    )
+    initial_partition = _producer(producer_by_value, query_partition_output, FlowMap, "initial partition Map")
+    if producer_by_value.get(key_partition_output.name) is not initial_partition:
+        raise ValueError("query and key pair Maps do not share one projection partition")
+    initial_projection = _producer(
+        producer_by_value,
+        initial_partition.inputs[0],
+        FlowContract,
+        "initial projection Contract",
+    )
+    input_view = _producer(producer_by_value, initial_projection.inputs[0], FlowMap, "initial input view")
+
+    attention_view = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(normalize_map.outputs[0].name, ())
+            if isinstance(operation, FlowMap) and operation.iteration is FlowMapIteration.VIEW
+        ),
+        "attention output view",
+    )
+    output_contract = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(attention_view.outputs[0].name, ())
+            if isinstance(operation, FlowContract)
+        ),
+        "attention output Contract",
+    )
+    first = _recover_fold_scale_contract(output_contract, producer_by_value, consumers_by_value)
+    gate_contract = _consumer_contract(first.normalized_scale.outputs[0], consumers_by_value, "first scaled Contract")
+    pairwise_map = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(gate_contract.output.name, ())
+            if isinstance(operation, FlowMap) and operation.iteration is FlowMapIteration.ADJACENT_PAIR
+        ),
+        "expanded projection pairwise Map",
+    )
+    down_contract = _consumer_contract(pairwise_map.outputs[0], consumers_by_value, "pairwise consumer Contract")
+    second = _recover_fold_scale_contract(down_contract, producer_by_value, consumers_by_value)
+    next_view = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(second.normalized_scale.outputs[0].name, ())
+            if isinstance(operation, FlowMap) and operation.iteration is FlowMapIteration.VIEW
+        ),
+        "following projection input view",
+    )
+    next_projection = _consumer_contract(next_view.outputs[0], consumers_by_value, "following projection Contract")
+    next_partition = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(next_projection.output.name, ())
+            if isinstance(operation, FlowMap) and operation.iteration is FlowMapIteration.PARTITION
+        ),
+        "following projection partition",
+    )
+    next_pairs = tuple(
+        operation
+        for output in next_partition.outputs
+        for operation in consumers_by_value.get(output.name, ())
+        if isinstance(operation, FlowMap) and operation.iteration is FlowMapIteration.ADJACENT_PAIR
+    )
+    if len(next_pairs) != 2:
+        raise ValueError(f"following partition must feed two adjacent-pair Maps, found {len(next_pairs)}")
     _validate_generic_dataflow(
         initial_projection,
         initial_partition,
@@ -225,7 +254,7 @@ def _recover_erased_region(operations) -> _ErasedDenseRegion:
         pairwise_map,
         next_projection,
         next_partition,
-        (next_pair_q, next_pair_k),
+        next_pairs,
     )
     return _ErasedDenseRegion(
         input_view,
@@ -243,26 +272,147 @@ def _recover_erased_region(operations) -> _ErasedDenseRegion:
         normalize_map,
         attention_view,
         output_contract,
-        first_add,
-        first_square,
-        first_fold,
-        first_row_finalize,
-        first_feature_scale,
-        first_normalized_scale,
+        first.add,
+        first.square,
+        first.fold,
+        first.row_finalize,
+        first.feature_scale,
+        first.normalized_scale,
         gate_contract,
         pairwise_map,
         down_contract,
-        second_add,
-        second_square,
-        second_fold,
-        second_row_finalize,
-        second_feature_scale,
-        second_normalized_scale,
+        second.add,
+        second.square,
+        second.fold,
+        second.row_finalize,
+        second.feature_scale,
+        second.normalized_scale,
         next_view,
         next_projection,
         next_partition,
-        (next_pair_q, next_pair_k),
+        next_pairs,
     )
+
+
+@dataclass(frozen=True)
+class _FlowFoldScaleContract:
+    add: FlowMap
+    square: FlowMap
+    fold: FlowFold
+    row_finalize: FlowMap
+    feature_scale: FlowMap
+    normalized_scale: FlowMap
+
+
+def _recover_fold_scale_contract(
+    producer_contract: FlowContract,
+    producer_by_value: dict[str, object],
+    consumers_by_value: dict[str, list[object]],
+) -> _FlowFoldScaleContract:
+    add = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(producer_contract.output.name, ())
+            if isinstance(operation, FlowMap) and _single_expression_kind(operation, ScalarExpressionKind.ADD)
+        ),
+        "tile-local add after Contract",
+    )
+    square = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(add.outputs[0].name, ())
+            if isinstance(operation, FlowMap) and _is_square_map(operation)
+        ),
+        "pointwise square before Fold",
+    )
+    fold = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(square.outputs[0].name, ())
+            if isinstance(operation, FlowFold) and operation.reducer.value == "sum"
+        ),
+        "sum Fold after square",
+    )
+    row_finalize = _one(
+        (operation for operation in consumers_by_value.get(fold.output.name, ()) if isinstance(operation, FlowMap)),
+        "row-scalar Fold finalization",
+    )
+    feature_scale = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(add.outputs[0].name, ())
+            if isinstance(operation, FlowMap)
+            and operation is not square
+            and _single_expression_kind(operation, ScalarExpressionKind.MULTIPLY)
+        ),
+        "feature-scale Map",
+    )
+    normalized_scale = _one(
+        (
+            operation
+            for operation in consumers_by_value.get(feature_scale.outputs[0].name, ())
+            if isinstance(operation, FlowMap) and row_finalize.outputs[0] in operation.inputs
+        ),
+        "row-scale Map",
+    )
+    if producer_by_value.get(normalized_scale.outputs[0].name) is not normalized_scale:
+        raise ValueError("row-scale Map output is not present in generic Flow dataflow")
+    return _FlowFoldScaleContract(add, square, fold, row_finalize, feature_scale, normalized_scale)
+
+
+def _operation_inputs(operation) -> tuple[FlowValue, ...]:
+    if isinstance(operation, FlowFold):
+        return (operation.input,)
+    if isinstance(operation, FlowDomainRestriction):
+        return (operation.input,)
+    return operation.inputs
+
+
+def _operation_outputs(operation) -> tuple[FlowValue, ...]:
+    if isinstance(operation, FlowContract):
+        return (operation.output,)
+    if isinstance(operation, FlowFold):
+        return (operation.output,)
+    if isinstance(operation, FlowDomainRestriction):
+        return (operation.output,)
+    return operation.outputs
+
+
+def _producer(producers: dict[str, object], value: FlowValue, expected_type, description: str):
+    operation = producers.get(value.name)
+    if not isinstance(operation, expected_type):
+        actual = "none" if operation is None else type(operation).__name__
+        raise ValueError(f"{description} producer is {actual}, expected {expected_type.__name__}")
+    return operation
+
+
+def _one(candidates, description: str):
+    matches = tuple(candidates)
+    if len(matches) != 1:
+        raise ValueError(f"expected one {description}, found {len(matches)}")
+    return matches[0]
+
+
+def _consumer_contract(
+    value: FlowValue,
+    consumers_by_value: dict[str, list[object]],
+    description: str,
+) -> FlowContract:
+    return _one(
+        (operation for operation in consumers_by_value.get(value.name, ()) if isinstance(operation, FlowContract)),
+        description,
+    )
+
+
+def _single_expression_kind(operation: FlowMap, kind: ScalarExpressionKind) -> bool:
+    return len(operation.expressions) == 1 and operation.expressions[0].kind is kind
+
+
+def _is_square_map(operation: FlowMap) -> bool:
+    if not _single_expression_kind(operation, ScalarExpressionKind.MULTIPLY):
+        return False
+    expression = operation.expressions[0]
+    return len(expression.operands) == 2 and expression.operands[0] == expression.operands[1]
 
 
 def _validate_generic_dataflow(

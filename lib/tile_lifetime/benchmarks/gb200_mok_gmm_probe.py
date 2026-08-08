@@ -26,6 +26,15 @@ from typing import Any
 
 import torch
 
+PACKAGE_SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
+if str(PACKAGE_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_SOURCE_ROOT))
+
+from tile_lifetime.cuda_map_fold_codegen import (  # noqa: E402
+    shuttle_map_fold_program,
+    verify_cuda_map_fold_include,
+)
+
 MOK_COMMIT = "3e1cf43ab93ad040afed52a45ab03cb490ffe4be"
 THUNDERKITTENS_COMMIT = "1c3920d993404dd49a6d4c7267ea11d583bd5c68"
 DEFAULT_EXPERTS = 96
@@ -118,6 +127,10 @@ def _extension_path(build_dir: Path) -> Path:
 
 
 def _build_extension(mok_root: Path, build_dir: Path, nvcc: str) -> Path:
+    verify_cuda_map_fold_include(
+        _probe_root() / "generated_map_fold.inc",
+        shuttle_map_fold_program(),
+    )
     output = _extension_path(build_dir)
     subprocess.run(
         [

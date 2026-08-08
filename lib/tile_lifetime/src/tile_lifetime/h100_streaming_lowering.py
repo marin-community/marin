@@ -3,6 +3,7 @@
 
 """Dependency-free legalization of streaming tensor programs for SM90."""
 
+import math
 from dataclasses import dataclass
 
 from tile_lifetime.streaming_attention import StreamingAttentionProgram
@@ -39,6 +40,7 @@ class H100StreamingLowering:
     score_map: LoweredScoreMap
     schedule: H100StreamingSchedule
     head_group_size: int
+    output_scale: float
 
 
 def lower_h100_streaming_program(program: StreamingAttentionProgram) -> H100StreamingLowering:
@@ -68,6 +70,7 @@ def lower_h100_streaming_program(program: StreamingAttentionProgram) -> H100Stre
         score_map=lower_score_map(program),
         schedule=schedule,
         head_group_size=_head_group_size(program),
+        output_scale=_lower_output_scale(program),
     )
 
 
@@ -135,3 +138,32 @@ def _head_group_size(program: StreamingAttentionProgram) -> int:
     if mapping.domain_axis.extent != mapping.operand_axis.extent * mapping.divisor:
         raise ValueError("GQA floor-division map does not exactly cover query heads")
     return mapping.divisor
+
+
+def _lower_output_scale(program: StreamingAttentionProgram) -> float:
+    """Lower ``weighted / denominator`` with an optional scalar output map."""
+    expression = program.finalize.expression
+    output_scale = 1.0
+    if expression.kind is ScalarExpressionKind.MULTIPLY:
+        left, right = expression.operands
+        if left.kind is ScalarExpressionKind.CONSTANT:
+            scale_expression, expression = left, right
+        elif right.kind is ScalarExpressionKind.CONSTANT:
+            scale_expression, expression = right, left
+        else:
+            raise ValueError("the SM90 finalizer only supports multiplication by a scalar constant")
+        assert scale_expression.constant is not None
+        output_scale = float(scale_expression.constant)
+    if expression.kind is not ScalarExpressionKind.DIVIDE:
+        raise ValueError("the SM90 finalizer must divide the weighted accumulator by the normalized-exp sum")
+    numerator, denominator = expression.operands
+    expected_inputs = (
+        program.state.weighted_value_accumulator.name,
+        program.state.row_sum_exp.name,
+    )
+    actual_inputs = (numerator.input_name, denominator.input_name)
+    if actual_inputs != expected_inputs:
+        raise ValueError(f"the SM90 finalizer expected inputs {expected_inputs}, found {actual_inputs}")
+    if not math.isfinite(output_scale):
+        raise ValueError("the SM90 finalizer output scale must be finite")
+    return output_scale

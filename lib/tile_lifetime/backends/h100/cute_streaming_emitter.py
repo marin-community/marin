@@ -113,6 +113,7 @@ def compile_h100_streaming_program(
         score_mod=score_mod,
         mask_mod=None,
         has_aux_tensors=False,
+        output_scale=lowering.output_scale,
         intra_wg_overlap=schedule.intra_warpgroup_overlap,
         mma_pv_is_rs=schedule.pv_register_source,
     )

@@ -263,6 +263,28 @@ def test_full_dense_pairwise_semantic_mutation_uses_the_same_generator() -> None
     validate_plan_semantic_erasure(plan)
 
 
+def test_full_dense_recovery_uses_dataflow_instead_of_operation_slots() -> None:
+    erased = erase_dense_transformer_semantics(_dense_llama_region())
+    reordered = erased.with_operations(tuple(reversed(erased.operations)))
+
+    plan = compile_erased_dense_transformer_region(
+        reordered,
+        row_scale_placement=RMSScalePlacement.CONSUMER_PROLOGUE,
+    )
+
+    assert [type(skeleton) for skeleton in plan.skeletons] == [
+        GemmSkeleton,
+        StreamingAttentionSkeleton,
+        GemmSkeleton,
+        ReductionSkeleton,
+        GemmSkeleton,
+        GemmSkeleton,
+        ReductionSkeleton,
+        GemmSkeleton,
+    ]
+    validate_plan_semantic_erasure(plan)
+
+
 def test_dense_transformer_region_materialization_boundaries_are_explicit() -> None:
     plan = compile_dense_transformer_region(
         _dense_llama_region(),

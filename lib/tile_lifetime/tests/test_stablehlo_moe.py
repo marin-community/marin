@@ -17,6 +17,7 @@ from tile_lifetime import (
     compile_stablehlo_expert_parallel_region,
     recover_stablehlo_moe_region,
 )
+from tile_lifetime.cuda_map_fold_codegen import render_cuda_map_fold_include, shuttle_map_fold_program
 from tile_lifetime.ir import (
     LinearOp,
     RoutedExpertMLPOp,
@@ -36,6 +37,7 @@ from tile_lifetime.stablehlo_import import (
     GatherAttributes,
     import_stablehlo,
 )
+from tile_lifetime.tensor_program import ScalarExpressionKind, scalar_binary, scalar_input
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stablehlo" / "moe_region_v1_14_1.mlir.bc.b64"
 PRIMARY_FIXTURE = (
@@ -116,6 +118,20 @@ def test_public_stablehlo_path_compiles_generic_expert_parallel_plan() -> None:
     assert plan.schedule.reverse_transport.semantics is TransportSemantics.PAYLOAD_PERMUTATION
     assert plan.schedule.merge_implementation == "generated_source_ordered_fold"
     assert plan.stage(ExpertParallelStageKind.WEIGHTED_SCATTER_REDUCE).outputs == ("moe_output.routed_scatter_output",)
+    generated = shuttle_map_fold_program(plan.map_fold_semantics)
+    assert generated.fingerprint == shuttle_map_fold_program().fingerprint
+
+    product_semantics = replace(
+        plan.map_fold_semantics,
+        pair_map=scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            scalar_input("left"),
+            scalar_input("right"),
+        ),
+    )
+    assert render_cuda_map_fold_include(shuttle_map_fold_program(product_semantics)) != render_cuda_map_fold_include(
+        generated
+    )
 
 
 def test_primary_benchmark_fixture_compiles_without_route_metadata() -> None:

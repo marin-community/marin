@@ -46,6 +46,7 @@ from gb200_mok_gmm_probe import (  # noqa: E402
 )
 
 from tile_lifetime import build_relation_plan  # noqa: E402
+from tile_lifetime.cuda_map_fold_codegen import CudaMapFoldProgram, shuttle_map_fold_program  # noqa: E402
 
 DEEPEP_COMMIT = "7febc6e25660af0f54d95dd781ecdcd62265ecca"
 DEFAULT_LOCAL_TOKENS = 2_048
@@ -55,6 +56,18 @@ DEFAULT_GLOBAL_EXPERTS = 384
 DEFAULT_TOP_K = 6
 DEFAULT_WORLD_SIZE = 4
 TILE_ROWS = 256
+
+
+def _validate_generated_map_fold_extension(
+    module: ModuleType,
+    program: CudaMapFoldProgram | None = None,
+) -> str:
+    """Require the loaded CUDA extension to match the selected generic scalar IR."""
+    expected = (program or shuttle_map_fold_program()).fingerprint
+    observed = module.generated_map_fold_program_sha256()
+    if observed != expected:
+        raise ValueError(f"CUDA Map/Fold program is {observed}; selected Shuttle program is {expected}")
+    return expected
 
 
 @dataclass(frozen=True)
@@ -421,10 +434,10 @@ class LocalPhysicalRuntime:
         self.swiglu.copy_(torch_functional.silu(self.gate.float()).mul_(self.up.float()).bfloat16())
 
     def apply_swiglu_cuda(self) -> None:
-        self.module.swiglu_bf16_out(self.gate, self.up, self.swiglu)
+        self.module.adjacent_pair_map_bf16_out(self.gate, self.up, self.swiglu)
 
     def apply_swiglu_concatenated_cuda(self) -> None:
-        self.module.swiglu_row_halves_bf16_out(self.gate_up, self.swiglu)
+        self.module.row_halves_pair_map_bf16_out(self.gate_up, self.swiglu)
 
     def w13_swiglu_generated(self) -> None:
         self.w13()
@@ -448,7 +461,7 @@ class LocalPhysicalRuntime:
         self.recv_merged_bf16.copy_(self.recv_merged.bfloat16())
 
     def merge_received_cuda(self) -> None:
-        self.module.fixed_route_merge_out(
+        self.module.indexed_weighted_ordered_fold_bf16_out(
             self.down,
             self.route_padded_rows,
             self.receiver_weights,
@@ -456,7 +469,7 @@ class LocalPhysicalRuntime:
         )
 
     def merge_received_cuda_fma(self) -> None:
-        self.module.fixed_route_merge_fma_out(
+        self.module.indexed_weighted_ordered_fold_relaxed_bf16_out(
             self.down,
             self.route_padded_rows,
             self.receiver_weights,
@@ -472,7 +485,7 @@ class LocalPhysicalRuntime:
         torch.add(self.returned[source_start:source_end], self.shared_output, out=self.output)
 
     def return_merge_and_add_shared_cuda(self) -> None:
-        self.module.fixed_route_merge_shared_out(
+        self.module.indirect_weighted_fold_base_map_out(
             self.down,
             self.route_padded_rows,
             self.receiver_weights,
@@ -653,6 +666,7 @@ def main() -> None:
     torch.cuda.set_device(device)
     extension_path = _extension(args)
     module = _load_extension(extension_path)
+    _validate_generated_map_fold_extension(module)
     runtime = LocalPhysicalRuntime(
         module,
         plan,

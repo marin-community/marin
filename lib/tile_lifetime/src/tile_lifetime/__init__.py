@@ -41,6 +41,7 @@ from tile_lifetime.expert_parallel_plan import (
     ExpertParallelPlan,
     ExpertParallelStageKind,
     GateUpPhysicalLayout,
+    MapFoldSemantics,
     ReadinessGranularity,
     TileStorage,
     TransportSelection,

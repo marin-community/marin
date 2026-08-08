@@ -1262,3 +1262,35 @@ author: dlwh
   attention is revisited, build a tight block-shared WGMMA/TMA oracle or change
   the natural workload to match FlashMoBA's native router; do not spend the next
   iteration on more tile-size tuning against this loose denominator.
+
+### 2026-08-08 06:35 PDT - TLTC-063 clean helper-boundary repair
+
+- An adversarial source audit rejected the dense and MoE clean-synthesis rows
+  despite their preserved performance evidence. Dense still imported
+  FlashAttention's semantic `Softmax` and `AttentionMask` helpers. MoE called
+  handwritten CUDA SwiGLU and ordered-merge bodies. A second audit also found
+  that the full dense planner assigned semantic roles through an exact
+  36-operation positional tuple.
+- Replaced the positional dense recovery with generic producer/consumer
+  dataflow discovery. Reversing the complete erased Flow operation order now
+  recovers the same eight-skeleton plan.
+- Replaced FA-owned attention semantics with Shuttle-owned normalized-exp Fold,
+  score-Map, and `DomainRestriction` physical helpers. The retained FA-derived
+  dependencies are lower-level CuTe layouts, copies, reductions, pipeline
+  records, barriers, sequence metadata, packed-GQA indexing, and scheduling.
+  H100 lowering now carries score-scale, softcap, causality, and scalar output
+  finalization mutations through one physical skeleton.
+- Added backend-neutral MoE `MapFoldSemantics` to the recovered plan and a CUDA
+  scalar-expression generator. The generic CUDA loop skeletons now invoke
+  generated pair-Map, Fold-contribution, Fold-update, and post-Fold functions.
+  The build verifies the generated include, and the natural StableHLO runtime
+  rejects an extension whose exported IR digest differs from the recovered
+  plan. Mutation tests change Map and Fold arithmetic without editing CUDA.
+- Tightened the natural MoE runtime connection: Relation/top-k/expert shapes
+  and scalar semantics come from the recovered plan. The small router adapter
+  still launches generic `torch.mm`, `torch.topk`, and `torch.softmax`; do not
+  describe that adapter as generated router code.
+- CPU result: all 190 `lib/tile_lifetime/tests` tests pass. Device compilation,
+  correctness, and performance replay remain required before restoring dense,
+  MoE, or sparse-attention acceptance.
+- Working branch: `research/shuttle-clean-helper-boundaries`.

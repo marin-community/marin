@@ -1,7 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import replace
 from enum import StrEnum
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -13,6 +15,7 @@ from tile_lifetime import (
     DType,
     FoldPrimitive,
     MapPrimitive,
+    ScalarExpressionKind,
     StreamingAttentionStage,
     StreamingTileSchedule,
     TensorProgram,
@@ -27,6 +30,7 @@ from tile_lifetime import (
     scaled_score_map,
 )
 from tile_lifetime.h100_streaming_lowering import lower_h100_streaming_program
+from tile_lifetime.tensor_program import scalar_binary, scalar_constant
 
 
 class ScoreMutation(StrEnum):
@@ -42,10 +46,11 @@ def _program_and_inputs(
     *,
     query_heads: int = 4,
     key_value_heads: int = 2,
+    score_scale: float = 0.5,
 ) -> tuple[TensorProgram, dict[str, np.ndarray]]:
     batch, query_length, key_length = 2, 7, 9
     rng = np.random.default_rng(17)
-    score_map = scaled_score_map(0.5)
+    score_map = scaled_score_map(score_scale)
     inputs: dict[str, np.ndarray] = {
         "query": rng.normal(size=(batch, query_length, query_heads, 4)).astype(np.float32),
         "key": rng.normal(size=(batch, key_length, key_value_heads, 4)).astype(np.float32),
@@ -163,6 +168,51 @@ def test_changed_score_map_changes_results_without_changing_streaming_structure(
     assert not np.allclose(plain_output, softcap_output, rtol=1e-4, atol=1e-4)
 
 
+@pytest.mark.parametrize("score_scale", [0.125, 0.5, 1.25])
+def test_score_scale_mutation_uses_same_generator_and_matches_materialized_program(score_scale: float) -> None:
+    source, inputs = _program_and_inputs(ScoreMutation.CAUSAL, score_scale=score_scale)
+    generated = derive_streaming_attention(
+        source,
+        schedule=StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2),
+    )
+
+    materialized = execute_tensor_program(source, inputs)["attention.output"]
+    streamed = execute_streaming_attention(generated, inputs)
+
+    assert float(np.max(np.abs(streamed - materialized))) < 2e-6
+
+
+def test_finalization_mutation_reuses_the_derived_fold_schedule() -> None:
+    source, inputs = _program_and_inputs(ScoreMutation.CAUSAL)
+    generated = derive_streaming_attention(
+        source,
+        schedule=StreamingTileSchedule(query_tile_size=3, key_value_tile_size=4, pipeline_depth=2),
+    )
+    output_scale = 0.375
+    scaled_finalize = replace(
+        generated.finalize,
+        expression=scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            generated.finalize.expression,
+            scalar_constant(output_scale),
+        ),
+    )
+    scaled_source = replace(source, operations=(*source.operations[:-1], scaled_finalize))
+    scaled_generated = replace(generated, source=scaled_source, finalize=scaled_finalize)
+
+    materialized = execute_tensor_program(scaled_source, inputs)["attention.output"]
+    streamed = execute_streaming_attention(scaled_generated, inputs)
+    baseline = execute_streaming_attention(generated, inputs)
+
+    assert scaled_generated.qk == generated.qk
+    assert scaled_generated.score_map == generated.score_map
+    assert scaled_generated.pv == generated.pv
+    assert scaled_generated.state == generated.state
+    assert scaled_generated.schedule == generated.schedule
+    assert float(np.max(np.abs(streamed - materialized))) < 2e-6
+    assert float(np.max(np.abs(streamed - baseline * output_scale))) < 2e-6
+
+
 @pytest.mark.parametrize("query_heads,key_value_heads", [(8, 2), (8, 4)])
 def test_grouped_head_index_map_is_explicit_and_matches_expanded_reference(
     query_heads: int,
@@ -246,8 +296,52 @@ def test_h100_lowering_accepts_softcap_mutation_without_named_attention_dispatch
     assert lowering.score_map.softcap == 16.0
 
 
+def test_h100_lowering_changes_only_finalization_scale_for_output_map_mutation() -> None:
+    program = _h100_program(apply_causal_score_mask(scaled_score_map(0.125)))
+    output_scale = 0.375
+    scaled_finalize = replace(
+        program.finalize,
+        expression=scalar_binary(
+            ScalarExpressionKind.MULTIPLY,
+            program.finalize.expression,
+            scalar_constant(output_scale),
+        ),
+    )
+    scaled_program = replace(program, finalize=scaled_finalize)
+
+    baseline = lower_h100_streaming_program(program)
+    scaled = lower_h100_streaming_program(scaled_program)
+
+    assert baseline.output_scale == 1.0
+    assert scaled.output_scale == output_scale
+    assert scaled.score_map == baseline.score_map
+    assert scaled.schedule == baseline.schedule
+    assert scaled.head_group_size == baseline.head_group_size
+
+
 def test_h100_lowering_reports_tensor_mask_as_missing_auxiliary_emitter() -> None:
     program = _h100_program(apply_arbitrary_score_mask(scaled_score_map(0.125)))
 
     with pytest.raises(ValueError, match="auxiliary-tensor emitter"):
         lower_h100_streaming_program(program)
+
+
+def test_sm90_streaming_skeleton_owns_fold_map_and_domain_semantics() -> None:
+    backend = Path(__file__).parents[1] / "backends" / "h100"
+    physical_sources = tuple(
+        (backend / filename).read_text() for filename in ("cute_streaming_base.py", "cute_streaming_sm90.py")
+    )
+    forbidden_dependencies = (
+        "flash_attn.cute.softmax",
+        "flash_attn.cute.mask",
+        "apply_score_mod_inner",
+        "AttentionMask",
+        "Softmax.create",
+    )
+
+    for source in physical_sources:
+        assert not any(dependency in source for dependency in forbidden_dependencies)
+        assert "NormalizedExpFoldState" in source
+        assert "DomainRestriction" in source
+        assert "apply_score_map_inner" in source
+        assert "finalize(output_scale=self.output_scale" in source

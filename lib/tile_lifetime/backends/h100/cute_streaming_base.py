@@ -31,14 +31,15 @@ from quack import layout_utils
 from flash_attn.cute import ampere_helpers as sm80_utils
 from flash_attn.cute.cute_dsl_utils import assume_tensor_aligned
 from flash_attn.cute import utils
-from flash_attn.cute.mask import AttentionMask
-from flash_attn.cute.softmax import Softmax, apply_score_mod_inner
 from flash_attn.cute.seqlen_info import SeqlenInfoQK
 from flash_attn.cute.block_info import BlockInfo
 from flash_attn.cute.pack_gqa import PackGQA
 from flash_attn.cute.named_barrier import NamedBarrierFwd
 from flash_attn.cute.block_sparsity import BlockSparseTensors
 from flash_attn.cute.tile_scheduler import SingleTileScheduler, SingleTileVarlenScheduler, TileSchedulerArguments
+
+from .cute_domain_restriction import DomainRestriction
+from .cute_normalized_exp import NormalizedExpFoldState, apply_score_map_inner
 
 
 class ShuttleStreamingAttentionBase:
@@ -61,6 +62,7 @@ class ShuttleStreamingAttentionBase:
         mask_mod: Optional[cutlass.Constexpr] = None,
         has_aux_tensors: bool = False,
         q_subtile_factor: int | None = None,
+        output_scale: float = 1.0,
     ):
         """Initializes the configuration for a flash attention kernel.
 
@@ -101,8 +103,11 @@ class ShuttleStreamingAttentionBase:
         self.num_stages = num_stages
         self.q_subtile_factor = q_subtile_factor
         self.Q_in_regs = Q_in_regs
-        self.score_mod = score_mod
-        self.mask_mod = mask_mod
+        # Keep the constructor names compatible with the extracted physical
+        # skeleton while exposing workload-independent compiler concepts here.
+        self.score_map = score_mod
+        self.domain_predicate = mask_mod
+        self.output_scale = output_scale
         self.qk_acc_dtype = Float32
         self.score_vec_size: cutlass.Constexpr = getattr(
             score_mod, "__vec_size__", 1 if cutlass.const_expr(has_aux_tensors) else 2
@@ -706,7 +711,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
         )
         tile_sched_params = TileScheduler.to_underlying_arguments(tile_sched_args)
         grid_dim = TileScheduler.get_grid_shape(tile_sched_params)
-        softmax_scale_log2, softmax_scale = utils.compute_softmax_scale_log2(softmax_scale, self.score_mod)
+        softmax_scale_log2, softmax_scale = utils.compute_softmax_scale_log2(softmax_scale, self.score_map)
         fastdiv_mods = utils.compute_fastdiv_mods(mQ, mK, self.qhead_per_kvhead, self.pack_gqa, aux_tensors)
 
         self.kernel(
@@ -910,10 +915,10 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             tVpV = utils.predicate_k(tVcV, limit=mV.shape[1])
 
         # shape: (atom_v_m * rest_m)
-        softmax = Softmax.create(
+        softmax = NormalizedExpFoldState.create(
             softmax_scale_log2,
             num_rows=acc_O.shape[0][0] * acc_O.shape[1],
-            softmax_scale=softmax_scale,
+            score_scale=softmax_scale,
         )
         softmax.reset()
 
@@ -948,7 +953,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             softmax=softmax,
             load_K=load_K,
             load_V=load_V,
-            score_mod=self.score_mod,
+            score_mod=self.score_map,
             batch_idx=batch_size,
             head_idx=num_head,
             m_block=m_block,
@@ -1000,7 +1005,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
         # those that need masking on S, and those that don't.
         # We need masking on S for the very last block when K and V has length not multiple of tile_n.
         # We also need masking on S if it's causal, for the last several blocks.
-        mask = AttentionMask(
+        mask = DomainRestriction(
             self.tile_m,
             self.tile_n,
             seqlen,
@@ -1009,7 +1014,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             self.qhead_per_kvhead if const_expr(self.pack_gqa) else 1,
         )
         mask_fn = partial(
-            mask.apply_mask,
+            mask.apply,
             batch_idx=batch_size,
             head_idx=num_head,
             m_block=m_block,
@@ -1017,7 +1022,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             mask_causal=self.is_causal,
             mask_local=self.is_local,
             aux_tensors=aux_tensors,
-            fastdiv_mods=fastdiv_mods if const_expr(self.mask_mod is not None) else None,
+            fastdiv_mods=fastdiv_mods if const_expr(self.domain_predicate is not None) else None,
         )
 
         # First iteration with seqlen masking
@@ -1029,7 +1034,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             smem_pipe_write,
             is_first_n_block=True,
             seqlen=seqlen,
-            mask_fn=partial(mask_fn, mask_mod=self.mask_mod, mask_seqlen=True),
+            mask_fn=partial(mask_fn, mask_mod=self.domain_predicate, mask_seqlen=True),
         )
         smem_pipe_read = self.advance_pipeline(smem_pipe_read)
         smem_pipe_write = self.advance_pipeline(smem_pipe_write)
@@ -1045,7 +1050,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
                     smem_pipe_read,
                     smem_pipe_write,
                     seqlen=seqlen,
-                    mask_fn=partial(mask_fn, mask_mod=self.mask_mod, mask_seqlen=True),
+                    mask_fn=partial(mask_fn, mask_mod=self.domain_predicate, mask_seqlen=True),
                 )
                 smem_pipe_read = self.advance_pipeline(smem_pipe_read)
                 smem_pipe_write = self.advance_pipeline(smem_pipe_write)
@@ -1054,15 +1059,15 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             compute_one_n_block(
                 n_block - n_tile - 1, smem_pipe_read, smem_pipe_write,
                 seqlen=seqlen, is_first_n_block=False,
-                mask_fn=partial(mask_fn, mask_mod=self.mask_mod, mask_seqlen=False)
+                mask_fn=partial(mask_fn, mask_mod=self.domain_predicate, mask_seqlen=False)
             )
             smem_pipe_read = self.advance_pipeline(smem_pipe_read)
             smem_pipe_write = self.advance_pipeline(smem_pipe_write)
         # TODO: local
 
         # normalize acc_O by row_sum and calculate the lse
-        row_scale = softmax.finalize()
-        softmax.rescale_O(acc_O, row_scale)
+        row_scale = softmax.finalize(output_scale=self.output_scale)
+        softmax.rescale_weighted_accumulator(acc_O, row_scale)
 
         # ///////////////////////////////////////////////////////////////////////////////
         # Epilogue
@@ -1093,7 +1098,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
         smem_pipe_write: Int32,
         mma_params: SimpleNamespace,
         smem_copy_params: SimpleNamespace,
-        softmax: Softmax,
+        softmax: NormalizedExpFoldState,
         load_K: Callable,
         load_V: Callable,
         score_mod: Callable | None,
@@ -1149,14 +1154,14 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             A_in_regs=self.Q_in_regs,
         )
         if const_expr(score_mod is not None):
-            self.apply_score_mod(
+            self.apply_score_map(
                 mma_params.thr_mma_qk,
                 batch_idx,
                 head_idx,
                 m_block,
                 acc_S,
                 n_block,
-                softmax_scale=softmax.softmax_scale,
+                softmax_scale=softmax.score_scale,
                 seqlen=seqlen,
                 aux_tensors=aux_tensors,
                 fastdiv_mods=fastdiv_mods,
@@ -1175,8 +1180,8 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             load_K_next()
         if const_expr(mask_fn is not None):
             mask_fn(acc_S, n_block=n_block)
-        row_scale = softmax.online_softmax(acc_S, is_first=is_first_n_block, check_inf=check_inf)
-        softmax.rescale_O(mma_params.acc_O, row_scale)
+        row_scale = softmax.update(acc_S, is_first=is_first_n_block, check_inf=check_inf)
+        softmax.rescale_weighted_accumulator(mma_params.acc_O, row_scale)
         rP = cute.make_fragment_like(acc_S, self.dtype)
         rP.store(acc_S.load().to(self.dtype))
         tOrP = layout_utils.reshape_acc_to_frgA(rP)
@@ -1197,7 +1202,7 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
         # if const_expr(self.num_stages > 1):
         #     load_K_next()
     @cute.jit
-    def apply_score_mod(
+    def apply_score_map(
         self,
         thr_mma_qk,
         batch_idx,
@@ -1215,10 +1220,10 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
         cS = cute.domain_offset((m_block * self.tile_m, n_block * self.tile_n), cS)
         tScS = thr_mma_qk.partition_C(cS)
 
-        apply_score_mod_inner(
+        apply_score_map_inner(
             acc_S,
             tScS,
-            self.score_mod,
+            self.score_map,
             batch_idx,
             head_idx,
             softmax_scale,
@@ -1227,8 +1232,8 @@ class FlashAttentionForwardSm80(ShuttleStreamingAttentionBase):
             aux_tensors,
             fastdiv_mods,
             seqlen_info=seqlen,
-            constant_q_idx=None,
-            qhead_per_kvhead=self.qhead_per_kvhead if const_expr(self.pack_gqa) else 1,
+            constant_query_idx=None,
+            head_group_size=self.qhead_per_kvhead if const_expr(self.pack_gqa) else 1,
         )
 
 
