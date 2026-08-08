@@ -13,6 +13,21 @@ import optax
 from optax import tree_utils as otu
 
 
+def _pin_sharding(x, ref):
+    """Pin ``x`` to ``ref``'s named sharding so a following norm reduces correctly.
+
+    The hyperball projection divides by ``norm(new_p)``; when ``new_p`` (a computed intermediate) is left
+    with an SPMD-inferred sharding, the sharded reduction can over-count and collapse the whole tensor
+    (issue #8073). Resharding to the parameter's own sharding is a same-layout no-op at runtime.
+    """
+    sharding = getattr(ref, "sharding", None)
+    if sharding is None:
+        sharding = getattr(jax.typeof(ref), "sharding", None)
+    if isinstance(sharding, jax.sharding.NamedSharding):
+        return jax.sharding.reshard(x, sharding)
+    return x
+
+
 class ScaleByAdamHState(NamedTuple):
     count: chex.Array
     mu: optax.Updates
@@ -53,6 +68,7 @@ def scale_by_adamh(
             p_norm = jnp.linalg.norm(p)
             u_norm = jnp.linalg.norm(u)
             new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+            new_p = _pin_sharding(new_p, p)  # correct the sharded norm reduction (issue #8073)
             return new_p / jnp.linalg.norm(new_p) * p_norm - p
 
         def scale_invariant_update(p, u):
