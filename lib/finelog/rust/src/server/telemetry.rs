@@ -26,6 +26,7 @@ use uuid::Uuid;
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
 use crate::server::auth::{auth_gate, AuthIdentity, AuthPolicy};
+use crate::server::ingest_health::IngestHealth;
 use crate::store::group_extrema::GroupExtremaConfig;
 use crate::store::ipc::encode_ipc;
 use crate::store::policy::StoragePolicy;
@@ -246,6 +247,7 @@ struct TelemetryState {
     admission: Arc<Semaphore>,
     dedupe: Mutex<DedupeCache>,
     namespace_registration: OnceCell<()>,
+    health: Arc<IngestHealth>,
 }
 
 struct PreparedBatch {
@@ -271,13 +273,17 @@ impl TelemetryState {
                 })
                 .await
                 {
-                    Ok(Ok(_)) => Ok(()),
+                    Ok(Ok(_)) => {
+                        self.health.record_registered(TELEMETRY_NAMESPACE);
+                        Ok(())
+                    }
                     Ok(Err(error)) => Err(error.to_string()),
                     Err(join) => Err(format!("telemetry namespace task failed: {join}")),
                 }
             })
             .await;
         result.map_err(|error| {
+            self.health.record_failure(TELEMETRY_NAMESPACE, &error);
             ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "storage_unavailable",
@@ -295,12 +301,15 @@ pub fn router(
     auth: Arc<AuthPolicy>,
     max_concurrent: usize,
     dedupe_capacity: usize,
+    health: Arc<IngestHealth>,
 ) -> Router {
+    health.declare_owned(TELEMETRY_NAMESPACE);
     let state = Arc::new(TelemetryState {
         store,
         admission: Arc::new(Semaphore::new(max_concurrent)),
         dedupe: Mutex::new(DedupeCache::new(dedupe_capacity)),
         namespace_registration: OnceCell::new(),
+        health,
     });
     // The schema is server-owned, so apply additive index-policy evolution at
     // startup even when telemetry reaches this store through StatsService or a

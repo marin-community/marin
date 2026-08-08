@@ -49,17 +49,17 @@ const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// The original five columns (key/source/data/epoch_ms/level) are non-nullable.
 /// `cluster` is a later **additive, nullable** column: the writer-supplied origin
 /// cluster of each push (trusted — writers are authenticated), which namespaces
-/// logs a global finelog collects from many federated clusters. It is nullable so
-/// it evolves an already-registered `log` namespace additively — `merge_schemas`
-/// requires new columns to be nullable, and segments written before the column
-/// existed null-fill it on read.
+/// logs a global finelog collects from many federated clusters. It is nullable
+/// because segments written before the column existed null-fill it on read,
+/// which is also why `merge_schemas` adopts any new column as nullable.
 pub(crate) fn log_registered_schema() -> Schema {
     Schema::new(
         vec![
-            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
+            // The job and task sit mid-key, so `key LIKE '%<job>%'` is opaque to
+            // the sort's min/max statistics and needs a trigram index of its own.
+            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
-            // The log message body — substring-searched via contains()/LIKE, so
-            // it carries the trigram index.
+            // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),
@@ -368,7 +368,7 @@ impl Store {
         resolve_key_column(&schema)?;
         let stored = with_implicit_seq(with_implicit_cluster(schema));
 
-        // `merge_schemas` (pure) raises SchemaConflict on a non-additive change.
+        // `merge_schemas` (pure) raises SchemaConflict on a column-type change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
         // under a single lock; we only supply the schema-merge decision.
         let stored_for_merge = stored.clone();
@@ -725,6 +725,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::schema::CoveringProjection;
 
     fn worker_schema() -> Schema {
         Schema::new(
@@ -893,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn type_change_and_non_nullable_reject() {
+    fn type_change_rejects_and_new_non_nullable_widens() {
         let store = mem_store();
         store
             .register_table("iris.worker", worker_schema(), StoragePolicy::default())
@@ -916,14 +917,38 @@ mod tests {
             ColumnType::COLUMN_TYPE_FLOAT64,
             false,
         ));
-        assert!(matches!(
-            store.register_table(
+        let effective = store
+            .register_table(
                 "iris.worker",
                 Schema::new(cols, ""),
-                StoragePolicy::default()
-            ),
-            Err(StatsError::SchemaConflict(_))
-        ));
+                StoragePolicy::default(),
+            )
+            .unwrap();
+        assert!(effective.column("cpu_pct").unwrap().nullable);
+    }
+
+    #[test]
+    fn redefined_covering_projection_supersedes_instead_of_conflicting() {
+        // A binary whose covering projection differs from the catalog's must
+        // still register: the catalog rehydrates the registered definition at
+        // boot, so a rejection wedges the namespace's ingest on every restart.
+        let store = mem_store();
+        let projection = |values: &[&str]| {
+            CoveringProjection::new("busy-workers", "worker_id", values.to_vec(), ["worker_id"])
+        };
+        let schema = |values: &[&str]| worker_schema().with_covering_projection(projection(values));
+
+        store
+            .register_table("iris.worker", schema(&["w1"]), StoragePolicy::default())
+            .unwrap();
+        let effective = store
+            .register_table("iris.worker", schema(&["w2"]), StoragePolicy::default())
+            .unwrap();
+        assert_eq!(effective.projections, vec![projection(&["w2"])]);
+        assert_eq!(
+            store.get_table_schema("iris.worker").unwrap().projections,
+            vec![projection(&["w2"])],
+        );
     }
 
     #[test]
@@ -1086,6 +1111,10 @@ mod tests {
         assert!(
             schema.column("cluster").unwrap().nullable,
             "the evolved cluster column is nullable"
+        );
+        assert!(
+            schema.column("key").unwrap().index.trigram,
+            "boot enables the key trigram index a pre-existing namespace lacks"
         );
         assert_eq!(
             store.get_policy(LOG_NAMESPACE_NAME).unwrap(),

@@ -25,7 +25,7 @@ from typing import Generic, ParamSpec, TypeVar, overload
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
-from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
+from marin.training.run_environment import dependency_groups_for_resources
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -79,7 +79,7 @@ class RemoteCallable(Generic[P, R]):
                 resources=self.resources,
                 environment=create_environment(
                     extras=dependency_groups,
-                    env_vars=env_vars_for_dependency_groups(self.resources, dependency_groups, self.env_vars),
+                    env_vars=self.env_vars,
                 ),
             )
         )

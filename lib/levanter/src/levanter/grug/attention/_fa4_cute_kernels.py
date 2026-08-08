@@ -1548,6 +1548,16 @@ def _segmented_backward_arches(
     tile_n: int,
     num_threads: int,
 ) -> _BackwardArchSelection:
+    """Select the backward kernel path, rejecting tile shapes that do not hold up.
+
+    Compute capability 9.x, 10.x, and 12.x are restricted to a 64x64 backward at 128 threads.
+    That is narrower than ``SegmentedFlashAttentionBackwardSm120.can_implement``, which admits
+    any 16-aligned key tile whose shared memory fits, and the gap is load-bearing rather than
+    conservative: measured on GB200 at head dimension 128, a 192x64 or 256x64 backward passes
+    ``can_implement`` and returns gradients off by four orders of magnitude, and 256 threads
+    does the same at 128x64. The remaining admissible shapes are 1.7x to 24x slower than 64x64.
+    Widen this only against a gradient comparison, never against ``can_implement`` alone.
+    """
     is_sm120_config = tile_m == 64 and tile_n == 64 and num_threads == 128
     if compute_arch is None:
         inferred_arch = 120 if is_sm120_config else 80

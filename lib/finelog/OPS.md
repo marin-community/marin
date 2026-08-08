@@ -75,7 +75,13 @@ depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
 underscores when you mean them literally. Adding one is a
 `RegisterTable` away and does not need a reset, but the index backfill runs a
 few segments per namespace per 30 s tick, so a large namespace speeds up over
-tens of minutes rather than at once.
+tens of minutes rather than at once. Enabling a column supersedes the whole
+`.fidx` policy, so every segment's bundle is rebuilt rather than extended: budget
+one core across the namespace's full segment count.
+
+An unindexed substring predicate spends its cost in the `LIKE` kernel, not in
+IO. `bytes_scanned` stays small while `pushdown_rows_pruned` reaches the
+namespace's row count. Read both.
 
 For repeated equality families, declare the hot string values in
 `ColumnIndex.exact_values`. Finelog stores exact source-row postings in the
@@ -89,6 +95,14 @@ explicit included-column list. Covered segments substitute the narrow Parquet
 file while uncovered segments use postings or source Parquet, so partial
 backfill is useful. `telemetry_v1` has one `training-status` projection for the
 three dashboard metric names.
+
+Change a projection in place; do not version its name. Re-registering a name
+with a different predicate or column list supersedes the registered definition:
+new segments build the new one, existing segments stay queryable under the
+definition they were written with (each `.fidx` section carries its own
+coverage), and the backfill rebuilds them a few per tick and deletes the
+superseded Parquet files. A widened copy under a second name leaves both being
+built for every new segment forever.
 
 For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
 Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then
@@ -277,6 +291,30 @@ To rotate a key, add the new Secret Manager version, add its public key alongsid
 the old one under the same `keys[].cluster` (the hub accepts either), roll the
 hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
 drop the old public key and roll the hub again.
+
+## Checking that a server is ingesting
+
+`/health` answers 200 whenever the process is listening, and it is also the
+Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
+condition a restart will not clear. The body carries the verdict: `ok`, or
+`degraded: <namespace>: registration failed: <reason>`.
+
+`telemetry_v1` must be registered before it accepts a row, and the registration
+is re-driven from the catalog's persisted schema on every boot. When the
+binary's schema and the catalog disagree in a way no merge can reconcile (a
+column type change), every write to that namespace fails until one of them
+changes, across restarts.
+
+```bash
+curl -sf http://<host>:<port>/health          # ok | degraded: ...
+curl -sf http://<host>:<port>/api/server | jq .ingest
+```
+
+`/api/server`'s `ingest` block names each namespace, its state, the error, when
+it first failed, and how many attempts have been made since. The dashboard's
+System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
+`safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
+back.
 
 ## Diagnosing Kubernetes mirror readiness
 

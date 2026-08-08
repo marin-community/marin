@@ -110,6 +110,29 @@ Regenerate protos after editing `proto/logging.proto`:
 cd lib/finelog && buf generate
 ```
 
+### Benchmarks
+
+Three harnesses under `src/finelog/benchmarks/`, each driving a real
+`finelog-server` and writing a JSON result with the server build, storage
+layout, and per-query `EXPLAIN ANALYZE` metrics.
+
+- `log_query_bench` — the operator query corpus for `log`: job substring
+  scoping, task tails, first-error lookups, body search. `generate` builds a
+  corpus; `measure` runs it over a directory that already holds segments.
+- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
+
+Point `--log-dir` at a **disposable copy**: starting Finelog activates
+compaction, layout rewrites, and index backfill.
+
+`log_query_bench` writes to the `log` namespace the server auto-registers rather
+than registering its own, so the same corpus under two binaries measures a
+schema change. Backfill must be finished before measuring; maintenance running
+alongside the queries moves every number by 2-4x.
+
+`EXPLAIN ANALYZE` counters are decimal, `bytes_scanned` included: `1.16 B` is
+1.16 billion.
+
 ### Dashboard
 
 `npm run dev` serves the SPA with HMR and proxies RPC to a finelog on port
@@ -136,6 +159,21 @@ already-running server; it does not start one. `scripts/demo.py --keep` serves a
 seeded store on the default port. Point it at a store with real segments via
 `FINELOG_BASE_URL` and `FINELOG_TEST_NAMESPACE`.
 
+## Ingest health
+
+`/health` returns 200 whenever the server is listening. It is the Kubernetes
+liveness, readiness, and startup probe, so it cannot fail on a condition that
+survives a restart; the verdict is in the body: `ok`, or `degraded:` followed by
+each namespace this process registers for itself that is not registered.
+`server/ingest_health.rs` holds that state. `/api/server`'s `ingest` block
+carries the per-namespace error, first-failure time, and attempt count, and the
+dashboard's System page renders it.
+
+The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
+(which is what makes `safe_deploy` auto-rollback fire), and `k8s_up` /
+`k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
+`telemetry_v1` fails its own deploy.
+
 ## Secondary indexes
 
 A segment with any configured method gets one `.fidx` bundle. The bundle is
@@ -153,7 +191,12 @@ benchmark; there is no free-form plugin registry.
 
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)` and `col LIKE '%…%'` prune instead
-of full-scan. Today it is on `log.data` and `telemetry_v1.name`.
+of full-scan. Today it is on `log.key`, `log.data`, and `telemetry_v1.name`.
+
+Sorting by a column does not cover substring search of it. A log key is
+`/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for
+is not a prefix and min/max statistics cannot bound it. `log.key` needs its own
+trigram section for that.
 
 A `LIKE` pattern contributes every literal run between its wildcards, all
 required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the
@@ -179,6 +222,20 @@ only when both the predicate values and every referenced query column are
 covered. Covered segments use the projection while uncovered segments retain
 source Parquet. The initial `training-status` projection covers three metric
 names and seven columns.
+
+Redefining a projection is not a conflict. `merge_schemas` supersedes the
+registered definition with the requested one, unless the registered one already
+covers it: a superset keeps its place, so an older binary re-registering a
+narrower definition against a newer catalog does not churn a namespace's derived
+state mid-rollout. Segments written under the superseded definition stay
+queryable untouched, because each `.fidx` `CoveringProjection` section describes
+its own coverage; the backfill rebuilds them at its usual few per tick and
+unlinks the superseded Parquet files. Index hints follow the same rule.
+
+A column *type* mismatch is still a hard `SchemaConflict`: the registered layout
+cannot hold the requested rows, so it fails at registration. A new column
+declared non-nullable is adopted as nullable, since every already-stored row is
+missing it.
 
 `value_counts` records a complete low-cardinality histogram. A DataFusion
 optimizer rule replaces a qualifying unfiltered one-column `GROUP BY` with

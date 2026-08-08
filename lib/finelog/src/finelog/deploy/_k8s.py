@@ -21,7 +21,7 @@ import click
 import yaml
 from rigging.secrets import resolve_secret_spec
 
-from finelog.deploy.bootstrap import render_template
+from finelog.deploy.bootstrap import HEALTH_OK, health_probe_command, render_template
 from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
 
@@ -328,6 +328,35 @@ def _ensure_priority_class(cfg: FinelogConfig) -> None:
     _kubectl_apply(cfg, json.dumps(manifest))
 
 
+def _verify_ingest_ready(cfg: FinelogConfig) -> None:
+    """Fail the deploy when the rolled-out pod is listening but not ingesting.
+
+    ``kubectl rollout status`` only proves the readiness probe passed, and that
+    probe is ``/health``, which answers 200 whenever the server is listening. A
+    binary whose schema the catalog rejects serves and rejects every write to
+    the namespace, so read the body from inside the new pod.
+    """
+    assert cfg.deployment.k8s is not None
+    result = _kubectl(
+        cfg,
+        "exec",
+        f"deployment/{cfg.name}",
+        "-n",
+        cfg.deployment.k8s.namespace,
+        "--",
+        "sh",
+        "-c",
+        health_probe_command(cfg.port),
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise click.ClickException(f"could not read /health from deployment/{cfg.name}: {result.stderr.strip()}")
+    body = result.stdout.strip()
+    if body != HEALTH_OK:
+        raise click.ClickException(f"finelog is serving but not ingesting: {body}")
+
+
 def k8s_up(cfg: FinelogConfig) -> None:
     """Render manifests and apply them; wait for the deployment to roll out.
 
@@ -350,6 +379,7 @@ def k8s_up(cfg: FinelogConfig) -> None:
         _kubectl_apply(cfg, rendered)
     click.echo(f"Waiting for deployment/{cfg.name} to become Ready...")
     _kubectl(cfg, "rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)
+    _verify_ingest_ready(cfg)
     click.echo("finelog is healthy.")
 
 
@@ -403,6 +433,7 @@ def k8s_restart(cfg: FinelogConfig) -> None:
         k8s.namespace,
     )
     _kubectl(cfg, "rollout", "status", f"deployment/{cfg.name}", "-n", k8s.namespace)
+    _verify_ingest_ready(cfg)
     click.echo("finelog is healthy.")
 
 

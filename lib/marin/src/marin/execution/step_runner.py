@@ -52,7 +52,7 @@ from marin.execution.step_status import (
     step_lock,
     worker_id,
 )
-from marin.training.run_environment import dependency_groups_for_resources, env_vars_for_dependency_groups
+from marin.training.run_environment import dependency_groups_for_resources
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger(__name__)
@@ -504,7 +504,7 @@ def _submit_iris_job(
         resources=resources,
         environment=create_environment(
             extras=dependency_groups,
-            env_vars=env_vars_for_dependency_groups(resources, dependency_groups, env_vars),
+            env_vars=env_vars,
         ),
     )
     handle = current_client().submit(request)

@@ -141,7 +141,7 @@ def test_remote_inference_uses_controller_minted_federated_capability_url(monkey
     )
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4"),
-        worker_environment=create_environment(extras=["tpu", "vllm"]),
+        worker_environment=create_environment(extras=["tpu"]),
     )
 
     with remote_inference(
@@ -199,7 +199,7 @@ def test_remote_inference_reports_direct_startup_job(monkeypatch) -> None:
     )
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4"),
-        worker_environment=create_environment(extras=["tpu", "vllm"]),
+        worker_environment=create_environment(extras=["tpu"]),
     )
 
     with pytest.raises(RemoteInferenceStartupError) as exc_info:
@@ -572,7 +572,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4", regions=["us-east5"], zone="us-east5-a"),
         worker_environment=create_environment(
-            extras=["tpu", "vllm"],
+            extras=["tpu"],
             env_vars={"VLLM_ENABLE_V1_MULTIPROCESSING": "0"},
         ),
     )
@@ -599,7 +599,7 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert events[-1] == ("unregister", "endpoint-id")
     assert len(client.submissions) == 2
     for worker_request in client.submissions:
-        assert worker_request.environment.extras == ["tpu", "vllm"]
+        assert worker_request.environment.extras == ["tpu"]
         assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
         assert worker_request.resources.regions == ["us-east5"]
         assert worker_request.resources.zone == "us-east5-a"

@@ -109,23 +109,32 @@ def test_dataset_facts_report_achieved_corpus_shape(
 
 
 def test_parse_explain_metrics_sums_data_sources() -> None:
+    # DataFusion prints each of these as a counter: decimal scaling with a bare
+    # ` K`/` M`/` B` suffix, `bytes_scanned` included.
     plan = """
 DataSourceExec: metrics=[files_ranges_pruned_statistics=12 total → 2 matched,
 row_groups_pruned_statistics=64 total → 3 matched, bytes_scanned=42.5 K,
+pushdown_rows_matched=4.10 K, pushdown_rows_pruned=127.0 K,
+row_pushdown_eval_time=1.79ms,
 metadata_load_time=10.2ms, time_elapsed_opening=23.1ms]
 DataSourceExec: metrics=[files_ranges_pruned_statistics=8 total → 1 matched,
-row_groups_pruned_statistics=16 total → 2 matched, bytes_scanned=1.5 M,
+row_groups_pruned_statistics=1.16 K total → 2 matched, bytes_scanned=1.5 M,
+pushdown_rows_matched=900, pushdown_rows_pruned=1.16 B,
+row_pushdown_eval_time=3.21s,
 metadata_load_time=400µs, time_elapsed_opening=1.1ms]
 """
     metrics = parse_explain_metrics(plan)
 
     assert metrics.files_total == 20
     assert metrics.files_matched == 3
-    assert metrics.row_groups_total == 80
+    assert metrics.row_groups_total == 64 + 1_160
     assert metrics.row_groups_matched == 5
-    assert metrics.bytes_scanned == round(42.5 * 1024 + 1.5 * 1024**2)
+    assert metrics.bytes_scanned == 42_500 + 1_500_000
     assert metrics.metadata_load_ms == 10.6
     assert metrics.file_open_ms == pytest.approx(24.2)
+    assert metrics.pushdown_rows_matched == 4_100 + 900
+    assert metrics.pushdown_rows_pruned == 127_000 + 1_160_000_000
+    assert metrics.pushdown_eval_ms == pytest.approx(3_211.79)
 
 
 def test_manifest_selection_keeps_only_timestamp_overlap() -> None:

@@ -26,6 +26,7 @@ SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 GENERATED_STRING_CHUNK_WIDTH = 88
 VLLM_CONFIG_NAME = "vllm"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu-release.toml"
+TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu-forks.toml"
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,26 @@ def locked_git_source(lock_path: Path, distribution: str) -> LockedGitSource:
     if "subdirectory" in parse_qs(parsed.query):
         raise ValueError(f"{lock_path}: expected a root Git source, found {source!r}")
     repository = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    return LockedGitSource(repository=repository, commit=commit)
+
+
+def tpu_fork_source(path: Path, name: str) -> LockedGitSource:
+    """Read one forked TPU vLLM pin (repository + commit) from the fork descriptor.
+
+    The TPU vLLM stack (``vllm`` + ``tpu-inference``) runs from an isolated uvx env rather than
+    the workspace lock, so its SHAs live in ``config/external/vllm/tpu-forks.toml`` instead of
+    ``uv.lock``. See ``marin.inference.vllm_server.IsolatedTpuVllm``.
+    """
+    config = tomllib.loads(path.read_text())
+    if name not in config:
+        raise ValueError(f"{path}: missing [{name}] section")
+    entry = config[name]
+    repository = entry["repository"]
+    commit = entry["commit"]
+    if not repository.endswith(GIT_SUFFIX):
+        raise ValueError(f"{path}: [{name}] repository must be a .git URL, found {repository!r}")
+    if GIT_COMMIT_PATTERN.fullmatch(commit) is None:
+        raise ValueError(f"{path}: [{name}] commit is not a full Git SHA, found {commit!r}")
     return LockedGitSource(repository=repository, commit=commit)
 
 
@@ -496,8 +517,8 @@ def main() -> None:
     if args.summary_file is not None:
         updates = dependency_updates(previous_dependencies, dependencies)
         args.summary_file.write_text(render_summary(dependencies, updates))
-    vllm_source = locked_git_source(ROOT / "uv.lock", "vllm")
-    tpu_inference_source = locked_git_source(ROOT / "uv.lock", "tpu-inference")
+    vllm_source = tpu_fork_source(TPU_FORKS_CONFIG, "vllm")
+    tpu_inference_source = tpu_fork_source(TPU_FORKS_CONFIG, "tpu-inference")
     pins_match = synchronize_file(
         GENERATED_PINS,
         render_pins(
