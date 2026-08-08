@@ -1344,3 +1344,21 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Decision rule: Keep the change only if the arm completes 200 steps with finite loss and norms.
   Compare its throughput and final drop fraction with MHEP-169. Revert the change if the same
   memory failure occurs.
+
+### 2026-08-08 13:22 UTC - MHEP-174 final E128 midpoint ready
+
+- MHEP-171 completed all five steps with 128 experts and width 7,168. W&B received 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics. The final loss was 10.4902, and the
+  run reported 201,824 tokens/s.
+- Result: 419.438 B total parameters and 26.247 B active parameters is a confirmed E128 pass.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-171-w17-ep-e128-i7168-cf2p00-fullwatch-p32769-20260808
+- MHEP-172 used 128 experts and width 7,424. It failed before step 1 when NCCL all-to-all could
+  not allocate device memory. Iris began a gang retry. The coordinator was stopped during that
+  retry, and W&B has no training or norm metric.
+- Result: 433.933 B total parameters and 26.700 B active parameters is a failed E128 upper bound.
+- MHEP-174 uses the only remaining 128-wide midpoint, expert width 7,296. It has 426.686 B total
+  parameters and 26.473 B active parameters.
+- Run ID: `mhep-174-w19-ep-e128-i7296-cf2p00-fullwatch-p32772-20260808`.
+- The arm uses five steps, full watch on every step, production priority, CUDA async allocation,
+  and zero retries. A pass makes width 7,296 the E128 maximum. A failure makes width 7,168 the
+  E128 maximum.
