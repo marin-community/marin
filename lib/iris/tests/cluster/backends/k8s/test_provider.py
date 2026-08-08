@@ -1048,9 +1048,24 @@ def test_no_configmap_when_no_workdir_files(provider, k8s):
 # ---------------------------------------------------------------------------
 
 
-def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
-    """Coordinator tasks (single-task, no accelerator) get a PDB."""
-    req = make_run_req("/coord-job/0")
+@pytest.mark.parametrize("priority", [job_pb2.PRIORITY_BAND_INTERACTIVE, job_pb2.PRIORITY_BAND_BATCH])
+def test_sync_coordinator_pdb_allows_disruption_for_retryable_priority(provider, k8s, priority):
+    req = make_run_req("/coord-job/0", priority=priority)
+    req.num_tasks = 1
+    batch = make_batch(tasks_to_run=[req])
+
+    provider.sync(batch)
+
+    pdbs = k8s.list_json(K8sResource.PDBS)
+    assert len(pdbs) == 1
+    pdb = pdbs[0]
+    assert pdb["spec"]["maxUnavailable"] == 1
+    assert "minAvailable" not in pdb["spec"]
+    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
+
+
+def test_sync_coordinator_pdb_blocks_disruption_for_production_priority(provider, k8s):
+    req = make_run_req("/coord-job/0", priority=job_pb2.PRIORITY_BAND_PRODUCTION)
     req.num_tasks = 1
     batch = make_batch(tasks_to_run=[req])
 
@@ -1060,7 +1075,7 @@ def test_sync_creates_pdb_for_coordinator_task(provider, k8s):
     assert len(pdbs) == 1
     pdb = pdbs[0]
     assert pdb["spec"]["minAvailable"] == 1
-    assert pdb["metadata"]["labels"][_LABEL_TASK_HASH] == _task_hash("/coord-job/0")
+    assert "maxUnavailable" not in pdb["spec"]
 
 
 def test_stray_delete_defers_pdb_cleanup_to_gc(provider, k8s):
