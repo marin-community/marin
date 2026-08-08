@@ -4,22 +4,33 @@
 # each fork toward upstream; it does not hold the pins themselves. The actual SHA/version lives
 # in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml descriptor).
 #
-# The `refresh-fork` skill reads a section to drive one fork's refresh; the weekly coordinator
-# walks all sections in `depends_on` order. Keep every section consistent with its pin source
-# and EXTERNAL_PROJECTS in config/update-external.py — tests/inference/test_migration_descriptors.py
-# enforces this.
+# The `refresh-fork` skill reads a section to drive one fork's refresh. A planned weekly coordinator
+# (#8048 phase 2) will walk all sections in `depends_on` order. Keep every section consistent with its
+# pin source and EXTERNAL_PROJECTS in config/update-external.py —
+# tests/inference/test_migration_descriptors.py enforces this.
+#
+# Two kinds, by how Marin consumes the fork:
+#   track    Marin pins an isolated uv project to a fork branch. A refresh advances the pin to the
+#            branch tip via `update-external.py`, including any commits the fork carries on top of
+#            upstream — Marin does not maintain those patches. Keeping the fork branch itself close to
+#            upstream (evalchemy carries dozens of local commits; harbor's main trails upstream by
+#            hundreds) is a fork-side rebase, out of scope for a pin refresh. `upstream` records that
+#            rebase target for reference only.
+#   overlay  Marin maintains local patches it replays onto a chosen upstream base and pins by SHA in a
+#            vllm/*.toml descriptor. A refresh selects a new base, replays the overlay, and re-pins.
 #
 # Fields:
 #   repository       Marin fork Marin pins (must match the pin source).
 #   upstream         Repo the fork tracks. Omitted for marin-native repos with no upstream.
-#   kind             "patch_free" (track a branch, no local commits) or "overlay" (Marin carries patches).
+#   kind             "track" or "overlay" (see above).
 #   pin              Where the pinned revision lives: "isolated_project"
 #                    (config/external/<name>/uv.lock) or "descriptor:<path>#<section>".
-#   base_select      How to choose the new base: "upstream_main", "fork_main", "latest_release",
-#                    or "derived" (with `derived_from`).
+#   base_select      How to choose the new base: "fork_main" (advance to the fork branch tip),
+#                    "latest_release", or "derived" (with `derived_from`).
 #   derived_from     For base_select="derived": "<fork>:<path>" giving the SHA the base is read from.
 #   depends_on       Forks whose refresh must land first (the coordinator's DAG edges).
-#   e2e              Marin end-to-end that validates the refreshed fork (file path, optional ::symbol).
+#   e2e              Marin end-to-end that validates the refreshed fork (file path, optional ::symbol);
+#                    the skill's Validate section holds the concrete invocation.
 #   blocker_assignee GitHub user assigned the "can't migrate" issue on failure.
 #   nuances          Migration constraints a human must respect (torch pins, known-good ceilings, etc.).
 
@@ -52,24 +63,27 @@ nuances = [
 [evalchemy]
 repository = "https://github.com/marin-community/evalchemy.git"
 upstream = "https://github.com/mlfoundations/evalchemy.git"
-kind = "patch_free"
+kind = "track"
 pin = "isolated_project"
-base_select = "upstream_main"
-e2e = "experiments/evaluation/cli.py"
+base_select = "fork_main"
+e2e = "experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml"
 blocker_assignee = "yonromai"
 
 [harbor]
 repository = "https://github.com/marin-community/harbor.git"
 upstream = "https://github.com/harbor-framework/harbor.git"
-kind = "patch_free"
+kind = "track"
 pin = "isolated_project"
-base_select = "upstream_main"
+base_select = "fork_main"
 e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
 blocker_assignee = "yonromai"
+nuances = [
+    "Fork main has diverged far from upstream (hundreds of commits behind); reconciling it is a fork-side rebase, not a pin refresh.",
+]
 
 [MarinSkyRL]
 repository = "https://github.com/marin-community/MarinSkyRL.git"
-kind = "patch_free"
+kind = "track"
 pin = "isolated_project"
 base_select = "fork_main"
 e2e = "experiments/post_training/iceball_micro.py"

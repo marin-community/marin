@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 from rigging.config_discovery import find_project_root
 
-_VALID_KINDS = {"patch_free", "overlay"}
-_VALID_BASE_SELECT = {"upstream_main", "fork_main", "latest_release", "derived"}
+_VALID_KINDS = {"track", "overlay"}
+_VALID_BASE_SELECT = {"fork_main", "latest_release", "derived"}
 
 
 def _root() -> Path:
@@ -81,7 +81,7 @@ def test_fields_are_well_formed():
         if section["base_select"] == "derived":
             fork, _, path = section["derived_from"].partition(":")
             assert fork in descriptors and path, f"{name}: derived_from must name a fork and path"
-        # An overlay is rebased onto its upstream, so it must name one; patch_free may be marin-native.
+        # An overlay is rebased onto its upstream, so it must name one; a track fork may be marin-native.
         if section["kind"] == "overlay":
             assert section.get("upstream"), f"{name}: overlay needs an upstream"
 

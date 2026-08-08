@@ -17,8 +17,9 @@ Use this skill to refresh **one** fork: advance its pin to a newer base, validat
 with the fork's declared e2e, and open the Marin PR — or, if a real external
 blocker remains, file one "can't migrate" issue.
 
-Run one fork at a time. The weekly `ops-fork-ferry` coordinator invokes this
-skill once per fork in `depends_on` order; a human runs it for a single fork.
+Run one fork at a time. A planned weekly coordinator (#8048 phase 2) will invoke
+this skill once per fork in `depends_on` order; today a human runs it for a single
+fork.
 
 Use the same algorithm in CI and local runs. In local/manual mode, ask before
 external mutations: pushing fork branches, opening the Marin PR, or filing a
@@ -28,7 +29,7 @@ GitHub issue. Do not ask before the fork's required e2e.
 
 Read the target fork's section in `config/external/migration.toml`. It gives:
 
-- `kind` — `patch_free` or `overlay`; everything below branches on this.
+- `kind` — `track` or `overlay`; everything below branches on this.
 - `pin` — where the pinned revision lives (`isolated_project`, or
   `descriptor:<path>#<section>`).
 - `base_select` (+ `derived_from`) — how to choose the new base.
@@ -53,21 +54,25 @@ against.
   selected base, branch names/SHAs if created, attempted fixes, the remaining
   failure, and artifacts.
 
-## patch_free forks
+## track forks
 
-`evalchemy`, `harbor`, `MarinSkyRL` track a branch with no Marin commits, so a
-refresh only advances the pin and validates.
+`evalchemy`, `harbor`, and `MarinSkyRL` are isolated uv projects pinned to a fork
+branch. Marin does not maintain their patches: a refresh advances the pin to
+whatever the branch currently points at — including any commits the fork carries
+on top of upstream — and validates.
 
-1. **Sync the base.** `base_select = upstream_main`: the fork's `main` should
-   fast-forward to its `upstream` `main`. If it does not fast-forward, the fork
-   carries local commits and is not patch-free — stop and reclassify it as
-   `overlay` in the descriptor. `base_select = fork_main`: the fork is
-   marin-native (no `upstream`); advance to its own `main`.
-2. **Advance the pin.** `pin = isolated_project`: run
-   `uv run config/update-external.py <fork>`, which bumps
-   `config/external/<fork>/uv.lock` and regenerates
-   `lib/marin/src/marin/external_dependencies.py`. Confirm no other files change.
-3. **Validate** with the fork's `e2e` (below), then open the Marin PR.
+1. **Advance the pin.** Run `uv run config/update-external.py <fork>`. It re-locks
+   `config/external/<fork>/uv.lock` to the fork branch tip and regenerates
+   `lib/marin/src/marin/external_dependencies.py`. Confirm only that fork's lock
+   and pin change. If the resolved commit equals the current pin, exit no-op.
+2. **Validate** with the fork's `e2e` (below), then open the Marin PR.
+
+This skill tracks the fork branch as-is; it does not rebase the fork's own branch
+onto upstream. Some track forks have drifted far (harbor's `main` trails its
+upstream by hundreds of commits; evalchemy carries dozens of local commits).
+Closing that gap is a fork-side rebase — pushed to the fork's `main` by its
+maintainer or a future extension of this workflow — and is out of scope for a pin
+refresh. The descriptor's `upstream` records that rebase target for reference.
 
 ## overlay forks
 
@@ -141,11 +146,11 @@ compare links from the Marin PR.
 ### Re-pin
 
 Update the descriptor named by `pin` — `config/external/vllm/tpu-forks.toml`, per
-section — so `commit` is the exact fork branch tip and `upstream_base` is the
+section — so `commit` is the pushed refresh-branch tip and `upstream_base` is the
 selected base. Then run `uv run config/update-external.py` to regenerate
 `external_dependencies.py`. This stack is isolated (uvx), so no `uv.lock` changes.
-PR-head SHAs are temporary and must be replaced by the landed fork `main` SHA
-before undrafting.
+The pin references the refresh branch, not fork `main`; promoting the branch to
+fork `main` is the post-merge follow-up below, not part of this refresh.
 
 Keep the stack isolated: it resolves entirely inside the `uvx` env from the two
 forks, so `jax`/`jaxlib`/`libtpu`/`torch` come from the forks' own dependencies.
@@ -173,11 +178,27 @@ uv run iris --config lib/iris/config/marin.yaml job run \
   "from dataclasses import replace; from fray.types import ResourceConfig; from marin.execution.lazy import lower; from marin.execution.step_runner import StepRunner; from experiments.evals.brokered_eval_suite import brokered_eval_suite; from experiments.evals.served_qwen3 import QWEN3_TPU_INFERENCE; inference = replace(QWEN3_TPU_INFERENCE, worker_resources=ResourceConfig.with_tpu('v6e-4', ram='96g', regions=['europe-west4'])); StepRunner().run([lower(brokered_eval_suite(inference, model_name='qwen3-0.6b-refresh-smoke', version='<run-id>-dev', limit=8))])"
 ```
 
-- **`experiments/evaluation/cli.py`** (`evalchemy`) and
-  **`experiments/evaluation/configs/harbor/aime-smoke.yaml`** (`harbor`) — run a
-  bounded eval through the runner and confirm it completes with metrics.
+- **`experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml`** (`evalchemy`) and
+  **`experiments/evaluation/configs/harbor/aime-smoke.yaml`** (`harbor`) — one eval
+  runner drives both; only the config source differs. Submit a bounded run and
+  confirm it completes with metrics and no fork import/build/runtime traceback:
+
+```sh
+uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 \
+  --evalchemy-config experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml   # evalchemy
+uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 \
+  --harbor-config experiments/evaluation/configs/harbor/aime-smoke.yaml          # harbor
+```
+
+  `--dry-run` resolves the model, backend, and task plan without opening Iris for a
+  cheap pre-check.
+
 - **`experiments/post_training/iceball_micro.py`** (`MarinSkyRL`) — the micro
-  post-training e2e.
+  post-training e2e; run the terminal stage and confirm the workflow completes:
+
+```sh
+uv run python -m experiments.post_training.iceball_micro --stage evaluation
+```
 
 When an e2e fails, rerun the same workload against Marin's current pins on the old
 fork stack, same target and priority. Fix only failures that pass on the old
