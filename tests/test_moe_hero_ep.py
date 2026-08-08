@@ -64,6 +64,25 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
         assert os.environ[name] == value
 
 
+def test_run_grug_keeps_explicit_ep_runtime_values(monkeypatch):
+    monkeypatch.setenv("JAX_ENABLE_PGLE", "true")
+    monkeypatch.setenv("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+    config = SimpleNamespace(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
+            watch_mode=train.WatchMode.INLINE,
+        ),
+        resources=object(),
+        processes_per_task=1,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    assert os.environ["JAX_ENABLE_PGLE"] == "true"
+    assert os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] == "platform"
+
+
 @pytest.mark.parametrize(
     ("watch_mode", "watch_interval", "expected_overlap_limit"),
     [

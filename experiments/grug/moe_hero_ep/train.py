@@ -72,7 +72,8 @@ class WatchMode(StrEnum):
 
 
 def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool) -> None:
-    os.environ.update(HERO_EP_RUNTIME_ENV)
+    for name, value in HERO_EP_RUNTIME_ENV.items():
+        os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
     overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
     flag_defaults = (

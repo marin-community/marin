@@ -1728,3 +1728,23 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   objective, matches the user's expert-count preference, and the completed d768 comparison gave
   E192 lower held-out loss than E128. Keep E128 width 8,704 as the maximum-active-parameter
   alternative.
+
+### 2026-08-08 14:56 UTC - Overlap limit 2 fails, and automatic PGLE is ready
+
+- MHEP-194 tested the selected E192 model with collective overlap limit 2. The first NCCL
+  all-to-all failed from CUDA out of memory before step 1. The coordinator was stopped
+  immediately. The safe collective overlap limit remains 1.
+- The next candidate is JAX automatic profile-guided latency estimation. Official JAX
+  documentation states that automatic PGLE measures compute and collective times for a configured
+  number of runs, then recompiles the module with those measurements for scheduling.
+- The EP runtime previously overwrote an explicit `JAX_ENABLE_PGLE` value with `false`. The
+  candidate changes EP runtime values to defaults that preserve explicit launch values. This
+  matches the FSDP hero runtime pattern. A behavior test confirms that explicit PGLE and allocator
+  values survive setup. The focused tests and changed-file checks pass.
+- MHEP-195 uses the selected E192 model, overlap limit 1, 25 steps, full norms every 10 steps,
+  `JAX_ENABLE_PGLE=true`, and `JAX_PGLE_PROFILING_RUNS=3`. It uses production priority and zero
+  retries. It does not run XProf, so the PGLE profiler has exclusive access.
+- Run ID: `mhep-195-w32-ep-e192-i6272-cf1p30-pgle3-watch10-p32793-20260808`.
+- A pass requires all 25 steps, all 76 finite norm fields at steps 0, 10, and 20, a confirmed PGLE
+  recompile, and no OOM or retry. Compare its post-recompile steps with MHEP-193. Revert the code
+  candidate if PGLE fails or does not give a useful gain.
