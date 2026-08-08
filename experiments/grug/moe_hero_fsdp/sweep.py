@@ -65,6 +65,11 @@ NCCL_MEMORY_FLAGS = "--xla_gpu_enable_nccl_comm_splitting=true --xla_gpu_enable_
 CUDNN_FUSION_FLAGS = "--xla_gpu_cudnn_gemm_fusion_level=2"
 # The block-level (Triton) fusion emitter, off by default.
 BLOCK_FUSION_FLAGS = "--xla_gpu_experimental_enable_fusion_block_level_rewriter=true"
+# Autotuning at its limit: exhaustive tiling search rather than the default heuristic shortlist, at
+# the highest autotune level. This buys compile time, which a 20-step run pays in full before the
+# scored window opens at step 5. `xla_gpu_experimental_autotune_cache_mode` is not settable here --
+# it takes no value form XLA_FLAGS accepts.
+EXHAUSTIVE_AUTOTUNE_FLAGS = "--xla_gpu_exhaustive_tiling_search=true --xla_gpu_autotune_level=5"
 _COMBINE_BYTES = 512 * 1024 * 1024
 COMBINE_THRESHOLD_FLAGS = (
     " ".join(
@@ -313,6 +318,12 @@ WAVES = {
             env={**COMBINED_ENV, "XLA_FLAGS": f"{BLOCK_FUSION_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
             args=COMBINED_ARGS,
             note="the block-level Triton fusion emitter, off by default",
+        ),
+        Arm(
+            "exhaustive",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{EXHAUSTIVE_AUTOTUNE_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="autotuning turned up as far as XLA goes; compile time falls outside the scored window",
         ),
     ],
 }
