@@ -1257,3 +1257,36 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Run IDs: `mhep-167-w15-ep-e192-i5632-cf2p00-fullwatch-overlap1-p32765-20260808` and
   `mhep-168-w15-ep-e128-i7680-cf2p00-fullwatch-overlap1-p32766-20260808`.
 - Both arms use full watch on every step, production priority, and zero retries.
+
+### 2026-08-08 12:59 UTC - The committed watch-aware default passes
+
+- MHEP-166 completed all five steps for the exact MHEP-131 model without an explicit XLA flag.
+- W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics. The run
+  reported 232,772 tokens/s and a final loss of 10.5243.
+- The no-watch MHEP-131 baseline reported 233,418 tokens/s. This short gate puts the committed
+  full-watch default 0.28% below that baseline.
+- Iris restarted the gang after the completed W&B run because one pod disappeared during teardown.
+  The coordinator was stopped immediately.
+- Result: Commit `4e9319968` makes overlap limit one the tested inline-watch default. No-watch and
+  diagnostic modes keep overlap limit four.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-166-w14-ep-e192-i5504-cf2p00-fullwatch-default-p32764-20260808
+
+### 2026-08-08 12:59 UTC - MHEP-169 and MHEP-170 capacity gates ready
+
+- Goal: Select the lowest capacity factor that keeps EP drops no higher than the FSDP chunk-4
+  baseline while it maximizes EP throughput.
+- Existing bounds: MHEP-139 at capacity 1.4 reported 270,756 tokens/s and 2.5837% drops. MHEP-131
+  at capacity 2.0 reported 233,418 tokens/s and 0.6844% drops. The matched FSDP chunk-4 MHEP-133
+  baseline reported 223,446 tokens/s and 1.9467% drops.
+- Issue #8062 requires a projected 5% loss win, a d2048 win, stable context extension, and stable
+  gradient and loss curves before EP selection. These capacity gates test only the throughput,
+  drop, and norm parts of that decision.
+- Common config: Exact MHEP-131 model; 192 experts; width 5504; top-4; d6144; 48 layers; latent
+  dimension 3072; batch 1024; sequence length 4096; 200 steps on the 2000-step schedule; full
+  gradient and parameter norms every 10 steps; committed watch-aware runtime default; production
+  priority; and zero retries.
+- MHEP-169 uses capacity factor 1.5. MHEP-170 uses capacity factor 1.6.
+- Run IDs: `mhep-169-w16-ep-e192-i5504-cf1p50-watch10-p32767-20260808` and
+  `mhep-170-w16-ep-e192-i5504-cf1p60-watch10-p32768-20260808`.
+- Decision rule: Select the faster arm if its end-of-run drop fraction is no higher than 1.9467%
+  and its norm and loss curves stay finite. Otherwise, select the higher capacity factor.
