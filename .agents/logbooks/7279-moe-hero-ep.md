@@ -963,3 +963,33 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   results. Compare the final and last three evaluation points, drop fractions, throughput, and norm
   curves. Stop a run on a non-finite loss or a repeated model or allocator failure.
 - Expected execution time: About 36 minutes per arm, excluding queue time.
+
+### 2026-08-08 10:10 UTC - MHEP-151 to MHEP-153 full-watch size ladder ready
+
+- Goal: Find the largest capacity-2 EP64 model that can send full gradient and parameter norms to
+  W&B. Keep the 192-expert hero shape and change only the routed-expert width.
+- Code snapshot: `08b80ae88`.
+- Common config: d6144; 48 layers; 192 experts; latent dimension 3072 with RMSNorm; top-4;
+  capacity factor 2.0; batch 1,024; sequence length 4,096; EP64 `fixed_all_to_all`; one 64-GPU
+  GB200 rack; pinned-host optimizer state; five steps on the 2,000-step schedule; and full gradient
+  and parameter norms on every step. Eval, profiles, checkpoints, retries, and an explicit XLA
+  memory fraction are disabled. The CUDA async allocator stays enabled.
+- Size ladder: MHEP-151 uses width 4,096, with 361.47 B total and 20.83 B active parameters.
+  MHEP-152 uses width 4,608, with 404.96 B total and 21.74 B active parameters. MHEP-153 uses
+  width 4,992, with 437.58 B total and 22.42 B active parameters. The known failed upper bound is
+  the 481.1 B width-5,504 model.
+- Run IDs: `mhep-151-w7-ep-e192-i4096-cf2p00-fullwatch-p32749-20260808`,
+  `mhep-152-w7-ep-e192-i4608-cf2p00-fullwatch-p32750-20260808`, and
+  `mhep-153-w7-ep-e192-i4992-cf2p00-fullwatch-p32751-20260808`.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority production --cpu 2
+  --memory 8GB --disk 32GB --timeout 28800 --max-retries 0 --job-name <run>-coord
+  -e WANDB_API_KEY <secret> -e WANDB_PROJECT rav_moe -e WANDB_ENTITY marin-community
+  -e IRIS_PORT_JAX <port> -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async -- python -m
+  experiments.grug.moe_hero_ep.launch --run-id <run> --num-steps 5 --schedule-steps 2000
+  --watch-interval 1 --version 2026.08.08 --run --num-experts 192
+  --intermediate-dim <width> --num-experts-per-token 4 --latent-dim 3072
+  --capacity-factor 2.0 --batch-size 1024`.
+- Decision rule: A model fits only if all five steps finish and W&B receives finite gradient and
+  parameter norms. A compile or NCCL memory failure is an upper bound. Use a new midpoint if two
+  adjacent ladder points give different results.
