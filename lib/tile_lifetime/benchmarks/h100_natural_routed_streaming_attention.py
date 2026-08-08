@@ -34,8 +34,14 @@ try:
 except ImportError:
     block_sparse_attn_func = None
 
+try:
+    from flash_moba import flash_moba_attn_varlen_func
+except ImportError:
+    flash_moba_attn_varlen_func = None
+
 
 PINNED_BLOCK_SPARSE_ATTENTION_REVISION = "49d6c39e4dc0303442cda3bb758b3925d4399c49"
+PINNED_FLASH_MOBA_REVISION = "39d9ac043b271d046a2181a9991e99a26b67bca1"
 
 
 def _measure(operation: Callable[[], object], warmups: int, repeats: int) -> list[float]:
@@ -218,6 +224,125 @@ def _matched_block_sparse_oracle(
     return operation
 
 
+def _flash_moba_column_relation(
+    selected: torch.Tensor,
+    valid_count: torch.Tensor,
+    *,
+    query_heads: int,
+    query_block_size: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Reorient a shared block relation into FlashMoBA's column-major row lists.
+
+    The transformation uses only generic relation fields: source block,
+    destination block, and edge validity. FlashMoBA stores one sorted query-row
+    list per ``(head, destination block)``. The accepted Shuttle workload uses
+    one relation shared by every query head, so the final row lists are repeated
+    across heads without changing the semantic relation.
+    """
+    if selected.ndim != 2 or valid_count.shape != selected.shape[:1]:
+        raise ValueError("selected must be [query_block, slot] and valid_count must be [query_block]")
+    if query_heads <= 0 or query_block_size <= 0:
+        raise ValueError("query_heads and query_block_size must be positive")
+
+    block_count, route_slots = selected.shape
+    slot = torch.arange(route_slots, device=selected.device)[None, :]
+    edge_valid = slot < valid_count[:, None]
+    block_relation = torch.zeros(block_count, block_count, dtype=torch.bool, device=selected.device)
+    block_relation.scatter_(1, selected, edge_valid)
+
+    # nonzero() is lexicographic in the logical destination-major view, so the
+    # source blocks and the expanded query rows are sorted within every column.
+    destination_source = block_relation.T.contiguous().nonzero()
+    source_block = destination_source[:, 1]
+    row_in_block = torch.arange(query_block_size, device=selected.device)
+    query_rows = (source_block[:, None] * query_block_size + row_in_block[None, :]).reshape(-1)
+    row_indices = query_rows.repeat(query_heads).to(torch.int32)
+
+    rows_per_destination = block_relation.sum(dim=0, dtype=torch.int64) * query_block_size
+    col_nnz = rows_per_destination.to(torch.int32)[None, None, :].expand(1, query_heads, -1).contiguous()
+    flat_counts = col_nnz.reshape(-1).to(torch.int64)
+    flat_offsets = torch.cumsum(flat_counts, dim=0) - flat_counts
+    col_offsets = flat_offsets.reshape(1, query_heads, block_count).contiguous()
+    return col_offsets, col_nnz, row_indices
+
+
+def _matched_flash_moba_oracle(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    query_metadata: torch.Tensor,
+    key_value_metadata: torch.Tensor,
+    router_valid: torch.Tensor,
+    valid_count: torch.Tensor,
+    *,
+    block_size: int,
+    query_group_size: int,
+    slots: int,
+    scale: float,
+) -> tuple[Callable[[], torch.Tensor], Callable[[], torch.Tensor], dict[str, torch.Tensor]]:
+    """Build matched full-boundary and attention-only FlashMoBA operations."""
+    if flash_moba_attn_varlen_func is None:
+        raise RuntimeError("install the pinned FlashMoBA checkout to run the primary expert oracle")
+    sequence = query.shape[1]
+    cumulative_sequence = torch.tensor([0, sequence], dtype=torch.int32, device=query.device)
+    slot = torch.arange(slots, device=query.device)[None, :]
+    cached: dict[str, torch.Tensor] = {}
+
+    def route() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        router_score = query_metadata @ key_value_metadata.T
+        router_score.masked_fill_(~router_valid, -torch.inf)
+        selected = torch.topk(router_score, slots, dim=-1, sorted=True).indices
+        edge_valid = slot < valid_count[:, None]
+        # Preserve the selected set and validity as an explicit semantic check;
+        # FlashMoBA's physical relation is destination-major and erases slot order.
+        cached["selected"] = selected
+        cached["edge_valid"] = edge_valid
+        return _flash_moba_column_relation(
+            selected,
+            valid_count,
+            query_heads=query.shape[2],
+            query_block_size=block_size,
+        )
+
+    initial_relation = route()
+    cached["col_offsets"], cached["col_nnz"], cached["row_indices"] = initial_relation
+
+    def attend(
+        col_offsets: torch.Tensor,
+        col_nnz: torch.Tensor,
+        row_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        output, _, _ = flash_moba_attn_varlen_func(
+            query[0],
+            key[0],
+            value[0],
+            cumulative_sequence,
+            cumulative_sequence,
+            sequence,
+            sequence,
+            col_offsets,
+            col_nnz,
+            row_indices,
+            query_group_size,
+            block_size,
+            0.0,
+            softmax_scale=scale,
+            causal=True,
+            deterministic=True,
+            return_attn_probs=False,
+        )
+        return output
+
+    def full_operation() -> torch.Tensor:
+        col_offsets, col_nnz, row_indices = route()
+        return attend(col_offsets, col_nnz, row_indices)
+
+    def attention_only_operation() -> torch.Tensor:
+        return attend(cached["col_offsets"], cached["col_nnz"], cached["row_indices"])
+
+    return full_operation, attention_only_operation, cached
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--sequence", type=int, default=16_384)
@@ -228,11 +353,15 @@ def main() -> None:
     parser.add_argument("--warmups", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--include-block-sparse-oracle", action="store_true")
+    parser.add_argument("--include-flash-moba-oracle", action="store_true")
+    parser.add_argument("--flash-moba-query-group", type=int, default=768)
     parser.add_argument("--include-kv-major", action="store_true")
     parser.add_argument("--kv-query-capacity", type=int, default=2)
     parser.add_argument("--include-kv-capacity-mutation", action="store_true")
     parser.add_argument("--json-output", type=Path, required=True)
     args = parser.parse_args()
+    if args.include_block_sparse_oracle and args.include_flash_moba_oracle:
+        raise ValueError("select only one matched expert oracle per counterbalanced run")
     config = RoutedAttentionDebugConfig(
         sequence=args.sequence,
         block_size=args.block,
@@ -363,7 +492,35 @@ def main() -> None:
 
     oracle_record = None
     measurement_protocol: dict[str, object]
-    if args.include_block_sparse_oracle:
+    oracle_attention_only = None
+    oracle_adapter_record = None
+    if args.include_flash_moba_oracle:
+        oracle, oracle_attention_only, flash_moba_relation = _matched_flash_moba_oracle(
+            query,
+            key,
+            value,
+            query_metadata,
+            key_value_metadata,
+            router_valid,
+            valid_count,
+            block_size=args.block,
+            query_group_size=args.flash_moba_query_group,
+            slots=args.slots,
+            scale=config.scale,
+        )
+        oracle_implementation = "pinned FlashMoBA precomputed-relation expert oracle"
+        oracle_revision = PINNED_FLASH_MOBA_REVISION
+        oracle_adapter_record = {
+            "source_relation": "query block -> selected KV block, shared across query heads",
+            "physical_relation": "destination KV block -> sorted query-token rows, repeated across query heads",
+            "col_offsets_shape": tuple(flash_moba_relation["col_offsets"].shape),
+            "col_nnz_shape": tuple(flash_moba_relation["col_nnz"].shape),
+            "row_indices_shape": tuple(flash_moba_relation["row_indices"].shape),
+            "physical_query_group_size": args.flash_moba_query_group,
+            "slot_order_policy": "erased to a selected set before exact normalized-exponential Fold",
+            "routing_cost_in_full_boundary": True,
+        }
+    elif args.include_block_sparse_oracle:
         oracle = _matched_block_sparse_oracle(
             query,
             key,
@@ -375,6 +532,12 @@ def main() -> None:
             slots=args.slots,
             scale=config.scale,
         )
+        oracle_implementation = "pinned Block-Sparse-Attention expert oracle"
+        oracle_revision = PINNED_BLOCK_SPARSE_ATTENTION_REVISION
+    else:
+        oracle = None
+
+    if oracle is not None:
         oracle_output = oracle()
         torch.cuda.synchronize()
         oracle_hash = hashlib.sha256(oracle_output.view(torch.int16).cpu().numpy().tobytes()).hexdigest()
@@ -393,9 +556,18 @@ def main() -> None:
         oracle_samples = paired_samples["matched_expert_oracle"]
         oracle_error = oracle_output.float() - output[0].float()
         oracle_median = statistics.median(oracle_samples)
+        attention_only_record = None
+        if oracle_attention_only is not None:
+            attention_only_samples = _measure(oracle_attention_only, args.warmups, args.repeats)
+            attention_only_record = {
+                "samples_ms": attention_only_samples,
+                "median_ms": statistics.median(attention_only_samples),
+                "excluded": ("router Contract", "top-k", "relation reorientation"),
+                "acceptance_denominator": False,
+            }
         oracle_record = {
-            "implementation": "pinned Block-Sparse-Attention expert oracle",
-            "revision": PINNED_BLOCK_SPARSE_ATTENTION_REVISION,
+            "implementation": oracle_implementation,
+            "revision": oracle_revision,
             "samples_ms": oracle_samples,
             "median_ms": oracle_median,
             "maximum_absolute_difference_from_generated": float(oracle_error.abs().max()),
@@ -404,6 +576,8 @@ def main() -> None:
             "output_sha256": oracle_hash,
             "generated_to_oracle_ratio": statistics.median(samples) / oracle_median,
             "matched_boundary": True,
+            "attention_only": attention_only_record,
+            "relation_adapter": oracle_adapter_record,
         }
     else:
         samples = _measure(operation, args.warmups, args.repeats)
