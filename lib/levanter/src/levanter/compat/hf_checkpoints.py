@@ -328,6 +328,63 @@ KEYS_TO_COPY_FROM_BASE_CONFIG = {
     "auto_map",
 }
 
+# Keys inside a transformers>=5 ``rope_parameters`` block that carry the base
+# frequency rather than part of the scaling spec.
+_ROPE_THETA_KEYS = ("rope_theta", "theta", "base")
+# ``rope_type`` values meaning "no scaling"; transformers 4.x wants
+# ``rope_scaling`` left as None for these rather than a dict.
+_UNSCALED_ROPE_TYPES = (None, "default")
+
+
+def _add_legacy_rope_keys(dict_config: dict) -> dict:
+    """Also state rope the way transformers 4.x reads it.
+
+    transformers>=5 serialises rope as a single ``rope_parameters`` block::
+
+        "rope_parameters": {"rope_type": "llama3", "rope_theta": 500000,
+                            "factor": 8.0, ...}
+
+    transformers 4.x reads ``rope_theta`` and ``rope_scaling`` instead. It does
+    **not** error on the 5.x shape — it ignores it and falls back to the
+    architecture default. A checkpoint exported under transformers 5.x
+    therefore loads under 4.x with the wrong rope base and no scaling, with no
+    warning of any kind.
+
+    That is not a small numerical difference. On a Qwen3 1.5B trained with
+    Llama3 rope at theta 500000, transformers 4.57 loads theta 10000 — a 50x
+    error — and mean NLL over real documents goes from 2.41 to 3.18
+    nats/token. The damage grows with sequence length, which is what makes it
+    easy to miss on short smoke tests.
+
+    Writing both shapes costs two keys and makes an export readable by either
+    major version. It is additive: ``rope_parameters`` is left untouched, and
+    under 5.x ``rope_scaling`` is an alias of it, so 5.x behaviour is
+    unchanged. Verified against transformers 4.57 and 5.14.
+
+    A no-op when the config was produced under transformers 4.x (no
+    ``rope_parameters``) or already carries both shapes.
+    """
+    rope = dict_config.get("rope_parameters")
+    if not isinstance(rope, dict):
+        return dict_config
+    if "rope_theta" in dict_config or "rope_scaling" in dict_config:
+        return dict_config
+
+    out = dict(dict_config)
+    params = dict(rope)
+
+    theta = next((params.pop(k) for k in _ROPE_THETA_KEYS if k in params), None)
+    if theta is not None:
+        out["rope_theta"] = theta
+
+    rope_type = params.get("rope_type", params.get("type"))
+    if rope_type in _UNSCALED_ROPE_TYPES:
+        out["rope_scaling"] = None
+    else:
+        params.setdefault("rope_type", rope_type)
+        out["rope_scaling"] = params
+    return out
+
 
 def _causal_lm_architecture_name(hf_config_class: type) -> Optional[str]:
     """Return the HF causal-LM architecture class name for *hf_config_class*, or None.
@@ -1038,6 +1095,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         if self.config_overrides:
             dict_config = mergedeep.merge({}, dict_config, self.config_overrides)
+
+        # Last, so it also covers anything the merges above introduced.
+        dict_config = _add_legacy_rope_keys(dict_config)
 
         return dict_config
 
