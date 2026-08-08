@@ -1228,7 +1228,7 @@ def run_capacity_oracle_split_local(config: CapacityOracleSplitJobConfig) -> Non
 
 
 def _validate_selected_local_recovery(manifest: MergeCheckpointManifest, *, selected_step: int) -> None:
-    """Require the validation-selected CE+KL local-recovery checkpoint used by XEM-007."""
+    """Validate a selected CE+KL bank-only local-recovery manifest."""
     expected = {
         "recovery_step": selected_step,
         "recovery_initialization": RecoveryInitialization.CONVERTED_STEP_ZERO,
@@ -1248,7 +1248,7 @@ def _validate_selected_local_recovery(manifest: MergeCheckpointManifest, *, sele
 
 
 def run_layer_adapter_augment_local(config: LayerAdapterAugmentJobConfig) -> None:
-    """Add the function-identical layer-3 rank adapter to selected Stage A weights."""
+    """Add a function-identical adapter to the configured merged source layer."""
     if config.adapter_rank <= 0:
         raise ValueError(f"adapter_rank must be positive, got {config.adapter_rank}")
     checkpoint_root = _checkpoint_root(config.output_path)

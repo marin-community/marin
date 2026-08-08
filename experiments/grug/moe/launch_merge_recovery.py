@@ -59,6 +59,9 @@ _BUDGET = 3.82e17
 _HIDDEN_DIM = 512
 _TARGET_STEPS = 2**14
 _SEQUENCE_LENGTH = 4096
+_LAYER_ADAPTER_RANK = 8
+_LAYER_ADAPTER_RECOVERY_TOKENS = 50_069_504
+_LAYER_ADAPTER_MILESTONES = (12_582_912, 25_034_752, 37_617_664, _LAYER_ADAPTER_RECOVERY_TOKENS)
 
 
 class MergeBranchName(StrEnum):
@@ -569,7 +572,7 @@ def build_merge_recovery_pipeline(
             run_id="grug-xem-native-local-ce-kl-adapter-r8-augment-d512-l2-l3",
             assignment_mode=AssignmentMode.NATIVE,
             prefit_applied=False,
-            adapter_rank=8,
+            adapter_rank=_LAYER_ADAPTER_RANK,
         )
 
     layer_adapter_augment = ArtifactStep(
@@ -583,8 +586,6 @@ def build_merge_recovery_pipeline(
     )
 
     layer_adapter_diagnostics = []
-    adapter_training_tokens = 50_069_504
-    adapter_milestones = (12_582_912, 25_034_752, 37_617_664, adapter_training_tokens)
     for branch_name, trainable_scope, init_from, initialization, checkpoint_selection in (
         (
             MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_CONTROL,
@@ -632,13 +633,15 @@ def build_merge_recovery_pipeline(
                 initialization=initialization,
                 assignment_mode=AssignmentMode.NATIVE,
                 prefit_applied=False,
-                training_tokens=adapter_training_tokens,
+                training_tokens=_LAYER_ADAPTER_RECOVERY_TOKENS,
                 cross_entropy_weight=1.0,
                 moe_loss_weight=1.0,
                 logit_kl_weight=0.1,
-                checkpoint_token_milestones=adapter_milestones,
+                checkpoint_token_milestones=_LAYER_ADAPTER_MILESTONES,
                 initial_checkpoint_selection=checkpoint_selection,
-                layer_adapter_rank=8 if initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED else None,
+                layer_adapter_rank=(
+                    _LAYER_ADAPTER_RANK if initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED else None
+                ),
                 layer_adapter_source_checkpoint_dir=(
                     _checkpoint_dir(ctx.artifact_path(selected_stage_a))
                     if initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED
