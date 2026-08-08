@@ -1069,3 +1069,31 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   reported success, while two task records stayed pending after a pod disappeared during teardown.
   The coordinator was stopped after the complete W&B result arrived. MHEP-155 tried to restart
   after its deterministic NCCL failure, so its coordinator was stopped to release the rack.
+
+### 2026-08-08 12:05 UTC - The d768 E192 arm has a small one-seed loss gain
+
+- Completion: MHEP-149 and MHEP-150 completed step 9,702. Both Iris coordinators and training
+  children succeeded with exit 0, no failures, and no preemptions. Both W&B runs finished.
+- Launch snapshot: `08b80ae88`.
+- Final training loss: E192 is 2.0151 and E128 is 2.0377. E192 is lower by 0.02261, or 1.11%.
+- Final held-out loss: E192 Paloma micro loss is 2.92373 against 2.93427 for E128. This is 0.01054,
+  or 0.36%, lower. E192 uncheatable micro loss is 2.69066 against 2.70878. This is 0.01812, or
+  0.67%, lower.
+
+| step | E192 Paloma | E128 Paloma | difference | E192 uncheatable | E128 uncheatable | difference |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 7,999 | 2.98517 | 2.99300 | -0.00783 | 2.76149 | 2.77415 | -0.01266 |
+| 8,999 | 2.94702 | 2.95611 | -0.00909 | 2.71607 | 2.73233 | -0.01626 |
+| 9,702 | 2.92373 | 2.93427 | -0.01054 | 2.69066 | 2.70878 | -0.01812 |
+
+- Routing: E192 ends at 1.3364% drops against 0.7907% for E128. This is 0.5457 percentage points,
+  or 69.0% relative, more drops.
+- Speed: E192 ends at 9.228 million tokens/s against 9.547 million for E128. E192 is 3.35% slower.
+  Median MFU is 5.902% for E192 and 6.127% for E128.
+- Norms: Each run has 980 watched samples from step 0 through step 9,700. All global gradient and
+  parameter norms are finite. E192 gradient norms start at 0.2116, are 0.3936 at step 4,860, and
+  end at 0.1290. E128 values are 0.2122, 0.4123, and 0.1346. E192 parameter norms start at 864.6,
+  are 1,831.1 at step 4,860, and end at 1,955.3. E128 values are 730.1, 1,770.4, and 1,898.4.
+- Decision: The one-seed result supports the E192 hypothesis. The held-out gain is consistent and
+  grows over the last three evaluations, but it is small. Run at least one more matched seed before
+  selecting E192 for a larger training run.
