@@ -1,20 +1,33 @@
-# Copyright The Levanter Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Sweep segmented FA4/CuTe tile configurations at Grug hero attention shapes.
 
-Times a sliding-window and a full-causal mask against a 64x64 reference configuration, and
-gates every candidate on reproducing ``reference_attention`` in float32. The forward tile is
-the only free dimension on compute capability 10.x and 12.x: ``_segmented_backward_arches``
-requires a 64x64 backward at 128 threads there, so other backward tiles raise
-``NotImplementedError`` and are reported as such rather than skipped.
+Times a sliding-window and a full-causal mask against a reference configuration and gates every
+candidate on reproducing ``reference_attention`` in float32.
 
-Larger query tiles matter most under a short sliding window, where each query tile covers few
-key tiles and the fixed per-tile cost -- pipeline fill and drain, the Q load, the softmax
-epilogue -- has little inner loop to amortize against.
+``--sweep forward`` varies the forward tile at the production backward. ``--sweep backward``
+varies the backward tile, thread count, and backward path, and lifts the
+``_segmented_backward_arches`` allowlist to do it: that function restricts compute capability
+9.x/10.x/12.x to a 64x64 backward at 128 threads, but the underlying
+``SegmentedFlashAttentionBackwardSm120.can_implement`` only requires ``n_block % 16 == 0``,
+``num_threads % 32 == 0``, and that shared memory fit. The allowlist is therefore the binding
+constraint rather than the kernel, and lifting it in a benchmark is how to find out whether it
+needs to bind.
+
+The two backward paths differ in more than tiles. ``path_arch=120`` runs
+``SegmentedFlashAttentionBackwardSm120`` with ``num_stages_Q = num_stages_dO = 1`` at head
+dimension 128 -- no double buffering of the Q and dO loads -- and a 4-warp atom layout that wants
+128 threads. ``path_arch=80`` runs the SM80 class with both stage counts at 2 and a 2-warp atom
+layout. Sweeping the path is how the double-buffering question gets answered without changing
+library code.
+
+``--shard``/``--num-shards`` split the candidate list so one 4-GPU node can run four disjoint
+slices concurrently, one process per GPU.
 """
 
 import argparse
+import contextlib
 import dataclasses
 import time
 from dataclasses import dataclass
@@ -25,12 +38,29 @@ import jax.numpy as jnp
 import numpy as np
 from levanter.grug.attention import AttentionMask, reference_attention
 from levanter.grug.attention import _fa4_cute as fa4_cute
+from levanter.grug.attention import _fa4_cute_kernels as fa4_cute_kernels
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
 
 REFERENCE_TILE = (64, 64)
-CANDIDATE_FORWARD_TILES = ((64, 64), (128, 64), (128, 128), (256, 64))
-CANDIDATE_BACKWARD_TILES = ((64, 64), (128, 64))
+CANDIDATE_FORWARD_TILES = ((64, 64), (64, 128), (128, 32), (128, 64), (128, 128), (192, 64), (256, 64))
+CANDIDATE_BACKWARD_TILES = ((64, 64), (64, 128), (128, 64), (128, 128), (192, 64), (256, 64))
 CANDIDATE_NUM_THREADS = (128, 256)
+# path_arch 120 is production (stages 1/1 at head_dim 128, 4-warp atoms); 80 is double-buffered.
+CANDIDATE_BACKWARD_PATHS = (120, 80)
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A kernel configuration plus the backward path to force it through."""
+
+    config: Flash4CuteKernelConfig
+    backward_path: int
+
+    def label(self) -> str:
+        return (
+            f"{self.config.forward_tile!s:>10} {self.config.backward_tile!s:>10} "
+            f"{self.config.num_threads:>4} {self.backward_path:>5}"
+        )
 
 
 def _segment_ids(batch: int, seq_len: int, documents: int) -> jax.Array:
@@ -57,8 +87,23 @@ class BenchResult:
     backward: float
 
 
-def _bench(config: Flash4CuteKernelConfig, q, k, v, mask, steps: int, warmup: int) -> BenchResult:
-    with patch.object(fa4_cute, "_segmented_kernel_config", lambda head_dim: config):
+@contextlib.contextmanager
+def _forced(candidate: Candidate):
+    """Force the kernel configuration and the backward path for the duration of the block.
+
+    Overriding ``_segmented_backward_arches`` bypasses its allowlist, so an unsupported
+    combination surfaces as the kernel's own rejection rather than the dispatcher's.
+    """
+    selection = fa4_cute_kernels._BackwardArchSelection(
+        path_arch=candidate.backward_path, postprocess_arch=candidate.backward_path
+    )
+    with patch.object(fa4_cute, "_segmented_kernel_config", lambda head_dim: candidate.config):
+        with patch.object(fa4_cute_kernels, "_segmented_backward_arches", lambda **_: selection):
+            yield
+
+
+def _bench(candidate: Candidate, q, k, v, mask, steps: int, warmup: int) -> BenchResult:
+    with _forced(candidate):
         forward = jax.jit(lambda q, k, v: fa4_cute.gpu_fa4_cute_attention(q, k, v, mask))
         grad = jax.jit(jax.grad(_loss, argnums=(0, 1, 2)))
 
@@ -89,7 +134,7 @@ def _max_diff(a, b) -> float:
 
 
 def _check_against_float32_reference(
-    config: Flash4CuteKernelConfig,
+    candidate: Candidate,
     window: int | None,
     args: argparse.Namespace,
 ) -> str:
@@ -121,7 +166,7 @@ def _check_against_float32_reference(
 
     expected = reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
     expected_grads = jax.jit(jax.grad(ref_loss, argnums=(0, 1, 2)))(q, k, v)
-    with patch.object(fa4_cute, "_segmented_kernel_config", lambda head_dim: config):
+    with _forced(candidate):
         actual = jax.jit(fa4_cute.gpu_fa4_cute_attention)(q, k, v, mask)
         actual_grads = jax.jit(jax.grad(fa4_loss, argnums=(0, 1, 2)))(q, k, v)
 
@@ -141,6 +186,27 @@ def _check_against_float32_reference(
     return "ok" if not failures else "FAIL:" + ",".join(failures)
 
 
+def _build_candidates(base: Flash4CuteKernelConfig, sweep: str) -> list[Candidate]:
+    """Candidates for one sweep axis, holding the other axis at its production value.
+
+    A full cross product of forward and backward tiles wastes most of its runs: the two kernels
+    are timed separately, so varying both at once only re-measures the same pairs.
+    """
+    if sweep == "forward":
+        return [
+            Candidate(dataclasses.replace(base, forward_tile=tile, backward_tile=REFERENCE_TILE, num_threads=128), 120)
+            for tile in CANDIDATE_FORWARD_TILES
+        ]
+    return [
+        Candidate(
+            dataclasses.replace(base, forward_tile=base.forward_tile, backward_tile=tile, num_threads=threads), path
+        )
+        for tile in CANDIDATE_BACKWARD_TILES
+        for threads in CANDIDATE_NUM_THREADS
+        for path in CANDIDATE_BACKWARD_PATHS
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--batch", type=int, default=32, help="Per-GPU batch; the hero runs 32.")
@@ -158,10 +224,20 @@ def main() -> None:
         default=512,
         help="Sequence length for the float32 reference check; the reference is quadratic in it.",
     )
+    parser.add_argument(
+        "--sweep",
+        choices=("forward", "backward"),
+        default="forward",
+        help="Which tile to vary. 'backward' also varies threads and backward path.",
+    )
+    parser.add_argument("--shard", type=int, default=0)
+    parser.add_argument("--num-shards", type=int, default=1)
     args = parser.parse_args()
+    if not 0 <= args.shard < args.num_shards:
+        raise SystemExit(f"--shard must be in [0, {args.num_shards}), got {args.shard}")
 
     if jax.default_backend() != "gpu":
-        raise SystemExit("bench_fa4_cute_tile_sweep requires the JAX GPU backend.")
+        raise SystemExit("tile_sweep requires the JAX GPU backend.")
 
     key = jax.random.key(0)
     shape_q = (args.batch, args.seq_len, args.q_heads, args.head_dim)
@@ -176,59 +252,45 @@ def main() -> None:
     print(f"arch=sm{arch} base_forward_tile={base.forward_tile} base_backward_tile={base.backward_tile}")
     print(f"shape: batch={args.batch} seq={args.seq_len} q_heads={args.q_heads} head_dim={args.head_dim}")
 
-    candidates = []
-    for forward_tile in CANDIDATE_FORWARD_TILES:
-        for backward_tile in CANDIDATE_BACKWARD_TILES:
-            for num_threads in CANDIDATE_NUM_THREADS:
-                if (forward_tile[0] * 2) % num_threads or (backward_tile[0] * 2) % num_threads:
-                    continue
-                candidates.append(
-                    dataclasses.replace(
-                        base, forward_tile=forward_tile, backward_tile=backward_tile, num_threads=num_threads
-                    )
-                )
+    reference = Candidate(
+        config=dataclasses.replace(base, forward_tile=REFERENCE_TILE, backward_tile=REFERENCE_TILE, num_threads=128),
+        backward_path=120,
+    )
+    candidates = _build_candidates(base, args.sweep)
+    shard = [c for i, c in enumerate(candidates) if i % args.num_shards == args.shard]
+    print(f"sweep={args.sweep} candidates={len(candidates)} shard={args.shard}/{args.num_shards} running={len(shard)}")
 
     for window_name, window in (("sliding", args.sliding_window), ("causal", None)):
         mask = AttentionMask.causal(sliding_window=window).with_segment_ids(segment_ids)
-        reference = dataclasses.replace(
-            base, forward_tile=REFERENCE_TILE, backward_tile=REFERENCE_TILE, num_threads=128
-        )
         ref = _bench(reference, q, k, v, mask, args.steps, args.warmup)
         print(f"\n=== {window_name} (window={window}) ===")
         print(
-            f"{'forward_tile':>14} {'backward_tile':>14} {'thr':>4} {'fwd ms':>8} {'bwd ms':>8} "
+            f"{'fwd_tile':>10} {'bwd_tile':>10} {'thr':>4} {'path':>5} {'fwd ms':>8} {'bwd ms':>8} "
             f"{'total ms':>9} {'vs ref':>8} {'max|d|':>9}"
         )
         print(
-            f"{str(REFERENCE_TILE):>14} {str(REFERENCE_TILE):>14} {128:>4} {ref.forward * 1e3:8.3f} "
-            f"{ref.backward * 1e3:8.3f} {(ref.forward + ref.backward) * 1e3:9.3f} {'1.00x':>8} {'ref':>9}"
+            f"{reference.label()} {ref.forward * 1e3:8.3f} {ref.backward * 1e3:8.3f} "
+            f"{(ref.forward + ref.backward) * 1e3:9.3f} {'1.00x':>8} {'ref':>9}"
         )
 
-        for config in candidates:
-            if (config.forward_tile, config.backward_tile, config.num_threads) == (
-                REFERENCE_TILE,
-                REFERENCE_TILE,
-                128,
-            ):
+        for candidate in shard:
+            if candidate == reference:
                 continue
             try:
-                got = _bench(config, q, k, v, mask, args.steps, args.warmup)
+                got = _bench(candidate, q, k, v, mask, args.steps, args.warmup)
             except Exception as exc:
                 # A rejected tile/thread/shared-memory combination is an expected outcome here, but
                 # print the message so a genuine failure is not mistaken for an unsupported config.
                 reason = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
-                print(
-                    f"{str(config.forward_tile):>14} {str(config.backward_tile):>14} "
-                    f"{config.num_threads:>4} {'-':>8} {'-':>8} {'-':>9} {'-':>8}  "
-                    f"{type(exc).__name__}: {reason[:80]}"
-                )
+                print(f"{candidate.label()} {'-':>8} {'-':>8} {'-':>9} {'-':>8}  {type(exc).__name__}: {reason[:70]}")
                 continue
-            diff = max([_max_diff(got.out, ref.out)] + [_max_diff(g, r) for g, r in zip(got.grads, ref.grads)])
+            diff = max(
+                [_max_diff(got.out, ref.out)] + [_max_diff(g, r) for g, r in zip(got.grads, ref.grads, strict=True)]
+            )
             speedup = (ref.forward + ref.backward) / (got.forward + got.backward)
-            verdict = _check_against_float32_reference(config, window, args)
+            verdict = _check_against_float32_reference(candidate, window, args)
             print(
-                f"{str(config.forward_tile):>14} {str(config.backward_tile):>14} {config.num_threads:>4} "
-                f"{got.forward * 1e3:8.3f} {got.backward * 1e3:8.3f} "
+                f"{candidate.label()} {got.forward * 1e3:8.3f} {got.backward * 1e3:8.3f} "
                 f"{(got.forward + got.backward) * 1e3:9.3f} {speedup:7.2f}x {diff:9.2e} {verdict}"
             )
 
