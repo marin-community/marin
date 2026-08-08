@@ -11,12 +11,10 @@ is the **median** ``throughput/duration`` over steps ``WARMUP..``, because the s
 distribution is right-skewed (run A: median 18.086 s, min 17.936, max 18.699, MAD 0.077). Steps 0-1
 are compile and the PGLE recompile; steps 2-4 absorb the one-time first-batch data-loader stall.
 
-Arms share the hardware, so placement no longer varies between them. It varied by 0.78% between two
-byte-identical controls when each arm took its own rack, which was the floor on everything this
-sweep could resolve. The arms are separated in time instead, and that drift is unmeasured: run two
-identical arms in a wave before trusting any delta from it.
-
-Every wave carries a ``control`` or ``base`` arm; an arm counts only against its own wave.
+Every wave carries a ``control`` or ``base`` arm; an arm counts only against its own wave. Waves w1
+through final4 ran one rack per arm, where two byte-identical controls differed by 0.78% -- the
+resolution floor on every delta below. Arms now share one allocation and are separated in time
+instead, which has not been characterized.
 
 Usage
 -----

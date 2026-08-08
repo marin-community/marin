@@ -356,11 +356,6 @@ def build_hero_sweep_run(
     Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its own
     W&B run named ``<run_id>-<arm>``. One arm's fault does not end the sweep. A sweep is a
     diagnostic, so it never checkpoints.
-
-    Running the arms on a single allocation puts them on the same hardware, which removes the
-    placement variance that dominates a fan-out across one rack per arm. It costs wall clock and
-    separates the arms in time instead, so the residual drift is worth measuring with two identical
-    arms before reading any delta.
     """
     if not arms:
         raise ValueError("a sweep needs at least one arm")
