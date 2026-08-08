@@ -35,6 +35,9 @@ CLUSTER = "cw-us-east-08a"
 PROJECT = "marin-community/marin_moe"
 STEPS = 20
 WARMUP = 5  # first scored step
+# A screening wave scores 15 steps, enough to separate the multi-percent effects it is looking for.
+# The wrap-up wave is measuring the result that gets reported, so it takes 40.
+WAVE_STEPS = {"final": 45}
 PREFIX = "hs"  # hero sweep
 PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 
@@ -443,6 +446,31 @@ WAVES = {
             batch_size=1280,
         ),
     ],
+    # The wrap-up. Everything the sweep adopted, measured end to end against the hero as it was,
+    # over 40 scored steps instead of 15, on the merged main.
+    #
+    # `control2` is a byte-identical second control. Every arm in a wave lands on a different rack,
+    # so placement variance has been confounded with the effect under test throughout; four
+    # cross-wave controls put it at 1.28% peak to peak, but that also carries time. Two controls in
+    # one window measure placement alone, which is the number every delta here should be read
+    # against.
+    "final": [
+        Arm("control", note="the hero as it was before this sweep"),
+        Arm("control2", note="byte-identical to control; measures placement variance in-window"),
+        Arm(
+            "adopted",
+            env=COMBINED_ENV,
+            args=COMBINED_ARGS,
+            note="FSDP-sharded small parameters, interleave before gather, NVLink SHARP",
+        ),
+        Arm(
+            "adoptedbatch",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
+            args=COMBINED_ARGS,
+            note="the adopted configuration plus the batch the freed HBM pays for",
+            batch_size=1152,
+        ),
+    ],
 }
 
 
@@ -495,7 +523,7 @@ def launch(wave):
             "--dp-racks",
             "1",
             "--num-steps",
-            str(STEPS),
+            str(WAVE_STEPS.get(wave, STEPS)),
             "--no-save-checkpoints",
             "--watch-interval",
             "0",
