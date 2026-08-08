@@ -57,6 +57,81 @@ class RelationSelectionProgram:
             raise ValueError("relation selection count exceeds the right domain")
 
 
+@dataclass(frozen=True)
+class ProjectedBlockSelectionProgram:
+    """Generic projected-token Contract, block Fold, and deterministic Selection."""
+
+    source_input: str
+    left_weight_input: str
+    right_weight_input: str
+    source_count: int
+    source_feature_count: int
+    group_count: int
+    relation_feature_count: int
+    right_block_size: int
+    selected_count: int
+    score_scale: float
+    token_restriction: IndexDomainRestriction
+    force_local_block: bool
+    accumulation_dtype: str = "fp32"
+    projection_output_dtype: str = "bf16"
+    right_source_input: str | None = None
+    right_source_feature_count: int | None = None
+    right_count: int | None = None
+    left_position_offset: int = 0
+    right_position_offset: int = 0
+
+    def __post_init__(self) -> None:
+        dimensions = (
+            self.source_count,
+            self.source_feature_count,
+            self.group_count,
+            self.relation_feature_count,
+            self.right_block_size,
+            self.selected_count,
+        )
+        if min(dimensions) <= 0:
+            raise ValueError("projected block-selection dimensions must be positive")
+        if self.resolved_right_count % self.right_block_size:
+            raise ValueError("right token count must be divisible by right block size")
+        if self.selected_count > self.right_block_count:
+            raise ValueError("selection count exceeds the right-block domain")
+        if not np.isfinite(self.score_scale):
+            raise ValueError("selection score scale must be finite")
+        if self.projection_output_dtype not in {"bf16", "fp32"}:
+            raise ValueError("projected selection supports BF16 or FP32 projected values")
+        if self.token_restriction.predicate != "left_greater_equal_right":
+            raise ValueError("projected block selection requires a causal token-domain restriction")
+        left_start = self.left_position_offset
+        left_stop = left_start + self.source_count
+        right_start = self.right_position_offset
+        right_stop = right_start + self.resolved_right_count
+        if self.force_local_block and not (right_start <= left_start and left_stop <= right_stop):
+            raise ValueError("forced-local selection requires the left position domain to lie inside the right domain")
+
+    @property
+    def resolved_right_source_input(self) -> str:
+        """Right-token input, defaulting to the symmetric left input."""
+        return self.source_input if self.right_source_input is None else self.right_source_input
+
+    @property
+    def resolved_right_source_feature_count(self) -> int:
+        """Right-token feature count, defaulting to the left feature count."""
+        if self.right_source_feature_count is None:
+            return self.source_feature_count
+        return self.right_source_feature_count
+
+    @property
+    def resolved_right_count(self) -> int:
+        """Right-token count, defaulting to the symmetric left count."""
+        return self.source_count if self.right_count is None else self.right_count
+
+    @property
+    def right_block_count(self) -> int:
+        """Number of blocks in the projected right-token domain."""
+        return self.resolved_right_count // self.right_block_size
+
+
 def execute_relation_selection(
     program: RelationSelectionProgram,
     inputs: dict[str, np.ndarray],
@@ -88,6 +163,81 @@ def execute_relation_selection(
         # Early rows in a causal relation can contain fewer legal right items.
         # Invalid slots are explicit Relation edges rather than padded duplicates.
         selected = np.where(selected_valid, selected, -1)
+    return selected, selected_valid
+
+
+def execute_projected_block_selection(
+    program: ProjectedBlockSelectionProgram,
+    inputs: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Execute projected token scores, causal block max, and stable top-k."""
+    try:
+        source = np.asarray(inputs[program.source_input], dtype=np.float32)
+        right_source = np.asarray(inputs[program.resolved_right_source_input], dtype=np.float32)
+        left_weight = np.asarray(inputs[program.left_weight_input], dtype=np.float32)
+        right_weight = np.asarray(inputs[program.right_weight_input], dtype=np.float32)
+    except KeyError as error:
+        raise ValueError(f"missing projected-selection input {error.args[0]!r}") from error
+    expected_source = (program.source_count, program.source_feature_count)
+    expected_right_source = (program.resolved_right_count, program.resolved_right_source_feature_count)
+    expected_left_weight = (
+        program.source_feature_count,
+        program.group_count * program.relation_feature_count,
+    )
+    expected_right_weight = (program.resolved_right_source_feature_count, program.relation_feature_count)
+    if source.shape != expected_source:
+        raise ValueError(f"selection source has shape {source.shape}, expected {expected_source}")
+    if right_source.shape != expected_right_source:
+        raise ValueError(f"right selection source has shape {right_source.shape}, expected {expected_right_source}")
+    if left_weight.shape != expected_left_weight:
+        raise ValueError(f"left projection weight has shape {left_weight.shape}, expected {expected_left_weight}")
+    if right_weight.shape != expected_right_weight:
+        raise ValueError(f"right projection weight has shape {right_weight.shape}, expected {expected_right_weight}")
+
+    left = (source @ left_weight).reshape(
+        program.source_count,
+        program.group_count,
+        program.relation_feature_count,
+    )
+    right = right_source @ right_weight
+    if program.projection_output_dtype == "bf16":
+        left = _round_float32_to_bfloat16(left)
+        right = _round_float32_to_bfloat16(right)
+    token_scores = np.einsum("qhd,kd->qhk", left, right, dtype=np.float32) * np.float32(program.score_scale)
+    query_position = np.arange(program.source_count, dtype=np.int32) + program.left_position_offset
+    key_position = np.arange(program.resolved_right_count, dtype=np.int32) + program.right_position_offset
+    token_valid = key_position[None, :] <= query_position[:, None]
+    token_scores = np.where(token_valid[:, None, :], token_scores, -np.inf)
+    block_scores = np.max(
+        token_scores.reshape(
+            program.source_count,
+            program.group_count,
+            program.right_block_count,
+            program.right_block_size,
+        ),
+        axis=-1,
+    )
+    block_valid = (
+        np.arange(program.right_block_count, dtype=np.int32)[None, :] * program.right_block_size
+        <= query_position[:, None]
+    )
+    block_scores = np.where(block_valid[:, None, :], block_scores, -np.inf)
+    if program.force_local_block:
+        local_block = (query_position - program.right_position_offset) // program.right_block_size
+        block_scores[np.arange(program.source_count), :, local_block] = np.inf
+
+    # Stable descending rank fixes ties by the original right-block identity.
+    selected = np.argsort(-block_scores, axis=-1, kind="stable")[..., : program.selected_count]
+    selected_valid = np.take_along_axis(
+        np.broadcast_to(block_valid[:, None, :], block_scores.shape),
+        selected,
+        axis=-1,
+    )
+    # Selection denotes a set. Canonical right-index order gives deterministic
+    # Fold order and the compact q2k convention expected by right-oriented plans.
+    selected = np.sort(np.where(selected_valid, selected, program.right_block_count), axis=-1)
+    selected_valid = selected < program.right_block_count
+    selected = np.where(selected_valid, selected, -1).astype(np.int32)
     return selected, selected_valid
 
 
@@ -137,6 +287,41 @@ def build_routed_attention_relation(
         edge_valid=resolved_validity,
         destination_rank_by_item=kv_rank_by_block,
         destination_local_item_by_item=kv_local_block_by_block,
+        padding_quantum=padding_quantum,
+    )
+
+
+def build_grouped_routed_attention_relation(
+    selected_right_blocks: np.ndarray,
+    *,
+    edge_valid: np.ndarray | None = None,
+    padding_quantum: int = 1,
+) -> RelationPlan:
+    """Flatten grouped selection slots while preserving one left-item domain.
+
+    The rectangular route slot is ``group * selected_count + selected_slot``.
+    This keeps semantic query-token and KV-block domains unchanged while making
+    the GQA group recoverable from generic relation metadata.
+    """
+    selected_right_blocks = np.asarray(selected_right_blocks)
+    if selected_right_blocks.ndim != 3:
+        raise ValueError("grouped selected blocks must have shape [left, group, selected_slot]")
+    resolved_validity = _resolve_edge_validity(selected_right_blocks, edge_valid)
+    left_count, group_count, selected_count = selected_right_blocks.shape
+    valid_blocks = selected_right_blocks[resolved_validity]
+    right_block_count = int(np.max(valid_blocks)) + 1 if valid_blocks.size else 0
+    grouped_destination = np.where(
+        resolved_validity,
+        selected_right_blocks,
+        -1,
+    ).reshape(left_count, group_count * selected_count)
+    grouped_validity = resolved_validity.reshape(grouped_destination.shape)
+    return build_relation_plan(
+        grouped_destination,
+        np.ones(grouped_destination.shape, dtype=np.float32),
+        edge_valid=grouped_validity,
+        destination_rank_by_item=np.zeros(right_block_count, dtype=np.int32),
+        destination_local_item_by_item=np.arange(right_block_count, dtype=np.int32),
         padding_quantum=padding_quantum,
     )
 
@@ -395,3 +580,12 @@ def _query_to_kv_head(query_head_count: int, kv_head_count: int) -> np.ndarray:
     if kv_head_count <= 0 or query_head_count % kv_head_count:
         raise ValueError("query heads must map evenly onto KV heads")
     return np.arange(query_head_count, dtype=np.int32) // (query_head_count // kv_head_count)
+
+
+def _round_float32_to_bfloat16(value: np.ndarray) -> np.ndarray:
+    """Round FP32 to BF16 round-to-nearest-even, retaining an FP32 container."""
+    contiguous = np.ascontiguousarray(value, dtype=np.float32)
+    bits = contiguous.view(np.uint32)
+    rounding_bias = np.uint32(0x7FFF) + ((bits >> np.uint32(16)) & np.uint32(1))
+    rounded = (bits + rounding_bias) & np.uint32(0xFFFF0000)
+    return rounded.view(np.float32)

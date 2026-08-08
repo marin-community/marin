@@ -1,0 +1,114 @@
+{
+  "status": "ok",
+  "shape": {
+    "query": 16384,
+    "key": 16384,
+    "query_heads": 64,
+    "key_value_heads": 4,
+    "dimension": 128,
+    "selected_count": 16,
+    "causal": true
+  },
+  "relation_sha256": "935161b303f5411a012d6b13ad593fe9e2cef2bf3a72e76ec180b8a0cd02872d",
+  "official_output_sha256": "a7dbef5414b613b3a40f4cd572a84bc15d70e0a7158f00666d764dc164996dae",
+  "candidates": {
+    "bf16_warp_rows_t256": {
+      "partial_value_bytes": 4294967296,
+      "merge_only": {
+        "samples_ms": [
+          1.8315839767456055,
+          1.8315839767456055,
+          1.8295040130615234,
+          1.8315199613571167,
+          1.829535961151123,
+          1.829535961151123,
+          1.8315839767456055,
+          1.8315839767456055,
+          1.8315839767456055,
+          1.829535961151123
+        ],
+        "minimum_ms": 1.8295040130615234,
+        "median_ms": 1.831551969051361,
+        "mean_ms": 1.8307551741600037,
+        "maximum_ms": 1.8315839767456055
+      },
+      "full_payload": {
+        "samples_ms": [
+          3.7263360023498535,
+          3.82259202003479,
+          3.7109758853912354,
+          3.679231882095337,
+          3.680255889892578,
+          3.7713921070098877,
+          3.6863999366760254,
+          3.675136089324951,
+          3.733504056930542,
+          3.693567991256714
+        ],
+        "minimum_ms": 3.675136089324951,
+        "median_ms": 3.7022719383239746,
+        "mean_ms": 3.7179391860961912,
+        "maximum_ms": 3.82259202003479
+      },
+      "official_payload_paired": {
+        "samples_ms": [
+          2.5872960090637207,
+          2.663072109222412,
+          2.7439680099487305,
+          2.7286078929901123,
+          2.6251840591430664,
+          2.6456639766693115,
+          2.6435840129852295,
+          2.638495922088623,
+          2.6221120357513428,
+          2.726560115814209
+        ],
+        "minimum_ms": 2.5872960090637207,
+        "median_ms": 2.6446239948272705,
+        "mean_ms": 2.6624544143676756,
+        "maximum_ms": 2.7439680099487305
+      },
+      "full_to_official_median_ratio": 1.3999237492987289,
+      "pair_order": [
+        "candidate_then_official",
+        "official_then_candidate",
+        "candidate_then_official",
+        "official_then_candidate",
+        "candidate_then_official",
+        "official_then_candidate",
+        "candidate_then_official",
+        "official_then_candidate",
+        "candidate_then_official",
+        "official_then_candidate"
+      ],
+      "finite": true,
+      "deterministic_merge": true,
+      "maximum_absolute_error_vs_official": 0.0009765625,
+      "mean_absolute_error_vs_official": 3.75388431450574e-09,
+      "output_sha256": "6152cff4b43d8892e1664f635b0d4ae2b6904cfbf6a2f172351cfd16c46b2e60",
+      "generated_source_sha256": {
+        "physical": "425341e8e87277e89624197c0b271d1c4a70874af889a735674342e303cf6027",
+        "semantics": "a0443203c325c071b71af496c253d022c5997e2cee08f20914466a438f16f53a",
+        "relation_builder": "e22cfc1ccaf12eb150e529dae5018b568cc7c693ad276cbe3184f0333510fd1a",
+        "scheduler": "30616bc83c4b92236200db82b613b0fa955eea97d5404b2653f30c62cfac5670",
+        "partial_merge": "95d9c26a8cf2e26947831a3809640f26fe5001c98b141de6acd8c252d1b5a43a"
+      }
+    }
+  },
+  "measurement": {
+    "cold_l2_cache": true,
+    "compilation_excluded": true,
+    "full_payload_includes_relation_conversion_and_partial_allocations": true,
+    "selection_excluded": true,
+    "relation_fixed_to_official_forced_local_topk": true
+  },
+  "device": {
+    "name": "NVIDIA GB200",
+    "capability": [
+      10,
+      0
+    ],
+    "torch": "2.10.0+cu130",
+    "cuda_runtime": "13.0"
+  }
+}

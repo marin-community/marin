@@ -16,12 +16,13 @@ author: dlwh
 
 ## Current TL;DR
 
-- Dense StableHLO recovery and the distributed GB200 MoE synthesis result are frozen at annotated local tag `shuttle-gb200-moe-v1`. Routed sparse attention now has exact CPU query-major/KV-major semantics and three measured H100 paths over the same relation: query-major Seer, KV-major FSA, and Shuttle's deterministic bounded slot waves. The selected Shuttle M32 candidate measures 4.017344 ms at 16K.
+- Dense and distributed-MoE checkpoints are frozen. The active experiment is a clean MiniMax Sparse Attention (MSA) proof on one GB200: ordinary JAX/StableHLO must recover index projections, causal block routing, a generic Relation, and exact selected attention; the device path must synthesize its Contract/Map/Fold/DomainRestriction body rather than call the official MSA kernel. The official SM100 implementation is the matched oracle and a source of low-level physical machinery only.
 
 ## Hypothesis Queue
 
 ### Active
 
+- `TLTC-MSA-001`: MSA's native token-and-GQA-group route can lower to the existing generic relation and normalized-exponential state machinery, then drive a Shuttle-owned SM100 KV-major skeleton within 1.20 times the pinned official oracle. Next test: close the exact payload boundary on one GB200 and compile a natural StableHLO fixture into the same relation.
 - `TLTC-RSA-003`: query-major and KV-major performance cross over as relation degree, KV reuse, padding, and partial-state traffic change. Next test: use a deliberately non-monotone relation and implement actual cross-query KV staging; current grouped CTAs do not share staged K/V.
 - `TLTC-005`: the semantic recognizer can tolerate ordinary JAX broadcast, multiply-order, and projection variations while rejecting near-misses with structured diagnostics. Next test: add permuted and illegal StableHLO fixtures.
 - `TLTC-002`: named layout contracts around fixed CuTe and attention skeletons are sufficient for the first full-region planner. Next test: inventory the layouts required by the local JAX/CuTe attention boundary.
@@ -60,6 +61,28 @@ author: dlwh
 - 2026-08-06: use explicit FP32 round-to-nearest multiplication and addition for deterministic routed merge. FMA remains a measured numerical alternative but is not the selected exact-order path.
 
 ## Entry Log
+
+### 2026-08-08 - TLTC-MSA-001 native routed sparse-attention start
+
+- Hypothesis: the existing generic `RelationPlan`, orientation, readiness, bounded-buffer, `Contract`, `DomainRestriction`, and normalized-exponential `Fold` machinery can express MSA's native `(query token, KV group) -> selected KV block` computation. The only new workload-specific code should be frontend recovery and SM100 physical legalization; online-state, mask, merge, and routing semantics must remain Shuttle-owned.
+- Baseline: branch `research/shuttle-clean-helper-boundaries` at commit `dd3bb84759`.
+- Oracle revisions: MiniMax Sparse Attention `80434d7f67877c6570ca19cac444b84bc9855dac`; its CUTLASS submodule `eb61c911471867a5fd2466bfd8f29306cea6ebf8`.
+- Primary configuration: one low-priority B200/GB200 GPU, BF16 Q/K/V and FP32 online state, batch 1, sequence 65536, 64 query heads, 4 KV heads, head dimension 128, KV block 128, top-k 16, causal. Sequence 16384 is the bring-up configuration.
+- Natural semantics: index-Q/index-K `Contract`s; causal token-score `Contract`; per-block maximum `Fold`; deterministic per-GQA-group top-k `Selection` with the local block forced; generic `Relation`; selected exact QK `Contract`; score-scale `Map`; `DomainRestriction`; normalized-exponential `Fold`; and PV `Contract`.
+- Measurement boundary A, payload: identical precomputed `q2k_indices`; q2k-to-k2q orientation/schedule preparation; sparse attention body. Boundary B, full route: index projections and scores; block-max; top-k; relation construction; and sparse attention. Routing/index planning is never silently excluded from the full boundary.
+- Acceptance: deterministic numerical correctness against the natural semantic reference; one semantic mutation through the same generator; no opaque official MSA/FlashAttention semantic call; generated Shuttle latency no more than 1.20 times the pinned official MSA implementation for one matched primary configuration.
+- Allowed lineage: retain generic SM100 tensor-core mainloops, TMA/copy/layout machinery, barriers, and bounded pipeline templates derived from MSA/CUTLASS. Replace or generalize MSA-owned softmax-state, attention-mask, route-combine, and workload scheduling semantics behind Shuttle `Fold`, `DomainRestriction`, and `RelationPlan` interfaces.
+- Candidate set: query-major sparse fold and KV-major right-resource reuse; a bounded set of tile/pipeline/worker configurations derived from hardware legality. Do not hard-code the official MSA schedule as the answer.
+- Parallel work: one GB200 oracle reproduction, one matched benchmark adapter, and one natural JAX/StableHLO recovery path. Root owns the clean SM100 synthesis boundary and final matched evaluation.
+- Next action: reproduce the exact pinned oracle and semantic interface, freeze a debug fixture, then extract only the generic SM100 physical mechanisms needed by the generated KV-major candidate.
+
+### 2026-08-08 - TLTC-MSA-002 full-route synthesis boundary
+
+- Source check: MSA paper Section 3.1 defines two index projections from hidden state, a causal token-score Contract scaled by `1/sqrt(d_idx)`, a maximum Fold over 128-token KV blocks, per-query/per-GQA-group top-16 selection with the local block forced, and exact selected attention. Section 4 implements the route with a dense max-score pass and exp-free top-k, then uses KV-outer sparse attention with a two-phase partial-state combine.
+- Scope correction: the primary full-route acceptance path must generate or instantiate generic index `Contract -> Map -> DomainRestriction -> Fold(max) -> Selection` machinery. Calling the official MSA dense proxy or top-k implementation in Shuttle would be the same semantic-boundary violation as calling its sparse-attention body.
+- Physical-state derivation: MSA materializes normalized per-block output and log-sum-exp rather than separate `(max, sum, weighted value)` fields. Shuttle now models this as a generic coordinate change of the normalized-exponential Fold state and tests that log-normalizer-weighted merging reproduces the canonical state merge.
+- Backend-neutral progress: `sm100_routed_lowering.py` validates a flattened `(query token, KV group) -> (KV group, block)` relation, GQA mapping, BF16 D=128 legality, selected counts, group preservation, both relation orientations, explicit pipeline fields, and compact partial-state representation. A causal-to-unrestricted mutation changes semantics through the same schedule lowering.
+- Next action: add the equivalent backend-neutral lowering for the index Contract/block-max/Selection, then connect both legalizations to Shuttle-owned SM100 physical emitters.
 
 ### 2026-08-06 - TLTC-RSA-001 routed sparse-attention start
 
@@ -1320,3 +1343,64 @@ author: dlwh
   remain device-pending.
 - Sealed evidence:
   `lib/tile_lifetime/benchmarks/artifacts/gb200_moe_clean_map_fold_v1`.
+
+### 2026-08-08 08:55 PDT - TLTC-MSA-003 pinned SM100 oracle
+
+- Pinned MiniMax Sparse Attention at
+  `80434d7f67877c6570ca19cac444b84bc9855dac` with its CUTLASS gitlink
+  `eb61c911471867a5fd2466bfd8f29306cea6ebf8`. The compatible Python stack is
+  CUDA/NVCC 13.0.88, Torch 2.10.0+cu130, CUTLASS DSL 4.4.1, and QuACK 0.2.10;
+  CUTLASS DSL 4.6.2 is incompatible with the pinned source.
+- Reproduced the official BF16 sparse QK/normalized-exp/PV/combine path on one
+  1200-W GB200 (driver 595.71.05, unpinned clocks). Upstream
+  S=16384,Hq/Hkv=64/4,D=128,top-k=16 measures 2.7211 ms (0.0146-ms standard
+  deviation, 404.07 TFLOP/s).
+- Established the matched primary boundary at K=16384,Q=256,Hq/Hkv=32/8,
+  D=128, block 128, top-k=16. Official MSA takes 0.472528 ms pooled median for
+  q2k-to-k2q scheduling plus sparse attention and deterministic combine. The
+  full common FP32 proxy Contract, block-max Fold, top-k Selection, relation
+  conversion, and sparse payload takes 0.586480 ms pooled median. The clean
+  Shuttle completion threshold is therefore 0.703776 ms for this full path.
+- Two counterbalanced captures contain 30 samples per ordering. Route score
+  multisets match exactly. Output cosine is 0.999995--0.999997, maximum error
+  is 0.0005--0.0020, relation/output hashes are stable, and repeats are bitwise
+  deterministic. Small filtered-CTA and large 4096-tile lookback cases pass.
+- Sealed local evidence is under `scratch/msa-sm100-oracle-80434d7f/`; raw JSON
+  checksums begin `245946d7` and `a47efa88`. Preserve the full provenance and
+  raw distributions before releasing the held GB200.
+- The first natural frontend used symmetric Q/K length. It must be generalized
+  to asymmetric Q=256,K=16384 sparse prefill with bottom-right causal position
+  mapping before the full-route number can be claimed as an exact natural JAX
+  acceptance boundary.
+
+### 2026-08-08 - TLTC-MSA-004 clean 16K synthesis checkpoint
+
+- Generalized the natural frontend to the full symmetric 16K MSA workload and
+  lowered it through generic index-projection Contracts, score Contract,
+  block-maximum Fold, Selection, RelationPlan, causal DomainRestriction,
+  normalized-exponential Fold, and QK/PV Contracts.
+- The accepted generated path calls no public MSA score, attention, or combine
+  operation. It keeps low-level CuTe layout, copy, MMA, and pipeline templates
+  while Shuttle owns the semantic body, relation scheduling, and deterministic
+  partial-state merge.
+- Isolated raw-10 GB200 medians are 0.637888/0.707600 ms for generated/oracle
+  score-Fold-selection, 0.785760/0.837360 ms with natural index projections,
+  and 4.431920/3.234160 ms for the full natural boundary. The full ratio is
+  `1.37035x`, so the written `1.20x` performance gate remains open.
+- Generated and oracle selectors produce the same deterministic route hash.
+  Both differ from the materialized reference in 61,446 slots: all but one
+  affected row has an underfilled finite causal domain and the last has an
+  exactly tied cutoff. Natural maximum/mean output differences are
+  0.0536499/0.0000687, so the current 0.01 maximum numerical gate also remains
+  open under the real-algebra route policy.
+- On the exact official relation, generated payload differs from official MSA
+  by at most 0.0009765625 and measures 3.702272/2.644624 ms (`1.39992x`). The
+  generic deterministic merge costs 1.831552 ms. A BF16x2 candidate regressed
+  to 3.829760 ms and was removed rather than retained as dead code.
+- Found and fixed an omitted causal DomainRestriction in the first 16K full
+  lowering. The invalid pre-fix run is preserved and labeled rather than used.
+- Chose to stop workload-specific merge tuning. The result is a clean generic
+  infrastructure checkpoint, not a completed performance row.
+- Sealed raw distributions, commands, audits, negative results, and checksums
+  under `lib/tile_lifetime/benchmarks/artifacts/msa_clean_sm100_v0` and released
+  the GB200 reservation.

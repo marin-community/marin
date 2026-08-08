@@ -116,8 +116,8 @@ The former public `compile_mok_expert_parallel_region` path has been renamed
 
 ## Routed sparse attention
 
-Current status: **accepted clean query-major result and physically executable
-bounded KV-major structural proof**.
+Current status: **clean MSA synthesis structure demonstrated; numerical and
+1.20-times performance gates remain open**.
 
 The earlier 4.02-ms slot-wave result was Shuttle-owned but used specialized
 Triton source. It remains a negative physical experiment rather than clean
@@ -169,9 +169,17 @@ a historical matched control rather than a Hopper acceptance comparison.
 Complete evidence is under
 `benchmarks/artifacts/natural_routed_sparse_attention_h100_matched_v0`.
 
-Proof C passes the synthesis, mutation, correctness, and orientation gates.
-Its performance gate remains open pending an exactly matched FlashMoBA H100
-comparison or a local benchmark of the current Hopper-enabled MIT kernel.
+The stronger MSA checkpoint replaces the old SM80-oriented oracle question.
+At 16K on GB200, generic Shuttle score/Fold/Selection is 0.9015 times the
+isolated MSA oracle and the full natural boundary is 4.431920/3.234160 ms, or
+1.37035 times. Generated and oracle route hashes match exactly. Their common
+route differs from the materialized reference only on early causal underfilled
+rows or a tied cutoff, but the resulting 0.0536499 maximum output difference
+exceeds the current 0.01 numerical gate. Exact-relation payload correctness
+passes. Proof C therefore passes synthesis and deterministic exact-relation
+execution, but remains provisional on both the natural numerical contract and
+the 1.20-times performance target. Evidence is under
+`benchmarks/artifacts/msa_clean_sm100_v0`.
 
 ## StatefulScan
 
@@ -236,15 +244,15 @@ defining the performance oracle.
 
 ## Milestone acceptance matrix
 
-Three clean-synthesis rows pass the frozen acceptance protocol. Sparse
-attention has passed the structural and synthesis checks but needs a matched
-Hopper oracle before its performance row can pass:
+The table records the strongest current evidence. Sparse attention now has a
+matched SM100 oracle, but the clean path does not yet pass its numerical or
+performance gate:
 
 | Workload | Natural frontend and name erasure | Generated semantic body | Mutation evidence | Matched ratio | Result |
 |---|---|---|---|---:|---|
 | Dense Transformer | JAX/StableHLO → 36 generic Flow operations | Contract ASTs plus generated SM90 streaming Fold | pairwise SiLU-product → product through the same AST generator | worst required-shape ratio `1.119422x` | pass |
 | Distributed BF16 MoE | JAX/StableHLO router/top-k → RelationPlan | generic segmented Contracts, generated SwiGLU, source-ordered Fold merge | route-slot counts 2 and 6 use the same recovery and generation path | `1.134995x` | pass |
-| Routed sparse attention | JAX/StableHLO → Relation/Contract/Map/Fold/DomainRestriction | generated query-major QK/Fold/PV and physical KV-major slot waves | relation, score-map, softcap, and KV-capacity changes retain the generator | pending matched Hopper oracle | provisional |
+| Routed sparse attention | JAX/StableHLO → Contract/Fold/Selection/Relation/DomainRestriction | generated score/Fold/Selection and routed QK/normalized-exp/PV/merge | relation, block size, score map, and merge schedule retain the generator | `1.37035x` MSA at 16K | provisional: misses performance and natural numerical gates |
 | StatefulScan | JAX `stablehlo.while` → Scan/Map/Contract | generated preparation, ordered state scan, and readout | scalar/per-key decay crossed with rank-one/rank-two updates | `1.097854x` | pass |
 
 The accepted numerical contracts remain explicit: dense records source-ordered

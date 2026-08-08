@@ -1,0 +1,26 @@
+Pod job: /dlwh/dev-gpu-dlwh-msa-sm100-oracle
+Pod: iris-dlwh-dev-gpu-dlwh-msa-sm100-or-d0b3ca2a-1-4206335f74da90bb
+MSA commit: 80434d7f67877c6570ca19cac444b84bc9855dac
+CUTLASS commit: eb61c911471867a5fd2466bfd8f29306cea6ebf8
+Device: NVIDIA GB200, compute capability 10.0
+Torch: 2.10.0+cu130
+CUDA runtime: 13.0
+Driver: 595.71.05
+
+env \
+  CUDA_HOME=/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13 \
+  CUDA_CCCL_INCLUDE=/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13/include/cccl \
+  PATH=/tmp/msa-env/bin:/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  LIBRARY_PATH=/tmp/msa-link:/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13/lib \
+  LD_LIBRARY_PATH=/tmp/msa-link:/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13/lib:/tmp/msa-env/lib/python3.12/site-packages/torch/lib \
+  PYTHONPATH=/tmp/msa-run/msa/python/fmha_sm100/cute:/tmp/msa-run/msa/python \
+  /tmp/msa-env/bin/python /tmp/msa-run/oracle_only_natural_16k_capture.py \
+  --msa-root /tmp/msa-run/msa \
+  --oracle-adapter /tmp/shuttle-clean/benchmarks/backends/sm100_minimax_msa_oracle.py \
+  --query-count 16384 \
+  --right-count 16384 \
+  --query-heads 64 \
+  --key-value-heads 4 \
+  --warmups 3 \
+  --repeats 10 \
+  --output /tmp/msa-run/artifacts/isolated-oracle-natural-16k-h64-hkv4.json

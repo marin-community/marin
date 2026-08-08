@@ -1412,8 +1412,41 @@ right-resource staging and deterministic online-state merge, so Proof C's
 structural gate is closed. Its first CUDA-core implementation is approximately
 188 times slower than query-major and is retained as a negative physical
 result; no sequence-squared or per-edge partial state is materialized. The
-refreshed performance gate remains open until the natural MSA program is
-synthesized and compared locally on SM100.
+refreshed performance gate remains open until the natural MSA program passes
+the numerical and performance requirements below.
+
+MSA checkpoint, 2026-08-08: the natural 16K program is now synthesized on
+SM100 without calling MSA's public score, attention, or combine operations.
+The generated path lowers index projections, score reduction, selection,
+relation planning, causal restriction, normalized-exponential state, QK/PV,
+and deterministic merge from generic Shuttle structure. It retains only
+low-level expert-derived CuTe layout, copy, MMA, and pipeline templates.
+
+The isolated matched medians are:
+
+```text
+score Contract + block-max Fold + top-k:
+    Shuttle 0.637888 ms / MSA 0.707600 ms = 0.9015x
+natural index projections + selection:
+    Shuttle 0.785760 ms / MSA 0.837360 ms = 0.9384x
+natural projections + selection + selected payload:
+    Shuttle 4.431920 ms / MSA 3.234160 ms = 1.37035x
+```
+
+This closes the natural frontend and generic physical-generation parts of the
+MSA row, but does not pass acceptance. The full boundary exceeds 1.20 times,
+the 64K primary shape remains unmeasured, and the natural output's maximum
+difference from the materialized semantic reference is 0.0536499 versus the
+current 0.01 gate. Generated and oracle selectors produce the identical route
+hash; the discrepancy from the materialized reference occurs on early causal
+rows with underfilled finite domains or an exactly tied top-k cutoff. Exact-
+relation generated payload agrees with official MSA to maximum 0.0009765625.
+
+The current decision is to preserve the clean generic implementation rather
+than add an MSA-specific combine to manufacture a passing number. The next
+performance work, if resumed, should improve the generic deterministic Fold
+merge or partial-state representation. Evidence is frozen under
+`benchmarks/artifacts/msa_clean_sm100_v0`.
 
 #### Acceptance
 

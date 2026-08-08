@@ -518,6 +518,53 @@ relation-orientation test but is not a competitive physical candidate.
 Query-major remains selected. Evidence is under
 `benchmarks/artifacts/natural_routed_sparse_attention_h100_matched_v0`.
 
+## Clean MSA routed-attention checkpoint
+
+MiniMax Sparse Attention provides a stronger SM100 routed workload than the
+earlier block-shared H100 comparison. The pinned natural program projects BF16
+hidden inputs into FP32 index features, computes causal block scores, reduces
+them with a block-maximum Fold, selects top-k blocks per GQA group, and executes
+exact causal attention over the selected relation.
+
+Shuttle erases that program to generic `Contract`, `Fold`, `Selection`,
+`RelationPlan`, `DomainRestriction`, and normalized-exponential state. Its
+generated execution path does not call MSA's public score, attention, or
+combine operations. It instantiates low-level CuTe score and routed-attention
+templates while generating the semantic score body, state update, causal
+restriction, scheduler, and deterministic merge.
+
+On one GB200 at `Q=K=16384`, `Hq/Hkv=64/4`, `D=128`, block 128, top-k 16,
+causal BF16, ten steady-state samples produce:
+
+| Matched boundary | Generated Shuttle | MSA oracle | Ratio |
+|---|---:|---:|---:|
+| Score Contract, block-max Fold, top-k | 0.637888 ms | 0.707600 ms | 0.9015x |
+| Natural index projections and selection | 0.785760 ms | 0.837360 ms | 0.9384x |
+| Natural projection, selection, and selected payload | 4.431920 ms | 3.234160 ms | 1.37035x |
+
+This is a clean synthesis result but not a completed acceptance row. It misses
+the 1.20-times performance gate. With an identical official relation, the
+generated payload is 1.399924 times the official payload, and its generic
+deterministic merge accounts for 1.831552 ms of the 3.702272-ms median. A
+BF16x2 vectorized merge candidate regressed to 3.829760 ms and was removed from
+the maintained source. The result is intentionally left slower rather than
+replacing the generated Fold with an MSA-specific combine.
+
+The isolated generated and oracle score paths produce the same bitwise-stable
+route hash. Both differ from a materialized Torch reference in 61,446 slots
+across 7,681 rows: 7,680 are early causal rows with fewer than top-k finite
+competitors, and the final row has an exactly tied cutoff. Under the declared
+`real_algebra_equivalent` route policy, this produces maximum/mean natural
+output differences of 0.0536499/0.0000687. The maximum exceeds the current
+0.01 numerical gate. With the exact oracle relation, the generated payload
+agrees with official MSA to maximum 0.0009765625 and mean 3.75e-9 and repeats
+bitwise.
+
+An earlier run omitted the causal `DomainRestriction` in the payload lowering.
+It is explicitly marked invalid and preserved next to the corrected raw
+distributions, commands, hashes, source audit, and rejected merge candidate in
+`benchmarks/artifacts/msa_clean_sm100_v0`.
+
 ## Known limitations
 
 - The plan-driven runtime consumes an in-memory `RegionPlan`; durable JSON serialization and compiled-artifact caching are not implemented yet.

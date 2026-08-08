@@ -1,0 +1,20 @@
+This diagnostic was run in a separate process from the isolated oracle. It
+loads only the direct-generated selector and records the generated route hash.
+The single timing sample is not used as a performance result.
+
+env \
+  CUDA_HOME=/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13 \
+  CUDA_CCCL_INCLUDE=/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13/include/cccl \
+  PATH=/tmp/msa-env/bin:/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  LIBRARY_PATH=/tmp/msa-link:/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13/lib \
+  LD_LIBRARY_PATH=/tmp/msa-link:/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13/lib:/tmp/msa-env/lib/python3.12/site-packages/torch/lib \
+  PYTHONPATH=/tmp/shuttle-clean/src:/tmp/shuttle-clean/backend:/tmp/shuttle-clean/backends/sm100:/tmp/msa-run/msa/python/fmha_sm100/cute:/tmp/msa-run/msa/python \
+  /tmp/msa-env/bin/python /tmp/msa-run/direct_selector_debug.py \
+  --msa-root /tmp/msa-run/msa \
+  --query-count 16384 \
+  --right-count 16384 \
+  --query-heads 64 \
+  --key-value-heads 4 \
+  --warmups 0 \
+  --repeats 1 \
+  --output /tmp/msa-run/artifacts/direct-selector-16k-route-hash.json

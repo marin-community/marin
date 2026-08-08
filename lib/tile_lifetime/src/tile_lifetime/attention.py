@@ -31,6 +31,20 @@ class AttentionPartial:
     weighted_value_accumulator: np.ndarray
 
 
+@dataclass(frozen=True)
+class NormalizedAttentionPartial:
+    """Compact physical form of an attention partial.
+
+    ``row_log_normalizer`` is ``row_max + log(row_sum_exp)`` and
+    ``normalized_weighted_value`` is the already normalized partial output.
+    This representation is useful when partial states cross a kernel boundary:
+    it stores one scalar per row rather than separate maximum and sum fields.
+    """
+
+    row_log_normalizer: np.ndarray
+    normalized_weighted_value: np.ndarray
+
+
 def summarize_attention_partial(
     query: np.ndarray,
     key: np.ndarray,
@@ -87,6 +101,69 @@ def finalize_attention_partial(partial: AttentionPartial) -> np.ndarray:
         locations = np.argwhere(empty_rows)
         raise ValueError(f"attention rows have no valid selected keys at indices {locations.tolist()}")
     return partial.weighted_value_accumulator / partial.row_sum_exp[..., None]
+
+
+def normalize_attention_partial(partial: AttentionPartial) -> NormalizedAttentionPartial:
+    """Change physical state coordinates without changing Fold semantics."""
+    empty_rows = partial.row_sum_exp <= 0
+    safe_sum = np.where(empty_rows, 1.0, partial.row_sum_exp)
+    row_log_normalizer = np.where(empty_rows, -np.inf, partial.row_max + np.log(safe_sum))
+    normalized_weighted_value = np.where(
+        empty_rows[..., None],
+        0.0,
+        partial.weighted_value_accumulator / safe_sum[..., None],
+    )
+    return NormalizedAttentionPartial(
+        row_log_normalizer=row_log_normalizer.astype(np.float32),
+        normalized_weighted_value=normalized_weighted_value.astype(np.float32),
+    )
+
+
+def merge_normalized_attention_partials(
+    left: NormalizedAttentionPartial,
+    right: NormalizedAttentionPartial,
+) -> NormalizedAttentionPartial:
+    """Merge compact partial states using log-normalizer weights."""
+    if left.row_log_normalizer.shape != right.row_log_normalizer.shape:
+        raise ValueError("attention log-normalizer shapes must match")
+    if left.normalized_weighted_value.shape != right.normalized_weighted_value.shape:
+        raise ValueError("normalized attention value shapes must match")
+    if left.normalized_weighted_value.shape[:-1] != left.row_log_normalizer.shape:
+        raise ValueError("normalized attention values must have one vector per log-normalizer row")
+
+    common = np.maximum(left.row_log_normalizer, right.row_log_normalizer)
+    finite_common = np.isfinite(common)
+    safe_common = np.where(finite_common, common, 0.0)
+    left_weight = np.where(
+        np.isfinite(left.row_log_normalizer),
+        np.exp(left.row_log_normalizer - safe_common),
+        0.0,
+    ).astype(np.float32)
+    right_weight = np.where(
+        np.isfinite(right.row_log_normalizer),
+        np.exp(right.row_log_normalizer - safe_common),
+        0.0,
+    ).astype(np.float32)
+    total_weight = left_weight + right_weight
+    safe_weight = np.where(total_weight > 0, total_weight, 1.0)
+    normalized = (
+        left_weight[..., None] * left.normalized_weighted_value
+        + right_weight[..., None] * right.normalized_weighted_value
+    ) / safe_weight[..., None]
+    row_log_normalizer = np.where(total_weight > 0, safe_common + np.log(safe_weight), -np.inf)
+    return NormalizedAttentionPartial(
+        row_log_normalizer=row_log_normalizer.astype(np.float32),
+        normalized_weighted_value=normalized.astype(np.float32),
+    )
+
+
+def finalize_normalized_attention_partial(partial: NormalizedAttentionPartial) -> np.ndarray:
+    """Return the normalized value, rejecting an empty Fold domain."""
+    empty_rows = ~np.isfinite(partial.row_log_normalizer)
+    if np.any(empty_rows):
+        locations = np.argwhere(empty_rows)
+        raise ValueError(f"attention rows have no valid selected keys at indices {locations.tolist()}")
+    return partial.normalized_weighted_value
 
 
 @dataclass(frozen=True)

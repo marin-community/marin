@@ -1,0 +1,27 @@
+Pod job: /dlwh/dev-gpu-dlwh-msa-sm100-oracle
+Pod: iris-dlwh-dev-gpu-dlwh-msa-sm100-or-d0b3ca2a-1-4206335f74da90bb
+MSA commit: 80434d7f67877c6570ca19cac444b84bc9855dac
+CUTLASS commit: eb61c911471867a5fd2466bfd8f29306cea6ebf8
+Device: NVIDIA GB200, compute capability 10.0
+Torch: 2.10.0+cu130
+CUDA runtime: 13.0
+Driver: 595.71.05
+
+export CUDA_HOME=/tmp/msa-env/lib/python3.12/site-packages/nvidia/cu13
+export CUDA_CCCL_INCLUDE=$CUDA_HOME/include/cccl
+export PATH=/tmp/msa-env/bin:$CUDA_HOME/bin:$PATH
+export LIBRARY_PATH=/tmp/msa-link:$CUDA_HOME/lib
+export LD_LIBRARY_PATH=/tmp/msa-link:$CUDA_HOME/lib:/tmp/msa-env/lib/python3.12/site-packages/torch/lib
+export PYTHONPATH=/tmp/shuttle-clean/src:/tmp/shuttle-clean/backend:/tmp/shuttle-clean/backends/sm100:/tmp/msa-run/msa/python/fmha_sm100/cute:/tmp/msa-run/msa/python:$PYTHONPATH
+
+/tmp/msa-env/bin/python /tmp/shuttle-clean/benchmarks/sm100_fused_projected_selection.py \
+  --msa-root /tmp/msa-run/msa \
+  --build-directory /tmp/shuttle-msa-direct-16k-warp-causal \
+  --query-count 16384 \
+  --right-count 16384 \
+  --query-heads 64 \
+  --key-value-heads 4 \
+  --warmups 3 \
+  --repeats 10 \
+  --execution-mode generated_only \
+  --output /tmp/msa-run/artifacts/shuttle-direct-natural-16k-warp-generated-only.json

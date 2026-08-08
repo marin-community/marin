@@ -12,6 +12,12 @@ from tile_lifetime.expert_parallel import ExpertParallelConfig, compile_expert_p
 from tile_lifetime.expert_parallel_plan import ExpertParallelPlan
 from tile_lifetime.ir import DType, ScaledDotProductAttentionOp
 from tile_lifetime.moe_recovery import RecoveredMoERegion, recover_moe_region
+from tile_lifetime.msa_recovery import (
+    NaturalProjectedRoutedAttentionCompilation,
+    RecoveredProjectedRoutedAttentionProgram,
+    compile_natural_projected_routed_attention,
+    recover_projected_routed_attention_program,
+)
 from tile_lifetime.plan import NumericalPolicy, RegionPlan
 from tile_lifetime.routed_attention_plan import RoutedAttentionPlanConfig
 from tile_lifetime.routed_attention_recovery import (
@@ -139,6 +145,36 @@ def compile_stablehlo_routed_attention_program(
     """Compile ordinary StableHLO through runtime RelationPlan and streaming skeletons."""
     recovered = recover_stablehlo_routed_attention_program(artifact, input_names=input_names)
     return compile_natural_routed_attention(
+        recovered,
+        runtime_inputs=runtime_inputs,
+        schedule=schedule,
+        config=config,
+        padding_quantum=padding_quantum,
+    )
+
+
+def recover_stablehlo_projected_routed_attention_program(
+    artifact: bytes,
+    *,
+    input_names: tuple[str, ...],
+) -> RecoveredProjectedRoutedAttentionProgram:
+    """Recover projected token routing into generic sparse-relation algebra."""
+    graph = import_stablehlo(artifact, input_names=input_names)
+    return recover_projected_routed_attention_program(graph)
+
+
+def compile_stablehlo_projected_routed_attention_program(
+    artifact: bytes,
+    *,
+    input_names: tuple[str, ...],
+    runtime_inputs: dict[str, np.ndarray],
+    schedule: StreamingTileSchedule,
+    config: RoutedAttentionPlanConfig,
+    padding_quantum: int = 1,
+) -> NaturalProjectedRoutedAttentionCompilation:
+    """Compile projected Selection through RelationPlan and schedule synthesis."""
+    recovered = recover_stablehlo_projected_routed_attention_program(artifact, input_names=input_names)
+    return compile_natural_projected_routed_attention(
         recovered,
         runtime_inputs=runtime_inputs,
         schedule=schedule,

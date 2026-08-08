@@ -14,7 +14,7 @@ changes generated source through the same AST generator. That component and
 mutation checkpoint remains under
 `benchmarks/artifacts/dense_clean_synthesis_h100_20260807`.
 
-The natural routed-attention path now includes metadata contraction, causal
+The earlier block-shared routed-attention path includes metadata contraction, causal
 restriction, GPU top-k/index forwarding, selected exact attention, and BF16
 output on both Shuttle and oracle paths. At S=16,384, block 128, top-8,
 Hq/Hkv=32/8, and D=128, two counterbalanced 30-sample captures pool to
@@ -30,15 +30,51 @@ schedule. One CTA stages 65,536 bytes of K/V in shared memory and reuses it for
 a bounded query group. The primary non-monotone relation covers 996 edges with
 671 tasks, uses no per-edge partial-state buffer or semantic atomics, and
 repeats bitwise. Its CUDA-core body is intentionally structural and measures
-107.879105 ms, so query-major remains selected. Sparse-attention structural
-synthesis and the exact-expert 1.20-times gate are complete. The FlashMoBA
+107.879105 ms, so query-major remains selected. That experiment closed the
+structural relation-orientation test and its exact FlashMoBA comparison. The FlashMoBA
 denominator is physically loose: it preserves per-token/per-head row-list
 generality and uses SM80-style MMA plus `cp.async`, while Shuttle is specialized
 to the shared block relation and is Hopper-native. The already-measured current
 MIT Block-Sparse-Attention result of 1.423632 ms remains a tighter secondary
 local H100 control, but it is also SM80-style. Evidence for the new primary
 comparison is under
-`benchmarks/artifacts/sparse_flashmoba_h100_matched_v0`.
+`benchmarks/artifacts/sparse_flashmoba_h100_matched_v0`. It does not close the
+refreshed MSA performance gate below.
+
+## Clean MSA synthesis
+
+The first natural MiniMax Sparse Attention path now lowers ordinary JAX and
+StableHLO into generic index-projection `Contract`s, score `Contract`, block
+maximum `Fold`, `Selection`, `RelationPlan`, causal `DomainRestriction`,
+normalized-exponential `Fold`, and QK/PV `Contract`s. The generated path calls
+no public MSA score, attention, or combine entry point. It retains only
+expert-derived low-level CuTe layout, copy, MMA, and pipeline templates.
+
+At `Q=K=16384`, `Hq/Hkv=64/4`, `D=128`, block 128, top-k 16, causal BF16,
+the isolated matched medians are:
+
+| Boundary | Shuttle | MSA oracle | Ratio |
+|---|---:|---:|---:|
+| Score/Fold/Selection | 0.637888 ms | 0.707600 ms | 0.9015x |
+| Natural index projections plus selection | 0.785760 ms | 0.837360 ms | 0.9384x |
+| Natural projections, selection, and payload | 4.431920 ms | 3.234160 ms | 1.37035x |
+
+The clean structural proof succeeds, but the written 1.20-times performance
+gate remains open. The dominant generic cost is deterministic online-state
+merge; under an exact relation it alone costs 1.831552 ms. A BF16x2 merge
+variant regressed and was removed rather than retained as dead specialized
+code. No further MSA-specific micro-optimization is planned for this
+checkpoint; future improvements should strengthen the generic Fold/merge
+skeleton.
+
+Generated and oracle selectors have the same deterministic route hash. Both
+differ from the materialized reference only on early causal underfilled rows
+or a zero cutoff-margin row under the declared `real_algebra_equivalent`
+policy. Exact-relation payload correctness passes, but the natural-program
+maximum output difference of 0.0536499 exceeds the current 0.01 threshold, so
+the numerical gate also remains open. Raw distributions, source audits,
+negative results, invalidated pre-causal evidence, commands, and checksums are
+under `benchmarks/artifacts/msa_clean_sm100_v0`.
 
 The dense path has also completed the revised statistical protocol. Two
 independent 30-sample captures reverse generated/oracle process order and use a

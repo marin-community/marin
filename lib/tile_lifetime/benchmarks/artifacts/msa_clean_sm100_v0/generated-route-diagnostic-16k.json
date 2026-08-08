@@ -1,0 +1,65 @@
+{
+  "correctness": {
+    "cutoff_margins": {
+      "finite_cutoff_count": 57344,
+      "mean_finite_cutoff_margin": 3.5678505897521973,
+      "minimum_finite_cutoff_margin": 0.0,
+      "nonfinite_cutoff_count": 8192
+    },
+    "matches_materialized_semantic_reference": false,
+    "mismatch_count": 61446,
+    "reference_sha256": "18886bcb75eacd42fe00c5fff2bd4de5577b12edfc62b84ae60e62ec7de5a07a",
+    "repeat_bitwise": true,
+    "route_sha256": "5d66957024106d1d2eaa9c8d7f752272e87f4b8c8b8e7d62a5e8f550376f4cf2"
+  },
+  "device": {
+    "capability": [
+      10,
+      0
+    ],
+    "cuda": "13.0",
+    "name": "NVIDIA GB200",
+    "torch": "2.10.0+cu130"
+  },
+  "generated_source": {
+    "classification": "direct_generated_contract_maximum_fold",
+    "clean": true,
+    "sha256": {
+      "fmha_sm100_inst.jinja": "7181b94bae8be3631824343e8ff68cbc001d38d1b929eebe9958928f968a7423",
+      "fmha_sm100_params.h": "a776dc84103e87931672d903a2b5737b163182d0a1ea7d07c9d3d105e8b34782",
+      "fmha_sm100_variant_run.cu.jinja": "3e8af59327dcbe3bf354a17b7445c027b9aa04b664a97ff4dad4cb52e8c4a9cc",
+      "gmem_bounds_check.h": "c6a174cd5d392bca154c17a119da4bd2ff1116371a20609b38f4eea27fa43597",
+      "tvm_ffi_utils.h": "e77134f7fc39637bcdd490e6371ee140014dbadf9a670627b673c9737a7e9b86"
+    }
+  },
+  "shape": {
+    "block_size": 128,
+    "feature_count": 128,
+    "key_value_heads": 4,
+    "query_count": 16384,
+    "query_heads": 64,
+    "right_count": 16384,
+    "top_k": 16
+  },
+  "status": "ok",
+  "timings": {
+    "natural_projection_and_selection": {
+      "maximum_ms": 0.968671977519989,
+      "mean_ms": 0.968671977519989,
+      "median_ms": 0.968671977519989,
+      "minimum_ms": 0.968671977519989,
+      "samples_ms": [
+        0.968671977519989
+      ]
+    },
+    "projected_selection_core": {
+      "maximum_ms": 0.8477759957313538,
+      "mean_ms": 0.8477759957313538,
+      "median_ms": 0.8477759957313538,
+      "minimum_ms": 0.8477759957313538,
+      "samples_ms": [
+        0.8477759957313538
+      ]
+    }
+  }
+}

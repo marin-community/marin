@@ -36,6 +36,7 @@ _GENERIC_SEMANTIC_PRIMITIVES = frozenset(
         "Scan",
         "Relation",
         "RelationPlan",
+        "Selection",
         "SegmentedContract",
         "DomainRestriction",
         "Transport",
