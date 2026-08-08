@@ -41,12 +41,29 @@ HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
 HERO_OFFLOAD_OPT_STATE = True
-# Grad/param norm reductions run outside the scanned step, cost a visible slice of a short run's
-# wall clock, and can require a 117 GiB temporary buffer on this model -- against a 173 GiB device,
-# enough to push a large shape into OOM. Off by default; --watch-interval buys the diagnostic back
-# every N steps for a run that wants it.
+# Grad/param norm reductions run outside the scanned step and cost a visible slice of a short run's
+# wall clock. Off by default; --watch-interval buys the diagnostic back every N steps.
 HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
+
+
+def _hero_watch_config(interval: int) -> WatchConfig:
+    """Global gradient norm only, which is what a stability check needs.
+
+    `WatchConfig`'s defaults watch grads *and* params, take a norm per parameter tensor, and set
+    `split_scan_layers`, which un-stacks the 48 scanned layers. At the hero shape that combination
+    needs a ~117 GiB temporary against a 173 GiB device and reliably OOMs a run that fits without
+    it -- measured twice, on shapes that had already completed 25 steps with the watch off.
+    """
+    if interval <= 0:
+        return WatchConfig(watch_targets=[])
+    return WatchConfig(
+        watch_targets=["grads"],
+        include_per_parameter_norms=False,
+        split_scan_layers=False,
+        interval=interval,
+    )
+
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
 _SLIMPAJAMA_SHUFFLE = BlockShuffleConfig(io_block_size=256, window_blocks=256, perm_type="feistel")
@@ -260,7 +277,7 @@ def build_hero_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=(WatchConfig(interval=watch_interval) if watch_interval > 0 else WatchConfig(watch_targets=[])),
+            watch=_hero_watch_config(watch_interval),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,

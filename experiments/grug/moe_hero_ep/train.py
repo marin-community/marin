@@ -413,6 +413,25 @@ def _make_train_step(
 
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
+
+        # Reduce over grads and params here, before the optimizer consumes them. Deferring the whole
+        # watch until after `optimizer.update` keeps the entire gradient tree resident across the
+        # update -- about 28 GiB per device at the hero shape -- which OOMs runs that fit without it.
+        watch_stats: dict | None = None
+        if watch_config is not None and compute_watch:
+            early = tuple(t for t in watch_targets if t in ("grads", "params"))
+            if early:
+                watch_stats = compute_watch_stats(
+                    watch_targets=early,
+                    include_norms=watch_config.include_norms,
+                    include_per_parameter_norms=watch_config.include_per_parameter_norms,
+                    include_histogram=watch_config.include_histograms,
+                    split_scan_layers=watch_config.split_scan_layers,
+                    params=qb_params,
+                    grads=grads,
+                    model_tree_type=type(state.params),
+                )
+
         opt_state_in = (
             _optimizer_state_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         )
@@ -430,20 +449,22 @@ def _make_train_step(
                 params,
             )
 
-        watch_stats = None
         if watch_config is not None and compute_watch:
-            watch_stats = compute_watch_stats(
-                watch_targets=watch_targets,
-                include_norms=watch_config.include_norms,
-                include_per_parameter_norms=watch_config.include_per_parameter_norms,
-                include_histogram=watch_config.include_histograms,
-                split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
-                grads=grads,
-                updates=updates,
-                opt_state=opt_state_in,
-                model_tree_type=type(state.params),
-            )
+            late = tuple(t for t in watch_targets if t in ("updates", "opt_state"))
+            if late:
+                watch_stats = {
+                    **(watch_stats or {}),
+                    **compute_watch_stats(
+                        watch_targets=late,
+                        include_norms=watch_config.include_norms,
+                        include_per_parameter_norms=watch_config.include_per_parameter_norms,
+                        include_histogram=watch_config.include_histograms,
+                        split_scan_layers=watch_config.split_scan_layers,
+                        updates=updates,
+                        opt_state=opt_state_in,
+                        model_tree_type=type(state.params),
+                    ),
+                }
 
         if offload_opt_state:
             opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")

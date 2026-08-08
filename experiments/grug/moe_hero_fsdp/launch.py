@@ -57,9 +57,8 @@ HERO_TRAIN_STEP_TIMEOUT = timedelta(minutes=15)
 # Evaluation, checkpointing, and other hooks use this process-wide deadline.
 HERO_PROCESS_STALL_TIMEOUT = timedelta(hours=1)
 HERO_STALL_DIAGNOSTIC_TIMEOUT = timedelta(seconds=20)
-# Grad/param norm reductions run outside the scanned step, cost a visible slice of a short run's
-# wall clock, and can require a 117 GiB temporary buffer on this model. The hero default leaves
-# them off; --watch-interval re-enables them every N steps for a run that wants the diagnostic.
+# Grad norm reductions run outside the scanned step and cost a visible slice of a short run's wall
+# clock. Off by default; --watch-interval re-enables them every N steps.
 HERO_WATCH_INTERVAL = 0
 # One process writes the XPlane capture. Every rank of a 16-node gang would upload a
 # multi-hundred-MB session into the same directory for the same timeline.
@@ -89,6 +88,23 @@ def _validation_datasets() -> list[ArtifactStep[TokenizedCache]]:
 
 class HeroThroughputResult(Artifact):
     """Metrics and resumable checkpoints from the rack-scale throughput hero run."""
+
+
+def _hero_watch_config(interval: int) -> WatchConfig:
+    """Global gradient norm only, which is what a stability check needs.
+
+    `WatchConfig`'s defaults watch grads *and* params, take a norm per parameter tensor, and set
+    `split_scan_layers`, which un-stacks the scanned layers. On the hero shapes that combination
+    needs a ~117 GiB temporary against a 173 GiB device and OOMs runs that fit without it.
+    """
+    if interval <= 0:
+        return WatchConfig(watch_targets=[])
+    return WatchConfig(
+        watch_targets=["grads"],
+        include_per_parameter_norms=False,
+        split_scan_layers=False,
+        interval=interval,
+    )
 
 
 def _hero_run_config(
@@ -145,9 +161,7 @@ def _hero_run_config(
             ),
             TelemetryConfig(),
         ),
-        # Watch statistics can require a 117 GiB temporary buffer on this model, so leave them off
-        # unless the caller opts in with a positive interval.
-        watch=WatchConfig(interval=watch_interval) if watch_interval > 0 else WatchConfig(watch_targets=[]),
+        watch=_hero_watch_config(watch_interval),
         progress_watchdog=ProgressWatchdogConfig(
             step_timeout=HERO_TRAIN_STEP_TIMEOUT,
             process_timeout=HERO_PROCESS_STALL_TIMEOUT,
