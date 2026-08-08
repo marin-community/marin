@@ -4,6 +4,7 @@
 import dataclasses
 import functools
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -14,10 +15,12 @@ import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from jax.experimental import multihost_utils
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -38,6 +41,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
+from levanter.utils.tree_utils import key_path_to_str
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
@@ -84,6 +88,10 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    # Take grad/param norms on the host instead of on device. The device reduction needs the whole
+    # tree live at once, which blocks rematerialization and starves the all-to-all collective on the
+    # EP shapes; a per-leaf copy to pinned host memory avoids that.
+    watch_on_host: bool = False
     # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
@@ -331,6 +339,53 @@ def _optimizer_state_to_memory_kind(tree, memory_kind: str):
     return jax.tree.map(_move, tree)
 
 
+def _tree_to_host(tree):
+    """Copy each leaf to pinned host memory, one leaf at a time.
+
+    Reducing over the gradient tree on device requires every leaf live at once. That blocks
+    rematerialization -- which is what keeps this program inside its memory budget -- and the
+    all-to-all collective then has nothing left to allocate from. Copying leaf by leaf lets XLA move
+    each buffer to host as the backward pass produces it and release the device copy immediately, so
+    the tree is never wholly resident.
+    """
+
+    def _move(leaf):
+        if not isinstance(leaf, jax.Array):
+            return leaf
+        sharding = jax.typeof(leaf).sharding
+        mesh = getattr(sharding, "mesh", None)
+        if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
+            return leaf
+        return jax.device_put(leaf, sharding.with_memory_kind("pinned_host"))
+
+    return jax.tree.map(_move, tree)
+
+
+def host_tree_norms(tree, *, prefix: str, include_per_parameter_norms: bool) -> dict[str, float]:
+    """Frobenius norms taken on the host from a pinned-host tree.
+
+    Each process sums squares over the shards it owns, then the partial sums are combined across
+    processes so the norms are global rather than per-process. Squares accumulate in float64: a
+    float32 sum over billions of elements loses precision that a gradient-norm curve depends on.
+    """
+    paths_and_leaves = [(p, v) for p, v in jax.tree_util.tree_leaves_with_path(tree) if isinstance(v, jax.Array)]
+    local = np.array(
+        [
+            sum(float(np.sum(np.square(np.asarray(shard.data), dtype=np.float64))) for shard in leaf.addressable_shards)
+            for _, leaf in paths_and_leaves
+        ],
+        dtype=np.float64,
+    )
+    # process_allgather returns (num_processes, num_leaves); sum over processes for a global figure.
+    squares = np.asarray(multihost_utils.process_allgather(local)).reshape(-1, local.size).sum(axis=0)
+    norms: dict[str, float] = {}
+    if include_per_parameter_norms:
+        for (path, _), sq in zip(paths_and_leaves, squares, strict=True):
+            norms[f"{prefix}/norm/{key_path_to_str(path)}"] = math.sqrt(float(sq))
+    norms[f"{prefix}/norm/total"] = math.sqrt(float(squares.sum()))
+    return norms
+
+
 def initial_state(
     model_config: GrugModelConfig,
     *,
@@ -379,6 +434,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
+    watch_on_host: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -418,7 +474,13 @@ def _make_train_step(
         # watch until after `optimizer.update` keeps the entire gradient tree resident across the
         # update -- about 28 GiB per device at the hero shape -- which OOMs runs that fit without it.
         watch_stats: dict | None = None
-        if watch_config is not None and compute_watch:
+        host_trees: dict | None = None
+        if watch_config is not None and compute_watch and watch_on_host:
+            # Ship leaf by leaf; the reduction happens on the host after the step returns.
+            host_trees = {
+                t: _tree_to_host(grads if t == "grads" else qb_params) for t in watch_targets if t in ("grads", "params")
+            }
+        elif watch_config is not None and compute_watch:
             early = tuple(t for t in watch_targets if t in ("grads", "params"))
             if early:
                 watch_stats = compute_watch_stats(
@@ -478,7 +540,7 @@ def _make_train_step(
             pending_qb_betas=metrics["qb_beta_per_layer"],
         )
 
-        return next_state, metrics, watch_stats
+        return next_state, metrics, watch_stats, host_trees
 
     return train_step
 
@@ -502,6 +564,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
         offload_opt_state=config.trainer.offload_opt_state,
+        watch_on_host=config.trainer.watch_on_host,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -636,7 +699,17 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 compute_watch = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                state, metrics, watch_stats, host_trees = train_step(state, batch, compute_watch=compute_watch)
+                if host_trees:
+                    watch_stats = {}
+                    for target, tree in host_trees.items():
+                        watch_stats.update(
+                            host_tree_norms(
+                                tree,
+                                prefix="grad" if target == "grads" else "params",
+                                include_per_parameter_norms=watch_config.include_per_parameter_norms,
+                            )
+                        )
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
