@@ -41,6 +41,11 @@ HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
 HERO_OFFLOAD_OPT_STATE = True
+# Grad/param norm reductions run outside the scanned step, cost a visible slice of a short run's
+# wall clock, and can require a 117 GiB temporary buffer on this model -- against a 173 GiB device,
+# enough to push a large shape into OOM. Off by default; --watch-interval buys the diagnostic back
+# every N steps for a run that wants it.
+HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
@@ -119,6 +124,7 @@ def build_hero_run(
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
+    watch_interval: int = HERO_WATCH_INTERVAL,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -250,7 +256,7 @@ def build_hero_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=0),
+            watch=(WatchConfig(interval=watch_interval) if watch_interval > 0 else WatchConfig(watch_targets=[])),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
@@ -360,6 +366,13 @@ def build_hero_run(
     ),
 )
 @click.option(
+    "--watch-interval",
+    type=click.IntRange(min=0),
+    default=HERO_WATCH_INTERVAL,
+    show_default=True,
+    help="Steps between grad/param norm dumps. 0 disables them.",
+)
+@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -399,6 +412,7 @@ def main(
     latent_dim: int | None,
     flavor: str,
     save_checkpoints: bool,
+    watch_interval: int,
     eval_every: int,
     profile_steps: int,
     profile_start_step: int,
@@ -415,6 +429,7 @@ def main(
         latent_dim=latent_dim,
         flavor=flavor,
         save_checkpoints=save_checkpoints,
+        watch_interval=watch_interval,
         eval_every=eval_every,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
