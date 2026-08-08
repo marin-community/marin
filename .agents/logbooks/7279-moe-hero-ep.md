@@ -1526,21 +1526,29 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 
 ### 2026-08-08 14:16 UTC - MHEP-185 tests dynamic inline norm sampling
 
-- The current inline path computes all norm statistics on every training step. It logs them only
-  at the configured interval. This keeps one executable resident, but it pays the reduction cost
-  on the other nine steps.
-- The candidate passes a dynamic scalar to the compiled training step. `jax.lax.cond` computes
-  the 76 statistics only when the scalar is true. Its false branch returns zero placeholders with
-  the same shapes and dtypes. The logging loop discards the placeholders. The scalar is not a
-  static argument, so both branches use one compiled training executable.
+- The prior inline path computes all norm statistics on every training step. It logs them only at
+  the configured interval. This keeps one executable resident, but it pays the reduction cost on
+  the other nine steps.
+- Commit `2d136d5e1` passed a dynamic scalar to the compiled training step. `jax.lax.cond`
+  computed the 76 statistics only when the scalar was true. Its false branch returned zero
+  placeholders with the same shapes and dtypes. The scalar was not a static argument, so the
+  design used one compiled training executable.
 - A local behavior test ran the true and false branches. The true branch returned the expected
   gradient norm, the false branch returned the placeholder, and the JIT cache contained one
   executable. All five focused watch tests and the changed-file checks passed.
-- MHEP-185 will use the MHEP-131 model with 192 experts, width 5,504, top-k 4, capacity factor 1.4,
-  and 200 steps. It will log full norms every 10 steps. This matches MHEP-178, except that MHEP-178
-  computes norms on every step.
+- MHEP-185 matched MHEP-178: MHEP-131 shape, 192 experts, width 5,504, top-k 4, capacity factor
+  1.4, 200 steps, and full norms every 10 steps.
 - Run ID: `mhep-185-w27-ep-e192-i5504-cf1p40-dynamic-watch10-p32783-20260808`.
-- Acceptance requires all 20 expected norm rows, all 76 finite norm fields in each row, no OOM or
-  retry, and no second training compilation after the first step. Compare the last-50 throughput
-  with MHEP-178 and the no-watch MHEP-139 reference. Revert the candidate if it fails correctness,
-  memory, or the single-executable requirement.
+- Acceptance required all 20 expected norm rows, all 76 finite norm fields in each row, no OOM or
+  retry, and no second training compilation after the first step.
+
+### 2026-08-08 14:19 UTC - Dynamic inline norm sampling fails on distributed sharding
+
+- MHEP-185 failed before step 1. The dynamic condition scalar had replicated pinned-host
+  sharding. The compiled condition required replicated device sharding. JAX stopped with
+  `AssertionError: Unexpected XLA sharding override` on all workers.
+- The compiler also estimated a 198.91 GiB rematerialized program against a 167.89 GiB target.
+  The sharding error happened before execution, so the run did not test the actual memory peak.
+- The coordinator was stopped immediately. It had production priority and zero retries.
+- Decision: Reject commit `2d136d5e1`. Revert the implementation and local test so this failed
+  option does not remain in the code. Keep this record as the negative result.
