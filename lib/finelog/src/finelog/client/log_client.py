@@ -598,6 +598,23 @@ class LogClient:
             )
         return result
 
+    def list_namespaces(self) -> dict[str, Schema]:
+        """Return every registered namespace's schema, keyed by name.
+
+        The registered schema, not a locally declared one: this is what the
+        server's catalog holds and what a re-register merges against. Wire
+        schemas omit the server-assigned ``seq`` column.
+        """
+        client = self._get_stats_client()
+        try:
+            response = client.list_namespaces(stats_pb2.ListNamespacesRequest())
+        except ConnectError as exc:
+            raise _translate_connect_error(exc) from exc
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            self._invalidate(_format_exc_summary(exc))
+            raise
+        return {info.namespace: schema_from_proto(info.schema) for info in response.namespaces}
+
     def flush(self, timeout: float | None = None) -> FlushResult:
         """Flush the ``log`` namespace's Table, if any."""
         table = self._tables.get(LOG_NAMESPACE)

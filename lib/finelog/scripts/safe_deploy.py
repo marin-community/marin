@@ -2,16 +2,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Safe finelog deploy with rollout / rollback.
+"""Safe finelog deploy with pre-flight, rollout, and rollback.
 
 Wraps the GCE bootstrap path used by ``finelog deploy restart`` with:
+  - a schema pre-flight that decides the deploy before it touches the host,
   - capture of the currently-running container's pinned image digest *before*
     the restart,
   - persistence of that digest under ``~/.cache/finelog/deploy-state/<name>.json``,
   - on health failure, an automatic re-bootstrap with the captured digest,
   - a separate ``rollback`` subcommand to restore the last good digest later.
 
+The pre-flight reads each deployment's registered schemas and runs them through
+the candidate image's own merge (``finelog-server check-schema``). A rollout
+refuses to proceed when the image's schema would not register, because that
+failure is invisible to the health gate: the server listens, ``/health`` is
+green, and every write to the wedged namespace fails. After a successful
+rollout the registered schemas are recorded under
+``lib/finelog/deploy/registered_schemas/``, where a Rust test re-checks them on
+every pull request that touches the server.
+
 Usage:
+    uv run python lib/finelog/scripts/safe_deploy.py preflight marin-dev
+    uv run python lib/finelog/scripts/safe_deploy.py preflight --all
     uv run python lib/finelog/scripts/safe_deploy.py rollout marin-dev
     uv run python lib/finelog/scripts/safe_deploy.py rollback marin-dev
     uv run python lib/finelog/scripts/safe_deploy.py rollback marin-dev --to ghcr.io/...@sha256:...
@@ -27,10 +39,32 @@ import click
 from finelog.deploy._gcp import _ssh_args, _wait_health_via_ssh, apply_bootstrap, render_bootstrap_for
 from finelog.deploy.bootstrap import CONTAINER_NAME, HEALTH_OK
 from finelog.deploy.build import build_image as build_finelog_image
-from finelog.deploy.config import FinelogConfig, load_finelog_config
+from finelog.deploy.config import FinelogConfig, bundled_config_names, load_finelog_config
+from finelog.deploy.connection import open_log_client
 from finelog.deploy.image import resolve_image_digest
+from finelog.deploy.preflight import (
+    Outcome,
+    PreflightResult,
+    blocks_rollout,
+    check_image,
+    load_golden,
+    registered_schema_document,
+    render_document,
+    summarize,
+)
+from finelog.schema import Schema
 
 STATE_DIR = Path.home() / ".cache" / "finelog" / "deploy-state"
+
+# Recorded registered schemas, one file per deployment. Checked in: each is the
+# last thing that deployment's catalog held, and `preflight::tests` re-decides
+# every one of them against the binary on each pull request. A stale golden only
+# over-reports — it can fail a change production would have accepted, never pass
+# one production would reject — which is the safe direction to age in.
+GOLDEN_DIR = Path(__file__).resolve().parents[1] / "deploy" / "registered_schemas"
+
+# Long enough for an SSH or kubectl port-forward to a cold VM/pod to come up.
+TUNNEL_TIMEOUT = 60.0
 
 
 def _state_path(cfg: FinelogConfig) -> Path:
@@ -84,7 +118,79 @@ def _running_repo_digest(cfg: FinelogConfig) -> str | None:
 
 def _require_gcp(cfg: FinelogConfig) -> None:
     if cfg.deployment.gcp is None:
-        raise click.ClickException("safe_deploy only supports GCP deployments.")
+        raise click.ClickException("safe_deploy rollout/rollback only supports GCP deployments.")
+
+
+def _golden_path(cfg: FinelogConfig) -> Path:
+    return GOLDEN_DIR / f"{cfg.name}.json"
+
+
+def _registered_schemas(cfg: FinelogConfig, name: str) -> dict[str, Schema] | None:
+    """Read the registered schemas from the running server, or None if unreachable.
+
+    Broad by intent: three transports (IAP proxy, SSH tunnel, kubectl
+    port-forward) fail in their own vocabularies, and every one of them means
+    the same thing here — the live side of the decision is not available, so
+    fall back to the recorded golden. Enumerating their exception types would
+    age worse than this does, and the reason is echoed either way.
+    """
+    try:
+        with open_log_client(cfg, name, TUNNEL_TIMEOUT) as client:
+            return client.list_namespaces()
+    except Exception as exc:
+        click.echo(f"could not read registered schemas from {cfg.name}: {exc}", err=True)
+        return None
+
+
+def _preflight(cfg: FinelogConfig, name: str, image: str) -> PreflightResult:
+    """Decide whether ``image`` would register against ``cfg``'s catalog."""
+    live = _registered_schemas(cfg, name)
+    if live is not None:
+        document = registered_schema_document(
+            deployment=cfg.name,
+            namespaces=live,
+            captured_at=_now(),
+            captured_from=f"the live catalog of {cfg.name}",
+        )
+        source = "the live server"
+    else:
+        document = load_golden(_golden_path(cfg))
+        if document is None:
+            return PreflightResult(
+                deployment=cfg.name,
+                outcome=Outcome.UNKNOWN,
+                source="nothing",
+                report=f"no live server and no recorded golden at {_golden_path(cfg)}",
+            )
+        source = f"the recorded golden {_golden_path(cfg).name}"
+    passed, report = check_image(image, document)
+    return PreflightResult(
+        deployment=cfg.name,
+        outcome=Outcome.PASS if passed else Outcome.FAIL,
+        source=source,
+        report=report,
+    )
+
+
+def _record_golden(cfg: FinelogConfig, name: str, digest: str) -> Path | None:
+    """Write the schemas ``cfg``'s catalog now holds to its checked-in golden."""
+    namespaces = _registered_schemas(cfg, name)
+    if namespaces is None:
+        click.echo(f"could not record the deploy golden for {cfg.name}; it stays at its last value.", err=True)
+        return None
+    path = _golden_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        render_document(
+            registered_schema_document(
+                deployment=cfg.name,
+                namespaces=namespaces,
+                captured_at=_now(),
+                captured_from=f"the live catalog of {cfg.name} on {digest}",
+            )
+        )
+    )
+    return path
 
 
 def _bootstrap_with_image(cfg: FinelogConfig, image: str) -> bool:
@@ -103,7 +209,41 @@ def _verify_health(cfg: FinelogConfig) -> bool:
 
 @click.group()
 def cli() -> None:
-    """Safe finelog deploy: rollout with auto-rollback, plus explicit rollback."""
+    """Safe finelog deploy: pre-flight, rollout with auto-rollback, explicit rollback."""
+
+
+@cli.command("preflight")
+@click.argument("names", nargs=-1)
+@click.option("--all", "check_all", is_flag=True, default=False, help="Check every bundled deployment.")
+@click.option(
+    "--image",
+    default=None,
+    help="Image to decide. Default: the digest each config's image tag currently pins to.",
+)
+def preflight_cmd(names: tuple[str, ...], check_all: bool, image: str | None) -> None:
+    """Decide whether an image's schemas would register, without touching a host.
+
+    Reads each deployment's registered schemas from its running server and runs
+    them through the candidate image's own merge. Every deployment keeps its own
+    catalog and they can disagree, so a fleet-wide change is only safe when all
+    of them accept it — that is what `--all` is for.
+    """
+    selected = list(names) + (bundled_config_names() if check_all else [])
+    if not selected:
+        raise click.UsageError("name at least one deployment, or pass --all")
+
+    results = []
+    for name in dict.fromkeys(selected):
+        cfg = load_finelog_config(name)
+        candidate = image or resolve_image_digest(cfg.image)
+        if "@sha256:" not in candidate:
+            raise click.ClickException(f"Could not pin {candidate} to a content digest; refusing to decide a tag.")
+        click.echo(f"== preflight: {cfg.name} on {candidate} ==", err=True)
+        results.append(_preflight(cfg, name, candidate))
+
+    click.echo(summarize(results))
+    if blocks_rollout(results):
+        raise click.ClickException("This image would not register everywhere. Do not roll it out.")
 
 
 @cli.command("rollout")
@@ -164,6 +304,16 @@ def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: 
     if old_digest == new_digest:
         click.echo("--force: redeploying the same digest.")
 
+    # Decide the deploy before it touches the host. A schema the catalog rejects
+    # is invisible to every gate below it: the bootstrap's health poll, the
+    # post-bootstrap probe, and the rollback trigger all pass while the wedged
+    # namespace rejects every write.
+    click.echo("pre-flight: deciding this image against the registered schemas...")
+    result = _preflight(cfg, name, new_digest)
+    click.echo(summarize([result]))
+    if blocks_rollout([result]):
+        raise click.ClickException(f"Refusing to roll {cfg.name} onto {new_digest}: its schemas would not register.")
+
     state_path = _write_state(
         cfg,
         previous_digest=old_digest,
@@ -187,6 +337,9 @@ def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: 
         click.echo(f"OK — {cfg.name} healthy on {new_digest}")
         if old_digest:
             click.echo(f"rollback target preserved: {old_digest}")
+        golden = _record_golden(cfg, name, new_digest)
+        if golden is not None:
+            click.echo(f"deploy golden written to {golden}; commit it so CI decides against it.")
         return
 
     click.echo("FAIL — finelog did not become healthy on the new image.", err=True)

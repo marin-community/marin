@@ -27,8 +27,8 @@ use crate::store::namespace::Namespace;
 use crate::store::namespace_name::validate_namespace_name;
 use crate::store::policy::StoragePolicy;
 use crate::store::schema::{
-    merge_schemas, resolve_key_column, validate_index_policies, with_implicit_cluster,
-    with_implicit_seq, AlignedBatch, Column, Schema,
+    merge_schemas, resolve_key_column, stored_form, validate_index_policies, AlignedBatch, Column,
+    Schema,
 };
 use crate::store::types::NamespaceStats;
 
@@ -52,7 +52,7 @@ const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// logs a global finelog collects from many federated clusters. It is nullable
 /// because segments written before the column existed null-fill it on read,
 /// which is also why `merge_schemas` adopts any new column as nullable.
-pub(crate) fn log_registered_schema() -> Schema {
+pub fn log_registered_schema() -> Schema {
     Schema::new(
         vec![
             // The job and task sit mid-key, so `key LIKE '%<job>%'` is opaque to
@@ -320,7 +320,7 @@ impl Store {
     fn ensure_log_namespace_schema(&self) -> Result<(), StatsError> {
         let schema = log_registered_schema();
         resolve_key_column(&schema)?;
-        let stored = with_implicit_seq(schema);
+        let stored = stored_form(schema);
         let policy = self.catalog.get_policy(LOG_NAMESPACE_NAME)?;
         let stored_for_merge = stored.clone();
         self.catalog
@@ -366,7 +366,7 @@ impl Store {
         self.namespace_dir(name)?;
         validate_index_policies(&schema)?;
         resolve_key_column(&schema)?;
-        let stored = with_implicit_seq(with_implicit_cluster(schema));
+        let stored = stored_form(schema);
 
         // `merge_schemas` (pure) raises SchemaConflict on a column-type change.
         // The catalog applies the empty-policy-keeps-existing rule and persists
@@ -725,7 +725,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::schema::CoveringProjection;
+    use crate::store::schema::{with_implicit_cluster, with_implicit_seq, CoveringProjection};
 
     fn worker_schema() -> Schema {
         Schema::new(

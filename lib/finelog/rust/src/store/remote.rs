@@ -30,6 +30,17 @@ pub struct RemoteStore {
     prefix: String,
 }
 
+/// Whether `remote_log_dir` names an object store rather than a local directory.
+///
+/// The complement of [`build_remote_store`]'s fallback: a value it does not
+/// recognize as an object-store URL becomes a `LocalFileSystem` root. Callers
+/// that must refuse production storage (the server's shadow mode) ask here
+/// rather than re-deriving the scheme list.
+pub fn is_object_store(remote_log_dir: &str) -> bool {
+    let dir = remote_log_dir.trim();
+    dir.starts_with("gs://") || dir.starts_with("s3://")
+}
+
 /// Build the remote store from `remote_log_dir`, or `None` when sync is
 /// disabled (empty string).
 ///

@@ -566,6 +566,15 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     }
 }
 
+/// Return the store-form schema a caller-supplied one registers as: the implicit
+/// `cluster` origin column appended, then the implicit `seq` counter prepended.
+///
+/// Every path that registers a namespace goes through here, so the schema a
+/// deploy pre-flight merges is exactly the schema `register_table` would.
+pub fn stored_form(schema: Schema) -> Schema {
+    with_implicit_seq(with_implicit_cluster(schema))
+}
+
 /// Resolve the ordering key column name, raising if invalid.
 ///
 /// If `key_column` is set it must name an existing column; otherwise the schema

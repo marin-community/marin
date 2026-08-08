@@ -1,8 +1,9 @@
 //! `finelog-server` binary entry point.
 //!
 //! Parse the CLI flags, open the `Store`, and serve `/health` plus the
-//! StatsService RPCs.
+//! StatsService RPCs. `check-schema` instead decides a deploy offline and exits.
 
+use std::io::Read;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -10,13 +11,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, Subcommand, ValueEnum};
+use finelog::preflight::{check, render, RegisteredSchemas};
 use finelog::query::configure_query_runtime;
 use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
 use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
+use finelog::store::remote::is_object_store;
 use finelog::store::Store;
 use tokio::sync::Notify;
 
@@ -32,9 +35,51 @@ use tokio::sync::Notify;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+/// What this process is allowed to do to storage.
+///
+/// Resolved once from the CLI at startup (see [`resolve_serve_mode`]); nothing
+/// downstream re-derives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ServeMode {
+    /// The deployed server: syncs to the configured archive, runs per-namespace
+    /// maintenance, forwards to a hub when configured.
+    Live,
+    /// A rehearsal against a copy of a real store. Reads from the local
+    /// directory and touches nothing else: no maintenance task (boot
+    /// maintenance redundancy-drops covered segments, which DELETES the
+    /// archive's objects), no forwarder, and no object-store archive at all.
+    Shadow,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Decide whether this image's schemas would register against a catalog,
+    /// and exit nonzero when one would not.
+    ///
+    /// Reads the registered schemas as JSON — `-` for stdin — and runs each
+    /// server-owned namespace through the same merge `RegisterTable` uses.
+    /// Opens no store, binds no port, writes nothing.
+    CheckSchema {
+        /// Path to the registered-schema document, or `-` for stdin.
+        #[arg(default_value = "-")]
+        registered: String,
+    },
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "finelog-server")]
 struct Args {
+    /// Offline subcommand. Absent runs the server.
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// What this process may touch. `shadow` serves reads from `--log-dir` and
+    /// is structurally incapable of reaching the archive or a hub: a non-local
+    /// `--remote-log-dir` or any `--forwarding` is a startup error rather than
+    /// something the process inherits and quietly acts on.
+    #[arg(long, env = "FINELOG_MODE", value_enum, default_value_t = ServeMode::Live)]
+    mode: ServeMode,
+
     /// Port to bind.
     #[arg(long, env = "FINELOG_PORT", default_value_t = 8080)]
     port: u16,
@@ -100,12 +145,20 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
+    if let Some(Command::CheckSchema { registered }) = &args.command {
+        return check_schema(registered);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| args.log_level.clone().into()),
         )
         .init();
+
+    // Resolve the storage mode ONCE, before anything opens a store or a socket.
+    // Everything below reads `mode`; nothing re-derives it from the flags.
+    let mode = resolve_serve_mode(&args)?;
 
     configure_query_runtime(args.query_metadata_cache_mb.map(NonZeroUsize::get))
         .map_err(|e| format!("failed to configure query runtime: {e}"))?;
@@ -124,7 +177,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // segments have never been footer-scanned) never blocks the listener bind
     // below. The server serves — and /health is green — while archived rows are
     // still being reconciled into the catalog.
-    store.bootstrap_maintenance();
+    //
+    // Shadow never starts it. Maintenance is every way this process mutates
+    // durable state — compaction, eviction, layout rewrites, and the boot
+    // reconcile's redundancy drop, which deletes archived objects. Skipping it
+    // is what makes a shadow boot safe to run against a copy of a real store.
+    match mode {
+        ServeMode::Live => store.bootstrap_maintenance(),
+        ServeMode::Shadow => tracing::info!("shadow mode: maintenance not started"),
+    }
     // Auth is ALWAYS enforced (default-deny). No policy → the private
     // allow-localhost default (loopback only); a shared global finelog sets a
     // cidr+jwt stack. A malformed policy fails startup rather than mis-admitting.
@@ -203,6 +264,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Resolve the storage mode, refusing a shadow configuration that could reach
+/// production storage.
+///
+/// A shadow instance must be *incapable* of touching the archive, not merely
+/// configured not to. An operator who rehearses a boot with a deployment's own
+/// environment gets a startup failure naming the offending flag, rather than a
+/// rehearsal whose first maintenance tick redundancy-drops the real bucket.
+fn resolve_serve_mode(args: &Args) -> Result<ServeMode, String> {
+    if args.mode == ServeMode::Live {
+        return Ok(ServeMode::Live);
+    }
+    if args.log_dir.is_none() {
+        return Err(
+            "shadow mode needs --log-dir: an in-memory store has no boot to rehearse".into(),
+        );
+    }
+    if is_object_store(&args.remote_log_dir) {
+        return Err(format!(
+            "shadow mode refuses the archive {:?}: point --remote-log-dir at a local directory, \
+             or leave it empty",
+            args.remote_log_dir
+        ));
+    }
+    if !args.forwarding.trim().is_empty() {
+        return Err("shadow mode refuses --forwarding: a rehearsal must not write to a hub".into());
+    }
+    Ok(ServeMode::Shadow)
+}
+
+/// Decide the deploy offline: read the registered schemas, run each
+/// server-owned namespace through the real merge, print the decision, and exit
+/// nonzero when one would fail to register.
+fn check_schema(registered: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let text = if registered == "-" {
+        let mut text = String::new();
+        std::io::stdin().read_to_string(&mut text)?;
+        text
+    } else {
+        std::fs::read_to_string(registered).map_err(|e| format!("read {registered}: {e}"))?
+    };
+    let report = check(&RegisteredSchemas::parse(&text)?)?;
+    print!("{}", render(&report));
+    std::io::Write::flush(&mut std::io::stdout())?;
+    if !report.passes() {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 /// Build the cross-cluster forwarder, or `None` when forwarding is unconfigured.
 ///
 /// Every way the configuration can be wrong is an error here rather than a silent
@@ -245,5 +355,102 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = sigterm.recv() => tracing::info!("received SIGTERM; shutting down"),
         _ = sigint.recv() => tracing::info!("received SIGINT; shutting down"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(argv: &[&str]) -> Args {
+        let mut full = vec!["finelog-server"];
+        full.extend_from_slice(argv);
+        Args::try_parse_from(full).expect("argv parses")
+    }
+
+    #[test]
+    fn no_subcommand_serves_in_live_mode() {
+        let parsed = args(&["--log-dir", "/tmp/x"]);
+
+        assert!(parsed.command.is_none());
+        assert_eq!(resolve_serve_mode(&parsed).unwrap(), ServeMode::Live);
+    }
+
+    #[test]
+    fn live_mode_keeps_the_configured_archive() {
+        let parsed = args(&[
+            "--log-dir",
+            "/tmp/x",
+            "--remote-log-dir",
+            "gs://marin-us-central2/finelog",
+        ]);
+
+        assert_eq!(resolve_serve_mode(&parsed).unwrap(), ServeMode::Live);
+    }
+
+    #[test]
+    fn shadow_mode_refuses_an_object_store_archive() {
+        for archive in ["gs://marin-us-central2/finelog", "s3://marin-us-east-02a/f"] {
+            let parsed = args(&[
+                "--mode",
+                "shadow",
+                "--log-dir",
+                "/tmp/x",
+                "--remote-log-dir",
+                archive,
+            ]);
+
+            let error = resolve_serve_mode(&parsed).unwrap_err();
+            assert!(error.contains(archive), "{error}");
+        }
+    }
+
+    #[test]
+    fn shadow_mode_refuses_forwarding_to_a_hub() {
+        let parsed = args(&[
+            "--mode",
+            "shadow",
+            "--log-dir",
+            "/tmp/x",
+            "--forwarding",
+            r#"{"target":"https://hub","cluster":"marin"}"#,
+        ]);
+
+        assert!(resolve_serve_mode(&parsed)
+            .unwrap_err()
+            .contains("--forwarding"));
+    }
+
+    #[test]
+    fn shadow_mode_needs_a_local_directory_to_rehearse() {
+        let parsed = args(&["--mode", "shadow"]);
+
+        assert!(resolve_serve_mode(&parsed)
+            .unwrap_err()
+            .contains("--log-dir"));
+    }
+
+    #[test]
+    fn shadow_mode_accepts_a_local_directory_and_a_local_remote() {
+        let parsed = args(&[
+            "--mode",
+            "shadow",
+            "--log-dir",
+            "/tmp/snapshot",
+            "--remote-log-dir",
+            "/tmp/snapshot-archive",
+        ]);
+
+        assert_eq!(resolve_serve_mode(&parsed).unwrap(), ServeMode::Shadow);
+    }
+
+    #[test]
+    fn check_schema_takes_stdin_by_default() {
+        let parsed = args(&["check-schema"]);
+
+        assert!(matches!(
+            parsed.command,
+            Some(Command::CheckSchema { ref registered }) if registered == "-"
+        ));
     }
 }
