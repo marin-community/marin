@@ -68,6 +68,7 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_AUTHORIZATION_HEADER,
     UPSTREAM_URL_HEADER,
 )
+from iris.cluster.controller.resources.rpc import ResourceServiceImpl
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.dashboard_common import (
     favicon_route,
@@ -81,6 +82,7 @@ from iris.rpc.auth import SESSION_COOKIE, authorize_method
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
 from iris.rpc.controller_connect import ControllerServiceASGIApplication, EndpointServiceASGIApplication
 from iris.rpc.interceptors import RequestTimingInterceptor
+from iris.rpc.resource_connect import ResourceServiceASGIApplication
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +178,7 @@ class ControllerDashboard:
         self,
         service: ControllerServiceImpl,
         *,
+        resource_service: ResourceServiceImpl | None = None,
         endpoint_service: EndpointServiceImpl | None = None,
         auth_provider: str | None = None,
         auth_policy: RequestAuthPolicy = RequestAuthPolicy(),
@@ -186,6 +189,7 @@ class ControllerDashboard:
         proxy_decision_secret: str | None = None,
     ):
         self._service = service
+        self._resource_service = resource_service
         # Defaults to the service's own backend; the two must share one instance
         # so a system endpoint registered on one is resolvable through the other.
         self._endpoint_service = endpoint_service or service.endpoint_service
@@ -239,6 +243,15 @@ class ControllerDashboard:
             service=AsyncServiceAdapter(self._endpoint_service),
             interceptors=controller_interceptors,
             compressions=IRIS_RPC_COMPRESSIONS,
+        )
+        resource_rpc_app = (
+            ResourceServiceASGIApplication(
+                service=AsyncServiceAdapter(self._resource_service),
+                interceptors=controller_interceptors,
+                compressions=IRIS_RPC_COMPRESSIONS,
+            )
+            if self._resource_service is not None
+            else None
         )
 
         @public
@@ -321,6 +334,8 @@ class ControllerDashboard:
             Mount(rpc_asgi_app.path, app=rpc_asgi_app),
             Mount(endpoint_rpc_app.path, app=endpoint_rpc_app),
         ]
+        if resource_rpc_app is not None:
+            routes.append(Mount(resource_rpc_app.path, app=resource_rpc_app))
         routes.append(static_files_mount())
 
         app = Starlette(routes=routes)

@@ -22,6 +22,7 @@ from rigging.credential_store import cluster_name_from_url
 from rigging.credentials import ClientCredentials, credentials_for
 
 from iris.client import IrisClient
+from iris.cluster.client.resource_client import ResourceClient
 from iris.cluster.composer import provider_bundle
 from iris.cluster.config import AuthConfig, IapAuthConfig, IrisClusterConfig, load_config
 from iris.cluster.local_cluster import LocalCluster
@@ -205,6 +206,22 @@ def iris_client_for_ctx(
         credentials=obj.get("credentials"),
         timeout_ms=timeout_ms,
         extra_bundle_includes=extra_bundle_includes,
+    )
+
+
+def resource_client_for_ctx(
+    ctx: click.Context,
+    *,
+    timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
+) -> ResourceClient:
+    """Build the typed public resource client for an active CLI context."""
+    obj = ctx.obj or {}
+    credentials = obj.get("credentials")
+    interceptors = credentials.interceptors() if credentials is not None else ()
+    return ResourceClient(
+        require_controller_url(ctx),
+        timeout_ms=timeout_ms,
+        interceptors=interceptors,
     )
 
 

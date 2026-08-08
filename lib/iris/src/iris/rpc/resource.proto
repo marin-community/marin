@@ -1,0 +1,641 @@
+// Copyright The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+edition = "2023";
+
+package iris.resource;
+
+import "iris_logging.proto";
+import "job.proto";
+import "time.proto";
+
+option features.field_presence = EXPLICIT;
+
+enum ResourceKind {
+  RESOURCE_KIND_UNSPECIFIED = 0;
+  RESOURCE_KIND_JOB = 1;
+  RESOURCE_KIND_TASK = 2;
+  RESOURCE_KIND_ATTEMPT = 3;
+  RESOURCE_KIND_ENDPOINT = 4;
+  RESOURCE_KIND_NODE = 5;
+  RESOURCE_KIND_SLICE = 6;
+}
+
+enum SourceState {
+  SOURCE_STATE_UNSPECIFIED = 0;
+  SOURCE_STATE_AVAILABLE = 1;
+  SOURCE_STATE_UNAVAILABLE = 2;
+  SOURCE_STATE_UNSUPPORTED = 3;
+}
+
+enum Freshness {
+  FRESHNESS_UNSPECIFIED = 0;
+  FRESHNESS_CURRENT = 1;
+  FRESHNESS_STALE = 2;
+  FRESHNESS_UNKNOWN = 3;
+}
+
+enum NodeHealth {
+  NODE_HEALTH_UNSPECIFIED = 0;
+  NODE_HEALTH_READY = 1;
+  NODE_HEALTH_DEGRADED = 2;
+  NODE_HEALTH_UNAVAILABLE = 3;
+  NODE_HEALTH_RETIRED = 4;
+}
+
+enum SliceLifecycle {
+  SLICE_LIFECYCLE_UNSPECIFIED = 0;
+  SLICE_LIFECYCLE_CREATING = 1;
+  SLICE_LIFECYCLE_READY = 2;
+  SLICE_LIFECYCLE_DELETING = 3;
+  SLICE_LIFECYCLE_FAILED = 4;
+}
+
+enum MembershipState {
+  MEMBERSHIP_STATE_UNSPECIFIED = 0;
+  MEMBERSHIP_STATE_UNKNOWN = 1;
+  MEMBERSHIP_STATE_OBSERVED = 2;
+}
+
+enum ActionKind {
+  ACTION_KIND_UNSPECIFIED = 0;
+  ACTION_KIND_CANCEL_JOB = 1;
+  ACTION_KIND_RETRY_TASK = 2;
+  ACTION_KIND_TERMINATE_ATTEMPT = 3;
+}
+
+enum ActionState {
+  ACTION_STATE_UNSPECIFIED = 0;
+  ACTION_STATE_ACCEPTED = 1;
+  ACTION_STATE_VERIFYING = 2;
+  ACTION_STATE_SUCCEEDED = 3;
+  ACTION_STATE_FAILED = 4;
+}
+
+enum ActionResult {
+  ACTION_RESULT_UNSPECIFIED = 0;
+  ACTION_RESULT_NONE = 1;
+  ACTION_RESULT_SATISFIED = 2;
+  ACTION_RESULT_TARGET_ABSENT = 3;
+  ACTION_RESULT_PROVIDER_REJECTED = 4;
+  ACTION_RESULT_INTERNAL_ERROR = 5;
+}
+
+enum EndpointAccess {
+  ENDPOINT_ACCESS_PRIVATE = 0;
+  ENDPOINT_ACCESS_LINK = 1;
+}
+
+message ResourceKey {
+  string cluster_id = 1;
+  ResourceKind kind = 2;
+  string resource_id = 3;
+}
+
+message JobIdentity {
+  ResourceKey key = 1;
+  string job_uid = 2;
+}
+
+message TaskIdentity {
+  ResourceKey key = 1;
+  string task_uid = 2;
+}
+
+message AttemptLocator {
+  ResourceKey task = 1;
+  int32 attempt_number = 2;
+}
+
+message AttemptIdentity {
+  ResourceKey task = 1;
+  int32 attempt_number = 2;
+  string attempt_uid = 3;
+}
+
+message NodeIdentity {
+  ResourceKey key = 1;
+  string backend_id = 2;
+  string node_uid = 3;
+}
+
+message NodeLocator {
+  ResourceKey key = 1;
+  string backend_id = 2;
+  string node_uid = 3;
+}
+
+message SliceIdentity {
+  ResourceKey key = 1;
+  string backend_id = 2;
+  string slice_uid = 3;
+}
+
+message SliceLocator {
+  ResourceKey key = 1;
+  string backend_id = 2;
+  string slice_uid = 3;
+}
+
+message ResourceSourceStatus {
+  string source_id = 1;
+  string backend_id = 2;
+  SourceState state = 3;
+  Freshness freshness = 4;
+  iris.time.Timestamp observed_at = 5;
+  string error_code = 6;
+  string error_message = 7;
+}
+
+message PageRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message PageInfo {
+  string next_page_token = 1;
+  repeated ResourceSourceStatus source_statuses = 2;
+}
+
+message JobSpec {
+  uint32 version = 1;
+  string name = 2;
+  iris.job.RuntimeEntrypoint entrypoint = 3;
+  iris.job.ResourceSpecProto resources = 4;
+  iris.job.EnvironmentConfig environment = 5;
+  string bundle_id = 6;
+  iris.time.Duration scheduling_timeout = 7;
+  repeated string ports = 8;
+  int32 max_task_failures = 9;
+  int32 max_retries_failure = 10;
+  int32 max_retries_preemption = 11;
+  repeated iris.job.Constraint constraints = 12;
+  iris.job.CoschedulingConfig coscheduling = 13;
+  int32 replicas = 14;
+  iris.time.Duration timeout = 15;
+  bool fail_if_exists = 16;
+  iris.job.JobPreemptionPolicy preemption_policy = 17;
+  iris.job.ExistingJobPolicy existing_job_policy = 18;
+  iris.job.PriorityBand priority_band = 19;
+  string task_image = 20;
+  repeated string submit_argv = 21;
+  string client_revision_date = 22;
+  iris.job.ContainerProfile container_profile = 23;
+}
+
+message SubmitJobRequest {
+  JobSpec spec = 1;
+  bytes bundle_blob = 2;
+}
+
+message SubmitJobResponse {
+  JobIdentity job = 1;
+}
+
+message JobQuery {
+  string owner_id = 1;
+  ResourceKey parent = 2;
+  string job_id_prefix = 3;
+  repeated iris.job.JobState states = 4;
+  string backend_id = 5;
+  string execution_cluster_id = 6;
+  PageRequest page = 7;
+}
+
+message JobSummary {
+  JobIdentity identity = 1;
+  string owner_id = 2;
+  JobIdentity parent = 3;
+  iris.job.JobState state = 4;
+  string execution_cluster_id = 5;
+  string backend_id = 6;
+  int32 num_tasks = 7;
+  iris.time.Timestamp submitted_at = 8;
+  iris.time.Timestamp started_at = 9;
+  iris.time.Timestamp finished_at = 10;
+  string error_message = 11;
+}
+
+message JobDetail {
+  JobSummary summary = 1;
+  JobSpec spec = 2;
+}
+
+message ListJobsRequest {
+  JobQuery query = 1;
+}
+
+message ListJobsResponse {
+  repeated JobSummary jobs = 1;
+  PageInfo page = 2;
+}
+
+message DescribeJobRequest {
+  ResourceKey job = 1;
+}
+
+message DescribeJobResponse {
+  JobDetail job = 1;
+}
+
+message TaskQuery {
+  ResourceKey job = 1;
+  string job_id_prefix = 2;
+  repeated iris.job.TaskState states = 3;
+  string backend_id = 4;
+  string authority_cluster_id = 5;
+  string execution_cluster_id = 6;
+  PageRequest page = 7;
+}
+
+message TaskSummary {
+  TaskIdentity identity = 1;
+  JobIdentity job = 2;
+  int32 task_index = 3;
+  iris.job.TaskState state = 4;
+  string execution_cluster_id = 5;
+  string backend_id = 6;
+  AttemptIdentity current_attempt = 7;
+  NodeIdentity current_node = 8;
+  int32 failure_count = 9;
+  int32 preemption_count = 10;
+  iris.time.Timestamp submitted_at = 11;
+  iris.time.Timestamp started_at = 12;
+  iris.time.Timestamp finished_at = 13;
+  string status_message = 14;
+  string error_message = 15;
+}
+
+message AttemptSummary {
+  AttemptIdentity identity = 1;
+  iris.job.TaskState state = 2;
+  string execution_cluster_id = 3;
+  string backend_id = 4;
+  NodeIdentity node = 5;
+  iris.time.Timestamp created_at = 6;
+  iris.time.Timestamp started_at = 7;
+  iris.time.Timestamp finished_at = 8;
+  int32 exit_code = 9;
+  string error_message = 10;
+  string terminal_reason = 11;
+}
+
+message AttemptRuntimeObject {
+  string provider_kind = 1;
+  string namespace = 2;
+  string name = 3;
+  string provider_uid = 4;
+  string provider_node_id = 5;
+  string provider_node_uid = 6;
+  string container_id = 7;
+  iris.time.Timestamp observed_at = 8;
+}
+
+message TaskDetail {
+  TaskSummary summary = 1;
+  repeated AttemptSummary attempts = 2;
+  repeated ResourceSourceStatus source_statuses = 3;
+  repeated string root_cause_highlights = 4;
+}
+
+message AttemptDetail {
+  AttemptSummary summary = 1;
+  AttemptRuntimeObject runtime = 2;
+  repeated ResourceSourceStatus source_statuses = 3;
+}
+
+message ListTasksRequest {
+  TaskQuery query = 1;
+}
+
+message ListTasksResponse {
+  repeated TaskSummary tasks = 1;
+  PageInfo page = 2;
+}
+
+message DescribeTaskRequest {
+  ResourceKey task = 1;
+}
+
+message DescribeTaskResponse {
+  TaskDetail task = 1;
+}
+
+message DescribeAttemptRequest {
+  AttemptLocator attempt = 1;
+}
+
+message DescribeAttemptResponse {
+  AttemptDetail attempt = 1;
+}
+
+message NodeQuery {
+  string backend_id = 1;
+  string contains = 2;
+  repeated NodeHealth health = 3;
+  PageRequest page = 4;
+}
+
+message NodeCapacity {
+  int64 cpu_millicores = 1;
+  int64 memory_bytes = 2;
+  int64 disk_bytes = 3;
+  string accelerator_kind = 4;
+  string accelerator_variant = 5;
+  int32 accelerator_count = 6;
+}
+
+message NodeSummary {
+  NodeIdentity identity = 1;
+  NodeHealth health = 2;
+  bool schedulable = 3;
+  NodeCapacity capacity = 4;
+  string scaling_group_id = 5;
+  SliceIdentity slice = 6;
+  int32 running_task_count = 7;
+  iris.time.Timestamp observed_at = 8;
+}
+
+message NodeAttribute {
+  string key = 1;
+  oneof value {
+    string string_value = 2;
+    int64 integer_value = 3;
+    double float_value = 4;
+  }
+}
+
+message NodeDetail {
+  NodeSummary summary = 1;
+  string address = 2;
+  repeated NodeAttribute attributes = 3;
+  repeated AttemptSummary recent_attempts = 4;
+  string bootstrap_log_key = 5;
+  repeated ResourceSourceStatus source_statuses = 6;
+}
+
+message ListNodesRequest {
+  NodeQuery query = 1;
+}
+
+message ListNodesResponse {
+  repeated NodeSummary nodes = 1;
+  PageInfo page = 2;
+}
+
+message DescribeNodeRequest {
+  NodeLocator node = 1;
+}
+
+message DescribeNodeResponse {
+  NodeDetail node = 1;
+}
+
+message SliceQuery {
+  string backend_id = 1;
+  string scaling_group_id = 2;
+  PageRequest page = 3;
+}
+
+message SliceSummary {
+  SliceIdentity identity = 1;
+  string scaling_group_id = 2;
+  SliceLifecycle lifecycle = 3;
+  MembershipState membership_state = 4;
+  int32 observed_member_count = 5;
+  iris.time.Timestamp observed_at = 6;
+  string error_message = 7;
+}
+
+message SliceMember {
+  string provider_node_id = 1;
+  NodeIdentity node = 2;
+  iris.time.Timestamp observed_at = 3;
+}
+
+message SliceDetail {
+  SliceSummary summary = 1;
+  repeated SliceMember members = 2;
+  repeated ResourceSourceStatus source_statuses = 3;
+}
+
+message ListSlicesRequest {
+  SliceQuery query = 1;
+}
+
+message ListSlicesResponse {
+  repeated SliceSummary slices = 1;
+  PageInfo page = 2;
+}
+
+message DescribeSliceRequest {
+  SliceLocator slice = 1;
+}
+
+message DescribeSliceResponse {
+  SliceDetail slice = 1;
+}
+
+message EndpointQuery {
+  string name_prefix = 1;
+  ResourceKey task = 2;
+  PageRequest page = 3;
+}
+
+message EndpointSummary {
+  ResourceKey key = 1;
+  string endpoint_id = 2;
+  string name = 3;
+  ResourceKey task = 4;
+  string execution_cluster_id = 5;
+  EndpointAccess access = 6;
+  iris.time.Timestamp lease_deadline = 7;
+}
+
+message EndpointDetail {
+  EndpointSummary summary = 1;
+  string address = 2;
+  map<string, string> metadata = 3;
+}
+
+message ListEndpointsRequest {
+  EndpointQuery query = 1;
+}
+
+message ListEndpointsResponse {
+  repeated EndpointSummary endpoints = 1;
+  PageInfo page = 2;
+}
+
+message DescribeEndpointRequest {
+  ResourceKey endpoint = 1;
+}
+
+message DescribeEndpointResponse {
+  EndpointDetail endpoint = 1;
+}
+
+message MintEndpointTokenRequest {
+  ResourceKey endpoint = 1;
+  iris.time.Duration ttl = 2;
+}
+
+message MintEndpointTokenResponse {
+  string token = 1;
+  iris.time.Timestamp expires_at = 2;
+  string capability_url = 3;
+}
+
+message ActivityQuery {
+  ResourceKey target = 1;
+  string attempt_uid = 2;
+  iris.time.Timestamp after = 3;
+  PageRequest page = 4;
+}
+
+message ActivityEntry {
+  string entry_id = 1;
+  iris.time.Timestamp occurred_at = 2;
+  string source = 3;
+  string severity = 4;
+  string kind = 5;
+  string message = 6;
+  ResourceKey target = 7;
+  string attempt_uid = 8;
+  string correlation_id = 9;
+  map<string, string> attributes = 10;
+}
+
+message ListActivityRequest {
+  ActivityQuery query = 1;
+}
+
+message ListActivityResponse {
+  repeated ActivityEntry entries = 1;
+  PageInfo page = 2;
+}
+
+message LogQuery {
+  iris.time.Timestamp after = 1;
+  int64 cursor = 2;
+  int32 max_lines = 3;
+  string substring = 4;
+  iris.logging.LogLevel minimum_level = 5;
+  bool tail = 6;
+}
+
+message LogTarget {
+  oneof target {
+    JobIdentity job = 1;
+    TaskIdentity task = 2;
+    AttemptIdentity attempt = 3;
+  }
+}
+
+message FetchLogsRequest {
+  LogTarget target = 1;
+  LogQuery query = 2;
+}
+
+message FetchLogsResponse {
+  repeated iris.logging.LogEntry entries = 1;
+  int64 next_cursor = 2;
+  repeated ResourceSourceStatus source_statuses = 3;
+}
+
+message ActionReceipt {
+  string action_id = 1;
+  ActionKind kind = 2;
+  ResourceKey target = 3;
+  string expected_target_uid = 4;
+  string expected_attempt_uid = 5;
+  ActionState state = 6;
+  ActionResult result_code = 7;
+  string result_message = 8;
+  iris.time.Timestamp created_at = 9;
+  iris.time.Timestamp updated_at = 10;
+  iris.time.Timestamp completed_at = 11;
+}
+
+message CancelJobRequest {
+  JobIdentity job = 1;
+  string idempotency_key = 2;
+}
+
+message RetryTaskRequest {
+  TaskIdentity task = 1;
+  string expected_attempt_uid = 2;
+  string idempotency_key = 3;
+}
+
+message TerminateAttemptRequest {
+  AttemptIdentity attempt = 1;
+  string idempotency_key = 2;
+}
+
+message ActionResponse {
+  ActionReceipt receipt = 1;
+}
+
+message GetActionReceiptRequest {
+  string action_id = 1;
+}
+
+message ExecAttemptRequest {
+  AttemptLocator attempt = 1;
+  repeated string command = 2;
+  iris.time.Duration timeout = 3;
+}
+
+message ExecAttemptResponse {
+  int32 exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+  string error_message = 4;
+}
+
+message ProfileAttemptRequest {
+  AttemptLocator attempt = 1;
+  iris.job.ProfileType profile = 2;
+  iris.time.Duration duration = 3;
+}
+
+message ProfileAttemptResponse {
+  bytes profile_data = 1;
+  string error_message = 2;
+}
+
+service ResourceService {
+  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc DescribeJob(DescribeJobRequest) returns (DescribeJobResponse);
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc DescribeTask(DescribeTaskRequest) returns (DescribeTaskResponse);
+  rpc DescribeAttempt(DescribeAttemptRequest) returns (DescribeAttemptResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc DescribeNode(DescribeNodeRequest) returns (DescribeNodeResponse);
+  rpc ListSlices(ListSlicesRequest) returns (ListSlicesResponse);
+  rpc DescribeSlice(DescribeSliceRequest) returns (DescribeSliceResponse);
+  rpc ListEndpoints(ListEndpointsRequest) returns (ListEndpointsResponse);
+  rpc DescribeEndpoint(DescribeEndpointRequest) returns (DescribeEndpointResponse);
+  rpc MintEndpointToken(MintEndpointTokenRequest) returns (MintEndpointTokenResponse);
+  rpc ListActivity(ListActivityRequest) returns (ListActivityResponse);
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
+  rpc CancelJob(CancelJobRequest) returns (ActionResponse);
+  rpc RetryTask(RetryTaskRequest) returns (ActionResponse);
+  rpc TerminateAttempt(TerminateAttemptRequest) returns (ActionResponse);
+  rpc GetActionReceipt(GetActionReceiptRequest) returns (ActionResponse);
+  rpc ExecAttempt(ExecAttemptRequest) returns (ExecAttemptResponse);
+  rpc ProfileAttempt(ProfileAttemptRequest) returns (ProfileAttemptResponse);
+}

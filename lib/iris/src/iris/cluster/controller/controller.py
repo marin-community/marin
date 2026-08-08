@@ -93,6 +93,7 @@ from iris.cluster.controller.reconcile.dispatch import (
     DISPATCH_PROMOTION_RATE,
 )
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
+from iris.cluster.controller.resources import ResourceController, ResourceServiceImpl
 from iris.cluster.controller.scheduling.meta_scheduler import (
     BackendRouting,
     RoutableJob,
@@ -301,9 +302,9 @@ class ControllerConfig:
     cluster_id: str = ""
     """This cluster's real federation identity (from the cluster config ``name``).
 
-    Sent as the ``requester_id`` on each ``FederationSync``. Required once this cluster
-    hands jobs off; unused otherwise. Also the tag a minted capability URL carries so a
-    federation parent can relay it back here."""
+    Sent as the ``requester_id`` on each ``FederationSync`` and used as the
+    authority coordinate on typed resources. Also the tag a minted capability
+    URL carries so a federation parent can relay it back here."""
 
     dashboard_url: str = ""
     """This cluster's public origin (cluster config ``dashboard_url``); the local origin
@@ -327,6 +328,10 @@ class ControllerConfig:
     burst of over-assignment against a single (possibly stale) availability
     observation, on top of the reservation ledger."""
 
+    def __post_init__(self) -> None:
+        if not self.cluster_id.strip():
+            raise ValueError("cluster_id is required")
+
 
 class Controller:
     """Unified controller managing all components and lifecycle.
@@ -337,7 +342,7 @@ class Controller:
 
     Example:
         ```python
-        config = ControllerConfig(port=8080)
+        config = ControllerConfig(port=8080, cluster_id="local")
         controller = Controller(
             config=config,
             backends={DEFAULT_BACKEND_ID: RpcTaskBackend(stub_factory=RpcWorkerStubFactory())},
@@ -520,6 +525,14 @@ class Controller:
                 parent_origin=config.federation_public_parent,
             ),
         )
+        self._resources = ResourceController(
+            cluster_id=config.cluster_id,
+            db=self._db,
+            legacy=self._service,
+            backends=self._backends,
+            log_client=self._log_client,
+        )
+        self._resource_service = ResourceServiceImpl(self._resources)
         # Forwards a /proxy request for an endpoint that lives on a federated child
         # to that peer's controller, presenting this cluster's federation bearer.
         # Present only when this controller has peers and a signing key to mint with.
@@ -539,6 +552,7 @@ class Controller:
         self._external_auth_allows_anonymous = external_auth_policy.allows_anonymous
         self._dashboard = ControllerDashboard(
             self._service,
+            resource_service=self._resource_service,
             endpoint_service=self._endpoint_service,
             auth_provider=config.auth_provider,
             auth_policy=self._auth_policy,
@@ -1815,6 +1829,10 @@ class Controller:
         """Return current public Task rows for a Job."""
         request = controller_pb2.Controller.ListTasksRequest(job_id=job_id)
         return self._service.list_tasks(request, None)
+
+    @property
+    def resources(self) -> ResourceController:
+        return self._resources
 
     def get_task_status(self, task_id: str) -> controller_pb2.Controller.GetTaskStatusResponse:
         """Get one Task and its Attempt history."""

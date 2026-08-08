@@ -71,6 +71,7 @@ class ScriptedTaskBackend:
         self.events: list[BackendEvent] = []
         self.calls: list[str] = []
         self._reconcile_failures = 0
+        self._status_failures = 0
         self.closed = False
         self.advertised: dict[str, set[str]] = {"region": {"us-central1"}}
 
@@ -93,6 +94,9 @@ class ScriptedTaskBackend:
     def fail_reconcile(self, *, times: int) -> None:
         self._reconcile_failures += times
 
+    def fail_status(self, *, times: int) -> None:
+        self._status_failures += times
+
     def advertised_attributes(self) -> dict[str, set[str]]:
         return self.advertised
 
@@ -103,6 +107,9 @@ class ScriptedTaskBackend:
         return None
 
     def status(self) -> controller_pb2.Controller.BackendStatus:
+        if self._status_failures:
+            self._status_failures -= 1
+            raise ConnectionError(f"backend {self.backend_id} resource source is unavailable")
         return controller_pb2.Controller.BackendStatus()
 
     def autoscaler_status(self) -> vm_pb2.AutoscalerStatus:

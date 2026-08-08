@@ -4,8 +4,9 @@
 """Concise multi-controller federation journeys."""
 
 import pytest
+from iris.cluster.resources.endpoint import EndpointQuery
 from iris.rpc import job_pb2
-from tests.journeys.federation import PEER_ID, FederationJourney
+from tests.journeys.federation import PARENT_CLUSTER_ID, PEER_ID, FederationJourney
 
 
 @pytest.fixture
@@ -100,9 +101,27 @@ def test_execution_peer_submits_a_child_and_syncs_the_subtree_to_authority_once(
     child = federation.submit_child_on_peer(root, "child", tasks=2)
     federation.sync()
 
+    assert [task.task_id for task in federation.peer_tasks(root)] == [root[0].wire_id]
     assert {task.task_id for task in federation.parent_tasks(child)} == {child[0].wire_id, child[1].wire_id}
+
+
+def test_federated_endpoint_keeps_authority_and_execution_coordinates_distinct(
+    federation: FederationJourney,
+) -> None:
+    job = federation.submit("endpoint")
+    federation.promote()
+    federation.sync()
+    federation.run_peer()
+    federation.peer.register_endpoint(job[0], "/serve/endpoint", "10.0.0.7:8000", endpoint_id="endpoint-1")
+
+    (received,) = federation.peer.controller.resources.list_endpoints(EndpointQuery()).items
+    assert received.key.cluster_id == PARENT_CLUSTER_ID
+    assert received.task is not None and received.task.cluster_id == PARENT_CLUSTER_ID
+    assert received.execution_cluster_id == PEER_ID
 
     federation.sync()
 
-    assert [task.task_id for task in federation.peer_tasks(root)] == [root[0].wire_id]
-    assert {task.task_id for task in federation.parent_tasks(child)} == {child[0].wire_id, child[1].wire_id}
+    (mirrored,) = federation.parent.controller.resources.list_endpoints(EndpointQuery()).items
+    assert mirrored.key.cluster_id == PARENT_CLUSTER_ID
+    assert mirrored.task is not None and mirrored.task.cluster_id == PARENT_CLUSTER_ID
+    assert mirrored.execution_cluster_id == PEER_ID

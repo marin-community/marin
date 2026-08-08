@@ -166,6 +166,7 @@ class E2ECluster:
         (fake_bundle / "pyproject.toml").write_text("[project]\nname = 'test'\n")
 
         controller_config = ControllerConfig(
+            cluster_id="docker-e2e",
             host="127.0.0.1",
             port=self._controller_port,
             remote_state_dir=f"file://{bundle_dir}",

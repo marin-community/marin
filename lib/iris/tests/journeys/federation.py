@@ -78,7 +78,7 @@ class FederationJourney:
     """Drive two real controllers while scripting only peer reachability."""
 
     def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        self.peer = JourneyWorld(root / "peer", monkeypatch)
+        self.peer = JourneyWorld(root / "peer", monkeypatch, cluster_id=PEER_ID)
         self.connection = InProcessPeerConnection(self.peer.controller)
         self._federation_peer = FederationPeer(
             PEER_ID,

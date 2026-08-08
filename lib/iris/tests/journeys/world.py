@@ -17,6 +17,19 @@ from iris.cluster.controller.log_stack import build_log_stack
 from iris.cluster.controller.transition_reader import DbTransitionReader
 from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.log_keys import task_log_key
+from iris.cluster.resources.action import ActionReceipt, ActionState
+from iris.cluster.resources.attempt import AttemptDetail
+from iris.cluster.resources.identity import (
+    AttemptIdentity,
+    AttemptLocator,
+    JobIdentity,
+    ResourceKey,
+    ResourceKind,
+    TaskIdentity,
+)
+from iris.cluster.resources.job import JobDetail
+from iris.cluster.resources.source import Page
+from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, TaskAttempt
 from iris.managed_thread import ThreadContainer
 from iris.rpc import controller_pb2, job_pb2
@@ -391,6 +404,11 @@ class JourneyWorld:
         self.backend.fail_reconcile(times=ticks)
         self.trace.append(f"backend unavailable ticks={ticks}")
 
+    def resource_source_outage(self, backend_id: str, *, reads: int = 1) -> None:
+        """Make one backend's public resource-status boundary unavailable."""
+        self.backends[backend_id].fail_status(times=reads)
+        self.trace.append(f"resource source unavailable backend={backend_id} reads={reads}")
+
     def wait_through_outage(self, *, ticks: int) -> None:
         """Run ticks that must fail at the scripted backend boundary."""
         for _ in range(ticks):
@@ -436,6 +454,64 @@ class JourneyWorld:
     def task_detail(self, task: TaskRef) -> controller_pb2.Controller.GetTaskStatusResponse:
         """Read one Task plus public Attempt-derived diagnostics."""
         return self.controller.get_task_status(task.wire_id)
+
+    def resource_tasks(
+        self,
+        *,
+        job: JobRef | None = None,
+        backend_id: str | None = None,
+    ) -> Page[TaskSummary]:
+        """Read the global typed Task inventory."""
+        job_key = self._resource_key(ResourceKind.JOB, job.wire_id) if job is not None else None
+        return self.controller.resources.list_tasks(TaskQuery(job=job_key, backend_id=backend_id))
+
+    def resource_job(self, job: JobRef) -> JobDetail:
+        return self.controller.resources.describe_job(self._resource_key(ResourceKind.JOB, job.wire_id))
+
+    def resource_task(self, task: TaskRef) -> TaskDetail:
+        return self.controller.resources.describe_task(self._resource_key(ResourceKind.TASK, task.wire_id))
+
+    def resource_attempt(self, task: TaskRef, attempt_number: int | None = None) -> AttemptDetail:
+        locator = AttemptLocator(self._resource_key(ResourceKind.TASK, task.wire_id), attempt_number)
+        return self.controller.resources.describe_attempt(locator)
+
+    def cancel_resource_job(self, identity: JobIdentity, *, idempotency_key: str) -> ActionReceipt:
+        return self.controller.resources.cancel_job(identity, idempotency_key=idempotency_key)
+
+    def retry_resource_task(
+        self,
+        identity: TaskIdentity,
+        *,
+        expected_attempt_uid: str,
+        idempotency_key: str,
+    ) -> ActionReceipt:
+        return self.controller.resources.retry_task(
+            identity,
+            expected_attempt_uid=expected_attempt_uid,
+            idempotency_key=idempotency_key,
+        )
+
+    def terminate_resource_attempt(
+        self,
+        identity: AttemptIdentity,
+        *,
+        idempotency_key: str,
+    ) -> ActionReceipt:
+        return self.controller.resources.terminate_attempt(identity, idempotency_key=idempotency_key)
+
+    def action_receipt(self, action_id: str) -> ActionReceipt:
+        return self.controller.resources.get_action_receipt(action_id)
+
+    def settle_action(self, receipt: ActionReceipt, *, max_ticks: int = 20) -> ActionReceipt:
+        for _ in range(max_ticks):
+            current = self.action_receipt(receipt.action_id)
+            if current.state in {ActionState.SUCCEEDED, ActionState.FAILED}:
+                return current
+            self.step()
+        raise AssertionError(f"action {receipt.action_id} did not converge after {max_ticks} ticks: {self.timeline}")
+
+    def _resource_key(self, kind: ResourceKind, resource_id: str) -> ResourceKey:
+        return ResourceKey(self._cluster_id, kind, resource_id)
 
     def push_task_logs(self, task: TaskRef, lines: list[str], *, attempt_id: int = 0) -> None:
         """Publish Task logs through the real finelog RPC boundary."""

@@ -80,6 +80,12 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "GetTaskStatus",
         "ListTasks",
         "GetProcessStatus",
+        "DescribeJob",
+        "DescribeTask",
+        "DescribeAttempt",
+        "ListActivity",
+        "FetchLogs",
+        "GetActionReceipt",
         # Workers, endpoints, scheduler, autoscaler
         "ListWorkers",
         "GetWorkerStatus",
@@ -88,6 +94,11 @@ DASHBOARD_READABLE_RPCS: frozenset[str] = frozenset(
         "GetSchedulerState",
         "GetKubernetesClusterStatus",
         "ListBackends",
+        "ListNodes",
+        "DescribeNode",
+        "ListSlices",
+        "DescribeSlice",
+        "DescribeEndpoint",
         # Federation (read-only peer observation)
         "ListPeers",
         # Identity, users, budgets (read)

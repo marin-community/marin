@@ -46,7 +46,7 @@ from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.platforms.k8s.types import K8sResource
 from iris.cluster.types import DEFAULT_BACKEND_ID, JobName, UserBudgetDefaults, WorkerId, WorkerUsability
-from iris.rpc import controller_pb2, job_pb2, vm_pb2
+from iris.rpc import controller_pb2, job_pb2, resource_pb2, vm_pb2
 from iris.time_proto import timestamp_to_proto
 from rigging.auth import StaticTokenProvider
 from rigging.credentials import ClientCredentials
@@ -292,6 +292,21 @@ def service(state, scheduler, tmp_path, embedded_log_server, log_client):
 def client(service):
     dashboard = ControllerDashboard(service)
     return TestClient(dashboard.app)
+
+
+def test_dashboard_serves_the_resource_service_surface(service) -> None:
+    resource_service = Mock()
+    resource_service.list_jobs.return_value = resource_pb2.ListJobsResponse()
+    client = TestClient(ControllerDashboard(service, resource_service=resource_service).app)
+
+    response = client.post(
+        "/iris.resource.ResourceService/ListJobs",
+        json={"query": {"page": {"pageSize": 1}}},
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {}
 
 
 @pytest.fixture

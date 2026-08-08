@@ -46,11 +46,13 @@ class TerminalKind(StrEnum):
     """Which terminal transition a :class:`TerminalDecision` requests.
 
     - ``PREEMPT``: the task should be preempted (retried if budget remains).
+    - ``TERMINATE``: an operator ends the task without automatic retry.
     - ``TIMEOUT``: the task should fail without retry.
     - ``UNSCHEDULABLE``: the task can never be placed.
     """
 
     PREEMPT = "preempt"
+    TERMINATE = "terminate"
     TIMEOUT = "timeout"
     UNSCHEDULABLE = "unschedulable"
 
@@ -280,6 +282,35 @@ def preempt_one(
         job_id=row.job_id,
         prior_state=prior_state,
         new_task_state=new_state,
+        cascade_to_peers=row.has_coscheduling,
+    )
+
+
+def terminate_one(
+    state: Overlay,
+    snapshot: TransitionSnapshot,
+    task_id: JobName,
+    reason: str,
+    *,
+    row: ActiveTaskRow | None,
+) -> TransitionOutcome | None:
+    """Terminate one exact active Attempt without permitting a retry."""
+    if row is None or row.state not in ACTIVE_TASK_STATES:
+        return None
+    merge_task_termination(
+        state,
+        task_id.to_wire(),
+        row.current_attempt_id,
+        job_pb2.TASK_STATE_KILLED,
+        reason,
+        snapshot.now.epoch_ms(),
+        stamp_attempt_finished=False,
+    )
+    return TransitionOutcome(
+        task_id=task_id,
+        job_id=row.job_id,
+        prior_state=row.state,
+        new_task_state=job_pb2.TASK_STATE_KILLED,
         cascade_to_peers=row.has_coscheduling,
     )
 

@@ -421,6 +421,7 @@ def make_controller(tmp_path):
         **config_kwargs,
     ) -> Controller:
         if config is None:
+            config_kwargs.setdefault("cluster_id", "test-cluster")
             config_kwargs.setdefault("remote_state_dir", f"file://{tmp_path}/remote")
             config_kwargs.setdefault("local_state_dir", tmp_path / "local")
             config = ControllerConfig(**config_kwargs)

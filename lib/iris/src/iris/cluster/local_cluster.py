@@ -231,6 +231,7 @@ class LocalCluster:
         )
 
         controller_config = ControllerConfig(
+            cluster_id=self._config.name,
             host="127.0.0.1",
             port=port,
             remote_state_dir=self._config.storage.remote_state_dir or f"file://{state_dir}",

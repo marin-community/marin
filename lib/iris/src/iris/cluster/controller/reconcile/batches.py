@@ -276,6 +276,8 @@ class ReconcileState:
         for decision in ordered:
             if decision.kind is task.TerminalKind.PREEMPT:
                 self._apply_preempt_decision(decision, now_ms)
+            elif decision.kind is task.TerminalKind.TERMINATE:
+                self._apply_terminate_decision(decision, now_ms)
             elif decision.kind is task.TerminalKind.UNSCHEDULABLE:
                 self._apply_unschedulable_decision(decision)
             # TIMEOUT handled above.
@@ -583,6 +585,23 @@ class ReconcileState:
         self.overlay.emit_log_event(
             LogEvent(
                 action="task_preempted",
+                entity_id=decision.task_id.to_wire(),
+                details=(("reason", decision.reason),),
+            )
+        )
+
+    def _apply_terminate_decision(self, decision: task.TerminalDecision, now_ms: int) -> None:
+        effective_state = self.overlay.task_state(decision.task_id)
+        if effective_state is None or effective_state not in ACTIVE_TASK_STATES:
+            return
+        row = task.active_row_from_snapshot(self._snapshot, decision.task_id)
+        outcome = task.terminate_one(self.overlay, self._snapshot, decision.task_id, decision.reason, row=row)
+        if outcome is None:
+            return
+        self._fan_out(outcome, child_reason=decision.reason, now_ms=now_ms)
+        self.overlay.emit_log_event(
+            LogEvent(
+                action="attempt_terminated",
                 entity_id=decision.task_id.to_wire(),
                 details=(("reason", decision.reason),),
             )

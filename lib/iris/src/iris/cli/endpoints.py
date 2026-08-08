@@ -1,102 +1,87 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI for registered controller endpoints.
-
-``mint`` issues a capability URL for an endpoint that is already registered, so a
-caller can be handed off-cluster access without relaunching the job that serves
-it.
-"""
-
-import time
+"""Endpoint inventory and capability tokens."""
 
 import click
 from rigging.connect import capability_path
 from rigging.timing import Duration
 
-from iris.cli.connect import endpoint_rpc_client_for_ctx, rpc_client_for_ctx
-from iris.cluster.types import EndpointAccess
-from iris.rpc import controller_pb2
-from iris.time_proto import duration_to_proto
-
-
-@click.group()
-def endpoints():
-    """Registered controller endpoints."""
-
-
-def _access_label(access: int) -> str:
-    """Human name for an EndpointAccess value ("private"/"link"), or the raw int."""
-    try:
-        return EndpointAccess.Name(access).removeprefix("ENDPOINT_ACCESS_").lower()
-    except ValueError:
-        return str(access)
-
-
-@endpoints.command("list")
-@click.argument("prefix", default="")
-@click.option("--exact", is_flag=True, help="Match PREFIX as an exact endpoint name instead of a prefix.")
-@click.option(
-    "--task-id",
-    "task_ids",
-    multiple=True,
-    help="Only endpoints registered by this wire-format task id (e.g. /user/job/0); repeatable.",
+from iris.cli.connect import resource_client_for_ctx
+from iris.cli.resource_commands import (
+    DEFAULT_RESOURCE_LIST_LIMIT,
+    MAX_RESOURCE_LIST_LIMIT,
+    echo_source_warnings,
+    resource_key,
 )
-@click.pass_context
-def list_(ctx, prefix: str, exact: bool, task_ids: tuple[str, ...]):
-    """List registered endpoints, optionally filtered by PREFIX, --exact, or --task-id."""
-    with endpoint_rpc_client_for_ctx(ctx) as client:
-        resp = client.list_endpoints(
-            controller_pb2.Controller.ListEndpointsRequest(
-                prefix=prefix,
-                exact=exact,
-                task_ids=list(task_ids),
-            )
-        )
-    if not resp.endpoints:
-        click.echo("No endpoints found.")
-        return
-    click.echo(f"{'NAME':<44s} {'ACCESS':<8s} {'PEER':<16s} {'ADDRESS':<28s} TASK")
-    for e in sorted(resp.endpoints, key=lambda e: e.name):
-        peer = e.peer_id or "local"
-        click.echo(f"{e.name:<44s} {_access_label(e.access):<8s} {peer:<16s} {e.address:<28s} {e.task_id}")
+from iris.cluster.resources.endpoint import EndpointQuery
+from iris.cluster.resources.identity import ResourceKind
 
 
-@endpoints.command("mint")
-@click.argument("name")
+@click.group("endpoint")
+def endpoint() -> None:
+    """Inspect Endpoints and mint capability links."""
+
+
+@endpoint.command("list")
+@click.option("--prefix", help="Only Endpoint names starting with this prefix.")
+@click.option("--task", "task_id", help="Only Endpoints registered by this Task ID.")
 @click.option(
-    "--ttl-hours",
-    type=float,
-    default=24.0,
+    "--limit",
+    type=click.IntRange(1, MAX_RESOURCE_LIST_LIMIT),
+    default=DEFAULT_RESOURCE_LIST_LIMIT,
     show_default=True,
-    help="Token lifetime; clamped server-side to the controller's maximum.",
 )
 @click.pass_context
-def mint(ctx, name: str, ttl_hours: float):
-    """Mint a capability URL for an already-registered endpoint NAME (e.g. /serve/foo).
-
-    The scoped token rides in the URL path (/proxy/t/<token>/<name>/...), so
-    possession of the URL is the credential — no auth header. It authorizes only
-    this endpoint and expires after --ttl-hours. The mint runs under your
-    identity, so the controller's owner check passes.
-    """
-    with rpc_client_for_ctx(ctx) as client:
-        resp = client.mint_endpoint_token(
-            controller_pb2.Controller.MintEndpointTokenRequest(
-                endpoint_name=name,
-                ttl=duration_to_proto(Duration.from_hours(ttl_hours)),
-            )
-        )
-
-    hours_left = max(0.0, (resp.expires_at.epoch_ms - int(time.time() * 1000)) / 3_600_000)
-
-    click.echo(f"Capability URL for {name} (token in the path — anyone with the URL can call it):")
-    if resp.capability_url:
-        click.echo(f"  url        {resp.capability_url}/")
-        click.echo(f"  expires    in {hours_left:.1f}h")
-        click.echo("  note       append the app path (e.g. /v1 for an OpenAI server); no auth header needed")
+def endpoint_list(ctx: click.Context, prefix: str | None, task_id: str | None, limit: int) -> None:
+    """List registered Endpoints."""
+    task = resource_key(ctx, ResourceKind.TASK, task_id) if task_id is not None else None
+    with resource_client_for_ctx(ctx) as client:
+        page = client.list_endpoints(EndpointQuery(name_prefix=prefix, task=task, page_size=limit))
+    if not page.items:
+        click.echo("No endpoints found.")
     else:
-        # No public origin on this cluster — front the controller's /proxy/t route.
-        path = capability_path(name, resp.token)
-        click.echo(f"  path       {path}/  (front the controller's /proxy/t route to reach it off-cluster)")
-        click.echo(f"  expires    in {hours_left:.1f}h")
+        click.echo(f"{'ENDPOINT ID':<36} {'NAME':<40} {'ACCESS':<9} TASK")
+        for item in page.items:
+            click.echo(
+                f"{item.endpoint_id:<36} {item.name:<40} {item.access.value:<9} "
+                f"{item.task.resource_id if item.task is not None else '-'}"
+            )
+    echo_source_warnings(page.source_statuses)
+
+
+@endpoint.command("describe")
+@click.argument("endpoint_id")
+@click.pass_context
+def endpoint_describe(ctx: click.Context, endpoint_id: str) -> None:
+    """Describe one Endpoint by its stable registration ID."""
+    with resource_client_for_ctx(ctx) as client:
+        detail = client.describe_endpoint(resource_key(ctx, ResourceKind.ENDPOINT, endpoint_id))
+    summary = detail.summary
+    click.echo(f"Endpoint: {summary.endpoint_id}")
+    click.echo(f"Name: {summary.name}")
+    click.echo(f"Access: {summary.access.value}")
+    click.echo(f"Address: {detail.address}")
+    click.echo(f"Execution cluster: {summary.execution_cluster_id or '-'}")
+    click.echo(f"Task: {summary.task.resource_id if summary.task is not None else '-'}")
+    if detail.metadata:
+        click.echo("Metadata:")
+        for key, value in sorted(detail.metadata.items()):
+            click.echo(f"  {key}: {value}")
+
+
+@endpoint.command("mint")
+@click.argument("endpoint_id")
+@click.option("--ttl-hours", type=click.FloatRange(min=0.01), default=24.0, show_default=True)
+@click.pass_context
+def endpoint_mint(ctx: click.Context, endpoint_id: str, ttl_hours: float) -> None:
+    """Mint a time-limited capability link for one Endpoint."""
+    key = resource_key(ctx, ResourceKind.ENDPOINT, endpoint_id)
+    with resource_client_for_ctx(ctx) as client:
+        detail = client.describe_endpoint(key)
+        token = client.mint_endpoint_token(key, ttl=Duration.from_hours(ttl_hours))
+    if token.capability_url:
+        click.echo(f"{token.capability_url}/")
+    else:
+        click.echo(f"{capability_path(detail.summary.name, token.token)}/")
+    click.echo(f"Expires: {token.expires_at.epoch_ms()}")
