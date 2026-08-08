@@ -1411,3 +1411,19 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Result: Width 7,168 is the exact E128 maximum on the tested 128-wide grid at capacity factor 2.0.
   It has 419.438 B total parameters and 26.247 B active parameters. Width 7,296 is the adjacent
   failed point.
+
+### 2026-08-08 13:33 UTC - MHEP-179 and MHEP-180 raise the capacity-1.5 E192 bounds
+
+- MHEP-175 completed all five steps with 192 experts, width 6,016, and capacity factor 1.5. W&B
+  received 38 finite gradient norm metrics and 38 finite parameter norm metrics. The final loss
+  was 10.5200, and the run reported 251,980 tokens/s.
+- Result: 524.549 B total parameters and 24.227 B active parameters is the new largest confirmed
+  full-watch E192 model.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-175-w20-ep-e192-i6016-cf1p50-fullwatch-p32773-20260808
+- MHEP-179 uses width 6,528, with 568.036 B total parameters and 25.133 B active parameters.
+- MHEP-180 uses width 7,040, with 611.522 B total parameters and 26.039 B active parameters.
+- Run IDs: `mhep-179-w22-ep-e192-i6528-cf1p50-fullwatch-p32777-20260808` and
+  `mhep-180-w22-ep-e192-i7040-cf1p50-fullwatch-p32778-20260808`.
+- Both arms keep the MHEP-175 config except for expert width. They use full watch on every step,
+  production priority, and zero retries. Use a 256-wide midpoint after the pair locates the next
+  pass and failure boundary.
