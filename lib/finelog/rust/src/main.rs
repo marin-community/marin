@@ -20,7 +20,7 @@ use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
 use finelog::store::remote::is_object_store;
-use finelog::store::Store;
+use finelog::store::{Maintenance, Store};
 use tokio::sync::Notify;
 
 /// Bound process RSS. DataFusion frees its query buffers promptly (the pool
@@ -162,11 +162,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     configure_query_runtime(args.query_metadata_cache_mb.map(NonZeroUsize::get))
         .map_err(|e| format!("failed to configure query runtime: {e}"))?;
+    // The store carries the decision, so every later registration — including
+    // the telemetry router's, which rebuilds an engine and would otherwise start
+    // its maintenance task right there — inherits it. Maintenance is every way
+    // this process mutates durable state: compaction, eviction, layout rewrites,
+    // and the boot reconcile's redundancy drop, which deletes archived objects.
     let store = Arc::new(
         Store::new(
             args.log_dir.clone().map(PathBuf::from),
             args.remote_log_dir.clone(),
             args.index_cache_mb.get(),
+            match mode {
+                ServeMode::Live => Maintenance::Enabled,
+                ServeMode::Shadow => Maintenance::Disabled,
+            },
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
@@ -176,16 +185,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // a namespace just self-healed into the catalog, whose thousands of archived
     // segments have never been footer-scanned) never blocks the listener bind
     // below. The server serves — and /health is green — while archived rows are
-    // still being reconciled into the catalog.
-    //
-    // Shadow never starts it. Maintenance is every way this process mutates
-    // durable state — compaction, eviction, layout rewrites, and the boot
-    // reconcile's redundancy drop, which deletes archived objects. Skipping it
-    // is what makes a shadow boot safe to run against a copy of a real store.
-    match mode {
-        ServeMode::Live => store.bootstrap_maintenance(),
-        ServeMode::Shadow => tracing::info!("shadow mode: maintenance not started"),
-    }
+    // still being reconciled into the catalog. A shadow store starts none of it.
+    store.bootstrap_maintenance();
     // Auth is ALWAYS enforced (default-deny). No policy → the private
     // allow-localhost default (loopback only); a shared global finelog sets a
     // cidr+jwt stack. A malformed policy fails startup rather than mis-admitting.

@@ -86,9 +86,23 @@ pub struct NamespaceSnapshot {
 /// map owns one `Namespace` per live namespace (built at boot from the catalog
 /// and on `register_table`). The data path (WriteRows / PushLogs) routes through
 /// these engines; the metadata RPCs stay on the catalog.
+/// Whether a store may mutate what it opened.
+///
+/// Maintenance compacts, evicts by policy, rewrites segment layouts, and — with
+/// a remote — redundancy-drops covered segments, deleting the archived objects.
+/// `Disabled` starts none of it, on the boot path and on a runtime
+/// `register_table` alike, so a rehearsal over a copied store leaves the copy as
+/// it found it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Maintenance {
+    Enabled,
+    Disabled,
+}
+
 pub struct Store {
     data_dir: Option<PathBuf>,
     remote_log_dir: String,
+    maintenance: Maintenance,
     catalog: Arc<Catalog>,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
     /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
@@ -118,11 +132,13 @@ impl Store {
     /// namespace exists.
     ///
     /// `remote_log_dir` configures the per-namespace offload target (empty
-    /// disables sync). Pass it through to each `Namespace`.
+    /// disables sync). Pass it through to each `Namespace`. `maintenance` decides
+    /// once, here, whether this store is ever allowed to mutate what it opened.
     pub fn new(
         data_dir: Option<PathBuf>,
         remote_log_dir: String,
         index_cache_mb: usize,
+        maintenance: Maintenance,
     ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
@@ -148,6 +164,7 @@ impl Store {
         let store = Store {
             data_dir,
             remote_log_dir,
+            maintenance,
             catalog,
             engines: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
@@ -193,6 +210,10 @@ impl Store {
     /// archived-row catalog visibility + redundancy cleanup, never correct
     /// serving of live (local) rows.
     pub fn bootstrap_maintenance(&self) {
+        if self.maintenance == Maintenance::Disabled {
+            tracing::info!("shadow store: maintenance not started");
+            return;
+        }
         let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
         for engine in &engines {
             engine.spawn_maintenance(true);
@@ -269,7 +290,7 @@ impl Store {
             &self.remote_log_dir,
             policy,
         )?;
-        if spawn_maint {
+        if spawn_maint && self.maintenance == Maintenance::Enabled {
             // Runtime register: run the boot remote reconcile SYNCHRONOUSLY (so a
             // re-register over a wiped catalog adopts the bucket's segments before
             // the caller observes the namespace), then start the maintenance
@@ -743,6 +764,7 @@ mod tests {
             None,
             String::new(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            Maintenance::Enabled,
         )
         .unwrap()
     }
@@ -1101,6 +1123,7 @@ mod tests {
             Some(dir.clone()),
             String::new(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+            Maintenance::Enabled,
         )
         .unwrap();
         let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
@@ -1122,5 +1145,49 @@ mod tests {
             "boot evolution must not reset the persisted log policy"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_shadow_store_starts_no_maintenance_for_a_namespace_registered_at_runtime() {
+        // A shadow boot registers its own namespaces after opening the snapshot,
+        // and a runtime `register_table` normally starts that namespace's
+        // maintenance task itself. Gating only the boot path would leave a
+        // rehearsal free to compact, evict, and rewrite the copy it was handed.
+        let live_dir = crate::test_support::unique_dir("maintenance_live");
+        let shadow_dir = crate::test_support::unique_dir("maintenance_shadow");
+        let mut counts = Vec::new();
+        for (dir, maintenance) in [
+            (&live_dir, Maintenance::Enabled),
+            (&shadow_dir, Maintenance::Disabled),
+        ] {
+            let store = Store::new(
+                Some(dir.clone()),
+                String::new(),
+                crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
+                maintenance,
+            )
+            .unwrap();
+            store.bootstrap_maintenance();
+            tokio::task::spawn_blocking(move || {
+                store
+                    .register_table("iris.worker", worker_schema(), StoragePolicy::default())
+                    .unwrap();
+                store
+                    .require_engine("iris.worker")
+                    .unwrap()
+                    .background_task_count()
+            })
+            .await
+            .map(|count| counts.push(count))
+            .unwrap();
+        }
+        let (live, shadow) = (counts[0], counts[1]);
+        assert!(
+            shadow < live,
+            "a shadow store must run fewer background tasks than a live one \
+             (live {live}, shadow {shadow})"
+        );
+        std::fs::remove_dir_all(&live_dir).ok();
+        std::fs::remove_dir_all(&shadow_dir).ok();
     }
 }

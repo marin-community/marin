@@ -337,14 +337,22 @@ uv run lib/finelog/scripts/safe_deploy.py preflight marin --image <ref-or-digest
 
 Each deployment keeps its own catalog and they can disagree, so decide them
 together. `rollout` runs the same check before it writes a bootstrap and
-refuses on a failure. A deployment the tunnel cannot reach falls back to its
-checked-in golden under `lib/finelog/deploy/registered_schemas/`, and reports
-`UNKNOWN` if there is none.
+refuses on a failure.
+
+Only what a deployment's own catalog holds decides anything. A deployment the
+tunnel cannot reach falls back to its checked-in golden under
+`lib/finelog/deploy/registered_schemas/`, but only when that golden was
+recorded from the deployment (`"source": "catalog"`); the seeded ones hold a
+binary's own schemas and agree with any binary whose schemas have not changed
+since, including one that conflicts with what production registered. Anything
+else is `UNDECIDED`, and `rollout` refuses on it — pass `--allow-undecided` for
+a first deploy, where there is no catalog to conflict with.
 
 `preflight::tests` re-decides every golden on each pull request that touches
 the server or a golden, so a merge that would wedge production fails at PR
-time. A rollout refreshes the golden it just deployed; a stale golden can only
-fail a change production would have accepted.
+time. A rollout refreshes the golden it just deployed, recorded from the live
+catalog; a stale catalog golden can only fail a change production would have
+accepted.
 
 Namespaces a client registers — `iris.worker`, zephyr's tables — are reported
 as unchecked. They are not the server image's to decide.
@@ -377,10 +385,12 @@ dashboard query runs green. A query over a namespace this deployment does not
 have is reported as not run rather than counted either way.
 
 The rehearsal cannot touch what it was snapshotted from: `--mode shadow`
-refuses a `gs://`/`s3://` remote or a forwarding target at startup, and never
-starts maintenance, whose boot reconcile redundancy-drops covered segments and
-deletes the archived objects. Use the same mode for any local benchmark over a
-copied store.
+refuses a `gs://`/`s3://` remote or a forwarding target at startup, and its
+store never starts maintenance — not at boot and not on the registrations that
+follow it — so the copy is left as it was found. Maintenance is every way the
+process mutates durable state: compaction, eviction, layout rewrites, and the
+boot reconcile's redundancy drop, which deletes archived objects. Use the same
+mode for any local benchmark over a copied store.
 
 ## Diagnosing Kubernetes mirror readiness
 

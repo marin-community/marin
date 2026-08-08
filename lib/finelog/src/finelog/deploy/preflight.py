@@ -84,25 +84,44 @@ def schema_to_catalog_json(schema: Schema) -> dict[str, object]:
     }
 
 
+class SchemaSource(StrEnum):
+    """Where a document's registered schemas came from."""
+
+    # A deployment's own catalog. Only this is evidence about that deployment.
+    CATALOG = "catalog"
+    # A finelog-server build's built-in schemas, seeded before any deployment had
+    # been captured. Merging an image against these decides nothing about a
+    # catalog: they agree with any binary whose schemas have not changed since,
+    # including one that conflicts with what production actually registered.
+    BINARY = "binary"
+
+
 def registered_schema_document(
     *,
     deployment: str,
     namespaces: Mapping[str, Schema],
     captured_at: str,
+    source: SchemaSource,
     captured_from: str,
 ) -> dict[str, object]:
     """Build the document ``check-schema`` reads and the deploy golden records.
 
-    ``captured_from`` says which catalog these schemas came from — a golden is
-    only as good as its provenance, and the server ignores everything but
-    ``namespaces``, so the metadata exists for the reader of the diff.
+    ``source`` decides whether the document is evidence about ``deployment``;
+    ``captured_from`` says the same thing in prose for the reader of a diff. The
+    server ignores everything but ``namespaces``.
     """
     return {
         "deployment": deployment,
         "captured_at": captured_at,
+        "source": source.value,
         "captured_from": captured_from,
         "namespaces": {name: schema_to_catalog_json(schema) for name, schema in sorted(namespaces.items())},
     }
+
+
+def document_source(document: Mapping[str, object]) -> SchemaSource:
+    """The provenance ``document`` records. A document with none never came from a catalog."""
+    return SchemaSource(document.get("source", SchemaSource.BINARY))
 
 
 def render_document(document: Mapping[str, object]) -> str:
@@ -115,9 +134,9 @@ class Outcome(StrEnum):
 
     PASS = "pass"
     FAIL = "fail"
-    # No registered schema was reachable — a live server that did not answer and
-    # no recorded golden. A first deploy has no catalog to conflict with, so this
-    # does not block a rollout; it is reported loudly instead.
+    # Nothing this deployment's catalog holds was reachable: an unreachable
+    # server and no golden captured from it. Not a pass — a first deploy has no
+    # catalog to conflict with, but so does an unreachable one that is wedged.
     UNKNOWN = "unknown"
 
 
@@ -146,9 +165,7 @@ def summarize(results: Sequence[PreflightResult]) -> str:
     failed = [result.deployment for result in results if result.outcome is Outcome.FAIL]
     unknown = [result.deployment for result in results if result.outcome is Outcome.UNKNOWN]
     if unknown:
-        lines.append(
-            f"no registered schema for: {', '.join(sorted(unknown))} (nothing to conflict with, or unreachable)"
-        )
+        lines.append(f"UNDECIDED, no catalog to decide against: {', '.join(sorted(unknown))}")
     lines.append(
         f"PREFLIGHT FAIL: {', '.join(sorted(failed))}"
         if failed

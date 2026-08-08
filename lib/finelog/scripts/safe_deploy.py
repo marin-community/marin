@@ -46,8 +46,10 @@ from finelog.deploy.image import resolve_image_digest
 from finelog.deploy.preflight import (
     Outcome,
     PreflightResult,
+    SchemaSource,
     blocks_rollout,
     check_image,
+    document_source,
     load_golden,
     registered_schema_document,
     render_document,
@@ -143,26 +145,45 @@ def _registered_schemas(cfg: FinelogConfig, name: str) -> dict[str, Schema] | No
 
 
 def _preflight(cfg: FinelogConfig, name: str, image: str) -> PreflightResult:
-    """Decide whether ``image`` would register against ``cfg``'s catalog."""
+    """Decide whether ``image`` would register against ``cfg``'s catalog.
+
+    Only a document that came from that catalog decides anything. The live
+    server first; its recorded golden when the server is unreachable; and
+    ``UNKNOWN`` when neither exists, because a golden seeded from a binary
+    agrees with any binary whose schemas have not changed since — including one
+    that conflicts with what this deployment actually registered.
+    """
     live = _registered_schemas(cfg, name)
     if live is not None:
         document = registered_schema_document(
             deployment=cfg.name,
             namespaces=live,
             captured_at=_now(),
+            source=SchemaSource.CATALOG,
             captured_from=f"the live catalog of {cfg.name}",
         )
         source = "the live server"
     else:
-        document = load_golden(_golden_path(cfg))
+        golden = _golden_path(cfg)
+        document = load_golden(golden)
         if document is None:
             return PreflightResult(
                 deployment=cfg.name,
                 outcome=Outcome.UNKNOWN,
                 source="nothing",
-                report=f"no live server and no recorded golden at {_golden_path(cfg)}",
+                report=f"{cfg.name} is unreachable and has no recorded golden at {golden}",
             )
-        source = f"the recorded golden {_golden_path(cfg).name}"
+        if document_source(document) is not SchemaSource.CATALOG:
+            return PreflightResult(
+                deployment=cfg.name,
+                outcome=Outcome.UNKNOWN,
+                source="nothing",
+                report=(
+                    f"{cfg.name} is unreachable and {golden.name} was seeded from a binary, "
+                    f"not from {cfg.name}'s catalog: it cannot decide this image"
+                ),
+            )
+        source = f"the recorded golden {golden.name}"
     passed, report = check_image(image, document)
     return PreflightResult(
         deployment=cfg.name,
@@ -186,6 +207,7 @@ def _record_golden(cfg: FinelogConfig, name: str, digest: str) -> Path | None:
                 deployment=cfg.name,
                 namespaces=namespaces,
                 captured_at=_now(),
+                source=SchemaSource.CATALOG,
                 captured_from=f"the live catalog of {cfg.name} on {digest}",
             )
         )
@@ -271,7 +293,21 @@ def preflight_cmd(names: tuple[str, ...], check_all: bool, image: str | None) ->
     help="Build with the Rust `fast` profile (no LTO, parallel codegen) for a much "
     "quicker build. For dev/test clusters; the production `release` profile is the default.",
 )
-def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: bool) -> None:
+@click.option(
+    "--allow-undecided",
+    is_flag=True,
+    default=False,
+    help="Roll even when the pre-flight could not read this deployment's registered schemas. "
+    "For a first deploy, where there is no catalog to conflict with.",
+)
+def rollout_cmd(
+    name: str,
+    auto_rollback: bool,
+    force: bool,
+    build: bool,
+    fast: bool,
+    allow_undecided: bool,
+) -> None:
     """Roll forward to the digest pinned from cfg.image; capture the previous digest."""
     cfg = load_finelog_config(name)
     _require_gcp(cfg)
@@ -313,6 +349,13 @@ def rollout_cmd(name: str, auto_rollback: bool, force: bool, build: bool, fast: 
     click.echo(summarize([result]))
     if blocks_rollout([result]):
         raise click.ClickException(f"Refusing to roll {cfg.name} onto {new_digest}: its schemas would not register.")
+    if result.outcome is Outcome.UNKNOWN and not allow_undecided:
+        # An undecided rollout is the case this gate exists for: the wedge is
+        # invisible afterwards, so rolling on no evidence is rolling blind.
+        raise click.ClickException(
+            f"Refusing to roll {cfg.name} onto {new_digest}: nothing decided its schemas. "
+            "Fix the connection, or pass --allow-undecided if this is a first deploy."
+        )
 
     state_path = _write_state(
         cfg,
