@@ -62,6 +62,7 @@ from finelog.benchmarks.log_workload_corpus import (
 from finelog.benchmarks.query_measurement import (
     explain_metrics,
     local_server,
+    maintain,
     nonnegative_int,
     positive_int,
     query_table,
@@ -76,15 +77,6 @@ from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 # backfills a bounded number of segment index bundles, so a corpus needs several
 # to reach full index coverage; this bounds a stuck backfill instead of looping.
 MAX_MAINTENANCE_TICKS = 200
-
-
-def _maintain(address: str, namespace: str, *, force_compact_l0: bool) -> None:
-    response = httpx.post(
-        f"{address}/debug/maintain",
-        json={"namespace": namespace, "force_compact_l0": force_compact_l0},
-        timeout=3_600,
-    )
-    response.raise_for_status()
 
 
 def _segments(address: str, namespace: str) -> list[dict[str, object]]:
@@ -168,7 +160,7 @@ def _drive_maintenance(address: str, client: StatsServiceClientSync) -> dict[str
     started = time.perf_counter()
     covered, total = 0, 0
     for tick in range(MAX_MAINTENANCE_TICKS):
-        _maintain(address, LOG_NAMESPACE, force_compact_l0=False)
+        maintain(address, LOG_NAMESPACE, force_compact_l0=False)
         covered, total = _indexed_segments(address, LOG_NAMESPACE, required)
         if total and covered == total:
             return {
@@ -192,7 +184,7 @@ def _load_corpus(address: str, client: StatsServiceClientSync, spec: LogDatasetS
     written = 0
     for start, stop in segment_row_ranges(spec):
         written += sum(write_batch(client, LOG_NAMESPACE, batch) for batch in generate_batches(spec, start, stop))
-        _maintain(address, LOG_NAMESPACE, force_compact_l0=True)
+        maintain(address, LOG_NAMESPACE, force_compact_l0=True)
     return {"rows_written": written, "seconds": time.perf_counter() - started}
 
 
@@ -216,7 +208,7 @@ def _measure_workload(
     payload: dict[str, object] = {
         "name": workload.name.value,
         "sql": workload.sql,
-        "prunes_on_key_substring": workload.prunes_on_key_substring,
+        "scoped_by_key_substring": workload.scoped_by_key_substring,
         "samples_ms": timings,
         "p50_ms": statistics.median(timings),
         "min_ms": min(timings),

@@ -715,59 +715,31 @@ mod tests {
         ]))
     }
 
-    /// Write one segment whose `data` column is a full span of `filler` followed
-    /// by `rg1`, then build its trigram section — so source span 0 lacks the
-    /// needle and span 1 carries it. Returns the segment path.
-    fn write_two_span_log_segment(dir: &std::path::Path, filler: &str, rg1: &[&str]) -> String {
-        let n0 = SIDECAR_SPAN_ROWS;
-        let mut data: Vec<String> = (0..n0).map(|_| filler.to_string()).collect();
-        data.extend(rg1.iter().map(|s| s.to_string()));
-        let n = data.len() as i64;
-        let batch = RecordBatch::try_new(
-            log_arrow(),
-            vec![
-                Arc::new(Int64Array::from_iter_values(1..=n)),
-                Arc::new(StringArray::from(vec!["/system/controller"; data.len()])),
-                Arc::new(StringArray::from(data)),
-            ],
-        )
-        .unwrap();
-        let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
-        crate::store::segment_index::write_segment_index(
-            &path,
-            &[batch],
-            &crate::store::segment_index::SegmentIndexConfig::from_policies(
-                ["data"],
-                &[],
-                &[],
-                Some("key".to_string()),
-            ),
-        )
-        .unwrap();
-        path.to_string_lossy().into_owned()
-    }
-
-    /// Write one segment holding `filler_key` for a full span and `span1_key`
-    /// after it, with both string columns indexed — the shape of a compacted
-    /// `log` segment, where each span covers a handful of job keys. Returns the
-    /// segment path.
-    fn write_two_span_keyed_log_segment(
+    /// Write one segment whose `column` ("key" or "data") is a full span of
+    /// `filler` followed by `span1`, with both string columns indexed as the
+    /// deployed `log` schema indexes them — so source span 0 lacks the needle
+    /// and span 1 carries it. The other string column is constant, which is what
+    /// makes a prune attributable to `column`. Returns the segment path.
+    fn write_two_span_log_segment(
         dir: &std::path::Path,
-        filler_key: &str,
-        span1_key: &str,
-        span1_rows: usize,
+        column: &str,
+        filler: &str,
+        span1: &[&str],
     ) -> String {
-        let mut keys: Vec<String> = (0..SIDECAR_SPAN_ROWS)
-            .map(|_| filler_key.to_string())
-            .collect();
-        keys.extend((0..span1_rows).map(|_| span1_key.to_string()));
-        let n = keys.len() as i64;
+        let mut varying: Vec<String> = (0..SIDECAR_SPAN_ROWS).map(|_| filler.to_string()).collect();
+        varying.extend(span1.iter().map(|s| s.to_string()));
+        let n = varying.len();
+        let (keys, data) = match column {
+            "key" => (varying, vec!["idle heartbeat ok".to_string(); n]),
+            "data" => (vec!["/system/controller".to_string(); n], varying),
+            other => panic!("unsupported varying column {other:?}"),
+        };
         let batch = RecordBatch::try_new(
             log_arrow(),
             vec![
-                Arc::new(Int64Array::from_iter_values(1..=n)),
+                Arc::new(Int64Array::from_iter_values(1..=n as i64)),
                 Arc::new(StringArray::from(keys)),
-                Arc::new(StringArray::from(vec!["idle heartbeat ok"; n as usize])),
+                Arc::new(StringArray::from(data)),
             ],
         )
         .unwrap();
@@ -784,6 +756,51 @@ mod tests {
         )
         .unwrap();
         path.to_string_lossy().into_owned()
+    }
+
+    /// Assert the scan injected a trigram access plan selecting exactly
+    /// `span1_rows`. A segment from `write_two_span_log_segment` fits one
+    /// byte-sized row group, so the prune expresses the skipped first span as a
+    /// row selection inside it rather than as a skipped row group.
+    fn assert_prunes_to_span1(
+        plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
+        span1_rows: usize,
+    ) {
+        use datafusion::datasource::physical_plan::FileScanConfig;
+        use datafusion::datasource::source::DataSourceExec;
+        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
+
+        let cfg = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("scan returns a parquet DataSourceExec")
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let mut checked = 0;
+        for group in &cfg.file_groups {
+            for pf in group.files() {
+                let ap = pf
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .expect("trigram access plan attached to the partitioned file");
+                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
+                    panic!("expected one row group carrying a row selection: {ap:?}");
+                };
+                assert_eq!(
+                    selection.row_count(),
+                    span1_rows,
+                    "only the needle's span may be selected"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(
+            checked, 1,
+            "exactly one partitioned file with an access plan"
+        );
     }
 
     /// Whether any expression in `plan` casts the `data` column. Walks the tree
@@ -819,7 +836,8 @@ mod tests {
         // planner cast the whole column ahead of the predicate — materializing
         // every value precisely to throw most of them away.
         let dir = tempdir("no_cast");
-        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &["needle here"; 4]);
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["needle here"; 4]);
         let provider = NamespaceProvider::build(
             log_arrow(),
             std::slice::from_ref(&path),
@@ -874,11 +892,8 @@ mod tests {
 
     #[tokio::test]
     async fn contains_query_returns_matches_and_prunes_row_groups() {
-        use datafusion::datasource::physical_plan::FileScanConfig;
-        use datafusion::datasource::source::DataSourceExec;
         use datafusion::logical_expr::{col, lit};
         use datafusion::logical_expr::{expr::ScalarFunction, Expr};
-        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 
         let dir = tempdir("contains_prune");
         // The needle lives only in row group 1 (rows 2 and 4 of the tail).
@@ -890,7 +905,7 @@ mod tests {
             "another Bootstrap completed for TPU-xyz here",
         ];
         let rg1_rows = rg1.len();
-        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
 
         // 1) End-to-end correctness: the contains() query returns exactly the two
         //    matching rows (and prunes row group 0 along the way).
@@ -941,41 +956,7 @@ mod tests {
         )
         .unwrap();
         let plan = probe.scan(&state, None, &[filter], None).await.unwrap();
-        let exec = plan
-            .as_any()
-            .downcast_ref::<DataSourceExec>()
-            .expect("scan returns a parquet DataSourceExec");
-        let cfg = exec
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .expect("a FileScanConfig");
-        let mut checked = 0;
-        for group in &cfg.file_groups {
-            for pf in group.files() {
-                let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
-                    .expect("trigram access plan attached to the partitioned file");
-                // The needle is confined to the second span. These narrow rows
-                // fit one byte-sized row group, so the prune expresses that as a
-                // row selection inside it rather than a skipped row group.
-                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
-                    panic!("expected one row group carrying a row selection: {ap:?}");
-                };
-                assert_eq!(
-                    selection.row_count(),
-                    rg1_rows,
-                    "only the needle's span may be selected"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(
-            checked, 1,
-            "exactly one partitioned file with an access plan"
-        );
+        assert_prunes_to_span1(&plan, rg1_rows);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -985,10 +966,6 @@ mod tests {
         // expression survives the simplifier as `Expr::Like` and the prune
         // extracts the framed substring. Asserts both the matching rows and the
         // injected skip of the needle-free row group 0.
-        use datafusion::datasource::physical_plan::FileScanConfig;
-        use datafusion::datasource::source::DataSourceExec;
-        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
-
         let dir = tempdir("like_prune");
         let needle = "Bootstrap completed for TPU-xyz";
         let rg1 = vec![
@@ -997,7 +974,7 @@ mod tests {
             "idle heartbeat ok",
         ];
         let rg1_rows = rg1.len();
-        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &rg1);
+        let path = write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &rg1);
 
         let ctx = crate::query::make_ctx();
         let provider = NamespaceProvider::build(
@@ -1045,37 +1022,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let cfg = plan
-            .as_any()
-            .downcast_ref::<DataSourceExec>()
-            .expect("a parquet DataSourceExec")
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .expect("a FileScanConfig");
-        let mut checked = 0;
-        for group in &cfg.file_groups {
-            for pf in group.files() {
-                let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
-                    .expect("trigram access plan attached for the LIKE query");
-                // The needle is confined to the second span. These narrow rows
-                // fit one byte-sized row group, so the prune expresses that as a
-                // row selection inside it rather than a skipped row group.
-                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
-                    panic!("expected one row group carrying a row selection: {ap:?}");
-                };
-                assert_eq!(
-                    selection.row_count(),
-                    rg1_rows,
-                    "only the needle's span may be selected"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(checked, 1);
+        assert_prunes_to_span1(&plan, rg1_rows);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1084,13 +1031,12 @@ mod tests {
         // A job name sits in the MIDDLE of a log key, so `key LIKE '%<job>%'` is
         // opaque to the `(key, seq)` sort and its min/max statistics. It prunes
         // only from the key column's own trigram section.
-        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
-
         let dir = tempdir("key_substring_prune");
         let filler_key = "/power/other-run-coord/other-run/0:0";
         let span1_key = "/power/hs-final2-adoptedbatch-coord/grug-train/3:0";
         let span1_rows = 5;
-        let path = write_two_span_keyed_log_segment(&dir, filler_key, span1_key, span1_rows);
+        let path =
+            write_two_span_log_segment(&dir, "key", filler_key, &vec![span1_key; span1_rows]);
 
         let ctx = crate::query::make_ctx();
         ctx.register_table(
@@ -1132,36 +1078,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let cfg = plan
-            .as_any()
-            .downcast_ref::<DataSourceExec>()
-            .expect("a parquet DataSourceExec")
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-            .expect("a FileScanConfig");
-        let mut checked = 0;
-        for group in &cfg.file_groups {
-            for pf in group.files() {
-                let ap = pf
-                    .extensions
-                    .as_ref()
-                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
-                    .expect("trigram access plan attached for the key substring query");
-                // These narrow rows fit one byte-sized row group, so the prune
-                // expresses the skipped first span as a row selection inside it.
-                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
-                    panic!("expected one row group carrying a row selection: {ap:?}");
-                };
-                assert_eq!(
-                    selection.row_count(),
-                    span1_rows,
-                    "only the matching job's span may be selected"
-                );
-                checked += 1;
-            }
-        }
-        assert_eq!(checked, 1);
+        assert_prunes_to_span1(&plan, span1_rows);
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1173,7 +1090,8 @@ mod tests {
         use datafusion::logical_expr::{col, lit};
 
         let dir = tempdir("no_contains");
-        let path = write_two_span_log_segment(&dir, "idle heartbeat ok", &["one match here"]);
+        let path =
+            write_two_span_log_segment(&dir, "data", "idle heartbeat ok", &["one match here"]);
         let ctx = crate::query::make_ctx();
         let provider = NamespaceProvider::build(
             log_arrow(),

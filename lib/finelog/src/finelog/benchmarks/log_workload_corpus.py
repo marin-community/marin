@@ -27,9 +27,9 @@ from enum import StrEnum
 
 import pyarrow as pa
 
+from finelog.client.log_client import LOG_NAMESPACE
 from finelog.schema import LOG_REGISTERED_SCHEMA, schema_to_arrow
 
-LOG_NAMESPACE = "log"
 # A log row encodes to roughly 160 bytes, so this keeps a batch well under the
 # server's 16 MiB WriteRows body limit.
 DEFAULT_BATCH_ROWS = 50_000
@@ -61,11 +61,9 @@ TASKS_PER_JOB = 16
 TARGET_JOB_ROW_STRIDE = 4_096
 
 # The job every job-scoped workload searches for. It is named like every other
-# generated job; `TARGET_JOB_INDEX` is a multiple of both tuple lengths so the
-# naming rule below places it under `TARGET_USER` with the `grug-train` prefix.
+# generated job; the index is a multiple of both tuple lengths, which puts it
+# under the `power` user with the `grug-train` prefix.
 TARGET_JOB_INDEX = 408
-TARGET_USER = USERS[TARGET_JOB_INDEX % len(USERS)]
-TARGET_JOB = f"{JOB_PREFIXES[TARGET_JOB_INDEX % len(JOB_PREFIXES)]}-{TARGET_JOB_INDEX:04d}"
 
 LEVEL_DEBUG = 10
 LEVEL_INFO = 20
@@ -121,16 +119,17 @@ class LogDatasetSpec:
 
 @dataclass(frozen=True)
 class Workload:
-    """One corpus query, and whether it reads the whole namespace unpruned.
+    """One corpus query, and where its selectivity comes from.
 
-    `prunes_on_key_substring` marks the shapes whose only selective predicate is
-    a `key` substring: they decode every row of `key` in the namespace unless a
-    segment index answers them.
+    `scoped_by_key_substring` marks the shapes whose only selective predicate is
+    a `key` substring. They decode every row of `key` in the namespace unless a
+    segment index answers that predicate, so they are the ones an index policy on
+    `key` moves.
     """
 
     name: WorkloadName
     sql: str
-    prunes_on_key_substring: bool
+    scoped_by_key_substring: bool
 
 
 def job_name(index: int) -> str:
@@ -147,6 +146,12 @@ def key_for_slot(slot: int) -> str:
 def target_key(task: int = 0) -> str:
     """The exact key a task-scoped workload reads, inside [`TARGET_JOB`]."""
     return key_for_slot(TARGET_JOB_INDEX * TASKS_PER_JOB + task)
+
+
+# Derived through the same rules the generator uses, so the job the workloads
+# search for cannot drift from the one the corpus emits.
+TARGET_JOB = job_name(TARGET_JOB_INDEX)
+TARGET_USER = target_key().split("/")[1]
 
 
 def dataset_facts(spec: LogDatasetSpec) -> dict[str, object]:
@@ -246,7 +251,7 @@ def build_workloads(spec: LogDatasetSpec) -> tuple[Workload, ...]:
 
     Every shape is one operators issue against a live cluster: scoping to a job
     by substring, tailing a task, finding the first error in a run, and searching
-    bodies. The `prunes_on_key_substring` shapes are the ones that read the whole
+    bodies. The `scoped_by_key_substring` shapes are the ones that read the whole
     namespace when no segment index answers the `key` predicate.
     """
     table = f'"{LOG_NAMESPACE}"'
@@ -257,17 +262,17 @@ def build_workloads(spec: LogDatasetSpec) -> tuple[Workload, ...]:
         Workload(
             WorkloadName.JOB_LAST_TIMESTAMP,
             f"SELECT max(epoch_ms) AS last_ms FROM {table} WHERE key LIKE '%{job}%'",
-            prunes_on_key_substring=True,
+            scoped_by_key_substring=True,
         ),
         Workload(
             WorkloadName.JOB_LINE_COUNT,
             f"SELECT count(*) AS lines FROM {table} WHERE key LIKE '%{job}%'",
-            prunes_on_key_substring=True,
+            scoped_by_key_substring=True,
         ),
         Workload(
             WorkloadName.JOB_TASK_KEYS,
             f"SELECT DISTINCT key FROM {table} WHERE key LIKE '%{job}%' ORDER BY key",
-            prunes_on_key_substring=True,
+            scoped_by_key_substring=True,
         ),
         Workload(
             WorkloadName.JOB_FIRST_ERROR,
@@ -278,7 +283,7 @@ WHERE key LIKE '%{job}%' AND level >= {LEVEL_ERROR}
 ORDER BY seq
 LIMIT 5
 """.strip(),
-            prunes_on_key_substring=True,
+            scoped_by_key_substring=True,
         ),
         Workload(
             WorkloadName.JOB_TAIL,
@@ -289,7 +294,7 @@ WHERE key LIKE '%{job}%'
 ORDER BY seq DESC
 LIMIT 200
 """.strip(),
-            prunes_on_key_substring=True,
+            scoped_by_key_substring=True,
         ),
         Workload(
             WorkloadName.JOB_TEXT_SEARCH,
@@ -300,7 +305,7 @@ WHERE key LIKE '%{job}%' AND contains(data, 'CUDA_ERROR')
 ORDER BY seq DESC
 LIMIT 100
 """.strip(),
-            prunes_on_key_substring=False,
+            scoped_by_key_substring=False,
         ),
         Workload(
             WorkloadName.JOB_SOURCE_SPLIT,
@@ -311,7 +316,7 @@ WHERE key LIKE '%{job}%'
 GROUP BY source
 ORDER BY lines DESC
 """.strip(),
-            prunes_on_key_substring=True,
+            scoped_by_key_substring=True,
         ),
         Workload(
             WorkloadName.JOB_RECENT_WINDOW,
@@ -322,7 +327,7 @@ WHERE key LIKE '%{job}%' AND epoch_ms >= {recent_from}
 ORDER BY seq DESC
 LIMIT 200
 """.strip(),
-            prunes_on_key_substring=True,
+            scoped_by_key_substring=True,
         ),
         Workload(
             WorkloadName.USER_PREFIX_TAIL,
@@ -333,7 +338,7 @@ WHERE key LIKE '/{TARGET_USER}/%'
 ORDER BY seq DESC
 LIMIT 100
 """.strip(),
-            prunes_on_key_substring=False,
+            scoped_by_key_substring=False,
         ),
         Workload(
             WorkloadName.TASK_TAIL,
@@ -344,7 +349,7 @@ WHERE key = '{target_key()}'
 ORDER BY seq DESC
 LIMIT 200
 """.strip(),
-            prunes_on_key_substring=False,
+            scoped_by_key_substring=False,
         ),
         Workload(
             WorkloadName.GLOBAL_TEXT_SEARCH,
@@ -355,11 +360,11 @@ WHERE contains(data, 'CUDA_ERROR')
 ORDER BY seq DESC
 LIMIT 100
 """.strip(),
-            prunes_on_key_substring=False,
+            scoped_by_key_substring=False,
         ),
         Workload(
             WorkloadName.SOURCE_ROLLUP,
             f"SELECT source, count(*) AS lines FROM {table} GROUP BY source ORDER BY lines DESC",
-            prunes_on_key_substring=False,
+            scoped_by_key_substring=False,
         ),
     )

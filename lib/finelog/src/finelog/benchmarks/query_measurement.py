@@ -210,12 +210,17 @@ def write_batch(
     return response.rows_written
 
 
-def force_compact(address: str, namespace: str) -> None:
-    """Force benchmark-owned local L0 files through Finelog's real compactor."""
+def maintain(address: str, namespace: str, *, force_compact_l0: bool) -> None:
+    """Run one maintenance tick on a benchmark-owned server.
+
+    A tick compacts and backfills a bounded number of index bundles.
+    `force_compact_l0` additionally pushes sealed L0 files through the real
+    compactor instead of waiting for its byte thresholds.
+    """
     response = httpx.post(
         f"{address}/debug/maintain",
-        json={"namespace": namespace, "force_compact_l0": True},
-        timeout=300,
+        json={"namespace": namespace, "force_compact_l0": force_compact_l0},
+        timeout=3_600,
     )
     response.raise_for_status()
 
