@@ -13,8 +13,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
-from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlparse
@@ -26,7 +24,6 @@ from rigging.secrets import resolve_secret_spec
 from finelog.deploy.bootstrap import HEALTH_OK, health_probe_command, render_template
 from finelog.deploy.config import FinelogConfig, auth_policy_json
 from finelog.deploy.image import resolve_image_digest
-from finelog.deploy.snapshot import STORE_DIR, extract_tar, tar_command
 
 _TEMPLATE_VAR_RE = re.compile(r"\{\{ (\w+) \}\}")
 
@@ -358,38 +355,6 @@ def _verify_ingest_ready(cfg: FinelogConfig) -> None:
     body = result.stdout.strip()
     if body != HEALTH_OK:
         raise click.ClickException(f"finelog is serving but not ingesting: {body}")
-
-
-def k8s_fetch_store_files(cfg: FinelogConfig, patterns: Sequence[str], destination: Path) -> None:
-    """Extract the named store files from the running pod into ``destination``.
-
-    ``kubectl exec`` streams the archive on stdout; the pod runs as the store's
-    owner, so no privilege escalation is involved. This is what ``kubectl cp``
-    does internally, minus its all-or-nothing directory copy.
-    """
-    assert cfg.deployment.k8s is not None
-    with tempfile.TemporaryDirectory() as staging:
-        local_tar = Path(staging) / "snapshot.tar"
-        with local_tar.open("wb") as archive:
-            result = subprocess.run(
-                [
-                    "kubectl",
-                    *_kube_flags(cfg),
-                    "exec",
-                    f"deployment/{cfg.name}",
-                    "-n",
-                    cfg.deployment.k8s.namespace,
-                    "--",
-                    "sh",
-                    "-c",
-                    tar_command(STORE_DIR, patterns),
-                ],
-                stdout=archive,
-                check=False,
-            )
-        if result.returncode != 0:
-            raise click.ClickException(f"could not read a store snapshot from deployment/{cfg.name}")
-        extract_tar(local_tar, destination)
 
 
 def k8s_up(cfg: FinelogConfig) -> None:

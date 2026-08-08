@@ -1,20 +1,20 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Boot a candidate image against a snapshot of a real store and query it.
+"""Boot a candidate image against a copy of a real store and query it.
 
-Decides what only a real boot can: whether the catalog adopts, whether the
-``.fidx`` sections and Parquet layout revisions in a deployment's segments still
-read, and whether the planner still substitutes the covering projections the
-dashboards use.
+Covers what the schema pre-flight cannot: catalog adoption, the ``.fidx`` and
+Parquet layout revisions in a deployment's segments, and the planner's
+substitution of covering projections.
 
 The image serves in shadow mode, so it runs no maintenance and cannot reach the
-archive the snapshot came from.
+archive the copy came from.
 """
 
 import os
 import re
 import socket
+import sqlite3
 import subprocess
 import time
 from collections.abc import Sequence
@@ -26,9 +26,14 @@ import httpx
 from finelog.benchmarks.grafana_dashboard_corpus import load_dashboard_corpus, sqlstring_variables
 from finelog.benchmarks.query_measurement import query_table, stats_client
 from finelog.client.log_client import LogClient
-from finelog.deploy.bootstrap import HEALTH_OK
+from finelog.deploy.bootstrap import CACHE_DIR, HEALTH_OK
 from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_policy_json
-from finelog.deploy.snapshot import CATALOG_FILENAME, STORE_DIR, namespaces_in_catalog
+
+# The snapshot mounts where the store was taken from: the catalog records
+# absolute segment paths and boot adoption matches them exactly.
+STORE_DIR = CACHE_DIR
+
+CATALOG_FILENAME = "_finelog_catalog.sqlite"
 
 # Opening a snapshot runs catalog adoption and per-namespace recovery.
 BOOT_TIMEOUT = 300.0
@@ -47,6 +52,15 @@ HOME_CLUSTER = "marin"
 
 _MISSING_TABLE = re.compile(r"table '([^']+)' not found")
 _DATAFUSION_PREFIX = "datafusion.public."
+
+
+def namespaces_in_catalog(catalog: Path) -> set[str]:
+    """Every namespace the catalog has registered."""
+    connection = sqlite3.connect(f"file:{catalog}?mode=ro", uri=True)
+    try:
+        return {row[0] for row in connection.execute("SELECT namespace FROM namespaces")}
+    finally:
+        connection.close()
 
 
 def missing_namespace(error: str) -> str | None:
@@ -226,9 +240,7 @@ def run_dashboard_corpus(
     The dashboards read every namespace any Marin service writes, while a
     deployment holds only what its own clients registered. A query over a
     namespace absent from this catalog is recorded as not run; one over a
-    namespace that did rehydrate and still fails to plan is a failure. So is a
-    dashboard whose corpus will not render, rather than a silent narrowing of
-    what the check covered.
+    namespace that did rehydrate and still fails to plan is a failure.
     """
     client = stats_client(address)
     rehydrated = set(report.namespaces_rehydrated)

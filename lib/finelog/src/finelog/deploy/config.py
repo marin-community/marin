@@ -262,12 +262,7 @@ def find_finelog_config(name_or_path: str) -> Path | None:
 
 
 def bundled_config_names() -> list[str]:
-    """Every repo-bundled deployment name, sorted.
-
-    The set of finelog servers Marin runs. Tooling that must cover all of them —
-    the deploy pre-flight, which decides each catalog separately — enumerates
-    them here rather than hard-coding a list that silently ages.
-    """
+    """Every repo-bundled deployment name, sorted."""
     return sorted(path.stem for path in _bundled_config_dir().glob("*.yaml"))
 
 
