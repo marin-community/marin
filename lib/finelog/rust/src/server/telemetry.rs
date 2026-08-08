@@ -75,6 +75,14 @@ const ACCELERATOR_METRIC_NAMES: [&str; 16] = [
     "gpu_xid_error_code",
     "hardware_inventory",
 ];
+const DEVICE_METRIC_PROJECTION_COLUMNS: [&str; 6] = [
+    "timestamp_ms",
+    "service",
+    "name",
+    "value",
+    "attributes_json",
+    "cluster",
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -777,14 +785,7 @@ fn telemetry_schema() -> Schema {
         "accelerator-memory",
         "name",
         ["gpu_memory_total_bytes", "gpu_memory_used_bytes"],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
         "accelerator-faults",
@@ -794,14 +795,7 @@ fn telemetry_schema() -> Schema {
             "gpu_row_remap_failures",
             "gpu_xid_error_code",
         ],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
         "accelerator-interconnect",
@@ -812,14 +806,7 @@ fn telemetry_schema() -> Schema {
             "gpu_pcie_receive_bytes_per_second",
             "gpu_pcie_transmit_bytes_per_second",
         ],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
         "accelerator-inventory",
@@ -837,66 +824,31 @@ fn telemetry_schema() -> Schema {
         "accelerator-sm-activity",
         "name",
         ["gpu_sm_active_ratio"],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
         "accelerator-temperature",
         "name",
         ["gpu_memory_temperature_celsius", "gpu_temperature_celsius"],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
         "accelerator-tensor-activity",
         "name",
         ["gpu_tensor_active_ratio"],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
         "accelerator-utilization",
         "name",
         ["gpu_utilization_percent"],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
         "node-host-network",
         "name",
         ["node_network_receive_bytes", "node_network_transmit_bytes"],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_covering_projection(CoveringProjection::new(
         "node-host-utilization",
@@ -908,14 +860,7 @@ fn telemetry_schema() -> Schema {
             "node_memory_total_bytes",
             "node_memory_used_bytes",
         ],
-        [
-            "timestamp_ms",
-            "service",
-            "name",
-            "value",
-            "attributes_json",
-            "cluster",
-        ],
+        DEVICE_METRIC_PROJECTION_COLUMNS,
     ))
     .with_grouped_extrema(GroupExtremaConfig::new(
         "service",

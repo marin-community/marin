@@ -64,8 +64,7 @@ _TERMINAL_POD_PHASES = frozenset(("Succeeded", "Failed"))
 _FINELOG_CONTAINER = "finelog"
 _FINELOG_FALLBACK_SERVER = "finelog-mirror"
 
-# CoreWeave physical-topology labels a GPU node carries: which rack it lives in,
-# the rack's full CoreWeave-assigned name, and its instance type.
+# CoreWeave node inventory and physical-topology labels exposed to Grafana.
 _RACK_LABEL = "node.coreweave.cloud/rack"
 _RACK_NAME_LABEL = "ds.coreweave.com/physical-topology.rack-name"
 _INSTANCE_TYPE_LABEL = "node.kubernetes.io/instance-type"
@@ -81,6 +80,17 @@ _CORDON_REASON_ANNOTATION = "node.coreweave.cloud/cordonReason"
 _KERNEL_DEADLOCK_CONDITION = "KernelDeadlock"
 _PENDING_PHASE_CONDITION = "PendingPhaseState"
 _NODE_POOLS_PATH = "/apis/compute.coreweave.com/v1alpha1/nodepools"
+_NODE_POOL_VALIDATED_CONDITION = "Validated"
+_NODE_POOL_AT_TARGET_CONDITION = "AtTarget"
+_NODE_POOL_CAPACITY_CONDITION = "Capacity"
+_NODE_POOL_QUOTA_CONDITION = "Quota"
+_NODE_POOL_RECONFIGURATION_CONDITION = "NodeReconfigurationRequired"
+_NODE_POOL_PROBLEM_CONDITIONS = (
+    (_NODE_POOL_VALIDATED_CONDITION, True),
+    (_NODE_POOL_CAPACITY_CONDITION, True),
+    (_NODE_POOL_QUOTA_CONDITION, True),
+    (_NODE_POOL_RECONFIGURATION_CONDITION, False),
+)
 
 # gpu_racks' tray/rack concept — many nodes sharing one liquid-cooled rack, with a
 # fleet-wide expected tray count — is specific to GB200 NVL72. Other instance types
@@ -750,14 +760,9 @@ class K8sSource:
             if target_nodes is None:
                 target_nodes = spec.get("targetNodes") or 0
             current_nodes = status.get("currentNodes") or 0
-            at_target = "AtTarget" in active_conditions
+            at_target = _NODE_POOL_AT_TARGET_CONDITION in active_conditions
             problem_reasons = []
-            for name, expected in (
-                ("Validated", True),
-                ("Capacity", True),
-                ("Quota", True),
-                ("NodeReconfigurationRequired", False),
-            ):
+            for name, expected in _NODE_POOL_PROBLEM_CONDITIONS:
                 condition = conditions.get(name) or {}
                 if (name in active_conditions) != expected:
                     problem_reasons.append(f"{name}: {condition.get('reason') or 'Unknown'}")
@@ -777,11 +782,11 @@ class K8sSource:
                     "prefill_nodes": status.get("prefillNodes") or 0,
                     "missing_nodes": max(target_nodes - current_nodes, 0),
                     "off_target": int(not at_target),
-                    "validated": "Validated" in active_conditions,
+                    "validated": _NODE_POOL_VALIDATED_CONDITION in active_conditions,
                     "at_target": at_target,
-                    "capacity_available": "Capacity" in active_conditions,
-                    "under_quota": "Quota" in active_conditions,
-                    "reconfiguration_required": "NodeReconfigurationRequired" in active_conditions,
+                    "capacity_available": _NODE_POOL_CAPACITY_CONDITION in active_conditions,
+                    "under_quota": _NODE_POOL_QUOTA_CONDITION in active_conditions,
+                    "reconfiguration_required": _NODE_POOL_RECONFIGURATION_CONDITION in active_conditions,
                     "problems": "; ".join(problem_reasons),
                 }
             )
