@@ -92,15 +92,18 @@ class HeroThroughputResult(Artifact):
     """Metrics and resumable checkpoints from the rack-scale throughput hero run."""
 
 
-def _hero_watch_config(interval: int) -> WatchConfig:
+def _hero_watch_config(interval: int, full: bool = False) -> WatchConfig:
     """Global gradient norm only, which is what a stability check needs.
 
     `WatchConfig`'s defaults watch grads *and* params, take a norm per parameter tensor, and set
     `split_scan_layers`, which un-stacks the scanned layers. On the hero shapes that combination
-    needs a ~117 GiB temporary against a 173 GiB device and OOMs runs that fit without it.
+    OOMs runs that fit without it, so the lean form is the default here. ``full`` restores the
+    upstream defaults for a shape with the headroom to afford per-layer detail.
     """
     if interval <= 0:
         return WatchConfig(watch_targets=[])
+    if full:
+        return WatchConfig(interval=interval)
     return WatchConfig(
         watch_targets=["grads"],
         include_per_parameter_norms=False,
@@ -126,6 +129,7 @@ def _hero_run_config(
     validation: list[ArtifactStep[TokenizedCache]] | None = None,
     eval_every: int = 0,
     watch_interval: int = HERO_WATCH_INTERVAL,
+    full_watch: bool = False,
     profile_start_step: int | None = None,
     profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
 ) -> GrugRunConfig:
@@ -164,7 +168,7 @@ def _hero_run_config(
             ),
             TelemetryConfig(),
         ),
-        watch=_hero_watch_config(watch_interval),
+        watch=_hero_watch_config(watch_interval, full_watch),
         progress_watchdog=ProgressWatchdogConfig(
             step_timeout=HERO_TRAIN_STEP_TIMEOUT,
             process_timeout=HERO_PROCESS_STALL_TIMEOUT,
@@ -291,6 +295,7 @@ def build_hero_run(
     save_checkpoints: bool = True,
     run_mode: GrugRunMode = GrugRunMode.DEFAULT,
     watch_interval: int = HERO_WATCH_INTERVAL,
+    full_watch: bool = False,
     profile_start_step: int | None = None,
     profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
     version: str | None = None,
@@ -344,6 +349,7 @@ def build_hero_run(
             validation=validation,
             eval_every=eval_every,
             watch_interval=watch_interval,
+            full_watch=full_watch,
             profile_start_step=profile_start_step,
             profile_num_steps=profile_num_steps,
         )
@@ -480,6 +486,14 @@ def build_ablation_sweep_hero_run(
     help="Steps between grad/param norm dumps. 0 disables them.",
 )
 @click.option(
+    "--full-watch/--lean-watch",
+    default=False,
+    help=(
+        "Use WatchConfig's upstream defaults (grads and params, per-parameter norms, split scan "
+        "layers) instead of a single global gradient norm. Far more detail, far more memory."
+    ),
+)
+@click.option(
     "--profile-start-step",
     type=click.IntRange(min=1),
     default=None,
@@ -504,6 +518,7 @@ def main(
     save_checkpoints: bool,
     mode: str,
     watch_interval: int,
+    full_watch: bool,
     profile_start_step: int | None,
     profile_num_steps: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -518,6 +533,7 @@ def main(
         save_checkpoints=save_checkpoints,
         run_mode=GrugRunMode(mode),
         watch_interval=watch_interval,
+        full_watch=full_watch,
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
     )
