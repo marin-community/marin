@@ -38,7 +38,7 @@ author: dlwh
 ### Active
 
 - `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best shared result: +0.02769 validation/+0.02583 Paloma after 250.09M online tokens, above the required +0.02 validation gate. Resume only with a new preregistered d512 shared-bank hypothesis.
-- `GRUG-XEM-H13`: Native Hungarian initialization traps sparse recovery in a poor slot factorization. A correspondence-free cached-trace refactorizer that trains one shared bank and both per-layer routers against complete teacher MoE outputs can beat the completed native direct-joint recovery at equal online tokens.
+- `GRUG-XEM-H14`: With two anchors at each end and core tie groups no larger than four, the tied-from-scratch Paloma penalty remains at most +0.04 at d1024. This is an architecture-scale test, not an effective-speed promotion gate.
 
 ### Blocked
 
@@ -51,6 +51,7 @@ author: dlwh
 - `GRUG-XEM-H9`: The `S/R/N/U` matrix did not identify a promotable one-factor unlock. Frozen routing was neutral, norm unlocking was harmful, and independent bank capacity improved validation/Paloma by 0.00490/0.00461, just below the fixed 0.005 signal. No tested factor explains the remaining shared-model gap by itself.
 - `GRUG-XEM-H10`: The rank-8 layer-3 routed-function adapter captured only 0.57% of the untied oracle's 50M validation and Paloma advantage. It passed local-fit, routing, and throughput checks but failed its 25M and 50M utility bounds and the original promotion gate.
 - `GRUG-XEM-H11`: Persistent material direct shared-bank gradient conflict was not supported. Only the 25.03M midpoint passed all five conflict criteria; the Stage-A start and 50.07M endpoint failed the aggregate-cosine and norm-balance criteria. The preregistered outcome is inconclusive, so do not launch PCGrad or an optimizer counterfactual from this result.
+- `GRUG-XEM-H13`: Correspondence-free cached hard-top-4 refactorization beat the fixed-route aggregate comparator by only 3.20%, missed its held-out loss and all-expert activity gates, and overfit the cached trace. No online screen launched.
 
 ### Promoted
 
@@ -836,3 +837,14 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Proof: `gs://marin-us-central1/grug/expert_merge/d512/joint-refactor-layers-2-3/2026.08.08/refactor_checkpoints/step-800/joint_refactor_training_manifest.json`. There is no converted `checkpoints/step-0`; the Iris graph contains no online child; the screen root still matches no objects; no W&B run or quality evaluation exists.
 - Decision: stop correspondence-free cached hard-top-4 refactorization and the current post-hoc surgery line. Do not retry, run the online screen, implement the 100M continuation, or advance to two-pair, d768, or post-hoc 67B surgery. This does not change the positive tied-from-scratch d512/d768 architecture result.
 - Issue result: https://github.com/marin-community/marin/issues/8032#issuecomment-5227768427
+
+### 2026-08-08 13:05 - GRUG-XEM-011 d1024 architecture-scale preregistration
+
+- Hypothesis: the tied-from-scratch quality penalty remains at most +0.04 Paloma at d1024 when the 11-layer model keeps two untied input anchors, two untied output anchors, and ties the seven-layer core in groups of four and three.
+- Protocol deviation: tied experts had effective speed `0.846x` at d512 and `0.849x` at d768, so they failed the formal `agent.md` Gate-1 requirement for Gate 2. GRUG-XEM-011 is authorized by the user as an architecture-scaling test with free TPU time and is not a production or effective-speed promotion experiment.
+- Matched arms: control topology `(0,1,2,3,4,5,6,7,8,9,10)`; treatment `(0,1,2,2,2,2,3,3,3,4,5)`. The treatment has two anchors at each end, reused-bank group sizes four and three, six unique banks instead of eleven, and removes 45.45% of unique routed banks. Both use unscaled MuonH, seed 0, sequence length 4096, global batch 128, identical current Grug defaults, and the same central1 `2026.06.28` mixture/data order.
+- Smoke: 500 updates and exactly 262,144,000 tokens per arm on one central1 v5p-8 each. Both must finish at zero-indexed W&B step 499 with exact total tokens, permanent step-500 checkpoint/artifact, finite CE and expert-bank gradient/update metrics, and no compile/HBM/checkpoint failure. Across steps 450-499, require zero capacity overflow at every layer/step, traffic to all 256 experts in every layer over the union, and mean hard-route entropy at least 5.3 separately per layer. The treatment's reused banks 2 and 3 must have finite median gradient and update norms over steps 20-499; for each metric, the larger median divided by the smaller must be at most 4. The treatment-minus-control median CE over steps 450-499 must be at most +0.15.
+- Full schedule: launch fresh matched arms only after both smoke arms pass. Current heuristic gives 16,149 updates and exactly 8,466,726,912 tokens per arm. The architecture passes if final tied-minus-control Paloma macro is `<=+0.040` and the final 100-step window passes the smoke routing/finite checks. Report last-100 throughput, unique parameter count, bank gradient/update norms, activation norms, and effective speed without using effective speed as a veto.
+- Scale diagnosis: raw penalty `<=+0.028548` is diminishing relative to d768. The d768 penalty per removed-bank fraction is `0.028548/(3/8)=0.076128`; multiplying by d1024's `5/11` removed fraction gives `+0.034604`. A d1024 gap `<=+0.034604` is compression-normalized non-worsening; `(0.034604,0.040]` remains architecture-viable but indicates the normalized penalty is growing; `>+0.040` stops d1280.
+- Regional contract: both arms initialize from seed 0 and read no checkpoint. Controller, nine training caches, 23 validation artifacts, v5p-8 workers, profiles, checkpoints, evaluations, and outputs remain in `us-central1`. Snowball and the central2 June cache are not inputs. Any cross-region dependency fails preflight rather than being copied.
+- Progression: a full d1024 pass permits a separately preregistered d1280 matched comparison; it does not unblock post-hoc d1024/d1280/67B surgery. A smoke failure stops before full training. A full failure stops larger tied-from-scratch scaling under this topology.

@@ -80,3 +80,53 @@ def test_d768_matrix_is_matched_untied_and_two_anchor_middle_four_comparison(mon
         "sqrt",
     ]
     assert all(run.runtime_args["train_resources"].regions == ["us-central1"] for run in runs)
+
+
+@pytest.mark.parametrize(
+    ("model_size", "hidden_dim", "num_layers", "batch_size", "full_steps", "tied_topology", "group_sizes"),
+    [
+        (
+            TiedExpertModelSize.D1024,
+            1024,
+            11,
+            128,
+            16_149,
+            [0, 1, 2, 2, 2, 2, 3, 3, 3, 4, 5],
+            [1, 1, 4, 3, 1, 1],
+        ),
+        (
+            TiedExpertModelSize.D1280,
+            1280,
+            13,
+            256,
+            14_315,
+            [0, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 5, 6],
+            [1, 1, 4, 4, 1, 1, 1],
+        ),
+    ],
+)
+def test_larger_matrix_uses_two_anchors_and_bounded_core_groups(
+    model_size: TiedExpertModelSize,
+    hidden_dim: int,
+    num_layers: int,
+    batch_size: int,
+    full_steps: int,
+    tied_topology: list[int],
+    group_sizes: list[int],
+) -> None:
+    runs = tied_expert_runs(version="dev", model_size=model_size, phase=TiedExpertPhase.FULL)
+    configs = [json.loads(run.fingerprint_payload()) for run in runs]
+
+    assert [run.name.rsplit("/", 1)[-1] for run in runs] == [
+        "baseline",
+        "core_groups_two_anchor_unscaled",
+    ]
+    assert configs[0]["model"]["expert_bank_for_layer"] == list(range(num_layers))
+    assert configs[1]["model"]["expert_bank_for_layer"] == tied_topology
+    assert all(config["model"]["hidden_dim"] == hidden_dim for config in configs)
+    assert all(config["batch_size"] == batch_size for config in configs)
+    assert all(config["steps"] == full_steps for config in configs)
+    assert configs[1]["optimizer"]["expert_bank_group_sizes"] == group_sizes
+    assert configs[1]["optimizer"]["tied_expert_lr_scale"] == "unscaled"
+    assert max(group_sizes) <= 4
+    assert all(run.runtime_args["train_resources"].regions == ["us-central1"] for run in runs)

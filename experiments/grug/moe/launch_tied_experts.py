@@ -1,11 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Matched d512 and d768 architecture gates for cross-layer routed-expert tying.
+"""Matched architecture gates for cross-layer routed-expert tying.
 
 Set ``GRUG_TIED_MODEL=d512`` (default) for the original LR/topology matrix or
 ``GRUG_TIED_MODEL=d768`` for the contemporaneous untied and two-anchor middle-four
-comparison with unscaled and ``1/sqrt(g)`` expert learning rates.
+comparison with unscaled and ``1/sqrt(g)`` expert learning rates. Larger d1024
+and d1280 comparisons use two anchors at each end, core groups no larger than
+four, and only the empirically selected unscaled expert learning rate.
 ``GRUG_TIED_PHASE=smoke`` (default) runs 500 steps; ``full`` uses the model's
 compute-optimal schedule.
 """
@@ -49,6 +51,10 @@ _D512_PAIRWISE_TOPOLOGY = (0, 1, 1, 2, 2, 3)
 _D512_MIDDLE_FOUR_TOPOLOGY = (0, 1, 1, 1, 1, 2)
 _D768_BASELINE_TOPOLOGY = (0, 1, 2, 3, 4, 5, 6, 7)
 _D768_TWO_ANCHOR_MIDDLE_FOUR_TOPOLOGY = (0, 1, 2, 2, 2, 2, 3, 4)
+_D1024_BASELINE_TOPOLOGY = tuple(range(11))
+_D1024_TWO_ANCHOR_CORE_GROUPS_TOPOLOGY = (0, 1, 2, 2, 2, 2, 3, 3, 3, 4, 5)
+_D1280_BASELINE_TOPOLOGY = tuple(range(13))
+_D1280_TWO_ANCHOR_CORE_GROUPS_TOPOLOGY = (0, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 5, 6)
 
 
 class TiedExpertPhase(StrEnum):
@@ -59,6 +65,8 @@ class TiedExpertPhase(StrEnum):
 class TiedExpertModelSize(StrEnum):
     D512 = "d512"
     D768 = "d768"
+    D1024 = "d1024"
+    D1280 = "d1280"
 
 
 @dataclass(frozen=True)
@@ -78,6 +86,8 @@ class TiedExpertModelSpec:
 _MODEL_SPECS = {
     TiedExpertModelSize.D512: TiedExpertModelSpec(budget=3.82e17, hidden_dim=512, num_layers=6),
     TiedExpertModelSize.D768: TiedExpertModelSpec(budget=2.81e18, hidden_dim=768, num_layers=8),
+    TiedExpertModelSize.D1024: TiedExpertModelSpec(budget=1.16e19, hidden_dim=1024, num_layers=11),
+    TiedExpertModelSize.D1280: TiedExpertModelSpec(budget=3.46e19, hidden_dim=1280, num_layers=13),
 }
 
 
@@ -95,6 +105,24 @@ def _run_id(
 
 
 def _matrix(model_size: TiedExpertModelSize, phase: TiedExpertPhase) -> Sequence[TiedExpertVariant]:
+    if model_size is TiedExpertModelSize.D1024:
+        return [
+            TiedExpertVariant("baseline", _D1024_BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
+            TiedExpertVariant(
+                "core_groups_two_anchor_unscaled",
+                _D1024_TWO_ANCHOR_CORE_GROUPS_TOPOLOGY,
+                TiedExpertLrScale.UNSCALED,
+            ),
+        ]
+    if model_size is TiedExpertModelSize.D1280:
+        return [
+            TiedExpertVariant("baseline", _D1280_BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
+            TiedExpertVariant(
+                "core_groups_two_anchor_unscaled",
+                _D1280_TWO_ANCHOR_CORE_GROUPS_TOPOLOGY,
+                TiedExpertLrScale.UNSCALED,
+            ),
+        ]
     if model_size is TiedExpertModelSize.D768:
         return [
             TiedExpertVariant("baseline", _D768_BASELINE_TOPOLOGY, TiedExpertLrScale.UNSCALED),
