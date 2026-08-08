@@ -3,8 +3,11 @@
 
 """Datakit mixture definitions used by the June TPU 67B cooldown run."""
 
+import dataclasses
+
 from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, UrlDatasetSourceConfig
 from levanter.data.text.formats import TextLmDatasetFormat
+from rigging.filesystem import prefix_join
 
 _STORE_PREFIX = "datakit/store_8ac06c74"
 
@@ -272,3 +275,17 @@ def _datakit_components() -> dict[str, DatasetComponent | ConcatDatasetComponent
             tags=["tail"],
         ),
     }
+
+
+def datakit_components_with_prefix(prefix: str) -> dict[str, DatasetComponent | ConcatDatasetComponent]:
+    """Return the June mixture with every cache rooted under ``prefix``."""
+
+    def add_prefix(component: DatasetComponent | ConcatDatasetComponent):
+        if isinstance(component, ConcatDatasetComponent):
+            return dataclasses.replace(
+                component,
+                children={name: add_prefix(child) for name, child in component.children.items()},
+            )
+        return dataclasses.replace(component, cache_dir=prefix_join(prefix, component.cache_dir))
+
+    return {name: add_prefix(component) for name, component in _datakit_components().items()}

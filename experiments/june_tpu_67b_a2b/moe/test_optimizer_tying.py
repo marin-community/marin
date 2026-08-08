@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig, TiedExpertLrScale
+from experiments.june_tpu_67b_a2b.moe.train import _stacked_expert_bank_norms
 
 
 class _ExpertWeights(NamedTuple):
@@ -84,3 +85,19 @@ def test_unstacked_expert_lr_scales_by_layer_reuse_count():
     bank_update_norms = jnp.stack([jnp.linalg.norm(bank.w_gate) for bank in updates.expert_banks])
 
     np.testing.assert_allclose(bank_update_norms[1:] / bank_update_norms[0], (1 / np.sqrt(2), 0.5), rtol=2e-3)
+
+
+def test_stacked_expert_bank_norms_reduce_each_bank_independently():
+    banks = _ArrayStacked(
+        stacked=_ExpertWeights(
+            w_gate=jnp.asarray(
+                [
+                    [[[3.0, 4.0]]],
+                    [[[0.0, 12.0]]],
+                ],
+                dtype=jnp.float32,
+            )
+        )
+    )
+
+    np.testing.assert_allclose(_stacked_expert_bank_norms(banks.stacked), (5.0, 12.0))

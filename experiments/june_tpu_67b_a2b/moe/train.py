@@ -20,6 +20,7 @@ import levanter.tracker
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
+from haliax.nn import ArrayStacked
 from haliax.partitioning import set_mesh
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
@@ -44,12 +45,46 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 from experiments.june_tpu_67b_a2b.checkpointing import load_june_checkpoint, restore_grug_state_from_checkpoint
 from experiments.june_tpu_67b_a2b.dispatch import dispatch_grug_training_run
 from experiments.june_tpu_67b_a2b.moe.model import Block, GrugModelConfig, Transformer
+from experiments.june_tpu_67b_a2b.moe.optimizer import GrugMoeMuonHConfig
 
 # This file intentionally mirrors `experiments/grug/base/train.py` with
 # variant-specific model/loss/FLOP wiring, per the grug copy-first workflow in
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+
+def _topology_summary(params: Transformer, optimizer: OptimizerConfig) -> dict[str, int | float]:
+    summary: dict[str, int | float] = {
+        "parameter_count": parameter_count(params),
+        "tying/group_size": max(params.config.expert_bank_group_sizes),
+        "tying/unique_expert_parameter_count": parameter_count(params.expert_banks),
+    }
+    if isinstance(optimizer, GrugMoeMuonHConfig):
+        divisors = optimizer.expert_bank_lr_divisors
+        if divisors:
+            summary["tying/expert_lr_divisor"] = max(divisors)
+            for bank_index, divisor in enumerate(divisors):
+                summary[f"tying/expert_lr_divisor_by_bank/bank_{bank_index}"] = divisor
+    return summary
+
+
+def _stacked_expert_bank_norms(stacked_banks) -> jax.Array:
+    squared_norms = None
+    for leaf in jax.tree_util.tree_leaves(stacked_banks):
+        axes = tuple(range(1, leaf.ndim))
+        leaf_squared_norms = jnp.sum(jnp.square(leaf.astype(jnp.float32)), axis=axes)
+        squared_norms = leaf_squared_norms if squared_norms is None else squared_norms + leaf_squared_norms
+    if squared_norms is None:
+        raise ValueError("expert bank tree must contain array leaves")
+    return jnp.sqrt(squared_norms)
+
+
+def _expert_bank_norms(expert_banks) -> jax.Array:
+    """Return one fp32 tree norm per explicit expert bank."""
+    if isinstance(expert_banks, ArrayStacked):
+        return _stacked_expert_bank_norms(expert_banks.stacked)
+    return jnp.stack([optax.global_norm(bank) for bank in expert_banks])
 
 
 @dataclass(frozen=True)
@@ -441,6 +476,11 @@ def _make_train_step(
         (loss, summarized_metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(qb_params)
         metrics = {"train/loss": loss, **summarized_metrics}
         updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+        bank_gradient_norms = _expert_bank_norms(grads.expert_banks)
+        bank_update_norms = _expert_bank_norms(updates.expert_banks)
+        for bank_index in range(bank_gradient_norms.shape[0]):
+            metrics[f"tying/expert_gradient_norm_by_bank/bank_{bank_index}"] = bank_gradient_norms[bank_index]
+            metrics[f"tying/update_norm_by_bank/bank_{bank_index}"] = bank_update_norms[bank_index]
         params = optax.apply_updates(qb_params, updates)
 
         if ema_beta is None:
@@ -573,7 +613,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 initialize_from=trainer.initialize_from,
             )
 
-        levanter.tracker.log_summary({"parameter_count": parameter_count(state.params)})
+        levanter.tracker.log_summary(_topology_summary(state.params, config.optimizer))
 
         flops_per_example, flops_summary = _compute_flops(model_config=config.model)
         levanter.tracker.log_summary(flops_summary)

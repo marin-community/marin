@@ -49,6 +49,7 @@ from levanter.utils.activation import ActivationFunctionEnum
 _DEFAULT_EP_CAPACITY_FACTOR = 1.0
 _GATED_NORM_RANK = 128
 _ROUTING_RENORM_SUM = 2.5
+_SELECTED_EXPERTS_KEY = "selected_experts"
 
 
 _BATCH_AXES: tuple[str, ...] = ("replica_dcn", "data", "expert")
@@ -483,6 +484,7 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
+    activation_norm = router_metrics["activation_norm_per_layer"]
     num_layers = int(routing_entropy.shape[0])
 
     # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
@@ -495,6 +497,8 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
+        "tying/top1_cross_loop_agreement": router_metrics["top1_cross_loop_agreement"],
+        "tying/topk_set_overlap": router_metrics["topk_set_overlap"],
         "qb_beta_per_layer": router_metrics["qb_beta_per_layer"],
     }
     for i in range(num_layers):
@@ -503,7 +507,48 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
         out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
         out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
+        out[f"tying/activation_norm_by_layer/layer_{i}"] = activation_norm[i]
     return out
+
+
+class CrossLoopAgreement(NamedTuple):
+    top1: jax.Array
+    topk_set_overlap: jax.Array
+
+
+def _cross_loop_agreement(
+    selected_experts_per_layer: Int[Array, "L T K"],
+    bank_for_layer: tuple[int, ...],
+) -> CrossLoopAgreement:
+    """Measure expert-choice agreement between layers that reuse a bank."""
+    if selected_experts_per_layer.shape[0] != len(bank_for_layer):
+        raise ValueError(
+            "selected_experts_per_layer must contain one entry per layer; "
+            f"got {selected_experts_per_layer.shape[0]} entries for {len(bank_for_layer)} layers"
+        )
+
+    top1_agreements: list[jax.Array] = []
+    topk_overlaps: list[jax.Array] = []
+    for bank_id in range(max(bank_for_layer) + 1):
+        layer_indices = [layer_index for layer_index, layer_bank in enumerate(bank_for_layer) if layer_bank == bank_id]
+        for first_offset, first_layer in enumerate(layer_indices):
+            first_selected = selected_experts_per_layer[first_layer]
+            for second_layer in layer_indices[first_offset + 1 :]:
+                second_selected = selected_experts_per_layer[second_layer]
+                top1_agreements.append(jnp.mean(first_selected[:, 0] == second_selected[:, 0]))
+                intersection_size = jnp.sum(
+                    jnp.any(first_selected[:, :, None] == second_selected[:, None, :], axis=-1),
+                    axis=-1,
+                )
+                topk_overlaps.append(jnp.mean(intersection_size / first_selected.shape[-1]))
+
+    if not top1_agreements:
+        nan = jnp.asarray(jnp.nan, dtype=jnp.float32)
+        return CrossLoopAgreement(top1=nan, topk_set_overlap=nan)
+    return CrossLoopAgreement(
+        top1=jnp.mean(jnp.stack(top1_agreements)),
+        topk_set_overlap=jnp.mean(jnp.stack(topk_overlaps)),
+    )
 
 
 def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
@@ -623,6 +668,7 @@ class MoEMLP(eqx.Module):
         )
         router_stats = routing.router_stats
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
+        router_stats[_SELECTED_EXPERTS_KEY] = routing.selected_experts
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
@@ -903,6 +949,7 @@ class Transformer(eqx.Module):
             assert isinstance(self.expert_banks, tuple)
             num_blocks = len(self.blocks)
             moe_router_stats: list[dict[str, jax.Array]] = []
+            activation_norms: list[jax.Array] = []
             for i, block in enumerate(self.blocks):
                 is_last = i == num_blocks - 1
                 is_long = i % 4 == 3 or is_last
@@ -912,6 +959,15 @@ class Transformer(eqx.Module):
                     hidden, short_mask, long_mask, is_long, expert_bank, use_pko, cfg.disable_long_rope
                 )
                 moe_router_stats.append(router_stats)
+                activation_norms.append(jnp.sqrt(jnp.mean(jnp.square(hidden.astype(jnp.float32)))))
+            selected_experts_per_layer = jnp.stack(
+                [stats[_SELECTED_EXPERTS_KEY] for stats in moe_router_stats],
+                axis=0,
+            )
+            cross_loop_agreement = _cross_loop_agreement(
+                selected_experts_per_layer,
+                cfg.resolved_expert_bank_for_layer,
+            )
             router_metrics = {
                 "routing_entropy_per_layer": jnp.stack([s["routing_entropy"] for s in moe_router_stats], axis=0),
                 "routing_counts_per_layer": jnp.stack([s["routing_counts"] for s in moe_router_stats], axis=0),
@@ -919,6 +975,9 @@ class Transformer(eqx.Module):
                 "router_z_loss_per_layer": jnp.stack([s["router_z_loss"] for s in moe_router_stats], axis=0),
                 "qb_beta_per_layer": jnp.stack([s["qb_beta"] for s in moe_router_stats], axis=0),
                 "capacity_overflow_per_layer": jnp.stack([s["capacity_overflow"] for s in moe_router_stats], axis=0),
+                "activation_norm_per_layer": jnp.stack(activation_norms, axis=0),
+                "top1_cross_loop_agreement": cross_loop_agreement.top1,
+                "topk_set_overlap": cross_loop_agreement.topk_set_overlap,
             }
         else:
             assert self.stacked_blocks is not None
@@ -932,7 +991,7 @@ class Transformer(eqx.Module):
             ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
                 layer, layer_use_long_mask, expert_bank_index = scan_inputs
                 expert_bank = self.expert_banks.get_layer(expert_bank_index)
-                return eqx.filter_checkpoint(layer, policy=remat_policy)(
+                next_hidden, router_stats = eqx.filter_checkpoint(layer, policy=remat_policy)(
                     carry_hidden,
                     short_mask,
                     long_mask,
@@ -941,11 +1000,17 @@ class Transformer(eqx.Module):
                     False,
                     cfg.disable_long_rope,
                 )
+                router_stats["activation_norm"] = jnp.sqrt(jnp.mean(jnp.square(next_hidden.astype(jnp.float32))))
+                return next_hidden, router_stats
 
             hidden, stacked_router_stats = jax.lax.scan(
                 _scan_layers,
                 hidden,
                 xs=(self.stacked_blocks.stacked, mask_schedule, bank_schedule),
+            )
+            cross_loop_agreement = _cross_loop_agreement(
+                stacked_router_stats[_SELECTED_EXPERTS_KEY],
+                cfg.resolved_expert_bank_for_layer,
             )
             router_metrics = {
                 "routing_entropy_per_layer": stacked_router_stats["routing_entropy"],
@@ -954,6 +1019,9 @@ class Transformer(eqx.Module):
                 "router_z_loss_per_layer": stacked_router_stats["router_z_loss"],
                 "qb_beta_per_layer": stacked_router_stats["qb_beta"],
                 "capacity_overflow_per_layer": stacked_router_stats["capacity_overflow"],
+                "activation_norm_per_layer": stacked_router_stats["activation_norm"],
+                "top1_cross_loop_agreement": cross_loop_agreement.top1,
+                "topk_set_overlap": cross_loop_agreement.topk_set_overlap,
             }
         hidden = self.finalize_hidden(hidden)
         return hidden, router_metrics

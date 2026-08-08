@@ -48,7 +48,7 @@ goes stale on the next commit.
 - Origin: moe
 - Introduced: c5aadc97c
 - Status: active
-- Purpose: vendored June 67B-A2B TPU training and inference snapshot; also carries the explicit expert-bank and same-region one-pair merge experiments needed to operate its historical array-stacked checkpoints.
+- Purpose: vendored June 67B-A2B TPU training and inference snapshot; also carries explicit expert banks, a central2-only fresh tied-architecture comparison, and the separately gated same-region one-pair merge tooling for historical array-stacked checkpoints.
 
 ### grugformer-vs-hackable-125m
 - Path: `experiments/speedrun/grugformer_vs_hackable_125m/grugformer_vs_hackable_125m.py`

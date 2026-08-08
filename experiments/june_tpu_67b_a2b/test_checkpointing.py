@@ -215,6 +215,34 @@ def test_load_june_checkpoint_keeps_current_explicit_bank_format(tmp_path):
     _assert_array_trees_equal(loaded["params"], source)
 
 
+def test_tied_stacked_checkpoint_round_trip_preserves_topology_and_values(tmp_path):
+    config = dataclasses.replace(_tiny_stacked_config(), expert_bank_for_layer=(0, 1, 1))
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    with jax.set_mesh(mesh):
+        source = Transformer.init(config, key=jax.random.key(8))
+        target = Transformer.init(config, key=jax.random.key(9))
+        pending_qb_betas = jnp.arange(config.num_layers * config.num_experts, dtype=jnp.float32).reshape(
+            config.num_layers, config.num_experts
+        )
+        save_checkpoint(
+            {"params": source, "pending_qb_betas": pending_qb_betas},
+            step=9,
+            checkpoint_path=tmp_path,
+        )
+
+        loaded = load_june_checkpoint(
+            {"params": target, "pending_qb_betas": jnp.zeros_like(pending_qb_betas)},
+            str(tmp_path),
+            mesh=mesh,
+        )
+
+    assert loaded["params"].config.resolved_expert_bank_for_layer == (0, 1, 1)
+    assert isinstance(loaded["params"].expert_banks, ArrayStacked)
+    assert loaded["params"].expert_banks.num_layers == 2
+    np.testing.assert_array_equal(loaded["pending_qb_betas"], pending_qb_betas)
+    _assert_array_trees_equal(loaded["params"], source)
+
+
 def test_weights_only_init_uses_legacy_expert_adapter_and_keeps_fresh_training_state(tmp_path):
     config = _tiny_stacked_config()
     mesh = compact_grug_mesh(expert_axis_size=1)

@@ -8,18 +8,17 @@ from dataclasses import dataclass
 
 import click
 from fray.cluster import ResourceConfig
-from levanter.data.text.datasets import ConcatDatasetComponent, DatasetComponent, LmDataConfig
+from levanter.data.text.datasets import LmDataConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from rigging.filesystem import prefix_join
 
 from experiments.grug.moe.merge_artifacts import ExpertCalibrationArtifact, ExpertMatchingArtifact
 from experiments.june_tpu_67b_a2b.moe.launch_datakit_moe_mix import (
     _MIXTURE_BLOCK_SIZE,
-    _datakit_components,
     _phase_weights,
+    datakit_components_with_prefix,
 )
 from experiments.june_tpu_67b_a2b.moe.merge_jobs import (
     JuneCalibrationJobConfig,
@@ -53,21 +52,11 @@ class JuneMergeMatchingPipeline:
     matching: ArtifactStep[ExpertMatchingArtifact]
 
 
-def _central2_component(component: DatasetComponent | ConcatDatasetComponent):
-    if isinstance(component, ConcatDatasetComponent):
-        return dataclasses.replace(
-            component,
-            children={name: _central2_component(child) for name, child in component.children.items()},
-        )
-    return dataclasses.replace(component, cache_dir=prefix_join(_CENTRAL2_PREFIX, component.cache_dir))
-
-
 def _calibration_data() -> LmDataConfig:
-    components = {name: _central2_component(component) for name, component in _datakit_components().items()}
     return LmDataConfig(
         tokenizer=marin_tokenizer,
         cache_dir=None,
-        components=components,
+        components=datakit_components_with_prefix(_CENTRAL2_PREFIX),
         train_weights=[(0, _phase_weights(1))],
         auto_build_caches=False,
         mixture_block_size=_MIXTURE_BLOCK_SIZE,
