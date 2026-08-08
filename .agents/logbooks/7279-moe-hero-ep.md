@@ -1669,3 +1669,20 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   24.680 B active parameters. It keeps the other size-gate settings and uses zero retries.
 - Run ID: `mhep-191-w30-ep-e192-i6272-cf1p30-fullwatch-p32789-20260808`.
 - A pass closes the E192 search at width 6,272. A failure closes it at width 6,144.
+
+### 2026-08-08 14:44 UTC - MHEP-189 raises the capacity-1.3 E128 pass bound
+
+- MHEP-189 completed all five steps with 128 experts, width 8,704, and capacity factor 1.3.
+  W&B received all 76 norm fields at every step, and every value was finite.
+- The run has 506.411 B total parameters and 28.965 B active parameters. Its final loss was
+  10.4769, and its final reported rate was 225,080 tokens/s.
+- Iris reports that the coordinator and training child succeeded. The job used production
+  priority and zero retries.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-189-w29-ep-e128-i8704-cf1p30-fullwatch-p32787-20260808
+- MHEP-192 tests the only 128-wide midpoint between the width-8,704 pass and width-8,960
+  failure. It uses 128 experts, width 8,832, and capacity factor 1.3. It has 513.659 B total
+  parameters and 29.191 B active parameters.
+- MHEP-192 keeps the other size-gate settings. It uses five steps, full norms on every step,
+  production priority, and zero retries.
+- Run ID: `mhep-192-w30-ep-e128-i8832-cf1p30-fullwatch-p32790-20260808`.
+- A pass closes the E128 search at width 8,832. A failure closes it at width 8,704.
