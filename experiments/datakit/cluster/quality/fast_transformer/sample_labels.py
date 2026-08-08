@@ -242,6 +242,11 @@ def build_label_set(
     buffer: list[dict] = []
     written = 0
     shard_index = 0
+    # Ids already drawn. A corpus shard can carry the same document more than once —
+    # one document appeared 19 times in a single common-crawl source — and paying the
+    # oracle to grade it repeatedly also over-weights it in training.
+    seen_ids: set[str] = set()
+    duplicates = 0
 
     def flush() -> None:
         nonlocal buffer, written, shard_index
@@ -266,14 +271,23 @@ def build_label_set(
             if not drawn:
                 logger.warning("sample_labels: %s contributed no rows", name)
             with lock:
-                buffer.extend(drawn)
+                fresh = [row for row in drawn if row["id"] not in seen_ids]
+                duplicates += len(drawn) - len(fresh)
+                seen_ids.update(row["id"] for row in fresh)
+                buffer.extend(fresh)
                 if len(buffer) >= SHARD_ROWS:
                     flush()
                 total = written + len(buffer)
             if i % 25 == 0:
                 logger.info("sample_labels: %d/%d sources, %d rows", i, len(sources), total)
     flush()
-    logger.info("sample_labels: drew %d rows from %d sources into %d shards", written, len(sources), shard_index)
+    logger.info(
+        "sample_labels: drew %d rows from %d sources into %d shards (%d duplicate ids dropped)",
+        written,
+        len(sources),
+        shard_index,
+        duplicates,
+    )
     return written
 
 
