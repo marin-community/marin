@@ -20,7 +20,8 @@ author: dlwh
 - `GRUG-XEM-002` completed six layers 2-3 conversion/recovery arms in `us-central1`. Spectral matching missed its initialization gate. Native no-prefit finished +0.02813 validation/+0.02814 Paloma after 250M online tokens; spectral plus per-expert prefit finished +0.02611/+0.02638. Native aggregate prefit finished within 0.00010/0.00029 of native no-prefit. Direct joint recovery needed about 50M more tokens to reach comparable quality. No arm met the required +0.02 validation target.
 - `GRUG-XEM-003` ports explicit expert banks and legacy-checkpoint migration into the array-stacked June 67B-A2B implementation. The selected no-copy teacher, data caches, eval caches, output bucket, and TPU resources are all in `us-central2`; no checkpoint payload has been read outside that region.
 - `GRUG-XEM-004` passed the d768 architecture screen. Middle-four unscaled tying was +0.02855 Paloma above the matched untied control, down from +0.03817 at d512, with zero overflow and 37.5% fewer unique routed-expert parameters. Effective speed was 0.849x, so the architecture is a conversion target rather than a compute-efficiency result.
-- `GRUG-XEM-005` will compare four native-assignment, frozen-router Stage A objectives: MoE-only, +0.05 CE, +0.1 logit KL, and CE+KL. Each arm runs 50M tokens, evaluates held-out model loss at 12.5M-token intervals, and records the best validation checkpoint. Only the winning arm proceeds to Stage B.
+- `GRUG-XEM-005` found that CE+KL supervision materially improves frozen-router Stage A, but its sole Stage-B continuation still failed the strict surgery gate: +0.03835 validation/+0.03535 Paloma at 100.14M total tokens and +0.02769/+0.02583 at 250.09M. Routing stayed healthy, so no larger surgery launched.
+- `GRUG-XEM-006` is a causal unlock matrix from the exact selected CE+KL Stage-A checkpoint. It compares bank-only recovery, the completed bank-plus-router arm, bank-plus-router-plus-MLP-input-norm recovery, and a function-identical untied capacity oracle. All new jobs and artifacts remain in `us-central1`.
 - The pushed research branch is `research/grug-matcher-jit` in `/tmp/marin-grug-xem-jit`. No PR exists.
 
 ## Baseline
@@ -33,12 +34,12 @@ author: dlwh
 
 ### Active
 
-- `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best: +0.02611 validation/+0.02638 Paloma after 250M online tokens, above the required +0.02 validation gate. Next test: `GRUG-XEM-H8`.
-- `GRUG-XEM-H8`: A small held-out model-preservation term during bank-only Stage A improves rollout quality without preventing local MoE fitting. Next test: a native-assignment 2x2 MoE/CE/KL matrix at 50M tokens, followed by equal-token Stage B for the winner.
+- `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best shared result: +0.02769 validation/+0.02583 Paloma after 250.09M online tokens, above the required +0.02 validation gate. Next test: `GRUG-XEM-H9`.
+- `GRUG-XEM-H9`: The remaining rollout gap is caused primarily by one of router freedom, frozen MLP-input conditioning, or shared-bank capacity/gradient interference. Next test: compare the `S/R/N/U` one-factor unlock matrix at the same 100.14M total recovery horizon.
 
 ### Blocked
 
-- `GRUG-XEM-H6`: Blocker: d512 surgery has not passed and the June checkpoint adapter is not yet validated. Resume when: both gates pass.
+- `GRUG-XEM-H6`: Blocker: d512 surgery has not passed, stacked checkpoint migration is not validated, and teacher-plus-student HBM feasibility is unknown. Resume when: a shared d512 arm passes and both 67B implementation gates pass.
 
 ### Falsified / Dead End
 
@@ -50,6 +51,7 @@ author: dlwh
 - `GRUG-XEM-H2`: Middle-four d512 tying is stable and within the +0.06 Paloma macro screening gate on a matched full run.
 - `GRUG-XEM-H3`: The LR ablation did not support `1/sqrt(g)` as best for this d512 MuonH recipe; unscaled tying was slightly better at full schedule for both topologies. Keep LR scaling configurable rather than treating Jaggi's setting as a Grug default.
 - `GRUG-XEM-H7`: The d768 middle-four penalty diminished to +0.02855 Paloma from +0.03817 at d512 with unscaled MuonH. The d768 tied architecture passed the +0.06 screening gate but had 0.849x effective speed.
+- `GRUG-XEM-H8`: CE+KL bank-only Stage A improved the MoE-only control by 0.01837 validation and 0.01967 Paloma at 50M tokens without material local-fit regression. The later shared recovery still missed H4's strict validation gate.
 
 ## Background Research Brief
 
@@ -559,3 +561,23 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Interpretation: adding CE+KL to frozen-router Stage A improves the initialization and the final staged result, but does not make the one-pair surgery pass its validation gate. The result strengthens the view that shared-bank distillation is the useful conversion operation and spectral correspondence is unnecessary; it does not establish that an untied checkpoint can reach the tied manifold within modest recovery. The still-decreasing terminal trajectory suggests more tokens could close part of the gap, but the fixed budget already failed and no extension is authorized.
 - Operations: the controller and child succeeded with zero failures and preemptions. `.artifact.json`, every requested evaluation, periodic training metrics, and the permanent step-1526 checkpoint are present. GCS JSON is the canonical metric source. Every dependency, output, resource, and provenance path is in `us-central1`; no explicit credential appears in provenance.
 - Next action: mark the strict d512 one-pair surgery gate failed. Do not launch two middle pairs, d768 surgery, or the central2 67B-A2B experiment. A future experiment would need an explicitly revised recovery hypothesis and gate rather than additional scale under the current procedure.
+
+### 2026-08-08 00:12 - GRUG-XEM-006 causal recovery-unlock matrix
+
+- Hypothesis: A matched one-factor matrix can identify whether the remaining one-pair rollout gap comes from router freedom, frozen MLP-input conditioning, or the shared-bank capacity/gradient-interference constraint.
+- Commit Hash: `cc0f33717f5f06c2233f11289b83bc7eeb296737`; source teacher `884b213ff4`; common selected initializer `gs://marin-us-central1/grug/expert_merge/d512/native_local_ce_kl/stage-a/2026.08.06/checkpoints/step-382`.
+- Config: every arm starts from the same function at the selected CE+KL Stage-A checkpoint, uses CE `1.0` + teacher-logit KL `0.1` + routed-MoE loss `1.0`, AdamW `1e-4`, zero weight decay, batch 32, sequence length 4096, seed 0, and 50M requested tokens. Evaluations are requested at 12.5M, 25M, 37.5M, and 50M. The completed `R` arm supplies its existing exact 50.07M Stage-B result.
+
+  | Arm | Trainable state | Diagnostic comparison |
+  |---|---|---|
+  | `S` bank-only | Shared bank; routers and QB frozen | Common control |
+  | `R` router unlock | Shared bank plus layer-2/3 routers; QB live | `R-S` measures routing freedom |
+  | `N` norm unlock | `R` plus layer-2/3 `rms_mlp` and `mlp_gated_norm` | `N-R` measures frozen input conditioning |
+  | `U` capacity oracle | Two independent copies of the recovered bank; routers and QB frozen | `U-S` measures sharing/interference |
+
+  `U` is diagnostic only. Its split converts `(0,1,2,2,3,4)` to `(0,1,2,3,4,5)` by copying the recovered bank into a distinct pytree subtree for layer 3. It does not restore the teacher's old layer-3 bank. Token-0 logits are exactly identical, and the already-permuted router, bias, and pending QB state are preserved.
+- Gates: existing `R@50M` is +0.03835249 validation, +0.03535414 Paloma, MoE loss 0.255401, and layer-2/3 NRMSE 0.310988/0.643498. A norm signal requires `N <= +0.03335249` validation and `<= +0.03035414` Paloma. A router signal requires `S >= +0.04335249` and `>= +0.04035414`. A capacity signal requires `U` to beat `S` by at least 0.005 on both; call capacity dominant only if `U <= +0.03335249/+0.03035414`, also beating `R` by 0.005. Require the improvement sign at both 25M and 50M, MoE loss no more than 10% above `R`, layer NRMSE no higher than 0.340988/0.673498, finite loss, zero overflow, and all experts active. `S` and `U` must retain exact teacher route agreement.
+- Promotion: only a shared arm can reopen scale-up. At the exact 100.14M total horizon it must satisfy the original `<= +0.020` validation and `<= +0.030` Paloma gate. The untied `U` arm cannot promote even if it wins.
+- Validation: 30 focused tests passed across checkpoint conversion, recovery behavior, launcher topology, and a real tiny conversion/selection/split/recovery checkpoint round trip. Changed-file lint passed; targeted Pyrefly reported zero errors. Independent review returned PASS. Checkpoints persist trainable scope and objective weights; resume fails closed on drift. The capacity splitter verifies the selected checkpoint path and saved step against both selector and manifest before duplicating the bank.
+- Regional audit: all d512 inputs, data, workers, and outputs remain in `us-central1`. The eventual larger target remains the completed 502 GiB step-105149 67B-A2B checkpoint in `us-central2`, with all 69 dependencies local there. It remains blocked on this shared-arm gate, stacked sharded checkpoint migration, teacher-plus-student HBM proof, and central2 v4-2048 availability. No payload was copied across regions.
+- Next action: verify the three new output roots are empty, lower each graph from the immutable commit, launch `S`, `N`, and `U` in `us-central1`, and assign one monitor. Compare them with the already completed `R` 25M/50M milestones before authorizing any longer shared recovery.
