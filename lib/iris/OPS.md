@@ -810,6 +810,14 @@ treat it as an explicit outage decision. Change one owner at a time and confirm
 that `CWActive` drops the blocker before continuing. Do not delete provider
 DaemonSets or use `kubectl drain --force`.
 
+Iris coordinator task PDBs follow the job's priority band. PRODUCTION uses
+`minAvailable: 1` and intentionally blocks voluntary eviction. INTERACTIVE and
+BATCH use `maxUnavailable: 1`; CoreWeave may evict those pods during a drain,
+and Iris records the disruption as `PREEMPTED` and retries it within the job's
+preemption budget. For a PRODUCTION blocker, follow the running-task procedure
+in the table above. Do not weaken its live PDB to recover a node without the
+job owner's approval.
+
 If a replacement remains Pending because no healthy node satisfies its required
 node affinity or pod anti-affinity, stop before deleting the original pod.
 Provision compatible capacity when possible. Record and restore any temporary

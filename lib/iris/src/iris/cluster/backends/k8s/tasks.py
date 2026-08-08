@@ -644,8 +644,8 @@ def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
     """Heuristic: single-task job with no accelerators is a coordinator/orchestrator.
 
     Coordinator pods (e.g. zephyr *-coord jobs) are single-replica, CPU-only
-    processes whose loss kills the entire pipeline. Returns True so the caller
-    can create a PodDisruptionBudget to prevent voluntary eviction.
+    processes whose loss can restart the entire pipeline. Returns True so the
+    caller can create a priority-aware PodDisruptionBudget.
     """
     if run_req.num_tasks > 1:
         return False
@@ -665,9 +665,10 @@ def _build_pdb_manifest(
     pod_name: str,
     namespace: str,
     task_hash: str,
+    priority_band: int,
     managed_label: str = "",
 ) -> dict:
-    """Build a PodDisruptionBudget manifest for a coordinator task pod."""
+    """Build a priority-aware PodDisruptionBudget for a coordinator task pod."""
     labels = {
         _LABEL_MANAGED: "true",
         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
@@ -675,6 +676,7 @@ def _build_pdb_manifest(
     }
     if managed_label:
         labels[managed_label] = "true"
+    availability = {"minAvailable": 1} if priority_band == job_pb2.PRIORITY_BAND_PRODUCTION else {"maxUnavailable": 1}
     return {
         "apiVersion": "policy/v1",
         "kind": "PodDisruptionBudget",
@@ -684,7 +686,7 @@ def _build_pdb_manifest(
             "labels": labels,
         },
         "spec": {
-            "minAvailable": 1,
+            **availability,
             "selector": {"matchLabels": {_LABEL_TASK_HASH: task_hash}},
         },
     }
@@ -2711,6 +2713,7 @@ class K8sTaskProvider:
                 pod_name,
                 self.pods.namespace,
                 _task_hash(run_req.task_id),
+                run_req.priority,
                 managed_label=self.pods.managed_label,
             )
             self.kubectl.apply_json(pdb)
