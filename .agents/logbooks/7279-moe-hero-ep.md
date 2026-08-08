@@ -1362,3 +1362,22 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - The arm uses five steps, full watch on every step, production priority, CUDA async allocation,
   and zero retries. A pass makes width 7,296 the E128 maximum. A failure makes width 7,168 the
   E128 maximum.
+
+### 2026-08-08 13:27 UTC - MHEP-175 and MHEP-176 capacity-1.5 size gates ready
+
+- Reason: Capacity factor 1.5 reached 2.37% drops by step 76 in MHEP-169 and was still declining.
+  It is likely to finish below the 1.9467% FSDP drop reference. Its smaller routing buffers can
+  raise the full-watch model-size limit above the capacity-2 bounds.
+- Common config: d6144; 48 layers; latent dimension 3072; top-4; capacity factor 1.5; batch 1024;
+  sequence length 4096; EP64 `fixed_all_to_all`; five steps on the 2000-step schedule; full norms
+  on every step; committed single-executable inline watch; CUDA async allocation; production
+  priority; and zero retries.
+- MHEP-175 uses 192 experts and width 6,016. It has 524.549 B total parameters and 24.227 B active
+  parameters. The same shape failed at capacity factor 2.0.
+- MHEP-176 uses 128 experts and width 8,192. It has 477.420 B total parameters and 28.059 B active
+  parameters. It lies between the capacity-2 width-7,680 and width-8,448 failures.
+- Run IDs: `mhep-175-w20-ep-e192-i6016-cf1p50-fullwatch-p32773-20260808` and
+  `mhep-176-w20-ep-e128-i8192-cf1p50-fullwatch-p32774-20260808`.
+- Decision rule: A candidate passes only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
+  NCCL memory failure without a retry. Continue upward after a pass and downward after a failure.
