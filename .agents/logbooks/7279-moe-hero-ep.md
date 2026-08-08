@@ -1686,3 +1686,29 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   production priority, and zero retries.
 - Run ID: `mhep-192-w30-ep-e128-i8832-cf1p30-fullwatch-p32790-20260808`.
 - A pass closes the E128 search at width 8,832. A failure closes it at width 8,704.
+
+### 2026-08-08 14:46 UTC - MHEP-191 closes the E192 size search
+
+- MHEP-191 completed all five steps with 192 experts, width 6,272, and capacity factor 1.3.
+  W&B received all 76 norm fields at every step, and every value was finite.
+- The run has 546.292 B total parameters and 24.680 B active parameters. Its final loss was
+  10.5240, and its final reported rate was 262,428 tokens/s.
+- The width-6,400 MHEP-187 arm failed from NCCL out of memory. Width 6,272 is therefore the exact
+  E192 maximum on the tested 128-wide grid at capacity factor 1.3.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-191-w30-ep-e192-i6272-cf1p30-fullwatch-p32789-20260808
+
+### 2026-08-08 14:46 UTC - MHEP-193 and MHEP-194 start the throughput search
+
+- Both arms use the selected E192 model: width 6,272, capacity factor 1.3, latent dimension
+  3,072, top-k 4, d6144, 48 layers, EP64, full norms every 10 steps, production priority, and
+  zero retries.
+- MHEP-193 is the 200-step baseline. It keeps collective overlap limit 1 and profiles five steps
+  starting at step 20. The last 50 non-profile steps define its steady-state throughput.
+- MHEP-194 is a five-step fit gate with collective overlap limit 2. It tests whether more
+  communication overlap fits beside the full norm executable. Stop it immediately for a compile
+  or NCCL out-of-memory failure.
+- Run IDs: `mhep-193-w31-ep-e192-i6272-cf1p30-overlap1-watch10-p32791-20260808` and
+  `mhep-194-w31-ep-e192-i6272-cf1p30-overlap2-gate-p32792-20260808`.
+- If MHEP-194 passes with all 76 finite norm fields at step 0, run a matched 200-step overlap-2
+  arm with the same profile window. If it fails, keep overlap limit 1 and use the baseline profile
+  to select the next safe optimization.
