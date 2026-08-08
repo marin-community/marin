@@ -1402,3 +1402,12 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Decision rule: Compare the last 50 steps of throughput, drop-adjusted token rate, loss, and drops.
   Require finite loss and all 76 norm metrics. Prefer the lowest capacity whose loss stays within
   0.5% of the best EP arm unless the issue's later scaling runs show a larger quality cost.
+
+### 2026-08-08 13:31 UTC - The capacity-2 E128 size search closes at width 7,168
+
+- MHEP-174 used 128 experts and width 7,296. The compiler reported a 187.72 GiB
+  rematerialization floor, and NCCL then failed from CUDA out of memory before step 1. The
+  coordinator was stopped immediately.
+- Result: Width 7,168 is the exact E128 maximum on the tested 128-wide grid at capacity factor 2.0.
+  It has 419.438 B total parameters and 26.247 B active parameters. Width 7,296 is the adjacent
+  failed point.
