@@ -3,9 +3,9 @@
 
 """Benchmark every Finelog query in a checked-in Grafana dashboard.
 
-The log directory must be a disposable local copy. Starting Finelog activates
-normal maintenance, including layout and index backfill; never point this tool
-at a production data directory.
+The server runs in shadow mode: it serves reads from ``--log-dir`` and refuses a
+`gs://`/`s3://` archive at startup, so it cannot compact, evict, or drop what it
+was pointed at.
 """
 
 from __future__ import annotations
@@ -98,6 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.server_binary,
         args.log_dir,
         query_timeout_ms=args.query_timeout_ms,
+        extra_args=("--mode", "shadow"),
     ) as address:
         client = stats_client(address)
         queries = [

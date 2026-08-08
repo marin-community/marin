@@ -174,6 +174,24 @@ The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
 `k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
 `telemetry_v1` fails its own deploy.
 
+## Changing a server-owned schema
+
+`log` and `telemetry_v1` are registered by the server itself, and every boot
+re-merges this binary's definition against the schema that deployment's catalog
+persisted. A merge that fails wedges the namespace for as long as the image is
+deployed, so `/health` reports it (`server/ingest_health.rs`) and `safe_deploy
+rollout` rolls back on it. To decide a schema change ahead of a deploy, boot
+the candidate over a copy of that deployment's catalog with `--mode shadow` and
+read `/health`. Register through `schema::stored_form` so what you check is the
+schema `register_table` merges.
+
+`--mode shadow` is for booting a server over a copy of a real store: it serves
+reads from `--log-dir` and refuses a `gs://`/`s3://` remote or a forwarding
+target at startup. It resolves once into the store's `ServeMode`, so no
+namespace starts a maintenance task — including one registered at runtime,
+which otherwise starts its own. Use it for any local benchmark over a copied
+store, and pass the mode down rather than re-deriving it at a call site.
+
 ## Secondary indexes
 
 A segment with any configured method gets one `.fidx` bundle. The bundle is

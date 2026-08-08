@@ -316,6 +316,21 @@ System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
 `safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
 back.
 
+## Serving a copy of a store
+
+Anything that boots finelog over a copy of a real store directory — the Grafana
+dashboard benchmark, a layout experiment, reproducing a query — should pass
+`--mode shadow`. The server serves reads from `--log-dir` and refuses a
+`gs://`/`s3://` remote or a forwarding target at startup, and its store starts
+no maintenance, so compaction, eviction, layout rewrites, and the boot
+reconcile's redundancy drop (which deletes archived objects) never run against
+the copy or the bucket it came from.
+
+A shadow boot over a copy of a deployment's catalog also re-runs that
+deployment's registrations, so a schema this binary can no longer merge shows
+up in `/health` as `degraded: <namespace>: registration failed: ...` with the
+per-namespace detail under `/api/server`.
+
 ## Diagnosing Kubernetes mirror readiness
 
 Use the kubeconfig and context from `config/<cluster>.yaml`; do not rely on the
