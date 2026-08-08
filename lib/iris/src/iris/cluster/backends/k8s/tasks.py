@@ -641,12 +641,7 @@ def _build_logship_sidecar(
 
 
 def _is_coordinator_task(run_req: job_pb2.RunTaskRequest) -> bool:
-    """Heuristic: single-task job with no accelerators is a coordinator/orchestrator.
-
-    Coordinator pods (e.g. zephyr *-coord jobs) are single-replica, CPU-only
-    processes whose loss can restart the entire pipeline. Returns True so the
-    caller can create a priority-aware PodDisruptionBudget.
-    """
+    """Return whether a request is a single-task CPU coordinator."""
     if run_req.num_tasks > 1:
         return False
     if run_req.HasField("resources") and run_req.resources.HasField("device"):
