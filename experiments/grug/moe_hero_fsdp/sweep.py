@@ -410,8 +410,18 @@ WAVES = {
     ],
     # Wave 14: the P2P pair, and the combine threshold given something to combine. Raising the
     # threshold cannot merge across scan iterations, so it is paired with the unroll here.
+    #
+    # `doublebuffer` is a rerun. Its wave-12 attempt compiled for 22 minutes against the control's
+    # 3.5, then lost every rank's coordinator connection at 24 minutes. That launch predates the
+    # #7994 cherry-pick, so it still bound the fixed port 8476.
     "w14": [
         Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
+        Arm(
+            "doublebuffer",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{DOUBLE_BUFFER_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="rerun; 2x unroll of the 48-layer scan, against 5.09 s/step of recompute",
+        ),
         Arm(
             "p2ppermute",
             env={**COMBINED_ENV, "XLA_FLAGS": f"{P2P_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
