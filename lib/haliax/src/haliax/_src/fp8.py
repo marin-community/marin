@@ -61,10 +61,20 @@ def compute_scale(amax, scale, fp8_max, margin=0):
     return 1.0 / sf
 
 
+def scale_from_history(q_dtype, scale, amax_history):
+    """Delayed-scaling scale for this step, computed from the amax history (TE recipe)."""
+    dtype_max = get_fp8_max(q_dtype, jnp.float32)
+    amax_from_history = jnp.max(amax_history, axis=0)
+    return compute_scale(amax_from_history, scale, dtype_max)
+
+
+def roll_amax_history(amax_update, amax_history):
+    """Shift the rolling amax history one step and record ``amax_update`` at slot 0."""
+    return jnp.roll(amax_history, shift=-1, axis=0).at[0].set(amax_update.astype(amax_history.dtype))
+
+
 def compute_amax_history(x, amax_history):
-    amax_update = jnp.max(jnp.abs(x)).astype(amax_history.dtype)
-    new_history = jnp.roll(amax_history, shift=-1, axis=0).at[0].set(amax_update)
-    return new_history
+    return roll_amax_history(jnp.max(jnp.abs(x)), amax_history)
 
 
 # ---------------------------------------------------------------------------
@@ -84,16 +94,16 @@ def compute_amax_history(x, amax_history):
 # custom "fm32" extended dtype and converts it back to float32 at each use (its
 # `_fm32_to_float32` helper and the `is_fmax32` branch of `update_fp8_meta`).
 # Haliax keeps this state as plain float32 arrays, so the fm32 handling is dead
-# code here and is omitted.
+# code here and is omitted. The scale-from-history and history-roll steps are
+# factored into `scale_from_history` / `roll_amax_history` above so the ragged
+# FP8 path (`_src/fp8_ragged`, `_src/fp8_cast_transpose`) shares the exact same
+# delayed-scaling recipe rather than re-implementing it.
 # ---------------------------------------------------------------------------
 
 
 def update_fp8_meta(x, q_dtype, scale, amax_history):
     """Compute the next-step scale and rolled amax history (without quantizing `x`)."""
-    dtype_max = get_fp8_max(q_dtype, jnp.float32)
-    amax_from_history = jnp.max(amax_history, axis=0)
-
-    new_scale = compute_scale(amax_from_history, scale, dtype_max)
+    new_scale = scale_from_history(q_dtype, scale, amax_history)
     new_history = compute_amax_history(x, amax_history)
     return new_scale, new_history
 
