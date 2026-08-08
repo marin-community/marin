@@ -1235,3 +1235,25 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   and no explicit XLA memory or scheduler flag.
 - Decision rule: The code default passes only if all five steps finish and W&B receives 38 finite
   gradient norm metrics and 38 finite parameter norm metrics.
+
+### 2026-08-08 12:56 UTC - MHEP-164 and MHEP-165 set new upper bounds
+
+- MHEP-164 used 192 experts and width 5760. The compiler reported a 193.34 GiB rematerialization
+  floor against a 169.22 GiB target. NCCL then failed from CUDA out of memory before step 1.
+- Result: 502.806 B total and 23.774 B active parameters is a failed E192 upper bound.
+- MHEP-165 used 128 experts and width 8448. The compiler reported a 206.06 GiB rematerialization
+  floor against a 168.41 GiB target. NCCL then failed from CUDA out of memory before step 1.
+- Result: 491.915 B total and 28.512 B active parameters is a failed E128 upper bound.
+- Both coordinators were stopped after their deterministic failures.
+
+### 2026-08-08 12:56 UTC - MHEP-167 and MHEP-168 final midpoints ready
+
+- Common config and success criteria match the prior overlap-limit size gates.
+- MHEP-167 uses 192 experts and expert width 5632. It has 491.934 B total parameters and 23.548 B
+  active parameters. This is the only 128-wide midpoint between the MHEP-131 pass and MHEP-164
+  failure.
+- MHEP-168 uses 128 experts and expert width 7680. It has 448.429 B total parameters and 27.153 B
+  active parameters. Its total size matches the known 448.45 B E192 pass.
+- Run IDs: `mhep-167-w15-ep-e192-i5632-cf2p00-fullwatch-overlap1-p32765-20260808` and
+  `mhep-168-w15-ep-e128-i7680-cf2p00-fullwatch-overlap1-p32766-20260808`.
+- Both arms use full watch on every step, production priority, and zero retries.
