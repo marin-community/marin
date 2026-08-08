@@ -11,10 +11,10 @@ on-disk caches cannot cover it either: ``cutlass.cute.compile`` forces
 ``no_cache=True``, leaving only an in-process dict keyed on launcher identity.
 
 :func:`install` wraps ``get_or_compile_kernel`` to consult an object store first,
-keyed on the launcher's configuration, the launch tree hash, the argument specification,
-the device architecture, and the CuTeDSL, QuACK, and FlashAttention versions.
-``cutlass.jax`` derives a kernel's fingerprint from its object code by SHA-256, so
-a stored blob reconstructs a compile with nothing else.
+keyed on the launcher's configuration, the launch tree hash, the argument
+specification, and the device architecture. ``cutlass.jax`` derives a kernel's
+fingerprint from its object code by SHA-256, so a stored blob reconstructs a compile
+with nothing else.
 
 Launchers opt in through :func:`cute_launcher_factory`.
 """
@@ -23,7 +23,6 @@ import functools
 import hashlib
 import importlib
 import logging
-from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Callable
 
 import jax
@@ -33,7 +32,6 @@ from rigging.provenance import launch_provenance
 logger = logging.getLogger(__name__)
 
 _KERNEL_IDENTITY_ATTR = "_levanter_cute_kernel_identity"
-_VERSIONED_PACKAGES = ("nvidia-cutlass-dsl", "quack-kernels", "jaxlib", "flash-attn-4")
 _KERNEL_CACHE_PREFIX = "cutlass-kernels"
 
 
@@ -81,21 +79,6 @@ def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
     """
     cjax = importlib.import_module("cutlass.jax")
     return cjax.cutlass_call(launcher, **kwargs)
-
-
-def _source_revision() -> str:
-    """Content hash of the working tree the process was launched from, or ``""`` if unknown.
-
-    A launcher rarely holds the whole kernel in its own file -- the segmented backward is
-    defined in ``_fa4_cute_kernels`` and built from ``_fa4_cute_segmented_bwd`` -- so keying
-    on any one file serves a stale object after the kernel changes. The launch tree hash
-    covers every source file at once. It is content-addressed rather than a commit hash, so
-    it survives rebases and amends that do not change content, and
-    :func:`rigging.provenance.launch_provenance` derives it through ``git stash create`` so
-    uncommitted edits count. In a bundle with no checkout it comes from ``MARIN_PROVENANCE``,
-    stamped by the submitting client.
-    """
-    return launch_provenance().tree_hash
 
 
 def cutlass_kernel_cache() -> PersistentKvCache:
@@ -159,16 +142,22 @@ def install(cache: PersistentKvCache) -> None:
 def _kernel_key(fn: Any, spec: Any) -> str | None:
     """Return the store key for a kernel, or ``None`` if it cannot be named stably.
 
-    Launchers built outside :func:`cute_launcher_factory` carry no identity, a launch
-    outside any checkout has no source revision to key on, and a specification whose
-    ``repr`` embeds an object address would key on the address and miss forever. All three
-    fall back to compiling.
+    The launch tree hash stands for every source input at once, since a launcher rarely holds
+    its whole kernel in its own file and since the lockfile that pins CuTeDSL, QuACK, and
+    FlashAttention is itself tracked. It is content-addressed rather than a commit hash, so it
+    survives rebases and amends that do not change content, and it is sensitive to uncommitted
+    edits. In a bundle with no checkout it comes from ``MARIN_PROVENANCE``, stamped by the
+    submitting client.
+
+    Launchers built outside :func:`cute_launcher_factory` carry no identity, a launch with no
+    tree hash has no source identity to key on, and a specification whose ``repr`` embeds an
+    object address would key on the address and miss forever. All three fall back to compiling.
     """
     identity = getattr(fn, _KERNEL_IDENTITY_ATTR, None)
     if identity is None:
         return None
 
-    revision = _source_revision()
+    revision = launch_provenance().tree_hash
     if not revision:
         logger.warning("CuTeDSL kernel not cacheable, no launch tree hash to key on: %s", identity)
         return None
@@ -178,21 +167,10 @@ def _kernel_key(fn: Any, spec: Any) -> str | None:
         logger.warning("CuTeDSL kernel not cacheable, specification repr carries an address: %s", identity)
         return None
 
-    payload = "\n".join([identity, revision, specification, _device_architecture(), _package_versions()])
+    payload = "\n".join([identity, revision, specification, _device_architecture()])
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _device_architecture() -> str:
     device = jax.local_devices()[0]
     return f"{device.platform}-{getattr(device, 'compute_capability', device.device_kind)}"
-
-
-@functools.lru_cache(maxsize=1)
-def _package_versions() -> str:
-    def installed(package: str) -> str:
-        try:
-            return version(package)
-        except PackageNotFoundError:
-            return "absent"
-
-    return " ".join(f"{package}={installed(package)}" for package in _VERSIONED_PACKAGES)

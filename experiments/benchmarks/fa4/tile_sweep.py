@@ -47,6 +47,7 @@ from levanter.grug.attention import _fa4_cute_kernels as fa4_cute_kernels
 from levanter.grug.attention._fa4_cute_config import Flash4CuteKernelConfig, flash4_cute_kernel_config
 
 REFERENCE_TILE = (64, 64)
+REFERENCE_NUM_THREADS = 128
 CANDIDATE_FORWARD_TILES = ((64, 64), (64, 128), (128, 32), (128, 64), (128, 128), (192, 64), (256, 64))
 CANDIDATE_BACKWARD_TILES = ((64, 64), (64, 128), (128, 64), (128, 128), (192, 64), (256, 64))
 CANDIDATE_NUM_THREADS = (128, 256)
@@ -107,6 +108,15 @@ def _forced(candidate: Candidate):
             yield
 
 
+def _seconds_per_step(call, steps: int, warmup: int) -> float:
+    for _ in range(warmup):
+        jax.block_until_ready(call())
+    start = time.perf_counter()
+    for _ in range(steps):
+        jax.block_until_ready(call())
+    return (time.perf_counter() - start) / steps
+
+
 def _bench(candidate: Candidate, q, k, v, mask, steps: int, warmup: int) -> BenchResult:
     with _forced(candidate):
         forward = jax.jit(lambda q, k, v: fa4_cute.gpu_fa4_cute_attention(q, k, v, mask))
@@ -117,19 +127,8 @@ def _bench(candidate: Candidate, q, k, v, mask, steps: int, warmup: int) -> Benc
         grads = grad(q, k, v, mask)
         jax.block_until_ready(grads)
 
-        for _ in range(warmup):
-            forward(q, k, v).block_until_ready()
-        start = time.perf_counter()
-        for _ in range(steps):
-            forward(q, k, v).block_until_ready()
-        forward_time = (time.perf_counter() - start) / steps
-
-        for _ in range(warmup):
-            jax.block_until_ready(grad(q, k, v, mask))
-        start = time.perf_counter()
-        for _ in range(steps):
-            jax.block_until_ready(grad(q, k, v, mask))
-        grad_time = (time.perf_counter() - start) / steps
+        forward_time = _seconds_per_step(lambda: forward(q, k, v), steps, warmup)
+        grad_time = _seconds_per_step(lambda: grad(q, k, v, mask), steps, warmup)
 
     return BenchResult(out=out, grads=grads, forward=forward_time, backward=grad_time - forward_time)
 
@@ -150,6 +149,9 @@ def _check_against_float32_reference(
     check that decides whether a configuration is usable. It reuses the swept head counts and
     document density but shrinks batch and sequence length, because the reference materializes
     the full score matrix and is quadratic in sequence length.
+
+    Returns ``"ok"``, or ``"FAIL:"`` followed by the comma-separated tensors that disagreed,
+    named among ``out``, ``dq``, ``dk``, and ``dv``.
     """
     seq_len = args.check_seq_len
     key = jax.random.key(11)
@@ -200,7 +202,9 @@ def _build_candidates(base: Flash4CuteKernelConfig, sweep: str, backward_path: i
     if sweep == "forward":
         return [
             Candidate(
-                dataclasses.replace(base, forward_tile=tile, backward_tile=REFERENCE_TILE, num_threads=128),
+                dataclasses.replace(
+                    base, forward_tile=tile, backward_tile=REFERENCE_TILE, num_threads=REFERENCE_NUM_THREADS
+                ),
                 backward_path,
             )
             for tile in CANDIDATE_FORWARD_TILES
@@ -272,7 +276,9 @@ def main() -> None:
     print(f"shape: batch={args.batch} seq={args.seq_len} q_heads={args.q_heads} head_dim={args.head_dim}")
 
     reference = Candidate(
-        config=dataclasses.replace(base, forward_tile=REFERENCE_TILE, backward_tile=REFERENCE_TILE, num_threads=128),
+        config=dataclasses.replace(
+            base, forward_tile=REFERENCE_TILE, backward_tile=REFERENCE_TILE, num_threads=REFERENCE_NUM_THREADS
+        ),
         backward_path=args.backward_path,
     )
     candidates = _build_candidates(base, args.sweep, args.backward_path)

@@ -129,8 +129,8 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
     assert served.module == b"objectcode:tile256-bf16:FakeFunctionSpec(shape=(8, 16))"
 
 
-def test_a_new_source_revision_invalidates_stored_kernels(fake_cutlass, tmp_path, monkeypatch):
-    """The launch tree hash is the whole source identity, so a changed tree must miss.
+def test_stored_kernels_survive_a_resume_but_not_a_source_change(fake_cutlass, tmp_path, monkeypatch):
+    """The launch tree hash is the whole source identity.
 
     A launcher rarely holds its whole kernel in its own file — the segmented backward is
     defined in ``_fa4_cute_kernels`` and built from ``_fa4_cute_segmented_bwd`` — so keying
@@ -139,34 +139,18 @@ def test_a_new_source_revision_invalidates_stored_kernels(fake_cutlass, tmp_path
     spec = FakeFunctionSpec(shape=(8, 16))
     store = str(tmp_path / "store")
 
-    compiled_per_revision = []
-    for revision in ("treehash-original", "treehash-edited"):
-        monkeypatch.setattr(
-            cutlass_kernel_cache,
-            "launch_provenance",
-            lambda revision=revision: _provenance(tree_hash=revision),
-        )
+    def launch(revision: str) -> None:
+        monkeypatch.setattr(cutlass_kernel_cache, "launch_provenance", lambda: _provenance(tree_hash=revision))
         fake_cutlass.forget_process_state()
         install(_kernel_store(store))
         fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
-        compiled_per_revision.append(list(fake_cutlass.compiled))
 
-    assert compiled_per_revision == [["tile128-bf16"], ["tile128-bf16", "tile128-bf16"]]
+    launch("treehash-original")
+    launch("treehash-original")
+    assert fake_cutlass.compiled == ["tile128-bf16"], "a resume runs the same tree and must be served"
 
-
-def test_the_same_source_revision_is_served_from_the_store(fake_cutlass, tmp_path, monkeypatch):
-    """A resume runs the same tree, which is the case the store exists to serve."""
-    spec = FakeFunctionSpec(shape=(8, 16))
-    store = str(tmp_path / "store")
-    monkeypatch.setattr(cutlass_kernel_cache, "launch_provenance", lambda: _provenance(tree_hash="treehash-stable"))
-
-    install(_kernel_store(store))
-    fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
-    fake_cutlass.forget_process_state()
-    install(_kernel_store(store))
-    fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
-
-    assert fake_cutlass.compiled == ["tile128-bf16"]
+    launch("treehash-edited")
+    assert fake_cutlass.compiled == ["tile128-bf16", "tile128-bf16"]
 
 
 def test_a_launch_with_no_source_revision_is_compiled_but_not_stored(fake_cutlass, tmp_path, monkeypatch):
