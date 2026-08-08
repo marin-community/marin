@@ -17,10 +17,11 @@ author: dlwh
 ## Current TL;DR
 
 - `GRUG-XEM-001` passed the d512 architecture gate on matched 1.44B-token runs in `us-central1`. Pairwise unscaled and `1/sqrt(g)` tying finished +0.02050 and +0.02203 Paloma macro loss above the 3.58622 untied control; middle-four variants finished +0.03817 and +0.04541, all inside their screening thresholds. Routing remained healthy and middle-four tying removed 50% of unique routed-expert parameters.
-- `GRUG-XEM-002` completed the layers 2-3 spectral-plus-prefit conversion in `us-central1`. After 50M local-recovery and 200M preservation tokens, the student is +0.02611 validation loss and +0.02638 Paloma macro loss above the untied teacher. This recovers about two-thirds of the initial gap, but misses the +0.01-0.02 validation target and reaches the Paloma +0.03 bound only after the proposed 100M-token budget.
+- `GRUG-XEM-002` completed six layers 2-3 conversion/recovery arms in `us-central1`. Spectral matching missed its initialization gate. Native no-prefit finished +0.02813 validation/+0.02814 Paloma after 250M online tokens; spectral plus per-expert prefit finished +0.02611/+0.02638. Native aggregate prefit finished within 0.00010/0.00029 of native no-prefit. Direct joint recovery needed about 50M more tokens to reach comparable quality. No arm met the required +0.02 validation target.
 - `GRUG-XEM-003` ports explicit expert banks and legacy-checkpoint migration into the array-stacked June 67B-A2B implementation. The selected no-copy teacher, data caches, eval caches, output bucket, and TPU resources are all in `us-central2`; no checkpoint payload has been read outside that region.
-- `GRUG-XEM-004` is the d768 scale comparison tracked in issue #8032. Its matched untied, two-anchor unscaled, and two-anchor `1/sqrt(g)` smoke configurations are ready on central1-only data and outputs.
-- The isolated branch is `research/grug-cross-layer-expert-merging` in `/tmp/marin-grug-xem`. It has not been pushed, and no PR exists.
+- `GRUG-XEM-004` passed the d768 architecture screen. Middle-four unscaled tying was +0.02855 Paloma above the matched untied control, down from +0.03817 at d512, with zero overflow and 37.5% fewer unique routed-expert parameters. Effective speed was 0.849x, so the architecture is a conversion target rather than a compute-efficiency result.
+- `GRUG-XEM-005` will compare four native-assignment, frozen-router Stage A objectives: MoE-only, +0.05 CE, +0.1 logit KL, and CE+KL. Each arm runs 50M tokens, evaluates held-out model loss at 12.5M-token intervals, and records the best validation checkpoint. Only the winning arm proceeds to Stage B.
+- The pushed research branch is `research/grug-matcher-jit` in `/tmp/marin-grug-xem-jit`. No PR exists.
 
 ## Baseline
 
@@ -32,9 +33,8 @@ author: dlwh
 
 ### Active
 
-- `GRUG-XEM-H4`: Functional matching plus shared-bank prefit can merge one adjacent middle-layer pair with partial aggregate recovery. Current result: spectral-plus-prefit recovered about two-thirds of the teacher gap after 250M total recovery tokens, but did not pass the strict single-pair gate. Next test: compare against the tied-from-scratch reference before changing the recovery objective or expanding to two pairs.
-- `GRUG-XEM-H6`: A recent June 67B-A2B checkpoint admits a one-pair middle-layer merge without cross-region checkpoint or data movement. Next test: validate legacy schema migration locally, then dispatch a central2-only one-pair smoke from step 105149 after the d512 surgery gate passes.
-- `GRUG-XEM-H7`: The tied-minus-untied loss gap diminishes at d768 when four middle layers share one bank behind two-layer input and output anchors. Next test: matched d768 untied, unscaled-tied, and `1/sqrt(g)`-tied runs at `2.81e18` FLOPs.
+- `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best: +0.02611 validation/+0.02638 Paloma after 250M online tokens, above the required +0.02 validation gate. Next test: `GRUG-XEM-H8`.
+- `GRUG-XEM-H8`: A small held-out model-preservation term during bank-only Stage A improves rollout quality without preventing local MoE fitting. Next test: a native-assignment 2x2 MoE/CE/KL matrix at 50M tokens, followed by equal-token Stage B for the winner.
 
 ### Blocked
 
@@ -49,6 +49,7 @@ author: dlwh
 - `GRUG-XEM-H1`: Pairwise d512 tying is stable and within the +0.03 Paloma macro screening gate on a matched full run.
 - `GRUG-XEM-H2`: Middle-four d512 tying is stable and within the +0.06 Paloma macro screening gate on a matched full run.
 - `GRUG-XEM-H3`: The LR ablation did not support `1/sqrt(g)` as best for this d512 MuonH recipe; unscaled tying was slightly better at full schedule for both topologies. Keep LR scaling configurable rather than treating Jaggi's setting as a Grug default.
+- `GRUG-XEM-H7`: The d768 middle-four penalty diminished to +0.02855 Paloma from +0.03817 at d512 with unscaled MuonH. The d768 tied architecture passed the +0.06 screening gate but had 0.849x effective speed.
 
 ## Background Research Brief
 
@@ -503,3 +504,13 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
   Final block NRMSE was `0.078769/0.242148`, top-k teacher agreement was `0.9266/0.8876`, routing entropy was `5.5315/5.5322`, and capacity overflow was zero. Layer-3 MoE error continued downward throughout recovery, while layer-2 error rose as its router adapted. The controller, conversion, and Stage-B jobs succeeded with zero failures and zero preemptions. Stage B committed `.artifact.json`, all scheduled evaluation and training JSON files, and the permanent step-1526 checkpoint with `metadata.json`, `manifest.ocdbt`, and `merge_manifest.json`. The final manifest records `converted_step_zero`, source topology `(0,1,2,3,4,5)`, and target topology `(0,1,2,2,3,4)`. Artifact provenance contains no sensitive key or value. The custom recovery worker created no W&B run, so the versioned GCS JSON files are canonical.
 - Interpretation: direct preservation recovery is stable and avoids the aggregate-prefit Stage-A rollout failure, but it does not pass the Paloma `+0.03` screening bound or the stricter validation gate at 200M tokens. Frozen-router native Stage A is not merely overhead: it produces a modest token-efficiency advantage that survives Stage B. Healthy routing and decreasing layer-3 error again identify shared-bank function mismatch, rather than router collapse, as the remaining limitation.
 - Next action: retain the staged native or spectral-prefit schedule as the stronger one-pair reference. Do not expand to two middle pairs. If Stage A is revised, early-stop it on aligned held-out model loss and compare at equal total recovery tokens; direct joint is the control for whether the revised local objective adds value.
+
+### 2026-08-07 22:20 - GRUG-XEM-005 validation-aligned Stage-A launch gate
+
+- Hypothesis: A small language-model preservation term during frozen-router Stage A improves held-out rollout quality without preventing the shared bank from fitting the two affected routed-MoE functions.
+- Commit Hash: `2f440eee114d35771b0b529d342140dae254164f`; source teacher commit `884b213ff4`.
+- Config: all four branches reuse the native Hungarian, no-prefit converted d512 checkpoint with layers 2-3 sharing one 256-expert bank. Only that bank trains. The control uses routed-MoE weight 1.0; treatments add CE weight 0.05, teacher-logit KL weight 0.1, or both. Each branch requests 50M tokens with held-out evaluations at 12.5M-token intervals. The selected checkpoint minimizes the Paloma-tag macro loss. Requested and exact batch-aligned processed-token counts are recorded separately.
+- Gate: a treatment must improve both selected Paloma macro delta and micro-average validation delta by at least 0.01 absolute relative to the selected MoE-only control. Aggregate routed-MoE loss may be at most 10% worse, each affected layer's routed-MoE NRMSE may increase by at most 0.03 absolute, throughput must be at least 80% of control, capacity overflow must be zero, and teacher router top-1/top-4 agreement must remain 1.0. Only the lowest-Paloma treatment that passes continues to Stage B. The Stage-B milestone superset includes the complement needed to observe a requested 100M total from any selected Stage-A quarter checkpoint.
+- Validation: 21 focused tests pass across the recovery objective, launch graph, and runtime checkpoint path. The runtime test selects the best of two Paloma checkpoints, distinguishes a requested 15-token horizon from 16 processed tokens, and verifies Stage B restores the selected path. Changed-file lint and Pyrefly report no errors. An independent review found no remaining blocker.
+- Reproducibility: issue #8032 defines Stage A and Stage B, the four arms, exact gate, launch template, regional dependencies, and output roots. A reader given no session context returned PASS after two repair rounds. All checkpoints, caches, outputs, and v5p-8 children remain in `us-central1`.
+- Next action: lower all four graphs from the pushed commit, verify empty Stage-A roots and reused central1 dependencies, then launch and babysit the four controllers. Do not launch Stage B until the complete matched result selects a treatment under the fixed gate.
