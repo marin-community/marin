@@ -1159,3 +1159,23 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   throughput cost.
 - W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-159-w10-ep-e192-i5504-cf2p00-fullwatch-overlap1-p32757-20260808
 - MHEP-157, MHEP-158, and MHEP-160 were still active at this result time.
+
+### 2026-08-08 12:36 UTC - MHEP-162 and MHEP-163 larger-model gates ready
+
+- Goal: Find a larger full-watch model after MHEP-159 made the 481.063 B MHEP-131 model fit.
+- Common config: d6144; 48 layers; latent dimension 3072 with RMSNorm; top-4; capacity factor 2.0;
+  batch 1024; sequence length 4096; EP64 `fixed_all_to_all`; one 64-GPU GB200 rack; pinned-host
+  optimizer state; CUDA async allocator; five steps on the 2000-step schedule; and full gradient
+  and parameter norms on every step. Eval, profiles, checkpoints, retries, and an explicit client
+  memory fraction are disabled.
+- Runtime control: Both arms set
+  `--xla_gpu_experimental_parallel_collective_overlap_limit=1`, which passed MHEP-159.
+- MHEP-162 uses 192 experts and expert width 6016. It has 524.549 B total parameters and 24.227 B
+  active parameters.
+- MHEP-163 uses 128 experts and expert width 8960. It has 520.906 B total parameters and 29.418 B
+  active parameters.
+- Run IDs: `mhep-162-w12-ep-e192-i6016-cf2p00-fullwatch-overlap1-p32760-20260808` and
+  `mhep-163-w12-ep-e128-i8960-cf2p00-fullwatch-overlap1-p32761-20260808`.
+- Decision rule: A candidate passes only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
+  NCCL memory failure without a retry.
