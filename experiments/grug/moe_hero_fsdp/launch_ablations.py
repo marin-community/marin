@@ -4,6 +4,7 @@
 """Sweep process-environment arms against the 300B FSDP hero on one allocation."""
 
 import click
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from marin.experiment.cli import build_options
 
 from experiments.grug.moe_hero_fsdp.launch import HeroSweepArm, build_hero_sweep_run
@@ -34,14 +35,22 @@ from experiments.grug.recovery.ablation_catalog import (
     show_default=True,
     help="Environment arm to run; repeat the option to sweep several arms on one allocation.",
 )
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    default="interactive",
+    show_default=True,
+    help="Iris band for the training gang. 'production' is admin-only and never preempted.",
+)
 @build_options
-def main(run_id: str, dp_racks: int, steps_per_arm: int, ablation_names: tuple[str, ...]):
+def main(run_id: str, dp_racks: int, steps_per_arm: int, ablation_names: tuple[str, ...], priority: str):
     specs = selected_ablations(environment_ablations(num_steps=steps_per_arm), ablation_names)
     return build_hero_sweep_run(
         run_id=run_id,
         dp_racks=dp_racks,
         steps_per_arm=steps_per_arm,
         arms=[HeroSweepArm(spec=spec) for spec in specs],
+        priority=priority_band_value(priority),
     )
 
 

@@ -349,6 +349,7 @@ def build_hero_sweep_run(
     dp_racks: int,
     steps_per_arm: int,
     arms: Sequence[HeroSweepArm],
+    priority: int,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build one allocation that runs ``arms`` back to back.
@@ -356,6 +357,9 @@ def build_hero_sweep_run(
     Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its own
     W&B run named ``<run_id>-<arm>``. One arm's fault does not end the sweep. A sweep is a
     diagnostic, so it never checkpoints.
+
+    ``priority`` is the Iris band for the training gang. It rides as a runtime arg, so rescheduling
+    the same arms at a different band reuses the cached result rather than rebuilding.
     """
     if not arms:
         raise ValueError("a sweep needs at least one arm")
@@ -397,6 +401,7 @@ def build_hero_sweep_run(
             runs=runs,
             resources=ctx.runtime_arg("train_resources"),
             processes_per_task=HERO_PROCESSES_PER_TASK,
+            priority=ctx.runtime_arg("priority"),
         )
 
     return ArtifactStep(
@@ -406,7 +411,7 @@ def build_hero_sweep_run(
         run=run_grug_ablation_sweep,
         build_config=build_config,
         deps=(slim,),
-        runtime_args={"train_resources": train_resources},
+        runtime_args={"train_resources": train_resources, "priority": priority},
     )
 
 

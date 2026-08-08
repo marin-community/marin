@@ -1,28 +1,30 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sweep single-rack hero configurations, one allocation per wave.
+"""Sweep single-rack hero configurations.
 
 Measurement protocol
 --------------------
-A wave runs its arms back to back on one allocation, each in a fresh trainer subprocess so
-process-start environment takes effect, each writing its own W&B run ``hs-<wave>-<tag>``. The score
-is the **median** ``throughput/duration`` over steps ``WARMUP..``, because the steady-state
-distribution is right-skewed (run A: median 18.086 s, min 17.936, max 18.699, MAD 0.077). Steps 0-1
-are compile and the PGLE recompile; steps 2-4 absorb the one-time first-batch data-loader stall.
+``--racks N`` splits a wave's arms into N allocations, each running its arms back to back in a
+fresh trainer subprocess so process-start environment takes effect, each writing its own W&B run
+``hs-<wave>[-g<i>]-<tag>``. The score is the **median** ``throughput/duration`` over steps
+``WARMUP..``, because the steady-state distribution is right-skewed (run A: median 18.086 s, min
+17.936, max 18.699, MAD 0.077). Steps 0-1 are compile and the PGLE recompile; steps 2-4 absorb the
+one-time first-batch data-loader stall.
 
-Every wave carries a ``control`` or ``base`` arm; an arm counts only against its own wave. Waves w1
-through final4 ran one rack per arm, where two byte-identical controls differed by 0.78% -- the
-resolution floor on every delta below. Arms now share one allocation and are separated in time
-instead, which has not been characterized.
+Every group carries the wave's ``control`` or ``base`` arm and an arm scores only against the
+control that ran beside it. Waves w1 through final4 ran one rack per arm, where two byte-identical
+controls differed by 0.78% -- the resolution floor on every delta below. Sharing an allocation
+trades that for drift over the hours a group takes, which nothing has measured yet.
 
 Usage
 -----
     uv run python -m experiments.grug.moe_hero_fsdp.sweep_preflight <wave>   # CPU trace, first
-    uv run python -m experiments.grug.moe_hero_fsdp.sweep launch <wave> --version dev --run
+    uv run python -m experiments.grug.moe_hero_fsdp.sweep launch <wave> --version dev --racks 4 --run
     uv run python -m experiments.grug.moe_hero_fsdp.sweep score <wave>
 """
 
+import collections
 import dataclasses
 import json
 import pathlib
@@ -32,6 +34,7 @@ from dataclasses import dataclass, field
 
 import click
 import wandb
+from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_value
 from levanter.recovery.types import AblationSpec
 from marin.experiment.cli import build_options
 
@@ -376,9 +379,31 @@ def wave_steps(wave: str) -> int:
     return WAVE_STEPS.get(wave, STEPS)
 
 
-def scored_steps(run_id):
+def split_arms(arms: list[Arm], racks: int) -> list[list[Arm]]:
+    """Split ``arms`` across ``racks`` allocations, replicating the control into each.
+
+    An arm is only comparable against a control that ran beside it, so a group without one could
+    not be scored. ``racks == len(arms) - 1`` reproduces the one-rack-per-arm fan-out.
+    """
+    if racks == 1:
+        return [list(arms)]
+    control = next(arm for arm in arms if arm.tag in CONTROL_TAGS)
+    rest = [arm for arm in arms if arm is not control]
+    if racks > len(rest):
+        raise click.BadParameter(f"{racks} racks for {len(rest)} arms besides the control")
+    groups: list[list[Arm]] = [[control] for _ in range(racks)]
+    for i, arm in enumerate(rest):
+        groups[i % racks].append(arm)
+    return groups
+
+
+def group_prefix(wave: str, index: int, racks: int) -> str:
+    """W&B run-id prefix for one group. A wave on a single allocation keeps the bare wave id."""
+    return f"{PREFIX}-{wave}" if racks == 1 else f"{PREFIX}-{wave}-g{index}"
+
+
+def scored_steps(run):
     """Return ``(step, duration, peak_gib)`` for every step in the scored window, ordered by step."""
-    run = wandb.Api().run(f"{PROJECT}/{run_id}")
     hist = run.history(keys=["throughput/duration", "memory/peak_gib", "_step"], pandas=False, samples=1000)
     return sorted(
         (x["_step"], x["throughput/duration"], x.get("memory/peak_gib"))
@@ -392,15 +417,15 @@ def scored_steps(run_id):
 COUNTED_FLOPS = 0.194145 * 18.0223 * PEAK_FLOPS_PER_DEVICE * NUM_DEVICES
 
 
-def score_run(run_id, batch_size=HERO_BATCH_SIZE):
-    rows = scored_steps(run_id)
+def score_run(run, batch_size=HERO_BATCH_SIZE):
+    rows = scored_steps(run)
     if len(rows) < 3:
         return None
     d = [t for _, t, _ in rows]
     hbm = [m for _, _, m in rows if m is not None]
     med = statistics.median(d)
     return {
-        "run_id": run_id,
+        "run_id": run.id,
         "n": len(d),
         "median": med,
         "mad": statistics.median([abs(x - med) for x in d]),
@@ -416,47 +441,75 @@ def score_run(run_id, batch_size=HERO_BATCH_SIZE):
     }
 
 
-def score(wave):
-    LOGDIR.mkdir(parents=True, exist_ok=True)
+def discover_runs(wave):
+    """Every W&B run for ``wave``, keyed by allocation prefix then arm tag.
+
+    How a wave was split across allocations is a launch-time choice that nothing records, so the
+    grouping is read back off the run ids rather than reconstructed.
+    """
+    groups = collections.defaultdict(dict)
+    for run in wandb.Api().runs(PROJECT, filters={"name": {"$regex": f"^{PREFIX}-{wave}-"}}):
+        prefix, _, tag = run.id.rpartition("-")
+        groups[prefix][tag] = run
+    return groups
+
+
+def score_group(prefix, runs, by_tag):
+    """Score one allocation's arms against the control that ran beside them."""
     results = []
-    for arm in WAVES[wave]:
+    for tag, run in runs.items():
+        arm = by_tag.get(tag)
+        if arm is None:
+            print(f"{tag:12s} not an arm of this wave; skipped")
+            continue
         try:
-            s = score_run(arm.run_id(wave), batch_size=arm.batch_size)
+            s = score_run(run, batch_size=arm.batch_size)
         except Exception as exc:
-            print(f"{arm.tag:12s} unavailable: {type(exc).__name__}: {exc}")
+            print(f"{tag:12s} unavailable: {type(exc).__name__}: {exc}")
             continue
         if s is None:
-            print(f"{arm.tag:12s} too few scored steps yet")
+            print(f"{tag:12s} too few scored steps yet")
             continue
-        s["tag"] = arm.tag
-        s["note"] = arm.note
-        results.append(s)
+        results.append({**s, "group": prefix, "tag": tag, "note": arm.note})
 
     if not results:
-        return
+        return []
     control = next((r for r in results if r["tag"] in CONTROL_TAGS), None)
     if control is None:
-        scored = ", ".join(r["tag"] for r in results) or "none"
-        print(f"no control arm has scored steps yet (scored so far: {scored})")
-        return
+        scored = ", ".join(r["tag"] for r in results)
+        print(f"{prefix}: no control arm has scored steps yet (scored so far: {scored})")
+        return results
 
     varies_batch = len({r["batch_size"] for r in results}) > 1
     if varies_batch:
         print(f"scoring on tokens/s: arms differ in batch size (control = {control['batch_size']})")
     print(
-        f"\n{'arm':12s} {'n':>3s} {'batch':>6s} {'median':>9s} {'MAD':>7s} "
+        f"\n{prefix:12s} {'n':>3s} {'batch':>6s} {'median':>9s} {'MAD':>7s} "
         f"{'Mtok/s':>7s} {'MFU':>7s} {'peak HBM':>9s} {'vs control':>11s}"
     )
     for r in sorted(results, key=lambda r: -r["tokens_per_s"]):
         if varies_batch:
-            delta = 100 * (r["tokens_per_s"] / control["tokens_per_s"] - 1)
+            r["delta_pct"] = 100 * (r["tokens_per_s"] / control["tokens_per_s"] - 1)
         else:
-            delta = 100 * (control["median"] - r["median"]) / control["median"]
+            r["delta_pct"] = 100 * (control["median"] - r["median"]) / control["median"]
         peak = f"{r['peak_gib']:.1f} GiB" if r["peak_gib"] else "--"
         print(
             f"{r['tag']:12s} {r['n']:3d} {r['batch_size']:6d} {r['median']:8.3f}s {r['mad']:6.3f}s "
-            f"{r['tokens_per_s'] / 1e6:7.3f} {r['mfu']:6.2f}% {peak:>9s} {delta:+10.2f}%"
+            f"{r['tokens_per_s'] / 1e6:7.3f} {r['mfu']:6.2f}% {peak:>9s} {r['delta_pct']:+10.2f}%"
         )
+    return results
+
+
+def score(wave):
+    LOGDIR.mkdir(parents=True, exist_ok=True)
+    by_tag = {arm.tag: arm for arm in WAVES[wave]}
+    groups = discover_runs(wave)
+    if not groups:
+        print(f"no W&B runs for {wave}")
+        return
+    results = [r for prefix in sorted(groups) for r in score_group(prefix, groups[prefix], by_tag)]
+    if not results:
+        return
     out = LOGDIR / f"{wave}.json"
     out.write_text(json.dumps(results, indent=2))
     print(f"\nwrote {out}")
@@ -469,16 +522,37 @@ def cli():
 
 @cli.command("launch")
 @click.argument("wave", type=click.Choice(sorted(WAVES)))
+@click.option(
+    "--racks", type=click.IntRange(min=1), default=1, show_default=True, help="Allocations to spread the wave over."
+)
+@click.option(
+    "--priority",
+    type=click.Choice(PRIORITY_BAND_NAMES),
+    default="production",
+    show_default=True,
+    help="Iris band for the training gangs. 'production' is admin-only and never preempted.",
+)
 @build_options
-def launch_cmd(wave):
-    """Build the wave as one allocation. Add --run to submit it."""
+def launch_cmd(wave, racks, priority):
+    """Build the wave. Add --run to submit it.
+
+    Each group of arms is one allocation and one step, so ``--racks`` trades wall clock for racks
+    and ``--max-concurrent`` bounds how many run at once. Every group carries the wave's control,
+    since an arm is scored only against a control that ran beside it.
+    """
     steps = wave_steps(wave)
-    return build_hero_sweep_run(
-        run_id=f"{PREFIX}-{wave}",
-        dp_racks=DP_RACKS,
-        steps_per_arm=steps,
-        arms=[arm.sweep_arm(wave, steps) for arm in WAVES[wave]],
-    )
+    band = priority_band_value(priority)
+    groups = split_arms(WAVES[wave], racks)
+    return [
+        build_hero_sweep_run(
+            run_id=group_prefix(wave, i, racks),
+            dp_racks=DP_RACKS,
+            steps_per_arm=steps,
+            arms=[arm.sweep_arm(wave, steps) for arm in group],
+            priority=band,
+        )
+        for i, group in enumerate(groups)
+    ]
 
 
 @cli.command("score")

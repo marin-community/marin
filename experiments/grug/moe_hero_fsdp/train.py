@@ -765,6 +765,7 @@ class GrugAblationSweepConfig:
     runs: tuple[GrugRunConfig, ...]
     resources: ResourceConfig
     processes_per_task: int
+    priority: int
 
     def __post_init__(self):
         if not self.arms:
@@ -804,6 +805,7 @@ def run_grug_ablation_sweep(config: GrugAblationSweepConfig) -> None:
         resources=config.resources,
         max_retries_failure=0,
         processes_per_task=config.processes_per_task,
+        priority=config.priority,
     )
 
 
