@@ -79,6 +79,22 @@ def test_fields_are_well_formed():
             assert section.get("upstream"), f"{name}: overlay needs an upstream"
 
 
+def test_derived_forks_share_a_group():
+    # A fork whose base derives from another must land in the same atomic group, so a split refresh
+    # cannot pin it against a different revision of its source than the one that landed.
+    root = _root()
+    descriptors = _descriptors(root)
+    for name, section in descriptors.items():
+        derived_from = section.get("derived_from")
+        if not derived_from:
+            continue
+        source = derived_from.partition(":")[0]
+        group = section.get("group")
+        assert (
+            group and descriptors[source].get("group") == group
+        ), f"{name} derives from {source}; both must share a group so they refresh atomically"
+
+
 def test_depends_on_is_acyclic_and_resolvable():
     root = _root()
     descriptors = _descriptors(root)

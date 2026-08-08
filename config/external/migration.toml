@@ -23,6 +23,10 @@
 # Fields:
 #   upstream         Repo the fork tracks. Omitted for marin-native repos with no upstream.
 #   kind             "track" or "overlay" (see above).
+#   group            Sections sharing a group refresh and land in one atomic Marin PR. The
+#                    vllm/tpu-inference pair must move together: the TPU launcher installs both pins
+#                    at once and vllm's base derives from the tpu-inference release, so a split refresh
+#                    could pin a mixed, unblessed stack. Omitted for forks that refresh alone.
 #   pin              Where the pinned revision lives: "isolated_project"
 #                    (config/external/<name>/uv.lock) or "descriptor:<path>#<section>".
 #   base_select      How to choose the new base: "fork_main" (advance to the fork branch tip),
@@ -37,6 +41,7 @@
 [tpu-inference]
 upstream = "https://github.com/vllm-project/tpu-inference.git"
 kind = "overlay"
+group = "tpu-vllm"
 pin = "descriptor:vllm/tpu-forks.toml#tpu-inference"
 base_select = "latest_release"
 e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
@@ -48,6 +53,7 @@ nuances = [
 [vllm]
 upstream = "https://github.com/vllm-project/vllm.git"
 kind = "overlay"
+group = "tpu-vllm"
 pin = "descriptor:vllm/tpu-forks.toml#vllm"
 base_select = "derived"
 derived_from = "tpu-inference:.buildkite/vllm_lkg.version"

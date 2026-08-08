@@ -13,13 +13,16 @@ Read first:
 
 Marin pins several forks under `config/external/`. Each has a section in
 `config/external/migration.toml` describing how to migrate it toward upstream.
-Use this skill to refresh **one** fork: advance its pin to a newer base, validate
-with the fork's declared e2e, and open the Marin PR — or, if a real external
-blocker remains, file one "can't migrate" issue.
+Use this skill to refresh one fork — or one atomic `group` — advancing its pin to
+a newer base, validating with the declared e2e, and opening the Marin PR — or, if
+a real external blocker remains, filing one "can't migrate" issue.
 
-Run one fork at a time. A weekly coordinator that invokes this skill once per fork
-in `depends_on` order is planned but not yet built; today a human runs it for a
-single fork.
+A `group` refreshes as a unit: its sections advance together in one PR. The
+vllm/tpu-inference pair is grouped because the TPU launcher installs both pins at
+once and vllm's base derives from the tpu-inference release; splitting them could
+pin a mixed, unblessed stack. Refresh one fork or one group at a time. A weekly
+coordinator that walks the descriptor in `depends_on` order is planned but not yet
+built; today a human runs it for a single fork or group.
 
 Use the same algorithm in CI and local runs. In local/manual mode, ask before
 external mutations: pushing fork branches, opening the Marin PR, or filing a
@@ -30,6 +33,8 @@ GitHub issue. Do not ask before the fork's required e2e.
 Read the target fork's section in `config/external/migration.toml`. It gives:
 
 - `kind` — `track` or `overlay`; everything below branches on this.
+- `group` — if present, refresh every section in the group together in one PR
+  (read them all now); if absent, this fork refreshes alone.
 - `pin` — where the pinned revision lives (`isolated_project`, or
   `descriptor:<path>#<section>`).
 - `base_select` (+ `derived_from`) — how to choose the new base.
@@ -45,9 +50,10 @@ against.
 
 - If no newer base is selected and no pin metadata needs repair, exit
   successfully with a no-op summary.
-- On success, open exactly one draft PR in `marin-community/marin` after the e2e
-  passes, request the descriptor's `blocker_assignee` as reviewer, and monitor it
-  per `.agents/skills/commit/SKILL.md`.
+- On success, open exactly one draft PR in `marin-community/marin` for the fork or
+  group after the e2e passes — a grouped refresh re-pins every group section in
+  that single PR. Request the descriptor's `blocker_assignee` as reviewer, and
+  monitor it per `.agents/skills/commit/SKILL.md`.
 - On an unresolved external blocker, do not open a PR. Create or update one
   `marin-community/marin` issue assigned to `blocker_assignee`, titled
   `Fork refresh blocked: <fork> — <short reason>`, with current pins, the
@@ -78,8 +84,10 @@ refresh. The descriptor's `upstream` records that rebase target for reference.
 
 `vllm` and `tpu-inference` carry Marin patches on top of upstream. A refresh
 selects a new upstream base, replays the overlays, audits the replay, and re-pins.
-The `vllm`/`tpu-inference` pair is the worked example; keep the two forks on the
-same date-stamped refresh.
+They share `group = "tpu-vllm"`, so refresh both in one run on the same
+date-stamped base and re-pin both in a single Marin PR. Select the `tpu-inference`
+release first, then derive `vllm` from it; never land one section's pin without
+the other, which would leave Marin on a mixed, unblessed stack.
 
 ### Scratch setup
 
