@@ -34,10 +34,12 @@ from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
     RotaryConfig,
+    ThdSegmentMetadata,
     align_kv_heads,
     apply_rotary_embedding,
     attention,
     fa4_cute_segment_bounds,
+    thd_segment_metadata_from_segment_ids,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -94,6 +96,24 @@ def _batch_reshard(x: jax.Array) -> jax.Array:
 
 def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
     return mask.with_sliding_window(sliding_window), mask.with_sliding_window(None)
+
+
+def _thd_base_mask(
+    segment_ids: tuple[jax.Array, jax.Array] | None,
+    thd_segment_metadata: ThdSegmentMetadata | None,
+    *,
+    max_segments: int,
+) -> AttentionMask:
+    """Build the scan-input mask for the native SM100 backend.
+
+    The kernel needs per-document lengths at a static shape, and the grug mask conversion
+    never carries them, so derive them from the packed segment ids when absent.
+    """
+    if thd_segment_metadata is None:
+        if segment_ids is None:
+            raise NotImplementedError("gpu_fa4_thd requires packed segment ids in the batch mask.")
+        thd_segment_metadata = thd_segment_metadata_from_segment_ids(segment_ids[0], max_segments=max_segments)
+    return AttentionMask(is_causal=True, segment_ids=segment_ids, thd_segment_metadata=thd_segment_metadata)
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -160,6 +180,13 @@ class GrugModelConfig:
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
+    thd_max_segments: int = 32
+    """Upper bound on documents per sequence for the ``gpu_fa4_thd`` backend.
+
+    The native SM100 kernel needs ``cu_seqlens`` at a static shape, so per-document metadata
+    is padded to this width and ``cu_seqlens`` becomes ``batch * thd_max_segments + 1``.
+    Exceeding the bound fails the step rather than silently truncating. The value is corpus
+    and sequence-length specific: it must exceed the most documents any one sequence holds."""
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     report_capacity_overflow: bool = False
@@ -185,6 +212,8 @@ class GrugModelConfig:
                 raise ValueError("num_kv_heads must equal the stored maximum of local/global KV heads")
         if self.global_every <= 0:
             raise ValueError("global_every must be positive")
+        if self.thd_max_segments <= 0:
+            raise ValueError("thd_max_segments must be positive")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -972,11 +1001,15 @@ class Transformer(eqx.Module):
             q_segment_ids = _batch_reshard(q_segment_ids)
             segment_ids = (q_segment_ids, q_segment_ids)
         thd_segment_metadata = mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None
-        base_mask = AttentionMask(
-            is_causal=True,
-            segment_ids=segment_ids,
-            thd_segment_metadata=thd_segment_metadata,
-        )
+        if cfg.attention_implementation == "gpu_fa4_thd":
+            # Derived once per step, outside the layer scan.
+            base_mask = _thd_base_mask(segment_ids, thd_segment_metadata, max_segments=cfg.thd_max_segments)
+        else:
+            base_mask = AttentionMask(
+                is_causal=True,
+                segment_ids=segment_ids,
+                thd_segment_metadata=thd_segment_metadata,
+            )
         short_mask, long_mask = _layer_attention_masks(base_mask, sliding_window=cfg.sliding_window)
 
         if cfg.remat_mode == "save_moe":
