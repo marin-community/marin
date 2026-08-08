@@ -16,6 +16,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
+from jax._src import config as jax_config
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from tqdm_loggable.auto import tqdm
@@ -410,13 +411,16 @@ def cb_tagged_evaluate(
             ProgressEvent.EVALUATION_STARTED,
             ProgressEvent.EVALUATION_FINISHED,
         ):
-            if eval_current:
-                log_dict = eval_model(evaluator, step.model, prefix=prefix)
-                levanter.tracker.log(log_dict, step=step_count)
+            # AutoPGLE profiles each newly compiled module. The tagged evaluation module must not
+            # start a second CUPTI profiling session while training uses its PGLE executable.
+            with jax_config.enable_pgle(False):
+                if eval_current:
+                    log_dict = eval_model(evaluator, step.model, prefix=prefix)
+                    levanter.tracker.log(log_dict, step=step_count)
 
-            if eval_ema:
-                log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
-                levanter.tracker.log(log_dict, step=step_count)
+                if eval_ema:
+                    log_dict = eval_model(evaluator, step.eval_model, prefix=_join_prefix(prefix, "ema"))
+                    levanter.tracker.log(log_dict, step=step_count)
             last_eval_step = step_count
 
     return eval_callback

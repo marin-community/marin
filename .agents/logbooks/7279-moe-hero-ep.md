@@ -863,3 +863,1140 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   Width is thus the cheap way to buy active compute and top-k is the expensive way.
 - Next test: MHEP-021 runs 128 experts x i5120 at top-4. It doubles the active neurons of MHEP-011
   to 20,480 at the same 590.7 B of parameters, for 23.00 GiB of k-scaled buffers.
+
+### 2026-08-05 05:50 UTC - Four GB200 runs still outstanding; ablation moves to H100
+
+- Outstanding on `cw-us-east-08a`, with exact job ids and collection steps recorded in
+  [`7279-outstanding-b200-runs.md`](7279-outstanding-b200-runs.md):
+  `/rav/mhep-021-wide-591b-e128-i5120-k4-p32579-20260805-coord` (128 x i5120 top-4, 20,480 active
+  neurons), `/rav/mhep-022-fine-591b-e512-i1280-k4-p32580-20260805-coord` (512 x i1280 top-4, eight
+  experts per device), `/rav/mhep-023-xprof-10-p32581-20260805-coord` (XProf steps 5 and 6 on rank
+  0), and `/rav/mhep-024-nsys-10-p32582-20260805-coord` (Nsight Systems on task 0).
+- All four were still queued at the snapshot. MHEP-021 and MHEP-022 each carry one real failure, and
+  their memory estimates put them near the measured out-of-memory boundary, so read their logs for
+  `ncclAlltoAll` before treating a failure as an infrastructure fault.
+- Reason the small-scale ablation moves to H100: A08 stays contended, so the GB200 racks are not
+  available for a nine-run sweep.
+- H100 attention finding: `gpu_fa4_cute` is Blackwell-only. Its MMA op accepts sm_100, sm_103, and
+  sm_110, and rejects H100 with `expects arch to be one of [Arch.sm_100a, ...], but got sm_90a`.
+  `gpu_fa4_thd` does carry SM90 forward and backward kernels, but it requires fixed-shape THD
+  segment metadata that this model does not supply, so it raises instead. Reference attention is the
+  remaining option.
+- Correction: this session first called the reference-attention cost about 16 times, from the ratio
+  of attention span (8192 against a 512 window). That is wrong. Attention is a minority of the FLOP
+  budget at these shapes, so losing the window costs 1.39 to 1.43 times the analytic FLOPs.
+- H100 target: 8 nodes of 8 GPUs, which is 64 GPUs and an expert axis of 64. One node was rejected
+  because capacity is per (sender shard, expert) cell: EP8 gives 4,096-row cells against 512 at
+  EP64, so it would drop far less on the same routing and would not reproduce GB200 behavior.
+
+### 2026-08-08 09:26 UTC - MHEP-146 to MHEP-148 allocator watch gate ready
+
+- Hypothesis: An explicit XLA pool limit can leave enough HBM for NCCL while the capacity-2 EP
+  arm logs full gradient and parameter norms. Prior full-watch compilation reported a 197.42 GiB
+  rematerialization floor on a 184.30 GiB GPU, so failure on the first watch step is expected.
+- Code snapshot: `078813ee6`. The launcher accepts `--watch-interval`, with zero as the default.
+  Interval 1 selects the existing `WatchConfig` defaults: gradient and parameter targets, global
+  and per-parameter norms, scan-layer splitting, and no histograms.
+- Common config: 481.1 B total and 23.3 B active parameters; d6144; 48 layers; 192 experts;
+  latent dimension 3072 with RMSNorm; expert width 5504; top-4; capacity factor 2.0; cell capacity
+  2,731; batch 1,024; sequence length 4,096; EP64 `fixed_all_to_all`; one 64-GPU GB200 rack;
+  pinned-host optimizer state; five steps on the 2,000-step schedule; no eval, profile, checkpoint,
+  or retry.
+- Arms: MHEP-146 sets `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80` for a 147.44 GiB XLA limit and
+  36.86 GiB outside the pool. MHEP-147 sets 0.95 for 175.09 GiB and 9.22 GiB. MHEP-148 sets 0.65
+  for 119.80 GiB and 64.51 GiB. All arms keep `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`.
+- Run IDs: `mhep-146-w7-ep-cf2p00-fullwatch-memfrac80-p32744-20260808`,
+  `mhep-147-w7-ep-cf2p00-fullwatch-memfrac95-p32745-20260808`, and
+  `mhep-148-w7-ep-cf2p00-fullwatch-memfrac65-p32746-20260808`.
+- Command template: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority production --cpu 2
+  --memory 8GB --disk 32GB --timeout 28800 --max-retries 0 --job-name <run>-coord
+  -e WANDB_API_KEY <secret> -e WANDB_PROJECT rav_moe -e WANDB_ENTITY marin-community
+  -e IRIS_PORT_JAX <port> -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async
+  -e XLA_PYTHON_CLIENT_MEM_FRACTION <fraction> -- python -m
+  experiments.grug.moe_hero_ep.launch --run-id <run> --num-steps 5 --schedule-steps 2000
+  --watch-interval 1 --version 2026.08.08 --run --num-experts 192 --intermediate-dim 5504
+  --num-experts-per-token 4 --latent-dim 3072 --capacity-factor 2.0 --batch-size 1024`.
+- Stop criteria: Keep each first failure and its complete logs. Stop on a terminal state, a
+  non-finite loss, or completion of step 5. Do not resubmit an allocator or compilation OOM.
+- Next action: Commit this launch contract, submit the three arms, and monitor after 120 seconds.
+
+### 2026-08-08 09:37 UTC - MHEP-146 to MHEP-148 stopped after allocator failures
+
+- All three jobs were stopped at the user's request. Iris reports each coordinator and training
+  child as `killed`, with `Terminated by user` as the reason.
+- MHEP-147, with memory fraction 0.95, reached the first training execution and failed in
+  `ncclAlltoAll` with CUDA out of memory. It did not complete a step or log norms.
+- MHEP-146, with memory fraction 0.80, reported that rematerialization could reduce the program
+  only from 210.26 GiB to 203.99 GiB against a 176.64 GiB target. It did not complete a step.
+- MHEP-148, with memory fraction 0.65, was stopped during start or compilation. Its retained logs
+  do not contain a complete root-cause message.
+- Decision: Do not run more memory-fraction arms for the full EP64 watch. Raising the fraction
+  still leaves too little room for NCCL, while lowering it cannot make the compiled program fit.
+
+### 2026-08-08 10:02 UTC - MHEP-149 and MHEP-150 d768 premise pair ready
+
+- Hypothesis: At fixed active compute, 192 routed experts improve held-out loss compared with 128
+  routed experts. The expert count is the only model or training variable in the pair.
+- Code snapshot: `42835f581`, after a rebase on the latest `origin/main`. The small-scale launcher
+  accepts `--watch-interval`; zero stays the default.
+- Common config: d768; 8 layers; expert width 688; latent dimension 384 with RMSNorm; top-4;
+  capacity factor 2.0; batch 1,024; sequence length 4,096; 4,194,304 tokens per step; 9,703 steps;
+  750 tokens per active parameter; seed 0; EP64 `fixed_all_to_all`; one 64-GPU GB200 rack per arm;
+  the two-phase datakit mixture; Paloma and uncheatable evaluation every 1,000 steps; checkpoints
+  every 30 minutes; and full gradient and parameter norms every 10 steps without histograms.
+- Arms: MHEP-149 uses 192 routed experts. MHEP-150 uses 128 routed experts. The two arms use the
+  same expert width, latent width, top-k, capacity factor, batch, data, seed, and schedule.
+- Run IDs: `mhep-149-d768-ep-e192-i688-l384-k4-cf2p00-t750-s0-w10-p32747-20260808` and
+  `mhep-150-d768-ep-e128-i688-l384-k4-cf2p00-t750-s0-w10-p32748-20260808`.
+- W&B: Entity `marin-community`, project `rav_moe`, group `moe-hero-ep-small-abl`.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority production --cpu 2
+  --memory 8GB --disk 32GB --timeout 7200 --max-retries 2 --job-name <run>-coord
+  -e WANDB_API_KEY <secret> -e WANDB_PROJECT rav_moe -e WANDB_ENTITY marin-community
+  -e IRIS_PORT_JAX <port> -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch
+  --run-id <run> --size d768 --target gb200-rack --flavor ep --seq-len 4096
+  --tokens-per-step 4194304 --capacity-factor 2.0 --num-experts <128-or-192>
+  --num-experts-per-token 4 --intermediate-dim 688 --latent-dim 384
+  --tokens-per-active-param 750 --watch-interval 10 --version 2026.08.08 --run`.
+- Success criteria: Both arms complete step 9,703 with finite losses, final checkpoints, and Paloma
+  results. Compare the final and last three evaluation points, drop fractions, throughput, and norm
+  curves. Stop a run on a non-finite loss or a repeated model or allocator failure.
+- Expected execution time: About 36 minutes per arm, excluding queue time.
+
+### 2026-08-08 10:10 UTC - MHEP-151 to MHEP-153 full-watch size ladder ready
+
+- Goal: Find the largest capacity-2 EP64 model that can send full gradient and parameter norms to
+  W&B. Keep the 192-expert hero shape and change only the routed-expert width.
+- Code snapshot: `08b80ae88`.
+- Common config: d6144; 48 layers; 192 experts; latent dimension 3072 with RMSNorm; top-4;
+  capacity factor 2.0; batch 1,024; sequence length 4,096; EP64 `fixed_all_to_all`; one 64-GPU
+  GB200 rack; pinned-host optimizer state; five steps on the 2,000-step schedule; and full gradient
+  and parameter norms on every step. Eval, profiles, checkpoints, retries, and an explicit XLA
+  memory fraction are disabled. The CUDA async allocator stays enabled.
+- Size ladder: MHEP-151 uses width 4,096, with 361.47 B total and 20.83 B active parameters.
+  MHEP-152 uses width 4,608, with 404.96 B total and 21.74 B active parameters. MHEP-153 uses
+  width 4,992, with 437.58 B total and 22.42 B active parameters. The known failed upper bound is
+  the 481.1 B width-5,504 model.
+- Run IDs: `mhep-151-w7-ep-e192-i4096-cf2p00-fullwatch-p32749-20260808`,
+  `mhep-152-w7-ep-e192-i4608-cf2p00-fullwatch-p32750-20260808`, and
+  `mhep-153-w7-ep-e192-i4992-cf2p00-fullwatch-p32751-20260808`.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority production --cpu 2
+  --memory 8GB --disk 32GB --timeout 28800 --max-retries 0 --job-name <run>-coord
+  -e WANDB_API_KEY <secret> -e WANDB_PROJECT rav_moe -e WANDB_ENTITY marin-community
+  -e IRIS_PORT_JAX <port> -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async -- python -m
+  experiments.grug.moe_hero_ep.launch --run-id <run> --num-steps 5 --schedule-steps 2000
+  --watch-interval 1 --version 2026.08.08 --run --num-experts 192
+  --intermediate-dim <width> --num-experts-per-token 4 --latent-dim 3072
+  --capacity-factor 2.0 --batch-size 1024`.
+- Decision rule: A model fits only if all five steps finish and W&B receives finite gradient and
+  parameter norms. A compile or NCCL memory failure is an upper bound. Use a new midpoint if two
+  adjacent ladder points give different results.
+
+### 2026-08-08 10:21 UTC - MHEP-154 exact top-6 target ready
+
+- Question: Can the target EP64 model send full norms with d6144, 48 layers, 192 experts, expert
+  width 4,608, latent width 3,072, top-6, and capacity factor 1.42?
+- Code snapshot: `b92b5dad5`.
+- Size: 404.96 B total and 25.81 B active parameters. The routing cell has 2,909 rows. This is 6.5%
+  more routing capacity than the top-4, capacity-2 MHEP-152 cell with 2,731 rows.
+- Run ID: `mhep-154-w8-ep-e192-i4608-k6-cf1p42-fullwatch-p32752-20260808`.
+- Config: One 64-GPU GB200 rack, batch 1,024, sequence length 4,096, five steps on the 2,000-step
+  schedule, and full gradient and parameter norms on every step. Eval, profiles, checkpoints,
+  retries, and an explicit XLA memory fraction are disabled. The CUDA async allocator stays
+  enabled.
+- Decision rule: The exact target fits only if all five steps finish and W&B receives finite
+  gradient and parameter norms.
+
+### 2026-08-08 10:25 UTC - The 437.58 B full-watch model passes
+
+- MHEP-151, MHEP-152, and MHEP-153 completed all five steps with finite losses. Each W&B run has
+  38 gradient norm metrics and 38 parameter norm metrics.
+- Final losses at step 4 are 10.5670 for width 4,096, 10.5501 for width 4,608, and 10.5396 for
+  width 4,992.
+- The width-4,992 compile warned that rematerialization could reduce the program from 184.44 GiB
+  to 178.36 GiB against a 165.23 GiB target. Execution still finished all five watched steps.
+- Result: 437.58 B total and 22.42 B active parameters is the largest confirmed full-watch EP64
+  model. The known failed upper bound stays 481.1 B at width 5,504.
+
+### 2026-08-08 10:25 UTC - MHEP-155 midpoint watch gate ready
+
+- Goal: Narrow the full-watch size boundary between the successful width-4,992 model and the
+  failed width-5,504 model.
+- Code snapshot: `799fbb937`.
+- Candidate: 192 experts at width 5,248, with 459.32 B total and 22.87 B active parameters. All
+  other MHEP-153 settings stay fixed.
+- Run ID: `mhep-155-w8-ep-e192-i5248-cf2p00-fullwatch-p32753-20260808`.
+- Decision rule: The candidate fits only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics.
+
+### 2026-08-08 10:27 UTC - The exact top-6 target passes full watch
+
+- MHEP-154 completed all five steps with exit 0 and a finite final loss of 10.5563 at step 4.
+- W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics.
+- Conclusion: EP64 on one 16-node GB200 rack supports full norms for d6144, 48 layers, 192
+  experts, expert width 4,608, latent width 3,072, top-6, and capacity factor 1.42.
+
+### 2026-08-08 10:34 UTC - The 459.32 B full-watch model fails in NCCL
+
+- MHEP-155 compiled the watched training step, then failed before step 1. NCCL reported CUDA out
+  of memory while it allocated the all-to-all buffer. JAX reported the error from `jit_train_step`.
+- Result: Width 5,248 is a failed upper bound. No retry is useful for this deterministic memory
+  failure.
+
+### 2026-08-08 10:34 UTC - MHEP-156 final size point ready
+
+- Goal: Test the only 128-wide point between the successful width-4,992 model and the failed
+  width-5,248 model.
+- Code snapshot: `5d7041bc2`.
+- Candidate: 192 experts at width 5,120, with 448.45 B total and 22.64 B active parameters. All
+  other MHEP-153 settings stay fixed.
+- Run ID: `mhep-156-w9-ep-e192-i5120-cf2p00-fullwatch-p32754-20260808`.
+- Decision rule: A pass makes width 5,120 the largest confirmed 128-wide model. A failure keeps
+  width 4,992 as the largest confirmed model.
+
+### 2026-08-08 10:45 UTC - The full-watch size boundary is 448.45 B to 459.32 B
+
+- MHEP-156 completed all five steps. Iris reports success for the child and coordinator. W&B
+  finished at step 4 with a finite loss of 10.5326.
+- W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics.
+- Result: Width 5,120, with 448.45 B total and 22.64 B active parameters, is the largest confirmed
+  128-wide point. Width 5,248, with 459.32 B total, is the failed NCCL upper bound.
+- The discrete size search is complete. The remaining gap is one 128-wide increment, or 10.87 B
+  total parameters.
+- Teardown note: MHEP-154 finished all five steps and its W&B run finished. Fourteen Iris tasks
+  reported success, while two task records stayed pending after a pod disappeared during teardown.
+  The coordinator was stopped after the complete W&B result arrived. MHEP-155 tried to restart
+  after its deterministic NCCL failure, so its coordinator was stopped to release the rack.
+
+### 2026-08-08 12:05 UTC - The d768 E192 arm has a small one-seed loss gain
+
+- Completion: MHEP-149 and MHEP-150 completed step 9,702. Both Iris coordinators and training
+  children succeeded with exit 0, no failures, and no preemptions. Both W&B runs finished.
+- Launch snapshot: `08b80ae88`.
+- Final training loss: E192 is 2.0151 and E128 is 2.0377. E192 is lower by 0.02261, or 1.11%.
+- Final held-out loss: E192 Paloma micro loss is 2.92373 against 2.93427 for E128. This is 0.01054,
+  or 0.36%, lower. E192 uncheatable micro loss is 2.69066 against 2.70878. This is 0.01812, or
+  0.67%, lower.
+
+| step | E192 Paloma | E128 Paloma | difference | E192 uncheatable | E128 uncheatable | difference |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 7,999 | 2.98517 | 2.99300 | -0.00783 | 2.76149 | 2.77415 | -0.01266 |
+| 8,999 | 2.94702 | 2.95611 | -0.00909 | 2.71607 | 2.73233 | -0.01626 |
+| 9,702 | 2.92373 | 2.93427 | -0.01054 | 2.69066 | 2.70878 | -0.01812 |
+
+- Routing: E192 ends at 1.3364% drops against 0.7907% for E128. This is 0.5457 percentage points,
+  or 69.0% relative, more drops.
+- Speed: E192 ends at 9.228 million tokens/s against 9.547 million for E128. E192 is 3.35% slower.
+  Median MFU is 5.902% for E192 and 6.127% for E128.
+- Norms: Each run has 980 watched samples from step 0 through step 9,700. All global gradient and
+  parameter norms are finite. E192 gradient norms start at 0.2116, are 0.3936 at step 4,860, and
+  end at 0.1290. E128 values are 0.2122, 0.4123, and 0.1346. E192 parameter norms start at 864.6,
+  are 1,831.1 at step 4,860, and end at 1,955.3. E128 values are 730.1, 1,770.4, and 1,898.4.
+- Decision: The one-seed result supports the E192 hypothesis. The held-out gain is consistent and
+  grows over the last three evaluations, but it is small. Run at least one more matched seed before
+  selecting E192 for a larger training run.
+
+### 2026-08-08 12:18 UTC - MHEP-157 to MHEP-160 memory-scheduler watch gates ready
+
+- Goal: Make the MHEP-131 shape report full gradient and parameter norms without changing its
+  model, batch, routing capacity, or allocator. Test compiler memory controls before changing the
+  training step.
+- Common config: d6144; 48 layers; 192 experts; latent dimension 3072 with RMSNorm; expert width
+  5504; top-4; capacity factor 2.0; batch 1024; sequence length 4096; EP64 `fixed_all_to_all`;
+  one 64-GPU GB200 rack; pinned-host optimizer state; CUDA async allocator; five steps on the
+  2000-step schedule; and full gradient and parameter norms on every step. Eval, profiles,
+  checkpoints, retries, and an explicit client memory fraction are disabled.
+- MHEP-157 sets `JAX_MEMORY_FITTING_EFFORT=1.0` and `JAX_MEMORY_FITTING_LEVEL=O3`. JAX 0.10.1
+  accepts both values. The defaults are 0.0 and O2.
+- MHEP-158 sets `--xla_gpu_enable_latency_hiding_scheduler=false`. OpenXLA states that disabling
+  latency hiding can reduce memory use by giving up compute and communication overlap. The EP
+  runtime default is true.
+- MHEP-159 lowers `--xla_gpu_experimental_parallel_collective_overlap_limit` from 4 to 1. This
+  limits the number of collectives that the scheduler can overlap.
+- MHEP-160 sets `--xla_gpu_enable_analytical_sol_latency_estimator=false`. OpenXLA lists this as a
+  memory control because the estimator tries to maximize compute and communication overlap.
+- Unsupported controls: This JAX/XLA build rejects `--xla_latency_hiding_scheduler_rerun=5` and
+  `--xla_memory_scheduler=kBrkga` during local backend startup. Do not spend a rack on them.
+- Run IDs: `mhep-157-w10-ep-e192-i5504-cf2p00-fullwatch-fit-o3-p32755-20260808`,
+  `mhep-158-w10-ep-e192-i5504-cf2p00-fullwatch-lhs-off-p32756-20260808`,
+  `mhep-159-w10-ep-e192-i5504-cf2p00-fullwatch-overlap1-p32757-20260808`, and
+  `mhep-160-w10-ep-e192-i5504-cf2p00-fullwatch-sol-off-p32758-20260808`.
+- Decision rule: A method passes only if all five steps finish and W&B receives 38 finite gradient
+  norm metrics and 38 finite parameter norm metrics. Stop on the first deterministic compile or
+  NCCL memory failure. Keep a successful compiler control for a longer throughput check.
+
+### 2026-08-08 12:25 UTC - MHEP-161 separate diagnostic watch gate ready
+
+- Hypothesis: Full watch fails because the gradient tree has the optimizer and the norm reduction
+  as concurrent consumers. A separate diagnostic executable can compute the same forward,
+  backward, gradient norms, and parameter norms without an optimizer update. After its scalar
+  outputs resolve, the known-good no-watch training executable runs and can free gradients as the
+  optimizer consumes them.
+- Implementation: `--watch-mode diagnostic` selects the separate executable. `inline` remains the
+  default. The diagnostic uses the same pre-update parameters, pending QB router biases, batch,
+  mixed-precision policy, loss, and z-loss as the following training step. Metric names and values
+  use the existing `compute_watch_stats` path. The mode supports gradient and parameter targets.
+- Cost: A watched step repeats forward and backward. Interval 1 is a fit gate and should be close
+  to twice the step cost. Interval 10 is the intended training setting and adds about 10 percent
+  forward and backward work before any compiler overlap effects.
+- Local checks: The diagnostic statistics match direct gradient and parameter statistics on a
+  small differentiable model. The new test passes. The changed-file pre-commit checks pass.
+- Run ID: `mhep-161-w11-ep-e192-i5504-cf2p00-fullwatch-diagnostic-p32759-20260808`.
+- Common config and decision rule match MHEP-157 to MHEP-160. No compiler memory controls are set,
+  so this arm isolates the separate diagnostic executable.
+
+### 2026-08-08 12:32 UTC - A collective-overlap limit of one fits MHEP-131
+
+- MHEP-159 completed all five steps with the exact MHEP-131 model and full watch on every step.
+- W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics. The final
+  loss was 10.5244 at step 4.
+- The run reported 230,051 tokens/s. The 200-step MHEP-131 no-watch baseline reported 233,418
+  tokens/s. This short comparison puts the full-watch arm 1.44% below the no-watch baseline.
+- Result: `--xla_gpu_experimental_parallel_collective_overlap_limit=1` removes the observed memory
+  failure without a model or allocator change. A longer matched run is necessary for a stable
+  throughput cost.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-159-w10-ep-e192-i5504-cf2p00-fullwatch-overlap1-p32757-20260808
+- MHEP-157, MHEP-158, and MHEP-160 were still active at this result time.
+
+### 2026-08-08 12:36 UTC - MHEP-162 and MHEP-163 larger-model gates ready
+
+- Goal: Find a larger full-watch model after MHEP-159 made the 481.063 B MHEP-131 model fit.
+- Common config: d6144; 48 layers; latent dimension 3072 with RMSNorm; top-4; capacity factor 2.0;
+  batch 1024; sequence length 4096; EP64 `fixed_all_to_all`; one 64-GPU GB200 rack; pinned-host
+  optimizer state; CUDA async allocator; five steps on the 2000-step schedule; and full gradient
+  and parameter norms on every step. Eval, profiles, checkpoints, retries, and an explicit client
+  memory fraction are disabled.
+- Runtime control: Both arms set
+  `--xla_gpu_experimental_parallel_collective_overlap_limit=1`, which passed MHEP-159.
+- MHEP-162 uses 192 experts and expert width 6016. It has 524.549 B total parameters and 24.227 B
+  active parameters.
+- MHEP-163 uses 128 experts and expert width 8960. It has 520.906 B total parameters and 29.418 B
+  active parameters.
+- Run IDs: `mhep-162-w12-ep-e192-i6016-cf2p00-fullwatch-overlap1-p32760-20260808` and
+  `mhep-163-w12-ep-e128-i8960-cf2p00-fullwatch-overlap1-p32761-20260808`.
+- Decision rule: A candidate passes only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
+  NCCL memory failure without a retry.
+
+### 2026-08-08 12:41 UTC - The diagnostic mode passes, and the SOL control fails
+
+- MHEP-161 completed all five steps with the exact MHEP-131 model. W&B received 38 finite gradient
+  norm metrics and 38 finite parameter norm metrics.
+- The diagnostic arm reported 107,683 tokens/s with diagnostics on every step. MHEP-159 reported
+  230,051 tokens/s with inline watch and a collective-overlap limit of one.
+- Interpretation: The diagnostic mode removes the memory conflict as designed. Its interval-1
+  cost is 53.2% relative to MHEP-159. It stays useful as an interval-based fallback, but the
+  collective-overlap control is the cheaper method for this shape.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-161-w11-ep-e192-i5504-cf2p00-fullwatch-diagnostic-p32759-20260808
+- MHEP-160 disabled the analytical SOL latency estimator. It failed before step 1 with NCCL
+  all-to-all CUDA out of memory in `jit_train_step`.
+- Decision: The SOL estimator control is a dead end for this shape. Its coordinator was stopped
+  after the deterministic failure.
+
+### 2026-08-08 12:47 UTC - The first larger-model gates fail or restart
+
+- MHEP-162 used 192 experts and width 6016. The compiler reported a 198.73 GiB rematerialization
+  floor against a 170.54 GiB target. NCCL then failed from CUDA out of memory before step 1.
+- Result: 524.549 B total and 24.227 B active parameters is a failed E192 upper bound. The
+  coordinator was stopped after the deterministic failure.
+- MHEP-163 used 128 experts and width 8960. One worker failed before step 1, and Iris restarted the
+  gang. The retained logs do not contain a model OOM or another root cause.
+- Result: The 520.906 B E128 gate is inconclusive. Its coordinator was stopped because the launch
+  contract and user instruction do not permit retries.
+- MHEP-157 and MHEP-158 each accumulated three worker failures and restarted tasks. Their
+  coordinators were also stopped. These infrastructure failures do not validate the memory-fitting
+  O3 or disabled latency-hiding controls.
+
+### 2026-08-08 12:47 UTC - MHEP-164 and MHEP-165 size midpoints ready
+
+- Common config and success criteria match MHEP-162 and MHEP-163.
+- MHEP-164 uses 192 experts and expert width 5760. It has 502.806 B total parameters and 23.774 B
+  active parameters.
+- MHEP-165 uses 128 experts and expert width 8448. It has 491.915 B total parameters and 28.512 B
+  active parameters.
+- Run IDs: `mhep-164-w13-ep-e192-i5760-cf2p00-fullwatch-overlap1-p32762-20260808` and
+  `mhep-165-w13-ep-e128-i8448-cf2p00-fullwatch-overlap1-p32763-20260808`.
+- Both arms set `--xla_gpu_experimental_parallel_collective_overlap_limit=1`, use full watch on
+  every step, use production priority, and permit zero retries.
+
+### 2026-08-08 12:52 UTC - MHEP-166 watch-aware runtime default ready
+
+- Change: Inline watch sets the GPU parallel-collective overlap limit to one. No-watch and
+  diagnostic runs keep the prior limit of four. An explicit `XLA_FLAGS` value still takes
+  precedence.
+- Reason: MHEP-159 captured all full norms at overlap limit one. The prior default of four failed
+  for the same MHEP-131 model.
+- Local checks: Four runtime-default cases pass. They cover explicit override, inline watch,
+  diagnostic watch, and disabled watch. The changed-file pre-commit checks pass.
+- Run ID: `mhep-166-w14-ep-e192-i5504-cf2p00-fullwatch-default-p32764-20260808`.
+- Gate config: Exact MHEP-131 model, five steps, full watch on every step, CUDA async allocator,
+  and no explicit XLA memory or scheduler flag.
+- Decision rule: The code default passes only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics.
+
+### 2026-08-08 12:56 UTC - MHEP-164 and MHEP-165 set new upper bounds
+
+- MHEP-164 used 192 experts and width 5760. The compiler reported a 193.34 GiB rematerialization
+  floor against a 169.22 GiB target. NCCL then failed from CUDA out of memory before step 1.
+- Result: 502.806 B total and 23.774 B active parameters is a failed E192 upper bound.
+- MHEP-165 used 128 experts and width 8448. The compiler reported a 206.06 GiB rematerialization
+  floor against a 168.41 GiB target. NCCL then failed from CUDA out of memory before step 1.
+- Result: 491.915 B total and 28.512 B active parameters is a failed E128 upper bound.
+- Both coordinators were stopped after their deterministic failures.
+
+### 2026-08-08 12:56 UTC - MHEP-167 and MHEP-168 final midpoints ready
+
+- Common config and success criteria match the prior overlap-limit size gates.
+- MHEP-167 uses 192 experts and expert width 5632. It has 491.934 B total parameters and 23.548 B
+  active parameters. This is the only 128-wide midpoint between the MHEP-131 pass and MHEP-164
+  failure.
+- MHEP-168 uses 128 experts and expert width 7680. It has 448.429 B total parameters and 27.153 B
+  active parameters. Its total size matches the known 448.45 B E192 pass.
+- Run IDs: `mhep-167-w15-ep-e192-i5632-cf2p00-fullwatch-overlap1-p32765-20260808` and
+  `mhep-168-w15-ep-e128-i7680-cf2p00-fullwatch-overlap1-p32766-20260808`.
+- Both arms use full watch on every step, production priority, and zero retries.
+
+### 2026-08-08 12:59 UTC - The committed watch-aware default passes
+
+- MHEP-166 completed all five steps for the exact MHEP-131 model without an explicit XLA flag.
+- W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics. The run
+  reported 232,772 tokens/s and a final loss of 10.5243.
+- The no-watch MHEP-131 baseline reported 233,418 tokens/s. This short gate puts the committed
+  full-watch default 0.28% below that baseline.
+- Iris restarted the gang after the completed W&B run because one pod disappeared during teardown.
+  The coordinator was stopped immediately.
+- Result: Commit `4e9319968` makes overlap limit one the tested inline-watch default. No-watch and
+  diagnostic modes keep overlap limit four.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-166-w14-ep-e192-i5504-cf2p00-fullwatch-default-p32764-20260808
+
+### 2026-08-08 12:59 UTC - MHEP-169 and MHEP-170 capacity gates ready
+
+- Goal: Select the lowest capacity factor that keeps EP drops no higher than the FSDP chunk-4
+  baseline while it maximizes EP throughput.
+- Existing bounds: MHEP-139 at capacity 1.4 reported 270,756 tokens/s and 2.5837% drops. MHEP-131
+  at capacity 2.0 reported 233,418 tokens/s and 0.6844% drops. The matched FSDP chunk-4 MHEP-133
+  baseline reported 223,446 tokens/s and 1.9467% drops.
+- Issue #8062 requires a projected 5% loss win, a d2048 win, stable context extension, and stable
+  gradient and loss curves before EP selection. These capacity gates test only the throughput,
+  drop, and norm parts of that decision.
+- Common config: Exact MHEP-131 model; 192 experts; width 5504; top-4; d6144; 48 layers; latent
+  dimension 3072; batch 1024; sequence length 4096; 200 steps on the 2000-step schedule; full
+  gradient and parameter norms every 10 steps; committed watch-aware runtime default; production
+  priority; and zero retries.
+- MHEP-169 uses capacity factor 1.5. MHEP-170 uses capacity factor 1.6.
+- Run IDs: `mhep-169-w16-ep-e192-i5504-cf1p50-watch10-p32767-20260808` and
+  `mhep-170-w16-ep-e192-i5504-cf1p60-watch10-p32768-20260808`.
+- Decision rule: Select the faster arm if its end-of-run drop fraction is no higher than 1.9467%
+  and its norm and loss curves stay finite. Otherwise, select the higher capacity factor.
+
+### 2026-08-08 13:10 UTC - The E192 size search closes at width 5,632
+
+- MHEP-167 completed all five steps with 192 experts and expert width 5,632. W&B received 38
+  finite gradient norm metrics and 38 finite parameter norm metrics. The final loss was 10.5207,
+  and the run reported 229,343 tokens/s.
+- Result: 491.934 B total parameters and 23.548 B active parameters is the largest confirmed E192
+  model at capacity factor 2.0. Width 5,760 is the adjacent failed point.
+- The worker coordination warnings started after every training task had completed with exit 0.
+  They were teardown messages. The coordinator was stopped after the result was verified.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-167-w15-ep-e192-i5632-cf2p00-fullwatch-overlap1-p32765-20260808
+- MHEP-168 used 128 experts and width 7,680. It failed from NCCL CUDA out of memory before step 1.
+  W&B has no training or norm metric. Its coordinator was stopped after the deterministic failure.
+- Result: 448.429 B total parameters and 27.153 B active parameters is a failed E128 upper bound.
+
+### 2026-08-08 13:10 UTC - MHEP-171 and MHEP-172 E128 size gates ready
+
+- Common config and success criteria match the prior committed-default full-watch size gates.
+- MHEP-171 uses 128 experts and expert width 7,168. It has 419.438 B total parameters and 26.247 B
+  active parameters.
+- MHEP-172 uses 128 experts and expert width 7,424. It has 433.933 B total parameters and 26.700 B
+  active parameters.
+- Run IDs: `mhep-171-w17-ep-e128-i7168-cf2p00-fullwatch-p32769-20260808` and
+  `mhep-172-w17-ep-e128-i7424-cf2p00-fullwatch-p32770-20260808`.
+- Both arms use five steps, full watch on every step, the committed watch-aware runtime default,
+  production priority, CUDA async allocation, and zero retries.
+- Decision rule: A candidate passes only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
+  NCCL memory failure without a retry. Use the remaining 128-wide midpoint after the pair locates
+  the pass and failure boundary.
+
+### 2026-08-08 13:16 UTC - MHEP-173 single-executable sparse watch gate ready
+
+- MHEP-170 used capacity factor 1.6 and full watch every 10 steps. It completed step 0, then
+  several GPUs failed 135,864,938,200-byte CUDA async allocations before step 1. Iris began a gang
+  retry. The coordinator was stopped during that retry. The child recorded three failures and 16
+  preemptions, and W&B contains only step 0.
+- Cause: `compute_watch` was a static JIT argument. A sparse inline watch compiled one watched and
+  one unwatched training executable. The second executable started while the first executable was
+  resident. Capacity 1.6 crossed the resulting memory limit.
+- Change: Inline watch now computes statistics in every training step and uses `WatchConfig.interval`
+  only to select which statistics it sends to W&B. The train step has no static watch argument, so
+  the process keeps one training executable. Diagnostic watch still runs only on its interval.
+- Cost: The inline path now performs the scalar norm reductions on every step. The prior MHEP-166
+  five-step gate measured the always-watched path at 0.28% below the no-watch MHEP-131 baseline.
+  The capacity gate will provide a longer throughput result.
+- Local checks: Six focused tests pass. They cover watched statistics on and between log intervals,
+  diagnostic statistics, and the watch-aware XLA defaults.
+- MHEP-173 repeats the exact MHEP-170 capacity-1.6 model for 200 steps. It logs full gradient and
+  parameter norms every 10 steps, uses production priority and CUDA async allocation, and permits
+  zero retries. Run ID: `mhep-173-w18-ep-e192-i5504-cf1p60-singleexec-watch10-p32771-20260808`.
+- Decision rule: Keep the change only if the arm completes 200 steps with finite loss and norms.
+  Compare its throughput and final drop fraction with MHEP-169. Revert the change if the same
+  memory failure occurs.
+
+### 2026-08-08 13:22 UTC - MHEP-174 final E128 midpoint ready
+
+- MHEP-171 completed all five steps with 128 experts and width 7,168. W&B received 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics. The final loss was 10.4902, and the
+  run reported 201,824 tokens/s.
+- Result: 419.438 B total parameters and 26.247 B active parameters is a confirmed E128 pass.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-171-w17-ep-e128-i7168-cf2p00-fullwatch-p32769-20260808
+- MHEP-172 used 128 experts and width 7,424. It failed before step 1 when NCCL all-to-all could
+  not allocate device memory. Iris began a gang retry. The coordinator was stopped during that
+  retry, and W&B has no training or norm metric.
+- Result: 433.933 B total parameters and 26.700 B active parameters is a failed E128 upper bound.
+- MHEP-174 uses the only remaining 128-wide midpoint, expert width 7,296. It has 426.686 B total
+  parameters and 26.473 B active parameters.
+- Run ID: `mhep-174-w19-ep-e128-i7296-cf2p00-fullwatch-p32772-20260808`.
+- The arm uses five steps, full watch on every step, production priority, CUDA async allocation,
+  and zero retries. A pass makes width 7,296 the E128 maximum. A failure makes width 7,168 the
+  E128 maximum.
+
+### 2026-08-08 13:27 UTC - MHEP-175 and MHEP-176 capacity-1.5 size gates ready
+
+- Reason: Capacity factor 1.5 reached 2.37% drops by step 76 in MHEP-169 and was still declining.
+  It is likely to finish below the 1.9467% FSDP drop reference. Its smaller routing buffers can
+  raise the full-watch model-size limit above the capacity-2 bounds.
+- Common config: d6144; 48 layers; latent dimension 3072; top-4; capacity factor 1.5; batch 1024;
+  sequence length 4096; EP64 `fixed_all_to_all`; five steps on the 2000-step schedule; full norms
+  on every step; committed single-executable inline watch; CUDA async allocation; production
+  priority; and zero retries.
+- MHEP-175 uses 192 experts and width 6,016. It has 524.549 B total parameters and 24.227 B active
+  parameters. The same shape failed at capacity factor 2.0.
+- MHEP-176 uses 128 experts and width 8,192. It has 477.420 B total parameters and 28.059 B active
+  parameters. It lies between the capacity-2 width-7,680 and width-8,448 failures.
+- Run IDs: `mhep-175-w20-ep-e192-i6016-cf1p50-fullwatch-p32773-20260808` and
+  `mhep-176-w20-ep-e128-i8192-cf1p50-fullwatch-p32774-20260808`.
+- Decision rule: A candidate passes only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
+  NCCL memory failure without a retry. Continue upward after a pass and downward after a failure.
+
+### 2026-08-08 13:30 UTC - MHEP-177 and MHEP-178 lower-capacity gates ready
+
+- Issue #8062 names capacity factor 1.3 for the target EP option. The first capacity search omitted
+  that point and used a drop threshold against FSDP that is not a decision rule in the issue.
+- Existing 200-step evidence: Capacity 1.4 reported 271,437 tokens/s and 2.8230% drops over its last
+  50 steps. Its heuristic drop-adjusted rate was 263,774 tokens/s. Capacity 2.0 reported 231,626
+  tokens/s and 0.6268% drops, or a 230,174 tokens/s drop-adjusted rate. Their last-50 mean losses
+  were 3.2430 and 3.2388. Thus, capacity 1.4 delivered a 14.6% higher drop-adjusted rate with only
+  0.13% higher loss in this short gate. The adjusted rate discounts every dropped assignment as if
+  it removed the same fraction of token work. It is a comparison heuristic, not a token count.
+- Common config: Exact MHEP-131 model; 192 experts; width 5,504; top-4; d6144; 48 layers; latent
+  dimension 3072; batch 1024; sequence length 4096; 200 steps on the 2000-step schedule; full norms
+  logged every 10 steps through the committed single executable; production priority; and zero
+  retries.
+- MHEP-177 uses capacity factor 1.3. MHEP-178 uses capacity factor 1.4.
+- Run IDs: `mhep-177-w21-ep-e192-i5504-cf1p30-singleexec-watch10-p32775-20260808` and
+  `mhep-178-w21-ep-e192-i5504-cf1p40-singleexec-watch10-p32776-20260808`.
+- Decision rule: Compare the last 50 steps of throughput, drop-adjusted token rate, loss, and drops.
+  Require finite loss and all 76 norm metrics. Prefer the lowest capacity whose loss stays within
+  0.5% of the best EP arm unless the issue's later scaling runs show a larger quality cost.
+
+### 2026-08-08 13:31 UTC - The capacity-2 E128 size search closes at width 7,168
+
+- MHEP-174 used 128 experts and width 7,296. The compiler reported a 187.72 GiB
+  rematerialization floor, and NCCL then failed from CUDA out of memory before step 1. The
+  coordinator was stopped immediately.
+- Result: Width 7,168 is the exact E128 maximum on the tested 128-wide grid at capacity factor 2.0.
+  It has 419.438 B total parameters and 26.247 B active parameters. Width 7,296 is the adjacent
+  failed point.
+
+### 2026-08-08 13:33 UTC - MHEP-179 and MHEP-180 raise the capacity-1.5 E192 bounds
+
+- MHEP-175 completed all five steps with 192 experts, width 6,016, and capacity factor 1.5. W&B
+  received 38 finite gradient norm metrics and 38 finite parameter norm metrics. The final loss
+  was 10.5200, and the run reported 251,980 tokens/s.
+- Result: 524.549 B total parameters and 24.227 B active parameters is the new largest confirmed
+  full-watch E192 model.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-175-w20-ep-e192-i6016-cf1p50-fullwatch-p32773-20260808
+- MHEP-179 uses width 6,528, with 568.036 B total parameters and 25.133 B active parameters.
+- MHEP-180 uses width 7,040, with 611.522 B total parameters and 26.039 B active parameters.
+- Run IDs: `mhep-179-w22-ep-e192-i6528-cf1p50-fullwatch-p32777-20260808` and
+  `mhep-180-w22-ep-e192-i7040-cf1p50-fullwatch-p32778-20260808`.
+- Both arms keep the MHEP-175 config except for expert width. They use full watch on every step,
+  production priority, and zero retries. Use a 256-wide midpoint after the pair locates the next
+  pass and failure boundary.
+
+### 2026-08-08 13:38 UTC - MHEP-181 sets the next capacity-1.5 E128 bound
+
+- MHEP-176 completed all five steps with 128 experts, width 8,192, and capacity factor 1.5. W&B
+  received all 76 norm metrics at every step. Every value was finite. The final loss was 10.4783,
+  and the run reported 220,036 tokens/s.
+- Result: 477.420 B total parameters and 28.059 B active parameters is the new largest confirmed
+  full-watch E128 model. It also has the largest confirmed active parameter count.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-176-w20-ep-e128-i8192-cf1p50-fullwatch-p32774-20260808
+- The compiler estimated a 189.66 GiB rematerialized program against its 167.52 GiB target. The
+  program still completed, but the estimate shows little remaining memory.
+- MHEP-181 tests the adjacent 128-wide point at width 8,320. It has 484.668 B total parameters and
+  28.285 B active parameters.
+- Run ID: `mhep-181-w23-ep-e128-i8320-cf1p50-fullwatch-p32779-20260808`.
+- The arm keeps the MHEP-176 config except for expert width. It uses five steps, full watch on every
+  step, production priority, CUDA async allocation, and zero retries. A pass raises the lower
+  bound. A failure closes the E128 search at width 8,192 on the tested 128-wide grid.
+
+### 2026-08-08 13:43 UTC - MHEP-182 narrows the capacity-1.5 E192 bound
+
+- MHEP-179 used 192 experts, width 6,528, and capacity factor 1.5. The compiler estimated a
+  201.14 GiB rematerialized program. NCCL all-to-all then failed from CUDA out of memory before
+  step 1. The coordinator was stopped.
+- MHEP-180 used width 7,040. One worker failed, and the gang began a second setup. The coordinator
+  was stopped during the retry. A point above the failed width 6,528 cannot narrow the boundary.
+- Result: Width 6,016 remains the E192 pass bound, and width 6,528 is the failure bound.
+- MHEP-182 tests their 256-wide midpoint at width 6,272. It has 546.292 B total parameters and
+  24.680 B active parameters.
+- Run ID: `mhep-182-w24-ep-e192-i6272-cf1p50-fullwatch-p32780-20260808`.
+- The arm keeps the MHEP-175 config except for expert width. It uses five steps, full watch on every
+  step, production priority, CUDA async allocation, and zero retries. A pass selects width 6,400
+  next. A failure selects width 6,144 next.
+
+### 2026-08-08 13:50 UTC - MHEP-183 tests the adjacent E128 width
+
+- MHEP-181 completed all five steps with 128 experts, width 8,320, and capacity factor 1.5. W&B
+  received all 76 norm metrics at every step, and every value was finite. The final loss was
+  10.4740, and the run reported 201,002 tokens/s.
+- Result: 484.668 B total parameters and 28.285 B active parameters is the new largest confirmed
+  full-watch E128 model. It has the largest confirmed active parameter count.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-181-w23-ep-e128-i8320-cf1p50-fullwatch-p32779-20260808
+- The compiler estimated a 191.59 GiB rematerialized program. The first NCCL all-to-all and all
+  five training steps still completed.
+- MHEP-183 tests the adjacent 128-wide point at width 8,448. It has 491.915 B total parameters and
+  28.512 B active parameters.
+- Run ID: `mhep-183-w25-ep-e128-i8448-cf1p50-fullwatch-p32781-20260808`.
+- The arm keeps the MHEP-181 config except for expert width. It uses five steps, full watch on every
+  step, production priority, CUDA async allocation, and zero retries. A failure closes the search
+  at width 8,320. A pass raises the lower bound and selects width 8,576 next.
+
+### 2026-08-08 13:52 UTC - MHEP-184 tests the final E192 midpoint
+
+- MHEP-182 used 192 experts, width 6,272, and capacity factor 1.5. The compiler estimated a
+  197.11 GiB rematerialized program. NCCL all-to-all failed from CUDA out of memory before step 1.
+  The coordinator was stopped immediately.
+- Result: Width 6,016 remains the E192 pass bound, and width 6,272 is the failure bound.
+- MHEP-184 tests their only 128-wide midpoint at width 6,144. It has 535.421 B total parameters and
+  24.454 B active parameters.
+- Run ID: `mhep-184-w26-ep-e192-i6144-cf1p50-fullwatch-p32782-20260808`.
+- The arm keeps the MHEP-175 config except for expert width. It uses five steps, full watch on every
+  step, production priority, CUDA async allocation, and zero retries. A pass makes width 6,144 the
+  E192 maximum on the tested grid. A failure keeps width 6,016 as the maximum.
+
+### 2026-08-08 13:57 UTC - The capacity-1.5 E128 search closes at width 8,320
+
+- MHEP-183 used 128 experts, width 8,448, and capacity factor 1.5. NCCL all-to-all failed from CUDA
+  out of memory before step 1. The coordinator was stopped immediately.
+- Result: Width 8,320 is the exact E128 maximum on the tested 128-wide grid at capacity factor 1.5.
+  It has 484.668 B total parameters and 28.285 B active parameters. Width 8,448 is the adjacent
+  failed point.
+
+### 2026-08-08 14:00 UTC - MHEP-169 completes the capacity-1.5 full-norm gate
+
+- MHEP-169 completed 200 steps at capacity factor 1.5. W&B received all 76 norm metrics at steps
+  0, 10, 20, through 190. Every value in all 20 norm rows was finite.
+- Final metrics: 258,817 tokens/s, 1.7509% drops, and loss 3.2030.
+- Last-50 means: 255,393 tokens/s, 2.1312% drops, 249,950 drop-adjusted tokens/s, and loss 3.2403.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-169-w16-ep-e192-i5504-cf1p50-watch10-p32767-20260808
+- Iris reported 14 successful workers after W&B finished. Two workers moved to pending during
+  teardown, with one preemption. The coordinator was stopped to prevent a useless gang retry. This
+  teardown state does not change the complete W&B result.
+- Keep capacity factor 1.5 as a valid candidate. Compare it with the matched 1.3, 1.4, and 1.6 arms
+  after they complete.
+
+### 2026-08-08 14:02 UTC - The capacity-1.5 E192 search closes at width 6,144
+
+- MHEP-184 completed all five steps with 192 experts, width 6,144, and capacity factor 1.5. W&B
+  received all 76 norm metrics at every step, and every value was finite. The final loss was
+  10.5164, and the run reported 251,021 tokens/s.
+- The compiler estimated a 194.72 GiB rematerialized program. Both compiled steps, NCCL, and all
+  five training steps still completed. Iris reports all 16 workers succeeded with zero failures
+  and zero preemptions.
+- Result: Width 6,144 is the exact E192 maximum on the tested 128-wide grid at capacity factor 1.5.
+  It has 535.421 B total parameters and 24.454 B active parameters. Width 6,272 is the adjacent
+  failed point.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-184-w26-ep-e192-i6144-cf1p50-fullwatch-p32782-20260808
+
+### 2026-08-08 14:16 UTC - MHEP-185 tests dynamic inline norm sampling
+
+- The prior inline path computes all norm statistics on every training step. It logs them only at
+  the configured interval. This keeps one executable resident, but it pays the reduction cost on
+  the other nine steps.
+- Commit `2d136d5e1` passed a dynamic scalar to the compiled training step. `jax.lax.cond`
+  computed the 76 statistics only when the scalar was true. Its false branch returned zero
+  placeholders with the same shapes and dtypes. The scalar was not a static argument, so the
+  design used one compiled training executable.
+- A local behavior test ran the true and false branches. The true branch returned the expected
+  gradient norm, the false branch returned the placeholder, and the JIT cache contained one
+  executable. All five focused watch tests and the changed-file checks passed.
+- MHEP-185 matched MHEP-178: MHEP-131 shape, 192 experts, width 5,504, top-k 4, capacity factor
+  1.4, 200 steps, and full norms every 10 steps.
+- Run ID: `mhep-185-w27-ep-e192-i5504-cf1p40-dynamic-watch10-p32783-20260808`.
+- Acceptance required all 20 expected norm rows, all 76 finite norm fields in each row, no OOM or
+  retry, and no second training compilation after the first step.
+
+### 2026-08-08 14:19 UTC - Dynamic inline norm sampling fails on distributed sharding
+
+- MHEP-185 failed before step 1. The dynamic condition scalar had replicated pinned-host
+  sharding. The compiled condition required replicated device sharding. JAX stopped with
+  `AssertionError: Unexpected XLA sharding override` on all workers.
+- The compiler also estimated a 198.91 GiB rematerialized program against a 167.89 GiB target.
+  The sharding error happened before execution, so the run did not test the actual memory peak.
+- The coordinator was stopped immediately. It had production priority and zero retries.
+- Decision: Reject commit `2d136d5e1`. Revert the implementation and local test so this failed
+  option does not remain in the code. Keep this record as the negative result.
+
+### 2026-08-08 14:22 UTC - MHEP-186 removes the host condition input
+
+- The corrected candidate derives the watch condition inside the compiled step from
+  `state.step % interval == 0`. The step is already a device-resident state value. This removes
+  the pinned-host predicate that caused MHEP-185 to fail.
+- The `lax.cond` true branch computes all requested watch statistics. The false branch returns
+  zero placeholders that the host loop does not log. Both branches remain in one executable.
+- The local test runs steps 0 and 1 with fixed parameter dtypes. Step 0 returns the expected norm,
+  step 1 returns the placeholder, and the JIT cache has one entry. All five focused watch tests
+  and all changed-file checks passed.
+- MHEP-186 is a five-step gate with the MHEP-131 shape, 192 experts, width 5,504, top-k 4,
+  capacity factor 1.4, and full norms every 10 steps.
+- Run ID: `mhep-186-w28-ep-e192-i5504-cf1p40-stepcond-watch10-p32784-20260808`.
+- Acceptance requires 76 finite norm fields at step 0, no norm row on steps 1 through 4, no
+  sharding error, no OOM or retry, and no second training compilation. A pass permits a matched
+  200-step arm. A failure requires another code revert.
+
+### 2026-08-08 14:25 UTC - MHEP-173 completes the capacity-1.6 gate
+
+- MHEP-173 completed all 200 steps. W&B received all 76 norm fields at steps 0, 10, 20, through
+  190. Every field in all 20 rows was finite. Iris reports the coordinator and training child as
+  succeeded, with no failure or retry.
+- Final metrics: 252,404 tokens/s, 1.3986% drops, and loss 3.2062.
+- Last-50 means: 250,734 tokens/s, 1.6189% drops, 246,675 drop-adjusted tokens/s, and loss 3.2388.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-173-w18-ep-e192-i5504-cf1p60-singleexec-watch10-p32771-20260808
+- Compared with capacity factor 1.5, capacity factor 1.6 has 1.82% lower raw throughput and 1.31%
+  lower drop-adjusted throughput. Its mean loss is only 0.045% lower. Capacity factor 1.5 is the
+  better of these two short-run choices.
+
+### 2026-08-08 14:27 UTC - MHEP-177 makes capacity 1.3 the leading candidate
+
+- MHEP-177 completed all 200 steps. W&B received all 76 norm fields at steps 0, 10, 20, through
+  190. Every field in all 20 rows was finite. Iris reports the coordinator and training child as
+  succeeded, with no failure or retry.
+- Final metrics: 271,090 tokens/s, 3.2570% drops, and loss 3.2050.
+- Last-50 means: 271,325 tokens/s, 3.9277% drops, 260,668 drop-adjusted tokens/s, and loss 3.2441.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-177-w21-ep-e192-i5504-cf1p30-singleexec-watch10-p32775-20260808
+- Compared with capacity factor 1.5, capacity factor 1.3 has 6.24% higher raw throughput, 1.80
+  percentage points more drops, 4.29% higher drop-adjusted throughput, and 0.119% higher loss. The
+  loss difference is within the preset 0.5% short-run rule. Capacity factor 1.3 is the leading
+  candidate while capacity factor 1.4 finishes.
+
+### 2026-08-08 14:28 UTC - Device-step conditional fails with the same sharding conflict
+
+- MHEP-186 failed before step 1 with the same `Unexpected XLA sharding override` assertion as
+  MHEP-185. Moving the condition from a host input to `state.step` did not change the failure.
+- The result isolates the problem to the `lax.cond` program and its merge with the pinned-host
+  optimizer state. It is not caused by the condition scalar location.
+- The coordinator was stopped immediately. It had production priority and zero retries.
+- Decision: Reject the dynamic conditional approach for this sharded, optimizer-offloaded model.
+  Revert commit `40510fccb`. Do not test another condition location without a new JAX or XLA
+  mechanism that can preserve memory kinds across both branches.
+
+### 2026-08-08 14:30 UTC - Capacity factor 1.3 wins the matched short-run rule
+
+- MHEP-178 completed all 200 steps at capacity factor 1.4. W&B received all 76 norm fields at
+  steps 0, 10, 20, through 190. Every field in all 20 rows was finite. Iris reports the
+  coordinator and training child as succeeded.
+- Capacity-1.4 last-50 means: 259,015 tokens/s, 2.8941% drops, 251,518 drop-adjusted tokens/s, and
+  loss 3.2417.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-178-w21-ep-e192-i5504-cf1p40-singleexec-watch10-p32776-20260808
+- Matched last-50 comparison:
+
+  | Capacity | Tokens/s | Drops | Adjusted tokens/s | Loss |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 1.3 | 271,325 | 3.9277% | 260,668 | 3.2441 |
+  | 1.4 | 259,015 | 2.8941% | 251,518 | 3.2417 |
+  | 1.5 | 255,393 | 2.1312% | 249,950 | 3.2403 |
+  | 1.6 | 250,734 | 1.6189% | 246,675 | 3.2388 |
+
+- Capacity factor 1.3 has the highest drop-adjusted throughput. Its mean loss is 0.164% above the
+  best arm, which is inside the preset 0.5% rule. It also matches the EP capacity in issue #8062.
+  Select 1.3 for the final size search. This 200-step result does not replace the issue's d2048,
+  context-extension, scaling-law, or target-scale gates.
+
+### 2026-08-08 14:30 UTC - MHEP-187 to MHEP-190 search the capacity-1.3 size bounds
+
+- All four arms use d6144, 48 layers, latent dimension 3,072, top-k 4, EP64, CUDA async
+  allocation, pinned-host optimizer state, five steps, full gradient and parameter norms on every
+  step, production priority, and zero retries.
+- MHEP-187 uses 192 experts and width 6,400: 557.164 B total and 24.907 B active parameters.
+- MHEP-188 uses 192 experts and width 6,656: 578.907 B total and 25.360 B active parameters.
+- MHEP-189 uses 128 experts and width 8,704: 506.411 B total and 28.965 B active parameters.
+- MHEP-190 uses 128 experts and width 8,960: 520.906 B total and 29.418 B active parameters.
+- Run IDs: `mhep-187-w29-ep-e192-i6400-cf1p30-fullwatch-p32785-20260808`,
+  `mhep-188-w29-ep-e192-i6656-cf1p30-fullwatch-p32786-20260808`,
+  `mhep-189-w29-ep-e128-i8704-cf1p30-fullwatch-p32787-20260808`, and
+  `mhep-190-w29-ep-e128-i8960-cf1p30-fullwatch-p32788-20260808`.
+- A point passes only if all five steps finish and W&B receives all 76 finite norm fields on every
+  step. Stop a compile or NCCL OOM immediately. Use the next 128-wide midpoint after these arms
+  establish one pass and one failure for each expert count.
+
+### 2026-08-08 14:37 UTC - MHEP-190 sets the E128 capacity-1.3 failure bound
+
+- MHEP-190 used 128 experts, width 8,960, and capacity factor 1.3. The compiler estimated a
+  195.71 GiB rematerialized program against a 170.18 GiB target.
+- The first NCCL all-to-all failed from CUDA out of memory before step 1. W&B received the
+  520.906 B parameter count but no training or norm row.
+- The coordinator remained active after the worker failure and was stopped immediately.
+- Result: Width 8,960 is a deterministic E128 failure bound. Wait for width 8,704. If it passes,
+  test their width-8,832 midpoint. If it fails, test width 8,448 or 8,576 from the capacity-1.5
+  pass bound.
+
+### 2026-08-08 14:40 UTC - MHEP-187 and MHEP-188 narrow the E192 bound
+
+- MHEP-187 used width 6,400. The compiler estimated a 196.28 GiB rematerialized program against
+  a 172.54 GiB target. The first NCCL all-to-all failed from CUDA out of memory before step 1.
+- MHEP-188 used width 6,656. The compiler estimated a 201.00 GiB rematerialized program against
+  a 173.87 GiB target. The first NCCL all-to-all also failed from CUDA out of memory before step 1.
+- Both coordinators remained active after their worker failures and were stopped immediately.
+- Result: Width 6,400 is the useful E192 failure bound. The capacity-1.5 width-6,144 pass remains
+  valid at lower capacity. Width 6,272 is the only 128-wide midpoint.
+- MHEP-191 tests 192 experts and width 6,272 at capacity factor 1.3. It has 546.292 B total and
+  24.680 B active parameters. It keeps the other size-gate settings and uses zero retries.
+- Run ID: `mhep-191-w30-ep-e192-i6272-cf1p30-fullwatch-p32789-20260808`.
+- A pass closes the E192 search at width 6,272. A failure closes it at width 6,144.
+
+### 2026-08-08 14:44 UTC - MHEP-189 raises the capacity-1.3 E128 pass bound
+
+- MHEP-189 completed all five steps with 128 experts, width 8,704, and capacity factor 1.3.
+  W&B received all 76 norm fields at every step, and every value was finite.
+- The run has 506.411 B total parameters and 28.965 B active parameters. Its final loss was
+  10.4769, and its final reported rate was 225,080 tokens/s.
+- Iris reports that the coordinator and training child succeeded. The job used production
+  priority and zero retries.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-189-w29-ep-e128-i8704-cf1p30-fullwatch-p32787-20260808
+- MHEP-192 tests the only 128-wide midpoint between the width-8,704 pass and width-8,960
+  failure. It uses 128 experts, width 8,832, and capacity factor 1.3. It has 513.659 B total
+  parameters and 29.191 B active parameters.
+- MHEP-192 keeps the other size-gate settings. It uses five steps, full norms on every step,
+  production priority, and zero retries.
+- Run ID: `mhep-192-w30-ep-e128-i8832-cf1p30-fullwatch-p32790-20260808`.
+- A pass closes the E128 search at width 8,832. A failure closes it at width 8,704.
+
+### 2026-08-08 14:46 UTC - MHEP-191 closes the E192 size search
+
+- MHEP-191 completed all five steps with 192 experts, width 6,272, and capacity factor 1.3.
+  W&B received all 76 norm fields at every step, and every value was finite.
+- The run has 546.292 B total parameters and 24.680 B active parameters. Its final loss was
+  10.5240, and its final reported rate was 262,428 tokens/s.
+- The width-6,400 MHEP-187 arm failed from NCCL out of memory. Width 6,272 is therefore the exact
+  E192 maximum on the tested 128-wide grid at capacity factor 1.3.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-191-w30-ep-e192-i6272-cf1p30-fullwatch-p32789-20260808
+
+### 2026-08-08 14:46 UTC - MHEP-193 and MHEP-194 start the throughput search
+
+- Both arms use the selected E192 model: width 6,272, capacity factor 1.3, latent dimension
+  3,072, top-k 4, d6144, 48 layers, EP64, full norms every 10 steps, production priority, and
+  zero retries.
+- MHEP-193 is the 200-step baseline. It keeps collective overlap limit 1 and profiles five steps
+  starting at step 20. The last 50 non-profile steps define its steady-state throughput.
+- MHEP-194 is a five-step fit gate with collective overlap limit 2. It tests whether more
+  communication overlap fits beside the full norm executable. Stop it immediately for a compile
+  or NCCL out-of-memory failure.
+- Run IDs: `mhep-193-w31-ep-e192-i6272-cf1p30-overlap1-watch10-p32791-20260808` and
+  `mhep-194-w31-ep-e192-i6272-cf1p30-overlap2-gate-p32792-20260808`.
+- If MHEP-194 passes with all 76 finite norm fields at step 0, run a matched 200-step overlap-2
+  arm with the same profile window. If it fails, keep overlap limit 1 and use the baseline profile
+  to select the next safe optimization.
+
+### 2026-08-08 14:52 UTC - The capacity-1.3 model-size search is complete
+
+- MHEP-192 used 128 experts, width 8,832, and capacity factor 1.3. The compiler estimated a
+  193.89 GiB rematerialized program against a 169.74 GiB target.
+- The first NCCL all-to-all failed from CUDA out of memory before step 1. The coordinator was
+  stopped immediately. It used production priority and zero retries.
+- Result: Width 8,704 is the exact E128 maximum on the tested 128-wide grid. It has 506.411 B
+  total parameters and 28.965 B active parameters. Width 8,832 is the adjacent failed point.
+- The E192 maximum is width 6,272, with 546.292 B total and 24.680 B active parameters. It is
+  7.87% larger by total parameter count. The E128 maximum is 17.36% larger by active parameter
+  count.
+- Select the E192 width-6,272 model as the primary model. It wins the requested total-parameter
+  objective, matches the user's expert-count preference, and the completed d768 comparison gave
+  E192 lower held-out loss than E128. Keep E128 width 8,704 as the maximum-active-parameter
+  alternative.
+
+### 2026-08-08 14:56 UTC - Overlap limit 2 fails, and automatic PGLE is ready
+
+- MHEP-194 tested the selected E192 model with collective overlap limit 2. The first NCCL
+  all-to-all failed from CUDA out of memory before step 1. The coordinator was stopped
+  immediately. The safe collective overlap limit remains 1.
+- The next candidate is JAX automatic profile-guided latency estimation. Official JAX
+  documentation states that automatic PGLE measures compute and collective times for a configured
+  number of runs, then recompiles the module with those measurements for scheduling.
+- The EP runtime previously overwrote an explicit `JAX_ENABLE_PGLE` value with `false`. The
+  candidate changes EP runtime values to defaults that preserve explicit launch values. This
+  matches the FSDP hero runtime pattern. A behavior test confirms that explicit PGLE and allocator
+  values survive setup. The focused tests and changed-file checks pass.
+- MHEP-195 uses the selected E192 model, overlap limit 1, 25 steps, full norms every 10 steps,
+  `JAX_ENABLE_PGLE=true`, and `JAX_PGLE_PROFILING_RUNS=3`. It uses production priority and zero
+  retries. It does not run XProf, so the PGLE profiler has exclusive access.
+- Run ID: `mhep-195-w32-ep-e192-i6272-cf1p30-pgle3-watch10-p32793-20260808`.
+- A pass requires all 25 steps, all 76 finite norm fields at steps 0, 10, and 20, a confirmed PGLE
+  recompile, and no OOM or retry. Compare its post-recompile steps with MHEP-193. Revert the code
+  candidate if PGLE fails or does not give a useful gain.
+
+### 2026-08-08 15:15 UTC - Automatic PGLE passes its gate
+
+- MHEP-195 completed all 25 steps. Iris reports that the coordinator and training child
+  succeeded, with no failure or retry. W&B received all 76 norm fields at steps 0, 10, and 20.
+  Every value was finite.
+- The first five steps collected latency data and changed the executable. XLA then used the
+  measured latency data in its profile-guided estimator. The post-change steps had a mean of
+  270,087 tokens/s and a median of 270,443 tokens/s.
+- The current matched MHEP-193 baseline mean after its XProf window is 255,330 tokens/s. The PGLE
+  gate is 5.78% faster. The comparison is provisional until both 200-step runs finish.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-195-w32-ep-e192-i6272-cf1p30-pgle3-watch10-p32793-20260808
+- MHEP-196 is the matched 200-step PGLE arm. It uses the selected E192 width-6,272 model,
+  capacity factor 1.3, latent dimension 3,072, top-k 4, d6144, 48 layers, EP64, overlap limit 1,
+  full norms every 10 steps, and the 2,000-step schedule. It sets `JAX_ENABLE_PGLE=true` and
+  `JAX_PGLE_PROFILING_RUNS=3`. XProf stays off because it also uses CUPTI.
+- MHEP-196 uses production priority, zero retries, and `IRIS_PORT_JAX=32794`. Its run ID is
+  `mhep-196-w33-ep-e192-i6272-cf1p30-pgle3-watch10-p32794-20260808`.
+- A pass requires all 200 steps, all 76 finite norm fields at steps 0, 10, through 190, a
+  confirmed profile-guided recompile, and no OOM or retry. Use the last 50 steps for the final
+  throughput comparison with MHEP-193. Stop the job at the first OOM or retry.
+
+### 2026-08-08 15:47 UTC - The selected-model baseline completes
+
+- MHEP-193 completed all 200 steps. Iris reports that the coordinator and training child
+  succeeded with zero failures and zero preemptions.
+- W&B has 200 history rows. It received all 76 norm fields at steps 0, 10, through 190. Every
+  value in all 20 norm rows was finite.
+- Last-50 means were 254,038 tokens/s, 3.9721% drops, 243,948 drop-adjusted tokens/s, and loss
+  3.2411. The final step reported 256,857 tokens/s, 3.7368% drops, and loss 3.2028.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-193-w31-ep-e192-i6272-cf1p30-overlap1-watch10-p32791-20260808
+- XProf captured steps 20 through 25 and uploaded the profile to
+  `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mhep-193-w31-ep-e192-i6272-cf1p30-overlap1-watch10-p32791-20260808/plugins/profile/steps-20-to-25`.
+  The local summary tool could not resolve the nested W&B `trainer.trainer.log_dir` value, and
+  this machine does not have the required S3 or IAP credential. No local profile summary was
+  available. The W&B step data remains the primary comparison record.
+
+### 2026-08-08 16:15 UTC - Automatic PGLE improves the selected model
+
+- MHEP-196 completed all 200 steps. Iris reports that the coordinator and training child
+  succeeded with zero failures and zero preemptions. The run used production priority and zero
+  retries.
+- W&B has 200 history rows. It received all 76 norm fields at steps 0, 10, through 190. Every
+  value in all 20 norm rows was finite.
+- Last-50 means were 262,683 tokens/s, 3.9642% drops, 252,271 drop-adjusted tokens/s, and loss
+  3.2417. The final step reported 262,368 tokens/s, 3.7762% drops, and loss 3.2035.
+- Compared with the matched MHEP-193 baseline, automatic PGLE improved raw throughput by 3.40%
+  and drop-adjusted throughput by 3.41%. The drop rate was 0.0079 percentage points lower. Mean
+  loss was 0.018% higher, which is not a material change in this short comparison.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-196-w33-ep-e192-i6272-cf1p30-pgle3-watch10-p32794-20260808
+- Decision: Keep the explicit runtime override support from commit `e4b68798e`. The EP defaults
+  remain unchanged, but a selected-model run can set `JAX_ENABLE_PGLE=true` and
+  `JAX_PGLE_PROFILING_RUNS=3`. Keep `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`, full norms every 10
+  steps, and collective overlap limit 1. Do not set an XLA memory fraction.
+- Overlap limit 2 remains rejected because MHEP-194 failed from NCCL out of memory. Automatic PGLE
+  is the only tested performance change that both keeps full norms and improves the selected
+  model. MHEP-195 confirmed that XLA used measured latency data for a profile-guided recompile,
+  and MHEP-196 confirmed the 200-step throughput result.
+
+### 2026-08-08 16:27 UTC - Selected-model capacity boundary sweep ready
+
+- Question: Find the maximum capacity factor for the selected E192, width-6,272 model while it
+  sends full gradient and parameter norms to W&B.
+- Code snapshot: `f639c264e`.
+- Common config: EP64 on 64 GB200 GPUs in 16 nodes; d6144; 48 layers; LatentMoE latent dimension
+  3,072; 192 experts; expert width 6,272; top-k 4; batch 1,024; sequence length 4,096; five steps
+  on the 2,000-step schedule; full inline norms every step; pinned-host optimizer state;
+  `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`; collective overlap limit 1; automatic PGLE with three
+  profile runs; no XProf; no explicit memory fraction; production priority; and zero retries.
+- Known bounds: Capacity 1.30 passes. Capacity 1.50 fails before step 1 from an NCCL CUDA OOM.
+- Coarse arms: MHEP-197 uses capacity 1.35 and port 32795. MHEP-198 uses capacity 1.40 and port
+  32796. MHEP-199 uses capacity 1.45 and port 32797.
+- Command template: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority production --cpu 2
+  --memory 8GB --disk 32GB --timeout 28800 --max-retries 0 --job-name <run>-coord
+  -e WANDB_API_KEY <secret> -e WANDB_PROJECT rav_moe -e WANDB_ENTITY marin-community
+  -e IRIS_PORT_JAX <port> -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async -e JAX_ENABLE_PGLE true
+  -e JAX_PGLE_PROFILING_RUNS 3 -- python -m experiments.grug.moe_hero_ep.launch
+  --run-id <run> --num-steps 5 --schedule-steps 2000 --watch-interval 1
+  --version 2026.08.08 --run --num-experts 192 --intermediate-dim 6272
+  --num-experts-per-token 4 --latent-dim 3072 --capacity-factor <capacity> --batch-size 1024`.
+- Decision rule: A capacity factor passes only when all five steps finish and W&B receives all 76
+  finite norm fields on every step. Stop an OOM or a retry immediately. Refine the highest pass
+  and lowest failure until their difference is at most 0.01.
+
+### 2026-08-08 16:34 UTC - Capacity 1.35 fails and sets the coarse upper bound
+
+- MHEP-197 used capacity factor 1.35. XLA reported a 195.29 GiB rematerialized program against its
+  171.87 GiB target. NCCL then reported a CUDA OOM before step 1. The coordinator was stopped.
+- MHEP-198 and MHEP-199 each recorded one child failure and entered a second gang attempt. Their
+  coordinators were stopped immediately. The capacity-1.35 failure makes their higher capacity
+  factors unnecessary for the boundary.
+- Automatic PGLE reported empty-trace warnings during these new compilations. This warning does
+  not change the memory result, but the final capacity result must keep this runtime caveat.
+- New bounds: Capacity 1.30 passes and capacity 1.35 fails. MHEP-200, MHEP-201, and MHEP-202 will
+  test capacity factors 1.32, 1.33, and 1.34 with the same common config.
+
+### 2026-08-08 16:44 UTC - The decimal boundary is 1.33 pass and 1.34 fail
+
+- MHEP-200 at capacity factor 1.32 and MHEP-201 at capacity factor 1.33 each completed all five
+  steps. Iris reports all 16 workers as succeeded, with zero failures and zero preemptions.
+- W&B has five rows for each passing arm. Each row has all 76 norm fields, and all 380 norm values
+  per arm are finite.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-200-w35-ep-e192-i6272-cf1p32-pgle3-fullwatch-p32798-20260808
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-201-w35-ep-e192-i6272-cf1p33-pgle3-fullwatch-p32799-20260808
+- MHEP-202 at capacity factor 1.34 reported an NCCL CUDA OOM before step 1. Its coordinator was
+  stopped. The decimal boundary is therefore 1.33 pass and 1.34 fail.
+- The fixed all-to-all router uses `ceil(capacity_factor * 262144 / 192)`. Thus, factors 1.33 and
+  1.34 select integer cell capacities 1,816 and 1,830. Thirteen untested cell capacities remain.
+- MHEP-203, MHEP-204, and MHEP-205 test cell capacities 1,819, 1,823, and 1,827. Their capacity
+  factors are 1.331909180, 1.334838867, and 1.337768555. This integer search can find the true
+  routing-buffer boundary instead of a decimal approximation.
+
+### 2026-08-08 17:04 UTC - The selected-model cell boundary closes at 1,829
+
+- MHEP-205 completed all five steps at cell capacity 1,827. MHEP-207 completed all five steps at
+  cell capacity 1,829. Iris reports all 16 workers succeeded for both runs, with zero failures and
+  zero preemptions.
+- W&B received all 76 norm fields on every step in both passing runs. All 380 norm values per run
+  were finite.
+- MHEP-207 used capacity factor 1.339233398438. The fixed router maps every factor through
+  1.339599609375 to the same cell capacity of 1,829. Capacity factor 1.34 maps to cell capacity
+  1,830, and MHEP-202 failed there from NCCL CUDA out of memory.
+- MHEP-203 at cell 1,819 and MHEP-206 at cell 1,828 also failed from CUDA out of memory during a
+  later PGLE compile. MHEP-204 entered a second gang attempt after one failure and was stopped.
+  These lower failures are not a monotonic capacity boundary because the larger cells 1,827 and
+  1,829 completed. All of these runs reported empty PGLE trace warnings.
+- Result: Cell capacity 1,829 is the highest confirmed buffer shape. Capacity factor
+  1.339599609375 is its mathematical upper endpoint. Use capacity factor 1.33 when a memory margin
+  is more important than the last 13 routing rows.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-205-w36-ep-e192-i6272-cell1827-pgle3-fullwatch-p32803-20260808
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-207-w36-ep-e192-i6272-cell1829-pgle3-fullwatch-p32805-20260808
+- MHEP-208 is the requested 200-step capacity-1.33 confirmation. It keeps automatic PGLE, full
+  norms every step, production priority, and zero retries. It reached step 5 and remains active.
+  Run ID: `mhep-208-w37-ep-e192-i6272-cf1p33-200step-pgle3-fullwatch-p32806-20260808`.
+
+### 2026-08-08 17:04 UTC - Top-6 capacity maximum sweep starts
+
+- Question: Find the maximum capacity factor that fits full watch for EP64, d6144, 48 layers,
+  latent dimension 3,072, 192 experts, expert width 4,608, top-k 6, sequence length 4,096, and
+  batch size 1,024.
+- MHEP-154 is the known pass at capacity factor 1.42 and cell capacity 2,909. It completed five
+  steps and sent all 380 finite norm values to W&B.
+- MHEP-209, MHEP-210, and MHEP-211 test capacity factors 1.6, 1.8, and 2.0. Their cell capacities
+  are 3,277, 3,687, and 4,096. The arms use five steps, full norms every step, the CUDA async
+  allocator, collective overlap limit 1, no explicit memory fraction, production priority, and
+  zero retries.
+- PGLE is off for this memory sweep. The selected-model boundary showed non-monotonic OOM results
+  when automatic PGLE collected empty traces. A pass or failure without PGLE gives a cleaner
+  full-watch capacity boundary. Refine the highest pass after the coarse arms finish.
+
+### 2026-08-08 17:22 UTC - Top-6 capacity search changes from maximum to optimal
+
+- MHEP-209, MHEP-210, and MHEP-211 completed five steps at capacity factors 1.6, 1.8, and 2.0.
+  W&B received all 76 norm fields on every step. All 380 norm values per run were finite.
+- Their last-three-step means were 230,425, 221,329, and 210,178 raw tokens/s. Mean drop fractions
+  were 6.1668%, 4.5698%, and 3.5134%. Drop-adjusted rates were 216,228, 211,258, and 202,805
+  tokens/s. Mean losses were 11.021320, 11.019033, and 11.017584.
+- Capacity factor 1.6 dominates 1.8 and 2.0 for the current short-run proxy. Raising capacity from
+  1.6 to 2.0 lowers mean loss by 0.034% but lowers drop-adjusted throughput by 6.21%.
+- MHEP-209 completed W&B but had one pod preemption during teardown. Its coordinator was stopped
+  after the complete result. MHEP-210 and MHEP-211 succeeded on all 16 workers.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-209-w38-ep-e192-i4608-k6-cf1p60-fullwatch-p32807-20260808
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-210-w38-ep-e192-i4608-k6-cf1p80-fullwatch-p32808-20260808
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-211-w38-ep-e192-i4608-k6-cf2p00-fullwatch-p32809-20260808
+- The requested maximum search was canceled. MHEP-212 and MHEP-214 had each entered a second gang
+  attempt. MHEP-213 was still on its first attempt. All three coordinators were stopped.
+- Issue #8062 selects EP on target-scale TPS, projected target-budget loss, a d2048 win, smooth
+  context extension, and clean gradient and loss curves. Its small-scale protocol requires fixed
+  capacity and complete parameter and gradient norms every 10 steps. A five-step memory maximum
+  does not optimize that decision.
+- MHEP-215, MHEP-216, and MHEP-217 are matched 200-step arms at capacity factors 1.3, 1.4, and 1.5.
+  They use the exact top-6 model, no PGLE, norms every 10 steps, production priority, and zero
+  retries. Compare last-50 raw throughput, drop fraction, drop-adjusted throughput, and loss. Use
+  this test only to select the capacity factor that advances to the issue's scale and context
+  gates.
+
+### 2026-08-08 17:32 UTC - Two-rack selected-model gate starts
+
+- Question: Does the selected capacity-1.33 model run on two racks with data parallelism across
+  racks and full parameter and gradient norms?
+- Commit `aa98ec794` adds an explicit data-parallel rack count to the EP launcher. The two-rack
+  mesh is `(replica_dcn=2, data=1, expert=64, model=1)` and requests 32 GB200 nodes.
+- MHEP-218 uses the selected E192, width-6,272, top-k-4, latent-3,072 model. It uses capacity 1.33,
+  sequence length 4,096, global batch 2,048, five steps on the 2,000-step schedule, full inline
+  norms every step, automatic PGLE with three profile runs, the CUDA async allocator, no explicit
+  client memory fraction, production priority, and zero retries.
+- Run ID: `mhep-218-w41-ep-dp2-e192-i6272-cf1p33-pgle3-fullwatch-p32816-20260808`.
+- Iris parent: `/rav/mhep-218-w41-ep-dp2-e192-i6272-cf1p33-pgle3-fullwatch-p32816-20260808-coord`.
+
+### 2026-08-08 17:45 UTC - Two-rack selected-model gate passes
+
+- MHEP-218 completed all five steps. Iris reports all 32 workers succeeded, with zero failures and
+  zero preemptions.
+- W&B has five metric rows. Each row has all 76 parameter and gradient norm fields. All 380 norm
+  values are finite.
+- The two-rack program and its PGLE recompile each reported a 192.34 GiB rematerialized estimate
+  against the 171.87 GiB target. Both programs ran without a CUDA OOM.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-218-w41-ep-dp2-e192-i6272-cf1p33-pgle3-fullwatch-p32816-20260808
+
+### 2026-08-08 17:45 UTC - Selected-model eval and checkpoint run starts
+
+- MHEP-219 was submitted with Paloma evaluation every 100 steps. It was stopped before training
+  after the requested interval changed to 10 steps.
+- MHEP-220 uses the selected one-rack model at capacity 1.33. It runs 200 training steps on the
+  2,000-step schedule, Paloma evaluation every 10 steps, full inline norms every step, and the
+  15-minute checkpoint interval. It keeps automatic PGLE with three profile runs, the CUDA async
+  allocator, no explicit client memory fraction, production priority, and zero retries.
+- Run ID: `mhep-220-w42-ep-e192-i6272-cf1p33-200step-eval10-ckpt-fullwatch-p32818-20260808`.
+- Iris parent: `/rav/mhep-220-w42-ep-e192-i6272-cf1p33-200step-eval10-ckpt-fullwatch-p32818-20260808-coord`.
+
+### 2026-08-08 17:56 UTC - Eval run restarts without PGLE
+
+- MHEP-220 sent all 76 finite norm values at each of its first nine logged steps. Its first
+  Paloma evaluation started at step 10, but the evaluation compile failed with
+  `ALREADY_EXISTS: Another profiling session active`. Automatic PGLE caused a second profiler
+  session during the evaluation compile. The coordinator was stopped after the fatal error.
+- MHEP-221 keeps the same selected model, capacity 1.33, 200 training steps, Paloma evaluation
+  every 10 steps, full norms every step, checkpoints, CUDA async allocator, production priority,
+  and zero retries. PGLE is disabled to remove the profiler conflict.
+- Run ID: `mhep-221-w43-ep-e192-i6272-cf1p33-200step-eval10-ckpt-fullwatch-nopgle-p32819-20260808`.
+- Iris parent: `/rav/mhep-221-w43-ep-e192-i6272-cf1p33-200step-eval10-ckpt-fullwatch-nopgle-p32819-20260808-coord`.
+
+### 2026-08-08 18:14 UTC - Evaluation-only PGLE guard test starts
+
+- The tagged evaluation callback now disables automatic PGLE only while it compiles and runs
+  evaluation programs. The surrounding training program keeps automatic PGLE enabled. A focused
+  regression test verifies both the evaluation state and restoration of the training state.
+- MHEP-222 tests the guard for 12 training steps with Paloma at step 10, full parameter and
+  gradient norms every step, automatic PGLE with three profile runs, and checkpoints every five
+  minutes plus the final checkpoint.
+- Run ID: `mhep-222-w44-ep-e192-i6272-cf1p33-12step-eval10-ckpt5-pgle3-fullwatch-p32820-20260808`.
+- Iris parent: `/rav/mhep-222-w44-ep-e192-i6272-cf1p33-12step-eval10-ckpt5-pgle3-fullwatch-p32820-20260808-coord`.
+- MHEP-221 started its first checkpoint at step 40. Its array error check passed, but one task
+  exited before the save was committed. Iris restarted the gang automatically. The run has one
+  failure and no preemptions. Keep it active while its restart and checkpoint state are checked.
+
+### 2026-08-08 18:35 UTC - Eval PGLE guard passes; checkpoint staging exhausts host memory
+
+- MHEP-222 completed its step-10 Paloma evaluation with automatic PGLE enabled for training. It
+  passed the MHEP-220 failure point and did not report a second profiling session. The guard works.
+- The step-10 temporary checkpoint then started. Task 11 attempt 0 stopped during pageable-host
+  shard transfer. Kubernetes reports `OOMKilled`; Iris reports exit 137 (`SIGKILL`), one failure,
+  and no preemption. The other tasks then lost JAX coordination.
+- The task cgroup limit is 850 GiB on a host with about 956 GiB of physical memory. The restarted
+  task used about 334 GiB before checkpoint staging. `XLA_PYTHON_CLIENT_MEM_FRACTION` controls GPU
+  memory and cannot raise this host limit.
+- MHEP-221 failed in the same checkpoint phase. Its failure is now also consistent with host-memory
+  exhaustion. Keep MHEP-221 active as requested.
+- The current checkpoint wrapper bounds retained memory across checkpoint saves, but one save can
+  still stage all local shards at the same time. Limit per-save transfer concurrency before using
+  a larger host-memory request as the main fix.
