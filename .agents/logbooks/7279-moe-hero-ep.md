@@ -1605,3 +1605,42 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Decision: Reject the dynamic conditional approach for this sharded, optimizer-offloaded model.
   Revert commit `40510fccb`. Do not test another condition location without a new JAX or XLA
   mechanism that can preserve memory kinds across both branches.
+
+### 2026-08-08 14:30 UTC - Capacity factor 1.3 wins the matched short-run rule
+
+- MHEP-178 completed all 200 steps at capacity factor 1.4. W&B received all 76 norm fields at
+  steps 0, 10, 20, through 190. Every field in all 20 rows was finite. Iris reports the
+  coordinator and training child as succeeded.
+- Capacity-1.4 last-50 means: 259,015 tokens/s, 2.8941% drops, 251,518 drop-adjusted tokens/s, and
+  loss 3.2417.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-178-w21-ep-e192-i5504-cf1p40-singleexec-watch10-p32776-20260808
+- Matched last-50 comparison:
+
+  | Capacity | Tokens/s | Drops | Adjusted tokens/s | Loss |
+  | ---: | ---: | ---: | ---: | ---: |
+  | 1.3 | 271,325 | 3.9277% | 260,668 | 3.2441 |
+  | 1.4 | 259,015 | 2.8941% | 251,518 | 3.2417 |
+  | 1.5 | 255,393 | 2.1312% | 249,950 | 3.2403 |
+  | 1.6 | 250,734 | 1.6189% | 246,675 | 3.2388 |
+
+- Capacity factor 1.3 has the highest drop-adjusted throughput. Its mean loss is 0.164% above the
+  best arm, which is inside the preset 0.5% rule. It also matches the EP capacity in issue #8062.
+  Select 1.3 for the final size search. This 200-step result does not replace the issue's d2048,
+  context-extension, scaling-law, or target-scale gates.
+
+### 2026-08-08 14:30 UTC - MHEP-187 to MHEP-190 search the capacity-1.3 size bounds
+
+- All four arms use d6144, 48 layers, latent dimension 3,072, top-k 4, EP64, CUDA async
+  allocation, pinned-host optimizer state, five steps, full gradient and parameter norms on every
+  step, production priority, and zero retries.
+- MHEP-187 uses 192 experts and width 6,400: 557.164 B total and 24.907 B active parameters.
+- MHEP-188 uses 192 experts and width 6,656: 578.907 B total and 25.360 B active parameters.
+- MHEP-189 uses 128 experts and width 8,704: 506.411 B total and 28.965 B active parameters.
+- MHEP-190 uses 128 experts and width 8,960: 520.906 B total and 29.418 B active parameters.
+- Run IDs: `mhep-187-w29-ep-e192-i6400-cf1p30-fullwatch-p32785-20260808`,
+  `mhep-188-w29-ep-e192-i6656-cf1p30-fullwatch-p32786-20260808`,
+  `mhep-189-w29-ep-e128-i8704-cf1p30-fullwatch-p32787-20260808`, and
+  `mhep-190-w29-ep-e128-i8960-cf1p30-fullwatch-p32788-20260808`.
+- A point passes only if all five steps finish and W&B receives all 76 finite norm fields on every
+  step. Stop a compile or NCCL OOM immediately. Use the next 128-wide midpoint after these arms
+  establish one pass and one failure for each expert count.
