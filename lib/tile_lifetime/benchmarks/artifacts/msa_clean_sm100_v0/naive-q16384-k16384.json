@@ -1,0 +1,61 @@
+{
+  "boundary": {
+    "excluded": [
+      "route construction",
+      "index projections",
+      "top-k selection"
+    ],
+    "included": [
+      "selected K/V gather",
+      "FP32 QK Contract",
+      "causal token mask",
+      "materialized FP32 softmax",
+      "FP32 PV Contract",
+      "BF16 output cast"
+    ],
+    "query_chunk_size": 256
+  },
+  "correctness": {
+    "finite": true,
+    "output_sha256": "b509ff74574c0f2d2783d9d1680a162d970ab6dc5c3d224adee5f29689e2a70a",
+    "repeat_bitwise": true
+  },
+  "device": {
+    "cuda": "13.0",
+    "name": "NVIDIA GB200",
+    "torch": "2.13.0+cu130"
+  },
+  "kind": "naive_eager_selected_attention",
+  "memory": {
+    "device_total_bytes": 197890015232,
+    "peak_allocated_delta_bytes": 2907724800,
+    "peak_allocated_delta_gib": 2.7080297470092773
+  },
+  "relation": {
+    "sha256": "18886bcb75eacd42fe00c5fff2bd4de5577b12edfc62b84ae60e62ec7de5a07a",
+    "source": "materialized natural score/block-max/top-k relation"
+  },
+  "shape": {
+    "block_size": 128,
+    "causal": true,
+    "head_dimension": 128,
+    "key_count": 16384,
+    "key_value_heads": 4,
+    "query_count": 16384,
+    "query_heads": 64,
+    "selected_blocks": 16
+  },
+  "timing": {
+    "maximum_milliseconds": 220.38656616210938,
+    "mean_milliseconds": 220.25633239746094,
+    "median_milliseconds": 220.19442749023438,
+    "minimum_milliseconds": 220.18800354003906,
+    "raw_milliseconds": [
+      220.38656616210938,
+      220.19442749023438,
+      220.18800354003906
+    ],
+    "repeats": 3,
+    "warmups": 1
+  }
+}

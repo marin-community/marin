@@ -1404,3 +1404,27 @@ author: dlwh
 - Sealed raw distributions, commands, audits, negative results, and checksums
   under `lib/tile_lifetime/benchmarks/artifacts/msa_clean_sm100_v0` and released
   the GB200 reservation.
+
+### 2026-08-08 - TLTC-MSA-005 naive semantic baseline and delta
+
+- Measured a direct eager selected-attention reference at the full 16K MSA
+  shape on a low-priority GB200. The exact payload boundary excludes route
+  construction and includes selected K/V gather, materialized FP32 QK and
+  softmax, FP32 PV, and BF16 cast.
+- One warmup and three repetitions measure 220.386566, 220.194427, and
+  220.188004 ms; the median is 220.194427 ms with a 2.708-GiB peak allocated
+  delta. Relation/output hashes match the preserved materialized reference and
+  repeats are bitwise identical.
+- The naive payload is 59.48 times slower than Shuttle's 3.702272-ms generated
+  payload and 83.26 times slower than MSA's 2.644624-ms payload. It executes
+  256 eager group/chunk bodies and lacks tile residency, online Fold state,
+  fusion, and producer-consumer pipelining.
+- The replacement pod resolved Torch 2.13.0+cu130 instead of pinned 2.10.0, so
+  this result is preserved as a semantic scale reference and is excluded from
+  acceptance ratios. Raw data, harness, telemetry, and checksums are stored in
+  `benchmarks/artifacts/msa_clean_sm100_v0`.
+- Source inspection attributes the generated-versus-MSA payload gap primarily
+  to final merge: scalar row-warp loads and serial per-row weights versus MSA's
+  staged, vectorized, compile-time-tiled combine. The estimated official
+  0.773904-ms combine remains explicitly inferred; no pinned combine-only
+  measurement was obtained.

@@ -42,6 +42,66 @@ output differs from the materialized reference by maximum `0.0536499` and mean
 exact-relation payload independently agrees with official MSA to maximum
 `0.0009765625` and mean `3.75e-9` and is deterministic.
 
+## Performance anatomy
+
+The generated and official payloads use the same high-level physical strategy:
+invert the selected relation into a KV-major work schedule, stage a selected KV
+block, run tiled QK, update normalized-exponential state, run PV, and write one
+BF16 value partial plus one FP32 log-normalizer per selected block. Both
+therefore materialize the same 4-GiB BF16 value-partial buffer and 64-MiB
+log-normalizer buffer at this shape.
+
+The measured difference is predominantly finalization. Shuttle's generic
+`warp_rows` Fold merge assigns one output row to each warp. Lane zero computes
+the 16 normalized-exponential weights serially, then each lane gathers four
+feature coordinates across all partials with scalar BF16 loads and stores. It
+has no staged shared-memory value pipeline, vectorized 128-bit copies, or
+compile-time specialization of the partial axis.
+
+Pinned MSA's combine is a four-stage 8-row by 64-feature tiled kernel. It uses
+128-bit asynchronous global-to-shared copies, shared-memory staging for values
+and log-normalizers, warp-distributed max/sum reductions, compile-time top-k,
+packed output stores, and programmatic dependent launch. The generated merge
+measures 1.831552 ms. Subtracting the common physical remainder from the
+official payload implies approximately 0.773904 ms for MSA's combine; that
+number is an inference, not an independently timed pinned measurement. On the
+4.3125-GiB minimum merge traffic, the corresponding lower-bound effective
+bandwidths are about 2.53 and 5.98 TB/s. This accounts for essentially all of
+the 1.057648-ms exact-relation payload gap.
+
+The next clean improvement is a generic tiled Fold-finalization skeleton with
+layout-aware vector loads, shared staging, a symbolic/compile-time partial
+axis, pipeline stages, and optional dependency launch. Copying MSA's semantic
+combine or adding MSA-specific cases is intentionally out of scope.
+
+## Naive semantic reference
+
+A deliberately direct eager reference was measured to establish the cost of
+executing the natural selected-attention algebra without a streaming skeleton.
+It excludes routing/index projection/top-k and includes selected K/V gather,
+materialized FP32 QK scores, causal masking, materialized FP32 softmax, FP32 PV,
+and the BF16 output cast.
+
+At the full 16K shape, one warmup and three repetitions measure
+`220.386566`, `220.194427`, and `220.188004` ms, with a 220.194427-ms median
+and a 2.708-GiB peak allocated-memory delta. The relation and output hashes
+match the preserved materialized semantic reference and repeated outputs are
+bitwise identical. This is 59.48 times Shuttle's 3.702272-ms exact-relation
+payload and 83.26 times official MSA's 2.644624-ms payload.
+
+The implementation runs four KV groups by 64 query chunks, hence 256 eager
+loop bodies. Each chunk gathers 2,048 selected tokens per query and separately
+materializes scores, probabilities, and PV work. It has no KV tile residency,
+online Fold state, QK-softmax-PV fusion, or producer-consumer pipeline. A fully
+vectorized selected implementation would require roughly 144 GiB just for
+selected K/V, scores, and probabilities before allocator/workspace overhead;
+it is impractical on this 184.3-GiB GB200 and does not fit an 80-GiB H100.
+
+The replacement low-priority pod resolved Torch `2.13.0+cu130`, rather than
+the pinned oracle's Torch `2.10.0+cu130`. The naive number is therefore an
+order-of-magnitude semantic control, not an acceptance-ratio input. A 1K-query
+pilot is also retained and measures 14.032576 ms median.
+
 `invalid-pre-causal-fix.json` records a run that accidentally omitted the
 causal `DomainRestriction`; it is invalid evidence and is retained to make the
 correction auditable.
@@ -71,5 +131,8 @@ that both processes used the same seeded fixture and selected relation.
 - `rejected-bf16x2-merge.json`: negative generic merge candidate.
 - `invalid-pre-causal-fix.json`: invalidated pre-fix run.
 - `oracle_only_natural_16k_capture.py`: exact isolated oracle harness.
+- `naive-q16384-k16384.json`: full-shape naive raw samples and hashes.
+- `naive-q1024-k16384.json`: smaller naive pilot.
+- `naive_selected_attention_benchmark.py`: naive reference harness.
+- `naive-gb200-nvidia-smi-q.txt`: naive-run device telemetry.
 - `*-command.txt`: reproduction commands.
-

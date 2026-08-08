@@ -550,6 +550,29 @@ BF16x2 vectorized merge candidate regressed to 3.829760 ms and was removed from
 the maintained source. The result is intentionally left slower rather than
 replacing the generated Fold with an MSA-specific combine.
 
+The exact-relation delta is concentrated in final state merge. Both paths use
+the same KV-major relation schedule and SM100 QK/normalized-exp/PV machinery,
+and both materialize 4 GiB of BF16 value partials plus 64 MiB of FP32
+log-normalizers. Shuttle's generic row-warp Fold merge takes 1.831552 ms and
+uses scalar partial loads with lane-zero weight calculation. MSA uses a
+four-stage 8-row by 64-feature combine with 128-bit asynchronous copies,
+shared-memory staging, warp-distributed reductions, compile-time top-k, packed
+stores, and dependent launch. Subtracting the common physical remainder
+implies about 0.773904 ms for the official combine; this value is inferred,
+not independently timed. The implied minimum-traffic bandwidth is about 2.53
+TB/s for Shuttle versus 5.98 TB/s for MSA, explaining nearly all of the
+1.057648-ms payload gap.
+
+A direct eager semantic reference measures 220.194427 ms median for the same
+exact selected-attention payload, excluding route construction. It is 59.48
+times slower than Shuttle and 83.26 times slower than MSA. The reference runs
+256 eager group/chunk bodies and materializes FP32 scores and probabilities;
+it has no KV residency, online state, fusion, or pipeline. The replacement pod
+used Torch 2.13.0 rather than the pinned 2.10.0 environment, so this is an
+order-of-magnitude control rather than acceptance evidence. Raw samples,
+memory telemetry, hashes, and the reference harness are preserved in the MSA
+artifact.
+
 The isolated generated and oracle score paths produce the same bitwise-stable
 route hash. Both differ from a materialized Torch reference in 61,446 slots
 across 7,681 rows: 7,680 are early causal rows with fewer than top-k finite
