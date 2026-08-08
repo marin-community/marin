@@ -1179,3 +1179,18 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Decision rule: A candidate passes only if all five steps finish and W&B receives 38 finite
   gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
   NCCL memory failure without a retry.
+
+### 2026-08-08 12:41 UTC - The diagnostic mode passes, and the SOL control fails
+
+- MHEP-161 completed all five steps with the exact MHEP-131 model. W&B received 38 finite gradient
+  norm metrics and 38 finite parameter norm metrics.
+- The diagnostic arm reported 107,683 tokens/s with diagnostics on every step. MHEP-159 reported
+  230,051 tokens/s with inline watch and a collective-overlap limit of one.
+- Interpretation: The diagnostic mode removes the memory conflict as designed. Its interval-1
+  cost is 53.2% relative to MHEP-159. It stays useful as an interval-based fallback, but the
+  collective-overlap control is the cheaper method for this shape.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-161-w11-ep-e192-i5504-cf2p00-fullwatch-diagnostic-p32759-20260808
+- MHEP-160 disabled the analytical SOL latency estimator. It failed before step 1 with NCCL
+  all-to-all CUDA out of memory in `jit_train_step`.
+- Decision: The SOL estimator control is a dead end for this shape. Its coordinator was stopped
+  after the deterministic failure.
