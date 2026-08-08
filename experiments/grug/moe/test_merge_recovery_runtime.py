@@ -54,6 +54,7 @@ from experiments.grug.moe.merge_recovery import (
 )
 from experiments.grug.moe.merge_recovery_runtime import (
     PrefitRuntimeState,
+    _validate_selected_local_recovery,
     evaluate_prefit_checkpoint_local,
     run_capacity_oracle_split_local,
     run_conversion_local,
@@ -904,6 +905,7 @@ def test_layer_adapter_augment_and_recovery_are_strict_and_resumable(tmp_path: P
     with pytest.raises(ValueError, match="stale provenance"):
         run_recovery_local(wrong_rank)
 
+    assert augmented_manifest.layer_adapter is not None
     for suffix, stale_adapter in (
         (
             "source",
@@ -926,6 +928,147 @@ def test_layer_adapter_augment_and_recovery_are_strict_and_resumable(tmp_path: P
                 )
             )
     write_merge_checkpoint_manifest(augmented_checkpoint, augmented_manifest)
+
+
+def test_legacy_selected_stage_a_uses_artifact_config_without_weakening_modern_manifests(tmp_path: Path) -> None:
+    inputs = _runtime_inputs(tmp_path)
+    converted_path = tmp_path / "legacy-validation-converted"
+    run_conversion_local(
+        ConversionJobConfig(
+            source=inputs.source,
+            calibration_path=inputs.calibration_path,
+            matching_path=inputs.matching_path,
+            prefit_path=None,
+            output_path=str(converted_path),
+            resources=ResourceConfig.with_cpu(),
+            run_id="test-legacy-validation-conversion",
+            assignment_mode=AssignmentMode.NATIVE,
+            representative_layer=1,
+            source_layer=2,
+        )
+    )
+    conversion_manifest = read_merge_checkpoint_manifest(latest_checkpoint_path(str(converted_path / "checkpoints")))
+    converted_checkpoint = latest_checkpoint_path(str(converted_path / "checkpoints"))
+    legacy_source_model = dataclasses.replace(
+        inputs.source.model,
+        num_layers=6,
+        expert_bank_for_layer=tuple(range(6)),
+    )
+    legacy_source = dataclasses.replace(inputs.source, model=legacy_source_model)
+    legacy_manifest = dataclasses.replace(
+        conversion_manifest,
+        spec=dataclasses.replace(conversion_manifest.spec, representative_layer=2, source_layer=3),
+        source_topology=tuple(range(6)),
+        target_topology=(0, 1, 2, 2, 3, 4),
+        source_step=legacy_source.training_steps,
+        recovery_step=382,
+        recovery_initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
+        recovery_initial_checkpoint=converted_checkpoint,
+        format_version=2,
+    )
+    legacy_root = tmp_path / "legacy-stage-a"
+    checkpoint_root = legacy_root / "checkpoints"
+    checkpoint_root.mkdir(parents=True)
+    config = LayerAdapterAugmentJobConfig(
+        source=legacy_source,
+        init_checkpoint_dir=str(checkpoint_root),
+        output_path=str(tmp_path / "legacy-adapter"),
+        resources=ResourceConfig.with_cpu(),
+        run_id="test-legacy-adapter",
+        assignment_mode=AssignmentMode.NATIVE,
+        prefit_applied=False,
+        adapter_rank=2,
+        affected_layers=(2, 3),
+    )
+    selection = {
+        "format_version": 1,
+        "checkpoint_path": str(checkpoint_root / "step-382"),
+        "step": 382,
+        "tokens": 50_069_504,
+        "requested_tokens": 50_000_000,
+        "selection_metric": "eval/paloma/macro_loss",
+        "selection_value": 3.6,
+    }
+    artifact_config = {
+        "run_id": "grug-xem-native_local_ce_kl-stage-a-d512-l2-l3",
+        "stage": RecoveryStage.LOCAL.value,
+        "initialization": RecoveryInitialization.CONVERTED_STEP_ZERO.value,
+        "initial_checkpoint_selection": RecoveryCheckpointSelection.LATEST.value,
+        "init_checkpoint_dir": str(converted_path / "checkpoints"),
+        "affected_layers": [2, 3],
+        "assignment_mode": AssignmentMode.NATIVE.value,
+        "prefit_applied": False,
+        "batch_size": 32,
+        "training_tokens": 50_000_000,
+        "cross_entropy_weight": 0.05,
+        "moe_loss_weight": 1.0,
+        "logit_kl_weight": 0.1,
+        "select_best_validation_checkpoint": True,
+        "source": {
+            "checkpoint_dir": legacy_source.checkpoint_dir,
+            "source_commit": legacy_source.source_commit,
+            "training_steps": legacy_source.training_steps,
+            "model": {"expert_bank_for_layer": list(legacy_source.model.resolved_expert_bank_for_layer)},
+        },
+    }
+    artifact_path = legacy_root / ".artifact.json"
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "name": "grug/expert_merge/d512/native_local_ce_kl/stage-a",
+                "version": "2026.08.06",
+                "fingerprint": "62564720",
+                "output_path": str(legacy_root),
+                "config": artifact_config,
+            }
+        )
+    )
+
+    _validate_selected_local_recovery(config, legacy_manifest, selection)
+
+    for stale_selection in (
+        {**selection, "step": 381, "checkpoint_path": str(checkpoint_root / "step-381")},
+        {**selection, "checkpoint_path": str(checkpoint_root / "step-381")},
+        {**selection, "tokens": 50_069_503},
+    ):
+        with pytest.raises(ValueError, match=r"selected CE\+KL|stale provenance"):
+            _validate_selected_local_recovery(config, legacy_manifest, stale_selection)
+
+    for stale_manifest in (
+        dataclasses.replace(legacy_manifest, source_topology=(0, 1, 2, 3, 3, 4)),
+        dataclasses.replace(legacy_manifest, target_topology=(0, 1, 2, 3, 3, 4)),
+        dataclasses.replace(legacy_manifest, source_step=legacy_source.training_steps - 1),
+    ):
+        with pytest.raises(ValueError, match="stale provenance"):
+            _validate_selected_local_recovery(config, stale_manifest, selection)
+
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "name": "grug/expert_merge/d512/native_local_ce_kl/stage-a",
+                "version": "2026.08.06",
+                "fingerprint": "62564720",
+                "output_path": str(legacy_root),
+                "config": {**artifact_config, "cross_entropy_weight": 0.0},
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="stale provenance"):
+        _validate_selected_local_recovery(config, legacy_manifest, selection)
+
+    artifact_path.write_text(
+        json.dumps(
+            {
+                "name": "grug/expert_merge/d512/native_local_ce_kl/stage-a",
+                "version": "2026.08.06",
+                "fingerprint": "62564720",
+                "output_path": str(legacy_root),
+                "config": artifact_config,
+            }
+        )
+    )
+    with pytest.raises(ValueError, match=r"requires the selected CE\+KL"):
+        _validate_selected_local_recovery(config, dataclasses.replace(legacy_manifest, format_version=3), selection)
 
 
 def test_native_joint_preservation_restores_converted_step_zero_strictly_and_records_provenance(

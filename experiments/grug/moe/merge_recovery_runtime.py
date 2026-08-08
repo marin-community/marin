@@ -96,6 +96,12 @@ _PREFIT_MANIFEST_FILENAME = "prefit_manifest.json"
 _PREFIT_FORMAT_VERSION = 2
 _RECOVERY_THRESHOLD_FILENAME = "recovery_threshold.json"
 _RECOVERY_SELECTION_FILENAME = "selected_checkpoint.json"
+_LEGACY_CE_KL_STAGE_A_NAME = "grug/expert_merge/d512/native_local_ce_kl/stage-a"
+_LEGACY_CE_KL_STAGE_A_VERSION = "2026.08.06"
+_LEGACY_CE_KL_STAGE_A_FINGERPRINT = "62564720"
+_LEGACY_CE_KL_STAGE_A_STEP = 382
+_LEGACY_CE_KL_STAGE_A_TOKENS = 50_069_504
+_LEGACY_CE_KL_TARGET_TOPOLOGY = (0, 1, 2, 2, 3, 4)
 
 
 @register_dataclass
@@ -1227,8 +1233,13 @@ def run_capacity_oracle_split_local(config: CapacityOracleSplitJobConfig) -> Non
         )
 
 
-def _validate_selected_local_recovery(manifest: MergeCheckpointManifest, *, selected_step: int) -> None:
-    """Validate a selected CE+KL bank-only local-recovery manifest."""
+def _validate_selected_local_recovery(
+    config: LayerAdapterAugmentJobConfig,
+    manifest: MergeCheckpointManifest,
+    selection: dict[str, Any],
+) -> None:
+    """Validate modern provenance or the one known legacy CE+KL Stage-A artifact."""
+    selected_step = int(selection["step"])
     expected = {
         "recovery_step": selected_step,
         "recovery_initialization": RecoveryInitialization.CONVERTED_STEP_ZERO,
@@ -1238,13 +1249,134 @@ def _validate_selected_local_recovery(manifest: MergeCheckpointManifest, *, sele
         "recovery_moe_loss_weight": 1.0,
         "recovery_logit_kl_weight": 0.1,
     }
-    mismatches = {
+    manifest_mismatches = {
         name: (getattr(manifest, name), value) for name, value in expected.items() if getattr(manifest, name) != value
     }
-    if mismatches:
-        raise ValueError(f"adapter augmentation requires the selected CE+KL local recovery: {mismatches}")
     if manifest.capacity_oracle is not None or manifest.layer_adapter is not None:
         raise ValueError("adapter augmentation requires an ordinary adapter-free tied recovery checkpoint")
+    if not manifest_mismatches:
+        return
+
+    legacy_fields = (
+        manifest.recovery_stage,
+        manifest.recovery_trainable_scope,
+        manifest.recovery_cross_entropy_weight,
+        manifest.recovery_moe_loss_weight,
+        manifest.recovery_logit_kl_weight,
+    )
+    if (
+        manifest.format_version != 2
+        or selected_step != _LEGACY_CE_KL_STAGE_A_STEP
+        or manifest.recovery_step != _LEGACY_CE_KL_STAGE_A_STEP
+        or any(value is not None for value in legacy_fields)
+    ):
+        raise ValueError(f"adapter augmentation requires the selected CE+KL local recovery: {manifest_mismatches}")
+    if manifest.recovery_initialization is not RecoveryInitialization.CONVERTED_STEP_ZERO:
+        raise ValueError(f"adapter augmentation requires the selected CE+KL local recovery: {manifest_mismatches}")
+    _validate_legacy_ce_kl_stage_a_artifact(config, manifest=manifest, selection=selection)
+
+
+def _validate_legacy_ce_kl_stage_a_artifact(
+    config: LayerAdapterAugmentJobConfig,
+    *,
+    manifest: MergeCheckpointManifest,
+    selection: dict[str, Any],
+) -> None:
+    artifact_root = str(StoragePath(config.init_checkpoint_dir).parent)
+    artifact_path = prefix_join(artifact_root, ".artifact.json")
+    artifact = StoragePath(artifact_path)
+    if not artifact.exists():
+        raise ValueError(f"legacy CE+KL Stage-A provenance is missing at {artifact_path}")
+    payload = json.loads(artifact.read_text())
+    expected_record = {
+        "name": _LEGACY_CE_KL_STAGE_A_NAME,
+        "version": _LEGACY_CE_KL_STAGE_A_VERSION,
+        "fingerprint": _LEGACY_CE_KL_STAGE_A_FINGERPRINT,
+        "output_path": artifact_root,
+    }
+    record_mismatches: dict[str, tuple[Any, Any]] = {
+        name: (payload.get(name), value) for name, value in expected_record.items() if payload.get(name) != value
+    }
+    artifact_config = payload.get("config")
+    if not isinstance(artifact_config, dict):
+        raise ValueError(f"legacy CE+KL Stage-A artifact config is missing at {artifact_path}")
+    expected_config = {
+        "run_id": "grug-xem-native_local_ce_kl-stage-a-d512-l2-l3",
+        "stage": RecoveryStage.LOCAL.value,
+        "initialization": RecoveryInitialization.CONVERTED_STEP_ZERO.value,
+        "initial_checkpoint_selection": RecoveryCheckpointSelection.LATEST.value,
+        "affected_layers": list(config.affected_layers),
+        "assignment_mode": config.assignment_mode.value,
+        "prefit_applied": config.prefit_applied,
+        "batch_size": 32,
+        "training_tokens": 50_000_000,
+        "cross_entropy_weight": 0.05,
+        "moe_loss_weight": 1.0,
+        "logit_kl_weight": 0.1,
+        "select_best_validation_checkpoint": True,
+    }
+    config_mismatches: dict[str, tuple[Any, Any]] = {
+        name: (artifact_config.get(name), value)
+        for name, value in expected_config.items()
+        if artifact_config.get(name) != value
+    }
+    if "trainable_scope" in artifact_config:
+        config_mismatches["trainable_scope"] = (artifact_config["trainable_scope"], "absent in legacy schema")
+
+    expected_source_topology = config.source.model.resolved_expert_bank_for_layer
+    manifest_mismatches: dict[str, tuple[Any, Any]] = {}
+    if manifest.source_topology != expected_source_topology:
+        manifest_mismatches["source_topology"] = (manifest.source_topology, expected_source_topology)
+    if manifest.target_topology != _LEGACY_CE_KL_TARGET_TOPOLOGY:
+        manifest_mismatches["target_topology"] = (manifest.target_topology, _LEGACY_CE_KL_TARGET_TOPOLOGY)
+    if manifest.source_step != config.source.training_steps:
+        manifest_mismatches["source_step"] = (manifest.source_step, config.source.training_steps)
+    converted_checkpoint_dir = artifact_config.get("init_checkpoint_dir")
+    expected_converted_checkpoint = (
+        prefix_join(converted_checkpoint_dir, "step-0") if isinstance(converted_checkpoint_dir, str) else None
+    )
+    if manifest.recovery_initial_checkpoint != expected_converted_checkpoint:
+        config_mismatches["recovery_initial_checkpoint"] = (
+            manifest.recovery_initial_checkpoint,
+            expected_converted_checkpoint,
+        )
+
+    source = artifact_config.get("source")
+    expected_source = {
+        "checkpoint_dir": config.source.checkpoint_dir,
+        "source_commit": config.source.source_commit,
+        "training_steps": config.source.training_steps,
+    }
+    if not isinstance(source, dict):
+        config_mismatches["source"] = (source, expected_source)
+    else:
+        for name, value in expected_source.items():
+            if source.get(name) != value:
+                config_mismatches[f"source.{name}"] = (source.get(name), value)
+        source_model = source.get("model")
+        expected_topology = list(config.source.model.resolved_expert_bank_for_layer)
+        if not isinstance(source_model, dict) or source_model.get("expert_bank_for_layer") != expected_topology:
+            config_mismatches["source.model.expert_bank_for_layer"] = (
+                source_model.get("expert_bank_for_layer") if isinstance(source_model, dict) else None,
+                expected_topology,
+            )
+
+    expected_selection = {
+        "step": _LEGACY_CE_KL_STAGE_A_STEP,
+        "checkpoint_path": prefix_join(config.init_checkpoint_dir, f"step-{_LEGACY_CE_KL_STAGE_A_STEP}"),
+        "tokens": _LEGACY_CE_KL_STAGE_A_TOKENS,
+        "requested_tokens": 50_000_000,
+        "selection_metric": "eval/paloma/macro_loss",
+    }
+    selection_mismatches: dict[str, tuple[Any, Any]] = {
+        name: (selection.get(name), value) for name, value in expected_selection.items() if selection.get(name) != value
+    }
+    if record_mismatches or config_mismatches or manifest_mismatches or selection_mismatches:
+        raise ValueError(
+            "legacy CE+KL Stage-A artifact has stale provenance: "
+            f"record={record_mismatches}, config={config_mismatches}, manifest={manifest_mismatches}, "
+            f"selection={selection_mismatches}"
+        )
 
 
 def run_layer_adapter_augment_local(config: LayerAdapterAugmentJobConfig) -> None:
@@ -1278,7 +1410,7 @@ def run_layer_adapter_augment_local(config: LayerAdapterAugmentJobConfig) -> Non
             prefit_applied=config.prefit_applied,
             affected_layers=config.affected_layers,
         )
-        _validate_selected_local_recovery(source_manifest, selected_step=selected_step)
+        _validate_selected_local_recovery(config, source_manifest, selection)
         teacher_checkpoint = latest_checkpoint_path(config.source.checkpoint_dir)
         if source_manifest.spec.source_checkpoint != teacher_checkpoint:
             raise ValueError(
