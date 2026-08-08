@@ -127,7 +127,10 @@ class Schema:
 # the implicit ``seq`` column on top.
 LOG_REGISTERED_SCHEMA = Schema(
     columns=(
-        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
+        # Keys embed the job and task a line came from, so operators search them
+        # by substring far more often than by the full value; sorting alone
+        # cannot serve that, so the key carries the trigram index too.
+        Column(name="key", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False, trigram_index=True),
         Column(name="source", type=stats_pb2.COLUMN_TYPE_STRING, nullable=False),
         # The log message body is substring-searched via contains()/LIKE, so it
         # carries the trigram index (matches the server's log schema).

@@ -55,7 +55,11 @@ const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) fn log_registered_schema() -> Schema {
     Schema::new(
         vec![
-            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false),
+            // Keys embed the job and task a line came from, so operators search
+            // them by substring (`key LIKE '%<job>%'`) far more often than by the
+            // full value. Sorting alone cannot serve that — min/max statistics key
+            // on whole values — so the key carries the trigram index too.
+            Column::new("key", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
             // The log message body — substring-searched via contains()/LIKE, so
             // it carries the trigram index.
@@ -1110,6 +1114,10 @@ mod tests {
         assert!(
             schema.column("cluster").unwrap().nullable,
             "the evolved cluster column is nullable"
+        );
+        assert!(
+            schema.column("key").unwrap().index.trigram,
+            "boot enables the key trigram index a pre-existing namespace lacks"
         );
         assert_eq!(
             store.get_policy(LOG_NAMESPACE_NAME).unwrap(),

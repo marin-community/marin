@@ -110,6 +110,38 @@ Regenerate protos after editing `proto/logging.proto`:
 cd lib/finelog && buf generate
 ```
 
+### Benchmarks
+
+Three harnesses under `src/finelog/benchmarks/`, all measuring through the RPC
+surface rather than an in-process shortcut. Each writes a JSON result file
+carrying the server build, the storage layout it measured, and per-query
+`EXPLAIN ANALYZE` scan metrics, so two runs are comparable without re-deriving
+what changed.
+
+- `log_query_bench` — the operator query corpus for the `log` namespace: job
+  substring scoping, task tails, first-error lookups, and body search. `generate`
+  builds a deterministic corpus; `measure` runs the same corpus over a log
+  directory that already holds segments, which is how a change is checked against
+  copied production shards.
+- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
+
+The first two take `--server-binary` and run it over a **disposable copy** of a
+log directory: starting Finelog activates compaction, layout rewrites, and index
+backfill. `log_query_bench` drives maintenance to full index coverage before
+measuring, and reports how long that took — the same cost an index-policy change
+imposes on a live namespace.
+
+`log_query_bench` never registers a schema — it writes to the `log` namespace the
+server auto-registers for itself, so running one corpus under two binaries
+measures a schema or index-policy change end to end. Compare a query change on
+real data the same way, over separate copies of the same shards. Measure in a
+server that has nothing left to backfill: maintenance competing with the queries
+moves every number by 2-4x, including queries that touch no index.
+
+`EXPLAIN ANALYZE` counters are decimal (`1.16 B` is 1.16 billion), including
+`bytes_scanned`, which is a counter rather than a size.
+
 ### Dashboard
 
 `npm run dev` serves the SPA with HMR and proxies RPC to a finelog on port
@@ -168,7 +200,14 @@ benchmark; there is no free-form plugin registry.
 
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)` and `col LIKE '%…%'` prune instead
-of full-scan. Today it is on `log.data` and `telemetry_v1.name`.
+of full-scan. Today it is on `log.key`, `log.data`, and `telemetry_v1.name`.
+
+`log.key` carries one even though the namespace is sorted by it: a log key names
+the job and task *inside* the value (`/user/<job>-coord/<job>/<task>:<attempt>`),
+so the substring an operator searches for is not a prefix and min/max statistics
+cannot bound it. The column is cheap on disk — a few thousand distinct values per
+segment, RLE over a dictionary — but a substring predicate decodes it per row, so
+without the index a job-scoped query reads every row in the namespace.
 
 A `LIKE` pattern contributes every literal run between its wildcards, all
 required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the

@@ -747,6 +747,45 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    /// Write one segment holding `filler_key` for a full span and `span1_key`
+    /// after it, with both string columns indexed — the shape of a compacted
+    /// `log` segment, where each span covers a handful of job keys. Returns the
+    /// segment path.
+    fn write_two_span_keyed_log_segment(
+        dir: &std::path::Path,
+        filler_key: &str,
+        span1_key: &str,
+        span1_rows: usize,
+    ) -> String {
+        let mut keys: Vec<String> = (0..SIDECAR_SPAN_ROWS)
+            .map(|_| filler_key.to_string())
+            .collect();
+        keys.extend((0..span1_rows).map(|_| span1_key.to_string()));
+        let n = keys.len() as i64;
+        let batch = RecordBatch::try_new(
+            log_arrow(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(1..=n)),
+                Arc::new(StringArray::from(keys)),
+                Arc::new(StringArray::from(vec!["idle heartbeat ok"; n as usize])),
+            ],
+        )
+        .unwrap();
+        let (path, _) = write_segment_to_dir(dir, 1, 1, &batch).unwrap();
+        crate::store::segment_index::write_segment_index(
+            &path,
+            &[batch],
+            &crate::store::segment_index::SegmentIndexConfig::from_policies(
+                ["key", "data"],
+                &[],
+                &[],
+                Some("key".to_string()),
+            ),
+        )
+        .unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
     /// Whether any expression in `plan` casts the `data` column. Walks the tree
     /// rather than the rendered text, which qualifies column names inconsistently
     /// across plan stages and would make a substring check pass vacuously.
@@ -1032,6 +1071,92 @@ mod tests {
                     selection.row_count(),
                     rg1_rows,
                     "only the needle's span may be selected"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn key_substring_query_prunes_row_groups() {
+        // A job name sits in the MIDDLE of a log key, so `key LIKE '%<job>%'` is
+        // opaque to the `(key, seq)` sort and its min/max statistics. It prunes
+        // only from the key column's own trigram section.
+        use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
+
+        let dir = tempdir("key_substring_prune");
+        let filler_key = "/power/other-run-coord/other-run/0:0";
+        let span1_key = "/power/hs-final2-adoptedbatch-coord/grug-train/3:0";
+        let span1_rows = 5;
+        let path = write_two_span_keyed_log_segment(&dir, filler_key, span1_key, span1_rows);
+
+        let ctx = crate::query::make_ctx();
+        ctx.register_table(
+            datafusion::common::TableReference::bare("log"),
+            Arc::new(
+                NamespaceProvider::build(
+                    log_arrow(),
+                    std::slice::from_ref(&path),
+                    crate::query::index_cache::test_index_cache(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap();
+        let batches = ctx
+            .sql("SELECT key FROM \"log\" WHERE key LIKE '%final2-adoptedbatch%' ORDER BY seq")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            first_column_strings(&batches),
+            vec![span1_key.to_string(); span1_rows],
+            "the key substring query must return exactly the matching job's rows"
+        );
+
+        let plan = NamespaceProvider::build(
+            log_arrow(),
+            &[path],
+            crate::query::index_cache::test_index_cache(),
+        )
+        .unwrap()
+        .scan(
+            &ctx.state(),
+            None,
+            std::slice::from_ref(&col("key").like(lit("%final2-adoptedbatch%"))),
+            None,
+        )
+        .await
+        .unwrap();
+        let cfg = plan
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("a parquet DataSourceExec")
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .expect("a FileScanConfig");
+        let mut checked = 0;
+        for group in &cfg.file_groups {
+            for pf in group.files() {
+                let ap = pf
+                    .extensions
+                    .as_ref()
+                    .and_then(|e| e.downcast_ref::<ParquetAccessPlan>())
+                    .expect("trigram access plan attached for the key substring query");
+                // These narrow rows fit one byte-sized row group, so the prune
+                // expresses the skipped first span as a row selection inside it.
+                let [RowGroupAccess::Selection(selection)] = ap.inner() else {
+                    panic!("expected one row group carrying a row selection: {ap:?}");
+                };
+                assert_eq!(
+                    selection.row_count(),
+                    span1_rows,
+                    "only the matching job's span may be selected"
                 );
                 checked += 1;
             }

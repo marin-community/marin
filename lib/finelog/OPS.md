@@ -75,7 +75,16 @@ depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
 underscores when you mean them literally. Adding one is a
 `RegisterTable` away and does not need a reset, but the index backfill runs a
 few segments per namespace per 30 s tick, so a large namespace speeds up over
-tens of minutes rather than at once.
+tens of minutes rather than at once. Enabling a column also supersedes the whole
+`.fidx` policy, so every segment's bundle is rebuilt, not just extended: budget
+one core for the length of that backfill on the namespace's full segment count.
+
+A cheap column is not a cheap predicate. `log.key` holds a few thousand distinct
+values per segment and costs a few MiB across a 15 GiB namespace, but a substring
+predicate decodes it once per row, so an unindexed `key LIKE '%…%'` spends its
+whole cost in the `LIKE` kernel: `bytes_scanned` stays in the hundreds of KiB
+while `pushdown_rows_pruned` reaches the namespace's row count. Read those two
+metrics together — a small `bytes_scanned` is not evidence a query was cheap.
 
 For repeated equality families, declare the hot string values in
 `ColumnIndex.exact_values`. Finelog stores exact source-row postings in the
