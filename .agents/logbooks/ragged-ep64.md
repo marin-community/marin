@@ -195,3 +195,31 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - DRI and monitoring: DRI `rjpower`; Codex owns monitoring. Stop on non-finite training, allocator or NCCL failure, exhausted retries, or failure to complete step 25. If it completes, score exactly steps 5 through 24.
 - Source bundle and Iris job: pending submission.
 - Next action: Commit and push this milestone, publish the allocation result to #8077, then submit the treatment once.
+
+### 2026-08-08 23:20 UTC - Background research brief and throughput arm queue
+
+- Effort: medium. Stop rule: stop external and internal foraging when new sources no longer change the first six single-variable arms.
+- Question: Once NCCL send/recv reaches step 0, which EP-specific controls could plausibly raise the selected ragged hero above 20% MFU?
+- Current context: the shape-matched fixed-all-to-all reference reaches about 23.47% median MFU but drops about 5.28% of routed assignments. The older, smaller EP64 ragged result reached 14.96% MFU. The target therefore likely requires a large scheduling or transport correction, not a sub-resolution collective tweak.
+- Internal prior work: the EP4 profile in [#7279](https://github.com/marin-community/marin/issues/7279#issuecomment-5064115832) measured 472.7 ms in 512 ragged send/recv kernels and found 6.96% more compute plus 11.56% more stall time than ring; communication time alone did not explain the gap. The FSDP sweep in [#8054](https://github.com/marin-community/marin/issues/8054) found latency hiding harmful and NCCL protocol/NVLS changes small, but that evidence is only a ranking prior because FSDP uses AG/RS/AR rather than ragged P2P.
+- External prior art: NVIDIA's [JAX Toolbox GPU guide](https://docs.nvidia.com/jax-toolbox/performance-profiling/gpu-performance) recommends `NCCL_PROTO`, local memcpy P2P, NCCL communicator/channel controls, and partial CUDA graphs. It says NCCL user buffers support send/recv, but require a separate memory pool. It also says NVLS accelerates reduction collectives, and explicitly warns that `CUDA_DEVICE_MAX_CONNECTIONS=1` is slower on Blackwell.
+- Negative leads: `NCCL_ALGO=NVLS,Ring` and SHARP do not change NCCL send/recv, so they are not direct ragged arms. AG/RS/AR combine thresholds are FSDP controls. `xla_gpu_enable_pipelined_p2p` documents collective-permute patterns, not ragged-all-to-all. `NCCL_LAUNCH_MODE=GROUP` is a hang workaround, not a throughput claim. The one-shot kernel remains excluded until its device-32 illegal-address fault is fixed.
+
+#### Ranked experiments after a stable baseline
+
+1. Find the largest non-OOM FIFO: bracket `NCCL_BUFFSIZE` at 2 MiB after a 1 MiB success, or fall to 256 KiB after a 1 MiB OOM. Score the largest reachable value; falsifier is no step-time improvement or another allocation OOM.
+2. Disable the latency-hiding scheduler with overlap otherwise unchanged. The EP default forces it on, while prior Marin measurements show ragged has excess stall/compute and FSDP shows the scheduler can lose performance. A result below the baseline falsifies scheduler interference.
+3. Keep latency hiding on and reduce `--xla_gpu_experimental_parallel_collective_overlap_limit` from 4 to 1. This tests whether concurrent dynamic P2P operations consume HBM or serialize badly without conflating the result with disabling scheduling entirely.
+4. Disable automatic PGLE. Every current rank reports an empty PGLE trace, so it has supplied no measured latency model. This arm tests whether its profiling/recompilation path is contaminating the short run.
+5. Set `NCCL_PROTO=Simple`. Large P2P messages may benefit from avoiding LL protocol overhead. Prior FSDP evidence was neutral, but ragged send/recv is a different NCCL operation.
+6. Enable `--xla_gpu_use_memcpy_local_p2p=true`. This moves only the three same-process peers per GPU to copy engines, so the upside is bounded and the arm follows global scheduler/protocol tests.
+7. Sweep `--xla_gpu_nccl_p2p_max_nchannels` serially, starting at 1 and then 4 only if 1 changes the result. Sixty-three peer relationships per rank may otherwise reserve too many SMs or launch resources.
+8. Test `--xla_gpu_enable_nccl_per_stream_comms=false` and communicator splitting as memory controls. Promote only if they permit a larger FIFO or materially improve peak HBM; they are not expected to create a large throughput win alone.
+9. Test `--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL` once. NVIDIA recommends this on B200 for launch overhead, but Marin has a multi-node command-buffer crash record in #5675, so stop immediately on graph-instantiation or illegal-address failure.
+10. Test NCCL user buffers only after reserving a bounded collective arena and preserving NCCL headroom. This is the remaining zero-copy send/recv path, but its extra pool makes it a high-OOM-risk arm.
+11. Test the analytical SOL estimator or O1 only if latency hiding remains enabled and a profile shows poor collective scheduling. SOL primarily models collectives, not private send/recv, and the FSDP sweep found this family below the resolution floor or harmful.
+12. Test explicit NVLS/SHARP only if a profile shows non-ragged AR/AG/RS dominating the remaining step. It cannot directly accelerate the defining ragged P2P traffic.
+
+- Success rule: a single 20-step window above 20% median MFU is a candidate win; effects below the ±1.57% reading resolution from #8054 remain unresolved without replication.
+- Source ledger: NVIDIA JAX Toolbox GPU guide (official docs, current 2026-08-08); NVIDIA NCCL 2.30.7 environment guide (official docs); Marin issues #7012, #7279, #8054; current RA2A-001/002 logs and W&B records.
+- Next action: finish the FIFO reachability bracket, publish the ranked queue to #8077, then serialize the highest-signal arms against the first stable baseline.
