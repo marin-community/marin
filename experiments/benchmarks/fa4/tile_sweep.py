@@ -22,8 +22,11 @@ dimension 128 -- no double buffering of the Q and dO loads -- and a 4-warp atom 
 layout. Sweeping the path is how the double-buffering question gets answered without changing
 library code.
 
-``--shard``/``--num-shards`` split the candidate list so one 4-GPU node can run four disjoint
-slices concurrently, one process per GPU.
+One process sweeps one backward path. ``cute_launcher_factory`` memoizes on the launcher's
+keyword arguments, and the path is derived inside the launcher rather than passed to it, so
+benching two paths at one tile in a single process silently returns the first path's kernel for
+both. ``--shard``/``--num-shards`` split the candidate list so one 4-GPU node can run four
+disjoint slices concurrently, one process per GPU.
 """
 
 import argparse
@@ -186,7 +189,7 @@ def _check_against_float32_reference(
     return "ok" if not failures else "FAIL:" + ",".join(failures)
 
 
-def _build_candidates(base: Flash4CuteKernelConfig, sweep: str) -> list[Candidate]:
+def _build_candidates(base: Flash4CuteKernelConfig, sweep: str, backward_path: int) -> list[Candidate]:
     """Candidates for one sweep axis, holding the other axis at its production value.
 
     A full cross product of forward and backward tiles wastes most of its runs: the two kernels
@@ -194,16 +197,19 @@ def _build_candidates(base: Flash4CuteKernelConfig, sweep: str) -> list[Candidat
     """
     if sweep == "forward":
         return [
-            Candidate(dataclasses.replace(base, forward_tile=tile, backward_tile=REFERENCE_TILE, num_threads=128), 120)
+            Candidate(
+                dataclasses.replace(base, forward_tile=tile, backward_tile=REFERENCE_TILE, num_threads=128),
+                backward_path,
+            )
             for tile in CANDIDATE_FORWARD_TILES
         ]
     return [
         Candidate(
-            dataclasses.replace(base, forward_tile=base.forward_tile, backward_tile=tile, num_threads=threads), path
+            dataclasses.replace(base, forward_tile=base.forward_tile, backward_tile=tile, num_threads=threads),
+            backward_path,
         )
         for tile in CANDIDATE_BACKWARD_TILES
         for threads in CANDIDATE_NUM_THREADS
-        for path in CANDIDATE_BACKWARD_PATHS
     ]
 
 
@@ -230,6 +236,17 @@ def main() -> None:
         default="forward",
         help="Which tile to vary. 'backward' also varies threads and backward path.",
     )
+    parser.add_argument(
+        "--backward-path",
+        type=int,
+        choices=CANDIDATE_BACKWARD_PATHS,
+        default=120,
+        help=(
+            "Backward path to force for every candidate including the reference. One process must "
+            "use one path: cute_launcher_factory memoizes on the launcher's keyword arguments, and "
+            "the path is derived inside rather than passed, so two paths in one process collide."
+        ),
+    )
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--num-shards", type=int, default=1)
     args = parser.parse_args()
@@ -254,9 +271,9 @@ def main() -> None:
 
     reference = Candidate(
         config=dataclasses.replace(base, forward_tile=REFERENCE_TILE, backward_tile=REFERENCE_TILE, num_threads=128),
-        backward_path=120,
+        backward_path=args.backward_path,
     )
-    candidates = _build_candidates(base, args.sweep)
+    candidates = _build_candidates(base, args.sweep, args.backward_path)
     shard = [c for i, c in enumerate(candidates) if i % args.num_shards == args.shard]
     print(f"sweep={args.sweep} candidates={len(candidates)} shard={args.shard}/{args.num_shards} running={len(shard)}")
 

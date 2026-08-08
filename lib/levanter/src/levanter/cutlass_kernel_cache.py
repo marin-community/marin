@@ -11,8 +11,9 @@ on-disk caches cannot cover it either: ``cutlass.cute.compile`` forces
 ``no_cache=True``, leaving only an in-process dict keyed on launcher identity.
 
 :func:`install` wraps ``get_or_compile_kernel`` to consult an object store first,
-keyed on the launcher's configuration and defining source, the argument
-specification, the device architecture, and the CuTeDSL and QuACK versions.
+keyed on the launcher's configuration and defining package source, the argument
+specification, the device architecture, and the CuTeDSL, QuACK, and FlashAttention
+versions.
 ``cutlass.jax`` derives a kernel's fingerprint from its object code by SHA-256, so
 a stored blob reconstructs a compile with nothing else.
 
@@ -23,6 +24,7 @@ import functools
 import hashlib
 import importlib
 import logging
+import pathlib
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Callable
 
@@ -32,7 +34,7 @@ from rigging.cache import PersistentKvCache
 logger = logging.getLogger(__name__)
 
 _KERNEL_IDENTITY_ATTR = "_levanter_cute_kernel_identity"
-_VERSIONED_PACKAGES = ("nvidia-cutlass-dsl", "quack-kernels", "jaxlib")
+_VERSIONED_PACKAGES = ("nvidia-cutlass-dsl", "quack-kernels", "jaxlib", "flash-attn-4")
 _KERNEL_CACHE_PREFIX = "cutlass-kernels"
 
 
@@ -46,9 +48,16 @@ def cute_launcher_factory(build: Callable[..., Any]) -> Callable[..., Any]:
     onto one compile.
 
     The stamped identity names the kernel across processes: the factory's
-    qualified name, its keyword arguments, and a digest of its defining source.
+    qualified name, its keyword arguments, and a digest of its defining package.
     Keyword arguments carry the whole kernel configuration; the positional
     argument is the CuTe module bundle, a singleton that configures nothing.
+
+    A launcher rarely holds the whole kernel in its own file. The segmented
+    backward, for one, builds from ``_fa4_cute_segmented_bwd`` while being defined
+    in ``_fa4_cute_kernels``, so digesting only the defining file would serve a
+    stale object after the kernel itself changed. The digest therefore covers the
+    package. Over-digesting costs a recompile; under-digesting runs the wrong
+    kernel.
     """
 
     @functools.lru_cache(maxsize=None)
@@ -85,16 +94,31 @@ def cutlass_call(launcher: Any, **kwargs: Any) -> Any:
 
 @functools.lru_cache(maxsize=None)
 def _source_digest(build: Callable[..., Any]) -> str:
-    """Digest the source file that defines ``build``.
+    """Digest every Python source file in the package that defines ``build``.
 
-    The launcher body is levanter source, so nothing else in the key would notice
-    an edit to it. Everything the body calls into is either QuACK or CuTeDSL,
+    The launcher body is levanter source, so nothing else in the key would notice an
+    edit to it, and a launcher routinely builds its kernel from a sibling module
+    rather than its own file. Digesting the whole package covers both. Everything
+    the body calls into beyond the package is either QuACK, CuTeDSL, or FlashAttention,
     covered by their package versions, or configuration, covered by the arguments.
     """
     source = importlib.import_module(build.__module__).__file__
     assert source is not None, f"{build.__module__} has no source file to digest"
-    with open(source, "rb") as handle:
-        return hashlib.sha256(handle.read()).hexdigest()[:16]
+    return _package_digest(str(pathlib.Path(source).parent))
+
+
+def _package_digest(directory: str) -> str:
+    """Digest every ``*.py`` under ``directory``, recursively, in a stable order.
+
+    Deliberately not memoized on the directory: the caller is, per launcher factory, and a
+    directory name does not change when its contents do. The walk runs a handful of times
+    per process.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(pathlib.Path(directory).rglob("*.py")):
+        digest.update(str(path.relative_to(directory)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def cutlass_kernel_cache() -> PersistentKvCache:

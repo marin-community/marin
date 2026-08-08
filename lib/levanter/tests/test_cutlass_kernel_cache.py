@@ -160,6 +160,58 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
     assert compiled_per_revision == [["tile128"], ["tile128", "tile128"]]
 
 
+def test_editing_a_sibling_module_the_launcher_builds_from_invalidates_its_kernels(
+    fake_cutlass, tmp_path, monkeypatch
+):
+    """A launcher usually builds its kernel from a sibling module, not its own file.
+
+    ``segmented_flash_attention_backward_launcher`` is defined in ``_fa4_cute_kernels`` but
+    builds from ``_fa4_cute_segmented_bwd``, so a key covering only the defining file would
+    serve the previously compiled object after the kernel itself changed.
+    """
+    package = tmp_path / "src" / "kernelpkg"
+    package.mkdir(parents=True)
+    monkeypatch.syspath_prepend(str(tmp_path / "src"))
+    (package / "__init__.py").write_text("")
+    (package / "launcher.py").write_text(
+        textwrap.dedent(
+            """
+            import importlib
+
+            from levanter.cutlass_kernel_cache import cute_launcher_factory
+
+            @cute_launcher_factory
+            def build(modules, *, tile: int):
+                kernel = importlib.import_module("kernelpkg.kernel")
+
+                def launcher(stream):
+                    raise AssertionError("a launcher is never called on the host")
+
+                launcher.kernel_name = f"tile{tile}-{kernel.VARIANT}"
+                return launcher
+            """
+        )
+    )
+    store = str(tmp_path / "store")
+
+    compiled_per_revision = []
+    for revision in ("original", "edited"):
+        (package / "kernel.py").write_text(f'VARIANT = "{revision}"\n')
+        importlib.invalidate_caches()
+        for name in [n for n in sys.modules if n.startswith("kernelpkg")]:
+            del sys.modules[name]
+        module = importlib.import_module("kernelpkg.launcher")
+        fake_cutlass.forget_process_state()
+        install(_kernel_store(store))
+        fake_cutlass.compile_kernel(module.build(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+        compiled_per_revision.append(list(fake_cutlass.compiled))
+
+    assert compiled_per_revision == [
+        ["tile128-original"],
+        ["tile128-original", "tile128-edited"],
+    ]
+
+
 def test_a_launcher_without_an_identity_is_compiled_but_not_stored(fake_cutlass, tmp_path):
     cache = _kernel_store(tmp_path)
     install(cache)
