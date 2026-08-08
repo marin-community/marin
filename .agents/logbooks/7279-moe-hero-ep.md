@@ -1784,3 +1784,25 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   The local summary tool could not resolve the nested W&B `trainer.trainer.log_dir` value, and
   this machine does not have the required S3 or IAP credential. No local profile summary was
   available. The W&B step data remains the primary comparison record.
+
+### 2026-08-08 16:15 UTC - Automatic PGLE improves the selected model
+
+- MHEP-196 completed all 200 steps. Iris reports that the coordinator and training child
+  succeeded with zero failures and zero preemptions. The run used production priority and zero
+  retries.
+- W&B has 200 history rows. It received all 76 norm fields at steps 0, 10, through 190. Every
+  value in all 20 norm rows was finite.
+- Last-50 means were 262,683 tokens/s, 3.9642% drops, 252,271 drop-adjusted tokens/s, and loss
+  3.2417. The final step reported 262,368 tokens/s, 3.7762% drops, and loss 3.2035.
+- Compared with the matched MHEP-193 baseline, automatic PGLE improved raw throughput by 3.40%
+  and drop-adjusted throughput by 3.41%. The drop rate was 0.0079 percentage points lower. Mean
+  loss was 0.018% higher, which is not a material change in this short comparison.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-196-w33-ep-e192-i6272-cf1p30-pgle3-watch10-p32794-20260808
+- Decision: Keep the explicit runtime override support from commit `e4b68798e`. The EP defaults
+  remain unchanged, but a selected-model run can set `JAX_ENABLE_PGLE=true` and
+  `JAX_PGLE_PROFILING_RUNS=3`. Keep `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`, full norms every 10
+  steps, and collective overlap limit 1. Do not set an XLA memory fraction.
+- Overlap limit 2 remains rejected because MHEP-194 failed from NCCL out of memory. Automatic PGLE
+  is the only tested performance change that both keeps full norms and improves the selected
+  model. MHEP-195 confirmed that XLA used measured latency data for a profile-guided recompile,
+  and MHEP-196 confirmed the 200-step throughput result.
