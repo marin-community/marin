@@ -834,8 +834,10 @@ def _qb_beta_dynamic_hist(
     target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts
 
     def _fn(s_local: jax.Array) -> jax.Array:
-        lo = 2.0 * jax.lax.pmin(jnp.min(s_local), axis_name=_BATCH_AXES)
-        hi = 2.0 * jax.lax.pmax(jnp.max(s_local), axis_name=_BATCH_AXES)
+        # pmin/pmax have no autodiff rule and the range is a control quantity, so detach their inputs;
+        # the bincount path below drops tangents at the integer bin cast (like logit_hist), so it needs none.
+        lo = 2.0 * jax.lax.pmin(jax.lax.stop_gradient(jnp.min(s_local)), axis_name=_BATCH_AXES)
+        hi = 2.0 * jax.lax.pmax(jax.lax.stop_gradient(jnp.max(s_local)), axis_name=_BATCH_AXES)
         hi = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
         return _bincount_upper_quantile(
             s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi, target_rank=target_rank
