@@ -933,3 +933,33 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   do not contain a complete root-cause message.
 - Decision: Do not run more memory-fraction arms for the full EP64 watch. Raising the fraction
   still leaves too little room for NCCL, while lowering it cannot make the compiled program fit.
+
+### 2026-08-08 10:02 UTC - MHEP-149 and MHEP-150 d768 premise pair ready
+
+- Hypothesis: At fixed active compute, 192 routed experts improve held-out loss compared with 128
+  routed experts. The expert count is the only model or training variable in the pair.
+- Code snapshot: `42835f581`, after a rebase on the latest `origin/main`. The small-scale launcher
+  accepts `--watch-interval`; zero stays the default.
+- Common config: d768; 8 layers; expert width 688; latent dimension 384 with RMSNorm; top-4;
+  capacity factor 2.0; batch 1,024; sequence length 4,096; 4,194,304 tokens per step; 9,703 steps;
+  750 tokens per active parameter; seed 0; EP64 `fixed_all_to_all`; one 64-GPU GB200 rack per arm;
+  the two-phase datakit mixture; Paloma and uncheatable evaluation every 1,000 steps; checkpoints
+  every 30 minutes; and full gradient and parameter norms every 10 steps without histograms.
+- Arms: MHEP-149 uses 192 routed experts. MHEP-150 uses 128 routed experts. The two arms use the
+  same expert width, latent width, top-k, capacity factor, batch, data, seed, and schedule.
+- Run IDs: `mhep-149-d768-ep-e192-i688-l384-k4-cf2p00-t750-s0-w10-p32747-20260808` and
+  `mhep-150-d768-ep-e128-i688-l384-k4-cf2p00-t750-s0-w10-p32748-20260808`.
+- W&B: Entity `marin-community`, project `rav_moe`, group `moe-hero-ep-small-abl`.
+- Submit command: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority production --cpu 2
+  --memory 8GB --disk 32GB --timeout 7200 --max-retries 2 --job-name <run>-coord
+  -e WANDB_API_KEY <secret> -e WANDB_PROJECT rav_moe -e WANDB_ENTITY marin-community
+  -e IRIS_PORT_JAX <port> -- python -m experiments.grug.moe_hero_ep.small_scale_abl_launch
+  --run-id <run> --size d768 --target gb200-rack --flavor ep --seq-len 4096
+  --tokens-per-step 4194304 --capacity-factor 2.0 --num-experts <128-or-192>
+  --num-experts-per-token 4 --intermediate-dim 688 --latent-dim 384
+  --tokens-per-active-param 750 --watch-interval 10 --version 2026.08.08 --run`.
+- Success criteria: Both arms complete step 9,703 with finite losses, final checkpoints, and Paloma
+  results. Compare the final and last three evaluation points, drop fractions, throughput, and norm
+  curves. Stop a run on a non-finite loss or a repeated model or allocator failure.
+- Expected execution time: About 36 minutes per arm, excluding queue time.
