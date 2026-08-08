@@ -17,7 +17,6 @@ paired reading resolves 1.57% at 95%.
 
 Usage
 -----
-    uv run python -m experiments.grug.moe_hero_fsdp.sweep_preflight <arm>...   # CPU trace, first
     uv run python -m experiments.grug.moe_hero_fsdp.sweep launch <arm>... --version dev --run
     uv run python -m experiments.grug.moe_hero_fsdp.sweep score <arm>...
 
