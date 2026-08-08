@@ -476,10 +476,21 @@ def _make_train_step(
         watch_stats: dict | None = None
         host_trees: dict | None = None
         if watch_config is not None and compute_watch and watch_on_host:
-            # Ship leaf by leaf; the reduction happens on the host after the step returns.
-            host_trees = {
-                t: _tree_to_host(grads if t == "grads" else qb_params) for t in watch_targets if t in ("grads", "params")
-            }
+            # Only the gradients are transient. Params are live for the whole step anyway, so
+            # reducing over them on device blocks nothing and keeps the host copy half the size.
+            device_targets = tuple(t for t in watch_targets if t == "params")
+            if "grads" in watch_targets:
+                host_trees = {"grads": _tree_to_host(grads)}
+            if device_targets:
+                watch_stats = compute_watch_stats(
+                    watch_targets=device_targets,
+                    include_norms=watch_config.include_norms,
+                    include_per_parameter_norms=watch_config.include_per_parameter_norms,
+                    include_histogram=watch_config.include_histograms,
+                    split_scan_layers=watch_config.split_scan_layers,
+                    params=qb_params,
+                    model_tree_type=type(state.params),
+                )
         elif watch_config is not None and compute_watch:
             early = tuple(t for t in watch_targets if t in ("grads", "params"))
             if early:
@@ -701,7 +712,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 )
                 state, metrics, watch_stats, host_trees = train_step(state, batch, compute_watch=compute_watch)
                 if host_trees:
-                    watch_stats = {}
+                    watch_stats = dict(watch_stats or {})
                     for target, tree in host_trees.items():
                         watch_stats.update(
                             host_tree_norms(
