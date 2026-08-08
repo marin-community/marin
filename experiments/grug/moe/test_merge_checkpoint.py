@@ -14,10 +14,13 @@ from levanter.grug.sharding import compact_grug_mesh
 from experiments.grug.moe.expert_merge import AssignmentMode
 from experiments.grug.moe.merge_checkpoint import (
     CapacityOracleKind,
+    JointRefactorKind,
+    JointRefactorProvenance,
     LayerAdapterKind,
     MergeCheckpointManifest,
     OnePairMergeCheckpointSpec,
     convert_grug_state_for_capacity_oracle_split,
+    convert_grug_state_for_joint_refactor,
     convert_grug_state_for_layer_adapter,
     convert_grug_state_for_one_pair_merge,
     read_merge_checkpoint_manifest,
@@ -77,6 +80,51 @@ def _spec() -> OnePairMergeCheckpointSpec:
 
 def _fresh_optimizer_state(model: Transformer):
     return {"recovery_bank_count": jnp.array(len(model.expert_banks), dtype=jnp.int32)}
+
+
+def _joint_refactor_provenance() -> JointRefactorProvenance:
+    return JointRefactorProvenance(
+        kind=JointRefactorKind.CACHED_TRACE_HARD_TOP4,
+        source_checkpoint="source/checkpoints/step-37",
+        source_commit="0123456789abcdef",
+        calibration_path="calibration/layers-2-3",
+        calibration_artifact_version="2026.08.06",
+        calibration_artifact_fingerprint="0dafe93d",
+        trace_paths=("calibration/traces/layer_02.npz", "calibration/traces/layer_03.npz"),
+        representative_layer=2,
+        source_layer=3,
+        source_topology=(0, 1, 2, 3, 4, 5),
+        target_topology=(0, 1, 2, 2, 3, 4),
+        correspondence_used=False,
+        matching_path=None,
+        router_initialization="unpermuted_source_columns",
+        router_bias_trained=False,
+        pending_qb_trained=False,
+        optimizer="adamw",
+        learning_rate=1e-4,
+        weight_decay=0.0,
+        optimizer_b1=0.9,
+        optimizer_b2=0.999,
+        optimizer_epsilon=1e-8,
+        normalization_epsilon=1e-8,
+        heldout_fraction=0.2,
+        split_seeds=(2, 3),
+        train_examples_per_layer=256,
+        heldout_examples_per_layer=512,
+        max_steps=2_000,
+        eval_every=100,
+        early_stopping_patience=5,
+        seed=0,
+        train_tokens_by_layer=(6_554, 6_554),
+        heldout_tokens_by_layer=(1_638, 1_638),
+        selected_refactor_step=700,
+        best_heldout_loss=0.31,
+        best_heldout_nrmse_by_layer=(0.5, 0.61),
+        routing_entropy_by_layer=(5.4, 5.35),
+        active_experts_by_layer=(4, 4),
+        capacity_overflow_by_layer=(0.0, 0.0),
+        output_step=0,
+    )
 
 
 def test_state_conversion_resets_recovery_state_and_preserves_qb_semantics():
@@ -197,6 +245,51 @@ def test_merge_checkpoint_manifest_and_state_round_trip(tmp_path):
         strict=True,
     ):
         np.testing.assert_array_equal(actual, expected)
+
+
+def test_joint_refactor_conversion_installs_one_bank_and_unpermuted_routers():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        source = _source_state(Transformer.init(_tiny_config(tuple(range(6))), key=jax.random.key(15)))
+        shared_bank = dataclasses.replace(
+            source.params.expert_banks[2],
+            w_gate=source.params.expert_banks[2].w_gate + 0.125,
+        )
+        routers = (
+            dataclasses.replace(
+                source.params.blocks[2].mlp,
+                router=source.params.blocks[2].mlp.router + 0.25,
+            ),
+            dataclasses.replace(
+                source.params.blocks[3].mlp,
+                router=source.params.blocks[3].mlp.router - 0.5,
+            ),
+        )
+        converted = convert_grug_state_for_joint_refactor(
+            source,
+            shared_bank=shared_bank,
+            routers=routers,
+            provenance=_joint_refactor_provenance(),
+            init_optimizer_state=_fresh_optimizer_state,
+        )
+
+    assert converted.state.params.config.resolved_expert_bank_for_layer == (0, 1, 2, 2, 3, 4)
+    assert len(converted.state.params.expert_banks) == 5
+    for actual, expected in zip(
+        jax.tree.leaves(converted.state.params.expert_banks[2]),
+        jax.tree.leaves(shared_bank),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(actual, expected)
+    for layer, expected in zip((2, 3), routers, strict=True):
+        np.testing.assert_array_equal(converted.state.params.blocks[layer].mlp.router, expected.router)
+        np.testing.assert_array_equal(converted.state.params.blocks[layer].mlp.router_bias, expected.router_bias)
+    np.testing.assert_array_equal(converted.state.pending_qb_betas, source.pending_qb_betas)
+    assert converted.manifest.spec.assignment_mode is AssignmentMode.IDENTITY
+    assert converted.manifest.spec.source_to_shared == tuple(range(4))
+    assert converted.manifest.spec.cost_matrix_path is None
+    assert converted.manifest.spec.probe_path is None
+    assert converted.manifest.joint_refactor == _joint_refactor_provenance()
+    assert MergeCheckpointManifest.from_dict(converted.manifest.to_dict()) == converted.manifest
 
 
 def _recovered_one_pair_state_and_manifest() -> tuple[GrugTrainState, MergeCheckpointManifest]:

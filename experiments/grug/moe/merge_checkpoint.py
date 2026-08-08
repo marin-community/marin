@@ -24,12 +24,13 @@ from experiments.grug.moe.merge_recovery import (
     RecoveryStage,
     RecoveryTrainableScope,
 )
-from experiments.grug.moe.model import RoutedExpertAdapter, Transformer
+from experiments.grug.moe.model import MoEMLP, RoutedExpertAdapter, Transformer
 from experiments.grug.moe.train import GrugTrainState
 
 MERGE_CHECKPOINT_MANIFEST_FILENAME = "merge_manifest.json"
 _LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION = 2
-_MERGE_CHECKPOINT_FORMAT_VERSION = 3
+_LAYER_ADAPTER_MERGE_CHECKPOINT_FORMAT_VERSION = 3
+_MERGE_CHECKPOINT_FORMAT_VERSION = 4
 
 type OptimizerStateInitializer = Callable[[Transformer], optax.OptState]
 
@@ -92,6 +93,58 @@ class LayerAdapterProvenance:
     output_step: int
 
 
+class JointRefactorKind(StrEnum):
+    """Machine-readable form of correspondence-free shared-bank refactorization."""
+
+    CACHED_TRACE_HARD_TOP4 = "cached_trace_hard_top4"
+
+
+@dataclass(frozen=True)
+class JointRefactorProvenance:
+    """Provenance for a shared bank and routers learned without expert correspondence."""
+
+    kind: JointRefactorKind
+    source_checkpoint: str
+    source_commit: str | None
+    calibration_path: str
+    calibration_artifact_version: str
+    calibration_artifact_fingerprint: str
+    trace_paths: tuple[str, str]
+    representative_layer: int
+    source_layer: int
+    source_topology: tuple[int, ...]
+    target_topology: tuple[int, ...]
+    correspondence_used: bool
+    matching_path: str | None
+    router_initialization: str
+    router_bias_trained: bool
+    pending_qb_trained: bool
+    optimizer: str
+    learning_rate: float
+    weight_decay: float
+    optimizer_b1: float
+    optimizer_b2: float
+    optimizer_epsilon: float
+    normalization_epsilon: float
+    heldout_fraction: float
+    split_seeds: tuple[int, int]
+    train_examples_per_layer: int
+    heldout_examples_per_layer: int
+    max_steps: int
+    eval_every: int
+    early_stopping_patience: int
+    seed: int
+    train_tokens_by_layer: tuple[int, int]
+    heldout_tokens_by_layer: tuple[int, int]
+    selected_refactor_step: int
+    best_heldout_loss: float
+    best_heldout_nrmse_by_layer: tuple[float, float]
+    routing_entropy_by_layer: tuple[float, float]
+    active_experts_by_layer: tuple[int, int]
+    capacity_overflow_by_layer: tuple[float, float]
+    output_step: int
+
+
 @dataclass(frozen=True)
 class MergeCheckpointManifest:
     """Metadata required to reconstruct a converted checkpoint's static topology."""
@@ -112,6 +165,7 @@ class MergeCheckpointManifest:
     recovery_logit_kl_weight: float | None = None
     capacity_oracle: CapacityOracleProvenance | None = None
     layer_adapter: LayerAdapterProvenance | None = None
+    joint_refactor: JointRefactorProvenance | None = None
     format_version: int = _MERGE_CHECKPOINT_FORMAT_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,10 +174,16 @@ class MergeCheckpointManifest:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "MergeCheckpointManifest":
         format_version = int(payload["format_version"])
-        if format_version not in {_LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION, _MERGE_CHECKPOINT_FORMAT_VERSION}:
+        if format_version not in {
+            _LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION,
+            _LAYER_ADAPTER_MERGE_CHECKPOINT_FORMAT_VERSION,
+            _MERGE_CHECKPOINT_FORMAT_VERSION,
+        }:
             raise ValueError(
                 f"unsupported merge checkpoint format version {format_version}; "
-                f"expected one of {_LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION}, {_MERGE_CHECKPOINT_FORMAT_VERSION}"
+                "expected one of "
+                f"{_LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION}, "
+                f"{_LAYER_ADAPTER_MERGE_CHECKPOINT_FORMAT_VERSION}, {_MERGE_CHECKPOINT_FORMAT_VERSION}"
             )
         spec_payload = payload["spec"]
         if not isinstance(spec_payload, Mapping):
@@ -182,6 +242,63 @@ class MergeCheckpointManifest:
             if layer_adapter_payload is not None
             else None
         )
+        joint_refactor_payload = payload.get("joint_refactor")
+        if joint_refactor_payload is not None and not isinstance(joint_refactor_payload, Mapping):
+            raise ValueError("joint_refactor must be an object")
+        if format_version < _MERGE_CHECKPOINT_FORMAT_VERSION and joint_refactor_payload is not None:
+            raise ValueError("joint-refactor provenance requires merge checkpoint format version 4")
+        joint_refactor = (
+            JointRefactorProvenance(
+                kind=JointRefactorKind(joint_refactor_payload["kind"]),
+                source_checkpoint=str(joint_refactor_payload["source_checkpoint"]),
+                source_commit=joint_refactor_payload.get("source_commit"),
+                calibration_path=str(joint_refactor_payload["calibration_path"]),
+                calibration_artifact_version=str(joint_refactor_payload["calibration_artifact_version"]),
+                calibration_artifact_fingerprint=str(joint_refactor_payload["calibration_artifact_fingerprint"]),
+                trace_paths=tuple(str(value) for value in joint_refactor_payload["trace_paths"]),
+                representative_layer=int(joint_refactor_payload["representative_layer"]),
+                source_layer=int(joint_refactor_payload["source_layer"]),
+                source_topology=tuple(int(index) for index in joint_refactor_payload["source_topology"]),
+                target_topology=tuple(int(index) for index in joint_refactor_payload["target_topology"]),
+                correspondence_used=bool(joint_refactor_payload["correspondence_used"]),
+                matching_path=joint_refactor_payload.get("matching_path"),
+                router_initialization=str(joint_refactor_payload["router_initialization"]),
+                router_bias_trained=bool(joint_refactor_payload["router_bias_trained"]),
+                pending_qb_trained=bool(joint_refactor_payload["pending_qb_trained"]),
+                optimizer=str(joint_refactor_payload["optimizer"]),
+                learning_rate=float(joint_refactor_payload["learning_rate"]),
+                weight_decay=float(joint_refactor_payload["weight_decay"]),
+                optimizer_b1=float(joint_refactor_payload["optimizer_b1"]),
+                optimizer_b2=float(joint_refactor_payload["optimizer_b2"]),
+                optimizer_epsilon=float(joint_refactor_payload["optimizer_epsilon"]),
+                normalization_epsilon=float(joint_refactor_payload["normalization_epsilon"]),
+                heldout_fraction=float(joint_refactor_payload["heldout_fraction"]),
+                split_seeds=tuple(int(value) for value in joint_refactor_payload["split_seeds"]),
+                train_examples_per_layer=int(joint_refactor_payload["train_examples_per_layer"]),
+                heldout_examples_per_layer=int(joint_refactor_payload["heldout_examples_per_layer"]),
+                max_steps=int(joint_refactor_payload["max_steps"]),
+                eval_every=int(joint_refactor_payload["eval_every"]),
+                early_stopping_patience=int(joint_refactor_payload["early_stopping_patience"]),
+                seed=int(joint_refactor_payload["seed"]),
+                train_tokens_by_layer=tuple(int(value) for value in joint_refactor_payload["train_tokens_by_layer"]),
+                heldout_tokens_by_layer=tuple(int(value) for value in joint_refactor_payload["heldout_tokens_by_layer"]),
+                selected_refactor_step=int(joint_refactor_payload["selected_refactor_step"]),
+                best_heldout_loss=float(joint_refactor_payload["best_heldout_loss"]),
+                best_heldout_nrmse_by_layer=tuple(
+                    float(value) for value in joint_refactor_payload["best_heldout_nrmse_by_layer"]
+                ),
+                routing_entropy_by_layer=tuple(
+                    float(value) for value in joint_refactor_payload["routing_entropy_by_layer"]
+                ),
+                active_experts_by_layer=tuple(int(value) for value in joint_refactor_payload["active_experts_by_layer"]),
+                capacity_overflow_by_layer=tuple(
+                    float(value) for value in joint_refactor_payload["capacity_overflow_by_layer"]
+                ),
+                output_step=int(joint_refactor_payload["output_step"]),
+            )
+            if joint_refactor_payload is not None
+            else None
+        )
         return cls(
             spec=spec,
             source_topology=tuple(int(index) for index in payload["source_topology"]),
@@ -221,6 +338,7 @@ class MergeCheckpointManifest:
             ),
             capacity_oracle=capacity_oracle,
             layer_adapter=layer_adapter,
+            joint_refactor=joint_refactor,
             format_version=format_version,
         )
 
@@ -299,6 +417,87 @@ def convert_grug_state_for_one_pair_merge(
         ema_converted=converted_ema_params is not None,
     )
     return ConvertedMergeCheckpoint(state=converted_state, manifest=manifest)
+
+
+def convert_grug_state_for_joint_refactor(
+    state: GrugTrainState,
+    *,
+    shared_bank: MoEExpertMlp,
+    routers: tuple[MoEMLP, MoEMLP],
+    provenance: JointRefactorProvenance,
+    init_optimizer_state: OptimizerStateInitializer,
+) -> ConvertedMergeCheckpoint:
+    """Install a correspondence-free bank-and-router fit into an untied state."""
+    representative_layer = provenance.representative_layer
+    source_layer = provenance.source_layer
+    if provenance.correspondence_used or provenance.matching_path is not None:
+        raise ValueError("joint refactorization must not use expert correspondence or a matching artifact")
+    if provenance.router_bias_trained or provenance.pending_qb_trained:
+        raise ValueError("offline joint refactorization must freeze router biases and pending QB statistics")
+    if provenance.output_step != 0:
+        raise ValueError(f"joint-refactor output_step must be zero, got {provenance.output_step}")
+    if state.params.config.resolved_expert_bank_for_layer != provenance.source_topology:
+        raise ValueError("joint-refactor source topology does not match the loaded model")
+    if len(routers) != 2:
+        raise ValueError(f"joint refactorization requires two routers, got {len(routers)}")
+
+    identity = tuple(range(state.params.config.num_experts))
+    spec = OnePairMergeCheckpointSpec(
+        representative_layer=representative_layer,
+        source_layer=source_layer,
+        source_to_shared=identity,
+        assignment_mode=AssignmentMode.IDENTITY,
+        source_checkpoint=provenance.source_checkpoint,
+        source_commit=provenance.source_commit,
+        calibration_path=provenance.calibration_path,
+        cost_matrix_path=None,
+        probe_path=None,
+        prefit_applied=False,
+        prefit_checkpoint=None,
+        prefit_objective=None,
+    )
+    converted = convert_grug_state_for_one_pair_merge(
+        state,
+        spec=spec,
+        init_optimizer_state=lambda _: optax.EmptyState(),
+    )
+    if converted.manifest.target_topology != provenance.target_topology:
+        raise ValueError(
+            "joint-refactor target topology disagrees with structural conversion: "
+            f"{provenance.target_topology} != {converted.manifest.target_topology}"
+        )
+
+    shared_bank_index = converted.state.params.blocks[representative_layer].expert_bank_index
+    converted_config = converted.state.params.config
+    installed_routers = tuple(dataclasses.replace(router, cfg=converted_config) for router in routers)
+    blocks = tuple(
+        (
+            dataclasses.replace(block, mlp=installed_routers[(representative_layer, source_layer).index(layer)])
+            if layer in (representative_layer, source_layer)
+            else block
+        )
+        for layer, block in enumerate(converted.state.params.blocks)
+    )
+    expert_banks = tuple(
+        shared_bank if bank_index == shared_bank_index else bank
+        for bank_index, bank in enumerate(converted.state.params.expert_banks)
+    )
+    params = dataclasses.replace(converted.state.params, blocks=blocks, expert_banks=expert_banks)
+    ema_params = params if state.ema_params is not None else None
+    output_state = dataclasses.replace(
+        converted.state,
+        params=params,
+        ema_params=ema_params,
+        opt_state=init_optimizer_state(params),
+    )
+    manifest = dataclasses.replace(
+        converted.manifest,
+        ema_converted=ema_params is not None,
+        optimizer_state_reset=True,
+        recovery_initialization=None,
+        joint_refactor=provenance,
+    )
+    return ConvertedMergeCheckpoint(state=output_state, manifest=manifest)
 
 
 def _copy_expert_bank(bank: MoEExpertMlp) -> MoEExpertMlp:

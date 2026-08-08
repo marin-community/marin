@@ -50,6 +50,7 @@ class RecoveryInitialization(StrEnum):
     LOCAL_RECOVERY = "local_recovery"
     CAPACITY_ORACLE_SPLIT = "capacity_oracle_split"
     LAYER_ADAPTER_AUGMENTED = "layer_adapter_augmented"
+    JOINT_REFACTORIZATION = "joint_refactorization"
 
 
 class RecoveryCheckpointSelection(StrEnum):
@@ -70,6 +71,7 @@ class MergeRecoveryConfig:
     moe_loss_weight: float = 1.0
     logit_kl_weight: float = 0.0
     source_to_shared: tuple[int, ...] | None = None
+    router_correspondence_defined: bool = True
     normalization_epsilon: float = _DEFAULT_NORMALIZATION_EPSILON
 
     def __post_init__(self) -> None:
@@ -95,6 +97,8 @@ class MergeRecoveryConfig:
             expected = list(range(len(self.source_to_shared)))
             if sorted(self.source_to_shared) != expected:
                 raise ValueError("source_to_shared must be a bijection")
+        if not self.router_correspondence_defined and self.source_to_shared is not None:
+            raise ValueError("undefined router correspondence cannot carry a source-to-shared assignment")
 
 
 class RecoveryForward(NamedTuple):
@@ -345,6 +349,7 @@ def recovery_forward(
     affected_layers: tuple[int, int],
     trainable_scope: RecoveryTrainableScope = RecoveryTrainableScope.SHARED_BANK,
     source_to_shared: tuple[int, ...] | None = None,
+    router_correspondence_defined: bool = True,
     mask: AttentionMask | jax.Array | None = None,
     normalization_epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
 ) -> RecoveryForward:
@@ -398,22 +403,27 @@ def recovery_forward(
         block_normalized_errors.append(numerator / block_denominator)
 
         teacher_selected = teacher_trace.routing.selected_experts
-        if layer_index == affected_layers[1] and source_to_shared is not None:
-            assignment = jnp.asarray(source_to_shared, dtype=teacher_selected.dtype)
-            if not get_abstract_mesh().empty:
-                assignment = jax.sharding.reshard(assignment, P(None))
-                teacher_selected = assignment.at[teacher_selected].get(
-                    out_sharding=P(("replica_dcn", "data", "expert"), None)
-                )
-            else:
-                teacher_selected = assignment[teacher_selected]
         student_selected = trace.selected_experts
-        router_top1_agreements.append(jnp.mean(student_selected[:, 0] == teacher_selected[:, 0]))
-        overlap = jnp.sum(
-            jnp.any(student_selected[:, :, None] == teacher_selected[:, None, :], axis=-1),
-            axis=-1,
-        )
-        router_topk_agreements.append(jnp.mean(overlap / student_selected.shape[-1]))
+        if layer_index == affected_layers[1] and not router_correspondence_defined:
+            undefined = jnp.asarray(jnp.nan, dtype=jnp.float32)
+            router_top1_agreements.append(undefined)
+            router_topk_agreements.append(undefined)
+        else:
+            if layer_index == affected_layers[1] and source_to_shared is not None:
+                assignment = jnp.asarray(source_to_shared, dtype=teacher_selected.dtype)
+                if not get_abstract_mesh().empty:
+                    assignment = jax.sharding.reshard(assignment, P(None))
+                    teacher_selected = assignment.at[teacher_selected].get(
+                        out_sharding=P(("replica_dcn", "data", "expert"), None)
+                    )
+                else:
+                    teacher_selected = assignment[teacher_selected]
+            router_top1_agreements.append(jnp.mean(student_selected[:, 0] == teacher_selected[:, 0]))
+            overlap = jnp.sum(
+                jnp.any(student_selected[:, :, None] == teacher_selected[:, None, :], axis=-1),
+                axis=-1,
+            )
+            router_topk_agreements.append(jnp.mean(overlap / student_selected.shape[-1]))
         routing_entropies.append(trace.router_stats["routing_entropy"])
         routing_counts.append(trace.router_stats["routing_counts"])
         capacity_overflows.append(trace.router_stats["capacity_overflow"])
@@ -451,6 +461,7 @@ def recovery_objective(
         affected_layers=config.affected_layers,
         trainable_scope=config.trainable_scope,
         source_to_shared=config.source_to_shared,
+        router_correspondence_defined=config.router_correspondence_defined,
         mask=mask,
         normalization_epsilon=config.normalization_epsilon,
     )

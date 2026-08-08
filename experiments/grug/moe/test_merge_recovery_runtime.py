@@ -8,6 +8,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import equinox as eqx
 import jax
@@ -47,6 +48,7 @@ from experiments.grug.moe.merge_jobs import (
     GradientConflictArtifactReference,
     GradientConflictCheckpointConfig,
     GradientConflictJobConfig,
+    JointRefactorJobConfig,
     LayerAdapterAugmentJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
@@ -65,6 +67,7 @@ from experiments.grug.moe.merge_recovery_runtime import (
     run_capacity_oracle_split_local,
     run_conversion_local,
     run_gradient_conflict_local,
+    run_joint_refactor_local,
     run_layer_adapter_augment_local,
     run_prefit_local,
     run_recovery_local,
@@ -94,6 +97,14 @@ def _tiny_config() -> GrugModelConfig:
         max_seq_len=8,
         sliding_window=4,
         moe_implementation="scatter",
+    )
+
+
+def _tiny_joint_refactor_config() -> GrugModelConfig:
+    return dataclasses.replace(
+        _tiny_config(),
+        num_experts=5,
+        num_experts_per_token=4,
     )
 
 
@@ -130,7 +141,6 @@ def _runtime_inputs(tmp_path: Path) -> _RuntimeInputs:
             checkpoint_path=concrete_checkpoint,
             is_temporary=False,
         )
-
     calibration_path = tmp_path / "calibration"
     reservoirs = {}
     traces = {}
@@ -435,6 +445,158 @@ def test_conversion_worker_persists_merged_checkpoint_and_ignores_source_optimiz
                 source=dataclasses.replace(inputs.source, checkpoint_dir=str(second_root)),
             )
         )
+
+
+def test_joint_refactor_worker_uses_complete_targets_and_writes_correspondence_free_checkpoint(
+    tmp_path: Path,
+) -> None:
+    model_config = _tiny_joint_refactor_config()
+    checkpoint_root = tmp_path / "joint-teacher" / "checkpoints"
+    concrete_checkpoint = checkpoint_root / "step-7"
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    with jax.set_mesh(mesh):
+        teacher = Transformer.init(model_config, key=jax.random.key(30))
+        pending_qb_betas = jnp.arange(20, dtype=jnp.float32).reshape(4, 5)
+        save_checkpoint(
+            {
+                "step": jnp.asarray(7, dtype=jnp.int32),
+                "params": teacher,
+                "pending_qb_betas": pending_qb_betas,
+            },
+            step=7,
+            checkpoint_path=concrete_checkpoint,
+            is_temporary=False,
+        )
+
+    calibration_path = tmp_path / "joint-calibration"
+    reservoirs = {}
+    traces = {}
+    for layer in (1, 2):
+        reservoir = ExpertReservoirCollection(
+            num_experts=5,
+            state_dim=8,
+            capacity_per_expert=2,
+            heldout_fraction=0.5,
+            seed=layer,
+        )
+        inputs = np.random.default_rng(100 + layer).normal(size=(8_192, 8)).astype(np.float32)
+        cyclic_experts = np.arange(inputs.shape[0], dtype=np.int32).reshape(-1, 1) % 5
+        reservoir.add_routes(inputs, cyclic_experts, np.ones_like(cyclic_experts, dtype=np.float32))
+        reservoirs[layer] = reservoir
+        block = teacher.blocks[layer]
+        bank = teacher.expert_banks[block.expert_bank_index]
+        with jax.set_mesh(mesh):
+            trace = block.mlp.forward_with_trace(jnp.asarray(inputs)[:, None, :], bank)
+        traces[layer] = MoeLayerTrace(
+            mlp_input=inputs,
+            selected_experts=np.asarray(trace.routing.selected_experts),
+            combine_weights=np.asarray(trace.routing.combine_weights),
+            routed_output=np.asarray(trace.routed_output[:, 0, :]),
+        )
+    write_calibration_artifact(
+        str(calibration_path),
+        reservoirs,
+        CalibrationArtifactManifest(
+            source_checkpoint=str(concrete_checkpoint),
+            source_commit="test-joint-refactor",
+            layers=(1, 2),
+            num_experts=5,
+            state_dim=8,
+            capacity_per_expert=2,
+            heldout_fraction=0.5,
+            calibration_tokens=8_192,
+            trace_capacity=8_192,
+        ),
+        traces_by_layer=traces,
+    )
+    write_record(
+        ArtifactRecord(
+            name="test/joint-calibration",
+            version="dev",
+            fingerprint="joint-calibration-fingerprint",
+            output_path=str(calibration_path),
+            config={},
+        )
+    )
+    output_path = tmp_path / "joint-refactor"
+    config = JointRefactorJobConfig(
+        source=SourceCheckpointConfig(
+            model=model_config,
+            optimizer=AdamConfig(learning_rate=1e-3, weight_decay=0.0),
+            training_steps=10,
+            checkpoint_dir=str(checkpoint_root),
+            source_commit="test-joint-refactor",
+        ),
+        calibration_path=str(calibration_path),
+        output_path=str(output_path),
+        resources=ResourceConfig.with_cpu(),
+        run_id="test-joint-refactor",
+        representative_layer=1,
+        source_layer=2,
+        learning_rate=1e-3,
+        steps=1,
+        eval_every=1,
+        early_stopping_patience=1,
+        heldout_loss_gate=10.0,
+        routing_entropy_gate=0.0,
+    )
+
+    run_joint_refactor_local(config)
+    run_joint_refactor_local(config)
+
+    checkpoint = latest_checkpoint_path(str(output_path / "checkpoints"))
+    manifest = read_merge_checkpoint_manifest(checkpoint)
+    assert manifest.target_topology == (0, 1, 1, 2)
+    assert manifest.spec.assignment_mode is AssignmentMode.IDENTITY
+    assert manifest.spec.cost_matrix_path is None
+    assert manifest.spec.probe_path is None
+    assert manifest.spec.prefit_checkpoint is None
+    assert manifest.spec.source_to_shared == tuple(range(5))
+    joint = manifest.joint_refactor
+    assert joint is not None
+    assert not joint.correspondence_used
+    assert joint.matching_path is None
+    assert joint.calibration_artifact_fingerprint == "joint-calibration-fingerprint"
+    assert joint.train_tokens_by_layer == (6_554, 6_554)
+    assert joint.heldout_tokens_by_layer == (1_638, 1_638)
+    assert joint.active_experts_by_layer == (5, 5)
+    assert joint.capacity_overflow_by_layer == (0.0, 0.0)
+    assert len(tuple((output_path / "checkpoints").glob("step-*"))) == 1
+    assert len(tuple((output_path / "refactor_checkpoints").glob("step-*"))) == 1
+
+    screen_output = tmp_path / "joint-refactor-screen"
+    run_recovery_local(
+        RecoveryJobConfig(
+            source=config.source,
+            data=_data_config(),
+            matching_path=None,
+            init_checkpoint_dir=str(output_path / "checkpoints"),
+            output_path=str(screen_output),
+            resources=ResourceConfig.with_cpu(),
+            run_id="test-joint-refactor-screen",
+            stage=RecoveryStage.PRESERVATION,
+            trainable_scope=RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS,
+            initialization=RecoveryInitialization.JOINT_REFACTORIZATION,
+            assignment_mode=AssignmentMode.IDENTITY,
+            prefit_applied=False,
+            training_tokens=8,
+            cross_entropy_weight=1.0,
+            batch_size=1,
+            learning_rate=1e-3,
+            moe_loss_weight=1.0,
+            logit_kl_weight=0.1,
+            affected_layers=(1, 2),
+            checkpoint_every=1,
+            checkpoint_token_milestones=(8,),
+        )
+    )
+    screen_checkpoint = latest_checkpoint_path(str(screen_output / "checkpoints"))
+    screen_manifest = read_merge_checkpoint_manifest(screen_checkpoint)
+    assert screen_manifest.joint_refactor == joint
+    assert screen_manifest.recovery_initialization is RecoveryInitialization.JOINT_REFACTORIZATION
+    assert screen_manifest.recovery_step == 1
+    training_metrics = json.loads((screen_output / "training_metrics" / "step-1.json").read_text())
+    assert np.isnan(training_metrics["metrics"]["merge/router_top1_agreement_with_teacher/layer_2"])
 
 
 def test_prefit_worker_persists_best_bank_and_balanced_layer_metrics(tmp_path: Path) -> None:
@@ -1184,13 +1346,16 @@ def test_gradient_conflict_worker_reads_frozen_checkpoints_and_writes_only_scala
     )
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         student = Transformer.init(student_config, key=jax.random.key(9))
-        loaded = load_checkpoint(
-            {
-                "params": student,
-                "pending_qb_betas": jnp.zeros((4, 2), dtype=jnp.float32),
-            },
-            converted_checkpoint,
-            allow_partial=False,
+        loaded = cast(
+            "dict[str, Any]",
+            load_checkpoint(
+                {
+                    "params": student,
+                    "pending_qb_betas": jnp.zeros((4, 2), dtype=jnp.float32),
+                },
+                converted_checkpoint,
+                allow_partial=False,
+            ),
         )
         recovered_params = eqx.tree_at(
             lambda model: model.expert_banks[1].w_down,

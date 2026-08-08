@@ -141,6 +141,24 @@ def test_recovery_forward_evaluates_teacher_moe_on_current_student_state():
     np.testing.assert_allclose(actual.router_topk_agreement_with_teacher, 1.0)
 
 
+def test_recovery_forward_marks_only_source_layer_correspondence_undefined():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        teacher, student = _teacher_and_student()
+        tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
+        actual = recovery_forward(
+            student,
+            teacher,
+            tokens,
+            affected_layers=_AFFECTED_LAYERS,
+            router_correspondence_defined=False,
+        )
+
+    assert np.isfinite(np.asarray(actual.router_top1_agreement_with_teacher)[0])
+    assert np.isnan(np.asarray(actual.router_top1_agreement_with_teacher)[1])
+    assert np.isfinite(np.asarray(actual.router_topk_agreement_with_teacher)[0])
+    assert np.isnan(np.asarray(actual.router_topk_agreement_with_teacher)[1])
+
+
 def test_recovery_router_agreement_accounts_for_source_expert_permutation():
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         teacher = Transformer.init(_tiny_config(), key=jax.random.key(21))

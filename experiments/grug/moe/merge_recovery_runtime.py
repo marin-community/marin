@@ -45,6 +45,17 @@ from experiments.grug.moe.expert_prefit import (
     sample_aggregate_prefit_batch,
     sample_prefit_batch,
 )
+from experiments.grug.moe.expert_refactor import (
+    ExpertRefactorParameters,
+    ExpertRefactorState,
+    RefactorSplit,
+    expert_refactor_forward,
+    expert_refactor_loss,
+    expert_refactor_step,
+    initial_expert_refactor_state,
+    make_expert_refactor_dataset,
+    sample_expert_refactor_batch,
+)
 from experiments.grug.moe.gradient_conflict import (
     GRADIENT_PAIR_METRIC_NAMES,
     GRADIENT_PROJECTION_NAMES,
@@ -63,10 +74,13 @@ from experiments.grug.moe.merge_artifacts import (
 )
 from experiments.grug.moe.merge_checkpoint import (
     CapacityOracleKind,
+    JointRefactorKind,
+    JointRefactorProvenance,
     LayerAdapterKind,
     MergeCheckpointManifest,
     OnePairMergeCheckpointSpec,
     convert_grug_state_for_capacity_oracle_split,
+    convert_grug_state_for_joint_refactor,
     convert_grug_state_for_layer_adapter,
     convert_grug_state_for_one_pair_merge,
     read_merge_checkpoint_manifest,
@@ -78,6 +92,7 @@ from experiments.grug.moe.merge_jobs import (
     GradientConflictArtifactReference,
     GradientConflictCheckpointConfig,
     GradientConflictJobConfig,
+    JointRefactorJobConfig,
     LayerAdapterAugmentJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
@@ -142,9 +157,22 @@ class PrefitRuntimeState:
     stale_evaluations: jax.Array
 
 
+@register_dataclass
+@dataclass(frozen=True)
+class JointRefactorRuntimeState:
+    step: jax.Array
+    parameters: ExpertRefactorParameters
+    opt_state: optax.OptState
+    best_parameters: ExpertRefactorParameters
+    best_loss: jax.Array
+    best_step: jax.Array
+    stale_evaluations: jax.Array
+
+
 def _is_local(
     config: (
         PrefitJobConfig
+        | JointRefactorJobConfig
         | ConversionJobConfig
         | CapacityOracleSplitJobConfig
         | GradientConflictJobConfig
@@ -158,6 +186,7 @@ def _is_local(
 def _validate_runtime_paths(
     config: (
         PrefitJobConfig
+        | JointRefactorJobConfig
         | ConversionJobConfig
         | CapacityOracleSplitJobConfig
         | GradientConflictJobConfig
@@ -1167,6 +1196,380 @@ def run_conversion_local(config: ConversionJobConfig) -> None:
         )
 
 
+def _joint_refactor_step(
+    state: JointRefactorRuntimeState,
+    batch,
+    optimizer: optax.GradientTransformation,
+    epsilon: float,
+) -> tuple[JointRefactorRuntimeState, jax.Array]:
+    updated, loss = expert_refactor_step(
+        ExpertRefactorState(step=state.step, parameters=state.parameters, opt_state=state.opt_state),
+        batch,
+        optimizer,
+        epsilon,
+    )
+    return (
+        dataclasses.replace(
+            state,
+            step=updated.step,
+            parameters=updated.parameters,
+            opt_state=updated.opt_state,
+        ),
+        loss,
+    )
+
+
+def _joint_refactor_health(parameters: ExpertRefactorParameters, batch) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    forward = expert_refactor_forward(parameters, batch)
+    return (
+        np.asarray(jax.device_get(forward.routing_entropy_by_layer)),
+        np.asarray(jax.device_get(jnp.sum(forward.routing_counts_by_layer > 0, axis=-1))),
+        np.asarray(jax.device_get(forward.capacity_overflow_by_layer)),
+    )
+
+
+def _evaluate_joint_refactor(
+    state: JointRefactorRuntimeState,
+    heldout_batch,
+    *,
+    epsilon: float,
+) -> tuple[JointRefactorRuntimeState, float, np.ndarray, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    loss, nrmse = expert_refactor_loss(state.parameters, heldout_batch, epsilon=epsilon)
+    loss_value = float(jax.device_get(loss))
+    nrmse_value = np.asarray(jax.device_get(nrmse))
+    if not np.isfinite(loss_value) or not np.all(np.isfinite(nrmse_value)):
+        raise FloatingPointError(f"joint refactor heldout metrics are not finite at step {int(state.step)}")
+    if loss_value < float(jax.device_get(state.best_loss)):
+        state = dataclasses.replace(
+            state,
+            best_parameters=state.parameters,
+            best_loss=jnp.asarray(loss, dtype=jnp.float32),
+            best_step=jnp.asarray(state.step, dtype=jnp.int32),
+            stale_evaluations=jnp.asarray(0, dtype=jnp.int32),
+        )
+    else:
+        state = dataclasses.replace(state, stale_evaluations=state.stale_evaluations + 1)
+    best_loss, best_nrmse = expert_refactor_loss(state.best_parameters, heldout_batch, epsilon=epsilon)
+    best_loss_value = float(jax.device_get(best_loss))
+    best_nrmse_value = np.asarray(jax.device_get(best_nrmse))
+    best_health = _joint_refactor_health(state.best_parameters, heldout_batch)
+    if not np.isfinite(best_loss_value) or not np.all(np.isfinite(best_nrmse_value)):
+        raise FloatingPointError("selected joint refactor metrics are not finite")
+    return state, best_loss_value, best_nrmse_value, best_health
+
+
+def _joint_refactor_training_manifest(
+    config: JointRefactorJobConfig,
+    state: JointRefactorRuntimeState,
+    *,
+    best_loss: float,
+    best_nrmse: np.ndarray,
+    health: tuple[np.ndarray, np.ndarray, np.ndarray],
+    train_tokens_by_layer: tuple[int, int],
+    heldout_tokens_by_layer: tuple[int, int],
+) -> dict[str, Any]:
+    entropies, active_experts, overflows = health
+    return {
+        "format_version": 1,
+        "step": int(state.step),
+        "best_step": int(state.best_step),
+        "best_heldout_loss": best_loss,
+        "best_heldout_nrmse_by_layer": best_nrmse.tolist(),
+        "routing_entropy_by_layer": entropies.tolist(),
+        "active_experts_by_layer": active_experts.tolist(),
+        "capacity_overflow_by_layer": overflows.tolist(),
+        "stale_evaluations": int(state.stale_evaluations),
+        "train_tokens_by_layer": list(train_tokens_by_layer),
+        "heldout_tokens_by_layer": list(heldout_tokens_by_layer),
+        "config": json.loads(canonical_json(config)),
+    }
+
+
+def _validate_joint_refactor_gate(
+    config: JointRefactorJobConfig,
+    *,
+    best_loss: float,
+    best_nrmse: np.ndarray,
+    health: tuple[np.ndarray, np.ndarray, np.ndarray],
+    num_experts: int,
+) -> None:
+    entropies, active_experts, overflows = health
+    failures = []
+    if not np.isfinite(best_loss) or not np.all(np.isfinite(best_nrmse)):
+        failures.append("non-finite heldout loss")
+    if best_loss > config.heldout_loss_gate:
+        failures.append(f"heldout loss {best_loss:.9f} > {config.heldout_loss_gate:.9f}")
+    if np.any(entropies < config.routing_entropy_gate):
+        failures.append(f"routing entropy {entropies.tolist()} below {config.routing_entropy_gate}")
+    if np.any(active_experts != num_experts):
+        failures.append(f"active expert counts {active_experts.tolist()} != {num_experts}")
+    if np.any(overflows != 0):
+        failures.append(f"capacity overflow {overflows.tolist()} is nonzero")
+    if failures:
+        raise ValueError("joint refactorization failed the offline gate: " + "; ".join(failures))
+
+
+def run_joint_refactor_local(config: JointRefactorJobConfig) -> None:
+    """Fit one shared bank and two routers without consuming expert correspondence."""
+    if config.representative_layer == config.source_layer:
+        raise ValueError("joint refactorization layers must be distinct")
+    positive = {
+        "train_examples_per_layer": config.train_examples_per_layer,
+        "heldout_examples_per_layer": config.heldout_examples_per_layer,
+        "steps": config.steps,
+        "eval_every": config.eval_every,
+        "early_stopping_patience": config.early_stopping_patience,
+    }
+    if any(value <= 0 for value in positive.values()):
+        raise ValueError(f"joint refactor positive configuration fields are invalid: {positive}")
+    if not 0 < config.heldout_fraction < 1:
+        raise ValueError("heldout_fraction must lie strictly between zero and one")
+    if config.normalization_epsilon <= 0:
+        raise ValueError("normalization_epsilon must be positive")
+
+    checkpoint_root = _checkpoint_root(config.output_path)
+    refactor_checkpoint_root = prefix_join(config.output_path, "refactor_checkpoints")
+    _validate_runtime_paths(
+        config,
+        {
+            "teacher_checkpoint": config.source.checkpoint_dir,
+            "calibration": config.calibration_path,
+            "refactor_checkpoints": refactor_checkpoint_root,
+            "joint_refactor_output": checkpoint_root,
+        },
+    )
+    initialize_merge_worker()
+    mesh = compact_merge_mesh(
+        expert_axis_size=config.expert_axis_size,
+        replica_axis_size=config.replica_axis_size,
+    )
+    with set_mesh(mesh):
+        completed_checkpoint = discover_latest_checkpoint(checkpoint_root)
+        if completed_checkpoint is not None:
+            manifest = read_merge_checkpoint_manifest(completed_checkpoint)
+            joint = manifest.joint_refactor
+            if (
+                joint is None
+                or joint.source_checkpoint != latest_checkpoint_path(config.source.checkpoint_dir)
+                or joint.calibration_path != config.calibration_path
+                or joint.representative_layer != config.representative_layer
+                or joint.source_layer != config.source_layer
+                or manifest.recovery_step != 0
+            ):
+                raise ValueError("existing joint-refactor checkpoint has stale provenance")
+            logger.info("Joint-refactor output already exists at %s", completed_checkpoint)
+            return
+
+        source_state, source_checkpoint = _source_state(config.source, key=jax.random.key(config.seed), mesh=mesh)
+        calibration = read_calibration_manifest(config.calibration_path)
+        if calibration.source_checkpoint != source_checkpoint:
+            raise ValueError(f"calibration was collected from {calibration.source_checkpoint}, not {source_checkpoint}")
+        if (config.representative_layer, config.source_layer) != calibration.layers:
+            raise ValueError(
+                f"joint refactor layers {(config.representative_layer, config.source_layer)} "
+                f"do not match calibration layers {calibration.layers}"
+            )
+        if calibration.trace_capacity != 8_192:
+            raise ValueError(f"joint refactor requires trace_capacity=8192, got {calibration.trace_capacity}")
+
+        affected_layers = (config.representative_layer, config.source_layer)
+        split_seeds = tuple(config.seed + layer for layer in affected_layers)
+        datasets = tuple(
+            make_expert_refactor_dataset(
+                read_layer_calibration_trace(config.calibration_path, layer),
+                source_layer=layer,
+                heldout_fraction=config.heldout_fraction,
+                seed=split_seed,
+            )
+            for layer, split_seed in zip(affected_layers, split_seeds, strict=True)
+        )
+        train_tokens_by_layer = tuple(int(dataset.train_inputs.shape[0]) for dataset in datasets)
+        heldout_tokens_by_layer = tuple(int(dataset.heldout_inputs.shape[0]) for dataset in datasets)
+        heldout_batch = sample_expert_refactor_batch(
+            datasets,
+            examples_per_layer=config.heldout_examples_per_layer,
+            split=RefactorSplit.HELDOUT,
+            rng=np.random.default_rng(config.seed),
+        )
+
+        representative_bank_index = source_state.params.blocks[config.representative_layer].expert_bank_index
+        bank = source_state.params.expert_banks[representative_bank_index]
+        routers = tuple(source_state.params.blocks[layer].mlp for layer in affected_layers)
+        optimizer = optax.adamw(
+            config.learning_rate,
+            b1=0.9,
+            b2=0.999,
+            eps=1e-8,
+            eps_root=0.0,
+            weight_decay=config.weight_decay,
+            nesterov=False,
+        )
+        initial = initial_expert_refactor_state(bank, routers, optimizer)
+        state = JointRefactorRuntimeState(
+            step=initial.step,
+            parameters=initial.parameters,
+            opt_state=initial.opt_state,
+            best_parameters=initial.parameters,
+            best_loss=jnp.asarray(jnp.inf, dtype=jnp.float32),
+            best_step=jnp.asarray(0, dtype=jnp.int32),
+            stale_evaluations=jnp.asarray(0, dtype=jnp.int32),
+        )
+        own_checkpoint = discover_latest_checkpoint(refactor_checkpoint_root)
+        if own_checkpoint is not None:
+            state = load_checkpoint(state, own_checkpoint, mesh=mesh, allow_partial=False)
+
+        if math.isinf(float(jax.device_get(state.best_loss))):
+            state, best_loss, best_nrmse, health = _evaluate_joint_refactor(
+                state,
+                heldout_batch,
+                epsilon=config.normalization_epsilon,
+            )
+        else:
+            best_loss_array, best_nrmse_array = expert_refactor_loss(
+                state.best_parameters,
+                heldout_batch,
+                epsilon=config.normalization_epsilon,
+            )
+            best_loss = float(jax.device_get(best_loss_array))
+            best_nrmse = np.asarray(jax.device_get(best_nrmse_array))
+            health = _joint_refactor_health(state.best_parameters, heldout_batch)
+
+        step_fn = jax.jit(_joint_refactor_step, static_argnums=(2, 3))
+        stopped_early = int(state.stale_evaluations) >= config.early_stopping_patience
+        while int(state.step) < config.steps and not stopped_early:
+            next_step = int(state.step) + 1
+            batch = sample_expert_refactor_batch(
+                datasets,
+                examples_per_layer=config.train_examples_per_layer,
+                split=RefactorSplit.TRAIN,
+                rng=np.random.default_rng(config.seed + next_step),
+            )
+            state, train_loss = step_fn(state, batch, optimizer, config.normalization_epsilon)
+            train_loss_value = float(jax.device_get(train_loss))
+            if not np.isfinite(train_loss_value):
+                raise FloatingPointError(f"joint refactor train loss is not finite at step {next_step}")
+            if next_step % config.eval_every != 0 and next_step != config.steps:
+                continue
+            state, best_loss, best_nrmse, health = _evaluate_joint_refactor(
+                state,
+                heldout_batch,
+                epsilon=config.normalization_epsilon,
+            )
+            stopped_early = int(state.stale_evaluations) >= config.early_stopping_patience
+            training_manifest = _joint_refactor_training_manifest(
+                config,
+                state,
+                best_loss=best_loss,
+                best_nrmse=best_nrmse,
+                health=health,
+                train_tokens_by_layer=train_tokens_by_layer,
+                heldout_tokens_by_layer=heldout_tokens_by_layer,
+            )
+            _save_permanent_checkpoint(
+                state,
+                checkpoint_root=refactor_checkpoint_root,
+                step=int(state.step),
+                sync_name=f"joint_refactor_{int(state.step)}",
+                extra_manifest=("joint_refactor_training_manifest.json", training_manifest),
+            )
+            if jax.process_index() == 0:
+                logger.info(
+                    "joint refactor step=%d train_loss=%g best_step=%d best_heldout_loss=%g stale=%d",
+                    int(state.step),
+                    train_loss_value,
+                    int(state.best_step),
+                    best_loss,
+                    int(state.stale_evaluations),
+                )
+
+        _validate_joint_refactor_gate(
+            config,
+            best_loss=best_loss,
+            best_nrmse=best_nrmse,
+            health=health,
+            num_experts=config.source.model.num_experts,
+        )
+        calibration_record = read_record(config.calibration_path)
+        if calibration_record is None:
+            raise ValueError(f"calibration artifact record is missing at {config.calibration_path}")
+        target_topology = _expected_one_pair_topology(
+            config.source.model.num_layers,
+            affected_layers,
+        )
+        entropies, active_experts, overflows = health
+        provenance = JointRefactorProvenance(
+            kind=JointRefactorKind.CACHED_TRACE_HARD_TOP4,
+            source_checkpoint=source_checkpoint,
+            source_commit=calibration.source_commit,
+            calibration_path=config.calibration_path,
+            calibration_artifact_version=calibration_record.version,
+            calibration_artifact_fingerprint=calibration_record.fingerprint,
+            trace_paths=tuple(
+                prefix_join(prefix_join(config.calibration_path, "traces"), f"layer_{layer:02d}.npz")
+                for layer in affected_layers
+            ),
+            representative_layer=config.representative_layer,
+            source_layer=config.source_layer,
+            source_topology=config.source.model.resolved_expert_bank_for_layer,
+            target_topology=target_topology,
+            correspondence_used=False,
+            matching_path=None,
+            router_initialization="unpermuted_source_columns",
+            router_bias_trained=False,
+            pending_qb_trained=False,
+            optimizer="adamw",
+            learning_rate=config.learning_rate,
+            weight_decay=config.weight_decay,
+            optimizer_b1=0.9,
+            optimizer_b2=0.999,
+            optimizer_epsilon=1e-8,
+            normalization_epsilon=config.normalization_epsilon,
+            heldout_fraction=config.heldout_fraction,
+            split_seeds=split_seeds,
+            train_examples_per_layer=config.train_examples_per_layer,
+            heldout_examples_per_layer=config.heldout_examples_per_layer,
+            max_steps=config.steps,
+            eval_every=config.eval_every,
+            early_stopping_patience=config.early_stopping_patience,
+            seed=config.seed,
+            train_tokens_by_layer=train_tokens_by_layer,
+            heldout_tokens_by_layer=heldout_tokens_by_layer,
+            selected_refactor_step=int(state.best_step),
+            best_heldout_loss=best_loss,
+            best_heldout_nrmse_by_layer=tuple(float(value) for value in best_nrmse),
+            routing_entropy_by_layer=tuple(float(value) for value in entropies),
+            active_experts_by_layer=tuple(int(value) for value in active_experts),
+            capacity_overflow_by_layer=tuple(float(value) for value in overflows),
+            output_step=0,
+        )
+        converted = convert_grug_state_for_joint_refactor(
+            source_state,
+            shared_bank=state.best_parameters.bank,
+            routers=state.best_parameters.routers,
+            provenance=provenance,
+            init_optimizer_state=lambda _: optax.EmptyState(),
+        )
+        _save_permanent_checkpoint(
+            converted.state,
+            checkpoint_root=checkpoint_root,
+            step=0,
+            sync_name="joint_refactor_conversion_0",
+            merge_manifest=converted.manifest,
+            extra_manifest=(
+                "joint_refactor_training_manifest.json",
+                _joint_refactor_training_manifest(
+                    config,
+                    state,
+                    best_loss=best_loss,
+                    best_nrmse=best_nrmse,
+                    health=health,
+                    train_tokens_by_layer=train_tokens_by_layer,
+                    heldout_tokens_by_layer=heldout_tokens_by_layer,
+                ),
+            ),
+        )
+
+
 def run_capacity_oracle_split_local(config: CapacityOracleSplitJobConfig) -> None:
     """Duplicate the selected recovered bank into an untied, function-identical diagnostic checkpoint."""
     checkpoint_root = _checkpoint_root(config.output_path)
@@ -1574,7 +1977,16 @@ def _recovery_template(
         expert_adapter_rank_for_layer=tuple(adapter_ranks),
     )
     params = Transformer.init(model_config, key=key)
-    optimizer = optax.adamw(config.learning_rate, weight_decay=config.weight_decay)
+    optimizer = optax.adamw(
+        config.learning_rate,
+        b1=0.9,
+        b2=0.999,
+        eps=1e-8,
+        eps_root=0.0,
+        weight_decay=config.weight_decay,
+        nesterov=False,
+    )
+    is_joint_refactor = manifest.joint_refactor is not None
     recovery_config = MergeRecoveryConfig(
         affected_layers=config.affected_layers,
         stage=config.stage,
@@ -1582,7 +1994,8 @@ def _recovery_template(
         cross_entropy_weight=config.cross_entropy_weight,
         moe_loss_weight=config.moe_loss_weight,
         logit_kl_weight=config.logit_kl_weight,
-        source_to_shared=manifest.spec.source_to_shared,
+        source_to_shared=None if is_joint_refactor else manifest.spec.source_to_shared,
+        router_correspondence_defined=not is_joint_refactor,
     )
     state = initial_recovery_state(
         params,
@@ -1752,6 +2165,15 @@ def _recovery_manifest_for_run(
             expected_source_checkpoint=expected_adapter_source_checkpoint,
             expected_source_step=expected_adapter_source_step,
         )
+    elif config.initialization is RecoveryInitialization.JOINT_REFACTORIZATION:
+        if config.stage is not RecoveryStage.PRESERVATION:
+            raise ValueError("joint-refactor initialization is valid only for preservation recovery")
+        if config.trainable_scope is not RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS:
+            raise ValueError("joint-refactor recovery must train the shared bank and both routers")
+        if manifest.recovery_step != 0 or manifest.joint_refactor is None:
+            raise ValueError("joint-refactor recovery requires an explicit step-0 refactor checkpoint")
+        if config.matching_path is not None:
+            raise ValueError("joint-refactor recovery must not depend on a matching artifact")
     else:
         raise ValueError(f"unknown recovery initialization {config.initialization}")
 
@@ -2600,12 +3022,14 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
                 config,
                 {"resolved_layer_adapter_source_checkpoint": expected_adapter_source_checkpoint},
             )
-        matching = _matching_manifest(
-            config.matching_path,
-            representative_layer=config.affected_layers[0],
-            source_layer=config.affected_layers[1],
-            num_experts=config.source.model.num_experts,
-        )
+        matching = None
+        if config.matching_path is not None:
+            matching = _matching_manifest(
+                config.matching_path,
+                representative_layer=config.affected_layers[0],
+                source_layer=config.affected_layers[1],
+                num_experts=config.source.model.num_experts,
+            )
         initialization_checkpoint = _recovery_initial_checkpoint(config)
         _validate_runtime_paths(config, {"resolved_initial_checkpoint": initialization_checkpoint})
         own_checkpoint = discover_latest_checkpoint(checkpoint_root)
@@ -2621,7 +3045,12 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
             prefit_applied=config.prefit_applied,
             affected_layers=config.affected_layers,
         )
-        _validate_assignment_provenance(manifest, matching)
+        if manifest.joint_refactor is None:
+            if matching is None:
+                raise ValueError("correspondence-based recovery requires a matching artifact")
+            _validate_assignment_provenance(manifest, matching)
+        elif matching is not None:
+            raise ValueError("correspondence-free recovery cannot consume a matching artifact")
         manifest = _recovery_manifest_for_run(
             config,
             manifest,

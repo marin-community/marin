@@ -97,6 +97,33 @@ class ConversionJobConfig:
 
 
 @dataclass(frozen=True)
+class JointRefactorJobConfig:
+    """Offline correspondence-free bank-and-router refactorization."""
+
+    source: SourceCheckpointConfig
+    calibration_path: str
+    output_path: str
+    resources: ResourceConfig
+    run_id: str
+    representative_layer: int = 2
+    source_layer: int = 3
+    heldout_fraction: float = 0.2
+    train_examples_per_layer: int = 256
+    heldout_examples_per_layer: int = 512
+    learning_rate: float = 1e-4
+    weight_decay: float = 0.0
+    steps: int = 2_000
+    eval_every: int = 100
+    early_stopping_patience: int = 5
+    normalization_epsilon: float = 1e-8
+    heldout_loss_gate: float = 0.349847
+    routing_entropy_gate: float = 5.3
+    seed: int = 0
+    expert_axis_size: int = 1
+    replica_axis_size: int | None = None
+
+
+@dataclass(frozen=True)
 class CapacityOracleSplitJobConfig:
     source: SourceCheckpointConfig
     init_checkpoint_dir: str
@@ -175,7 +202,7 @@ class GradientConflictJobConfig:
 class RecoveryJobConfig:
     source: SourceCheckpointConfig
     data: LmDataConfig
-    matching_path: str
+    matching_path: str | None
     init_checkpoint_dir: str
     output_path: str
     resources: ResourceConfig
@@ -234,6 +261,13 @@ def _run_conversion_local(config: ConversionJobConfig) -> None:
     run_conversion_local(config)
 
 
+def _run_joint_refactor_local(config: JointRefactorJobConfig) -> None:
+    # Break the config/runtime import cycle at the dispatched worker boundary.
+    from experiments.grug.moe.merge_recovery_runtime import run_joint_refactor_local  # noqa: PLC0415
+
+    run_joint_refactor_local(config)
+
+
 def _run_capacity_oracle_split_local(config: CapacityOracleSplitJobConfig) -> None:
     # Break the config/runtime import cycle at the dispatched worker boundary.
     from experiments.grug.moe.merge_recovery_runtime import run_capacity_oracle_split_local  # noqa: PLC0415
@@ -285,6 +319,10 @@ def run_prefit(config: PrefitJobConfig) -> None:
 
 def run_conversion(config: ConversionJobConfig) -> None:
     _dispatch(config.run_id, config, _run_conversion_local, config.resources)
+
+
+def run_joint_refactor(config: JointRefactorJobConfig) -> None:
+    _dispatch(config.run_id, config, _run_joint_refactor_local, config.resources)
 
 
 def run_capacity_oracle_split(config: CapacityOracleSplitJobConfig) -> None:
