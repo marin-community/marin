@@ -5,18 +5,7 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import jax
-import jax.numpy as jnp
-import numpy as np
-import pytest
-from jax.sharding import AxisType, Mesh, reshard
-from jax.sharding import PartitionSpec as P
-from levanter.data.text.examples import GrugLmExample
-from levanter.grug.attention import AttentionMask
-
-from experiments.grug.moe_hero_fsdp import launch, model, train
-
-EOS_ID = 128_001
+from experiments.grug.moe_hero_fsdp import launch, train
 
 
 def test_build_hero_run_uses_run_id_argument(monkeypatch):
@@ -54,75 +43,3 @@ def test_run_grug_applies_xla_command_buffer_default_and_keeps_override(monkeypa
         train.run_grug(config)
 
         assert os.environ["XLA_FLAGS"] == explicit_flags
-
-
-def test_layer_attention_masks_preserve_thd_segment_metadata():
-    mask = AttentionMask.causal().with_segment_ids(
-        jnp.array([[0, 0, 1, 1, -1, -1]], dtype=jnp.int32),
-        max_segments=3,
-    )
-
-    short_mask, long_mask = model._layer_attention_masks(mask, sliding_window=512)
-
-    assert short_mask.thd_segment_metadata is mask.thd_segment_metadata
-    assert long_mask.thd_segment_metadata is mask.thd_segment_metadata
-    assert short_mask.segment_ids is mask.segment_ids
-    assert long_mask.segment_ids is mask.segment_ids
-    assert short_mask.sliding_window == 512
-    assert long_mask.sliding_window is None
-
-
-def test_thd_base_mask_derives_metadata_from_training_mask():
-    """The training mask carries segment ids but no THD metadata, so it must be derived.
-
-    ``GrugLmExample.causal`` builds segment ids from an EOS cumsum without passing
-    ``max_segments``, which is exactly the shape the native SM100 kernel rejects.
-    """
-    tokens = jnp.array([[5, 7, EOS_ID, 9, 3, EOS_ID, 4, 4]], dtype=jnp.int32)
-    training_mask = GrugLmExample.causal(tokens=tokens[0], eos_id=EOS_ID).attn_mask
-    assert training_mask.thd_segment_metadata is None, "precondition: conversion carries no metadata"
-    assert training_mask.segment_ids is not None
-
-    base_mask = model._thd_base_mask(training_mask.segment_ids, None, max_segments=4)
-
-    metadata = base_mask.thd_segment_metadata
-    assert metadata is not None
-    assert int(metadata.num_segments.reshape(-1)[0]) == 3
-    # Documents end after each EOS, so the packed lengths are [3, 3, 2] padded to max_segments.
-    assert metadata.segment_lengths.reshape(-1)[:3].tolist() == [3, 3, 2]
-
-
-def test_thd_base_mask_requires_segment_ids():
-    with pytest.raises(NotImplementedError, match="packed segment ids"):
-        model._thd_base_mask(None, None, max_segments=4)
-
-
-def test_thd_base_mask_derives_metadata_under_batch_sharding():
-    """The derivation vmaps a per-row scan, which cannot carry the batch sharding through.
-
-    Deriving straight from batch-sharded segment ids fails resource-axis resolution with
-    "is not found in mesh: ()", because under vmap the abstract mesh is empty. One device is
-    enough to catch it: what matters is that the batch spec names three mesh axes, not how many
-    devices back them. The kernel then takes the metadata sharding from the tokens, so the
-    batch sharding also has to survive the round trip rather than stay replicated.
-    """
-    mesh = Mesh(
-        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1),
-        ("replica_dcn", "data", "expert", "model"),
-        axis_types=(AxisType.Explicit,) * 4,
-    )
-    tokens = jax.random.randint(jax.random.key(0), (4, 44), 0, 1000).at[:, ::11].set(EOS_ID)
-    starts = (jnp.roll(tokens, 1, axis=1).at[:, 0].set(0) == EOS_ID).astype(jnp.int32)
-    segment_ids = jnp.cumsum(starts, axis=1)
-    batch = ("replica_dcn", "data", "expert")
-
-    with jax.set_mesh(mesh):
-        sharded = reshard(segment_ids, P(batch, None))
-        build = jax.jit(lambda ids: model._thd_base_mask((ids, ids), None, max_segments=16))
-        metadata = build(sharded).thd_segment_metadata
-
-    # EOS at position p opens a segment at p+1, so four EOS in 44 tokens give five documents.
-    assert metadata.segment_lengths.shape == (4, 16)
-    np.testing.assert_array_equal(np.asarray(metadata.num_segments), np.full(4, 5))
-    assert metadata.segment_lengths.sharding.spec == P(batch, None)
-    assert metadata.num_segments.sharding.spec == P(batch)

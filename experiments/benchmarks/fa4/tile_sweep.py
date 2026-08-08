@@ -8,19 +8,21 @@ candidate on reproducing ``reference_attention`` in float32.
 
 ``--sweep forward`` varies the forward tile at the production backward. ``--sweep backward``
 varies the backward tile, thread count, and backward path, and lifts the
-``_segmented_backward_arches`` allowlist to do it: that function restricts compute capability
-9.x/10.x/12.x to a 64x64 backward at 128 threads, but the underlying
-``SegmentedFlashAttentionBackwardSm120.can_implement`` only requires ``n_block % 16 == 0``,
-``num_threads % 32 == 0``, and that shared memory fit. The allowlist is therefore the binding
-constraint rather than the kernel, and lifting it in a benchmark is how to find out whether it
-needs to bind.
+``_segmented_backward_arches`` allowlist to do it, since that function is narrower than the
+kernel's own ``can_implement``.
+
+Lifting the allowlist is a benchmark-only affordance. Measured on GB200 at head dimension 128,
+every backward outside it is slower, wrong, or unlaunchable: 192x64 and 256x64 pass
+``can_implement`` and return gradients off by four orders of magnitude, and 256 threads does the
+same at 128x64 and 128x128. Read the correctness column before any timing column.
 
 The two backward paths differ in more than tiles. ``path_arch=120`` runs
 ``SegmentedFlashAttentionBackwardSm120`` with ``num_stages_Q = num_stages_dO = 1`` at head
 dimension 128 -- no double buffering of the Q and dO loads -- and a 4-warp atom layout that wants
 128 threads. ``path_arch=80`` runs the SM80 class with both stage counts at 2 and a 2-warp atom
-layout. Sweeping the path is how the double-buffering question gets answered without changing
-library code.
+layout, which is how the double-buffering question gets answered without changing library code.
+On GB200 the two measure the same at 64x64/128, and every larger tile on the SM80 path exceeds
+the 232448-byte shared-memory limit.
 
 One process sweeps one backward path. ``cute_launcher_factory`` memoizes on the launcher's
 keyword arguments, and the path is derived inside the launcher rather than passed to it, so

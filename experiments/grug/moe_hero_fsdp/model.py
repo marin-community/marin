@@ -34,12 +34,10 @@ from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
     RotaryConfig,
-    ThdSegmentMetadata,
     align_kv_heads,
     apply_rotary_embedding,
     attention,
     fa4_cute_segment_bounds,
-    thd_segment_metadata_from_segment_ids,
 )
 from levanter.grug.grug_moe import (
     MOE_REMAT_SAVE_NAMES,
@@ -64,7 +62,6 @@ _CE_BLOCK_SIZES = BlockSizes(v_block_size=4096)
 # is replicated across racks and FSDP-sharded within each rack.
 _EMBED_PARTITION_SPEC = P(None, None)
 _LM_HEAD_PARTITION_SPEC = P("data", "model")
-_GPU_FA4_THD_ATTENTION: GrugAttentionImplementation = "gpu_fa4_thd"
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -93,42 +90,6 @@ def _batch_spec() -> P:
 
 def _batch_reshard(x: jax.Array) -> jax.Array:
     return reshard(x, _batch_spec())
-
-
-def _layer_attention_masks(mask: AttentionMask, *, sliding_window: int) -> tuple[AttentionMask, AttentionMask]:
-    return mask.with_sliding_window(sliding_window), mask.with_sliding_window(None)
-
-
-def _thd_base_mask(
-    segment_ids: tuple[jax.Array, jax.Array] | None,
-    thd_segment_metadata: ThdSegmentMetadata | None,
-    *,
-    max_segments: int,
-) -> AttentionMask:
-    """Build the scan-input mask for the native SM100 backend.
-
-    The kernel needs per-document lengths at a static shape, and the grug mask conversion
-    never carries them, so derive them from the packed segment ids when absent.
-    """
-    if thd_segment_metadata is None:
-        if segment_ids is None:
-            raise NotImplementedError("gpu_fa4_thd requires packed segment ids in the batch mask.")
-        # The derivation vmaps a per-row scan, and the batch sharding cannot survive that inner
-        # concatenate: under vmap the abstract mesh is empty, so a batch-sharded row spec fails to
-        # resolve its resource axes. Derive from replicated ids, then put the batch sharding back:
-        # the kernel takes the metadata sharding from the tokens, so leaving it replicated makes its
-        # own segment-length select mismatch.
-        ids = segment_ids[0]
-        batch_spec = _partition_spec_of(ids)
-        if batch_spec is None:
-            thd_segment_metadata = thd_segment_metadata_from_segment_ids(ids, max_segments=max_segments)
-        else:
-            derived = thd_segment_metadata_from_segment_ids(reshard(ids, P(None, None)), max_segments=max_segments)
-            thd_segment_metadata = ThdSegmentMetadata(
-                segment_lengths=reshard(derived.segment_lengths, P(batch_spec[0], None)),
-                num_segments=reshard(derived.num_segments, P(batch_spec[0])),
-            )
-    return AttentionMask(is_causal=True, segment_ids=segment_ids, thd_segment_metadata=thd_segment_metadata)
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -195,13 +156,6 @@ class GrugModelConfig:
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "v", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
-    thd_max_segments: int = 32
-    """Upper bound on documents per sequence for the ``gpu_fa4_thd`` backend.
-
-    The native SM100 kernel needs ``cu_seqlens`` at a static shape, so per-document metadata
-    is padded to this width and ``cu_seqlens`` becomes ``batch * thd_max_segments + 1``.
-    Exceeding the bound fails the step rather than silently truncating. The value is corpus
-    and sequence-length specific: it must exceed the most documents any one sequence holds."""
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     report_capacity_overflow: bool = False
@@ -227,8 +181,6 @@ class GrugModelConfig:
                 raise ValueError("num_kv_heads must equal the stored maximum of local/global KV heads")
         if self.global_every <= 0:
             raise ValueError("global_every must be positive")
-        if self.thd_max_segments <= 0:
-            raise ValueError("thd_max_segments must be positive")
         if self.vocab_size <= 0:
             raise ValueError("vocab_size must be positive")
         if self.max_seq_len <= 0:
@@ -563,18 +515,7 @@ class CausalSelfAttention(eqx.Module):
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
-        if self.cfg.attention_implementation == _GPU_FA4_THD_ATTENTION:
-            if not isinstance(mask, AttentionMask):
-                raise NotImplementedError("gpu_fa4_thd requires a structured AttentionMask.")
-            short_mask, long_mask = _layer_attention_masks(mask, sliding_window=self.cfg.sliding_window)
-            attn_out = jax.lax.cond(
-                jnp.asarray(is_global, dtype=jnp.bool_),
-                lambda qkv: attention(qkv[0], qkv[1], qkv[2], long_mask, implementation=_GPU_FA4_THD_ATTENTION),
-                lambda qkv: attention(qkv[0], qkv[1], qkv[2], short_mask, implementation=_GPU_FA4_THD_ATTENTION),
-                (q, k, v),
-            )
-        else:
-            attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
         # zᵢ = yᵢ - (yᵢᵀvᵢ / ‖vᵢ‖²) vᵢ.
         aligned_v = align_kv_heads(v, num_q_heads=attn_out.shape[2])
@@ -1015,17 +956,8 @@ class Transformer(eqx.Module):
             q_segment_ids, _ = mask.segment_ids
             q_segment_ids = _batch_reshard(q_segment_ids)
             segment_ids = (q_segment_ids, q_segment_ids)
-        thd_segment_metadata = mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None
-        if cfg.attention_implementation == _GPU_FA4_THD_ATTENTION:
-            # Derived once per step, outside the layer scan.
-            base_mask = _thd_base_mask(segment_ids, thd_segment_metadata, max_segments=cfg.thd_max_segments)
-        else:
-            base_mask = AttentionMask(
-                is_causal=True,
-                segment_ids=segment_ids,
-                thd_segment_metadata=thd_segment_metadata,
-            )
-        short_mask, long_mask = _layer_attention_masks(base_mask, sliding_window=cfg.sliding_window)
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
 
         if cfg.remat_mode == "save_moe":
             remat_policy = jax.checkpoint_policies.save_only_these_names(*MOE_REMAT_SAVE_NAMES)
@@ -1035,21 +967,21 @@ class Transformer(eqx.Module):
         # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
         # short/long choice rides in as a Bool[num_layers] scan input.
         mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
-        if cfg.attention_implementation == _GPU_FA4_THD_ATTENTION:
-            long_lower_bounds = short_lower_bounds = valid = None
-        else:
-            # The sliding window is a static AttentionMask field the scan body cannot vary, so the
-            # custom segmented kernel receives precomputed bounds selected by the per-layer scalar.
-            batch_size, seq_len = hidden.shape[0], hidden.shape[1]
-            long_lower_bounds, valid = fa4_cute_segment_bounds(
-                long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
-            )
-            short_lower_bounds, _ = fa4_cute_segment_bounds(
-                short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
-            )
-            long_lower_bounds = _batch_reshard(long_lower_bounds)
-            short_lower_bounds = _batch_reshard(short_lower_bounds)
-            valid = _batch_reshard(valid)
+        # Precompute the FA4 per-token metadata for both the full-causal (long) and sliding-window
+        # (short) layers outside the scan, then select per layer with a jnp.where inside the body:
+        # the sliding window is a static AttentionMask field the scan body cannot vary, so the
+        # per-layer window rides in as the selected bound arrays. ``valid`` is window-independent, so
+        # it is shared; long/global layers run rope-free (``disable_rope`` is the per-layer scalar).
+        batch_size, seq_len = hidden.shape[0], hidden.shape[1]
+        long_lower_bounds, valid = fa4_cute_segment_bounds(
+            long_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=None
+        )
+        short_lower_bounds, _ = fa4_cute_segment_bounds(
+            short_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.sliding_window
+        )
+        long_lower_bounds = _batch_reshard(long_lower_bounds)
+        short_lower_bounds = _batch_reshard(short_lower_bounds)
+        valid = _batch_reshard(valid)
 
         def _scan_layers(
             carry_hidden: Float[Array, "B S D"],
@@ -1057,12 +989,8 @@ class Transformer(eqx.Module):
         ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
             layer, layer_use_long_mask = scan_inputs
             use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
-            if cfg.attention_implementation == _GPU_FA4_THD_ATTENTION:
-                layer_mask = long_mask
-            else:
-                assert long_lower_bounds is not None and short_lower_bounds is not None and valid is not None
-                lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
-                layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
+            lower_bounds = jnp.where(use_long, long_lower_bounds, short_lower_bounds)
+            layer_mask = long_mask.with_fa4_bounds(lower_bounds, valid)
             return eqx.filter_checkpoint(layer, policy=remat_policy)(
                 carry_hidden,
                 layer_mask,
