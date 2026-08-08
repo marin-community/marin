@@ -16,7 +16,9 @@ import time
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from rigging.cache import sync_kv_cache
 from rigging.filesystem import marin_prefix, prefix_join
+from rigging.provenance import LAUNCH_PROVENANCE_ENV
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
@@ -36,6 +38,8 @@ logger = logging.getLogger(__name__)
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
 _XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
 _XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
+# Object-store home (per build) that sync_kv_cache mirrors the node-local dir against.
+_XLA_AUTOTUNE_REMOTE_PREFIX = "xla-per-fusion-autotune"
 # JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
 # preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
 # GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
@@ -123,15 +127,17 @@ def configure_jax_compilation_cache() -> None:
 
     if "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
         jax.config.update("jax_persistent_cache_enable_xla_caches", "none")
-    _enable_node_local_xla_autotune_cache()
+    _enable_xla_autotune_cache()
 
 
-def _enable_node_local_xla_autotune_cache() -> None:
-    """Point XLA's per-fusion autotune cache at the node-local Iris cache mount.
+def _enable_xla_autotune_cache() -> None:
+    """Point XLA's per-fusion autotune cache at the node-local mount and mirror it remotely.
 
     Goes through ``XLA_FLAGS`` because JAX derives this path from the compilation
     cache dir, which is remote. The flag is on ``xla_flags_to_exclude_from_cache_key``,
-    so it stays out of the compilation cache key.
+    so it stays out of the compilation cache key. XLA opens the directory from C++
+    through ``tsl::Env``, which cannot read an object store, so the live directory
+    is always node-local and :func:`rigging.cache.sync_kv_cache` mirrors it.
 
     GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
 
@@ -159,6 +165,12 @@ def _enable_node_local_xla_autotune_cache() -> None:
 
     os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
     logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
+
+    # Mirror the node-local cache to per-build object storage only on a real launch;
+    # off one (local dev, unit tests) the published provenance is absent and the
+    # cache stays node-local. sync_kv_cache namespaces it by the launch tree hash.
+    if os.environ.get(LAUNCH_PROVENANCE_ENV):
+        sync_kv_cache(_XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)
 
 
 # An endpoint name that has not been registered yet surfaces differently across

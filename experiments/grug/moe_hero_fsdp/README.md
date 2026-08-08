@@ -51,8 +51,8 @@ by the one-day lifecycle policy.
 
 The QuACK and FA4 kernels compile through CuTeDSL during MLIR lowering, before JAX's compilation
 cache is consulted, so a compilation-cache hit still regenerates them. Levanter persists them under
-`cutlass-kernels/` inside whatever `jax_compilation_cache_dir` is in effect. Entries are
-content-addressed, so runs share them and a launcher edit invalidates only its own kernels.
+`cutlass-kernels/` in the 30-day region-local temp prefix, fronted by an in-process memory tier.
+Entries are content-addressed, so runs share them and a launcher edit invalidates only its own kernels.
 
 ## Files
 

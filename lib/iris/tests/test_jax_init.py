@@ -477,6 +477,9 @@ def _isolated_jax_cache_config():
             os.environ.pop("JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES", None)
             os.environ.pop("XLA_FLAGS", None)
             os.environ.pop("IRIS_TASK_RESOURCES", None)
+            # Off a real launch by default, so the autotune cache stays node-local
+            # and never reaches for object storage.
+            os.environ.pop("MARIN_PROVENANCE", None)
             _read_iris_resource_proto.cache_clear()
             yield
     finally:
@@ -619,6 +622,36 @@ def test_remote_cache_keeps_an_explicit_xla_autotune_dir(tmp_path) -> None:
             configure_jax_compilation_cache()
 
         assert os.environ["XLA_FLAGS"] == "--xla_gpu_per_fusion_autotune_cache_dir=/mnt/elsewhere"
+
+
+def test_launch_provenance_mirrors_the_autotune_cache_to_object_storage(tmp_path) -> None:
+    """A launched GPU task hands the node-local autotune dir to sync_kv_cache for mirroring."""
+    calls: list[tuple[str, str]] = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path) as scratch_cache_dir:
+        os.environ["MARIN_PROVENANCE"] = "{}"
+        with (
+            patch.object(jax_init_module, "sync_kv_cache", lambda prefix, local: calls.append((prefix, local))),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    autotune_dir = f"{scratch_cache_dir}/xla/per-fusion-autotune"
+    assert calls == [(jax_init_module._XLA_AUTOTUNE_REMOTE_PREFIX, autotune_dir)]
+
+
+def test_autotune_cache_stays_node_local_without_a_launch_provenance(tmp_path) -> None:
+    """Off a real launch (no MARIN_PROVENANCE), the autotune cache never reaches object storage."""
+    calls: list = []
+
+    with _isolated_jax_cache_config(), _gpu_task(tmp_path):
+        with (
+            patch.object(jax_init_module, "sync_kv_cache", lambda *args: calls.append(args)),
+            patch("iris.runtime.jax_init.marin_prefix", return_value="s3://marin-eu/marin/"),
+        ):
+            configure_jax_compilation_cache()
+
+    assert calls == []
 
 
 def test_explicit_remote_cache_dir_still_gets_the_xla_guard(tmp_path) -> None:

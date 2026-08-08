@@ -19,7 +19,14 @@ from typing import Any
 
 import pytest
 
-from levanter.cutlass_kernel_cache import CutlassKernelCache, cute_launcher_factory, install
+from rigging.cache import PersistentKvCache
+
+from levanter.cutlass_kernel_cache import cute_launcher_factory, install
+
+
+def _kernel_store(directory) -> PersistentKvCache:
+    """A single-directory store standing in for the cutlass cache's disk tier."""
+    return PersistentKvCache.at(str(directory))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -83,15 +90,15 @@ def build_launcher(modules, *, tile: int, dtype: str = "bf16") -> Any:
 
 
 def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_cutlass, tmp_path):
-    cache = CutlassKernelCache(directory=str(tmp_path))
     spec = FakeFunctionSpec(shape=(8, 16))
 
-    install(cache)
+    install(_kernel_store(tmp_path))
     cold = fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
     assert fake_cutlass.compiled == ["tile128-bf16"]
 
+    # A restart drops the in-process memory tier, so a fresh cache must read the store.
     fake_cutlass.forget_process_state()
-    install(cache)
+    install(_kernel_store(tmp_path))
     warm = fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
 
     assert fake_cutlass.compiled == ["tile128-bf16"]
@@ -100,8 +107,7 @@ def test_a_restarted_process_loads_the_stored_object_instead_of_compiling(fake_c
 
 
 def test_configuration_and_specification_both_discriminate_stored_kernels(fake_cutlass, tmp_path):
-    cache = CutlassKernelCache(directory=str(tmp_path))
-    install(cache)
+    install(_kernel_store(tmp_path))
 
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
     fake_cutlass.compile_kernel(build_launcher(None, tile=256), FakeFunctionSpec(shape=(8, 16)))
@@ -111,7 +117,7 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
     assert len(list(tmp_path.iterdir())) == 3
 
     fake_cutlass.forget_process_state()
-    install(cache)
+    install(_kernel_store(tmp_path))
     served = fake_cutlass.compile_kernel(build_launcher(None, tile=256), FakeFunctionSpec(shape=(8, 16)))
 
     assert fake_cutlass.compiled == ["tile128-bf16", "tile256-bf16", "tile128-bf16"]
@@ -136,8 +142,7 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
     module_dir = tmp_path / "src"
     module_dir.mkdir()
     monkeypatch.syspath_prepend(str(module_dir))
-    cache = CutlassKernelCache(directory=str(tmp_path / "store"))
-    install(cache)
+    store = str(tmp_path / "store")
 
     compiled_per_revision = []
     for revision in ("original", "edited"):
@@ -148,7 +153,7 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
         importlib.invalidate_caches()
         module = __import__(name)
         fake_cutlass.forget_process_state()
-        install(cache)
+        install(_kernel_store(store))
         fake_cutlass.compile_kernel(module.build(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
         compiled_per_revision.append(list(fake_cutlass.compiled))
 
@@ -156,7 +161,7 @@ def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_p
 
 
 def test_a_launcher_without_an_identity_is_compiled_but_not_stored(fake_cutlass, tmp_path):
-    cache = CutlassKernelCache(directory=str(tmp_path))
+    cache = _kernel_store(tmp_path)
     install(cache)
 
     def untagged(stream):
@@ -172,7 +177,7 @@ def test_a_launcher_without_an_identity_is_compiled_but_not_stored(fake_cutlass,
 
 def test_a_specification_that_reprs_an_address_is_not_stored(fake_cutlass, tmp_path):
     """Such a key would change every process, so it would miss forever and litter the store."""
-    cache = CutlassKernelCache(directory=str(tmp_path))
+    cache = _kernel_store(tmp_path)
     install(cache)
 
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), object())
@@ -182,10 +187,10 @@ def test_a_specification_that_reprs_an_address_is_not_stored(fake_cutlass, tmp_p
 
 
 def test_an_unwritable_store_compiles_without_failing(fake_cutlass, tmp_path):
-    """The store follows the compilation cache dir, which a task may not be able to write."""
+    """A cache directory a task cannot write degrades to a compile rather than failing."""
     blocked = tmp_path / "file"
     blocked.write_bytes(b"")
-    install(CutlassKernelCache(directory=str(blocked / "kernels")))
+    install(_kernel_store(blocked / "kernels"))
 
     result = fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
 
@@ -197,7 +202,7 @@ def test_install_is_a_noop_when_cutlass_jax_will_not_import(fake_cutlass, monkey
     """A CPU task on the GPU image has the package but no CUDA bindings to import it with."""
     monkeypatch.setitem(sys.modules, "cutlass.jax.primitive", None)
 
-    install(CutlassKernelCache(directory=str(tmp_path)))
+    install(_kernel_store(tmp_path))
 
     # Nothing was patched, so the compile never reaches the store.
     fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
