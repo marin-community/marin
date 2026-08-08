@@ -1030,3 +1030,10 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Run ID: `mhep-155-w8-ep-e192-i5248-cf2p00-fullwatch-p32753-20260808`.
 - Decision rule: The candidate fits only if all five steps finish and W&B receives 38 finite
   gradient norm metrics and 38 finite parameter norm metrics.
+
+### 2026-08-08 10:27 UTC - The exact top-6 target passes full watch
+
+- MHEP-154 completed all five steps with exit 0 and a finite final loss of 10.5563 at step 4.
+- W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics.
+- Conclusion: EP64 on one 16-node GB200 rack supports full norms for d6144, 48 layers, 192
+  experts, expert width 4,608, latent width 3,072, top-6, and capacity factor 1.42.
