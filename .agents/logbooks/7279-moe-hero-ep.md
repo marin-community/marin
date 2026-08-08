@@ -1037,3 +1037,21 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - W&B received 38 finite gradient norm metrics and 38 finite parameter norm metrics.
 - Conclusion: EP64 on one 16-node GB200 rack supports full norms for d6144, 48 layers, 192
   experts, expert width 4,608, latent width 3,072, top-6, and capacity factor 1.42.
+
+### 2026-08-08 10:34 UTC - The 459.32 B full-watch model fails in NCCL
+
+- MHEP-155 compiled the watched training step, then failed before step 1. NCCL reported CUDA out
+  of memory while it allocated the all-to-all buffer. JAX reported the error from `jit_train_step`.
+- Result: Width 5,248 is a failed upper bound. No retry is useful for this deterministic memory
+  failure.
+
+### 2026-08-08 10:34 UTC - MHEP-156 final size point ready
+
+- Goal: Test the only 128-wide point between the successful width-4,992 model and the failed
+  width-5,248 model.
+- Code snapshot: `5d7041bc2`.
+- Candidate: 192 experts at width 5,120, with 448.45 B total and 22.64 B active parameters. All
+  other MHEP-153 settings stay fixed.
+- Run ID: `mhep-156-w9-ep-e192-i5120-cf2p00-fullwatch-p32754-20260808`.
+- Decision rule: A pass makes width 5,120 the largest confirmed 128-wide model. A failure keeps
+  width 4,992 as the largest confirmed model.
