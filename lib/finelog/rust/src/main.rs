@@ -1,9 +1,8 @@
 //! `finelog-server` binary entry point.
 //!
 //! Parse the CLI flags, open the `Store`, and serve `/health` plus the
-//! StatsService RPCs. `check-schema` instead decides a deploy offline and exits.
+//! StatsService RPCs.
 
-use std::io::Read;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -11,8 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::{Parser, Subcommand};
-use finelog::preflight::{check, render, RegisteredSchemas};
+use clap::Parser;
 use finelog::query::configure_query_runtime;
 use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
 use finelog::server::diagnostics::spawn_pool_diagnostics;
@@ -35,28 +33,9 @@ use tokio::sync::Notify;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-#[derive(Subcommand, Debug)]
-enum Command {
-    /// Decide whether this image's schemas would register against a catalog,
-    /// and exit nonzero when one would not.
-    ///
-    /// Reads the registered schemas as JSON — `-` for stdin — and runs each
-    /// server-owned namespace through the same merge `RegisterTable` uses.
-    /// Opens no store, binds no port, writes nothing.
-    CheckSchema {
-        /// Path to the registered-schema document, or `-` for stdin.
-        #[arg(default_value = "-")]
-        registered: String,
-    },
-}
-
 #[derive(Parser, Debug)]
 #[command(name = "finelog-server")]
 struct Args {
-    /// Offline subcommand. Absent runs the server.
-    #[command(subcommand)]
-    command: Option<Command>,
-
     /// What this process may touch. `shadow` additionally refuses a non-local
     /// `--remote-log-dir` and any `--forwarding` at startup.
     #[arg(long, env = "FINELOG_MODE", value_enum, default_value_t = ServeMode::Live)]
@@ -126,10 +105,6 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-
-    if let Some(Command::CheckSchema { registered }) = &args.command {
-        return check_schema(registered);
-    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -268,23 +243,6 @@ fn resolve_serve_mode(args: &Args) -> Result<ServeMode, String> {
 /// Decide the deploy offline: read the registered schemas, run each
 /// server-owned namespace through the real merge, print the decision, and exit
 /// nonzero when one would fail to register.
-fn check_schema(registered: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let text = if registered == "-" {
-        let mut text = String::new();
-        std::io::stdin().read_to_string(&mut text)?;
-        text
-    } else {
-        std::fs::read_to_string(registered).map_err(|e| format!("read {registered}: {e}"))?
-    };
-    let report = check(&RegisteredSchemas::parse(&text)?)?;
-    print!("{}", render(&report));
-    std::io::Write::flush(&mut std::io::stdout())?;
-    if !report.passes() {
-        std::process::exit(1);
-    }
-    Ok(())
-}
-
 /// Build the cross-cluster forwarder, or `None` when forwarding is unconfigured.
 ///
 /// Every way the configuration can be wrong is an error here rather than a silent
@@ -341,10 +299,9 @@ mod tests {
     }
 
     #[test]
-    fn no_subcommand_serves_in_live_mode() {
+    fn the_default_mode_is_live() {
         let parsed = args(&["--log-dir", "/tmp/x"]);
 
-        assert!(parsed.command.is_none());
         assert_eq!(resolve_serve_mode(&parsed).unwrap(), ServeMode::Live);
     }
 
@@ -414,15 +371,5 @@ mod tests {
         ]);
 
         assert_eq!(resolve_serve_mode(&parsed).unwrap(), ServeMode::Shadow);
-    }
-
-    #[test]
-    fn check_schema_takes_stdin_by_default() {
-        let parsed = args(&["check-schema"]);
-
-        assert!(matches!(
-            parsed.command,
-            Some(Command::CheckSchema { ref registered }) if registered == "-"
-        ));
     }
 }

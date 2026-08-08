@@ -16,6 +16,8 @@ import json
 import logging
 import re
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime
 from enum import StrEnum
 
@@ -24,15 +26,54 @@ import duckdb
 import fsspec
 import pyarrow as pa
 from rigging.auth import IapLoginRequired
+from rigging.connect import IapAuth, connect, disconnect
+from rigging.credentials import iap_edge_provider
 from rigging.log_setup import configure_logging
+from rigging.tunnel import open_tunnel
 
+from finelog.client.log_client import LogClient
 from finelog.deploy import _gcp, _k8s
 from finelog.deploy.build import DEFAULT_PLATFORM
 from finelog.deploy.build import build_image as build_finelog_image
-from finelog.deploy.config import FinelogConfig, load_finelog_config
-from finelog.deploy.connection import DEFAULT_REQUEST_TIMEOUT, open_log_client
+from finelog.deploy.config import FinelogConfig, load_finelog_config, tunnel_target_for
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
+
+# Sits just past the server's own 10s query deadline so a long query is ended by
+# the server, which reports why, rather than by a client-side timeout that
+# reports only that time ran out.
+DEFAULT_REQUEST_TIMEOUT = 15.0
+
+
+@contextmanager
+def _log_client(
+    cfg: FinelogConfig, name: str, tunnel_timeout: float, request_timeout: float = DEFAULT_REQUEST_TIMEOUT
+) -> Generator[LogClient, None, None]:
+    """Yield a LogClient: via the controller IAP proxy if cfg.client_url is set, else an SSH/k8s tunnel."""
+    timeout_ms = int(request_timeout * 1000)
+    if cfg.client_url:
+        provider = iap_edge_provider(name)
+        if provider is None:
+            raise IapLoginRequired(f"no cached IAP credentials for {name!r}; log in to {name!r} to refresh them")
+        client = connect(
+            cfg.client_url,
+            lambda ep: LogClient.connect(ep.url, interceptors=ep.interceptors, timeout_ms=timeout_ms),
+            auth=IapAuth(provider),
+            connect_timeout=tunnel_timeout,
+        )
+        try:
+            yield client
+        finally:
+            client.close()
+            disconnect(client)
+    else:
+        target = tunnel_target_for(cfg)
+        with open_tunnel(target, timeout=tunnel_timeout) as url:
+            client = LogClient.connect(url, timeout_ms=timeout_ms)
+            try:
+                yield client
+            finally:
+                client.close()
 
 
 def _dispatch_up(cfg: FinelogConfig) -> None:
@@ -275,7 +316,7 @@ def query_cmd(
     configure_logging(level=logging.INFO)
     cfg = load_finelog_config(name)
     try:
-        with open_log_client(cfg, name, tunnel_timeout, request_timeout) as client:
+        with _log_client(cfg, name, tunnel_timeout, request_timeout) as client:
             table = client.query(sql, max_rows=max_rows)
     except IapLoginRequired as exc:
         raise click.ClickException(str(exc)) from exc

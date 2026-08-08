@@ -316,39 +316,7 @@ System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
 `safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
 back.
 
-## Deciding a deploy before it touches a host
-
-A wedged registration is only visible after the image is running, and a restart
-does not clear it. Both checks below run against a candidate image on your own
-machine, decide the deploy, and never write to a deployment.
-
-### Schema pre-flight
-
-Whether an image's `log` and `telemetry_v1` schemas merge against a
-deployment's catalog is a pure function of two schemas, and both are cheap to
-reach. `safe_deploy preflight` reads the registered side over `ListNamespaces`
-and runs it through `finelog-server check-schema` inside the image being
-deployed, so the merge rules under test are the rules that ship:
-
-```bash
-uv run lib/finelog/scripts/safe_deploy.py preflight --all
-uv run lib/finelog/scripts/safe_deploy.py preflight marin --image <ref-or-digest>
-```
-
-Each deployment keeps its own catalog and they can disagree — marin-dev
-currently holds eight covering projections marin does not — so decide them
-together. `rollout` runs the same check before it writes a bootstrap and
-refuses on a failure.
-
-The live catalog is the only thing that decides this: a deployment the tunnel
-cannot reach ends the command rather than falling back to a guess. An
-`EVOLVES` names what an accepted merge costs, including the covering
-projections whose Parquet the index backfill rebuilds.
-
-Namespaces a client registers — `iris.worker`, zephyr's tables — are reported
-as unchecked. They are not the server image's to decide.
-
-### Serving a copy of a store
+## Serving a copy of a store
 
 Anything that boots finelog over a copy of a real store directory — the Grafana
 dashboard benchmark, a layout experiment, reproducing a query — should pass
@@ -357,6 +325,11 @@ dashboard benchmark, a layout experiment, reproducing a query — should pass
 no maintenance, so compaction, eviction, layout rewrites, and the boot
 reconcile's redundancy drop (which deletes archived objects) never run against
 the copy or the bucket it came from.
+
+A shadow boot over a copy of a deployment's catalog also re-runs that
+deployment's registrations, so a schema this binary can no longer merge shows
+up in `/health` as `degraded: <namespace>: registration failed: ...` with the
+per-namespace detail under `/api/server`.
 
 ## Diagnosing Kubernetes mirror readiness
 

@@ -179,12 +179,11 @@ The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
 `log` and `telemetry_v1` are registered by the server itself, and every boot
 re-merges this binary's definition against the schema that deployment's catalog
 persisted. A merge that fails wedges the namespace for as long as the image is
-deployed. `rust/src/preflight.rs` decides that merge ahead of a deploy — same
-`merge_schemas`, no store, no port — and `safe_deploy preflight --all` runs it
-against every deployment's live catalog. Run it before changing either schema;
-a change that is not additive shows up there. Register through
-`schema::stored_form` so the pre-flight merges the schema `register_table`
-would.
+deployed, so `/health` reports it (`server/ingest_health.rs`) and `safe_deploy
+rollout` rolls back on it. To decide a schema change ahead of a deploy, boot
+the candidate over a copy of that deployment's catalog with `--mode shadow` and
+read `/health`. Register through `schema::stored_form` so what you check is the
+schema `register_table` merges.
 
 `--mode shadow` is for booting a server over a copy of a real store: it serves
 reads from `--log-dir` and refuses a `gs://`/`s3://` remote or a forwarding
