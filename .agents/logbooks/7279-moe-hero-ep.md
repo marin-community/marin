@@ -1510,3 +1510,16 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   teardown state does not change the complete W&B result.
 - Keep capacity factor 1.5 as a valid candidate. Compare it with the matched 1.3, 1.4, and 1.6 arms
   after they complete.
+
+### 2026-08-08 14:02 UTC - The capacity-1.5 E192 search closes at width 6,144
+
+- MHEP-184 completed all five steps with 192 experts, width 6,144, and capacity factor 1.5. W&B
+  received all 76 norm metrics at every step, and every value was finite. The final loss was
+  10.5164, and the run reported 251,021 tokens/s.
+- The compiler estimated a 194.72 GiB rematerialized program. Both compiled steps, NCCL, and all
+  five training steps still completed. Iris reports all 16 workers succeeded with zero failures
+  and zero preemptions.
+- Result: Width 6,144 is the exact E192 maximum on the tested 128-wide grid at capacity factor 1.5.
+  It has 535.421 B total parameters and 24.454 B active parameters. Width 6,272 is the adjacent
+  failed point.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-184-w26-ep-e192-i6144-cf1p50-fullwatch-p32782-20260808
