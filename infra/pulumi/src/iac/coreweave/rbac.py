@@ -102,14 +102,21 @@ class GrafanaObserverRbacArgs:
 
 
 def grafana_observer_manifests(usernames: tuple[str, ...]) -> tuple[dict, dict]:
-    """Return the nodes-only read role and its token-specific binding."""
+    """Return the cluster-inventory read role and its token-specific binding."""
     labels = {
         "app.kubernetes.io/name": "marin-grafana",
         "app.kubernetes.io/component": "k8s-observer",
     }
     role = {
         "metadata": {"name": GRAFANA_OBSERVER_ROLE, "labels": labels},
-        "rules": [{"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]}],
+        "rules": [
+            {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch"]},
+            {
+                "apiGroups": ["compute.coreweave.com"],
+                "resources": ["nodepools"],
+                "verbs": ["get", "list", "watch"],
+            },
+        ],
     }
     binding = {
         "metadata": {"name": GRAFANA_OBSERVER_ROLE, "labels": labels},
@@ -131,7 +138,7 @@ def grafana_observer_manifests(usernames: tuple[str, ...]) -> tuple[dict, dict]:
 
 
 class GrafanaObserverRbac(pulumi.ComponentResource):
-    """Nodes-only read access for Grafana's CoreWeave Managed Auth identity."""
+    """Node and NodePool read access for Grafana's CoreWeave Managed Auth identity."""
 
     def __init__(
         self,

@@ -239,8 +239,13 @@ _DCGM_METRICS = {
     ),
     "DCGM_FI_DEV_ROW_REMAP_FAILURE": _DcgmMetricSpec("gpu_row_remap_failures", "{failure}"),
     "DCGM_FI_PROF_GR_ENGINE_ACTIVE": _DcgmMetricSpec("gpu_graphics_engine_active_ratio", "1"),
+    "DCGM_FI_PROF_SM_ACTIVE": _DcgmMetricSpec("gpu_sm_active_ratio", "1"),
     "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE": _DcgmMetricSpec("gpu_tensor_active_ratio", "1"),
     "DCGM_FI_PROF_DRAM_ACTIVE": _DcgmMetricSpec("gpu_dram_active_ratio", "1"),
+    "DCGM_FI_PROF_NVLINK_RX_BYTES": _DcgmMetricSpec("gpu_nvlink_receive_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_NVLINK_TX_BYTES": _DcgmMetricSpec("gpu_nvlink_transmit_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_PCIE_RX_BYTES": _DcgmMetricSpec("gpu_pcie_receive_bytes_per_second", "By/s"),
+    "DCGM_FI_PROF_PCIE_TX_BYTES": _DcgmMetricSpec("gpu_pcie_transmit_bytes_per_second", "By/s"),
     "DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL": _DcgmMetricSpec(
         "gpu_nvlink_errors",
         "{error}",

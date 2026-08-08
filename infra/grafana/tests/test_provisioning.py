@@ -275,6 +275,76 @@ def test_clusters_dashboard_shows_node_deadlock_and_reboot_state():
     } <= selectors
 
 
+def test_node_details_dashboard_combines_live_state_and_hardware_history():
+    dashboard = _stitched_dashboards()["nodes.json"]
+    panels = _all_panels(dashboard)
+    state_target = next(
+        target for panel in panels for target in panel.get("targets", []) if target.get("url") == "/nodes"
+    )
+    selectors = {column["selector"] for column in state_target["columns"]}
+    assert {
+        "cluster",
+        "node",
+        "node_pool",
+        "instance_type",
+        "gpu_model",
+        "gpu_capacity",
+        "ready",
+        "unschedulable",
+        "rack_name",
+        "rack_slot",
+        "ib_fabric",
+        "ib_speed",
+    } <= selectors
+
+    sql = "\n".join(_panel_sql(dashboard))
+    assert "gpu_sm_active_ratio" in sql
+    assert "gpu_memory_total_bytes" in sql
+    assert "gpu_nvlink_receive_bytes_per_second" in sql
+    assert "gpu_pcie_transmit_bytes_per_second" in sql
+    assert "node_cpu_utilization_percent" in sql
+    assert "node_network_receive_bytes" in sql
+    assert "json_get(attributes_json, 'node_name') IN (${node:sqlstring})" in sql
+
+
+def test_node_pools_dashboard_reads_live_node_pool_state():
+    dashboard = _stitched_dashboards()["node_pools.json"]
+    targets = [target for panel in _all_panels(dashboard) for target in panel.get("targets", [])]
+
+    assert targets
+    assert {target["url"] for target in targets} == {"/node_pools"}
+    table_target = next(target for target in targets if len(target["columns"]) > 1)
+    selectors = {column["selector"] for column in table_target["columns"]}
+    assert {
+        "cluster",
+        "node_pool",
+        "instance_type",
+        "compute_class",
+        "current_nodes",
+        "target_nodes",
+        "missing_nodes",
+        "in_progress_nodes",
+        "queued_nodes",
+        "at_target",
+        "capacity_available",
+        "under_quota",
+        "problems",
+    } <= selectors
+
+
+def test_accelerators_dashboard_shows_sm_and_temperature_distributions():
+    dashboard = _stitched_dashboards()["accelerators.json"]
+    heatmaps = {panel["title"]: panel for panel in _all_panels(dashboard) if panel.get("type") == "heatmap"}
+
+    assert set(heatmaps) == {"SM utilization distribution", "GPU temperature distribution"}
+    assert all(panel["options"]["calculate"] for panel in heatmaps.values())
+    sm_sql = _panel_sql({**dashboard, "panels": [heatmaps["SM utilization distribution"]]})
+    temperature_sql = _panel_sql({**dashboard, "panels": [heatmaps["GPU temperature distribution"]]})
+    assert len(sm_sql) == len(temperature_sql) == 1
+    assert "name = 'gpu_sm_active_ratio'" in sm_sql[0]
+    assert "name = 'gpu_temperature_celsius'" in temperature_sql[0]
+
+
 def test_clusters_dashboard_shows_finelog_pods_storage_and_events():
     targets = [
         target for panel in _all_panels(_stitched_dashboards()["clusters.json"]) for target in panel.get("targets", [])
