@@ -20,7 +20,7 @@ import jax
 from iris.actor.resolver import ResolvedEndpoint, ResolveResult
 from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
-from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax
+from iris.runtime.jax_init import configure_jax_compilation_cache, initialize_jax, resolve_coordinator_port
 
 EXPECTED_JAX_INITIALIZATION_TIMEOUT = 1800
 EXPECTED_JAX_HEARTBEAT_TIMEOUT = 100
@@ -135,10 +135,11 @@ def test_initialize_jax_single_task(
     """Single-task jobs call jax.distributed.initialize with explicit args."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
 
-    initialize_jax()
+    with patch("iris.runtime.jax_init.find_free_port", return_value=45678):
+        initialize_jax()
 
     mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476",
+        "10.0.0.1:45678",
         num_processes=1,
         process_id=0,
     )
@@ -156,13 +157,12 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
     """TPU Iris jobs use the same explicit coordinator and rank wiring as other multi-task jobs."""
     monkeypatch.setenv("PJRT_DEVICE", "TPU")
     monkeypatch.setenv("JAX_PLATFORMS", "tpu,cpu")
-    mock_get_job_info.side_effect = [
-        _make_job_info(task_index=0, num_tasks=2),
-        _make_job_info(task_index=1, num_tasks=2),
-    ]
+    coordinator_info = _make_job_info(task_index=0, num_tasks=2)
+    coordinator_info.ports = {"jax": 12345}
+    mock_get_job_info.side_effect = [coordinator_info, _make_job_info(task_index=1, num_tasks=2)]
     found = ResolveResult(
         name="jax_coordinator",
-        endpoints=[ResolvedEndpoint(url="10.0.0.1:8476", actor_id="ep-1")],
+        endpoints=[ResolvedEndpoint(url="10.0.0.1:12345", actor_id="ep-1")],
     )
     fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
     mock_iris_ctx.return_value = fake_ctx
@@ -170,17 +170,17 @@ def test_initialize_jax_tpu_multitask_uses_iris_registry(
     initialize_jax()
     initialize_jax(poll_timeout=10.0, poll_interval=0.01)
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:12345")]
     assert mock_jax_init.call_args_list == [
         call(
-            "10.0.0.1:8476",
+            "10.0.0.1:12345",
             2,
             0,
             initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
             heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
         ),
         call(
-            "10.0.0.1:8476",
+            "10.0.0.1:12345",
             2,
             1,
             initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
@@ -241,7 +241,7 @@ def test_initialize_jax_task0_uses_iris_port(
     mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
 ) -> None:
-    """Task 0 uses IRIS_PORT_jax when available, ignoring the port argument."""
+    """Task 0 uses IRIS_PORT_JAX when available, ignoring the port argument."""
     info = _make_job_info(task_index=0, num_tasks=2)
     info.ports = {"jax": 12345}
     mock_get_job_info.return_value = info
@@ -319,12 +319,18 @@ def test_initialize_jax_poll_timeout(
 @patch("iris.runtime.jax_init.get_job_info")
 def test_initialize_jax_supervised_single_host(
     mock_get_job_info: MagicMock,
-    _mock_iris_ctx: MagicMock,
+    mock_iris_ctx: MagicMock,
     mock_jax_init: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A supervised non-zero rank on a single host joins via advertise_host, no registry."""
+    """A local peer resolves the address published by global rank 0."""
     mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=1)
+    found = ResolveResult(
+        name="jax_coordinator",
+        endpoints=[ResolvedEndpoint(url="10.0.0.1:12345", actor_id="ep-1")],
+    )
+    fake_ctx = FakeContext(resolver=FakeResolver(results=[found]))
+    mock_iris_ctx.return_value = fake_ctx
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "8")
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "3")
     monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "3")
@@ -332,13 +338,14 @@ def test_initialize_jax_supervised_single_host(
     initialize_jax()
 
     mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476",
+        "10.0.0.1:12345",
         8,
         3,
         local_device_ids=[3],
         initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
+    assert fake_ctx.registry.registered == []
 
 
 @patch("jax.distributed.initialize")
@@ -351,7 +358,9 @@ def test_initialize_jax_supervised_global_rank0_registers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Global rank 0 on a multi-host supervised job registers the coordinator."""
-    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=2)
+    info = _make_job_info(task_index=0, num_tasks=2)
+    info.ports = {"jax": 12345}
+    mock_get_job_info.return_value = info
     fake_ctx = FakeContext()
     mock_iris_ctx.return_value = fake_ctx
     monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
@@ -360,9 +369,41 @@ def test_initialize_jax_supervised_global_rank0_registers(
 
     initialize_jax()
 
-    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:8476")]
+    assert fake_ctx.registry.registered == [("jax_coordinator", "10.0.0.1:12345")]
     mock_jax_init.assert_called_once_with(
-        "10.0.0.1:8476",
+        "10.0.0.1:12345",
+        16,
+        0,
+        local_device_ids=[0],
+        initialization_timeout=EXPECTED_JAX_INITIALIZATION_TIMEOUT,
+        heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
+    )
+
+
+@patch("jax.distributed.initialize")
+@patch("iris.runtime.jax_init.iris_ctx")
+@patch("iris.runtime.jax_init.get_job_info")
+def test_initialize_jax_supervised_global_rank0_picks_port(
+    mock_get_job_info: MagicMock,
+    mock_iris_ctx: MagicMock,
+    mock_jax_init: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Global rank 0 chooses and publishes the port without supervisor help."""
+    mock_get_job_info.return_value = _make_job_info(task_index=0, num_tasks=2)
+    fake_ctx = FakeContext()
+    mock_iris_ctx.return_value = fake_ctx
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_COUNT", "16")
+    monkeypatch.setenv("IRIS_MULTIGPU_PROCESS_INDEX", "0")
+    monkeypatch.setenv("IRIS_MULTIGPU_LOCAL_DEVICE_IDS", "0")
+
+    with patch("iris.runtime.jax_init.find_free_port", return_value=45678):
+        initialize_jax()
+
+    coordinator = "10.0.0.1:45678"
+    assert fake_ctx.registry.registered == [("jax_coordinator", coordinator)]
+    mock_jax_init.assert_called_once_with(
+        coordinator,
         16,
         0,
         local_device_ids=[0],
@@ -403,6 +444,24 @@ def test_initialize_jax_supervised_other_host_polls(
         heartbeat_timeout_seconds=EXPECTED_JAX_HEARTBEAT_TIMEOUT,
     )
     assert fake_ctx.registry.registered == []
+
+
+@pytest.mark.parametrize("assigned", [{}, {"jax": 0}], ids=["unassigned", "k8s-placeholder"])
+def test_resolve_coordinator_port_uses_kernel_fallback(assigned: dict[str, int]) -> None:
+    info = _make_job_info()
+    info.ports = assigned
+
+    with patch("iris.runtime.jax_init.find_free_port", return_value=45678) as find_port:
+        assert resolve_coordinator_port(info) == 45678
+    find_port.assert_called_once_with()
+
+
+def test_resolve_coordinator_port_prefers_assigned_port() -> None:
+    info = _make_job_info()
+    info.ports = {"jax": 12345}
+
+    assert resolve_coordinator_port(info, 9999) == 12345
+    assert resolve_coordinator_port(_make_job_info(), 9999) == 9999
 
 
 @contextmanager
