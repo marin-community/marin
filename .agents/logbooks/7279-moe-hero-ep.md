@@ -1497,3 +1497,16 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Result: Width 8,320 is the exact E128 maximum on the tested 128-wide grid at capacity factor 1.5.
   It has 484.668 B total parameters and 28.285 B active parameters. Width 8,448 is the adjacent
   failed point.
+
+### 2026-08-08 14:00 UTC - MHEP-169 completes the capacity-1.5 full-norm gate
+
+- MHEP-169 completed 200 steps at capacity factor 1.5. W&B received all 76 norm metrics at steps
+  0, 10, 20, through 190. Every value in all 20 norm rows was finite.
+- Final metrics: 258,817 tokens/s, 1.7509% drops, and loss 3.2030.
+- Last-50 means: 255,393 tokens/s, 2.1312% drops, 249,950 drop-adjusted tokens/s, and loss 3.2403.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-169-w16-ep-e192-i5504-cf1p50-watch10-p32767-20260808
+- Iris reported 14 successful workers after W&B finished. Two workers moved to pending during
+  teardown, with one preemption. The coordinator was stopped to prevent a useless gang retry. This
+  teardown state does not change the complete W&B result.
+- Keep capacity factor 1.5 as a valid candidate. Compare it with the matched 1.3, 1.4, and 1.6 arms
+  after they complete.
