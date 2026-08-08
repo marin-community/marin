@@ -75,7 +75,13 @@ depends on the pattern's literal runs: `%CUDA_ERROR%` only requires `CUDA` and
 underscores when you mean them literally. Adding one is a
 `RegisterTable` away and does not need a reset, but the index backfill runs a
 few segments per namespace per 30 s tick, so a large namespace speeds up over
-tens of minutes rather than at once.
+tens of minutes rather than at once. Enabling a column supersedes the whole
+`.fidx` policy, so every segment's bundle is rebuilt rather than extended: budget
+one core across the namespace's full segment count.
+
+An unindexed substring predicate spends its cost in the `LIKE` kernel, not in
+IO. `bytes_scanned` stays small while `pushdown_rows_pruned` reaches the
+namespace's row count. Read both.
 
 For repeated equality families, declare the hot string values in
 `ColumnIndex.exact_values`. Finelog stores exact source-row postings in the

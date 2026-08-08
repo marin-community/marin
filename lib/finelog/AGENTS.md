@@ -110,6 +110,29 @@ Regenerate protos after editing `proto/logging.proto`:
 cd lib/finelog && buf generate
 ```
 
+### Benchmarks
+
+Three harnesses under `src/finelog/benchmarks/`, each driving a real
+`finelog-server` and writing a JSON result with the server build, storage
+layout, and per-query `EXPLAIN ANALYZE` metrics.
+
+- `log_query_bench` — the operator query corpus for `log`: job substring
+  scoping, task tails, first-error lookups, body search. `generate` builds a
+  corpus; `measure` runs it over a directory that already holds segments.
+- `grafana_dashboard_bench` — every query in a checked-in Grafana dashboard.
+- `telemetry_layout_bench` — the storage-layout candidates for `telemetry_v1`.
+
+Point `--log-dir` at a **disposable copy**: starting Finelog activates
+compaction, layout rewrites, and index backfill.
+
+`log_query_bench` writes to the `log` namespace the server auto-registers rather
+than registering its own, so the same corpus under two binaries measures a
+schema change. Backfill must be finished before measuring; maintenance running
+alongside the queries moves every number by 2-4x.
+
+`EXPLAIN ANALYZE` counters are decimal, `bytes_scanned` included: `1.16 B` is
+1.16 billion.
+
 ### Dashboard
 
 `npm run dev` serves the SPA with HMR and proxies RPC to a finelog on port
@@ -168,7 +191,12 @@ benchmark; there is no free-form plugin registry.
 
 A column declared with `ColumnIndex.trigram` gets a span-granular substring
 section. That index makes `contains(col, …)` and `col LIKE '%…%'` prune instead
-of full-scan. Today it is on `log.data` and `telemetry_v1.name`.
+of full-scan. Today it is on `log.key`, `log.data`, and `telemetry_v1.name`.
+
+Sorting by a column does not cover substring search of it. A log key is
+`/user/<job>-coord/<job>/<task>:<attempt>`, so the job an operator searches for
+is not a prefix and min/max statistics cannot bound it. `log.key` needs its own
+trigram section for that.
 
 A `LIKE` pattern contributes every literal run between its wildcards, all
 required: `%CUDA_ERROR%` prunes on `CUDA` and `ERROR` separately, while the
