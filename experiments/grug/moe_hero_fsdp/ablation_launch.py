@@ -132,7 +132,7 @@ def num_steps_for(hidden_dim: int, batch_size: int) -> int:
 
 
 def _build_model(
-    hidden_dim: int, moe_implementation: str, expert_chunks: int, qb_estimator: QbEstimator
+    hidden_dim: int, moe_implementation: str, expert_chunks: int, qb_estimator: QbEstimator, qb_hist_bins: int
 ) -> GrugModelConfig:
     """The FSDP hero shape downsized to this width; depth from the even-round depth heuristic."""
     num_heads = hidden_dim // HEAD_DIM
@@ -164,6 +164,7 @@ def _build_model(
         moe_implementation=moe_implementation,
         expert_chunks=expert_chunks,
         qb_estimator=qb_estimator,
+        qb_hist_bins=qb_hist_bins,
         report_capacity_overflow=True,
         rope_fused=True,
     )
@@ -187,6 +188,7 @@ def build_ablation_run(
     accelerator: str = "H100",
     expert_chunks: int = 1,
     qb_estimator: QbEstimator = QbEstimator.CHUNK_QUANTILE,
+    qb_hist_bins: int = 1000,
     batch_size: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[AblationResult]:
@@ -202,7 +204,7 @@ def build_ablation_run(
     hidden_dim = WIDTHS[size]
     steps = num_steps_for(hidden_dim, batch)
 
-    model = _build_model(hidden_dim, acc.moe_implementation, expert_chunks, qb_estimator)
+    model = _build_model(hidden_dim, acc.moe_implementation, expert_chunks, qb_estimator, qb_hist_bins)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=steps, batch_size=batch, hidden_dim=hidden_dim, seq_len=SEQ_LEN
     )
@@ -244,6 +246,7 @@ def build_ablation_run(
                     f"shape-{size}",
                     f"chunks-{expert_chunks}",
                     f"qb-{qb_estimator.value}",
+                    f"bins-{qb_hist_bins}",
                     accelerator.lower(),
                 ],
                 group="moe-hero-fsdp-abl",
@@ -335,6 +338,13 @@ def build_ablation_run(
     help="QB threshold estimator (bias-mechanism ablation #8033).",
 )
 @click.option(
+    "--qb-hist-bins",
+    type=click.IntRange(min=1),
+    default=1000,
+    show_default=True,
+    help="Histogram bin count for the logit_hist / hist_dynamic / k3_hist estimators.",
+)
+@click.option(
     "--batch-size",
     type=click.IntRange(min=1),
     default=None,
@@ -342,7 +352,13 @@ def build_ablation_run(
 )
 @build_options
 def main(
-    run_id: str, size: str, accelerator: str, expert_chunks: int, qb_estimator: str, batch_size: int | None
+    run_id: str,
+    size: str,
+    accelerator: str,
+    expert_chunks: int,
+    qb_estimator: str,
+    qb_hist_bins: int,
+    batch_size: int | None,
 ) -> ArtifactStep[AblationResult]:
     return build_ablation_run(
         run_id=run_id,
@@ -350,6 +366,7 @@ def main(
         accelerator=accelerator,
         expert_chunks=expert_chunks,
         qb_estimator=QbEstimator(qb_estimator),
+        qb_hist_bins=qb_hist_bins,
         batch_size=batch_size,
     )
 
