@@ -41,6 +41,7 @@ HERO_MIXED_PRECISION = "params=float32,compute=bfloat16,output=bfloat16"
 # The hero shape keeps its MuonH state on pinned host memory: 24.59 GiB of parameters and 27.78 GiB
 # of optimizer state per device leave too little room for the fixed all-to-all buffers otherwise.
 HERO_OFFLOAD_OPT_STATE = True
+HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
 _SLIMPAJAMA_TOKENIZE_RESOURCES = ResourceConfig(ram="64g", disk="64g")
@@ -120,6 +121,7 @@ def build_hero_run(
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
+    watch_interval: int = HERO_WATCH_INTERVAL,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -255,7 +257,7 @@ def build_hero_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=0),
+            watch=WatchConfig(interval=watch_interval),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
@@ -379,6 +381,13 @@ def build_hero_run(
     help="Run the paloma suite every N steps. 0 disables eval (throughput-only run).",
 )
 @click.option(
+    "--watch-interval",
+    type=click.IntRange(min=0),
+    default=HERO_WATCH_INTERVAL,
+    show_default=True,
+    help="Steps between gradient and parameter norm logs. 0 disables norm logging.",
+)
+@click.option(
     "--profile-steps",
     type=click.IntRange(min=0),
     default=0,
@@ -413,6 +422,7 @@ def main(
     flavor: str,
     save_checkpoints: bool,
     eval_every: int,
+    watch_interval: int,
     profile_steps: int,
     profile_start_step: int,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -430,6 +440,7 @@ def main(
         flavor=flavor,
         save_checkpoints=save_checkpoints,
         eval_every=eval_every,
+        watch_interval=watch_interval,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
     )
