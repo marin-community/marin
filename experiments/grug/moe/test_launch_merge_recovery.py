@@ -9,7 +9,7 @@ from experiments.grug.moe.expert_merge import AssignmentMode
 from experiments.grug.moe.expert_prefit import PrefitObjective
 from experiments.grug.moe.launch_merge_recovery import MergeBranchName, build_merge_recovery_pipeline
 from experiments.grug.moe.launch_tied_experts import TiedExpertPhase, tied_expert_runs
-from experiments.grug.moe.merge_recovery import RecoveryInitialization, RecoveryStage
+from experiments.grug.moe.merge_recovery import RecoveryCheckpointSelection, RecoveryInitialization, RecoveryStage
 
 _PREFIX = "gs://marin-us-central1/test"
 
@@ -107,12 +107,60 @@ def test_native_joint_runs_preservation_directly_from_native_conversion(monkeypa
     assert stage_b.assignment_mode is AssignmentMode.NATIVE
     assert not stage_b.prefit_applied
     assert stage_b.training_tokens == 200_000_000
+    assert stage_b.cross_entropy_weight == 1.0
     assert stage_b.moe_loss_weight == 1.0
     assert stage_b.logit_kl_weight == 0.1
     assert stage_b.run_id == "grug-xem-native-joint-stage-b-d512-l2-l3"
     assert stage_b.resources.regions == ["us-central1"]
     assert branch.converted in branch.stage_b.deps
     assert all(existing.stage_a not in branch.stage_b.deps for existing in pipeline.branches)
+
+
+def test_validation_aligned_local_matrix_reuses_native_conversion_and_selects_heldout_best(monkeypatch) -> None:
+    monkeypatch.setattr("experiments.grug.moe.launch_merge_recovery.mixture", lambda *_args, **_kwargs: None)
+    pipeline = _pipeline(teacher_commit="teacher-sha")
+    branches = {branch.name: branch for branch in pipeline.branches}
+    native = branches[MergeBranchName.NATIVE]
+    expected_weights = {
+        MergeBranchName.NATIVE_LOCAL_SELECTED: (0.0, 0.0),
+        MergeBranchName.NATIVE_LOCAL_CE: (0.05, 0.0),
+        MergeBranchName.NATIVE_LOCAL_KL: (0.0, 0.1),
+        MergeBranchName.NATIVE_LOCAL_CE_KL: (0.05, 0.1),
+    }
+
+    for name, (cross_entropy_weight, logit_kl_weight) in expected_weights.items():
+        branch = branches[name]
+        stage_a = materialized_config(branch.stage_a, _PREFIX)
+        stage_b = materialized_config(branch.stage_b, _PREFIX)
+
+        assert branch.converted is native.converted
+        assert stage_a.stage is RecoveryStage.LOCAL
+        assert stage_a.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO
+        assert stage_a.init_checkpoint_dir == prefix_join(native.converted.path(_PREFIX), "checkpoints")
+        assert stage_a.training_tokens == 50_000_000
+        assert stage_a.cross_entropy_weight == cross_entropy_weight
+        assert stage_a.moe_loss_weight == 1.0
+        assert stage_a.logit_kl_weight == logit_kl_weight
+        assert stage_a.select_best_validation_checkpoint
+        assert stage_a.initial_checkpoint_selection is RecoveryCheckpointSelection.LATEST
+        assert stage_a.checkpoint_token_milestones == (12_500_000, 25_000_000, 37_500_000, 50_000_000)
+
+        assert stage_b.stage is RecoveryStage.PRESERVATION
+        assert stage_b.initialization is RecoveryInitialization.LOCAL_RECOVERY
+        assert stage_b.init_checkpoint_dir == prefix_join(branch.stage_a.path(_PREFIX), "checkpoints")
+        assert stage_b.cross_entropy_weight == 1.0
+        assert stage_b.logit_kl_weight == 0.1
+        assert not stage_b.select_best_validation_checkpoint
+        assert stage_b.initial_checkpoint_selection is RecoveryCheckpointSelection.BEST_VALIDATION
+        assert stage_b.checkpoint_token_milestones == (
+            25_000_000,
+            50_000_000,
+            62_500_000,
+            75_000_000,
+            87_500_000,
+            100_000_000,
+            200_000_000,
+        )
 
 
 def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeypatch) -> None:

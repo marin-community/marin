@@ -65,6 +65,7 @@ from experiments.grug.moe.merge_jobs import (
 from experiments.grug.moe.merge_recovery import (
     MergeRecoveryConfig,
     MergeRecoveryState,
+    RecoveryCheckpointSelection,
     RecoveryInitialization,
     RecoveryLosses,
     RecoveryStage,
@@ -87,6 +88,7 @@ _CHECKPOINTS_DIRECTORY = "checkpoints"
 _PREFIT_MANIFEST_FILENAME = "prefit_manifest.json"
 _PREFIT_FORMAT_VERSION = 2
 _RECOVERY_THRESHOLD_FILENAME = "recovery_threshold.json"
+_RECOVERY_SELECTION_FILENAME = "selected_checkpoint.json"
 
 
 @register_dataclass
@@ -1121,6 +1123,7 @@ def _recovery_template(
     recovery_config = MergeRecoveryConfig(
         affected_layers=config.affected_layers,
         stage=config.stage,
+        cross_entropy_weight=config.cross_entropy_weight,
         moe_loss_weight=config.moe_loss_weight,
         logit_kl_weight=config.logit_kl_weight,
         source_to_shared=manifest.spec.source_to_shared,
@@ -1150,6 +1153,59 @@ def _load_recovery_initial_weights(
         params=loaded["params"],
         pending_qb_betas=loaded["pending_qb_betas"],
     )
+
+
+def _recovery_initial_checkpoint(config: RecoveryJobConfig) -> str:
+    if config.initial_checkpoint_selection is RecoveryCheckpointSelection.LATEST:
+        return latest_checkpoint_path(config.init_checkpoint_dir)
+    if config.initial_checkpoint_selection is not RecoveryCheckpointSelection.BEST_VALIDATION:
+        raise ValueError(f"unknown recovery checkpoint selection {config.initial_checkpoint_selection}")
+    if config.initialization is not RecoveryInitialization.LOCAL_RECOVERY:
+        raise ValueError("best-validation checkpoint selection requires a local-recovery initializer")
+    selection_path = prefix_join(config.init_checkpoint_dir, _RECOVERY_SELECTION_FILENAME)
+    selection = StoragePath(selection_path)
+    if not selection.exists():
+        raise ValueError(f"best-validation checkpoint selection is missing at {selection_path}")
+    payload = json.loads(selection.read_text())
+    if payload.get("format_version") != 1:
+        raise ValueError(f"unsupported recovery checkpoint selection at {selection_path}")
+    checkpoint_path = payload.get("checkpoint_path")
+    if not isinstance(checkpoint_path, str):
+        raise ValueError(f"recovery checkpoint selection at {selection_path} has no checkpoint_path")
+    return checkpoint_path
+
+
+def _record_best_validation_checkpoint(
+    config: RecoveryJobConfig,
+    *,
+    checkpoint_path: str,
+    step: int,
+    tokens: int,
+    requested_tokens: int,
+    student_macro_loss: float,
+) -> None:
+    selection_path = prefix_join(_checkpoint_root(config.output_path), _RECOVERY_SELECTION_FILENAME)
+    _sync(f"recovery_{config.stage.value}_selection_before_{step}")
+    if jax.process_index() == 0:
+        selection = StoragePath(selection_path)
+        current = json.loads(selection.read_text()) if selection.exists() else None
+        if current is None or student_macro_loss < float(current["selection_value"]):
+            selection.write_text(
+                json.dumps(
+                    {
+                        "format_version": 1,
+                        "checkpoint_path": checkpoint_path,
+                        "step": step,
+                        "tokens": tokens,
+                        "requested_tokens": requested_tokens,
+                        "selection_metric": "eval/paloma/macro_loss",
+                        "selection_value": student_macro_loss,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+    _sync(f"recovery_{config.stage.value}_selection_after_{step}")
 
 
 def _recovery_manifest_for_run(
@@ -1243,6 +1299,13 @@ def _eval_result_metrics(result, *, prefix: str) -> dict[str, float]:
     return metrics
 
 
+def _paloma_macro_loss(result) -> float:
+    try:
+        return float(result.tag_macro_losses["paloma"])
+    except KeyError as error:
+        raise ValueError("recovery checkpoint selection requires a paloma validation tag") from error
+
+
 def _evaluate_recovery_checkpoint(
     config: RecoveryJobConfig,
     *,
@@ -1251,10 +1314,12 @@ def _evaluate_recovery_checkpoint(
     teacher: Transformer | None,
     step: int,
     tokens: int,
-) -> None:
+    requested_tokens: int,
+) -> float:
     student_result = evaluator.evaluate(student)
     metrics = _eval_result_metrics(student_result, prefix="student")
-    metrics["eval/paloma/macro_loss"] = float(student_result.macro_avg_loss)
+    student_paloma_macro_loss = _paloma_macro_loss(student_result)
+    metrics["eval/paloma/macro_loss"] = student_paloma_macro_loss
     if teacher is not None:
         teacher_result = evaluator.evaluate(teacher)
         metrics.update(_eval_result_metrics(teacher_result, prefix="teacher"))
@@ -1263,6 +1328,9 @@ def _evaluate_recovery_checkpoint(
         )
         metrics["merge/immediate_macro_loss_delta"] = float(
             student_result.macro_avg_loss - teacher_result.macro_avg_loss
+        )
+        metrics["merge/immediate_paloma_macro_loss_delta"] = student_paloma_macro_loss - _paloma_macro_loss(
+            teacher_result
         )
         threshold = float(teacher_result.micro_avg_loss) + config.recovery_loss_threshold_delta
         reached = float(student_result.micro_avg_loss) <= threshold
@@ -1294,6 +1362,7 @@ def _evaluate_recovery_checkpoint(
         "stage": config.stage.value,
         "step": step,
         "tokens": tokens,
+        "requested_tokens": requested_tokens,
         "max_eval_batches": 8,
         "metrics": metrics,
     }
@@ -1302,6 +1371,7 @@ def _evaluate_recovery_checkpoint(
         payload,
         sync_name=f"recovery_{config.stage.value}_eval_{step}",
     )
+    return student_paloma_macro_loss
 
 
 def run_recovery_local(config: RecoveryJobConfig) -> None:
@@ -1314,6 +1384,8 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
         raise ValueError("training_tokens, batch_size, checkpoint_every, and KL chunk size must be positive")
     if any(tokens <= 0 for tokens in config.checkpoint_token_milestones):
         raise ValueError("checkpoint token milestones must be positive")
+    if config.select_best_validation_checkpoint and config.stage is not RecoveryStage.LOCAL:
+        raise ValueError("best-validation checkpoint selection is only valid for local recovery")
     checkpoint_root = _checkpoint_root(config.output_path)
     _validate_runtime_paths(
         config,
@@ -1336,7 +1408,8 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
             source_layer=config.affected_layers[1],
             num_experts=config.source.model.num_experts,
         )
-        initialization_checkpoint = latest_checkpoint_path(config.init_checkpoint_dir)
+        initialization_checkpoint = _recovery_initial_checkpoint(config)
+        _validate_runtime_paths(config, {"resolved_initial_checkpoint": initialization_checkpoint})
         own_checkpoint = discover_latest_checkpoint(checkpoint_root)
         if own_checkpoint is None:
             manifest = read_merge_checkpoint_manifest(initialization_checkpoint)
@@ -1380,12 +1453,12 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
 
         tokens_per_step = config.batch_size * config.source.model.max_seq_len
         target_steps = math.ceil(config.training_tokens / tokens_per_step)
-        milestone_tokens_by_step = {
+        milestone_requested_tokens_by_step = {
             math.ceil(tokens / tokens_per_step): tokens
             for tokens in config.checkpoint_token_milestones
             if tokens <= config.training_tokens
         }
-        milestone_steps = set(milestone_tokens_by_step)
+        milestone_steps = set(milestone_requested_tokens_by_step)
         evaluator = build_tagged_evaluator(
             data_config=config.data,
             max_seq_len=config.source.model.max_seq_len,
@@ -1408,16 +1481,36 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
                 teacher=teacher_state.params,
                 step=0,
                 tokens=0,
+                requested_tokens=0,
             )
-        elif initial_step in milestone_steps:
-            _evaluate_recovery_checkpoint(
+        elif initial_step in milestone_steps or (
+            config.select_best_validation_checkpoint and initial_step == target_steps
+        ):
+            requested_tokens = milestone_requested_tokens_by_step.get(
+                initial_step,
+                config.training_tokens,
+            )
+            actual_tokens = initial_step * tokens_per_step
+            student_macro_loss = _evaluate_recovery_checkpoint(
                 config,
                 evaluator=evaluator,
                 student=state.params,
                 teacher=teacher_state.params,
                 step=initial_step,
-                tokens=milestone_tokens_by_step[initial_step],
+                tokens=actual_tokens,
+                requested_tokens=requested_tokens,
             )
+            if config.select_best_validation_checkpoint:
+                if own_checkpoint is None:
+                    raise ValueError("resumed local recovery has no checkpoint to select")
+                _record_best_validation_checkpoint(
+                    config,
+                    checkpoint_path=own_checkpoint,
+                    step=initial_step,
+                    tokens=actual_tokens,
+                    requested_tokens=requested_tokens,
+                    student_macro_loss=student_macro_loss,
+                )
         if int(state.step) >= target_steps:
             logger.info("Recovery output already complete at step %d", int(state.step))
             return
@@ -1467,10 +1560,10 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
                 losses,
                 config.affected_layers,
                 tokens_per_second=tokens_per_second,
-                total_tokens=min(step * tokens_per_step, config.training_tokens),
+                total_tokens=step * tokens_per_step,
             )
             recovery_manifest = dataclasses.replace(manifest, recovery_step=step, optimizer_state_reset=True)
-            _save_permanent_checkpoint(
+            checkpoint_path = _save_permanent_checkpoint(
                 state,
                 checkpoint_root=checkpoint_root,
                 step=step,
@@ -1483,19 +1576,37 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
                     "format_version": 1,
                     "stage": config.stage.value,
                     "step": step,
-                    "tokens": min(step * tokens_per_step, config.training_tokens),
+                    "tokens": step * tokens_per_step,
                     "metrics": checkpoint_metrics,
                 },
                 sync_name=f"recovery_{config.stage.value}_training_metrics_{step}",
             )
             metrics_started = time.monotonic()
             metrics_start_step = step
-            if step in milestone_steps:
-                _evaluate_recovery_checkpoint(
+            should_evaluate = step in milestone_steps or (
+                config.select_best_validation_checkpoint and step == target_steps
+            )
+            if should_evaluate:
+                requested_tokens = milestone_requested_tokens_by_step.get(
+                    step,
+                    config.training_tokens,
+                )
+                actual_tokens = step * tokens_per_step
+                student_macro_loss = _evaluate_recovery_checkpoint(
                     config,
                     evaluator=evaluator,
                     student=state.params,
                     teacher=teacher_state.params,
                     step=step,
-                    tokens=milestone_tokens_by_step[step],
+                    tokens=actual_tokens,
+                    requested_tokens=requested_tokens,
                 )
+                if config.select_best_validation_checkpoint:
+                    _record_best_validation_checkpoint(
+                        config,
+                        checkpoint_path=checkpoint_path,
+                        step=step,
+                        tokens=actual_tokens,
+                        requested_tokens=requested_tokens,
+                        student_macro_loss=student_macro_loss,
+                    )

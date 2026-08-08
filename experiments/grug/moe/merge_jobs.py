@@ -12,7 +12,7 @@ from levanter.optim.config import OptimizerConfig
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.expert_merge import AssignmentMode, SpectralProbeConfig
 from experiments.grug.moe.expert_prefit import PrefitConfig, PrefitObjective
-from experiments.grug.moe.merge_recovery import RecoveryInitialization, RecoveryStage
+from experiments.grug.moe.merge_recovery import RecoveryCheckpointSelection, RecoveryInitialization, RecoveryStage
 from experiments.grug.moe.model import GrugModelConfig
 
 
@@ -105,6 +105,7 @@ class RecoveryJobConfig:
     assignment_mode: AssignmentMode
     prefit_applied: bool
     training_tokens: int
+    cross_entropy_weight: float
     batch_size: int = 32
     learning_rate: float = 1e-4
     weight_decay: float = 0.0
@@ -116,6 +117,8 @@ class RecoveryJobConfig:
     checkpoint_every: int = 100
     checkpoint_token_milestones: tuple[int, ...] = (25_000_000, 100_000_000, 200_000_000)
     recovery_loss_threshold_delta: float = 0.02
+    select_best_validation_checkpoint: bool = False
+    initial_checkpoint_selection: RecoveryCheckpointSelection = RecoveryCheckpointSelection.LATEST
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
 

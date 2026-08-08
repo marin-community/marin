@@ -40,12 +40,20 @@ class RecoveryInitialization(StrEnum):
     LOCAL_RECOVERY = "local_recovery"
 
 
+class RecoveryCheckpointSelection(StrEnum):
+    """How a recovery phase resolves its initialization checkpoint."""
+
+    LATEST = "latest"
+    BEST_VALIDATION = "best_validation"
+
+
 @dataclass(frozen=True)
 class MergeRecoveryConfig:
     """Configuration shared by the local and preservation recovery objectives."""
 
     affected_layers: tuple[int, int]
     stage: RecoveryStage
+    cross_entropy_weight: float
     moe_loss_weight: float = 1.0
     logit_kl_weight: float = 0.0
     source_to_shared: tuple[int, ...] | None = None
@@ -58,12 +66,12 @@ class MergeRecoveryConfig:
             raise ValueError(f"affected_layers must contain two distinct layers, got {self.affected_layers}")
         if tuple(sorted(self.affected_layers)) != self.affected_layers:
             raise ValueError(f"affected_layers must be in model order, got {self.affected_layers}")
+        if self.cross_entropy_weight < 0:
+            raise ValueError("cross_entropy_weight must be non-negative")
         if self.moe_loss_weight < 0:
             raise ValueError("moe_loss_weight must be non-negative")
         if self.logit_kl_weight < 0:
             raise ValueError("logit_kl_weight must be non-negative")
-        if self.stage is RecoveryStage.LOCAL and self.logit_kl_weight != 0:
-            raise ValueError("local recovery does not include logit KL")
         if self.normalization_epsilon <= 0:
             raise ValueError("normalization_epsilon must be positive")
         if self.source_to_shared is not None:
@@ -381,11 +389,11 @@ def recovery_objective(
     )
 
     zero = jnp.zeros((), dtype=jnp.float32)
-    if config.stage is RecoveryStage.LOCAL:
+    if config.cross_entropy_weight == 0:
         cross_entropy = zero
     else:
         if loss_weight is None:
-            raise ValueError("preservation recovery requires per-token loss weights")
+            raise ValueError("cross entropy requires per-token loss weights")
         labels = jnp.zeros_like(token_ids).at[:, :-1].set(token_ids[:, 1:]).astype(jnp.int32)
         if not get_abstract_mesh().empty:
             labels = jax.sharding.reshard(labels, P(("replica_dcn", "data", "expert"), None))
@@ -411,7 +419,11 @@ def recovery_objective(
             raise ValueError("logit KL requires per-token loss weights")
         logit_kl = logit_kl_loss(student, teacher, token_ids, mask, forward.hidden, loss_weight)
 
-    total = cross_entropy + config.moe_loss_weight * forward.moe_loss + config.logit_kl_weight * logit_kl
+    total = (
+        config.cross_entropy_weight * cross_entropy
+        + config.moe_loss_weight * forward.moe_loss
+        + config.logit_kl_weight * logit_kl
+    )
     return RecoveryLosses(
         total=total,
         cross_entropy=cross_entropy,

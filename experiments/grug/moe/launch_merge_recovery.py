@@ -40,7 +40,7 @@ from experiments.grug.moe.merge_jobs import (
     run_prefit,
     run_recovery,
 )
-from experiments.grug.moe.merge_recovery import RecoveryInitialization, RecoveryStage
+from experiments.grug.moe.merge_recovery import RecoveryCheckpointSelection, RecoveryInitialization, RecoveryStage
 from experiments.grug.moe.optimizer import TiedExpertLrScale
 
 _RESOURCES_KEY = "merge_resources"
@@ -58,6 +58,10 @@ class MergeBranchName(StrEnum):
     SPECTRAL = "spectral"
     SPECTRAL_PREFIT = "spectral_prefit"
     NATIVE_AGGREGATE_PREFIT = "native_aggregate_prefit"
+    NATIVE_LOCAL_SELECTED = "native_local_selected"
+    NATIVE_LOCAL_CE = "native_local_ce"
+    NATIVE_LOCAL_KL = "native_local_kl"
+    NATIVE_LOCAL_CE_KL = "native_local_ce_kl"
     NATIVE_JOINT = "native_joint"
 
 
@@ -240,6 +244,84 @@ def build_merge_recovery_pipeline(
         runtime_args={_RESOURCES_KEY: resources},
     )
 
+    def recovery_handle(
+        stage: RecoveryStage,
+        init_from: ArtifactStep[LevanterCheckpoint],
+        *,
+        branch_name: MergeBranchName,
+        assignment_mode: AssignmentMode,
+        prefit_applied: bool,
+        local_cross_entropy_weight: float = 0.0,
+        local_logit_kl_weight: float = 0.0,
+        select_best_local_checkpoint: bool = False,
+        initial_checkpoint_selection: RecoveryCheckpointSelection = RecoveryCheckpointSelection.LATEST,
+    ) -> ArtifactStep[LevanterCheckpoint]:
+        stage_label = "stage-a" if stage is RecoveryStage.LOCAL else "stage-b"
+        recovery_name = f"grug/expert_merge/d512/{branch_name.value}/{stage_label}"
+        recovery_version = resolve_version(recovery_name, version)
+        training_tokens = 50_000_000 if stage is RecoveryStage.LOCAL else 200_000_000
+        if stage is RecoveryStage.LOCAL:
+            checkpoint_token_milestones = (
+                (12_500_000, 25_000_000, 37_500_000, 50_000_000)
+                if select_best_local_checkpoint
+                else (25_000_000, 50_000_000)
+            )
+            cross_entropy_weight = local_cross_entropy_weight
+            logit_kl_weight = local_logit_kl_weight
+        else:
+            checkpoint_token_milestones = (
+                25_000_000,
+                50_000_000,
+                62_500_000,
+                75_000_000,
+                87_500_000,
+                100_000_000,
+                200_000_000,
+            )
+            cross_entropy_weight = 1.0
+            logit_kl_weight = 0.1
+
+        def recovery_config(ctx: StepContext) -> RecoveryJobConfig:
+            return RecoveryJobConfig(
+                source=SourceCheckpointConfig(
+                    model=base_model,
+                    optimizer=base_optimizer,
+                    training_steps=source_steps,
+                    checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                    source_commit=teacher_commit,
+                ),
+                data=mixture(ctx, train, validation=validation),
+                matching_path=ctx.artifact_path(matching),
+                init_checkpoint_dir=_checkpoint_dir(ctx.artifact_path(init_from)),
+                output_path=ctx.output_path,
+                resources=ctx.runtime_arg(_RESOURCES_KEY),
+                run_id=f"grug-xem-{branch_name.value}-{stage_label}-d512-l2-l3",
+                stage=stage,
+                initialization=(
+                    RecoveryInitialization.CONVERTED_STEP_ZERO
+                    if stage is RecoveryStage.LOCAL
+                    else RecoveryInitialization.LOCAL_RECOVERY
+                ),
+                assignment_mode=assignment_mode,
+                prefit_applied=prefit_applied,
+                training_tokens=training_tokens,
+                cross_entropy_weight=cross_entropy_weight,
+                logit_kl_weight=logit_kl_weight,
+                checkpoint_token_milestones=checkpoint_token_milestones,
+                select_best_validation_checkpoint=(stage is RecoveryStage.LOCAL and select_best_local_checkpoint),
+                initial_checkpoint_selection=initial_checkpoint_selection,
+            )
+
+        return ArtifactStep(
+            name=user_namespaced_name(recovery_name, recovery_version),
+            version=recovery_version,
+            artifact_type=LevanterCheckpoint,
+            run=run_recovery,
+            build_config=recovery_config,
+            deps=(teacher, matching, init_from, *data_deps),
+            runtime_args={_RESOURCES_KEY: resources},
+        )
+
     branch_specs = (
         (MergeBranchName.IDENTITY, AssignmentMode.IDENTITY, None),
         (MergeBranchName.NATIVE, AssignmentMode.NATIVE, None),
@@ -297,72 +379,62 @@ def build_merge_recovery_pipeline(
             runtime_args={_RESOURCES_KEY: resources},
         )
 
-        def recovery_handle(
-            stage: RecoveryStage,
-            init_from: ArtifactStep[LevanterCheckpoint],
-            *,
+        stage_a = recovery_handle(
+            RecoveryStage.LOCAL,
+            converted,
             branch_name=branch_name,
             assignment_mode=assignment_mode,
             prefit_applied=prefit_applied,
-        ):
-            stage_label = "stage-a" if stage is RecoveryStage.LOCAL else "stage-b"
-            recovery_name = f"grug/expert_merge/d512/{branch_name.value}/{stage_label}"
-            recovery_version = resolve_version(recovery_name, version)
-            training_tokens = 50_000_000 if stage is RecoveryStage.LOCAL else 200_000_000
-
-            def recovery_config(
-                ctx: StepContext,
-                *,
-                stage=stage,
-                branch_name=branch_name,
-                assignment_mode=assignment_mode,
-                prefit_applied=prefit_applied,
-                training_tokens=training_tokens,
-            ) -> RecoveryJobConfig:
-                return RecoveryJobConfig(
-                    source=SourceCheckpointConfig(
-                        model=base_model,
-                        optimizer=base_optimizer,
-                        training_steps=source_steps,
-                        checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
-                        source_commit=teacher_commit,
-                    ),
-                    data=mixture(ctx, train, validation=validation),
-                    matching_path=ctx.artifact_path(matching),
-                    init_checkpoint_dir=_checkpoint_dir(ctx.artifact_path(init_from)),
-                    output_path=ctx.output_path,
-                    resources=ctx.runtime_arg(_RESOURCES_KEY),
-                    run_id=f"grug-xem-{branch_name.value}-{stage_label}-d512-l2-l3",
-                    stage=stage,
-                    initialization=(
-                        RecoveryInitialization.CONVERTED_STEP_ZERO
-                        if stage is RecoveryStage.LOCAL
-                        else RecoveryInitialization.LOCAL_RECOVERY
-                    ),
-                    assignment_mode=assignment_mode,
-                    prefit_applied=prefit_applied,
-                    training_tokens=training_tokens,
-                    logit_kl_weight=0.1 if stage is RecoveryStage.PRESERVATION else 0.0,
-                )
-
-            return ArtifactStep(
-                name=user_namespaced_name(recovery_name, recovery_version),
-                version=recovery_version,
-                artifact_type=LevanterCheckpoint,
-                run=run_recovery,
-                build_config=recovery_config,
-                deps=(teacher, matching, init_from, *data_deps),
-                runtime_args={_RESOURCES_KEY: resources},
-            )
-
-        stage_a = recovery_handle(RecoveryStage.LOCAL, converted)
-        stage_b = recovery_handle(RecoveryStage.PRESERVATION, stage_a)
+        )
+        stage_b = recovery_handle(
+            RecoveryStage.PRESERVATION,
+            stage_a,
+            branch_name=branch_name,
+            assignment_mode=assignment_mode,
+            prefit_applied=prefit_applied,
+        )
         branches.append(
             MergeRecoveryBranch(
                 name=branch_name,
                 assignment_mode=assignment_mode,
                 prefit_applied=prefit_applied,
                 converted=converted,
+                stage_a=stage_a,
+                stage_b=stage_b,
+            )
+        )
+
+    native_converted = next(branch.converted for branch in branches if branch.name is MergeBranchName.NATIVE)
+    for branch_name, cross_entropy_weight, logit_kl_weight in (
+        (MergeBranchName.NATIVE_LOCAL_SELECTED, 0.0, 0.0),
+        (MergeBranchName.NATIVE_LOCAL_CE, 0.05, 0.0),
+        (MergeBranchName.NATIVE_LOCAL_KL, 0.0, 0.1),
+        (MergeBranchName.NATIVE_LOCAL_CE_KL, 0.05, 0.1),
+    ):
+        stage_a = recovery_handle(
+            RecoveryStage.LOCAL,
+            native_converted,
+            branch_name=branch_name,
+            assignment_mode=AssignmentMode.NATIVE,
+            prefit_applied=False,
+            local_cross_entropy_weight=cross_entropy_weight,
+            local_logit_kl_weight=logit_kl_weight,
+            select_best_local_checkpoint=True,
+        )
+        stage_b = recovery_handle(
+            RecoveryStage.PRESERVATION,
+            stage_a,
+            branch_name=branch_name,
+            assignment_mode=AssignmentMode.NATIVE,
+            prefit_applied=False,
+            initial_checkpoint_selection=RecoveryCheckpointSelection.BEST_VALIDATION,
+        )
+        branches.append(
+            MergeRecoveryBranch(
+                name=branch_name,
+                assignment_mode=AssignmentMode.NATIVE,
+                prefit_applied=False,
+                converted=native_converted,
                 stage_a=stage_a,
                 stage_b=stage_b,
             )
@@ -422,8 +494,10 @@ def build_merge_recovery_pipeline(
             assignment_mode=AssignmentMode.NATIVE,
             prefit_applied=False,
             training_tokens=200_000_000,
+            cross_entropy_weight=1.0,
             moe_loss_weight=1.0,
             logit_kl_weight=0.1,
+            checkpoint_token_milestones=(25_000_000, 50_000_000, 100_000_000, 200_000_000),
         )
 
     native_joint_stage_b = ArtifactStep(
@@ -473,13 +547,16 @@ def pipeline_from_environment(*, version: str | None = None) -> MergeRecoveryPip
 
 @click.command()
 @click.option("--branch", type=click.Choice([branch.value for branch in MergeBranchName]), default="spectral_prefit")
+@click.option("--stage", type=click.Choice([stage.value for stage in RecoveryStage]), default="preservation")
 @build_options
-def main(branch: str) -> ArtifactStep[LevanterCheckpoint]:
+def main(branch: str, stage: str) -> ArtifactStep[LevanterCheckpoint]:
     pipeline = pipeline_from_environment()
     if branch == MergeBranchName.NATIVE_JOINT.value:
+        if stage != RecoveryStage.PRESERVATION.value:
+            raise click.BadParameter("native_joint has no local-recovery stage", param_hint="--stage")
         return pipeline.native_joint.stage_b
     selected = next(candidate for candidate in pipeline.branches if candidate.name.value == branch)
-    return selected.stage_b
+    return selected.stage_a if stage == RecoveryStage.LOCAL.value else selected.stage_b
 
 
 if __name__ == "__main__":

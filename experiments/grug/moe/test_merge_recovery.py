@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
+import pytest
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.expert_merge import convert_one_expert_pair, forward_with_moe_traces
@@ -14,6 +15,7 @@ from experiments.grug.moe.merge_recovery import (
     RecoveryStage,
     chunked_output_kl,
     initial_recovery_state,
+    make_chunked_logit_kl,
     make_recovery_train_step,
     recovery_forward,
     recovery_trainable_filter,
@@ -164,9 +166,21 @@ def test_recovery_router_agreement_accounts_for_source_expert_permutation():
     np.testing.assert_allclose(actual.router_topk_agreement_with_teacher, 1.0)
 
 
-def test_local_recovery_updates_only_shared_bank_and_keeps_qb_frozen():
+@pytest.mark.parametrize(
+    ("cross_entropy_weight", "logit_kl_weight"),
+    ((0.0, 0.0), (0.05, 0.0), (0.0, 0.1), (0.05, 0.1)),
+)
+def test_local_recovery_preservation_losses_update_only_shared_bank_and_keep_qb_frozen(
+    cross_entropy_weight: float,
+    logit_kl_weight: float,
+):
     optimizer = optax.sgd(1e-3)
-    config = MergeRecoveryConfig(affected_layers=_AFFECTED_LAYERS, stage=RecoveryStage.LOCAL)
+    config = MergeRecoveryConfig(
+        affected_layers=_AFFECTED_LAYERS,
+        stage=RecoveryStage.LOCAL,
+        cross_entropy_weight=cross_entropy_weight,
+        logit_kl_weight=logit_kl_weight,
+    )
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         teacher, student = _teacher_and_student()
         pending_qb_betas = jnp.arange(16, dtype=jnp.float32).reshape(4, 4) / 10.0
@@ -176,15 +190,27 @@ def test_local_recovery_updates_only_shared_bank_and_keeps_qb_frozen():
             pending_qb_betas=pending_qb_betas,
             config=config,
         )
-        updated, losses = make_recovery_train_step(optimizer, config)(
+        updated, losses = make_recovery_train_step(
+            optimizer,
+            config,
+            logit_kl_loss=make_chunked_logit_kl(8) if logit_kl_weight else None,
+        )(
             state,
             teacher,
             jnp.arange(8, dtype=jnp.int32).reshape(1, 8),
-            None,
+            jnp.ones((1, 8), dtype=jnp.float32) if cross_entropy_weight or logit_kl_weight else None,
         )
 
     assert int(updated.step) == 1
     assert float(losses.moe) > 0
+    assert (float(losses.cross_entropy) > 0) is (cross_entropy_weight > 0)
+    assert (float(losses.logit_kl) > 0) is (logit_kl_weight > 0)
+    np.testing.assert_allclose(
+        losses.total,
+        cross_entropy_weight * losses.cross_entropy + losses.moe + logit_kl_weight * losses.logit_kl,
+        rtol=1e-6,
+        atol=1e-6,
+    )
     assert _tree_changed(student.expert_banks[1], updated.params.expert_banks[1])
     _assert_tree_equal(updated.params.expert_banks[0], student.expert_banks[0])
     _assert_tree_equal(updated.params.expert_banks[2], student.expert_banks[2])
@@ -196,7 +222,11 @@ def test_local_recovery_updates_only_shared_bank_and_keeps_qb_frozen():
 
 def test_preservation_recovery_trains_affected_routers_and_updates_only_their_qb_state():
     optimizer = optax.sgd(1e-3)
-    config = MergeRecoveryConfig(affected_layers=_AFFECTED_LAYERS, stage=RecoveryStage.PRESERVATION)
+    config = MergeRecoveryConfig(
+        affected_layers=_AFFECTED_LAYERS,
+        stage=RecoveryStage.PRESERVATION,
+        cross_entropy_weight=1.0,
+    )
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         teacher, student = _teacher_and_student()
         trainable, _ = eqx.partition(student, recovery_trainable_filter(student, config))

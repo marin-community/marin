@@ -44,7 +44,7 @@ from experiments.grug.moe.merge_jobs import (
     RecoveryJobConfig,
     SourceCheckpointConfig,
 )
-from experiments.grug.moe.merge_recovery import RecoveryInitialization, RecoveryStage
+from experiments.grug.moe.merge_recovery import RecoveryCheckpointSelection, RecoveryInitialization, RecoveryStage
 from experiments.grug.moe.merge_recovery_runtime import (
     PrefitRuntimeState,
     evaluate_prefit_checkpoint_local,
@@ -573,7 +573,7 @@ def _data_config() -> LmDataConfig:
     examples = [GrugLmExample.causal((jnp.arange(8, dtype=jnp.int32) + offset) % 32) for offset in range(4)]
     return LmDataConfig(
         components={
-            "direct": DirectDatasetComponent(
+            "paloma/c4_en": DirectDatasetComponent(
                 datasets={
                     "train": ListAsyncDataset(examples),
                     "validation": ListAsyncDataset(examples[:2]),
@@ -611,12 +611,10 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         "resources": ResourceConfig.with_cpu(),
         "assignment_mode": AssignmentMode.SPECTRAL,
         "prefit_applied": False,
-        "training_tokens": 8,
         "batch_size": 1,
         "learning_rate": 1e-3,
         "affected_layers": (1, 2),
         "checkpoint_every": 1,
-        "checkpoint_token_milestones": (8,),
     }
     stage_a_config = RecoveryJobConfig(
         **common,
@@ -625,8 +623,27 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         run_id="test-stage-a",
         stage=RecoveryStage.LOCAL,
         initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
+        training_tokens=15,
+        cross_entropy_weight=0.0,
+        checkpoint_token_milestones=(8,),
+        select_best_validation_checkpoint=True,
     )
     run_recovery_local(stage_a_config)
+    stage_a_evaluations = {
+        1: json.loads((stage_a_path / "evaluations" / "tokens-8-step-1.json").read_text()),
+        2: json.loads((stage_a_path / "evaluations" / "tokens-16-step-2.json").read_text()),
+    }
+    expected_step = min(
+        stage_a_evaluations,
+        key=lambda step: stage_a_evaluations[step]["metrics"]["eval/paloma/macro_loss"],
+    )
+    selection = json.loads((stage_a_path / "checkpoints" / "selected_checkpoint.json").read_text())
+    assert selection["selection_metric"] == "eval/paloma/macro_loss"
+    assert selection["selection_value"] == stage_a_evaluations[expected_step]["metrics"]["eval/paloma/macro_loss"]
+    assert selection["tokens"] == expected_step * 8
+    assert selection["requested_tokens"] == (8 if expected_step == 1 else 15)
+    assert selection["step"] == expected_step
+    assert selection["checkpoint_path"] == str(stage_a_path / "checkpoints" / f"step-{expected_step}")
 
     stage_b_path = tmp_path / "stage-b"
     stage_b_config = RecoveryJobConfig(
@@ -636,8 +653,12 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         run_id="test-stage-b",
         stage=RecoveryStage.PRESERVATION,
         initialization=RecoveryInitialization.LOCAL_RECOVERY,
+        training_tokens=8,
+        cross_entropy_weight=1.0,
         logit_kl_weight=0.1,
         logit_kl_vocab_chunk_size=8,
+        checkpoint_token_milestones=(8,),
+        initial_checkpoint_selection=RecoveryCheckpointSelection.BEST_VALIDATION,
     )
     run_recovery_local(stage_b_config)
 
@@ -645,25 +666,30 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
     run_recovery_local(stage_a_config)
     run_recovery_local(stage_b_config)
 
-    for output_path in (stage_a_path, stage_b_path):
+    for output_path, final_step, final_tokens in ((stage_a_path, 2, 16), (stage_b_path, 1, 8)):
         checkpoint = latest_checkpoint_path(str(output_path / "checkpoints"))
         manifest = read_merge_checkpoint_manifest(checkpoint)
-        assert manifest.recovery_step == 1
+        assert manifest.recovery_step == final_step
         assert manifest.optimizer_state_reset
+        if output_path == stage_b_path:
+            assert manifest.recovery_initial_checkpoint == selection["checkpoint_path"]
         initial_eval = json.loads((output_path / "evaluations" / "tokens-0-step-0.json").read_text())
-        milestone_eval = json.loads((output_path / "evaluations" / "tokens-8-step-1.json").read_text())
-        training_metrics = json.loads((output_path / "training_metrics" / "step-1.json").read_text())
+        milestone_eval = json.loads(
+            (output_path / "evaluations" / f"tokens-{final_tokens}-step-{final_step}.json").read_text()
+        )
+        training_metrics = json.loads((output_path / "training_metrics" / f"step-{final_step}.json").read_text())
         assert initial_eval["max_eval_batches"] == 8
         assert "merge/immediate_validation_loss_delta" in initial_eval["metrics"]
         assert "eval/paloma/macro_loss" in initial_eval["metrics"]
-        assert milestone_eval["tokens"] == 8
+        assert milestone_eval["tokens"] == final_tokens
+        assert milestone_eval["requested_tokens"] == (15 if output_path == stage_a_path else 8)
         assert "teacher/loss" in milestone_eval["metrics"]
         assert "merge/recovery_tokens_to_threshold" in milestone_eval["metrics"]
         assert "merge/moe_output_nrmse_by_layer/layer_1" in training_metrics["metrics"]
         assert "merge/block_output_nrmse_by_layer/layer_1" in training_metrics["metrics"]
         assert "merge/router_topk_agreement_with_teacher/layer_1" in training_metrics["metrics"]
         assert "throughput/tokens_per_second" in training_metrics["metrics"]
-        assert training_metrics["metrics"]["throughput/total_tokens"] == 8
+        assert training_metrics["metrics"]["throughput/total_tokens"] == final_tokens
         assert "train/router/layer_1/routing_entropy" in training_metrics["metrics"]
         assert "train/router/layer_1/capacity_overflow" in training_metrics["metrics"]
         assert "train/router/layer_1/routing_count/expert_0" in training_metrics["metrics"]
@@ -722,6 +748,7 @@ def test_native_joint_preservation_restores_converted_step_zero_strictly_and_rec
             assignment_mode=AssignmentMode.NATIVE,
             prefit_applied=False,
             training_tokens=8,
+            cross_entropy_weight=1.0,
             batch_size=1,
             learning_rate=1e-3,
             moe_loss_weight=1.0,
