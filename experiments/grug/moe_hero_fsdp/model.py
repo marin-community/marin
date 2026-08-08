@@ -140,6 +140,7 @@ class QbEstimator(StrEnum):
     PER_SEQUENCE = "per_sequence"  # logit domain, per-sequence top-k, averaged over sequences
     AFTER_SIGMOID = "after_sigmoid"  # sigmoid domain, per-device top-k, pmean
     LOGIT_HIST = "logit_hist"  # logit domain, global bincount histogram of margins over fixed [-R, R]
+    HIST_DYNAMIC = "hist_dynamic"  # logit domain, global bincount histogram over 2x the current [min, max] of margins
     K3_HIST = "k3_hist"  # Kimi-K3: sigmoid domain, global bincount histogram of required bias, adaptive range
 
 
@@ -765,6 +766,37 @@ def _qb_beta_topk(
     return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P())(s_ma)
 
 
+def _bincount_upper_quantile(
+    s_local: jax.Array,
+    *,
+    num_experts: int,
+    n_bins: int,
+    lo: jax.Array | float,
+    hi: jax.Array | float,
+    target_rank: float,
+) -> jax.Array:
+    """Per-expert (1-k/n) upper quantile of ``s_local`` via one fused bincount over ``[lo, hi]``.
+
+    Runs inside a ``shard_map``: a single ``jnp.bincount`` over an expert-major flat index
+    (``expert*n_bins + bin``) builds the local per-expert histogram (clip-to-edge), one integer ``psum``
+    pools it globally, and beta is read from the top-cumulative counts (interpolated in the crossing bin)
+    and mean-centered. ``lo``/``hi`` may be Python floats (fixed grid) or traced scalars (dynamic grid).
+    """
+    bin_width = (hi - lo) / n_bins
+    expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
+    idx = jnp.clip(((s_local - lo) / bin_width).astype(jnp.int32), 0, n_bins - 1)
+    flat = (expert_ids * n_bins + idx).reshape(-1)
+    local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
+    counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
+    cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
+    bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
+    ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
+    h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
+    lower_edge = lo + bstar.astype(jnp.float32) * bin_width
+    beta = lower_edge + bin_width * (ct_b - target_rank) / jnp.maximum(h_b, 1.0)
+    return beta - jnp.mean(beta)
+
+
 def _qb_beta_logit_hist(
     s_ma: jax.Array,
     mesh: jax.sharding.AbstractMesh,
@@ -774,30 +806,40 @@ def _qb_beta_logit_hist(
     n_bins: int,
     hist_range: float,
 ) -> jax.Array:
-    """Global (1-k/n)-quantile of the logit margins ``s - alpha`` from one pooled bincount histogram.
-
-    ``s_ma`` is the batch-sharded ``logit - alpha`` block. A single fused ``jnp.bincount`` over an
-    expert-major flat index (``expert*n_bins + bin``) builds the per-expert histogram over the fixed range
-    ``[-hist_range, hist_range]`` (clip-to-edge) with one integer ``psum``; the quantile is read from the
-    top-cumulative counts (interpolated in the crossing bin) and mean-centered. No per-expert scatter, so
-    it stays cheap at ~1M tokens/device.
-    """
+    """Global (1-k/n)-quantile of the logit margins ``s - alpha`` over the fixed grid ``[-R, R]``."""
     target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts  # tokens at/above beta per expert
-    bin_width = 2.0 * hist_range / n_bins
 
     def _fn(s_local: jax.Array) -> jax.Array:  # [local_tokens, experts]
-        expert_ids = jnp.arange(num_experts, dtype=jnp.int32)[None, :]
-        idx = jnp.clip(((s_local + hist_range) / bin_width).astype(jnp.int32), 0, n_bins - 1)
-        flat = (expert_ids * n_bins + idx).reshape(-1)
-        local_counts = jnp.bincount(flat, length=num_experts * n_bins).reshape(num_experts, n_bins)
-        counts = jax.lax.psum(local_counts, axis_name=_BATCH_AXES).astype(jnp.float32)
-        cum_from_top = jnp.cumsum(counts[:, ::-1], axis=-1)[:, ::-1]  # #{margins in bins >= b}
-        bstar = jnp.clip(jnp.sum((cum_from_top >= target_rank).astype(jnp.int32), axis=-1) - 1, 0, n_bins - 1)
-        ct_b = jnp.take_along_axis(cum_from_top, bstar[:, None], axis=-1)[:, 0]
-        h_b = jnp.take_along_axis(counts, bstar[:, None], axis=-1)[:, 0]
-        lower_edge = -hist_range + bstar.astype(jnp.float32) * bin_width
-        beta = lower_edge + bin_width * (ct_b - target_rank) / jnp.maximum(h_b, 1.0)
-        return beta - jnp.mean(beta)
+        return _bincount_upper_quantile(
+            s_local, num_experts=num_experts, n_bins=n_bins, lo=-hist_range, hi=hist_range, target_rank=target_rank
+        )
+
+    return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P())(s_ma)
+
+
+def _qb_beta_dynamic_hist(
+    s_ma: jax.Array,
+    mesh: jax.sharding.AbstractMesh,
+    *,
+    num_experts_per_token: int,
+    num_experts: int,
+    n_bins: int,
+) -> jax.Array:
+    """Same (1-k/n)-quantile of the logit margins as ``logit_hist``, but the histogram grid adapts each step.
+
+    The range is ``2x`` the current global ``[min, max]`` of the margins, computed with one ``pmin``/``pmax``
+    reduction, so the grid never clips outliers (the fixed ``[-R, R]`` variant does) at the cost of coarser
+    bins when the tails are wide.
+    """
+    target_rank = float(s_ma.shape[0]) * num_experts_per_token / num_experts
+
+    def _fn(s_local: jax.Array) -> jax.Array:
+        lo = 2.0 * jax.lax.pmin(jnp.min(s_local), axis_name=_BATCH_AXES)
+        hi = 2.0 * jax.lax.pmax(jnp.max(s_local), axis_name=_BATCH_AXES)
+        hi = jnp.maximum(hi, lo + 1e-6)  # guard a degenerate all-equal range
+        return _bincount_upper_quantile(
+            s_local, num_experts=num_experts, n_bins=n_bins, lo=lo, hi=hi, target_rank=target_rank
+        )
 
     return shard_map(_fn, mesh=mesh, in_specs=(P(_BATCH_AXES, None),), out_specs=P())(s_ma)
 
@@ -932,6 +974,15 @@ class MoEMLP(eqx.Module):
                 num_experts=self.cfg.num_experts,
                 n_bins=self.cfg.qb_hist_bins,
                 hist_range=self.cfg.qb_hist_range,
+            )
+        elif self.cfg.qb_estimator == QbEstimator.HIST_DYNAMIC:
+            s_minus_alpha = reshard(router_logits - qb_alpha, P(_BATCH_AXES, None))
+            router_stats["qb_beta"] = _qb_beta_dynamic_hist(
+                s_minus_alpha,
+                mesh,
+                num_experts_per_token=self.cfg.num_experts_per_token,
+                num_experts=self.cfg.num_experts,
+                n_bins=self.cfg.qb_hist_bins,
             )
         else:
             s_minus_alpha = reshard(router_score - qb_alpha, P(_BATCH_AXES, None))
