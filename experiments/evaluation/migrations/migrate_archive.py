@@ -10,7 +10,7 @@ trajectory into the ``blobs`` table (rewriting the sample's ``trajectory_uri`` t
 reference) and flattens its steps into the ``steps`` table. If a legacy trajectory is already
 missing, its sample and original URI are preserved.
 
-It is idempotent — samples dedupe on ``(task, doc_id, trial_id)`` — and validates every normalized
+It is idempotent — samples dedupe on ``(task, doc_id, trial_id, filter)`` — and validates every normalized
 sample, every available raw trajectory blob, and each flattened trajectory step before optionally
 moving the superseded ``samples_*.parquet`` files to region-local 30-day storage. A later migration
 can read those archived Parquets while writing replacement shards at the original results path.
@@ -21,7 +21,6 @@ them as mechanism-native artifacts and resume state.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import logging
 from collections.abc import Iterable
@@ -35,6 +34,8 @@ from finestore.eval import (
     ARCHIVE_STEPS_TABLE,
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
+    SCHEMA_VERSION,
+    TRIAL_ID_COLUMN,
     EvalSample,
     EvaluationStore,
     SampleKind,
@@ -44,25 +45,19 @@ from finestore.eval import (
 )
 from finestore.reader import CompositeReader
 from marin.evaluation.records import list_records
-from rigging.filesystem import (
-    StoragePath,
-    get_bucket_location,
-    load_cluster_config,
-    marin_temp_bucket,
-    url_to_fs,
-    use_data_config,
-)
+from rigging.filesystem import StoragePath, url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
+
+from experiments.evaluation.migrations.archive_backup import legacy_archive_prefix
+from experiments.evaluation.migrations.samples_v4 import preserve_and_replace_samples
 
 logger = logging.getLogger(__name__)
 
 _ARCHIVE_URI_PREFIX = "finestore://"
-_LEGACY_ARCHIVE_PREFIX = "eval-archive-legacy"
-_LEGACY_ARCHIVE_TTL_DAYS = 30
 _MIGRATION_WRITER_ID = "migrate"
 _OBJECT_CHECKSUM_KEYS = ("md5Hash", "md5", "ETag", "etag", "checksum")
 
-SampleKey = tuple[str, str, str]
+SampleKey = tuple[str, str, str, str]
 StepKey = tuple[str, str, str, int | None]
 
 
@@ -148,7 +143,12 @@ def _trial_id_from_uri(uri: str) -> str:
 
 
 def _sample_key(sample: EvalSample, trial_id: str) -> SampleKey:
-    return sample.task, sample.doc_id, trial_id
+    """The archive's identity for one sample: task, document, trial, and extraction filter.
+
+    A legacy Parquet holds one row per (document, filter) for a multi-filter task, so the filter must
+    take part or two distinct rows would compare as one and validation would accept a lossy archive.
+    """
+    return sample.task, sample.doc_id, trial_id, (sample.grading.filter or "") if sample.grading else ""
 
 
 def _trial_id(sample: EvalSample) -> str:
@@ -201,6 +201,18 @@ def _legacy_sample_inventory(files: Iterable[LegacySampleFile]) -> tuple[int, di
     return rows, samples
 
 
+def _replace_stale_samples(results_path: str) -> None:
+    """Clear a samples table written under an older contract, preserving it outside the run first.
+
+    The legacy parquets this migration reads reproduce every row of the table, agentic ones included,
+    so it may replace a table outright where an lm-eval export refuses. Rows written under a narrower
+    primary key would otherwise survive beside the new ones as duplicates.
+    """
+    stored_version = CompositeReader(results_path).schema_version(ARCHIVE_SAMPLES_TABLE)
+    if stored_version is not None and stored_version != SCHEMA_VERSION:
+        preserve_and_replace_samples(results_path, stored_version)
+
+
 def migrate_run(
     results_path: str,
     *,
@@ -209,6 +221,7 @@ def migrate_run(
 ) -> MigrationCounts:
     """Backfill one run's legacy sample parquets into its finestore archive. Safe to re-run."""
     sample_count = step_count = trajectory_count = missing_trajectory_count = 0
+    _replace_stale_samples(results_path)
     # Archive shards are named ``{seq}-{uid}.parquet`` under per-table subdirs, so the legacy
     # ``samples_*.parquet`` filter below never picks them up: a re-run reads only legacy sources.
     with EvaluationStore.open(results_path, writer_id=writer_id) as store:
@@ -254,7 +267,7 @@ def _archive_samples(reader: CompositeReader) -> dict[SampleKey, EvalSample]:
     samples = {}
     for row in table.to_pylist(maps_as_pydicts="strict"):
         sample = sample_from_archive_row(row)
-        samples[_sample_key(sample, row.get("trial_id") or "")] = sample
+        samples[_sample_key(sample, row.get(TRIAL_ID_COLUMN) or "")] = sample
     return samples
 
 
@@ -411,37 +424,6 @@ def archive_legacy_sample_files(
         source.rm()
         logger.info("archived legacy sample %s", destination)
     return len(destinations)
-
-
-def legacy_archive_prefix(results_path: str) -> str:
-    """Return a collision-resistant, region-local 30-day prefix for one run's legacy Parquets."""
-    results = StoragePath(results_path)
-    run_name = results.parent.name if results.name == "results" else results.name
-    identity = hashlib.sha256(str(results).encode()).hexdigest()[:12]
-    prefix = f"{_LEGACY_ARCHIVE_PREFIX}/{run_name}-{identity}"
-    if results.scheme == "gs":
-        region = get_bucket_location(results.bucket)
-        config = load_cluster_config("marin")
-        bucket = config.region_buckets.get(region)
-        if bucket is None:
-            raise ValueError(f"no region-local GCS temp bucket is configured for region {region!r}")
-        # Iris clusters can bind a storage config without GCS region buckets. Use the canonical Marin
-        # data config explicitly so the helper cannot fall back to a non-lifecycle ``tmp/`` prefix.
-        with use_data_config(config):
-            destination = marin_temp_bucket(
-                _LEGACY_ARCHIVE_TTL_DAYS,
-                prefix=prefix,
-                source_prefix=f"gs://{bucket.name}",
-            )
-    else:
-        destination = marin_temp_bucket(
-            _LEGACY_ARCHIVE_TTL_DAYS,
-            prefix=prefix,
-            source_prefix=results_path,
-        )
-    if StoragePath(destination).scheme != results.scheme:
-        raise ValueError(f"could not resolve region-local temp storage for {results_path!r}: got {destination!r}")
-    return destination
 
 
 def migration_plan(results_path: str, *, legacy_source: str | None = None) -> MigrationPlan:

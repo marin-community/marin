@@ -54,6 +54,15 @@ CACHE_LAYOUT_CONSOLIDATED = "consolidated"
 CACHE_LAYOUT_SHARDED = "sharded"
 
 
+def _cache_zephyr_context(*, resources: ResourceConfig, max_workers: int, name: str) -> ZephyrContext:
+    return ZephyrContext(
+        resources=resources,
+        coordinator_resources=ResourceConfig(cpu=1, ram="4g", preemptible=False),
+        max_workers=max_workers,
+        name=name,
+    )
+
+
 @dataclass(frozen=True)
 class ShardedCacheLayout:
     """Storage paths of a sharded Levanter cache: its top-level ledger and per-shard subdirectories."""
@@ -959,7 +968,7 @@ def build_cache(
             metadata=metadata,
         )
 
-    ctx = ZephyrContext(
+    ctx = _cache_zephyr_context(
         resources=ResourceConfig(ram="32g", disk="16g"),
         max_workers=min(128, len(shard_jobs)),
         name="levanter-cache-build",
@@ -1078,7 +1087,7 @@ def consolidate_shard_caches(
             data_sizes = jax.tree.map(lambda x: x.data_size, store.tree)
         return (data_sizes, ledger)
 
-    probe_ctx = ZephyrContext(
+    probe_ctx = _cache_zephyr_context(
         resources=ResourceConfig(ram="5g", cpu=2),
         max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
         name="levanter-cache-probe",
@@ -1113,7 +1122,7 @@ def consolidate_shard_caches(
             )
         )
 
-    ctx = ZephyrContext(
+    ctx = _cache_zephyr_context(
         resources=ResourceConfig(ram="10g", disk="16g"),
         max_workers=min(copy_max_workers, len(shard_info)),
         name="levanter-cache-copy",
@@ -1180,7 +1189,7 @@ def consolidate_shard_cache_ledgers(
                 field_counts = _field_counts_from_store(store)
         return (field_counts, ledger)
 
-    probe_ctx = ZephyrContext(
+    probe_ctx = _cache_zephyr_context(
         resources=ResourceConfig(ram="5g", cpu=2),
         max_workers=min(CONSOLIDATE_DATA_SIZE_WORKERS, len(shard_cache_paths)),
         name="levanter-cache-probe",

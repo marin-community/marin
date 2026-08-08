@@ -64,6 +64,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable
 
+from levanter.cutlass_kernel_cache import cute_launcher_factory
 from levanter.grug.attention._fa4_cute_config import Flash4CuteSm90BackwardConfig
 
 
@@ -152,6 +153,7 @@ def _validate_sm90_native_config(
         )
 
 
+@cute_launcher_factory
 def segmented_flash_attention_forward_launcher(
     modules: Any,
     *,
@@ -930,6 +932,7 @@ def segmented_flash_attention_forward_launcher(
     return _launch_segmented_flash_attention_forward
 
 
+@cute_launcher_factory
 def segmented_flash_attention_backward_launcher(
     modules: Any,
     *,
@@ -1174,6 +1177,7 @@ def segmented_flash_attention_backward_launcher(
     return _launch_segmented_flash_attention_backward
 
 
+@cute_launcher_factory
 def segmented_flash_attention_backward_sm90_launcher(
     modules: Any,
     *,
@@ -1368,6 +1372,7 @@ def segmented_flash_attention_backward_sm90_launcher(
     return _launch_segmented_flash_attention_backward_sm90
 
 
+@cute_launcher_factory
 def segmented_flash_attention_backward_sm90_preprocess_launcher(
     modules: Any,
     *,
@@ -1415,6 +1420,7 @@ def segmented_flash_attention_backward_sm90_preprocess_launcher(
     return _launch_flash_attention_backward_sm90_preprocess
 
 
+@cute_launcher_factory
 def flash_attention_backward_postprocess_launcher(
     modules: Any,
     *,

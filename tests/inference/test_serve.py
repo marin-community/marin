@@ -5,13 +5,17 @@
 
 import dataclasses
 import json
+import os
 import re
 import socket
+import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import click
 import pytest
@@ -20,7 +24,7 @@ from click.testing import CliRunner
 from fray.types import ANY_REGION, ResourceConfig, create_environment
 from iris.rpc import controller_pb2
 from iris.time_proto import timestamp_to_proto
-from marin.external_dependencies import VLLM_FORK_REQUIREMENT
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import (
     DEFAULT_CUDA_VLLM_VERSION,
@@ -54,6 +58,10 @@ from marin.inference.levanter_backend import (
 from marin.inference.model_preparation import resolve_model_path, select_tensor_parallel_size
 from marin.inference.serve_cli import main as serve_main
 from marin.inference.vllm_backend import VllmBackend, vllm_launcher
+from marin.inference.vllm_release import (
+    vllm_gpu_wheel_for_architecture,
+    vllm_gpu_wheel_provenance,
+)
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
@@ -176,35 +184,97 @@ def test_checkout_free_setup_script_pins_marin_core_with_extras():
     assert "vllm" not in script
 
 
-def test_isolated_cuda_vllm_upstream_disables_flashinfer_sampler():
-    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
-    env = launcher.env()
-    assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
-    assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
-    assert launcher.command()[:5] == [
-        "uvx",
-        "--from",
-        f"vllm[runai]=={DEFAULT_CUDA_VLLM_VERSION}",
-        "--with",
-        "runai-model-streamer[s3]==0.16.1",
-    ]
-
-
-def test_isolated_cuda_vllm_marin_fork_command_and_env():
+@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+def test_isolated_cuda_vllm_marin_fork_uses_verified_wheel(monkeypatch, machine):
+    # uvx is the external install boundary. The direct wheel, digest-bearing URL, CUDA ABI,
+    # entrypoint, and provenance payload are its immutable contract; entrypoint behavior is
+    # exercised separately in test_vllm_wheel_entrypoint.py.
+    monkeypatch.setattr("platform.machine", lambda: machine)
     launcher = IsolatedCudaVllm(source=VllmType.MARIN_FORK)
     cmd = launcher.command()
-    assert cmd[:5] == [
-        "uvx",
-        "--from",
-        VLLM_FORK_REQUIREMENT,
-        "--with",
-        "runai-model-streamer[s3]==0.16.1",
-    ]
-    assert "--torch-backend" in cmd and cmd[cmd.index("--torch-backend") + 1] == "cu130"
+    requirement = cmd[cmd.index("--from") + 1]
+    wheel = vllm_gpu_wheel_for_architecture(VLLM_GPU_RELEASE, machine)
+    distribution, separator, direct_url = requirement.partition(" @ ")
+    parsed_url = urlsplit(direct_url)
+    assert distribution == "vllm"
+    assert separator
+    assert urlunsplit(parsed_url._replace(fragment="")) == wheel.url
+    assert parse_qs(parsed_url.fragment) == {"sha256": [wheel.sha256]}
+    assert cmd[cmd.index("--torch-backend") + 1] == VLLM_GPU_RELEASE.torch_backend
+    bootstrap_index = cmd.index("-c")
+    wrapped_command = cmd[bootstrap_index + 2 :]
+    assert wrapped_command[0] == "python"
+    assert wrapped_command[1] == "-c"
+    assert Path(wrapped_command[3]).name == "vllm_wheel_entrypoint.py"
+    expected_provenance = json.loads(json.dumps(dataclasses.asdict(vllm_gpu_wheel_provenance(VLLM_GPU_RELEASE, wheel))))
+    assert json.loads(wrapped_command[4]) == expected_provenance
     env = launcher.env()
-    assert env["VLLM_USE_PRECOMPILED"] == "1"
-    assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert "VLLM_USE_PRECOMPILED" not in env
+    assert "VLLM_USE_FLASHINFER_SAMPLER" not in env
     assert "addressing_style = virtual" in Path(env["AWS_CONFIG_FILE"]).read_text()
+    assert requirement in launcher.cache_identity()
+
+
+def test_isolated_cuda_vllm_marin_fork_rejects_unpublished_architecture(monkeypatch):
+    monkeypatch.setattr("platform.machine", lambda: "ppc64le")
+
+    with pytest.raises(ValueError):
+        IsolatedCudaVllm(source=VllmType.MARIN_FORK).command()
+
+
+def test_isolated_cuda_vllm_bootstrap_exposes_wheel_nvcc(tmp_path):
+    site_packages = tmp_path / "site-packages"
+    nvcc = site_packages / "nvidia" / "cu13" / "bin" / "nvcc"
+    nvcc.parent.mkdir(parents=True)
+    nvcc.write_text("#!/bin/sh\n")
+    nvcc.chmod(0o755)
+    cuda_lib = nvcc.parent.parent / "lib"
+    cuda_lib.mkdir()
+    cudart = cuda_lib / "libcudart.so.13"
+    cudart.touch()
+    dist_info = site_packages / "nvidia_cuda_nvcc-13.0.88.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.4\nName: nvidia-cuda-nvcc\nVersion: 13.0.88\n")
+    (dist_info / "RECORD").write_text("nvidia/cu13/bin/nvcc,,\n")
+
+    tool_bin = tmp_path / "tool-bin"
+    tool_bin.mkdir()
+    capture = tmp_path / "capture.json"
+    vllm = tool_bin / "vllm"
+    vllm.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['CAPTURE']).write_text(json.dumps({"
+        "'args': sys.argv[1:], 'cuda_home': os.environ['CUDA_HOME'], 'path': os.environ['PATH']}))\n"
+    )
+    vllm.chmod(0o755)
+
+    launcher = IsolatedCudaVllm(source=VllmType.UPSTREAM, version=DEFAULT_CUDA_VLLM_VERSION)
+    command = launcher.command()
+    requirements = [command[index + 1] for index, value in enumerate(command) if value == "--with"]
+    assert set(requirements) >= {
+        "nvidia-cuda-nvcc==13.0.88",
+        "nvidia-cuda-crt==13.0.88",
+        "nvidia-nvvm==13.0.88",
+    }
+    assert "addressing_style = virtual" in Path(launcher.env()["AWS_CONFIG_FILE"]).read_text()
+    bootstrap_index = command.index("-c")
+    bootstrap = command[bootstrap_index + 1]
+    wrapped_command = command[bootstrap_index + 2 :]
+    environment = {
+        **os.environ,
+        "CAPTURE": str(capture),
+        "PATH": os.pathsep.join((str(tool_bin), os.environ["PATH"])),
+        "PYTHONPATH": str(site_packages),
+    }
+    subprocess.run([sys.executable, "-c", bootstrap, *wrapped_command, "serve", "model"], env=environment, check=True)
+
+    observed = json.loads(capture.read_text())
+    assert observed["args"] == ["serve", "model"]
+    assert observed["cuda_home"] == str(nvcc.parent.parent.resolve())
+    assert observed["path"].split(os.pathsep)[0] == str(nvcc.parent.resolve())
+    assert (nvcc.parent.parent / "lib64").resolve() == cuda_lib.resolve()
+    assert (cuda_lib / "libcudart.so").resolve() == cudart.resolve()
 
 
 def test_isolated_cuda_vllm_upstream_requires_version():

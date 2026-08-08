@@ -16,13 +16,15 @@ import time
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
-from rigging.filesystem import marin_prefix
+from rigging.filesystem import marin_prefix, prefix_join
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.actor.resolver import Resolver
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import JobInfo, get_job_info
 from iris.cluster.platforms.types import find_free_port
+from iris.cluster.runtime.env import SCRATCH_CACHE_PATH
+from iris.env_resources import TaskResources
 from iris.hooks.multigpu import (
     IRIS_MULTIGPU_LOCAL_DEVICE_IDS_ENV,
     IRIS_MULTIGPU_PROCESS_COUNT_ENV,
@@ -32,6 +34,8 @@ from iris.hooks.multigpu import (
 logger = logging.getLogger(__name__)
 
 _COMPILATION_CACHE_SUBDIR = "compilation-cache"
+_XLA_AUTOTUNE_CACHE_SUBDIR = "xla/per-fusion-autotune"
+_XLA_AUTOTUNE_CACHE_DIR_FLAG = "--xla_gpu_per_fusion_autotune_cache_dir"
 # JAX's RegisterTask barrier defaults to 300s. On a large gang (e.g. v5p-64 = 8 hosts) a
 # preemption-driven cold restart can have a random subset of hosts still doing uv-sync/import/
 # GCS-read setup past 300s, so the already-registered hosts hit DEADLINE_EXCEEDED and abort the
@@ -94,35 +98,67 @@ def _log_jax_bootstrap_inputs(job_info, *, port: int | None, endpoint_name: str)
 
 
 def configure_jax_compilation_cache() -> None:
-    """Default the JAX compilation cache to a subdir of the active Marin prefix.
+    """Place JAX's compilation cache on object storage and XLA's autotune cache on the node.
 
-    Without a cache dir, every process re-runs XLA compilation and kernel
-    autotune sweeps at startup. An explicit setting (``JAX_COMPILATION_CACHE_DIR``
-    or ``jax.config``) wins; otherwise the cache lands under the cluster's
-    region-local storage prefix, which may be a ``gs://``/``s3://`` URL.
+    The JAX cache defaults to a subdirectory of the active Marin prefix, unless
+    ``JAX_COMPILATION_CACHE_DIR`` or ``jax.config`` already names one. It has to
+    be somewhere every process can read: JAX writes it only from process 0, so a
+    node-local copy would leave every other node cold.
 
-    JAX's own compilation cache handles a remote URL fine (it reads/writes via
-    fsspec), but it also derives XLA's C++ per-fusion autotune cache path from
-    the same directory and hands it to XLA's `tsl::Env`, which has no
-    ``gs://``/``s3://`` support and crashes the first compile with
-    "UNIMPLEMENTED: File system scheme ... not implemented". Disable that
-    derivation when the cache dir is remote; the autotune cache is ephemeral
-    (skipped entirely on a compilation-cache hit), so losing it costs at most
-    a few minutes on a cold compile.
+    A remote JAX cache additionally disables JAX's XLA sub-cache derivation,
+    which would otherwise hand XLA's C++ filesystem layer a URL it cannot open,
+    and redirects XLA's per-fusion autotune cache to node-local disk instead.
     """
     import jax  # noqa: PLC0415  # optional dep: jax (iris does not depend on jax)
 
-    if os.environ.get("JAX_COMPILATION_CACHE_DIR") or jax.config.jax_compilation_cache_dir:
-        return
-
-    cache_dir = f"{marin_prefix().rstrip('/')}/{_COMPILATION_CACHE_SUBDIR}"
-    os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
-    jax.config.update("jax_compilation_cache_dir", cache_dir)
+    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR") or jax.config.jax_compilation_cache_dir
+    if not cache_dir:
+        cache_dir = prefix_join(marin_prefix(), _COMPILATION_CACHE_SUBDIR)
+        os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
+        jax.config.update("jax_compilation_cache_dir", cache_dir)
     logger.info("JAX compilation cache: %s", cache_dir)
 
-    if "://" in cache_dir and "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
+    if "://" not in cache_dir:
+        return
+
+    if "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES" not in os.environ:
         jax.config.update("jax_persistent_cache_enable_xla_caches", "none")
-        logger.info("XLA autotune sub-cache disabled (compilation cache is remote: %s)", cache_dir)
+    _enable_node_local_xla_autotune_cache()
+
+
+def _enable_node_local_xla_autotune_cache() -> None:
+    """Point XLA's per-fusion autotune cache at the node-local Iris cache mount.
+
+    Goes through ``XLA_FLAGS`` because JAX derives this path from the compilation
+    cache dir, which is remote. The flag is on ``xla_flags_to_exclude_from_cache_key``,
+    so it stays out of the compilation cache key.
+
+    GPU only: a TPU or CPU jaxlib aborts on an unknown ``--xla_gpu`` flag.
+
+    The mount arrives with the worker, and VM-cluster workers restart on their own
+    daily schedule. For up to a day after a rollout a task can land on a worker
+    whose mount is absent or unwritable; skip the cache there.
+    """
+    if TaskResources.from_environment().gpu_count == 0:
+        return
+
+    if not os.path.isdir(SCRATCH_CACHE_PATH):
+        logger.info("XLA autotune cache disabled: %s is not mounted", SCRATCH_CACHE_PATH)
+        return
+
+    xla_flags = os.environ.get("XLA_FLAGS", "")
+    if any(flag.partition("=")[0] == _XLA_AUTOTUNE_CACHE_DIR_FLAG for flag in xla_flags.split()):
+        return
+
+    autotune_dir = f"{SCRATCH_CACHE_PATH}/{_XLA_AUTOTUNE_CACHE_SUBDIR}"
+    try:
+        os.makedirs(autotune_dir, exist_ok=True)
+    except OSError as exc:
+        logger.info("XLA autotune cache disabled: cannot create %s: %s", autotune_dir, exc)
+        return
+
+    os.environ["XLA_FLAGS"] = f"{xla_flags} {_XLA_AUTOTUNE_CACHE_DIR_FLAG}={autotune_dir}".strip()
+    logger.info("XLA per-fusion autotune cache: %s", autotune_dir)
 
 
 # An endpoint name that has not been registered yet surfaces differently across

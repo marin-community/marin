@@ -802,6 +802,7 @@ def create_app(
             offset=_parse_int(params.get("offset"), default=0, low=0, high=10_000_000),
             limit=_parse_int(params.get("limit"), default=DEFAULT_SAMPLE_LIMIT, low=1, high=MAX_SAMPLE_LIMIT),
             correct=params.get("correct") or "all",
+            extraction_filter=params.get("extraction_filter") or None,
         )
         return JSONResponse(payload.model_dump(mode="json"))
 

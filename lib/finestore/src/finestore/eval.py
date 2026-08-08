@@ -7,6 +7,7 @@ Every eval mechanism normalizes its native per-question output into :class:`Eval
 time, and every consumer (the dashboard's sample browser, ad-hoc parquet analysis) reads that
 contract back through this module -- the producer and consumer share one schema definition, so a
 format change is a change to this file and its round-trip test, never a guessing game in a viewer.
+The conversion from a mechanism's native output lives with that mechanism, not here.
 
 A sample is either ``multiple_choice`` (the model scored a fixed choice list by loglikelihood;
 ``choices`` carries the per-choice scores with the model's pick and the gold index resolved at
@@ -27,6 +28,7 @@ so it rides in every row for future evolution. The legacy per-(sub)task
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
 from collections.abc import Iterable
@@ -35,7 +37,7 @@ from enum import StrEnum
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import BaseModel
-from rigging.filesystem import StoragePath, prefix_join
+from rigging.filesystem import prefix_join
 
 from finestore.schema import arrow_schema
 from finestore.store import DataStore
@@ -44,7 +46,10 @@ logger = logging.getLogger(__name__)
 
 # 3: metrics moved from an inferred struct to a pinned ``map<string,double>`` and the unused
 # ``exchange_uri`` was dropped (finestore now pins both eval tables' schemas from these models).
-SCHEMA_VERSION = 3
+# 4: the lm-eval extraction filter joined the samples primary key. A task that scores one document
+# under several filters (gsm8k under strict-match and flexible-extract) emits one sample per filter,
+# and each is a distinct row rather than one overwriting the other.
+SCHEMA_VERSION = 4
 
 SAMPLES_PREFIX = "samples_"
 SAMPLES_SUFFIX = ".parquet"
@@ -136,6 +141,24 @@ class EvalSample(BaseModel):
     doc: str = "{}"
 
 
+def primary_filter(filters: Iterable[str]) -> str | None:
+    """Pick the extraction filter a reader should show by default, or ``None`` if there are none.
+
+    A task that scores each document under several filters stores one sample per filter, so a viewer
+    showing every row would list each question more than once. ``FILTER_PRIORITY`` decides which one
+    leads, and the alphabetically-first name is the fallback — the same ranking
+    :func:`primary_metric` applies to the aggregate keys, so the samples a reader sees by default and
+    the headline score it compares them against come from the same filter.
+    """
+    names = {name for name in filters if name}
+    if not names:
+        return None
+    for preferred in FILTER_PRIORITY:
+        if preferred in names:
+            return preferred
+    return min(names)
+
+
 def base_metric(name: str) -> str:
     """A metric key without lm-eval's ``,<filter>`` suffix (``exact_match,none`` -> ``exact_match``)."""
     return name.split(",", 1)[0]
@@ -166,187 +189,6 @@ def primary_metric(metrics: dict[str, float]) -> tuple[str, float] | None:
 
 
 # --------------------------------------------------------------------------------------------------
-# lm-eval adapter: normalize one --log_samples row into the contract.
-# --------------------------------------------------------------------------------------------------
-
-# lm-eval per-sample fields that are structural rather than metric values.
-_LM_EVAL_STRUCTURAL_KEYS = frozenset(
-    {"doc", "doc_id", "target", "arguments", "resps", "filtered_resps", "doc_hash", "prompt_hash", "target_hash"}
-)
-
-
-def _loglikelihood_pair(entry) -> tuple[float, bool] | None:
-    """Unwrap a response entry to ``(loglikelihood, is_greedy)``, tolerating a singleton wrapper."""
-    if isinstance(entry, list) and len(entry) == 1:
-        entry = entry[0]
-    if (
-        isinstance(entry, list)
-        and len(entry) == 2
-        and isinstance(entry[0], (int, float))
-        and not isinstance(entry[0], bool)
-        and isinstance(entry[1], bool)
-    ):
-        return float(entry[0]), entry[1]
-    return None
-
-
-def _is_multiple_choice(arguments, responses) -> bool:
-    if not isinstance(arguments, list) or len(arguments) <= 1:
-        return False
-    if not isinstance(responses, list) or len(responses) != len(arguments):
-        return False
-    return all(_loglikelihood_pair(entry) is not None for entry in responses)
-
-
-def _choice_labels(doc, count: int) -> list[str]:
-    # arc-style docs carry {"choices": {"label": [...], "text": [...]}}; other tasks (mmlu,
-    # hellaswag) store choices as a plain list, which gets the A/B/C default.
-    choices = doc.get("choices") if isinstance(doc, dict) else None
-    labels = choices.get("label") if isinstance(choices, dict) else None
-    if isinstance(labels, list) and len(labels) == count and all(isinstance(label, str) for label in labels):
-        return labels
-    return [chr(ord("A") + i) for i in range(count)]
-
-
-def _resolve_target_choice(target, choices: list[Choice]) -> int | None:
-    if isinstance(target, bool):
-        return None
-    if isinstance(target, int):
-        return target if 0 <= target < len(choices) else None
-    if isinstance(target, str):
-        trimmed = target.strip()
-        for i, choice in enumerate(choices):
-            if choice.label == trimmed or choice.text.strip() == trimmed:
-                return i
-        if trimmed.isdigit():
-            index = int(trimmed)
-            return index if 0 <= index < len(choices) else None
-    return None
-
-
-def _parse_chat_messages(text: str) -> list[Message] | None:
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(parsed, list) or not parsed:
-        return None
-    messages = []
-    for item in parsed:
-        if (
-            not isinstance(item, dict)
-            or not isinstance(item.get("role"), str)
-            or not isinstance(item.get("content"), str)
-        ):
-            return None
-        messages.append(Message(role=item["role"], content=item["content"]))
-    return messages
-
-
-def _sample_metrics(raw: dict) -> dict[str, float]:
-    metrics: dict[str, float] = {}
-    for key, value in raw.items():
-        if key in _LM_EVAL_STRUCTURAL_KEYS or isinstance(value, bool):
-            continue
-        if isinstance(value, (int, float)):
-            metrics[key] = float(value)
-    return metrics
-
-
-def _correct(metrics: dict[str, float]) -> bool | None:
-    picked = primary_metric(metrics)
-    if picked is None:
-        return None
-    return picked[1] >= 1.0
-
-
-def _lm_eval_grading(metrics: dict[str, float]) -> Grading | None:
-    """The explicit grading for an lm-eval sample: its headline metric, filter, score, and pass flag."""
-    picked = primary_metric(metrics)
-    if picked is None:
-        return None
-    name, value = picked
-    metric_filter = name.split(",", 1)[1] if "," in name else None
-    return Grading(
-        method=f"lm-eval:{base_metric(name)}",
-        metric=name,
-        filter=metric_filter,
-        score=value,
-        passed=value >= 1.0,
-    )
-
-
-def sample_from_lm_eval(task: str, raw: dict) -> EvalSample:
-    """Normalize one lm-eval ``--log_samples`` row into an :class:`EvalSample`.
-
-    Multiple-choice rows carry one ``arguments`` entry per choice (``[context, continuation]``,
-    context identical across entries) and per-choice ``[loglikelihood, is_greedy]`` responses; the
-    model's pick is the loglikelihood argmax and the gold index is resolved from ``target`` (an
-    index, a label, or the choice text). Generation rows carry a single prompt -- raw text, or a
-    JSON-encoded chat message list when the chat API served the request.
-    """
-    arguments = raw.get("arguments")
-    responses = raw.get("resps")
-    doc = raw.get("doc")
-    target = raw.get("target")
-    metrics = _sample_metrics(raw)
-    common = {
-        "task": task,
-        "doc_id": str(raw.get("doc_id")),
-        "metrics": metrics,
-        "correct": _correct(metrics),
-        "grading": _lm_eval_grading(metrics),
-        "target_text": target if isinstance(target, str) else json.dumps(target, ensure_ascii=False),
-        "doc": doc if isinstance(doc, str) else json.dumps(doc, ensure_ascii=False),
-    }
-
-    if isinstance(arguments, list) and isinstance(responses, list) and _is_multiple_choice(arguments, responses):
-        labels = _choice_labels(doc, len(arguments))
-        choices = []
-        for i, entry in enumerate(arguments):
-            text = entry[1] if isinstance(entry, list) and len(entry) > 1 and isinstance(entry[1], str) else ""
-            pair = _loglikelihood_pair(responses[i])
-            loglikelihood, is_greedy = pair if pair is not None else (None, None)
-            choices.append(Choice(label=labels[i], text=text, loglikelihood=loglikelihood, is_greedy=is_greedy))
-        scored = [(choice.loglikelihood, i) for i, choice in enumerate(choices) if choice.loglikelihood is not None]
-        context = arguments[0][0] if isinstance(arguments[0], list) and isinstance(arguments[0][0], str) else ""
-        return EvalSample(
-            kind=SampleKind.MULTIPLE_CHOICE,
-            prompt_text=context,
-            choices=choices,
-            model_choice=max(scored)[1] if scored else None,
-            target_choice=_resolve_target_choice(target, choices),
-            **common,
-        )
-
-    prompt = ""
-    if isinstance(arguments, list) and arguments:
-        first = arguments[0]
-        candidate = first[0] if isinstance(first, list) and first else first
-        if isinstance(candidate, str):
-            prompt = candidate
-    output = ""
-    if isinstance(responses, list) and responses:
-        first = responses[0]
-        if isinstance(first, list) and first and isinstance(first[0], str):
-            output = first[0]
-        elif isinstance(first, str):
-            output = first
-    filtered = raw.get("filtered_resps")
-    if isinstance(filtered, list) and filtered:
-        filtered = filtered[0]
-    messages = _parse_chat_messages(prompt)
-    return EvalSample(
-        kind=SampleKind.GENERATION,
-        prompt_text=None if messages else prompt,
-        prompt_messages=messages,
-        output=output,
-        extracted=filtered if isinstance(filtered, str) else json.dumps(filtered, ensure_ascii=False),
-        **common,
-    )
-
-
-# --------------------------------------------------------------------------------------------------
 # Writer: the parquet schema is the pydantic model, so ``EvalSample.model_validate(row)`` on any
 # ``to_pylist`` row is the reader.
 # --------------------------------------------------------------------------------------------------
@@ -364,11 +206,6 @@ def write_sample_parquet(fs, dest: str, samples: Iterable[EvalSample]) -> None:
         pq.write_table(table, handle)
 
 
-def _task_from_filename(name: str, suffix: str) -> str:
-    # samples_<task>_<timestamp>.<suffix>; the timestamp contains no underscore.
-    return name[len(SAMPLES_PREFIX) : -len(suffix)].rsplit("_", 1)[0]
-
-
 # --------------------------------------------------------------------------------------------------
 # finestore archive adapter: an eval run's durable output is one finestore archive rooted at its
 # results directory, with a ``samples`` table (one row per evaluated question, this contract), a
@@ -380,31 +217,49 @@ def _task_from_filename(name: str, suffix: str) -> str:
 ARCHIVE_SAMPLES_TABLE = "samples"
 ARCHIVE_STEPS_TABLE = "steps"
 
-# The archive's own key on a samples row, added at write time (not an EvalSample field): a sample is
-# unique within a run by its task, its document, and (for multi-attempt Harbor runs) the trial that
-# produced it. evalchemy leaves ``trial_id`` empty: one attempt per document.
+# Blob-name prefix for preserved evaluator-native inputs. A blob under this prefix is the verbatim
+# bytes of a file the export read, keyed by its path relative to the run's results root, so a rebuild
+# can recover the same inputs from the archive alone.
+SOURCES_PREFIX = "sources"
+
+# The archive's own keys on a samples row, added at write time (not EvalSample fields): a sample is
+# unique within a run by its task, its document, the trial that produced it (for multi-attempt Harbor
+# runs), and the extraction filter that scored it (for lm-eval tasks that apply more than one).
+# evalchemy leaves ``trial_id`` empty (one attempt per document). An lm-eval row names its filter
+# even when the task applies only one ("none"), so the column holds that name; a Harbor trial, or a
+# benchmark that reports no filter at all, leaves it empty.
 TRIAL_ID_COLUMN = "trial_id"
-SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN)
+FILTER_COLUMN = "filter"
+SAMPLES_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, FILTER_COLUMN)
 STEPS_MERGE_KEY = ("task", "doc_id", TRIAL_ID_COLUMN, "step_id")
 
 
 def samples_schema() -> pa.Schema:
     """The pinned ``samples`` table schema: the :class:`EvalSample` columns plus the archive's
-    ``trial_id`` key. Pinning fixes each column's type up front, so ``metrics`` stays a
-    ``map<string,double>`` and no per-flush inference can drift a column's type across shards."""
-    return pa.schema([*arrow_schema(EvalSample), pa.field(TRIAL_ID_COLUMN, pa.string())])
+    ``trial_id`` and ``filter`` keys. Pinning fixes each column's type up front, so ``metrics`` stays
+    a ``map<string,double>`` and no per-flush inference can drift a column's type across shards."""
+    return pa.schema(
+        [
+            *arrow_schema(EvalSample),
+            pa.field(TRIAL_ID_COLUMN, pa.string()),
+            pa.field(FILTER_COLUMN, pa.string()),
+        ]
+    )
 
 
 def steps_schema() -> pa.Schema:
     """The pinned ``steps`` table schema, derived from :class:`StepRecord` (its own columns carry the
-    merge key), so token-id and logprob columns keep their list types across shards."""
+    primary key), so token-id and logprob columns keep their list types across shards."""
     return arrow_schema(StepRecord)
 
 
 def sample_to_archive_row(sample: EvalSample, *, trial_id: str = "") -> dict:
-    """One archive ``samples`` row: the sample's JSON-mode dump plus its ``trial_id`` archive key."""
+    """One archive ``samples`` row: the sample's JSON-mode dump plus its ``trial_id`` and ``filter``
+    archive keys. The filter comes from the sample's own grading, so a caller sets it by grading the
+    sample, not by passing it here."""
     row = sample.model_dump(mode="json")
-    row["trial_id"] = trial_id
+    row[TRIAL_ID_COLUMN] = trial_id
+    row[FILTER_COLUMN] = (sample.grading.filter or "") if sample.grading else ""
     return row
 
 
@@ -505,10 +360,10 @@ class EvaluationStore:
     def __init__(self, store: DataStore) -> None:
         self._store = store
         self._samples = store.table(
-            ARCHIVE_SAMPLES_TABLE, schema=samples_schema(), merge_key=SAMPLES_MERGE_KEY, schema_version=SCHEMA_VERSION
+            ARCHIVE_SAMPLES_TABLE, schema=samples_schema(), primary_key=SAMPLES_MERGE_KEY, schema_version=SCHEMA_VERSION
         )
         self._steps = store.table(
-            ARCHIVE_STEPS_TABLE, schema=steps_schema(), merge_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION
+            ARCHIVE_STEPS_TABLE, schema=steps_schema(), primary_key=STEPS_MERGE_KEY, schema_version=SCHEMA_VERSION
         )
 
     @classmethod
@@ -519,6 +374,18 @@ class EvaluationStore:
     def add_sample(self, sample: EvalSample, *, trial_id: str = "") -> None:
         """Append one evaluated question to the ``samples`` table."""
         self._samples.append(sample_to_archive_row(sample, trial_id=trial_id))
+
+    def add_source_artifact(self, name: str, raw: bytes, *, content_type: str) -> str:
+        """Preserve one evaluator-native source file inside the archive; return its blob URI.
+
+        ``name`` is the file's path relative to the run's results root, so a rebuild can re-derive
+        the tables from the archive alone, without the surrounding results tree still being intact.
+        """
+        return self._store.write(
+            prefix_join(SOURCES_PREFIX, name),
+            {"content_type": content_type, "sha256": hashlib.sha256(raw).hexdigest()},
+            raw,
+        )
 
     def add_trajectory(self, raw: bytes, *, task: str, doc_id: str, trial_id: str) -> StoredTrajectory:
         """Store a raw trajectory as a blob and flatten its steps into the ``steps`` table.
@@ -540,6 +407,10 @@ class EvaluationStore:
             self._steps.extend(dataclasses.asdict(step) for step in steps)
         return StoredTrajectory(uri=uri, steps=steps)
 
+    def flush(self) -> None:
+        """Write buffered rows to shards now, bounding how much a large payload holds in memory."""
+        self._store.flush()
+
     def seal(self) -> None:
         """Flush every table and mark the run complete."""
         self._store.seal()
@@ -553,27 +424,3 @@ class EvaluationStore:
 
     def __exit__(self, *exc) -> None:
         self.close()
-
-
-def export_lm_eval_samples(out_path: str, *, writer_id: str = "evalchemy") -> int:
-    """Normalize every lm-eval ``samples_*.jsonl`` under ``out_path`` into the run's finestore archive.
-
-    Returns the number of samples written. The source jsonl is kept as the mechanism's native
-    artifact. Re-running is idempotent: samples dedupe on ``(task, doc_id, trial_id)``.
-    """
-    store = EvaluationStore.open(out_path, writer_id=writer_id)
-    count = 0
-    try:
-        for path in StoragePath(prefix_join(out_path, f"**/{SAMPLES_PREFIX}*.jsonl")).glob():
-            rows = [json.loads(line) for line in path.read_text().split("\n") if line.strip()]
-            if not rows:
-                logger.warning("samples file %s is empty; skipping archive export", path)
-                continue
-            task = _task_from_filename(path.name, ".jsonl")
-            for raw in rows:
-                store.add_sample(sample_from_lm_eval(task, raw))
-                count += 1
-        store.seal()
-    finally:
-        store.close()
-    return count

@@ -205,16 +205,21 @@ def test_warning_alerts_remain_visible_without_notifications():
     ]
 
 
-def test_critical_contact_point_reaches_email_slack_and_loom():
+def test_every_slack_alert_goes_through_the_bridge_and_none_through_grafana():
+    """The bridge posts every Slack alert, not Grafana. For critical alerts that is
+    load-bearing — an incoming webhook never reveals the message ts that Loom needs
+    to route the thread — and routing the fallback the same way keeps one channel,
+    one credential, and one rendering."""
     points = {point["name"]: point for point in _load(ALERTING / "contact-points.yaml")["contactPoints"]}
-    critical_types = {receiver["type"] for receiver in points["ops-critical"]["receivers"]}
-    assert critical_types == {"email", "slack", "webhook"}
-    for point in points.values():
-        for receiver in point["receivers"]:
-            if receiver["type"] == "slack":
-                assert receiver["settings"]["url"] == "$SLACK_ALERTS_WEBHOOK"
+    assert {receiver["type"] for receiver in points["ops-critical"]["receivers"]} == {"email", "webhook"}
+    assert {receiver["type"] for receiver in points["ops-slack"]["receivers"]} == {"webhook"}
+    slack_receivers = [r for point in points.values() for r in point["receivers"] if r["type"] == "slack"]
+    assert slack_receivers == [], "a Slack receiver would post a second message Loom cannot route"
+
     (loom,) = [receiver for receiver in points["ops-critical"]["receivers"] if receiver["type"] == "webhook"]
     assert loom["settings"] == {"url": "http://127.0.0.1:8081/alerts/loom", "httpMethod": "POST"}
+    (fallback,) = points["ops-slack"]["receivers"]
+    assert fallback["settings"] == {"url": "http://127.0.0.1:8081/alerts/slack", "httpMethod": "POST"}
 
 
 def test_finelog_health_alert_pages_critical_after_five_minutes():
