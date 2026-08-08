@@ -136,6 +136,21 @@ already-running server; it does not start one. `scripts/demo.py --keep` serves a
 seeded store on the default port. Point it at a store with real segments via
 `FINELOG_BASE_URL` and `FINELOG_TEST_NAMESPACE`.
 
+## Ingest health
+
+`/health` returns 200 whenever the server is listening. It is the Kubernetes
+liveness, readiness, and startup probe, so it cannot fail on a condition that
+survives a restart; the verdict is in the body: `ok`, or `degraded:` followed by
+each namespace this process registers for itself that is not registered.
+`server/ingest_health.rs` holds that state. `/api/server`'s `ingest` block
+carries the per-namespace error, first-failure time, and attempt count, and the
+dashboard's System page renders it.
+
+The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
+(which is what makes `safe_deploy` auto-rollback fire), and `k8s_up` /
+`k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
+`telemetry_v1` fails its own deploy.
+
 ## Secondary indexes
 
 A segment with any configured method gets one `.fidx` bundle. The bundle is
@@ -179,6 +194,20 @@ only when both the predicate values and every referenced query column are
 covered. Covered segments use the projection while uncovered segments retain
 source Parquet. The initial `training-status` projection covers three metric
 names and seven columns.
+
+Redefining a projection is not a conflict. `merge_schemas` supersedes the
+registered definition with the requested one, unless the registered one already
+covers it: a superset keeps its place, so an older binary re-registering a
+narrower definition against a newer catalog does not churn a namespace's derived
+state mid-rollout. Segments written under the superseded definition stay
+queryable untouched, because each `.fidx` `CoveringProjection` section describes
+its own coverage; the backfill rebuilds them at its usual few per tick and
+unlinks the superseded Parquet files. Index hints follow the same rule.
+
+A column *type* mismatch is still a hard `SchemaConflict`: the registered layout
+cannot hold the requested rows, so it fails at registration. A new column
+declared non-nullable is adopted as nullable, since every already-stored row is
+missing it.
 
 `value_counts` records a complete low-cardinality histogram. A DataFusion
 optimizer rule replaces a qualifying unfiltered one-column `GROUP BY` with

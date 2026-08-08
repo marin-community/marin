@@ -44,10 +44,19 @@ export interface FormatInfo {
   sidecarSpanRows: number
 }
 
+export interface NamespaceRegistration {
+  namespace: string
+  state: 'pending' | 'registered' | 'failed'
+  error?: string
+  sinceUnix?: number
+  attempts?: number
+}
+
 export interface ServerInfo {
   build: BuildInfo
   process: ProcessInfo
   store: StoreInfo
+  ingest: NamespaceRegistration[]
   metadataCache: MetadataCacheInfo
   indexCache: IndexCacheInfo
   format: FormatInfo
