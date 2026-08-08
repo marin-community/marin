@@ -122,6 +122,7 @@ def build_hero_run(
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
+    checkpoint_interval: timedelta = HERO_CHECKPOINT_INTERVAL,
     watch_interval: int = HERO_WATCH_INTERVAL,
     watch_mode: WatchMode = WatchMode.INLINE,
     profile_steps: int = 0,
@@ -144,6 +145,8 @@ def build_hero_run(
         raise ValueError(f"dp_racks must be positive, got {dp_racks}")
     if num_steps <= 0:
         raise ValueError(f"num_steps must be positive, got {num_steps}")
+    if checkpoint_interval <= timedelta(0):
+        raise ValueError(f"checkpoint_interval must be positive, got {checkpoint_interval}")
     if flavor not in FLAVORS:
         raise ValueError(f"flavor must be one of {sorted(FLAVORS)}, got {flavor!r}")
     sharding = FLAVORS[flavor]
@@ -272,7 +275,7 @@ def build_hero_run(
             checkpointer=CheckpointerConfig(
                 base_path=prefix_join(ctx.output_path, "checkpoints"),
                 temporary_base_path=None,
-                save_interval=HERO_CHECKPOINT_INTERVAL,
+                save_interval=checkpoint_interval,
                 keep=None,
                 append_run_id_to_base_path=False,
                 delete_old_temp_checkpoints=True,
@@ -380,6 +383,13 @@ def build_hero_run(
     ),
 )
 @click.option(
+    "--checkpoint-minutes",
+    type=click.FloatRange(min=0, min_open=True),
+    default=HERO_CHECKPOINT_INTERVAL.total_seconds() / 60,
+    show_default=True,
+    help="Wall-clock minutes between resumable checkpoints when checkpoint saving is enabled.",
+)
+@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -435,6 +445,7 @@ def main(
     latent_dim: int | None,
     flavor: str,
     save_checkpoints: bool,
+    checkpoint_minutes: float,
     eval_every: int,
     watch_interval: int,
     watch_mode: str,
@@ -455,6 +466,7 @@ def main(
         latent_dim=latent_dim,
         flavor=flavor,
         save_checkpoints=save_checkpoints,
+        checkpoint_interval=timedelta(minutes=checkpoint_minutes),
         eval_every=eval_every,
         watch_interval=watch_interval,
         watch_mode=WatchMode(watch_mode),
