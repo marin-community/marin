@@ -17,9 +17,9 @@ Use this skill to refresh **one** fork: advance its pin to a newer base, validat
 with the fork's declared e2e, and open the Marin PR — or, if a real external
 blocker remains, file one "can't migrate" issue.
 
-Run one fork at a time. A planned weekly coordinator (#8048 phase 2) will invoke
-this skill once per fork in `depends_on` order; today a human runs it for a single
-fork.
+Run one fork at a time. A weekly coordinator that invokes this skill once per fork
+in `depends_on` order is planned but not yet built; today a human runs it for a
+single fork.
 
 Use the same algorithm in CI and local runs. In local/manual mode, ask before
 external mutations: pushing fork branches, opening the Marin PR, or filing a
@@ -86,7 +86,9 @@ same date-stamped refresh.
 - Scratch dir: `/tmp/marin-fork-refresh/<run-id>` (run id:
   `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}` in Actions, else a UTC timestamp plus
   a short label).
-- Clone each fork there and add its `upstream` remote:
+- Clone each fork there and add its `upstream` remote. The fork URL is the
+  `repository` in the pin descriptor named by `pin` (`vllm/tpu-forks.toml`);
+  `<upstream>` is this section's `upstream`.
 
 ```sh
 git clone <repository> <fork>
@@ -194,10 +196,12 @@ uv run python -m experiments.evaluation.cli launch --model qwen3-0.6b --limit 8 
   cheap pre-check.
 
 - **`experiments/post_training/iceball_micro.py`** (`MarinSkyRL`) — the micro
-  post-training e2e; run the terminal stage and confirm the workflow completes:
+  post-training e2e. `--version` is required and `--run` builds the handles
+  (without it the command only prints the plan); confirm the terminal stage
+  completes:
 
 ```sh
-uv run python -m experiments.post_training.iceball_micro --stage evaluation
+uv run python -m experiments.post_training.iceball_micro --stage evaluation --version dev --run
 ```
 
 When an e2e fails, rerun the same workload against Marin's current pins on the old

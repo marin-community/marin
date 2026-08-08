@@ -4,9 +4,9 @@
 # each fork toward upstream; it does not hold the pins themselves. The actual SHA/version lives
 # in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml descriptor).
 #
-# The `refresh-fork` skill reads a section to drive one fork's refresh. A planned weekly coordinator
-# (#8048 phase 2) will walk all sections in `depends_on` order. Keep every section consistent with its
-# pin source and EXTERNAL_PROJECTS in config/update-external.py —
+# The `refresh-fork` skill reads a section to drive one fork's refresh. A weekly coordinator that
+# walks all sections in `depends_on` order is planned but not yet built. Keep every section consistent
+# with its pin source and EXTERNAL_PROJECTS in config/update-external.py —
 # tests/inference/test_migration_descriptors.py enforces this.
 #
 # Two kinds, by how Marin consumes the fork:
@@ -19,8 +19,8 @@
 #   overlay  Marin maintains local patches it replays onto a chosen upstream base and pins by SHA in a
 #            vllm/*.toml descriptor. A refresh selects a new base, replays the overlay, and re-pins.
 #
+# A section's name is the fork; its pin source holds the fork's repository URL and pinned revision.
 # Fields:
-#   repository       Marin fork Marin pins (must match the pin source).
 #   upstream         Repo the fork tracks. Omitted for marin-native repos with no upstream.
 #   kind             "track" or "overlay" (see above).
 #   pin              Where the pinned revision lives: "isolated_project"
@@ -35,7 +35,6 @@
 #   nuances          Migration constraints a human must respect (torch pins, known-good ceilings, etc.).
 
 [tpu-inference]
-repository = "https://github.com/marin-community/tpu-inference.git"
 upstream = "https://github.com/vllm-project/tpu-inference.git"
 kind = "overlay"
 pin = "descriptor:vllm/tpu-forks.toml#tpu-inference"
@@ -47,7 +46,6 @@ nuances = [
 ]
 
 [vllm]
-repository = "https://github.com/marin-community/vllm.git"
 upstream = "https://github.com/vllm-project/vllm.git"
 kind = "overlay"
 pin = "descriptor:vllm/tpu-forks.toml#vllm"
@@ -61,7 +59,6 @@ nuances = [
 ]
 
 [evalchemy]
-repository = "https://github.com/marin-community/evalchemy.git"
 upstream = "https://github.com/mlfoundations/evalchemy.git"
 kind = "track"
 pin = "isolated_project"
@@ -70,7 +67,6 @@ e2e = "experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml"
 blocker_assignee = "yonromai"
 
 [harbor]
-repository = "https://github.com/marin-community/harbor.git"
 upstream = "https://github.com/harbor-framework/harbor.git"
 kind = "track"
 pin = "isolated_project"
@@ -82,7 +78,6 @@ nuances = [
 ]
 
 [MarinSkyRL]
-repository = "https://github.com/marin-community/MarinSkyRL.git"
 kind = "track"
 pin = "isolated_project"
 base_select = "fork_main"

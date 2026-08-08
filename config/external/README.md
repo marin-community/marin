@@ -70,8 +70,9 @@ The external configurations intentionally model only what Marin needs:
 
 `migration.toml` describes how to migrate each fork toward upstream — the base to
 select, the Marin e2e that validates it, and the constraints to respect. It holds
-no pins; the `refresh-fork` skill reads a section to refresh one fork, and the
-weekly coordinator walks the sections in dependency order.
+no pins; the `refresh-fork` skill reads a section to refresh one fork. A weekly
+coordinator that walks the sections in dependency order is planned but not yet
+built.
 
 To add another external tool, create an isolated project and register its
 directory, distribution, and generated constant in `config/update-external.py`,
