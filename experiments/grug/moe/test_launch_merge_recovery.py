@@ -9,7 +9,12 @@ from experiments.grug.moe.expert_merge import AssignmentMode
 from experiments.grug.moe.expert_prefit import PrefitObjective
 from experiments.grug.moe.launch_merge_recovery import MergeBranchName, build_merge_recovery_pipeline
 from experiments.grug.moe.launch_tied_experts import TiedExpertPhase, tied_expert_runs
-from experiments.grug.moe.merge_recovery import RecoveryCheckpointSelection, RecoveryInitialization, RecoveryStage
+from experiments.grug.moe.merge_recovery import (
+    RecoveryCheckpointSelection,
+    RecoveryInitialization,
+    RecoveryStage,
+    RecoveryTrainableScope,
+)
 
 _PREFIX = "gs://marin-us-central1/test"
 
@@ -27,7 +32,12 @@ def _pipeline(*, teacher_commit: str | None = None):
 def test_merge_pipeline_reuses_calibration_and_matching_across_all_ablation_branches() -> None:
     pipeline = _pipeline(teacher_commit="teacher-sha")
 
-    assert {branch.name for branch in pipeline.branches} == set(MergeBranchName) - {MergeBranchName.NATIVE_JOINT}
+    assert {branch.name for branch in pipeline.branches} == set(MergeBranchName) - {
+        MergeBranchName.NATIVE_JOINT,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_BANK_ONLY,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_MLP_NORMS,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_CAPACITY_ORACLE,
+    }
     assert len({branch.converted.fingerprint() for branch in pipeline.branches}) == 5
     for branch in pipeline.branches:
         assert pipeline.calibration in branch.converted.deps
@@ -57,9 +67,11 @@ def test_stage_b_initializes_from_stage_a_permanent_checkpoint(monkeypatch) -> N
     stage_b = materialized_config(branch.stage_b, _PREFIX)
 
     assert stage_a.stage is RecoveryStage.LOCAL
+    assert stage_a.trainable_scope is RecoveryTrainableScope.SHARED_BANK
     assert stage_a.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO
     assert stage_a.init_checkpoint_dir == prefix_join(branch.converted.path(_PREFIX), "checkpoints")
     assert stage_b.stage is RecoveryStage.PRESERVATION
+    assert stage_b.trainable_scope is RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS
     assert stage_b.initialization is RecoveryInitialization.LOCAL_RECOVERY
     assert stage_b.init_checkpoint_dir == prefix_join(branch.stage_a.path(_PREFIX), "checkpoints")
     assert stage_b.init_checkpoint_dir != stage_a.init_checkpoint_dir
@@ -102,6 +114,7 @@ def test_native_joint_runs_preservation_directly_from_native_conversion(monkeypa
     assert branch.converted.fingerprint() != staged_native.converted.fingerprint()
 
     assert stage_b.stage is RecoveryStage.PRESERVATION
+    assert stage_b.trainable_scope is RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS
     assert stage_b.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO
     assert stage_b.init_checkpoint_dir == prefix_join(branch.converted.path(_PREFIX), "checkpoints")
     assert stage_b.assignment_mode is AssignmentMode.NATIVE
@@ -135,6 +148,7 @@ def test_validation_aligned_local_matrix_reuses_native_conversion_and_selects_he
 
         assert branch.converted is native.converted
         assert stage_a.stage is RecoveryStage.LOCAL
+        assert stage_a.trainable_scope is RecoveryTrainableScope.SHARED_BANK
         assert stage_a.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO
         assert stage_a.init_checkpoint_dir == prefix_join(native.converted.path(_PREFIX), "checkpoints")
         assert stage_a.training_tokens == 50_000_000
@@ -146,6 +160,7 @@ def test_validation_aligned_local_matrix_reuses_native_conversion_and_selects_he
         assert stage_a.checkpoint_token_milestones == (12_500_000, 25_000_000, 37_500_000, 50_000_000)
 
         assert stage_b.stage is RecoveryStage.PRESERVATION
+        assert stage_b.trainable_scope is RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS
         assert stage_b.initialization is RecoveryInitialization.LOCAL_RECOVERY
         assert stage_b.init_checkpoint_dir == prefix_join(branch.stage_a.path(_PREFIX), "checkpoints")
         assert stage_b.cross_entropy_weight == 1.0
@@ -163,6 +178,53 @@ def test_validation_aligned_local_matrix_reuses_native_conversion_and_selects_he
         )
 
 
+def test_unlock_diagnostics_share_selected_stage_a_and_vary_one_trainable_surface(monkeypatch) -> None:
+    monkeypatch.setattr("experiments.grug.moe.launch_merge_recovery.mixture", lambda *_args, **_kwargs: None)
+    pipeline = _pipeline(teacher_commit="teacher-sha")
+    selected_stage_a = next(
+        branch.stage_a for branch in pipeline.branches if branch.name is MergeBranchName.NATIVE_LOCAL_CE_KL
+    )
+    diagnostics = {branch.name: branch for branch in pipeline.unlock_diagnostics}
+
+    assert set(diagnostics) == {
+        MergeBranchName.NATIVE_LOCAL_CE_KL_BANK_ONLY,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_MLP_NORMS,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_CAPACITY_ORACLE,
+    }
+    expected_scopes = {
+        MergeBranchName.NATIVE_LOCAL_CE_KL_BANK_ONLY: RecoveryTrainableScope.SHARED_BANK,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_MLP_NORMS: RecoveryTrainableScope.SHARED_BANK_ROUTERS_AND_MLP_NORMS,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_CAPACITY_ORACLE: RecoveryTrainableScope.AFFECTED_EXPERT_BANKS,
+    }
+    for name, expected_scope in expected_scopes.items():
+        config = materialized_config(diagnostics[name].recovery, _PREFIX)
+        assert config.stage is RecoveryStage.PRESERVATION
+        assert config.trainable_scope is expected_scope
+        if name is MergeBranchName.NATIVE_LOCAL_CE_KL_CAPACITY_ORACLE:
+            assert config.initialization is RecoveryInitialization.CAPACITY_ORACLE_SPLIT
+            assert config.initial_checkpoint_selection is RecoveryCheckpointSelection.LATEST
+            assert config.init_checkpoint_dir == prefix_join(pipeline.capacity_oracle_split.path(_PREFIX), "checkpoints")
+            assert pipeline.capacity_oracle_split in diagnostics[name].recovery.deps
+        else:
+            assert config.initialization is RecoveryInitialization.LOCAL_RECOVERY
+            assert config.initial_checkpoint_selection is RecoveryCheckpointSelection.BEST_VALIDATION
+            assert config.init_checkpoint_dir == prefix_join(selected_stage_a.path(_PREFIX), "checkpoints")
+            assert selected_stage_a in diagnostics[name].recovery.deps
+        assert config.training_tokens == 50_000_000
+        assert config.checkpoint_token_milestones == (12_500_000, 25_000_000, 37_500_000, 50_000_000)
+        assert config.cross_entropy_weight == 1.0
+        assert config.moe_loss_weight == 1.0
+        assert config.logit_kl_weight == 0.1
+        assert config.resources.regions == ["us-central1"]
+
+    split = materialized_config(pipeline.capacity_oracle_split, _PREFIX)
+    assert split.init_checkpoint_dir == prefix_join(selected_stage_a.path(_PREFIX), "checkpoints")
+    assert split.assignment_mode is AssignmentMode.NATIVE
+    assert not split.prefit_applied
+    assert split.resources.regions == ["us-central1"]
+    assert selected_stage_a in pipeline.capacity_oracle_split.deps
+
+
 def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeypatch) -> None:
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("checkpoint storage was accessed during graph construction")
@@ -174,6 +236,11 @@ def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeyp
         branch.stage_b.lower()
     pipeline.native_joint.stage_b.fingerprint()
     pipeline.native_joint.stage_b.lower()
+    pipeline.capacity_oracle_split.fingerprint()
+    pipeline.capacity_oracle_split.lower()
+    for diagnostic in pipeline.unlock_diagnostics:
+        diagnostic.recovery.fingerprint()
+        diagnostic.recovery.lower()
 
     monkeypatch.setattr("experiments.grug.moe.launch_merge_recovery.mixture", lambda *_args, **_kwargs: None)
     for branch in pipeline.branches:
@@ -182,6 +249,9 @@ def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeyp
         materialized_config(branch.stage_b, _PREFIX)
     materialized_config(pipeline.native_joint.converted, _PREFIX)
     materialized_config(pipeline.native_joint.stage_b, _PREFIX)
+    materialized_config(pipeline.capacity_oracle_split, _PREFIX)
+    for diagnostic in pipeline.unlock_diagnostics:
+        materialized_config(diagnostic.recovery, _PREFIX)
 
 
 def test_merge_source_matches_full_untied_teacher_config(monkeypatch) -> None:

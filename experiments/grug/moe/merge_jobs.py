@@ -12,7 +12,12 @@ from levanter.optim.config import OptimizerConfig
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.expert_merge import AssignmentMode, SpectralProbeConfig
 from experiments.grug.moe.expert_prefit import PrefitConfig, PrefitObjective
-from experiments.grug.moe.merge_recovery import RecoveryCheckpointSelection, RecoveryInitialization, RecoveryStage
+from experiments.grug.moe.merge_recovery import (
+    RecoveryCheckpointSelection,
+    RecoveryInitialization,
+    RecoveryStage,
+    RecoveryTrainableScope,
+)
 from experiments.grug.moe.model import GrugModelConfig
 
 
@@ -92,6 +97,20 @@ class ConversionJobConfig:
 
 
 @dataclass(frozen=True)
+class CapacityOracleSplitJobConfig:
+    source: SourceCheckpointConfig
+    init_checkpoint_dir: str
+    output_path: str
+    resources: ResourceConfig
+    run_id: str
+    assignment_mode: AssignmentMode
+    prefit_applied: bool
+    affected_layers: tuple[int, int] = (2, 3)
+    expert_axis_size: int = 1
+    replica_axis_size: int | None = None
+
+
+@dataclass(frozen=True)
 class RecoveryJobConfig:
     source: SourceCheckpointConfig
     data: LmDataConfig
@@ -101,6 +120,7 @@ class RecoveryJobConfig:
     resources: ResourceConfig
     run_id: str
     stage: RecoveryStage
+    trainable_scope: RecoveryTrainableScope
     initialization: RecoveryInitialization
     assignment_mode: AssignmentMode
     prefit_applied: bool
@@ -151,6 +171,13 @@ def _run_conversion_local(config: ConversionJobConfig) -> None:
     run_conversion_local(config)
 
 
+def _run_capacity_oracle_split_local(config: CapacityOracleSplitJobConfig) -> None:
+    # Break the config/runtime import cycle at the dispatched worker boundary.
+    from experiments.grug.moe.merge_recovery_runtime import run_capacity_oracle_split_local  # noqa: PLC0415
+
+    run_capacity_oracle_split_local(config)
+
+
 def _run_recovery_local(config: RecoveryJobConfig) -> None:
     # Break the config/runtime import cycle at the dispatched worker boundary.
     from experiments.grug.moe.merge_recovery_runtime import run_recovery_local  # noqa: PLC0415
@@ -181,6 +208,10 @@ def run_prefit(config: PrefitJobConfig) -> None:
 
 def run_conversion(config: ConversionJobConfig) -> None:
     _dispatch(config.run_id, config, _run_conversion_local, config.resources)
+
+
+def run_capacity_oracle_split(config: CapacityOracleSplitJobConfig) -> None:
+    _dispatch(config.run_id, config, _run_capacity_oracle_split_local, config.resources)
 
 
 def run_recovery(config: RecoveryJobConfig) -> None:

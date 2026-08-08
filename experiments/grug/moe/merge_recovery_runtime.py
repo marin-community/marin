@@ -50,13 +50,16 @@ from experiments.grug.moe.merge_artifacts import (
     read_matching_manifest,
 )
 from experiments.grug.moe.merge_checkpoint import (
+    CapacityOracleKind,
     MergeCheckpointManifest,
     OnePairMergeCheckpointSpec,
+    convert_grug_state_for_capacity_oracle_split,
     convert_grug_state_for_one_pair_merge,
     read_merge_checkpoint_manifest,
     write_merge_checkpoint_manifest,
 )
 from experiments.grug.moe.merge_jobs import (
+    CapacityOracleSplitJobConfig,
     ConversionJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
@@ -69,6 +72,7 @@ from experiments.grug.moe.merge_recovery import (
     RecoveryInitialization,
     RecoveryLosses,
     RecoveryStage,
+    RecoveryTrainableScope,
     initial_recovery_state,
     make_chunked_logit_kl,
     make_recovery_train_step,
@@ -102,12 +106,14 @@ class PrefitRuntimeState:
     stale_evaluations: jax.Array
 
 
-def _is_local(config: PrefitJobConfig | ConversionJobConfig | RecoveryJobConfig) -> bool:
+def _is_local(
+    config: PrefitJobConfig | ConversionJobConfig | CapacityOracleSplitJobConfig | RecoveryJobConfig,
+) -> bool:
     return isinstance(config.resources.device, CpuConfig)
 
 
 def _validate_runtime_paths(
-    config: PrefitJobConfig | ConversionJobConfig | RecoveryJobConfig,
+    config: PrefitJobConfig | ConversionJobConfig | CapacityOracleSplitJobConfig | RecoveryJobConfig,
     paths: dict[str, str | None],
 ) -> None:
     """Validate material stage paths before initializing JAX devices."""
@@ -1111,6 +1117,101 @@ def run_conversion_local(config: ConversionJobConfig) -> None:
         )
 
 
+def run_capacity_oracle_split_local(config: CapacityOracleSplitJobConfig) -> None:
+    """Duplicate the selected recovered bank into an untied, function-identical diagnostic checkpoint."""
+    checkpoint_root = _checkpoint_root(config.output_path)
+    _validate_runtime_paths(
+        config,
+        {
+            "teacher_checkpoint": config.source.checkpoint_dir,
+            "selected_recovery_checkpoint": config.init_checkpoint_dir,
+            "capacity_oracle_output": checkpoint_root,
+        },
+    )
+    initialize_merge_worker()
+    mesh = compact_merge_mesh(
+        expert_axis_size=config.expert_axis_size,
+        replica_axis_size=config.replica_axis_size,
+    )
+    with set_mesh(mesh):
+        selection = _best_validation_selection(config.init_checkpoint_dir)
+        source_checkpoint = str(selection["checkpoint_path"])
+        _validate_runtime_paths(config, {"resolved_recovery_checkpoint": source_checkpoint})
+        own_checkpoint = discover_latest_checkpoint(checkpoint_root)
+        if own_checkpoint is not None:
+            manifest = read_merge_checkpoint_manifest(own_checkpoint)
+            _validate_merge_manifest(
+                manifest,
+                assignment_mode=config.assignment_mode,
+                prefit_applied=config.prefit_applied,
+                affected_layers=config.affected_layers,
+            )
+            expected_topology = tuple(range(config.source.model.num_layers))
+            if (
+                manifest.capacity_oracle is None
+                or manifest.capacity_oracle.kind is not CapacityOracleKind.UNTIED_IDENTICAL_START_DIAGNOSTIC
+                or manifest.capacity_oracle.source_checkpoint != source_checkpoint
+                or manifest.target_topology != expected_topology
+                or manifest.recovery_step != 0
+            ):
+                raise ValueError("existing capacity-oracle checkpoint has stale provenance")
+            logger.info("Capacity-oracle split already exists at %s", own_checkpoint)
+            return
+
+        source_manifest = read_merge_checkpoint_manifest(source_checkpoint)
+        _validate_merge_manifest(
+            source_manifest,
+            assignment_mode=config.assignment_mode,
+            prefit_applied=config.prefit_applied,
+            affected_layers=config.affected_layers,
+        )
+        model_config = dataclasses.replace(config.source.model, expert_bank_for_layer=source_manifest.target_topology)
+        params = Transformer.init(model_config, key=jax.random.key(0))
+        pending_qb_betas = jnp.zeros(
+            (len(params.blocks), params.config.num_experts),
+            dtype=jnp.float32,
+        )
+        loaded = cast(
+            "dict[str, Any]",
+            load_checkpoint(
+                {
+                    "step": jnp.asarray(source_manifest.recovery_step, dtype=jnp.int32),
+                    "params": params,
+                    "pending_qb_betas": pending_qb_betas,
+                },
+                source_checkpoint,
+                mesh=mesh,
+                allow_partial=False,
+            ),
+        )
+        loaded_step = int(jax.device_get(loaded["step"]))
+        if loaded_step != source_manifest.recovery_step or loaded_step != int(selection["step"]):
+            raise ValueError(
+                "selected recovery checkpoint step disagrees with selector or manifest: "
+                f"checkpoint={loaded_step}, selector={selection['step']}, manifest={source_manifest.recovery_step}"
+            )
+        recovered = GrugTrainState(
+            step=loaded["step"],
+            params=loaded["params"],
+            opt_state=optax.EmptyState(),
+            ema_params=None,
+            pending_qb_betas=loaded["pending_qb_betas"],
+        )
+        oracle = convert_grug_state_for_capacity_oracle_split(
+            recovered,
+            source_manifest=source_manifest,
+            source_checkpoint=source_checkpoint,
+            init_optimizer_state=lambda _: optax.EmptyState(),
+        )
+        _save_permanent_checkpoint(
+            oracle.state,
+            checkpoint_root=checkpoint_root,
+            step=0,
+            sync_name="capacity_oracle_split_0",
+            merge_manifest=oracle.manifest,
+        )
+
+
 def _recovery_template(
     config: RecoveryJobConfig,
     manifest: MergeCheckpointManifest,
@@ -1123,6 +1224,7 @@ def _recovery_template(
     recovery_config = MergeRecoveryConfig(
         affected_layers=config.affected_layers,
         stage=config.stage,
+        trainable_scope=config.trainable_scope,
         cross_entropy_weight=config.cross_entropy_weight,
         moe_loss_weight=config.moe_loss_weight,
         logit_kl_weight=config.logit_kl_weight,
@@ -1162,7 +1264,15 @@ def _recovery_initial_checkpoint(config: RecoveryJobConfig) -> str:
         raise ValueError(f"unknown recovery checkpoint selection {config.initial_checkpoint_selection}")
     if config.initialization is not RecoveryInitialization.LOCAL_RECOVERY:
         raise ValueError("best-validation checkpoint selection requires a local-recovery initializer")
-    selection_path = prefix_join(config.init_checkpoint_dir, _RECOVERY_SELECTION_FILENAME)
+    return _best_validation_checkpoint(config.init_checkpoint_dir)
+
+
+def _best_validation_checkpoint(checkpoint_dir: str) -> str:
+    return str(_best_validation_selection(checkpoint_dir)["checkpoint_path"])
+
+
+def _best_validation_selection(checkpoint_dir: str) -> dict[str, Any]:
+    selection_path = prefix_join(checkpoint_dir, _RECOVERY_SELECTION_FILENAME)
     selection = StoragePath(selection_path)
     if not selection.exists():
         raise ValueError(f"best-validation checkpoint selection is missing at {selection_path}")
@@ -1172,7 +1282,10 @@ def _recovery_initial_checkpoint(config: RecoveryJobConfig) -> str:
     checkpoint_path = payload.get("checkpoint_path")
     if not isinstance(checkpoint_path, str):
         raise ValueError(f"recovery checkpoint selection at {selection_path} has no checkpoint_path")
-    return checkpoint_path
+    step = payload.get("step")
+    if not isinstance(step, int) or step <= 0:
+        raise ValueError(f"recovery checkpoint selection at {selection_path} has invalid step {step!r}")
+    return payload
 
 
 def _record_best_validation_checkpoint(
@@ -1229,6 +1342,20 @@ def _recovery_manifest_for_run(
                 "recovery checkpoint initializer is "
                 f"{manifest.recovery_initial_checkpoint}, expected {initialization_checkpoint}"
             )
+        expected_recovery = {
+            "recovery_stage": config.stage,
+            "recovery_trainable_scope": config.trainable_scope,
+            "recovery_cross_entropy_weight": config.cross_entropy_weight,
+            "recovery_moe_loss_weight": config.moe_loss_weight,
+            "recovery_logit_kl_weight": config.logit_kl_weight,
+        }
+        mismatches = {
+            name: (getattr(manifest, name), expected)
+            for name, expected in expected_recovery.items()
+            if getattr(manifest, name) != expected
+        }
+        if mismatches:
+            raise ValueError(f"recovery checkpoint objective or trainable scope changed: {mismatches}")
         return manifest
 
     if config.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO:
@@ -1241,11 +1368,23 @@ def _recovery_manifest_for_run(
             raise ValueError("a local-recovery initializer is valid only for preservation recovery")
         if manifest.recovery_step <= 0:
             raise ValueError("local-recovery initialization requires a checkpoint with recovery_step > 0")
+    elif config.initialization is RecoveryInitialization.CAPACITY_ORACLE_SPLIT:
+        if config.stage is not RecoveryStage.PRESERVATION:
+            raise ValueError("a capacity-oracle initializer is valid only for preservation recovery")
+        if config.trainable_scope is not RecoveryTrainableScope.AFFECTED_EXPERT_BANKS:
+            raise ValueError("a capacity-oracle initializer must train the two affected expert banks")
+        if manifest.recovery_step != 0 or manifest.capacity_oracle is None:
+            raise ValueError("capacity-oracle recovery requires an explicit step-0 split checkpoint")
 
     return dataclasses.replace(
         manifest,
         recovery_initialization=config.initialization,
         recovery_initial_checkpoint=initialization_checkpoint,
+        recovery_stage=config.stage,
+        recovery_trainable_scope=config.trainable_scope,
+        recovery_cross_entropy_weight=config.cross_entropy_weight,
+        recovery_moe_loss_weight=config.moe_loss_weight,
+        recovery_logit_kl_weight=config.logit_kl_weight,
     )
 
 
@@ -1360,6 +1499,7 @@ def _evaluate_recovery_checkpoint(
     payload = {
         "format_version": 1,
         "stage": config.stage.value,
+        "trainable_scope": config.trainable_scope.value,
         "step": step,
         "tokens": tokens,
         "requested_tokens": requested_tokens,
@@ -1575,6 +1715,7 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
                 {
                     "format_version": 1,
                     "stage": config.stage.value,
+                    "trainable_scope": config.trainable_scope.value,
                     "step": step,
                     "tokens": step * tokens_per_step,
                     "metrics": checkpoint_metrics,

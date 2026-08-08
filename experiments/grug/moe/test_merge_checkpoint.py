@@ -11,12 +11,15 @@ from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.expert_merge import AssignmentMode
 from experiments.grug.moe.merge_checkpoint import (
+    CapacityOracleKind,
     MergeCheckpointManifest,
     OnePairMergeCheckpointSpec,
+    convert_grug_state_for_capacity_oracle_split,
     convert_grug_state_for_one_pair_merge,
     read_merge_checkpoint_manifest,
     write_merge_checkpoint_manifest,
 )
+from experiments.grug.moe.merge_recovery import RecoveryInitialization
 from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.moe.train import GrugTrainState
 
@@ -189,3 +192,109 @@ def test_merge_checkpoint_manifest_and_state_round_trip(tmp_path):
         strict=True,
     ):
         np.testing.assert_array_equal(actual, expected)
+
+
+def _recovered_one_pair_state_and_manifest() -> tuple[GrugTrainState, MergeCheckpointManifest]:
+    source = _source_state(Transformer.init(_tiny_config(tuple(range(6))), key=jax.random.key(6)))
+    converted = convert_grug_state_for_one_pair_merge(
+        source,
+        spec=_spec(),
+        init_optimizer_state=_fresh_optimizer_state,
+        recovery_step=19,
+    )
+    recovered_state = dataclasses.replace(
+        converted.state,
+        step=jnp.array(1526, dtype=jnp.int32),
+        opt_state={"recovered_optimizer_state": jnp.array([42.0])},
+        pending_qb_betas=converted.state.pending_qb_betas + 0.5,
+    )
+    recovered_manifest = dataclasses.replace(
+        converted.manifest,
+        recovery_step=1526,
+        recovery_initialization=RecoveryInitialization.LOCAL_RECOVERY,
+        recovery_initial_checkpoint="stage-a/checkpoints/step-382",
+    )
+    return recovered_state, recovered_manifest
+
+
+def test_capacity_oracle_split_is_functionally_identical_and_unties_source_bank():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        recovered, manifest = _recovered_one_pair_state_and_manifest()
+        tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
+        tied_logits = recovered.params.logits(tokens)
+        oracle = convert_grug_state_for_capacity_oracle_split(
+            recovered,
+            source_manifest=manifest,
+            source_checkpoint="recovery/checkpoints/step-1526",
+            init_optimizer_state=_fresh_optimizer_state,
+        )
+        untied_logits = oracle.state.params.logits(tokens)
+
+    assert oracle.state.params.config.resolved_expert_bank_for_layer == (0, 1, 2, 3, 4, 5)
+    assert tuple(block.expert_bank_index for block in oracle.state.params.blocks) == (0, 1, 2, 3, 4, 5)
+    assert len(oracle.state.params.expert_banks) == 6
+    np.testing.assert_array_equal(untied_logits, tied_logits)
+
+    representative_bank = oracle.state.params.expert_banks[2]
+    duplicated_bank = oracle.state.params.expert_banks[3]
+    for representative_leaf, duplicated_leaf in zip(
+        jax.tree.leaves(representative_bank),
+        jax.tree.leaves(duplicated_bank),
+        strict=True,
+    ):
+        assert representative_leaf is not duplicated_leaf
+        np.testing.assert_array_equal(duplicated_leaf, representative_leaf)
+
+    np.testing.assert_array_equal(
+        oracle.state.params.blocks[3].mlp.router,
+        recovered.params.blocks[3].mlp.router,
+    )
+    np.testing.assert_array_equal(
+        oracle.state.params.blocks[3].mlp.router_bias,
+        recovered.params.blocks[3].mlp.router_bias,
+    )
+    assert oracle.state.pending_qb_betas is recovered.pending_qb_betas
+    np.testing.assert_array_equal(oracle.state.pending_qb_betas, recovered.pending_qb_betas)
+    assert int(oracle.state.step) == 0
+    assert set(oracle.state.opt_state) == {"recovery_bank_count"}
+    assert int(oracle.state.opt_state["recovery_bank_count"]) == 6
+
+
+def test_capacity_oracle_split_records_diagnostic_provenance_and_converts_ema():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        recovered, manifest = _recovered_one_pair_state_and_manifest()
+        oracle = convert_grug_state_for_capacity_oracle_split(
+            recovered,
+            source_manifest=manifest,
+            source_checkpoint="recovery/checkpoints/step-1526",
+            init_optimizer_state=_fresh_optimizer_state,
+            oracle_step=7,
+        )
+
+    provenance = oracle.manifest.capacity_oracle
+    assert provenance is not None
+    assert provenance.kind is CapacityOracleKind.UNTIED_IDENTICAL_START_DIAGNOSTIC
+    assert provenance.source_checkpoint == "recovery/checkpoints/step-1526"
+    assert provenance.representative_layer == 2
+    assert provenance.source_layer == 3
+    assert provenance.input_topology == (0, 1, 2, 2, 3, 4)
+    assert provenance.source_shared_bank_index == 2
+    assert provenance.duplicated_bank_index == 3
+    assert provenance.source_recovery_step == 1526
+    assert provenance.output_step == 7
+    assert oracle.manifest.target_topology == (0, 1, 2, 3, 4, 5)
+    assert oracle.manifest.recovery_step == 7
+    assert oracle.manifest.optimizer_state_reset
+    assert oracle.manifest.recovery_initialization is None
+    assert oracle.manifest.recovery_initial_checkpoint is None
+    assert MergeCheckpointManifest.from_dict(oracle.manifest.to_dict()) == oracle.manifest
+
+    assert oracle.state.ema_params is not None
+    assert oracle.state.ema_params.config.resolved_expert_bank_for_layer == (0, 1, 2, 3, 4, 5)
+    for representative_leaf, duplicated_leaf in zip(
+        jax.tree.leaves(oracle.state.ema_params.expert_banks[2]),
+        jax.tree.leaves(oracle.state.ema_params.expert_banks[3]),
+        strict=True,
+    ):
+        assert representative_leaf is not duplicated_leaf
+        np.testing.assert_array_equal(duplicated_leaf, representative_leaf)

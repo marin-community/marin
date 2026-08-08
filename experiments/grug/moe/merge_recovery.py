@@ -33,11 +33,21 @@ class RecoveryStage(StrEnum):
     PRESERVATION = "preservation"
 
 
+class RecoveryTrainableScope(StrEnum):
+    """Parameters that may adapt during one recovery phase."""
+
+    SHARED_BANK = "shared_bank"
+    SHARED_BANK_AND_ROUTERS = "shared_bank_and_routers"
+    SHARED_BANK_ROUTERS_AND_MLP_NORMS = "shared_bank_routers_and_mlp_norms"
+    AFFECTED_EXPERT_BANKS = "affected_expert_banks"
+
+
 class RecoveryInitialization(StrEnum):
     """Checkpoint lifecycle expected at the start of a recovery run."""
 
     CONVERTED_STEP_ZERO = "converted_step_zero"
     LOCAL_RECOVERY = "local_recovery"
+    CAPACITY_ORACLE_SPLIT = "capacity_oracle_split"
 
 
 class RecoveryCheckpointSelection(StrEnum):
@@ -53,6 +63,7 @@ class MergeRecoveryConfig:
 
     affected_layers: tuple[int, int]
     stage: RecoveryStage
+    trainable_scope: RecoveryTrainableScope
     cross_entropy_weight: float
     moe_loss_weight: float = 1.0
     logit_kl_weight: float = 0.0
@@ -62,6 +73,10 @@ class MergeRecoveryConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.stage, RecoveryStage):
             raise ValueError(f"stage must be a RecoveryStage, got {self.stage!r}")
+        if not isinstance(self.trainable_scope, RecoveryTrainableScope):
+            raise ValueError(f"trainable_scope must be a RecoveryTrainableScope, got {self.trainable_scope!r}")
+        if self.stage is RecoveryStage.LOCAL and self.trainable_scope is not RecoveryTrainableScope.SHARED_BANK:
+            raise ValueError("local recovery trains only the shared expert bank")
         if len(set(self.affected_layers)) != 2:
             raise ValueError(f"affected_layers must contain two distinct layers, got {self.affected_layers}")
         if tuple(sorted(self.affected_layers)) != self.affected_layers:
@@ -204,11 +219,24 @@ class MergeRecoveryState:
     pending_qb_betas: jax.Array
 
 
-def _validate_affected_layers(model: Transformer, affected_layers: tuple[int, int]) -> int:
+def _affected_bank_indices(
+    model: Transformer,
+    affected_layers: tuple[int, int],
+    trainable_scope: RecoveryTrainableScope,
+) -> tuple[int, ...]:
     num_layers = len(model.blocks)
     if any(layer < 0 or layer >= num_layers for layer in affected_layers):
         raise IndexError(f"affected_layers must lie in [0, {num_layers}), got {affected_layers}")
     bank_indices = tuple(model.blocks[layer].expert_bank_index for layer in affected_layers)
+    if trainable_scope is RecoveryTrainableScope.AFFECTED_EXPERT_BANKS:
+        if len(set(bank_indices)) != len(affected_layers):
+            raise ValueError(f"the capacity oracle requires distinct affected banks, got bank IDs {bank_indices}")
+        for bank in bank_indices:
+            bank_use_count = sum(block.expert_bank_index == bank for block in model.blocks)
+            if bank_use_count != 1:
+                raise ValueError(f"capacity-oracle bank {bank} is used by {bank_use_count} layers")
+        return bank_indices
+
     if len(set(bank_indices)) != 1:
         raise ValueError(f"affected student layers must share one expert bank, got bank IDs {bank_indices}")
     shared_bank = bank_indices[0]
@@ -218,7 +246,7 @@ def _validate_affected_layers(model: Transformer, affected_layers: tuple[int, in
             "the initial recovery requires the merged bank to be used only by the two affected layers; "
             f"bank {shared_bank} is used by {bank_use_count} layers"
         )
-    return shared_bank
+    return (shared_bank,)
 
 
 def _validate_teacher(student: Transformer, teacher: Transformer, affected_layers: tuple[int, int]) -> None:
@@ -237,20 +265,38 @@ def _validate_teacher(student: Transformer, teacher: Transformer, affected_layer
 
 def recovery_trainable_filter(model: Transformer, config: MergeRecoveryConfig) -> Transformer:
     """Return an Equinox filter selecting exactly the parameters trained in a phase."""
-    shared_bank = _validate_affected_layers(model, config.affected_layers)
+    affected_banks = _affected_bank_indices(model, config.affected_layers, config.trainable_scope)
     filter_spec = jax.tree.map(lambda _: False, model)
-    bank_filter = jax.tree.map(eqx.is_inexact_array, model.expert_banks[shared_bank])
-    filter_spec = eqx.tree_at(
-        lambda current: current.expert_banks[shared_bank],
-        filter_spec,
-        bank_filter,
-    )
-    if config.stage is RecoveryStage.PRESERVATION:
+    for bank in affected_banks:
+        bank_filter = jax.tree.map(eqx.is_inexact_array, model.expert_banks[bank])
+        filter_spec = eqx.tree_at(
+            lambda current, bank=bank: current.expert_banks[bank],
+            filter_spec,
+            bank_filter,
+        )
+    if config.trainable_scope in {
+        RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS,
+        RecoveryTrainableScope.SHARED_BANK_ROUTERS_AND_MLP_NORMS,
+    }:
         for layer in config.affected_layers:
             filter_spec = eqx.tree_at(
                 lambda current, layer=layer: current.blocks[layer].mlp.router,
                 filter_spec,
                 True,
+            )
+    if config.trainable_scope is RecoveryTrainableScope.SHARED_BANK_ROUTERS_AND_MLP_NORMS:
+        for layer in config.affected_layers:
+            rms_filter = jax.tree.map(eqx.is_inexact_array, model.blocks[layer].rms_mlp)
+            filter_spec = eqx.tree_at(
+                lambda current, layer=layer: current.blocks[layer].rms_mlp,
+                filter_spec,
+                rms_filter,
+            )
+            gated_norm_filter = jax.tree.map(eqx.is_inexact_array, model.blocks[layer].mlp_gated_norm)
+            filter_spec = eqx.tree_at(
+                lambda current, layer=layer: current.blocks[layer].mlp_gated_norm,
+                filter_spec,
+                gated_norm_filter,
             )
     return filter_spec
 
@@ -278,12 +324,13 @@ def recovery_forward(
     token_ids: jax.Array,
     *,
     affected_layers: tuple[int, int],
+    trainable_scope: RecoveryTrainableScope = RecoveryTrainableScope.SHARED_BANK,
     source_to_shared: tuple[int, ...] | None = None,
     mask: AttentionMask | jax.Array | None = None,
     normalization_epsilon: float = _DEFAULT_NORMALIZATION_EPSILON,
 ) -> RecoveryForward:
     """Roll out the student and match teacher MoEs on each current student state."""
-    _validate_affected_layers(student, affected_layers)
+    _affected_bank_indices(student, affected_layers, trainable_scope)
     _validate_teacher(student, teacher, affected_layers)
     if normalization_epsilon <= 0:
         raise ValueError("normalization_epsilon must be positive")
@@ -383,6 +430,7 @@ def recovery_objective(
         teacher,
         token_ids,
         affected_layers=config.affected_layers,
+        trainable_scope=config.trainable_scope,
         source_to_shared=config.source_to_shared,
         mask=mask,
         normalization_epsilon=config.normalization_epsilon,
@@ -476,7 +524,10 @@ def make_recovery_train_step(
         mask: AttentionMask | jax.Array | None = None,
     ) -> tuple[MergeRecoveryState, RecoveryLosses]:
         params = state.params
-        if config.stage is RecoveryStage.PRESERVATION:
+        if config.trainable_scope in {
+            RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS,
+            RecoveryTrainableScope.SHARED_BANK_ROUTERS_AND_MLP_NORMS,
+        }:
             params = apply_qb_betas(params, state.pending_qb_betas, config.affected_layers)
 
         filter_spec = recovery_trainable_filter(params, config)
@@ -500,7 +551,10 @@ def make_recovery_train_step(
         trainable = optax.apply_updates(trainable, updates)
         params = eqx.combine(trainable, frozen)
 
-        if config.stage is RecoveryStage.LOCAL:
+        if config.trainable_scope in {
+            RecoveryTrainableScope.SHARED_BANK,
+            RecoveryTrainableScope.AFFECTED_EXPERT_BANKS,
+        }:
             pending_qb_betas = state.pending_qb_betas
         else:
             pending_qb_betas = update_affected_qb_betas(

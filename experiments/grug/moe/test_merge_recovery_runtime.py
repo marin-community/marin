@@ -39,15 +39,22 @@ from experiments.grug.moe.merge_artifacts import (
 )
 from experiments.grug.moe.merge_checkpoint import read_merge_checkpoint_manifest
 from experiments.grug.moe.merge_jobs import (
+    CapacityOracleSplitJobConfig,
     ConversionJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
     SourceCheckpointConfig,
 )
-from experiments.grug.moe.merge_recovery import RecoveryCheckpointSelection, RecoveryInitialization, RecoveryStage
+from experiments.grug.moe.merge_recovery import (
+    RecoveryCheckpointSelection,
+    RecoveryInitialization,
+    RecoveryStage,
+    RecoveryTrainableScope,
+)
 from experiments.grug.moe.merge_recovery_runtime import (
     PrefitRuntimeState,
     evaluate_prefit_checkpoint_local,
+    run_capacity_oracle_split_local,
     run_conversion_local,
     run_prefit_local,
     run_recovery_local,
@@ -622,6 +629,7 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         output_path=str(stage_a_path),
         run_id="test-stage-a",
         stage=RecoveryStage.LOCAL,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK,
         initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
         training_tokens=15,
         cross_entropy_weight=0.0,
@@ -652,6 +660,7 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         output_path=str(stage_b_path),
         run_id="test-stage-b",
         stage=RecoveryStage.PRESERVATION,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS,
         initialization=RecoveryInitialization.LOCAL_RECOVERY,
         training_tokens=8,
         cross_entropy_weight=1.0,
@@ -666,19 +675,85 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
     run_recovery_local(stage_a_config)
     run_recovery_local(stage_b_config)
 
-    for output_path, final_step, final_tokens in ((stage_a_path, 2, 16), (stage_b_path, 1, 8)):
+    capacity_split_path = tmp_path / "capacity-oracle-split"
+    run_capacity_oracle_split_local(
+        CapacityOracleSplitJobConfig(
+            source=inputs.source,
+            init_checkpoint_dir=str(stage_a_path / "checkpoints"),
+            output_path=str(capacity_split_path),
+            resources=ResourceConfig.with_cpu(),
+            run_id="test-capacity-oracle-split",
+            assignment_mode=AssignmentMode.SPECTRAL,
+            prefit_applied=False,
+            affected_layers=(1, 2),
+        )
+    )
+    capacity_split_checkpoint = latest_checkpoint_path(str(capacity_split_path / "checkpoints"))
+    capacity_split_manifest = read_merge_checkpoint_manifest(capacity_split_checkpoint)
+    assert capacity_split_manifest.target_topology == tuple(range(4))
+    assert capacity_split_manifest.capacity_oracle is not None
+    assert capacity_split_manifest.capacity_oracle.source_checkpoint == selection["checkpoint_path"]
+
+    capacity_recovery_path = tmp_path / "capacity-oracle-recovery"
+    capacity_recovery_config = RecoveryJobConfig(
+        **common,
+        init_checkpoint_dir=str(capacity_split_path / "checkpoints"),
+        output_path=str(capacity_recovery_path),
+        run_id="test-capacity-oracle-recovery",
+        stage=RecoveryStage.PRESERVATION,
+        trainable_scope=RecoveryTrainableScope.AFFECTED_EXPERT_BANKS,
+        initialization=RecoveryInitialization.CAPACITY_ORACLE_SPLIT,
+        training_tokens=8,
+        cross_entropy_weight=1.0,
+        logit_kl_weight=0.1,
+        logit_kl_vocab_chunk_size=8,
+        checkpoint_token_milestones=(8,),
+    )
+    run_recovery_local(capacity_recovery_config)
+
+    selected_stage_a_eval = stage_a_evaluations[expected_step]
+    capacity_initial_eval = json.loads((capacity_recovery_path / "evaluations" / "tokens-0-step-0.json").read_text())
+    assert capacity_initial_eval["metrics"]["student/loss"] == selected_stage_a_eval["metrics"]["student/loss"]
+
+    for output_path, final_step, final_tokens in (
+        (stage_a_path, 2, 16),
+        (stage_b_path, 1, 8),
+        (capacity_recovery_path, 1, 8),
+    ):
         checkpoint = latest_checkpoint_path(str(output_path / "checkpoints"))
         manifest = read_merge_checkpoint_manifest(checkpoint)
         assert manifest.recovery_step == final_step
         assert manifest.optimizer_state_reset
+        expected_config = (
+            stage_a_config
+            if output_path == stage_a_path
+            else capacity_recovery_config if output_path == capacity_recovery_path else stage_b_config
+        )
+        assert manifest.recovery_stage is expected_config.stage
+        assert manifest.recovery_trainable_scope is expected_config.trainable_scope
+        assert manifest.recovery_cross_entropy_weight == expected_config.cross_entropy_weight
+        assert manifest.recovery_moe_loss_weight == expected_config.moe_loss_weight
+        assert manifest.recovery_logit_kl_weight == expected_config.logit_kl_weight
         if output_path == stage_b_path:
             assert manifest.recovery_initial_checkpoint == selection["checkpoint_path"]
+        elif output_path == capacity_recovery_path:
+            assert manifest.recovery_initialization is RecoveryInitialization.CAPACITY_ORACLE_SPLIT
+            assert manifest.recovery_initial_checkpoint == capacity_split_checkpoint
         initial_eval = json.loads((output_path / "evaluations" / "tokens-0-step-0.json").read_text())
         milestone_eval = json.loads(
             (output_path / "evaluations" / f"tokens-{final_tokens}-step-{final_step}.json").read_text()
         )
         training_metrics = json.loads((output_path / "training_metrics" / f"step-{final_step}.json").read_text())
         assert initial_eval["max_eval_batches"] == 8
+        assert initial_eval["trainable_scope"] == (
+            RecoveryTrainableScope.SHARED_BANK.value
+            if output_path == stage_a_path
+            else (
+                RecoveryTrainableScope.AFFECTED_EXPERT_BANKS.value
+                if output_path == capacity_recovery_path
+                else RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS.value
+            )
+        )
         assert "merge/immediate_validation_loss_delta" in initial_eval["metrics"]
         assert "eval/paloma/macro_loss" in initial_eval["metrics"]
         assert milestone_eval["tokens"] == final_tokens
@@ -690,6 +765,7 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         assert "merge/router_topk_agreement_with_teacher/layer_1" in training_metrics["metrics"]
         assert "throughput/tokens_per_second" in training_metrics["metrics"]
         assert training_metrics["metrics"]["throughput/total_tokens"] == final_tokens
+        assert training_metrics["trainable_scope"] == initial_eval["trainable_scope"]
         assert "train/router/layer_1/routing_entropy" in training_metrics["metrics"]
         assert "train/router/layer_1/capacity_overflow" in training_metrics["metrics"]
         assert "train/router/layer_1/routing_count/expert_0" in training_metrics["metrics"]
@@ -744,6 +820,7 @@ def test_native_joint_preservation_restores_converted_step_zero_strictly_and_rec
             resources=ResourceConfig.with_cpu(),
             run_id="test-native-joint-stage-b",
             stage=RecoveryStage.PRESERVATION,
+            trainable_scope=RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS,
             initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
             assignment_mode=AssignmentMode.NATIVE,
             prefit_applied=False,

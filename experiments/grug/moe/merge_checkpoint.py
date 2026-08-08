@@ -7,6 +7,7 @@ import dataclasses
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import jax
@@ -18,7 +19,11 @@ from rigging.filesystem import StoragePath, prefix_join
 
 from experiments.grug.moe.expert_merge import AssignmentMode, convert_one_expert_pair, permute_pending_qb_beta
 from experiments.grug.moe.expert_prefit import PrefitObjective
-from experiments.grug.moe.merge_recovery import RecoveryInitialization
+from experiments.grug.moe.merge_recovery import (
+    RecoveryInitialization,
+    RecoveryStage,
+    RecoveryTrainableScope,
+)
 from experiments.grug.moe.model import Transformer
 from experiments.grug.moe.train import GrugTrainState
 
@@ -46,6 +51,27 @@ class OnePairMergeCheckpointSpec:
     prefit_objective: PrefitObjective | None = None
 
 
+class CapacityOracleKind(StrEnum):
+    """Machine-readable purpose of a capacity-oracle checkpoint."""
+
+    UNTIED_IDENTICAL_START_DIAGNOSTIC = "untied_identical_start_diagnostic"
+
+
+@dataclass(frozen=True)
+class CapacityOracleProvenance:
+    """Provenance for splitting one recovered shared bank without changing its function."""
+
+    kind: CapacityOracleKind
+    source_checkpoint: str
+    representative_layer: int
+    source_layer: int
+    input_topology: tuple[int, ...]
+    source_shared_bank_index: int
+    duplicated_bank_index: int
+    source_recovery_step: int
+    output_step: int
+
+
 @dataclass(frozen=True)
 class MergeCheckpointManifest:
     """Metadata required to reconstruct a converted checkpoint's static topology."""
@@ -59,6 +85,12 @@ class MergeCheckpointManifest:
     optimizer_state_reset: bool = True
     recovery_initialization: RecoveryInitialization | None = None
     recovery_initial_checkpoint: str | None = None
+    recovery_stage: RecoveryStage | None = None
+    recovery_trainable_scope: RecoveryTrainableScope | None = None
+    recovery_cross_entropy_weight: float | None = None
+    recovery_moe_loss_weight: float | None = None
+    recovery_logit_kl_weight: float | None = None
+    capacity_oracle: CapacityOracleProvenance | None = None
     format_version: int = _MERGE_CHECKPOINT_FORMAT_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -93,6 +125,24 @@ class MergeCheckpointManifest:
                 else None
             ),
         )
+        capacity_oracle_payload = payload.get("capacity_oracle")
+        if capacity_oracle_payload is not None and not isinstance(capacity_oracle_payload, Mapping):
+            raise ValueError("capacity_oracle must be an object")
+        capacity_oracle = (
+            CapacityOracleProvenance(
+                kind=CapacityOracleKind(capacity_oracle_payload["kind"]),
+                source_checkpoint=str(capacity_oracle_payload["source_checkpoint"]),
+                representative_layer=int(capacity_oracle_payload["representative_layer"]),
+                source_layer=int(capacity_oracle_payload["source_layer"]),
+                input_topology=tuple(int(index) for index in capacity_oracle_payload["input_topology"]),
+                source_shared_bank_index=int(capacity_oracle_payload["source_shared_bank_index"]),
+                duplicated_bank_index=int(capacity_oracle_payload["duplicated_bank_index"]),
+                source_recovery_step=int(capacity_oracle_payload["source_recovery_step"]),
+                output_step=int(capacity_oracle_payload["output_step"]),
+            )
+            if capacity_oracle_payload is not None
+            else None
+        )
         return cls(
             spec=spec,
             source_topology=tuple(int(index) for index in payload["source_topology"]),
@@ -107,6 +157,30 @@ class MergeCheckpointManifest:
                 else None
             ),
             recovery_initial_checkpoint=payload.get("recovery_initial_checkpoint"),
+            recovery_stage=(
+                RecoveryStage(payload["recovery_stage"]) if payload.get("recovery_stage") is not None else None
+            ),
+            recovery_trainable_scope=(
+                RecoveryTrainableScope(payload["recovery_trainable_scope"])
+                if payload.get("recovery_trainable_scope") is not None
+                else None
+            ),
+            recovery_cross_entropy_weight=(
+                float(payload["recovery_cross_entropy_weight"])
+                if payload.get("recovery_cross_entropy_weight") is not None
+                else None
+            ),
+            recovery_moe_loss_weight=(
+                float(payload["recovery_moe_loss_weight"])
+                if payload.get("recovery_moe_loss_weight") is not None
+                else None
+            ),
+            recovery_logit_kl_weight=(
+                float(payload["recovery_logit_kl_weight"])
+                if payload.get("recovery_logit_kl_weight") is not None
+                else None
+            ),
+            capacity_oracle=capacity_oracle,
             format_version=format_version,
         )
 
@@ -183,6 +257,145 @@ def convert_grug_state_for_one_pair_merge(
         source_step=int(jax.device_get(state.step)),
         recovery_step=recovery_step,
         ema_converted=converted_ema_params is not None,
+    )
+    return ConvertedMergeCheckpoint(state=converted_state, manifest=manifest)
+
+
+def _copy_expert_bank(bank: MoEExpertMlp) -> MoEExpertMlp:
+    return jax.tree.map(lambda value: jnp.array(value, copy=True), bank)
+
+
+def _split_recovered_shared_bank(
+    model: Transformer,
+    *,
+    representative_layer: int,
+    source_layer: int,
+) -> tuple[Transformer, int, int]:
+    num_layers = len(model.blocks)
+    if representative_layer == source_layer:
+        raise ValueError("representative_layer and source_layer must be different")
+    if not 0 <= representative_layer < num_layers or not 0 <= source_layer < num_layers:
+        raise IndexError(f"layer indices must be in [0, {num_layers})")
+
+    input_topology = model.config.resolved_expert_bank_for_layer
+    shared_bank_index = model.blocks[representative_layer].expert_bank_index
+    if model.blocks[source_layer].expert_bank_index != shared_bank_index:
+        raise ValueError("capacity oracle requires the representative and source layers to share a bank")
+    shared_layers = tuple(index for index, bank_index in enumerate(input_topology) if bank_index == shared_bank_index)
+    if shared_layers != tuple(sorted((representative_layer, source_layer))):
+        raise ValueError(
+            "capacity oracle requires a recovered one-pair bank used only by the representative and source layers; "
+            f"bank {shared_bank_index} is used by layers {shared_layers}"
+        )
+
+    duplicated_bank_index = shared_bank_index + 1
+    output_topology = tuple(
+        duplicated_bank_index if layer_index == source_layer else bank_index + int(bank_index >= duplicated_bank_index)
+        for layer_index, bank_index in enumerate(input_topology)
+    )
+    converted_config = dataclasses.replace(model.config, expert_bank_for_layer=output_topology)
+    converted_blocks = tuple(
+        dataclasses.replace(
+            block,
+            attn=dataclasses.replace(block.attn, cfg=converted_config),
+            mlp=dataclasses.replace(block.mlp, cfg=converted_config),
+            expert_bank_index=output_topology[layer_index],
+        )
+        for layer_index, block in enumerate(model.blocks)
+    )
+    duplicated_bank = _copy_expert_bank(model.expert_banks[shared_bank_index])
+    converted_banks = (
+        *model.expert_banks[:duplicated_bank_index],
+        duplicated_bank,
+        *model.expert_banks[duplicated_bank_index:],
+    )
+    return (
+        dataclasses.replace(
+            model,
+            blocks=converted_blocks,
+            expert_banks=converted_banks,
+            config=converted_config,
+        ),
+        shared_bank_index,
+        duplicated_bank_index,
+    )
+
+
+def convert_grug_state_for_capacity_oracle_split(
+    state: GrugTrainState,
+    *,
+    source_manifest: MergeCheckpointManifest,
+    source_checkpoint: str,
+    init_optimizer_state: OptimizerStateInitializer,
+    oracle_step: int = 0,
+) -> ConvertedMergeCheckpoint:
+    """Untie a recovered one-pair bank into identical layer-specific copies.
+
+    This diagnostic changes capacity without changing the model's initial
+    function. The source layer keeps its already-permuted router and QB state;
+    only its routed expert bank becomes an independent pytree subtree.
+    """
+    if oracle_step < 0:
+        raise ValueError(f"oracle_step must be non-negative, got {oracle_step}")
+    if not source_checkpoint:
+        raise ValueError("source_checkpoint must identify the recovered tied checkpoint")
+    if source_manifest.capacity_oracle is not None:
+        raise ValueError("capacity oracle cannot split a checkpoint that is already an oracle")
+
+    input_topology = state.params.config.resolved_expert_bank_for_layer
+    if input_topology != source_manifest.target_topology:
+        raise ValueError(
+            f"checkpoint topology {input_topology} does not match merge manifest target "
+            f"{source_manifest.target_topology}"
+        )
+    representative_layer = source_manifest.spec.representative_layer
+    source_layer = source_manifest.spec.source_layer
+    converted_params, shared_bank_index, duplicated_bank_index = _split_recovered_shared_bank(
+        state.params,
+        representative_layer=representative_layer,
+        source_layer=source_layer,
+    )
+    converted_ema_params = (
+        None
+        if state.ema_params is None
+        else _split_recovered_shared_bank(
+            state.ema_params,
+            representative_layer=representative_layer,
+            source_layer=source_layer,
+        )[0]
+    )
+    converted_state = dataclasses.replace(
+        state,
+        step=_scalar_like(oracle_step, state.step),
+        params=converted_params,
+        opt_state=init_optimizer_state(converted_params),
+        ema_params=converted_ema_params,
+    )
+    provenance = CapacityOracleProvenance(
+        kind=CapacityOracleKind.UNTIED_IDENTICAL_START_DIAGNOSTIC,
+        source_checkpoint=source_checkpoint,
+        representative_layer=representative_layer,
+        source_layer=source_layer,
+        input_topology=input_topology,
+        source_shared_bank_index=shared_bank_index,
+        duplicated_bank_index=duplicated_bank_index,
+        source_recovery_step=int(jax.device_get(state.step)),
+        output_step=oracle_step,
+    )
+    manifest = dataclasses.replace(
+        source_manifest,
+        target_topology=converted_params.config.resolved_expert_bank_for_layer,
+        recovery_step=oracle_step,
+        ema_converted=converted_ema_params is not None,
+        optimizer_state_reset=True,
+        recovery_initialization=None,
+        recovery_initial_checkpoint=None,
+        recovery_stage=None,
+        recovery_trainable_scope=None,
+        recovery_cross_entropy_weight=None,
+        recovery_moe_loss_weight=None,
+        recovery_logit_kl_weight=None,
+        capacity_oracle=provenance,
     )
     return ConvertedMergeCheckpoint(state=converted_state, manifest=manifest)
 

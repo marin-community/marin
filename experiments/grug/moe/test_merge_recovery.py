@@ -13,6 +13,7 @@ from experiments.grug.moe.expert_merge import convert_one_expert_pair, forward_w
 from experiments.grug.moe.merge_recovery import (
     MergeRecoveryConfig,
     RecoveryStage,
+    RecoveryTrainableScope,
     chunked_output_kl,
     initial_recovery_state,
     make_chunked_logit_kl,
@@ -178,6 +179,7 @@ def test_local_recovery_preservation_losses_update_only_shared_bank_and_keep_qb_
     config = MergeRecoveryConfig(
         affected_layers=_AFFECTED_LAYERS,
         stage=RecoveryStage.LOCAL,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK,
         cross_entropy_weight=cross_entropy_weight,
         logit_kl_weight=logit_kl_weight,
     )
@@ -225,6 +227,7 @@ def test_preservation_recovery_trains_affected_routers_and_updates_only_their_qb
     config = MergeRecoveryConfig(
         affected_layers=_AFFECTED_LAYERS,
         stage=RecoveryStage.PRESERVATION,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS,
         cross_entropy_weight=1.0,
     )
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
@@ -266,3 +269,75 @@ def test_preservation_recovery_trains_affected_routers_and_updates_only_their_qb
             np.testing.assert_array_equal(after_block.mlp.router_bias, before_block.mlp.router_bias)
             np.testing.assert_array_equal(updated.pending_qb_betas[layer], pending_qb_betas[layer])
     assert affected_router_changed
+
+
+def test_bank_only_preservation_keeps_routers_and_qb_frozen():
+    optimizer = optax.sgd(1e-3)
+    config = MergeRecoveryConfig(
+        affected_layers=_AFFECTED_LAYERS,
+        stage=RecoveryStage.PRESERVATION,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK,
+        cross_entropy_weight=1.0,
+        logit_kl_weight=0.1,
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        teacher, student = _teacher_and_student()
+        pending_qb_betas = jnp.arange(16, dtype=jnp.float32).reshape(4, 4) / 10.0
+        state = initial_recovery_state(
+            student,
+            optimizer=optimizer,
+            pending_qb_betas=pending_qb_betas,
+            config=config,
+        )
+        updated, _ = make_recovery_train_step(optimizer, config, logit_kl_loss=make_chunked_logit_kl(8))(
+            state,
+            teacher,
+            jnp.arange(8, dtype=jnp.int32).reshape(1, 8),
+            jnp.ones((1, 8), dtype=jnp.float32),
+        )
+
+    assert _tree_changed(student.expert_banks[1], updated.params.expert_banks[1])
+    for before_block, after_block in zip(student.blocks, updated.params.blocks, strict=True):
+        _assert_tree_equal(before_block.mlp.router, after_block.mlp.router)
+        np.testing.assert_array_equal(before_block.mlp.router_bias, after_block.mlp.router_bias)
+    np.testing.assert_array_equal(updated.pending_qb_betas, pending_qb_betas)
+
+
+def test_norm_adaptation_trains_only_affected_mlp_input_norms_beyond_bank_and_routers():
+    optimizer = optax.sgd(1e-1)
+    config = MergeRecoveryConfig(
+        affected_layers=_AFFECTED_LAYERS,
+        stage=RecoveryStage.PRESERVATION,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK_ROUTERS_AND_MLP_NORMS,
+        cross_entropy_weight=1.0,
+        logit_kl_weight=0.1,
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        teacher, student = _teacher_and_student()
+        state = initial_recovery_state(
+            student,
+            optimizer=optimizer,
+            pending_qb_betas=jnp.zeros((4, 4), dtype=jnp.float32),
+            config=config,
+        )
+        updated, _ = make_recovery_train_step(optimizer, config, logit_kl_loss=make_chunked_logit_kl(8))(
+            state,
+            teacher,
+            jnp.arange(8, dtype=jnp.int32).reshape(1, 8),
+            jnp.ones((1, 8), dtype=jnp.float32),
+        )
+
+    assert _tree_changed(student.expert_banks[1], updated.params.expert_banks[1])
+    for layer, (before_block, after_block) in enumerate(zip(student.blocks, updated.params.blocks, strict=True)):
+        if layer in _AFFECTED_LAYERS:
+            assert _tree_changed(before_block.mlp.router, after_block.mlp.router)
+            assert _tree_changed(before_block.rms_mlp, after_block.rms_mlp)
+            assert _tree_changed(before_block.mlp_gated_norm, after_block.mlp_gated_norm)
+        else:
+            _assert_tree_equal(before_block.mlp.router, after_block.mlp.router)
+            _assert_tree_equal(before_block.rms_mlp, after_block.rms_mlp)
+            _assert_tree_equal(before_block.mlp_gated_norm, after_block.mlp_gated_norm)
+        _assert_tree_equal(before_block.attn, after_block.attn)
+        _assert_tree_equal(before_block.rms_attn, after_block.rms_attn)
+        _assert_tree_equal(before_block.attn_gated_norm, after_block.attn_gated_norm)
+        _assert_tree_equal(before_block.shared, after_block.shared)
