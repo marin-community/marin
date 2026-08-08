@@ -20,8 +20,26 @@ import pytest
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
+from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep import grugmuon_hero, launch, model, small_scale_abl_launch, train
+
+
+def test_hero_run_without_shape_overrides_uses_the_selected_model():
+    step = launch.build_hero_run(run_id="selected-default", dp_racks=1, num_steps=1, version="dev")
+    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
+
+    assert (
+        config.model.hidden_dim,
+        config.model.num_layers,
+        config.model.num_experts,
+        config.model.intermediate_dim,
+        config.model.num_experts_per_token,
+        config.model.latent_dim,
+        config.model.capacity_factor,
+        config.trainer.trainer.train_batch_size,
+        config.model.max_seq_len,
+    ) == (6144, 48, 192, 6272, 4, 3072, 1.33, 1024, 4096)
 
 
 def test_full_bank_top_k_is_rejected_before_launch():
@@ -29,7 +47,14 @@ def test_full_bank_top_k_is_rejected_before_launch():
     # more entries than there are experts. Without this the job dies in the router, which is after
     # the 16-node gang is allocated.
     with pytest.raises(ValueError, match="must be < num_experts"):
-        launch.build_hero_run(run_id="full-bank", dp_racks=1, num_steps=1, num_experts_per_token=128, version="dev")
+        launch.build_hero_run(
+            run_id="full-bank",
+            dp_racks=1,
+            num_steps=1,
+            num_experts=128,
+            num_experts_per_token=128,
+            version="dev",
+        )
 
 
 def test_checkpoint_interval_must_be_positive():
