@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import subprocess
+import sys
+import textwrap
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -91,3 +94,51 @@ def test_thd_base_mask_derives_metadata_from_training_mask():
 def test_thd_base_mask_requires_segment_ids():
     with pytest.raises(NotImplementedError, match="packed segment ids"):
         model._thd_base_mask(None, None, max_segments=4)
+
+
+def test_thd_base_mask_derives_metadata_under_batch_sharding():
+    """The derivation vmaps a per-row scan, which cannot carry the batch sharding.
+
+    Deriving straight from batch-sharded segment ids fails resource-axis resolution
+    ("is not found in mesh: ()"), which only reproduces on a real multi-device mesh.
+    """
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+    script = """
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, PartitionSpec as P, reshard
+
+        from experiments.grug.moe_hero_fsdp import model
+
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(2, 2, 2, 1),
+            ("replica_dcn", "data", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 4,
+        )
+        eos_id = 128001
+        tokens = jax.random.randint(jax.random.key(0), (8, 64), 0, 1000).at[:, ::11].set(eos_id)
+        starts = (jnp.roll(tokens, 1, axis=1).at[:, 0].set(0) == eos_id).astype(jnp.int32)
+        segment_ids = jnp.cumsum(starts, axis=1)
+
+        with jax.set_mesh(mesh):
+            sharded = reshard(segment_ids, P(("replica_dcn", "data", "expert"), None))
+            build = jax.jit(lambda ids: model._thd_base_mask((ids, ids), None, max_segments=16))
+            metadata = build(sharded).thd_segment_metadata
+
+        # EOS at position p opens a segment at p+1, so six EOS give seven documents.
+        assert metadata.segment_lengths.shape == (8, 16)
+        np.testing.assert_array_equal(np.asarray(metadata.num_segments), np.full(8, 7))
+    """
+
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
