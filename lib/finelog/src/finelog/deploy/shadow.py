@@ -31,9 +31,7 @@ from finelog.benchmarks.query_measurement import query_table, stats_client
 from finelog.client.log_client import LogClient
 from finelog.deploy.bootstrap import HEALTH_OK
 from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_policy_json
-from finelog.deploy.snapshot import STORE_DIR, namespaces_in_catalog
-
-CATALOG_FILENAME = "_finelog_catalog.sqlite"
+from finelog.deploy.snapshot import CATALOG_FILENAME, STORE_DIR, namespaces_in_catalog
 
 # Opening a snapshot runs catalog adoption and per-namespace recovery, which is
 # the slow part of a real boot and the part worth rehearsing.
@@ -48,6 +46,11 @@ UNMATCHED_VALUE = "__finelog_shadow_no_match__"
 # `${__interval_ms}` is a panel's pixel width in Grafana; here it just has to be
 # a bucket size the snapshot's window divides into more than once.
 DASHBOARD_INTERVAL_MS = 60_000
+
+# What a row written before the `cluster` column existed, or by a server that is
+# its own hub, reports as its origin. Rows are only unlabelled on the deployment
+# that wrote them, so this is the label for "the snapshot's own cluster".
+HOME_CLUSTER = "marin"
 
 _MISSING_TABLE = re.compile(r"table '([^']+)' not found")
 _DATAFUSION_PREFIX = "datafusion.public."
@@ -202,7 +205,7 @@ def snapshot_window(client: LogClient, namespace: str = "telemetry_v1") -> tuple
 def snapshot_clusters(client: LogClient, namespace: str = "telemetry_v1") -> tuple[str, ...]:
     """The origin clusters present in the snapshot, as the dashboards filter on them."""
     table = client.query(
-        f"SELECT DISTINCT COALESCE(NULLIF(\"cluster\", ''), 'marin') AS c FROM \"{namespace}\" LIMIT 32"
+        f"SELECT DISTINCT COALESCE(NULLIF(\"cluster\", ''), '{HOME_CLUSTER}') AS c FROM \"{namespace}\" LIMIT 32"
     )
     return tuple(sorted(value for value in table.column("c").to_pylist() if value))
 
@@ -301,7 +304,7 @@ def check_snapshot(image: str, snapshot: Path, dashboards: Sequence[Path]) -> Sh
             start_ms=start_ms,
             end_ms=end_ms,
             interval_ms=DASHBOARD_INTERVAL_MS,
-            clusters=clusters or ("marin",),
+            clusters=clusters or (HOME_CLUSTER,),
             report=report,
         )
         if report.failures:

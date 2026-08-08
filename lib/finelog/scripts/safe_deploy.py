@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import click
+import httpx
 from finelog.deploy._gcp import _ssh_args, _wait_health_via_ssh, apply_bootstrap, render_bootstrap_for
 from finelog.deploy.bootstrap import CONTAINER_NAME, HEALTH_OK
 from finelog.deploy.build import build_image as build_finelog_image
@@ -52,7 +53,9 @@ from finelog.deploy.preflight import (
     render_document,
     summarize,
 )
+from finelog.errors import StatsError
 from finelog.schema import Schema
+from rigging.auth import IapLoginRequired
 
 STATE_DIR = Path.home() / ".cache" / "finelog" / "deploy-state"
 
@@ -126,18 +129,15 @@ def _golden_path(cfg: FinelogConfig) -> Path:
 
 
 def _registered_schemas(cfg: FinelogConfig, name: str) -> dict[str, Schema] | None:
-    """Read the registered schemas from the running server, or None if unreachable.
-
-    Broad by intent: three transports (IAP proxy, SSH tunnel, kubectl
-    port-forward) fail in their own vocabularies, and every one of them means
-    the same thing here — the live side of the decision is not available, so
-    fall back to the recorded golden. Enumerating their exception types would
-    age worse than this does, and the reason is echoed either way.
-    """
+    """Read the registered schemas from the running server, or None if unreachable."""
     try:
         with open_log_client(cfg, name, TUNNEL_TIMEOUT) as client:
             return client.list_namespaces()
-    except Exception as exc:
+    # Three transports — IAP proxy, SSH tunnel, kubectl port-forward — fail in
+    # their own vocabularies, and all of them mean the same thing here. A bug in
+    # this script is not one of them, so `Exception` is too wide: it would read
+    # as unreachability and quietly downgrade the decision.
+    except (OSError, RuntimeError, StatsError, IapLoginRequired, httpx.HTTPError) as exc:
         click.echo(f"could not read registered schemas from {cfg.name}: {exc}", err=True)
         return None
 

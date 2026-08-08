@@ -33,8 +33,9 @@ from finelog.deploy.build import DEFAULT_PLATFORM
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
 from finelog.deploy.connection import DEFAULT_REQUEST_TIMEOUT, open_log_client
-from finelog.deploy.shadow import CATALOG_FILENAME, check_snapshot
+from finelog.deploy.shadow import check_snapshot
 from finelog.deploy.snapshot import (
+    CATALOG_FILENAME,
     CATALOG_PATTERNS,
     DEFAULT_MAX_BYTES,
     DEFAULT_SEGMENTS_PER_NAMESPACE,

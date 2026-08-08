@@ -30,15 +30,17 @@ pub struct RemoteStore {
     prefix: String,
 }
 
+/// The URL schemes that name a bucket rather than a directory on this host.
+const GCS_SCHEME: &str = "gs://";
+const S3_SCHEME: &str = "s3://";
+
 /// Whether `remote_log_dir` names an object store rather than a local directory.
 ///
-/// The complement of [`build_remote_store`]'s fallback: a value it does not
-/// recognize as an object-store URL becomes a `LocalFileSystem` root. Callers
-/// that must refuse production storage (the server's shadow mode) ask here
-/// rather than re-deriving the scheme list.
+/// True exactly when [`build_remote_store`] would open a bucket for it, and
+/// false when it would fall back to a `LocalFileSystem` root.
 pub fn is_object_store(remote_log_dir: &str) -> bool {
     let dir = remote_log_dir.trim();
-    dir.starts_with("gs://") || dir.starts_with("s3://")
+    dir.starts_with(GCS_SCHEME) || dir.starts_with(S3_SCHEME)
 }
 
 /// Build the remote store from `remote_log_dir`, or `None` when sync is
@@ -59,7 +61,7 @@ pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, S
     if dir.is_empty() {
         return Ok(None);
     }
-    if let Some(rest) = dir.strip_prefix("gs://") {
+    if let Some(rest) = dir.strip_prefix(GCS_SCHEME) {
         let (bucket, prefix) = match rest.split_once('/') {
             Some((b, p)) => (b, p),
             None => (rest, ""),
@@ -73,7 +75,7 @@ pub fn build_remote_store(remote_log_dir: &str) -> Result<Option<RemoteStore>, S
             prefix: prefix.trim_matches('/').to_string(),
         }));
     }
-    if let Some(rest) = dir.strip_prefix("s3://") {
+    if let Some(rest) = dir.strip_prefix(S3_SCHEME) {
         let (bucket, prefix) = match rest.split_once('/') {
             Some((b, p)) => (b, p),
             None => (rest, ""),

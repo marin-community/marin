@@ -387,9 +387,9 @@ mod tests {
 
     #[test]
     fn a_redefined_projection_evolves_and_reports_the_rebuild() {
-        // The 2026-08-08 shape: a registered projection name whose definition the
-        // image has since changed. It supersedes rather than conflicts, so the
-        // pre-flight passes — and says what the acceptance costs.
+        // A registered projection name whose definition this image has changed.
+        // It supersedes rather than conflicts, so the pre-flight passes — and
+        // says what the acceptance costs.
         let mut registered = as_wire(&owned(TELEMETRY_NAMESPACE));
         let projection = registered
             .projections

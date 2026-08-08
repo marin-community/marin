@@ -26,14 +26,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-# Where both deploy backends mount the store: the GCE bootstrap bind-mounts it
-# and the k8s Deployment mounts its PVC there.
-STORE_DIR = "/var/cache/finelog"
+from finelog.deploy.bootstrap import CACHE_DIR
+
+# Where both deploy backends mount the store: the GCE bootstrap bind-mounts
+# CACHE_DIR and the k8s Deployment mounts its PVC at the same path.
+STORE_DIR = CACHE_DIR
+
+CATALOG_FILENAME = "_finelog_catalog.sqlite"
 
 # The catalog sqlite plus any rollback journal beside it, and the adoption
 # sentinel whose presence keeps a boot on the ordinary fast path instead of
 # re-running the rebuild-from-disk scan.
-CATALOG_PATTERNS = ("_finelog_catalog.sqlite*", ".finelog-rust-catalog")
+CATALOG_PATTERNS = (f"{CATALOG_FILENAME}*", ".finelog-rust-catalog")
 
 # Bounded by default. Enough recent segments per namespace to exercise catalog
 # adoption, index-bundle reads, and projection substitution, without copying a

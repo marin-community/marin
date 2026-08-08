@@ -160,11 +160,13 @@ def summarize(results: Sequence[PreflightResult]) -> str:
 def check_image(image: str, document: Mapping[str, object], *, docker: str = "docker") -> tuple[bool, str]:
     """Run ``image``'s own pre-flight over ``document``; return (passed, report).
 
-    The candidate image decides, so the rules under test are the rules that
-    ship. ``--network=none`` makes the "no network" part of the contract
-    structural rather than a claim about the subcommand.
+    ``passed`` is false when any server-owned namespace in ``document`` would
+    fail to register; ``report`` is the image's per-namespace decision, ready to
+    print.
     """
     result = subprocess.run(
+        # `--network=none`: the subcommand touches nothing outside its stdin, and
+        # this makes that structural rather than a claim.
         [docker, "run", "--rm", "-i", "--network=none", image, "finelog-server", "check-schema", "-"],
         input=render_document(document),
         capture_output=True,

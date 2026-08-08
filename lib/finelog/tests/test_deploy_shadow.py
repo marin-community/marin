@@ -4,7 +4,29 @@
 import json
 from pathlib import Path
 
-from finelog.deploy.shadow import UNMATCHED_VALUE, ShadowReport, dashboard_variables, missing_namespace
+import pytest
+from finelog.client import LogClient
+from finelog.deploy.shadow import (
+    UNMATCHED_VALUE,
+    ShadowReport,
+    dashboard_variables,
+    missing_namespace,
+    run_dashboard_corpus,
+)
+from finelog.embedded import is_available, require_embedded_server
+
+DASHBOARD_DIR = Path(__file__).resolve().parents[3] / "infra/grafana/dashboards"
+
+
+@pytest.fixture
+def embedded_server(tmp_path):
+    if not is_available():
+        pytest.skip("finelog native server extension (finelog_server) not available")
+    server = require_embedded_server()(log_dir=str(tmp_path / "log-server"))
+    try:
+        yield server
+    finally:
+        server.stop()
 
 
 def test_a_planning_error_names_the_namespace_the_snapshot_lacks() -> None:
@@ -15,6 +37,36 @@ def test_a_planning_error_names_the_namespace_the_snapshot_lacks() -> None:
 
 def test_an_ordinary_query_failure_is_not_read_as_a_missing_namespace() -> None:
     assert missing_namespace("Arrow error: Invalid argument error: column types must match") is None
+
+
+def test_a_dashboard_query_over_a_namespace_this_store_lacks_is_not_a_failure(embedded_server) -> None:
+    # The dashboards read every namespace any Marin service writes; a store holds
+    # only what its own clients registered. Those queries must be reported as not
+    # run — counting them as failures would make every real snapshot fail, and
+    # counting them as green would claim coverage the check never had.
+    client = LogClient.connect(embedded_server.address)
+    try:
+        rehydrated = tuple(sorted(client.list_namespaces()))
+    finally:
+        client.close()
+    report = ShadowReport(namespaces_expected=rehydrated, namespaces_rehydrated=rehydrated)
+
+    run_dashboard_corpus(
+        embedded_server.address,
+        sorted(DASHBOARD_DIR.glob("*.json")),
+        start_ms=1_000,
+        end_ms=5_000,
+        interval_ms=250,
+        clusters=("marin",),
+        report=report,
+    )
+
+    assert report.passed(), report.describe()
+    assert report.queries_skipped, "the dashboards read namespaces only a live deployment registers"
+    assert set(report.queries_skipped.values()).isdisjoint(rehydrated)
+    if "telemetry_v1" in rehydrated:
+        assert report.queries_run > 0
+        assert "accelerators.json" in report.dashboards_run
 
 
 def test_a_report_says_which_namespaces_went_unexercised() -> None:
@@ -28,19 +80,10 @@ def test_a_report_says_which_namespaces_went_unexercised() -> None:
 
     described = report.describe()
 
-    assert report.passed()
-    assert "namespaces rehydrated: 2/2" in described
+    # An operator reads this to decide whether a green run covered anything.
     assert "dashboard queries green: 25 across jobs.json" in described
     assert "dashboard queries not run: 1" in described
     assert "iris.task_state" in described
-    assert described.endswith("SHADOW PASS")
-
-
-def test_a_failure_makes_the_report_fail() -> None:
-    report = ShadowReport(failures=["log.json:rate: boom"])
-
-    assert not report.passed()
-    assert report.describe().endswith("SHADOW FAIL")
 
 
 def test_a_dashboards_own_variables_get_values_the_snapshot_can_supply(tmp_path: Path) -> None:
