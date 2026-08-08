@@ -598,7 +598,11 @@ def score(wave):
 
     if not results:
         return
-    control = next(r for r in results if r["tag"] in CONTROL_TAGS)
+    control = next((r for r in results if r["tag"] in CONTROL_TAGS), None)
+    if control is None:
+        scored = ", ".join(r["tag"] for r in results) or "none"
+        print(f"\nno control arm has scored steps yet (scored so far: {scored})")
+        return
     # Step time is only comparable when every arm processes the same tokens. A batch-size arm is
     # scored on tokens/s instead, where a slower but larger step can still be a win.
     varies_batch = len({r["batch_size"] for r in results}) > 1
