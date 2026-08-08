@@ -56,7 +56,6 @@ EP_SCHEDULER_FLAGS = (
     "--xla_gpu_enable_latency_hiding_scheduler=true " "--xla_gpu_experimental_parallel_collective_overlap_limit=4"
 )
 SOL_ESTIMATOR_FLAG = "--xla_gpu_enable_analytical_sol_latency_estimator=true"
-NCCL_MEMORY_FLAGS = "--xla_gpu_enable_nccl_comm_splitting=true --xla_gpu_enable_nccl_per_stream_comms=false"
 # `xla_gpu_cudnn_gemm_fusion_level` is an int, not a bool, and the two other fusion switches this
 # once carried no longer exist in XLA 0.11 (`enable_custom_fusions`, and
 # `enable_address_computation_fusion`, whose successor `enable_dynamic_slice_fusion` is already on).
@@ -99,9 +98,6 @@ BIG_COMBINE_THRESHOLD_FLAGS = _combine_threshold_flags(8 * 1024 * 1024 * 1024)
 # `xla_gpu_enable_address_computation_fusion` was renamed; the successor defaults to false, so this
 # is untested rather than already on.
 DYNAMIC_SLICE_FUSION_FLAGS = "--xla_gpu_enable_dynamic_slice_fusion=true"
-# Both target collective-permute, which a pure-FSDP graph may not contain at all. `xla_gpu_lhs_enable
-# _gpu_async_tracker` would have belonged here but does not exist in XLA 0.11.
-P2P_FLAGS = "--xla_gpu_enable_pipelined_p2p=true --xla_gpu_collective_permute_decomposer_threshold=1024"
 LOGDIR = pathlib.Path("scratch/hero_sweep")
 PEAK_FLOPS_PER_DEVICE = 2.5e15
 NUM_DEVICES = 64
@@ -411,51 +407,26 @@ WAVES = {
             note="fourth attempt; the first three never reached step 0",
         ),
     ],
-    # Wave 14: the P2P pair, and the combine threshold given something to combine. Raising the
-    # threshold cannot merge across scan iterations, so it is paired with the unroll here.
+    # Wave 14: the last two ideas worth a rack. Every remaining latency-hiding and collective flag
+    # is dropped: six independent measurements agree that a 90.3% compute-busy step has nothing for
+    # that family to recover, so `p2ppermute` and `unrollcombine` were retired unrun.
     #
     # `doublebuffer` is a rerun. Its wave-12 attempt compiled for 22 minutes against the control's
     # 3.5, then lost every rank's coordinator connection at 24 minutes. That launch predates the
     # #7994 cherry-pick, so it still bound the fixed port 8476.
+    #
+    # The batch arms spend the HBM headroom on tokens. Peak sits at 137.2 GiB against a 138.22 GiB
+    # ceiling, and raising the allocator fraction lifts that to 162.18 GiB at no cost of its own.
+    # Activations scale with the batch while weights and optimizer state do not. These arms do more
+    # work per step, so step time is not comparable and scoring switches to tokens/s; both batches
+    # divide the 64-device mesh evenly.
     "w14": [
-        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control, batch 1024"),
         Arm(
             "doublebuffer",
             env={**COMBINED_ENV, "XLA_FLAGS": f"{DOUBLE_BUFFER_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
             args=COMBINED_ARGS,
             note="rerun; 2x unroll of the 48-layer scan, against 5.09 s/step of recompute",
-        ),
-        Arm(
-            "p2ppermute",
-            env={**COMBINED_ENV, "XLA_FLAGS": f"{P2P_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
-            args=COMBINED_ARGS,
-            note="pipelined P2P and collective-permute decomposition; may be a no-op on pure FSDP",
-        ),
-        Arm(
-            "unrollcombine",
-            env={
-                **COMBINED_ENV,
-                "XLA_FLAGS": f"{DOUBLE_BUFFER_FLAGS} {BIG_COMBINE_THRESHOLD_FLAGS} {_COMMAND_BUFFER_DISABLED}",
-            },
-            args=COMBINED_ARGS,
-            note="unroll the scan twice, then let the two iterations' collectives merge",
-        ),
-    ],
-    # Wave 15: spend the HBM headroom on tokens. Peak sits at 137.2 GiB against a 138.22 GiB
-    # ceiling, and raising the allocator fraction to 0.88 lifts that to 162.18 GiB with no cost of
-    # its own. Activations scale with the batch while weights and optimizer state do not, so the
-    # extra 25 GiB buys roughly a quarter more sequences.
-    #
-    # These arms do more work per step, so step time is not comparable and scoring switches to
-    # tokens/s. Every batch here divides the 64-device mesh evenly.
-    "w15": [
-        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control, batch 1024"),
-        Arm(
-            "batch1088",
-            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
-            args=COMBINED_ARGS,
-            note="+6.25% sequences, 17 per device",
-            batch_size=1088,
         ),
         Arm(
             "batch1152",
