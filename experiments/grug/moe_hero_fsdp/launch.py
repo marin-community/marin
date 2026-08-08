@@ -5,6 +5,7 @@
 
 import dataclasses
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, get_args
@@ -17,6 +18,7 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.recovery.types import AblationSpec
 from levanter.tracker.telemetry import TelemetryConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -40,7 +42,6 @@ from experiments.grug.moe_hero_fsdp.train import (
     run_grug,
     run_grug_ablation_sweep,
 )
-from experiments.grug.recovery.ablation_catalog import environment_ablations, selected_ablations
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -328,37 +329,64 @@ def build_hero_run(
     )
 
 
-def build_ablation_sweep_hero_run(
+@dataclass(frozen=True)
+class HeroSweepArm:
+    """One sweep arm: an ``AblationSpec`` for the process env, plus the model-side deltas.
+
+    ``AblationSpec`` carries only process-start environment, which covers NCCL, XLA_FLAGS, and the
+    allocator fraction. ``overrides`` and ``batch_size`` reach the knobs that live in the model
+    config instead, so one sweep can vary both.
+    """
+
+    spec: AblationSpec
+    overrides: HeroOverrides = HeroOverrides()
+    batch_size: int | None = None
+
+
+def build_hero_sweep_run(
     *,
     run_id: str,
     dp_racks: int,
     steps_per_arm: int,
-    ablation_names: tuple[str, ...],
+    arms: Sequence[HeroSweepArm],
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build one allocation that runs the named environment arms back to back.
+    """Build one allocation that runs ``arms`` back to back.
 
-    Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its
-    own W&B run named ``<run_id>-<arm>``. A sweep is a diagnostic, so it never checkpoints.
+    Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its own
+    W&B run named ``<run_id>-<arm>``. One arm's fault does not end the sweep. A sweep is a
+    diagnostic, so it never checkpoints.
+
+    Running the arms on a single allocation puts them on the same hardware, which removes the
+    placement variance that dominates a fan-out across one rack per arm. It costs wall clock and
+    separates the arms in time instead, so the residual drift is worth measuring with two identical
+    arms before reading any delta.
     """
-    arms = tuple(selected_ablations(environment_ablations(num_steps=steps_per_arm), ablation_names))
+    if not arms:
+        raise ValueError("a sweep needs at least one arm")
     parts = _hero_run_parts(
         run_id=run_id, dp_racks=dp_racks, num_steps=steps_per_arm, save_checkpoints=False, version=version
     )
-    batch_size = parts.batch_size
-    model, optimizer = parts.model, parts.optimizer
     wandb_project = parts.wandb_project
     grug_trainer = parts.grug_trainer
     train_resources = parts.train_resources
     name, version, slim = parts.name, parts.version, parts.slim
+    # The optimizer's LR schedule is derived from the batch, so an arm that changes the batch needs
+    # its own pair rather than the allocation's.
+    configs = []
+    for arm in arms:
+        batch_size = arm.batch_size if arm.batch_size is not None else parts.batch_size
+        steps = arm.spec.num_steps or steps_per_arm
+        model, optimizer = build_hero_configs(num_train_steps=steps, batch_size=batch_size)
+        configs.append((arm, batch_size, steps, apply_hero_overrides(model, arm.overrides), optimizer))
 
     def build_config(ctx: StepContext) -> GrugAblationSweepConfig:
         runs = tuple(
             _hero_run_config(
                 ctx=ctx,
-                run_id=f"{run_id}-{arm.name}",
+                run_id=f"{run_id}-{arm.spec.name}",
                 batch_size=batch_size,
-                num_steps=arm.num_steps or steps_per_arm,
+                num_steps=steps,
                 model=model,
                 optimizer=optimizer,
                 grug_trainer=grug_trainer,
@@ -366,11 +394,11 @@ def build_ablation_sweep_hero_run(
                 slim=slim,
                 run_mode=GrugRunMode.SUPERVISED,
             )
-            for arm in arms
+            for arm, batch_size, steps, model, optimizer in configs
         )
         return GrugAblationSweepConfig(
             run_id=run_id,
-            arms=arms,
+            arms=tuple(arm.spec for arm in arms),
             runs=runs,
             resources=ctx.runtime_arg("train_resources"),
             processes_per_task=HERO_PROCESSES_PER_TASK,

@@ -3,9 +3,9 @@
 
 """Trace every arm of a sweep wave on CPU before it reaches a rack.
 
-Iris ships the local worktree, so one wiring mistake kills all four arms at once, roughly 20
-minutes of four racks. This traces ``next_token_loss`` under each arm's launcher flags at a small
-shape, on CPU, through :func:`apply_hero_overrides` -- the same override path the launcher uses.
+A wave's arms share one allocation and one code state, so a single wiring mistake kills them all,
+control included. This traces ``next_token_loss`` under each arm's overrides at a small shape, on
+CPU, through :func:`apply_hero_overrides` -- the same path the launcher uses.
 
 ``jax.eval_shape`` never allocates and never launches a kernel, so it cannot catch a numerical or
 kernel-level fault. It covers the Python -- attribute names, config plumbing, remat policies,
@@ -32,7 +32,7 @@ from jax.sharding import AxisType, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
-from experiments.grug.moe_hero_fsdp.launch import HeroOverrides, apply_hero_overrides
+from experiments.grug.moe_hero_fsdp.launch import apply_hero_overrides
 from experiments.grug.moe_hero_fsdp.sweep import WAVES
 from experiments.grug.moe_hero_fsdp.train import BATCH_AXES
 
@@ -57,8 +57,7 @@ PREFLIGHT_OVERRIDES = {
     # every knob these arms vary, so the plumbing is still exercised.
     "moe_implementation": "scatter",
     "attention_implementation": "reference",
-    # `expert_chunks` is rejected outside `sonic_cute`, so chunk-count arms trace at the default
-    # chunking. Their flag plumbing is covered by the launcher's own `click.IntRange`.
+    # `expert_chunks` is rejected outside `sonic_cute`, so chunk-count arms trace at the default.
     "expert_chunks": 1,
 }
 # `data` is the only axis a preflight needs to be non-trivial: it carries FSDP.
@@ -67,20 +66,11 @@ PREFLIGHT_BATCH = 2
 
 
 def preflight_model(arm):
-    """The hero config at preflight shape with ``arm``'s launcher flags applied."""
-    model, _ = build_hero_configs(num_train_steps=20, batch_size=1024)
-    flags = {}
-    args = list(arm.args)
-    while args:
-        flag = args.pop(0).removeprefix("--").replace("-", "_")
-        flags[flag] = args.pop(0)
-    if "expert_chunks" in flags:
-        flags["expert_chunks"] = int(flags["expert_chunks"])
-    if "ce_b_block_size" in flags:
-        flags["ce_b_block_size"] = int(flags["ce_b_block_size"])
-    # Arm flags first, then the portable-backend shape, so a knob the CPU path rejects is dropped
-    # rather than fought over. `HeroOverrides` rejects a flag name the launcher would not accept.
-    return dataclasses.replace(apply_hero_overrides(model, HeroOverrides(**flags)), **PREFLIGHT_OVERRIDES)
+    """The hero config at preflight shape with ``arm``'s overrides applied."""
+    model, _ = build_hero_configs(num_train_steps=20, batch_size=arm.batch_size)
+    # Arm overrides first, then the portable-backend shape, so a knob the CPU path rejects is
+    # dropped rather than fought over.
+    return dataclasses.replace(apply_hero_overrides(model, arm.setting.overrides), **PREFLIGHT_OVERRIDES)
 
 
 def trace(cfg):
@@ -110,7 +100,7 @@ def check_xla_flags(arm):
     subprocess, and the verdict is the child's exit status: unknown names and unparsable values abort
     through different messages, and both kill a rack.
     """
-    flags = arm.env.get("XLA_FLAGS")
+    flags = arm.setting.process_env().get("XLA_FLAGS")
     if not flags:
         return
     probe = subprocess.run(

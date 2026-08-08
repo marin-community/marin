@@ -6,8 +6,13 @@
 import click
 from marin.experiment.cli import build_options
 
-from experiments.grug.moe_hero_fsdp.launch import build_ablation_sweep_hero_run
-from experiments.grug.recovery.ablation_catalog import BASELINE_ABLATION_NAME, environment_ablation_names
+from experiments.grug.moe_hero_fsdp.launch import HeroSweepArm, build_hero_sweep_run
+from experiments.grug.recovery.ablation_catalog import (
+    BASELINE_ABLATION_NAME,
+    environment_ablation_names,
+    environment_ablations,
+    selected_ablations,
+)
 
 
 @click.command()
@@ -31,11 +36,12 @@ from experiments.grug.recovery.ablation_catalog import BASELINE_ABLATION_NAME, e
 )
 @build_options
 def main(run_id: str, dp_racks: int, steps_per_arm: int, ablation_names: tuple[str, ...]):
-    return build_ablation_sweep_hero_run(
+    specs = selected_ablations(environment_ablations(num_steps=steps_per_arm), ablation_names)
+    return build_hero_sweep_run(
         run_id=run_id,
         dp_racks=dp_racks,
         steps_per_arm=steps_per_arm,
-        ablation_names=ablation_names,
+        arms=[HeroSweepArm(spec=spec) for spec in specs],
     )
 
 
