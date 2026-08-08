@@ -73,8 +73,14 @@ class MoeHeuristic:
         )
 
 
-def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
-    """The fixed FSDP hero model plus its compute-scaled MuonH optimizer."""
+def build_hero_configs(
+    *, num_train_steps: int, batch_size: int, expert_chunks: int = 4
+) -> tuple[GrugModelConfig, GrugMoeMuonHConfig]:
+    """The fixed FSDP hero model plus its compute-scaled MuonH optimizer.
+
+    ``expert_chunks`` splits the expert bank for the local ``sonic_cute`` path. The hero default of
+    4 drops about 1.9 percent of assignments; 1 computes every assignment and is the dropless arm.
+    """
     model = GrugModelConfig(
         vocab_size=128_256,
         hidden_dim=6144,
@@ -98,7 +104,7 @@ def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugMo
         sconv=True,
         attention_implementation="gpu_fa4_cute",
         moe_implementation="sonic_cute",
-        expert_chunks=4,
+        expert_chunks=expert_chunks,
         report_capacity_overflow=True,
         rope_fused=True,
     )

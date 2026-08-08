@@ -132,6 +132,7 @@ def build_hero_run(
     run_id: str,
     num_steps: int,
     schedule_steps: int | None = None,
+    seed: int = 0,
     batch_size: int = HERO_EP_BATCH_SIZE,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
@@ -245,7 +246,7 @@ def build_hero_run(
     def build_config(ctx: StepContext) -> GrugRunConfig:
         trainer = TrainerConfig(
             id=run_id,
-            seed=0,
+            seed=seed,
             train_batch_size=batch_size,
             num_train_steps=total_schedule_steps,
             profiler=ProfilerConfig(
@@ -340,6 +341,12 @@ def build_hero_run(
     ),
 )
 @click.option(
+    "--seed",
+    type=int,
+    default=0,
+    help="Trainer seed. Vary it across otherwise identical runs to measure run-to-run variance.",
+)
+@click.option(
     "--num-experts",
     type=click.IntRange(min=1),
     default=None,
@@ -426,6 +433,7 @@ def main(
     run_id: str,
     num_steps: int,
     schedule_steps: int | None,
+    seed: int,
     batch_size: int,
     num_experts: int | None,
     num_experts_per_token: int | None,
@@ -443,6 +451,7 @@ def main(
         run_id=run_id,
         num_steps=num_steps,
         schedule_steps=schedule_steps,
+        seed=seed,
         batch_size=batch_size,
         num_experts=num_experts,
         num_experts_per_token=num_experts_per_token,

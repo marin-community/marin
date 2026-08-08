@@ -166,6 +166,10 @@ SMALL_SHAPES: dict[str, SmallShape] = {
     # not a free choice -- active parameters scale as layers x hidden^2, and that model reproduces
     # the three measured step counts to within 0.5%, giving 24,840 here.
     "d1536": SmallShape(1536, 16, 12, 3, 1, num_steps=24840),
+    # Issue #8062's fourth rung. Heads stay hidden/128, the KV split follows local = heads//4 and
+    # global = heads//8, and depth continues the 8/12/14/16 progression to 22. The 60x step count
+    # comes from the same layers x hidden^2 active-parameter model that reproduces the other four.
+    "d2048": SmallShape(2048, 22, 16, 4, 2, num_steps=60640),
 }
 
 
@@ -176,6 +180,10 @@ def _small_model(
     moe_implementation: str,
     expert_chunks: int,
     seq_len: int,
+    num_experts: int,
+    num_experts_per_token: int,
+    intermediate_dim: int | None,
+    latent_dim: int | None,
 ) -> GrugModelConfig:
     """The hero shape (moe_hero_ep ``HERO_MODEL``) downsized to this width.
 
@@ -186,11 +194,11 @@ def _small_model(
     return GrugModelConfig(
         vocab_size=128_256,
         hidden_dim=shape.hidden_dim,
-        intermediate_dim=shape.hidden_dim // 2,
+        intermediate_dim=intermediate_dim if intermediate_dim is not None else shape.hidden_dim // 2,
         shared_expert_intermediate_dim=shape.hidden_dim // 2,
         num_shared_experts=2,
-        num_experts=128,
-        num_experts_per_token=4,
+        num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
         num_layers=shape.num_layers,
         num_heads=shape.num_heads,
         num_kv_heads=max(shape.local_kv_heads, shape.global_kv_heads),
@@ -207,6 +215,7 @@ def _small_model(
         attention_implementation=attention_implementation,
         moe_implementation=moe_implementation,
         expert_chunks=expert_chunks,
+        latent_dim=latent_dim,
         report_capacity_overflow=True,
         rope_fused=True,
     )
@@ -229,9 +238,24 @@ def build_small_run(
     capacity_factor: float = 1.0,
     seq_len: int = SEQ_LEN,
     tokens_per_step: int = TOKENS_PER_STEP,
+    num_experts: int = 128,
+    num_experts_per_token: int = 4,
+    intermediate_dim: int | None = None,
+    latent_dim: int | None = None,
+    tokens_per_active_param: int = 60,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """One expert-parallel run of the downsized hero shape ``size`` at its 60x token budget."""
+    """One expert-parallel run of the downsized hero shape ``size``.
+
+    ``tokens_per_active_param`` scales the step budget. The shapes carry a 60x count; issue #8062
+    specifies 750x for the EP/FSDP ladder, which is what makes these rungs comparable to the hero.
+    The expert overrides let a rung reproduce the hero's routing geometry: cell load is
+    ``tokens_per_shard * top-k / experts``, which depends on ``num_experts`` and
+    ``num_experts_per_token`` but not on the model width, so a narrow rung can carry the hero's
+    exact drop dynamics at a fraction of the step time.
+    """
+    if tokens_per_active_param <= 0:
+        raise ValueError(f"tokens_per_active_param must be positive, got {tokens_per_active_param}")
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in SMALL_SHAPES:
@@ -251,7 +275,7 @@ def build_small_run(
     # The 60x token budget is what the step count encodes, so a wider step needs proportionally
     # fewer of them. A wider step also deepens each routing cell, which is what sets the drop rate:
     # capacity is ceil(factor * tokens_per_shard * top-k / experts).
-    num_steps = max(1, round(shape.num_steps * TOKENS_PER_STEP / tokens_per_step))
+    num_steps = max(1, round(shape.num_steps * TOKENS_PER_STEP / tokens_per_step * tokens_per_active_param / 60))
     expert_axis_size = fleet.expert_axis_size if sharding.expert_axis_size is None else sharding.expert_axis_size
     model = _small_model(
         shape,
@@ -260,6 +284,10 @@ def build_small_run(
         sharding.moe_implementation,
         sharding.expert_chunks,
         seq_len,
+        num_experts,
+        num_experts_per_token,
+        intermediate_dim,
+        latent_dim,
     )
     optimizer = dataclasses.replace(
         MoeHeuristic().build_optimizer_config(
@@ -424,6 +452,26 @@ def build_small_run(
     show_default=True,
     help="Fixed all-to-all capacity factor. Higher values drop fewer assignments and pad more.",
 )
+@click.option("--num-experts", type=click.IntRange(min=1), default=128, help="Routed expert count.")
+@click.option("--num-experts-per-token", type=click.IntRange(min=1), default=4, help="Routed experts per token.")
+@click.option(
+    "--intermediate-dim",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Expert width. Defaults to hidden_dim // 2.",
+)
+@click.option(
+    "--latent-dim",
+    type=click.IntRange(min=1),
+    default=None,
+    help="LatentMoE: run routed experts at this width. Divides all-to-all traffic by hidden/latent.",
+)
+@click.option(
+    "--tokens-per-active-param",
+    type=click.IntRange(min=1),
+    default=60,
+    help="Token budget per active parameter. The shapes carry 60; issue #8062 specifies 750.",
+)
 @build_options
 def main(
     run_id: str,
@@ -433,6 +481,11 @@ def main(
     seq_len: int,
     tokens_per_step: int,
     capacity_factor: float,
+    num_experts: int,
+    num_experts_per_token: int,
+    intermediate_dim: int | None,
+    latent_dim: int | None,
+    tokens_per_active_param: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_small_run(
         run_id=run_id,
@@ -442,6 +495,11 @@ def main(
         seq_len=seq_len,
         tokens_per_step=tokens_per_step,
         capacity_factor=capacity_factor,
+        num_experts=num_experts,
+        num_experts_per_token=num_experts_per_token,
+        intermediate_dim=intermediate_dim,
+        latent_dim=latent_dim,
+        tokens_per_active_param=tokens_per_active_param,
     )
 
 

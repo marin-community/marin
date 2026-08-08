@@ -60,6 +60,8 @@ HERO_STALL_DIAGNOSTIC_TIMEOUT = timedelta(seconds=20)
 # Grad norm reductions run outside the scanned step and cost a visible slice of a short run's wall
 # clock. Off by default; --watch-interval re-enables them every N steps.
 HERO_WATCH_INTERVAL = 0
+# sonic_cute expert-bank split. 4 is the hero default and drops ~1.9% of assignments; 1 is dropless.
+HERO_EXPERT_CHUNKS = 4
 # One process writes the XPlane capture. Every rank of a 16-node gang would upload a
 # multi-hundred-MB session into the same directory for the same timeline.
 HERO_PROFILE_PROCESS_INDEX = 0
@@ -120,6 +122,7 @@ def _hero_run_config(
     slim: ArtifactStep[TokenizedCache],
     run_mode: GrugRunMode,
     schedule_steps: int | None = None,
+    seed: int = 0,
     validation: list[ArtifactStep[TokenizedCache]] | None = None,
     eval_every: int = 0,
     watch_interval: int = HERO_WATCH_INTERVAL,
@@ -137,7 +140,7 @@ def _hero_run_config(
         raise ValueError(f"schedule_steps={schedule_steps} must be at least num_steps={num_steps}")
     trainer = TrainerConfig(
         id=run_id,
-        seed=0,
+        seed=seed,
         train_batch_size=batch_size,
         # Warmup and decay are fractions of this field, so it carries the whole schedule length.
         # `stop_after_steps` below is what actually bounds the run.
@@ -236,6 +239,7 @@ def _hero_run_parts(
     save_checkpoints: bool,
     version: str | None,
     schedule_steps: int | None = None,
+    expert_chunks: int = HERO_EXPERT_CHUNKS,
 ) -> _HeroRunParts:
     _validate_hero_args(run_id, dp_racks, num_steps)
     if schedule_steps is not None and schedule_steps <= 0:
@@ -249,6 +253,7 @@ def _hero_run_parts(
     model, optimizer = build_hero_configs(
         num_train_steps=schedule_steps if schedule_steps is not None else num_steps,
         batch_size=batch_size,
+        expert_chunks=expert_chunks,
     )
     name = f"grug/{run_id}"
     return _HeroRunParts(
@@ -280,6 +285,8 @@ def build_hero_run(
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None = None,
+    expert_chunks: int = HERO_EXPERT_CHUNKS,
+    seed: int = 0,
     eval_every: int = 0,
     save_checkpoints: bool = True,
     run_mode: GrugRunMode = GrugRunMode.DEFAULT,
@@ -310,6 +317,7 @@ def build_hero_run(
         schedule_steps=schedule_steps,
         save_checkpoints=save_checkpoints,
         version=version,
+        expert_chunks=expert_chunks,
     )
     batch_size = parts.batch_size
     model, optimizer = parts.model, parts.optimizer
@@ -332,6 +340,7 @@ def build_hero_run(
             slim=slim,
             run_mode=run_mode,
             schedule_steps=schedule_steps,
+            seed=seed,
             validation=validation,
             eval_every=eval_every,
             watch_interval=watch_interval,
@@ -437,6 +446,21 @@ def build_ablation_sweep_hero_run(
     ),
 )
 @click.option(
+    "--expert-chunks",
+    type=click.IntRange(min=1),
+    default=HERO_EXPERT_CHUNKS,
+    help=(
+        "Split the sonic_cute expert bank into this many chunks. The hero default of 4 drops about "
+        "1.9 percent of assignments; 1 computes every assignment and is the dropless arm."
+    ),
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=0,
+    help="Trainer seed. Vary it across otherwise identical runs to measure run-to-run variance.",
+)
+@click.option(
     "--save-checkpoints/--no-save-checkpoints",
     default=True,
     show_default=True,
@@ -474,6 +498,8 @@ def main(
     dp_racks: int,
     num_steps: int,
     schedule_steps: int | None,
+    expert_chunks: int,
+    seed: int,
     eval_every: int,
     save_checkpoints: bool,
     mode: str,
@@ -486,6 +512,8 @@ def main(
         dp_racks=dp_racks,
         num_steps=num_steps,
         schedule_steps=schedule_steps,
+        expert_chunks=expert_chunks,
+        seed=seed,
         eval_every=eval_every,
         save_checkpoints=save_checkpoints,
         run_mode=GrugRunMode(mode),
