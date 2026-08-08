@@ -226,6 +226,33 @@ write) access in [`infra/permissions`](../permissions/README.md).
 Adapting this to another Pulumi project means a new thin workflow that triggers on that
 project's paths and calls `./.github/actions/pulumi-preview` with its own `stack`/`work-dir`.
 
+## IAM drift scan
+
+Every grant in `iam_data.py` is a non-authoritative `*IAMMember`, so `pulumi preview` only
+detects drift on bindings already in Pulumi state — a grant nobody told the program about (a
+newly enabled API's service agent, a hand-run `gcloud ... add-iam-policy-binding`, an expanded
+role on an existing member) lands invisibly. `.github/workflows/ops-iam-drift.yaml` runs weekly
+(and on `workflow_dispatch`), re-enumerates the live IAM surface `iam_data.py` covers, and files
+what diverges on one sticky GitHub issue labelled `iam-drift`.
+
+- `iac.gcp.iam_live` reads each resource's live `getIamPolicy` as the same read-only `pulumi-ci`
+  account the preview uses; `iac.gcp.iam_scan` diffs it against `iam_data.py` and classifies:
+  undeclared bindings (new service agents included), broad roles (`roles/owner`, `roles/editor`,
+  `roles/iam.securityAdmin`) bound outside config, and service agents whose backing API looks
+  disabled. Run it by hand with
+  `uv run --package marin-iac --extra deploy python infra/pulumi/iam_drift.py --no-github`.
+- The issue updates in place: a re-scan finding the same drift matches the fingerprint the body
+  embeds and re-notifies no one; new or changed drift rewrites the body; a clean scan comments
+  and closes.
+- **Human `user:` grants are not diffed.** They are KMS-encrypted in `iam_data.py`, and the scan
+  runs without decrypt access, so a plaintext live email can't be matched to its ciphertext.
+  Diffing them would need decrypt on the marin-iac state key — deliberately out of scope for a
+  read-only scan. Extending the scan to humans is the way to close that gap.
+- The orphaned-agent check needs `serviceusage.services.list`, which `marinGcpResourcePreviewer`
+  does not yet grant; without it the scan logs a warning and skips that check while still
+  reporting undeclared and broad bindings. Add the permission to the role (and `pulumi up`) to
+  turn it on.
+
 ## Unsupported
 
 - **Signing keys** (`iris-<cluster>-signing-key`, `finelog-<cluster>-signing-key`) stay manual,
