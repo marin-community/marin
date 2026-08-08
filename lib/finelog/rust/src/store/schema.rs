@@ -566,6 +566,12 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     }
 }
 
+/// Add the implicit columns registration gives every namespace: the `cluster`
+/// origin column appended, then the `seq` counter prepended.
+pub fn stored_form(schema: Schema) -> Schema {
+    with_implicit_seq(with_implicit_cluster(schema))
+}
+
 /// Resolve the ordering key column name, raising if invalid.
 ///
 /// If `key_column` is set it must name an existing column; otherwise the schema
