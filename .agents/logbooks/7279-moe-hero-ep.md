@@ -1489,3 +1489,11 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - The arm keeps the MHEP-175 config except for expert width. It uses five steps, full watch on every
   step, production priority, CUDA async allocation, and zero retries. A pass makes width 6,144 the
   E192 maximum on the tested grid. A failure keeps width 6,016 as the maximum.
+
+### 2026-08-08 13:57 UTC - The capacity-1.5 E128 search closes at width 8,320
+
+- MHEP-183 used 128 experts, width 8,448, and capacity factor 1.5. NCCL all-to-all failed from CUDA
+  out of memory before step 1. The coordinator was stopped immediately.
+- Result: Width 8,320 is the exact E128 maximum on the tested 128-wide grid at capacity factor 1.5.
+  It has 484.668 B total parameters and 28.285 B active parameters. Width 8,448 is the adjacent
+  failed point.
