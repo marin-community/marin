@@ -12,7 +12,13 @@ import requests
 from fray.current_client import current_client
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 
-from marin.inference.config import InferenceModelConfig, VllmCompilationCacheMode
+from marin.inference.config import (
+    InferenceModelConfig,
+    VllmCompilationCacheMode,
+    VllmEngineConfig,
+    VllmLauncherType,
+)
+from marin.inference.vllm_backend import vllm_launcher
 from marin.inference.vllm_server import VllmEnvironment
 from marin.training.run_environment import env_vars_for_dependency_groups
 
@@ -45,6 +51,7 @@ def run_one_query(
         host="127.0.0.1",
         port=port,
         timeout_seconds=3600,
+        launcher=vllm_launcher(VllmEngineConfig(launcher=VllmLauncherType.TPU)),
         compilation_cache_mode=compilation_cache_mode,
     )
     try:
@@ -158,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.repeat < 1:
         raise ValueError("--repeat must be >= 1")
 
-    dependency_groups = ["tpu", "vllm"]
+    dependency_groups = ["tpu"]
     resources = ResourceConfig.with_tpu(args.tpu_type)
     env_vars: dict[str, str] = {}
     if args.local_cache_dir is not None:

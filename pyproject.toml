@@ -95,8 +95,8 @@ override-dependencies = [
 ]
 conflicts = [
     # GPU extras still carry CUDA/Linux-only solver constraints. Keep them out
-    # of non-GPU cross-package splits while allowing TPU and vLLM stacks to
-    # resolve together.
+    # of non-GPU cross-package splits while allowing the TPU stack to resolve
+    # together.
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "cpu" },
@@ -104,10 +104,6 @@ conflicts = [
     [
         { package = "marin-levanter", extra = "gpu" },
         { package = "marin-core", extra = "tpu" },
-    ],
-    [
-        { package = "marin-levanter", extra = "gpu" },
-        { package = "marin-core", extra = "vllm" },
     ],
     [
         { package = "marin-core", extra = "gpu" },
@@ -147,16 +143,6 @@ members = [
 #   - lib/iris/rust     -> marin-iris-native     (module `iris_native`)
 exclude = ["lib/finelog/rust", "lib/dupekit/rust", "lib/iris/rust", "config/external/*"]
 
-[tool.uv.extra-build-variables]
-vllm = { VLLM_TARGET_DEVICE = "tpu" }
-
-[tool.uv.extra-build-dependencies]
-vllm = [
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; python_version == '3.12' and sys_platform == 'linux' and platform_machine == 'aarch64'",
-    "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-win_amd64.whl ; python_version == '3.12' and sys_platform == 'win32' and platform_machine == 'AMD64'",
-]
-
 [tool.uv.sources]
 marin-iris = { workspace = true }
 marin-fray = { workspace = true }
@@ -172,15 +158,9 @@ marin-finestore = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
-# Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
-# release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
-# if this is a fixed-base overlay PR, then follow
-# .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
-# temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/a30addc7548a9a8b9b3323a7bc3eb7d7c4895d1c...244808e7863d53ac319a22beb548afd854d48d57
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "244808e7863d53ac319a22beb548afd854d48d57" }
-# https://github.com/marin-community/tpu-inference/compare/23d17a8120d9cc34890135599f42e1db4f947c10...e8809d492d5d6c7008369919a00384eb1c4de969
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "e8809d492d5d6c7008369919a00384eb1c4de969" }
+# The TPU vLLM stack (vllm + tpu-inference forks) is not a workspace dependency: it runs from an
+# isolated uvx env, pinned by SHA in config/external/vllm/tpu-forks.toml and surfaced through
+# marin.external_dependencies. Refresh those pins via .agents/skills/refresh-tpu-vllm-forks/SKILL.md.
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
@@ -338,14 +318,10 @@ ignore-missing-imports = [
     "librosa.*",
     "lm_eval",
     "lm_eval.*",
-    "math_verify",
-    "math_verify.*",
     "memray",
     "memray.*",
     "prompt_toolkit",
     "prompt_toolkit.*",
-    "pylatexenc",
-    "pylatexenc.*",
     "quack",
     "quack.*",
     "resiliparse",
@@ -362,8 +338,6 @@ ignore-missing-imports = [
     "trackio.*",
     "triton",
     "triton.*",
-    "verifiers",
-    "verifiers.*",
     "vllm",
     "vllm.*",
     "xprof",

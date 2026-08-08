@@ -84,13 +84,13 @@ def qwen3_inference_config(
 
 
 QWEN3_TPU_INFERENCE = qwen3_inference_config(
-    engine=VllmEngineConfig(startup_timeout_seconds=_VLLM_TIMEOUT),
+    engine=VllmEngineConfig(launcher=VllmLauncherType.TPU, startup_timeout_seconds=_VLLM_TIMEOUT),
     worker_resources=ResourceConfig.with_tpu(
         ["v5litepod-4", "v4-8", "v5p-8", "v6e-4"],
         ram="96g",
         regions=[ANY_REGION],
     ),
-    worker_extras=("tpu", "vllm"),
+    worker_extras=("tpu",),
     worker_env_vars=_TPU_VLLM_WORKER_ENV_VARS,
 )
 

@@ -6,16 +6,17 @@ reviewing, or validating the Marin PR.
 
 The goal is cosmetic but useful: keep each fork's `main` branch pointing at the
 same commit Marin actually pins, so human readers see the active fork tip
-without opening Marin's root `pyproject.toml`.
+without opening `config/external/vllm/tpu-forks.toml`.
 
 For clarity, both `vllm` and `tpu-inference` fork `main` branches should point
-to the same commits pinned in Marin's root `tool.uv.sources`, and each fork
-should keep linear history: Marin overlay commits over upstream commits, with no
-merge commits.
+to the same commits pinned in `config/external/vllm/tpu-forks.toml`, and each
+fork should keep linear history: Marin overlay commits over upstream commits,
+with no merge commits.
 
 For each fork:
 
-- Read the target SHA from Marin `main` root `pyproject.toml`.
+- Read the target SHA (`commit`) from Marin `main`
+  `config/external/vllm/tpu-forks.toml`.
 - Fetch the fork and record current `origin/main`.
 - Verify the target SHA exists in that fork.
 - Create or verify `main-backup/YYYYMMDD/pre-<old-main-shortsha>`.

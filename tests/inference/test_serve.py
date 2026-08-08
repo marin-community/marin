@@ -167,7 +167,7 @@ def test_resolved_model_keeps_requested_id_as_served_name(monkeypatch):
     )
     iris = IrisConfig(
         worker_resources=ResourceConfig.with_tpu("v6e-4"),
-        worker_environment=create_environment(extras=["tpu", "vllm"]),
+        worker_environment=create_environment(extras=["tpu"]),
     )
 
     resolved, _num_chips = _resolved_model(ServedModelConfig(weights="Qwen/Qwen3-0.6B", tensor_parallel_size=1), iris)
@@ -377,7 +377,6 @@ def _plan(**overrides):
         "tpu": "v6e-8",
         "gpu": None,
         "in_checkout": True,
-        "isolated_vllm": False,
         "task_image": None,
         "cuda_vllm_version": DEFAULT_CUDA_VLLM_VERSION,
         "vllm_source": VllmSource.UPSTREAM,
@@ -391,11 +390,10 @@ def _plan(**overrides):
 @pytest.mark.parametrize(
     ("overrides", "backend_type", "worker_extras"),
     [
-        # vLLM in a checkout builds from the workspace lock, so the venv needs both TPU extras.
-        ({}, VllmEngineConfig, ("tpu", "vllm")),
-        # Outside a checkout (or with --isolated-vllm) vLLM comes from uvx: no `vllm` extra.
+        # The forked TPU vLLM always comes from an isolated uvx env, so the worker venv needs only
+        # the `tpu` extra for the serving glue's JAX/libtpu, in a checkout or not.
+        ({}, VllmEngineConfig, ("tpu",)),
         ({"in_checkout": False}, VllmEngineConfig, ("tpu",)),
-        ({"isolated_vllm": True}, VllmEngineConfig, ("tpu",)),
         # CUDA vLLM is provisioned by uvx, so the GPU worker venv needs no accelerator extra.
         ({"gpu": "H100x8"}, VllmEngineConfig, ()),
         # Levanter computes in the worker venv, so that venv carries the accelerator's JAX itself.
@@ -429,11 +427,11 @@ def test_gpu_plan_task_image_serves_workspace_vllm():
     assert _plan(gpu="H100x8", task_image="img").engine.launcher is VllmLauncherType.WORKSPACE
 
 
-def test_tpu_plan_isolates_vllm_outside_a_checkout():
-    # No checkout to build the TPU-vLLM fork from, so it comes from a pinned uvx env; in a checkout
-    # it serves the workspace vLLM instead.
+def test_tpu_plan_always_isolates_vllm():
+    # The forked TPU vLLM always runs from a pinned uvx env (it is not in the workspace lock),
+    # in a checkout or not.
     assert _plan(in_checkout=False).engine.launcher is VllmLauncherType.TPU
-    assert _plan().engine.launcher is VllmLauncherType.WORKSPACE
+    assert _plan().engine.launcher is VllmLauncherType.TPU
 
 
 def test_marin_fork_requires_gpu():

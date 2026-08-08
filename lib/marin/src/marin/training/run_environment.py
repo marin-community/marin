@@ -10,9 +10,6 @@ from fray.types import GpuConfig, ResourceConfig, TpuConfig
 
 logger = logging.getLogger(__name__)
 
-VLLM_TARGET_DEVICE_ENV = "VLLM_TARGET_DEVICE"
-VLLM_TPU_TARGET_DEVICE = "tpu"
-
 
 def _cli_helpers_module():
     return importlib.import_module("levanter.infra.cli_helpers")
@@ -75,9 +72,10 @@ def env_vars_for_dependency_groups(
     dependency_groups: list[str],
     env_vars: dict[str, str] | None,
 ) -> dict[str, str]:
-    """Return environment variables required by the selected dependency groups."""
-    env = dict(env_vars or {})
-    if "vllm" in dependency_groups and isinstance(resources.device, TpuConfig):
-        # vLLM source installs choose CUDA by default unless the TPU target is explicit.
-        env.setdefault(VLLM_TARGET_DEVICE_ENV, VLLM_TPU_TARGET_DEVICE)
-    return env
+    """Return environment variables required by the selected dependency groups.
+
+    No dependency group currently needs group-specific environment variables (the forked TPU
+    vLLM sets ``VLLM_TARGET_DEVICE`` itself from its isolated uvx launcher), so this normalizes
+    the caller's overrides into a fresh dict. The seam stays so groups can add env vars later.
+    """
+    return dict(env_vars or {})

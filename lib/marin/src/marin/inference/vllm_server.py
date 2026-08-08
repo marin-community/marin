@@ -143,7 +143,7 @@ class VllmLauncherWithEnvironment:
 
 @dataclass(frozen=True)
 class WorkspaceVllm:
-    """Run the ``vllm`` installed in the active workspace venv (the TPU-vLLM stack)."""
+    """Run the ``vllm`` installed on the active venv PATH (GPU task-image serving)."""
 
     def command(self) -> list[str]:
         return [shutil.which("vllm") or "vllm"]
@@ -709,7 +709,8 @@ class VllmEnvironment:
         self.port = port if port is not None else _DEFAULT_VLLM_PORT
         self.timeout_seconds = timeout_seconds
         self.extra_cli_args = [*_engine_kwargs_to_cli_args(self.model.engine_kwargs), *(extra_args or [])]
-        # Default to the workspace vLLM (TPU stack); GPU serving passes IsolatedCudaVllm.
+        # Default to the workspace vLLM on PATH (GPU task-image serving); TPU and
+        # GPU-fork serving pass an isolated uvx launcher.
         self.launcher: VllmLauncher = launcher or WorkspaceVllm()
         self.compilation_cache_mode = compilation_cache_mode
         self._ready_on_enter = wait_for_ready

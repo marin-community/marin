@@ -19,7 +19,6 @@ WORKER_PYTHON_VERSION = "3.12"
 # Stock CUDA vLLM runs in an isolated uv-tool environment and does not
 # participate in Marin's workspace dependency resolution.
 DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
-TPU_VLLM_WORKER_EXTRAS = ("tpu", "vllm")
 
 
 class VllmLauncherType(StrEnum):

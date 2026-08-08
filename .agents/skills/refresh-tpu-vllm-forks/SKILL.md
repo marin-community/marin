@@ -38,8 +38,9 @@ smoke tests.
 - If the refresh succeeds, open exactly one draft PR in `marin-community/marin`
   after required smoke tests pass, request `@yonromai` as reviewer, and monitor
   it per `.agents/skills/commit/SKILL.md`.
-- The PR updates Marin's fork tip SHAs, refreshes `uv.lock`, and reports bases,
-  branches/tips, carried/dropped/fixed overlays, validation, and residual risk.
+- The PR updates the fork tip SHAs in `config/external/vllm/tpu-forks.toml`,
+  regenerates `external_dependencies.py`, and reports bases, branches/tips,
+  carried/dropped/fixed overlays, validation, and residual risk.
 - Do not open fork PRs. Do not move either fork `main`; fork review happens via
   pushed branches and compare links from the Marin PR.
 
@@ -94,15 +95,13 @@ git -C tpu-inference fetch --tags origin upstream
 
 ### 1. Read Current Pins
 
-- Prefer managed fork pins: read current `vllm` and `tpu-inference` SHAs from
-  root `pyproject.toml` `tool.uv.sources`; check `uv.lock` against them.
-- Read adjacent GitHub compare-link comments to recover each current upstream
-  base. If comments are missing, compute `git merge-base <fork-sha>
-  upstream/main` and include repaired compare comments in the Marin change.
-- If Marin is still on legacy package pins such as `vllm-tpu==...` /
-  `tpu-inference==...` in `lib/marin/pyproject.toml`, treat this as a one-time
-  bootstrap migration: record the package versions, do not require old fork SHAs
-  or compare comments, and migrate to exact fork SHA pins after validation.
+- Read the current `vllm` and `tpu-inference` fork SHAs from
+  `config/external/vllm/tpu-forks.toml` (`commit` per section). This stack runs
+  from an isolated uvx env, so it is not in `uv.lock`; the generated pins in
+  `lib/marin/src/marin/external_dependencies.py` must match the descriptor.
+- Read each section's `upstream_base` to recover the current upstream base. If
+  it is missing, compute `git merge-base <fork-sha> upstream/main` and repair
+  `upstream_base` in the Marin change.
 - Resolve any old fork SHAs in the scratch fork clones before replaying overlays.
 
 ### 2. Select Bases
@@ -168,22 +167,26 @@ Push the finished branch to the corresponding `marin-community` fork.
 
 ### 4. Wire Marin
 
-Update Marin root `pyproject.toml` so `tool.uv.sources` pins exact fork branch
-tip SHAs. Add adjacent compare comments that show the retained overlay commits
-against the selected upstream base. Keep the short workflow pointer immediately
-above the TPU-vLLM pins so future editors know which procedure owns the SHAs:
+Update `config/external/vllm/tpu-forks.toml` so each section's `commit` is the
+exact fork branch tip SHA and `upstream_base` is the selected upstream base the
+retained overlays are compared against:
 
 ```toml
-# Changes to TPU-vLLM fork SHAs must follow one of these protocols: if this is a
-# release/LKG refresh, then follow .agents/skills/refresh-tpu-vllm-forks/SKILL.md;
-# if this is a fixed-base overlay PR, then follow
-# .agents/skills/refresh-tpu-vllm-forks/docs/overlay-only-pr.md. PR-head SHAs are
-# temporary and must be replaced by the landed fork main SHA.
-# https://github.com/marin-community/vllm/compare/<vllm-upstream-base-sha>...<vllm-branch-tip-sha>
-vllm = { git = "https://github.com/marin-community/vllm.git", rev = "<vllm-branch-tip-sha>" }
-# https://github.com/marin-community/tpu-inference/compare/<tpu-inference-upstream-base-sha>...<tpu-inference-branch-tip-sha>
-tpu-inference = { git = "https://github.com/marin-community/tpu-inference.git", rev = "<tpu-inference-branch-tip-sha>" }
+[vllm]
+repository = "https://github.com/marin-community/vllm.git"
+commit = "<vllm-branch-tip-sha>"
+upstream_base = "<vllm-upstream-base-sha>"
+
+[tpu-inference]
+repository = "https://github.com/marin-community/tpu-inference.git"
+commit = "<tpu-inference-branch-tip-sha>"
+upstream_base = "<tpu-inference-upstream-base-sha>"
 ```
+
+Then run `uv run config/update-external.py` to regenerate the packaged pins in
+`lib/marin/src/marin/external_dependencies.py` from the descriptor. This stack
+is not a workspace dependency, so no `uv.lock` change is involved. PR-head SHAs
+are temporary and must be replaced by the landed fork `main` SHA.
 
 Also make only fork-stack update changes needed in Marin:
 
@@ -274,8 +277,8 @@ PR body:
 
 - Fork `main` branches are unchanged and no fork PRs are opened.
 - Refreshed fork branches use stable names and exact SHA pins in Marin.
-- Marin `pyproject.toml` includes overlay compare links and `uv.lock` is
-  refreshed.
+- `config/external/vllm/tpu-forks.toml` carries the fork tip SHAs and their
+  `upstream_base` compare bases, and `external_dependencies.py` is regenerated.
 - Retained overlays explain why they still exist; dropped overlays are called
   out with reasons.
 - Required smoke tests pass before PR creation, or the unresolved blocker is in
