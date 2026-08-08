@@ -54,7 +54,7 @@ PREFLIGHT_OVERRIDES = {
     "sliding_window": 64,
     # The hero's `sonic_cute` MoE and `gpu_fa4_cute` attention are SM100 CUTLASS kernels with no
     # CPU lowering. Their portable equivalents consume the same config fields, including
-    # `interleave_before_gather`, so the knob plumbing is still exercised.
+    # every knob these arms vary, so the plumbing is still exercised.
     "moe_implementation": "scatter",
     "attention_implementation": "reference",
     # `expert_chunks` is rejected outside `sonic_cute`, so chunk-count arms trace at the default
@@ -73,9 +73,6 @@ def preflight_model(arm):
     args = list(arm.args)
     while args:
         flag = args.pop(0).removeprefix("--").replace("-", "_")
-        if flag == "interleave_before_gather":
-            flags[flag] = True
-            continue
         flags[flag] = args.pop(0)
     if "expert_chunks" in flags:
         flags["expert_chunks"] = int(flags["expert_chunks"])

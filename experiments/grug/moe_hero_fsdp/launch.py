@@ -205,7 +205,6 @@ class HeroOverrides:
 
     expert_chunks: int | None = None
     small_param_sharding: SmallParamSharding | None = None
-    interleave_before_gather: bool | None = None
     remat_mode: RematMode | None = None
     ce_b_block_size: int | None = None
 
@@ -447,11 +446,6 @@ def build_ablation_sweep_hero_run(
     help="Shard or replicate the router, attention gate, and GatedNorm factors.",
 )
 @click.option(
-    "--interleave-before-gather/--interleave-after-gather",
-    default=None,
-    help="Run the MoE gate/up interleave on the local shard rather than the gathered chunk.",
-)
-@click.option(
     "--remat-mode",
     type=click.Choice(get_args(RematMode)),
     default=None,
@@ -481,7 +475,6 @@ def main(
     profile_num_steps: int,
     expert_chunks: int | None,
     small_param_sharding: SmallParamSharding | None,
-    interleave_before_gather: bool | None,
     remat_mode: RematMode | None,
     ce_b_block_size: int | None,
     batch_size: int | None,
@@ -498,7 +491,6 @@ def main(
         overrides=HeroOverrides(
             expert_chunks=expert_chunks,
             small_param_sharding=small_param_sharding,
-            interleave_before_gather=interleave_before_gather,
             remat_mode=remat_mode,
             ce_b_block_size=ce_b_block_size,
         ),

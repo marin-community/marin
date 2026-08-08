@@ -71,7 +71,6 @@ class MoEExpertMlp(eqx.Module):
     activation: MoeActivation = eqx.field(static=True)
     capacity_factor: float = eqx.field(static=True)
     expert_chunks: int = eqx.field(static=True, default=1)
-    interleave_before_gather: bool = eqx.field(static=True, default=False)
 
     @staticmethod
     def init(
@@ -85,7 +84,6 @@ class MoEExpertMlp(eqx.Module):
         activation: MoeActivation = ActivationFunctionEnum.silu,
         capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
         expert_chunks: int = 1,
-        interleave_before_gather: bool = False,
         pspecs: MoEExpertMlpPspecs = MoEExpertMlpPspecs(),
     ) -> "MoEExpertMlp":
         resolved_implementation = resolve_moe_implementation(implementation)
@@ -104,7 +102,6 @@ class MoEExpertMlp(eqx.Module):
             activation=activation,
             capacity_factor=capacity_factor,
             expert_chunks=expert_chunks,
-            interleave_before_gather=interleave_before_gather,
         )
 
     @named_call
@@ -130,7 +127,6 @@ class MoEExpertMlp(eqx.Module):
             capacity_factor=self.capacity_factor,
             report_capacity_overflow=report_capacity_overflow,
             expert_chunks=self.expert_chunks,
-            interleave_before_gather=self.interleave_before_gather,
         )
 
 
@@ -148,7 +144,6 @@ def moe_mlp(
     capacity_factor: float = _DEFAULT_EP_CAPACITY_FACTOR,
     report_capacity_overflow: bool = False,
     expert_chunks: int = 1,
-    interleave_before_gather: bool = False,
 ) -> Float[Array, "T D"] | tuple[Float[Array, "T D"], Int[Array, ""]]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -161,8 +156,6 @@ def moe_mlp(
 
     `expert_chunks` applies only to the local `sonic_cute` FSDP path. Values
     greater than one split the expert bank into equal, statically sized chunks.
-    `interleave_before_gather` applies to that chunked path only; it runs the
-    gate/up interleave on the local shard instead of the gathered chunk.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
 
@@ -209,7 +202,6 @@ def moe_mlp(
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
-            interleave_before_gather=interleave_before_gather,
         )
         if report_capacity_overflow:
             return out, dropped
@@ -313,7 +305,6 @@ def moe_mlp(
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
-            interleave_before_gather=interleave_before_gather,
         )
         batch_axis_names = x_spec[0]
         if report_capacity_overflow and batch_axis_names is not None:

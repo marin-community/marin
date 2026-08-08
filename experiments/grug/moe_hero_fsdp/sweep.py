@@ -44,13 +44,13 @@ PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 # The configuration adopted after wave 4: FSDP-sharded small parameters, the gate/up interleave
 # moved ahead of its all-gather, and NVLink SHARP for collectives.
 #
-# These are now the hero's own defaults, so restating them is a no-op. They stay spelled out because
-# every wave below was run when they were not, and because a wave that reads its own configuration
-# is worth more than one that reads `[]`. The corollary is that the pre-adoption hero is no longer
-# expressible as an arm -- `--interleave-before-gather` is a set-only flag -- so the early waves'
-# `control` describes what was measured, not what re-running them today would produce.
+# Both are now the hero's own defaults -- the interleave unconditionally, since the two orders give
+# identical results and the local-shard one is strictly cheaper. `--small-param-sharding fsdp` stays
+# spelled out because every wave below was run when it was not. The pre-adoption hero is no longer
+# expressible as an arm, so the early waves' `control` describes what was measured, not what
+# re-running them today would produce.
 COMBINED_ENV = {"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"}
-COMBINED_ARGS = ["--small-param-sharding", "fsdp", "--interleave-before-gather"]
+COMBINED_ARGS = ["--small-param-sharding", "fsdp"]
 # Wave 5 measured expert_chunks=2 at +1.63% on the unmodified hero. Wave 7 suggests it does not
 # survive stacking with the adopted configuration, which wave 8 settles in-window.
 CHUNKED_ARGS = [*COMBINED_ARGS, "--expert-chunks", "2"]
@@ -164,7 +164,6 @@ WAVES = {
     "w2": [
         Arm("control"),
         Arm("shardsmall", args=["--small-param-sharding", "fsdp"], note="kill the per-layer all-reduce"),
-        Arm("interleave", args=["--interleave-before-gather"], note="interleave w13 on the local shard"),
         Arm("savemoe", args=["--remat-mode", "save_moe"], note="probe the HBM ceiling; may OOM"),
     ],
     # Wave 3: confirm the wave-2 winners stack, and attack the two biggest remaining blocks of
@@ -174,7 +173,7 @@ WAVES = {
         Arm("control"),
         Arm(
             "combo",
-            args=["--small-param-sharding", "fsdp", "--interleave-before-gather"],
+            args=["--small-param-sharding", "fsdp"],
             note="both wave-2 winners together",
         ),
         Arm("cebig", args=["--ce-b-block-size", "8192"], note="8x fewer CE launches, larger GEMMs"),

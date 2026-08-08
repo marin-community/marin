@@ -171,10 +171,6 @@ class GrugModelConfig:
     attention_implementation: GrugAttentionImplementation | None = None
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
-    interleave_before_gather: bool = False
-    """Run the chunked sonic_cute gate/up interleave on the local expert-weight shard, ahead of the
-    per-chunk all-gather, rather than on the gathered chunk. The gather is along the hidden dim and
-    the interleave rewrites only the last dim, so the result is identical."""
     report_capacity_overflow: bool = False
     remat_mode: RematMode = "recompute_all"
     """Per-block gradient checkpointing. "recompute_all" reruns the whole block in
@@ -779,7 +775,6 @@ class MoEMLP(eqx.Module):
                 activation=ActivationFunctionEnum.silu,
                 capacity_factor=cfg.capacity_factor,
                 expert_chunks=cfg.expert_chunks,
-                interleave_before_gather=cfg.interleave_before_gather,
             ),
             cfg=cfg,
         )
