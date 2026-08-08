@@ -114,6 +114,7 @@ def build_hero_run(
     interleave_before_gather: bool | None = None,
     remat_mode: RematMode | None = None,
     ce_b_block_size: int | None = None,
+    batch_size: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run.
@@ -139,7 +140,7 @@ def build_hero_run(
     if profile_start_step is not None and not 0 < profile_start_step < num_steps:
         raise ValueError(f"profile_start_step must fall inside (0, {num_steps}), got {profile_start_step}")
 
-    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
+    batch_size = batch_size if batch_size is not None else dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
     model = apply_hero_overrides(
         model,
@@ -304,6 +305,12 @@ def build_hero_run(
     default=None,
     help="Token-axis tile for the fused cross-entropy. Unset keeps the hero value.",
 )
+@click.option(
+    "--batch-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Global batch in sequences. Unset derives it as dp_racks x 1024. Must divide the device count.",
+)
 @build_options
 def main(
     run_id: str,
@@ -318,6 +325,7 @@ def main(
     interleave_before_gather: bool | None,
     remat_mode: RematMode | None,
     ce_b_block_size: int | None,
+    batch_size: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -332,6 +340,7 @@ def main(
         interleave_before_gather=interleave_before_gather,
         remat_mode=remat_mode,
         ce_b_block_size=ce_b_block_size,
+        batch_size=batch_size,
     )
 
 

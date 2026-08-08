@@ -105,6 +105,8 @@ P2P_FLAGS = "--xla_gpu_enable_pipelined_p2p=true --xla_gpu_collective_permute_de
 LOGDIR = pathlib.Path("scratch/hero_sweep")
 PEAK_FLOPS_PER_DEVICE = 2.5e15
 NUM_DEVICES = 64
+HERO_BATCH_SIZE = 1024
+HERO_SEQ_LEN = 4096
 
 
 # Early waves named the in-window baseline `control`; from wave 6 on it is `base`, the adopted
@@ -116,11 +118,12 @@ CONTROL_TAGS = frozenset({"control", "base"})
 class Arm:
     """One configuration under test: coordinator env plus launcher flags."""
 
-    def __init__(self, tag, *, env=None, args=(), note=""):
+    def __init__(self, tag, *, env=None, args=(), note="", batch_size=HERO_BATCH_SIZE):
         self.tag = tag
         self.env = env or {}
         self.args = list(args)
         self.note = note
+        self.batch_size = batch_size
 
     def run_id(self, wave):
         return f"{PREFIX}-{wave}-{self.tag}"
@@ -438,6 +441,37 @@ WAVES = {
             note="unroll the scan twice, then let the two iterations' collectives merge",
         ),
     ],
+    # Wave 15: spend the HBM headroom on tokens. Peak sits at 137.2 GiB against a 138.22 GiB
+    # ceiling, and raising the allocator fraction to 0.88 lifts that to 162.18 GiB with no cost of
+    # its own. Activations scale with the batch while weights and optimizer state do not, so the
+    # extra 25 GiB buys roughly a quarter more sequences.
+    #
+    # These arms do more work per step, so step time is not comparable and scoring switches to
+    # tokens/s. Every batch here divides the 64-device mesh evenly.
+    "w15": [
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control, batch 1024"),
+        Arm(
+            "batch1088",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
+            args=COMBINED_ARGS,
+            note="+6.25% sequences, 17 per device",
+            batch_size=1088,
+        ),
+        Arm(
+            "batch1152",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
+            args=COMBINED_ARGS,
+            note="+12.5% sequences, 18 per device",
+            batch_size=1152,
+        ),
+        Arm(
+            "batch1280",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.93"},
+            args=COMBINED_ARGS,
+            note="+25% sequences, 20 per device; the ceiling this headroom can reach",
+            batch_size=1280,
+        ),
+    ],
 }
 
 
@@ -496,6 +530,8 @@ def launch(wave):
             "0",
             "--version",
             "dev",
+            "--batch-size",
+            str(arm.batch_size),
             "--run",
             *arm.args,
         ]
@@ -516,7 +552,7 @@ def step_times(run_id):
     )
 
 
-def score_run(run_id):
+def score_run(run_id, batch_size=HERO_BATCH_SIZE):
     rows = step_times(run_id)
     if len(rows) < 3:
         return None
@@ -531,8 +567,12 @@ def score_run(run_id):
         "min": min(d),
         "max": max(d),
         "peak_gib": max(hbm) if hbm else None,
-        # The MFU denominator is fixed by shape, so MFU is a pure restatement of step time.
-        "mfu": 100 * COUNTED_FLOPS / med / PEAK_FLOPS_PER_DEVICE / NUM_DEVICES,
+        "batch_size": batch_size,
+        # At a fixed shape MFU is a pure restatement of step time. An arm that changes the batch
+        # does more work per step, so its FLOPs scale with the batch and step time stops being
+        # comparable; tokens/s is the metric that survives both cases.
+        "mfu": 100 * COUNTED_FLOPS * batch_size / HERO_BATCH_SIZE / med / PEAK_FLOPS_PER_DEVICE / NUM_DEVICES,
+        "tokens_per_s": batch_size * HERO_SEQ_LEN / med,
     }
 
 
@@ -546,7 +586,7 @@ def score(wave):
     results = []
     for arm in WAVES[wave]:
         try:
-            s = score_run(arm.run_id(wave))
+            s = score_run(arm.run_id(wave), batch_size=arm.batch_size)
         except Exception as exc:
             print(f"{arm.tag:12s} unavailable: {type(exc).__name__}: {exc}")
             continue
@@ -560,14 +600,25 @@ def score(wave):
     if not results:
         return
     control = next(r for r in results if r["tag"] in CONTROL_TAGS)
-    reference = control["median"]
-    print(f"\n{'arm':12s} {'n':>3} {'median':>9} {'MAD':>7} {'min':>8} {'MFU':>7} {'peak HBM':>9} {'vs control':>11}")
-    for r in sorted(results, key=lambda r: r["median"]):
-        delta = 100 * (reference - r["median"]) / reference
+    # Step time is only comparable when every arm processes the same tokens. A batch-size arm is
+    # scored on tokens/s instead, where a slower but larger step can still be a win.
+    varies_batch = len({r["batch_size"] for r in results}) > 1
+    metric = "tokens_per_s" if varies_batch else "median"
+    reference = control[metric]
+    if varies_batch:
+        print(f"scoring on tokens/s: arms differ in batch size (control = {control['batch_size']})")
+    print(
+        f"\n{'arm':12s} {'n':>3} {'batch':>6} {'median':>9} {'MAD':>7} "
+        f"{'Mtok/s':>7} {'MFU':>7} {'peak HBM':>9} {'vs control':>11}"
+    )
+    for r in sorted(results, key=lambda r: -r[metric] if varies_batch else r[metric]):
+        delta = 100 * (r[metric] - reference) / reference
+        if metric == "median":  # lower is better
+            delta = -delta
         hbm = f"{r['peak_gib']:.1f} GiB" if r["peak_gib"] is not None else "-"
         print(
-            f"{r['tag']:12s} {r['n']:3d} {r['median']:8.3f}s {r['mad']:6.3f}s {r['min']:7.3f}s "
-            f"{r['mfu']:6.2f}% {hbm:>9} {delta:+10.2f}%"
+            f"{r['tag']:12s} {r['n']:3d} {r['batch_size']:6d} {r['median']:8.3f}s {r['mad']:6.3f}s "
+            f"{r['tokens_per_s'] / 1e6:7.3f} {r['mfu']:6.2f}% {hbm:>9} {delta:+10.2f}%"
         )
     out = LOGDIR / f"{wave}.json"
     out.write_text(json.dumps(results, indent=1))
