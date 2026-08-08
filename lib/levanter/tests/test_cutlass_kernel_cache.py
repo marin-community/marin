@@ -11,17 +11,22 @@ entry point bound into ``cutlass.jax.primitive``, the in-process
 
 import dataclasses
 import hashlib
-import importlib
 import sys
-import textwrap
 import types
 from typing import Any
 
 import pytest
 
 from rigging.cache import PersistentKvCache
+from rigging.provenance import Provenance
 
+from levanter import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import cute_launcher_factory, install
+
+
+def _provenance(*, tree_hash: str) -> Provenance:
+    """Launch provenance carrying only the field the cache key reads."""
+    return Provenance(tree_hash=tree_hash, base_commit="", dirty=False, branch=None, built_by=None)
 
 
 def _kernel_store(directory) -> PersistentKvCache:
@@ -124,92 +129,58 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
     assert served.module == b"objectcode:tile256-bf16:FakeFunctionSpec(shape=(8, 16))"
 
 
-def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_path, monkeypatch):
-    """A launcher body is levanter source: nothing else in the key notices an edit."""
-    source = textwrap.dedent(
-        """
-        from levanter.cutlass_kernel_cache import cute_launcher_factory
+def test_a_new_source_revision_invalidates_stored_kernels(fake_cutlass, tmp_path, monkeypatch):
+    """The launch tree hash is the whole source identity, so a changed tree must miss.
 
-        @cute_launcher_factory
-        def build(modules, *, tile: int):
-            def launcher(stream):
-                raise AssertionError("a launcher is never called on the host")
-
-            launcher.kernel_name = f"tile{tile}"
-            return launcher
-        """
-    )
-    module_dir = tmp_path / "src"
-    module_dir.mkdir()
-    monkeypatch.syspath_prepend(str(module_dir))
-    store = str(tmp_path / "store")
-
-    compiled_per_revision = []
-    for revision in ("original", "edited"):
-        name = f"edited_launcher_{revision}"
-        (module_dir / f"{name}.py").write_text(f"# revision: {revision}\n{source}")
-        # The import system caches each directory's listing against its mtime, so a
-        # second file written inside one mtime tick is invisible to the finder.
-        importlib.invalidate_caches()
-        module = __import__(name)
-        fake_cutlass.forget_process_state()
-        install(_kernel_store(store))
-        fake_cutlass.compile_kernel(module.build(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
-        compiled_per_revision.append(list(fake_cutlass.compiled))
-
-    assert compiled_per_revision == [["tile128"], ["tile128", "tile128"]]
-
-
-def test_editing_a_sibling_module_the_launcher_builds_from_invalidates_its_kernels(
-    fake_cutlass, tmp_path, monkeypatch
-):
-    """A launcher usually builds its kernel from a sibling module, not its own file.
-
-    ``segmented_flash_attention_backward_launcher`` is defined in ``_fa4_cute_kernels`` but
-    builds from ``_fa4_cute_segmented_bwd``, so a key covering only the defining file would
-    serve the previously compiled object after the kernel itself changed.
+    A launcher rarely holds its whole kernel in its own file — the segmented backward is
+    defined in ``_fa4_cute_kernels`` and built from ``_fa4_cute_segmented_bwd`` — so keying
+    on any one file would serve a stale object after the kernel itself changed.
     """
-    package = tmp_path / "src" / "kernelpkg"
-    package.mkdir(parents=True)
-    monkeypatch.syspath_prepend(str(tmp_path / "src"))
-    (package / "__init__.py").write_text("")
-    (package / "launcher.py").write_text(
-        textwrap.dedent(
-            """
-            import importlib
-
-            from levanter.cutlass_kernel_cache import cute_launcher_factory
-
-            @cute_launcher_factory
-            def build(modules, *, tile: int):
-                kernel = importlib.import_module("kernelpkg.kernel")
-
-                def launcher(stream):
-                    raise AssertionError("a launcher is never called on the host")
-
-                launcher.kernel_name = f"tile{tile}-{kernel.VARIANT}"
-                return launcher
-            """
-        )
-    )
+    spec = FakeFunctionSpec(shape=(8, 16))
     store = str(tmp_path / "store")
 
     compiled_per_revision = []
-    for revision in ("original", "edited"):
-        (package / "kernel.py").write_text(f'VARIANT = "{revision}"\n')
-        importlib.invalidate_caches()
-        for name in [n for n in sys.modules if n.startswith("kernelpkg")]:
-            del sys.modules[name]
-        module = importlib.import_module("kernelpkg.launcher")
+    for revision in ("treehash-original", "treehash-edited"):
+        monkeypatch.setattr(
+            cutlass_kernel_cache,
+            "launch_provenance",
+            lambda revision=revision: _provenance(tree_hash=revision),
+        )
         fake_cutlass.forget_process_state()
         install(_kernel_store(store))
-        fake_cutlass.compile_kernel(module.build(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+        fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
         compiled_per_revision.append(list(fake_cutlass.compiled))
 
-    assert compiled_per_revision == [
-        ["tile128-original"],
-        ["tile128-original", "tile128-edited"],
-    ]
+    assert compiled_per_revision == [["tile128-bf16"], ["tile128-bf16", "tile128-bf16"]]
+
+
+def test_the_same_source_revision_is_served_from_the_store(fake_cutlass, tmp_path, monkeypatch):
+    """A resume runs the same tree, which is the case the store exists to serve."""
+    spec = FakeFunctionSpec(shape=(8, 16))
+    store = str(tmp_path / "store")
+    monkeypatch.setattr(cutlass_kernel_cache, "launch_provenance", lambda: _provenance(tree_hash="treehash-stable"))
+
+    install(_kernel_store(store))
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
+    fake_cutlass.forget_process_state()
+    install(_kernel_store(store))
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), spec)
+
+    assert fake_cutlass.compiled == ["tile128-bf16"]
+
+
+def test_a_launch_with_no_source_revision_is_compiled_but_not_stored(fake_cutlass, tmp_path, monkeypatch):
+    """Outside a checkout with no stamped provenance there is no source identity to key on.
+
+    Storing anyway would let one revision's object serve another's.
+    """
+    monkeypatch.setattr(cutlass_kernel_cache, "launch_provenance", lambda: _provenance(tree_hash=""))
+    install(_kernel_store(tmp_path))
+
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
+
+    assert fake_cutlass.compiled == ["tile128-bf16"]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_launcher_without_an_identity_is_compiled_but_not_stored(fake_cutlass, tmp_path):
