@@ -97,9 +97,10 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
-    # Inline watch computes statistics on every step and uses the watch interval only for logging.
-    # This keeps one training executable resident. A diagnostic watch repeats forward and backward
-    # in a separate executable, which costs compute but shortens gradient liveness.
+    # Inline watch uses one training executable with a dynamic conditional derived from the device
+    # step. The watched branch computes statistics only on the configured interval. A diagnostic
+    # watch repeats forward and backward in a separate executable, which costs compute but shortens
+    # gradient liveness.
     watch_mode: WatchMode = WatchMode.INLINE
     # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
     # restores from the latest committed checkpoint, so without a writer an interrupted run
@@ -487,18 +488,27 @@ def _make_train_step(
 
         watch_stats = None
         if watch_config is not None:
-            watch_stats = compute_watch_stats(
-                watch_targets=watch_targets,
-                include_norms=watch_config.include_norms,
-                include_per_parameter_norms=watch_config.include_per_parameter_norms,
-                include_histogram=watch_config.include_histograms,
-                split_scan_layers=watch_config.split_scan_layers,
-                params=qb_params,
-                grads=grads,
-                updates=updates,
-                opt_state=opt_state_in,
-                model_tree_type=type(state.params),
-            )
+
+            def compute_stats(_):
+                return compute_watch_stats(
+                    watch_targets=watch_targets,
+                    include_norms=watch_config.include_norms,
+                    include_per_parameter_norms=watch_config.include_per_parameter_norms,
+                    include_histogram=watch_config.include_histograms,
+                    split_scan_layers=watch_config.split_scan_layers,
+                    params=qb_params,
+                    grads=grads,
+                    updates=updates,
+                    opt_state=opt_state_in,
+                    model_tree_type=type(state.params),
+                )
+
+            def skip_stats(_):
+                stats_shapes = jax.eval_shape(compute_stats, None)
+                return jax.tree.map(lambda value: jnp.zeros(value.shape, value.dtype), stats_shapes)
+
+            compute_watch = state.step % watch_config.interval == 0
+            watch_stats = jax.lax.cond(compute_watch, compute_stats, skip_stats, operand=None)
 
         if offload_opt_state:
             opt_state = _optimizer_state_to_memory_kind(opt_state, "pinned_host")

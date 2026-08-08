@@ -1552,3 +1552,20 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - The coordinator was stopped immediately. It had production priority and zero retries.
 - Decision: Reject commit `2d136d5e1`. Revert the implementation and local test so this failed
   option does not remain in the code. Keep this record as the negative result.
+
+### 2026-08-08 14:22 UTC - MHEP-186 removes the host condition input
+
+- The corrected candidate derives the watch condition inside the compiled step from
+  `state.step % interval == 0`. The step is already a device-resident state value. This removes
+  the pinned-host predicate that caused MHEP-185 to fail.
+- The `lax.cond` true branch computes all requested watch statistics. The false branch returns
+  zero placeholders that the host loop does not log. Both branches remain in one executable.
+- The local test runs steps 0 and 1 with fixed parameter dtypes. Step 0 returns the expected norm,
+  step 1 returns the placeholder, and the JIT cache has one entry. All five focused watch tests
+  and all changed-file checks passed.
+- MHEP-186 is a five-step gate with the MHEP-131 shape, 192 experts, width 5,504, top-k 4,
+  capacity factor 1.4, and full norms every 10 steps.
+- Run ID: `mhep-186-w28-ep-e192-i5504-cf1p40-stepcond-watch10-p32784-20260808`.
+- Acceptance requires 76 finite norm fields at step 0, no norm row on steps 1 through 4, no
+  sharding error, no OOM or retry, and no second training compilation. A pass permits a matched
+  200-step arm. A failure requires another code revert.
