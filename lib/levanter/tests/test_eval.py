@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
+from jax._src import config as jax_config
 
 from levanter.callbacks import ProgressEvent
 from levanter.data.dataset import ListAsyncDataset
@@ -300,11 +301,14 @@ def test_loss_labels_from_spans_rejects_overlapping_spans():
 
 
 def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
+    pgle_states = []
+
     class _FakeEvaluator:
         tokenizer = None
         dataset = SimpleNamespace(tag_to_index={"base": 0})
 
         def evaluate(self, _model):
+            pgle_states.append(jax_config.enable_pgle.value)
             return EvalResult(
                 micro_avg_loss=1.0,
                 macro_avg_loss=1.0,
@@ -321,11 +325,13 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
 
     events = []
     with current_tracker(tracker):
-        step0 = SimpleNamespace(step=0, model=object(), eval_model=object(), emit_event=events.append)
-        callback(step0)
-        callback(step0, force=True)
-        step1 = SimpleNamespace(step=1, model=object(), eval_model=object(), emit_event=events.append)
-        callback(step1)
+        with jax_config.enable_pgle(True):
+            step0 = SimpleNamespace(step=0, model=object(), eval_model=object(), emit_event=events.append)
+            callback(step0)
+            callback(step0, force=True)
+            step1 = SimpleNamespace(step=1, model=object(), eval_model=object(), emit_event=events.append)
+            callback(step1)
+            assert jax_config.enable_pgle.value
 
     log_events = []
     for record in caplog.records:
@@ -347,3 +353,4 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
         ProgressEvent.EVALUATION_STARTED,
         ProgressEvent.EVALUATION_FINISHED,
     ]
+    assert pgle_states == [False, False, False, False]
