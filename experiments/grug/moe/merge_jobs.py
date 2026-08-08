@@ -129,6 +129,49 @@ class LayerAdapterAugmentJobConfig:
 
 
 @dataclass(frozen=True)
+class GradientConflictArtifactReference:
+    """Exact immutable artifact record required by the diagnostic."""
+
+    name: str
+    version: str
+    root: str
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class GradientConflictCheckpointConfig:
+    """One exact frozen checkpoint in the preregistered diagnostic trajectory."""
+
+    label: str
+    artifact: GradientConflictArtifactReference
+    checkpoint_path: str
+    expected_step: int
+    continuation_tokens: int
+
+
+@dataclass(frozen=True)
+class GradientConflictJobConfig:
+    """Read-only direct shared-bank gradient diagnostic over frozen checkpoints."""
+
+    source: SourceCheckpointConfig
+    teacher_artifact: GradientConflictArtifactReference
+    data: LmDataConfig
+    checkpoints: tuple[GradientConflictCheckpointConfig, ...]
+    output_path: str
+    resources: ResourceConfig
+    run_id: str
+    affected_layers: tuple[int, int] = (2, 3)
+    batch_size: int = 32
+    num_batches: int = 16
+    loader_start_step: int = 382
+    bootstrap_samples: int = 10_000
+    bootstrap_seed: int = 8_032
+    seed: int = 0
+    expert_axis_size: int = 1
+    replica_axis_size: int | None = None
+
+
+@dataclass(frozen=True)
 class RecoveryJobConfig:
     source: SourceCheckpointConfig
     data: LmDataConfig
@@ -205,6 +248,13 @@ def _run_layer_adapter_augment_local(config: LayerAdapterAugmentJobConfig) -> No
     run_layer_adapter_augment_local(config)
 
 
+def _run_gradient_conflict_local(config: GradientConflictJobConfig) -> None:
+    # Break the config/runtime import cycle at the dispatched worker boundary.
+    from experiments.grug.moe.merge_recovery_runtime import run_gradient_conflict_local  # noqa: PLC0415
+
+    run_gradient_conflict_local(config)
+
+
 def _run_recovery_local(config: RecoveryJobConfig) -> None:
     # Break the config/runtime import cycle at the dispatched worker boundary.
     from experiments.grug.moe.merge_recovery_runtime import run_recovery_local  # noqa: PLC0415
@@ -243,6 +293,10 @@ def run_capacity_oracle_split(config: CapacityOracleSplitJobConfig) -> None:
 
 def run_layer_adapter_augment(config: LayerAdapterAugmentJobConfig) -> None:
     _dispatch(config.run_id, config, _run_layer_adapter_augment_local, config.resources)
+
+
+def run_gradient_conflict(config: GradientConflictJobConfig) -> None:
+    _dispatch(config.run_id, config, _run_gradient_conflict_local, config.resources)
 
 
 def run_recovery(config: RecoveryJobConfig) -> None:

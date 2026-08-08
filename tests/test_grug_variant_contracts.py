@@ -40,6 +40,7 @@ from marin.execution.lazy import materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.ferries import canary_ferry
+from experiments.grug.moe.gradient_conflict import direct_shared_bank_gradients, gradient_pair_metrics
 from experiments.grug.moe.merge_recovery import (
     MergeRecoveryConfig,
     RecoveryStage,
@@ -360,6 +361,38 @@ def test_grug_moe_layer_adapter_recovery_lowers_on_multi_axis_mesh():
     assert state_shape.step.shape == ()
     assert state_shape.params.blocks[2].routed_expert_adapter is not None
     assert losses_shape.total.shape == ()
+
+
+def test_grug_moe_gradient_conflict_lowers_on_multi_axis_mesh():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    teacher_config = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+    teacher_config = dataclasses.replace(
+        teacher_config,
+        num_layers=4,
+        expert_bank_for_layer=(0, 1, 2, 3),
+        moe_implementation="ring",
+    )
+    student_config = dataclasses.replace(teacher_config, expert_bank_for_layer=(0, 1, 1, 2))
+    mesh, token_pspec = model_module.debug_mesh_and_token_pspec(num_devices=4)
+
+    def diagnostic_batch():
+        teacher = model_module.Transformer.init(teacher_config, key=jax.random.PRNGKey(40))
+        student = model_module.Transformer.init(student_config, key=jax.random.PRNGKey(40))
+        tokens = jax.sharding.reshard(jnp.zeros((8, 4), dtype=jnp.int32), token_pspec)
+        batch = direct_shared_bank_gradients(
+            student,
+            teacher,
+            tokens,
+            affected_layers=(1, 2),
+            source_to_shared=tuple(range(teacher_config.num_experts)),
+        )
+        return batch.layer_losses, gradient_pair_metrics(batch.gradients)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        losses_shape, metrics_shape = eqx.filter_eval_shape(diagnostic_batch)
+
+    assert losses_shape.shape == (2,)
+    assert metrics_shape.shape == (6,)
 
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():

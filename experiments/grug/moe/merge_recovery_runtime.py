@@ -4,6 +4,8 @@
 """Accelerator workers for expert-bank prefit, conversion, and recovery."""
 
 import dataclasses
+import functools
+import gc
 import json
 import logging
 import math
@@ -24,6 +26,8 @@ from levanter.distributed import DistributedConfig
 from levanter.grug.grug_moe import MoEExpertMlp
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.schedule import BatchSchedule
+from marin.execution.artifact import read_record
+from marin.execution.fingerprint import canonical_json
 from rigging.filesystem import StoragePath, check_gcs_paths_same_region, prefix_join
 
 from experiments.grug.moe.expert_merge import AssignmentMode, ExpertProbeSet, build_spectral_probe_set, eval_expert
@@ -40,6 +44,14 @@ from experiments.grug.moe.expert_prefit import (
     prefit_loss,
     sample_aggregate_prefit_batch,
     sample_prefit_batch,
+)
+from experiments.grug.moe.gradient_conflict import (
+    GRADIENT_PAIR_METRIC_NAMES,
+    GRADIENT_PROJECTION_NAMES,
+    GradientConflictResult,
+    accumulate_gradient_conflict_batch,
+    finalize_gradient_conflict,
+    initial_gradient_conflict_accumulator,
 )
 from experiments.grug.moe.merge_artifacts import (
     MatchingArtifactManifest,
@@ -63,6 +75,9 @@ from experiments.grug.moe.merge_checkpoint import (
 from experiments.grug.moe.merge_jobs import (
     CapacityOracleSplitJobConfig,
     ConversionJobConfig,
+    GradientConflictArtifactReference,
+    GradientConflictCheckpointConfig,
+    GradientConflictJobConfig,
     LayerAdapterAugmentJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
@@ -80,7 +95,7 @@ from experiments.grug.moe.merge_recovery import (
     make_chunked_logit_kl,
     make_recovery_train_step,
 )
-from experiments.grug.moe.model import Transformer
+from experiments.grug.moe.model import GrugModelConfig, Transformer
 from experiments.grug.moe.train import (
     GrugEvalConfig,
     GrugTrainState,
@@ -94,6 +109,8 @@ logger = logging.getLogger(__name__)
 _CHECKPOINTS_DIRECTORY = "checkpoints"
 _PREFIT_MANIFEST_FILENAME = "prefit_manifest.json"
 _PREFIT_FORMAT_VERSION = 2
+_GRADIENT_CONFLICT_FILENAME = "gradient_conflict.json"
+_GRADIENT_CONFLICT_FORMAT_VERSION = 1
 _RECOVERY_THRESHOLD_FILENAME = "recovery_threshold.json"
 _RECOVERY_SELECTION_FILENAME = "selected_checkpoint.json"
 _LEGACY_CE_KL_STAGE_A_NAME = "grug/expert_merge/d512/native_local_ce_kl/stage-a"
@@ -102,6 +119,16 @@ _LEGACY_CE_KL_STAGE_A_FINGERPRINT = "62564720"
 _LEGACY_CE_KL_STAGE_A_STEP = 382
 _LEGACY_CE_KL_STAGE_A_TOKENS = 50_069_504
 _LEGACY_CE_KL_TARGET_TOPOLOGY = (0, 1, 2, 2, 3, 4)
+_GRADIENT_CONFLICT_TEACHER_NAME = "grug/tied_experts/d512/full/baseline"
+_GRADIENT_CONFLICT_TEACHER_ROOT = "gs://marin-us-central1/grug/tied_experts/d512/full/baseline/2026.08.06"
+_GRADIENT_CONFLICT_TEACHER_FINGERPRINT = "38d1fe9b"
+_GRADIENT_CONFLICT_TEACHER_COMMIT = "884b213ff4"
+_GRADIENT_CONFLICT_STAGE_A_ROOT = "gs://marin-us-central1/grug/expert_merge/d512/native_local_ce_kl/stage-a/2026.08.06"
+_GRADIENT_CONFLICT_CONTROL_NAME = "grug/expert_merge/d512/native_local_ce_kl_adapter_control/stage-b"
+_GRADIENT_CONFLICT_CONTROL_ROOT = (
+    "gs://marin-us-central1/grug/expert_merge/d512/native_local_ce_kl_adapter_control/stage-b/2026.08.06"
+)
+_GRADIENT_CONFLICT_CONTROL_FINGERPRINT = "59969d51"
 
 
 @register_dataclass
@@ -120,6 +147,7 @@ def _is_local(
         PrefitJobConfig
         | ConversionJobConfig
         | CapacityOracleSplitJobConfig
+        | GradientConflictJobConfig
         | LayerAdapterAugmentJobConfig
         | RecoveryJobConfig
     ),
@@ -132,6 +160,7 @@ def _validate_runtime_paths(
         PrefitJobConfig
         | ConversionJobConfig
         | CapacityOracleSplitJobConfig
+        | GradientConflictJobConfig
         | LayerAdapterAugmentJobConfig
         | RecoveryJobConfig
     ),
@@ -153,7 +182,7 @@ def _validate_runtime_paths(
             )
 
     payload: dict[str, Any] = {"paths": material}
-    if isinstance(config, RecoveryJobConfig):
+    if isinstance(config, (GradientConflictJobConfig, RecoveryJobConfig)):
         payload["data"] = config.data
     check_gcs_paths_same_region(payload, local_ok=local_ok, skip_if_prefix_contains=())
 
@@ -1239,6 +1268,28 @@ def _validate_selected_local_recovery(
     selection: dict[str, Any],
 ) -> None:
     """Validate modern provenance or the one known legacy CE+KL Stage-A artifact."""
+    _validate_selected_local_recovery_contract(
+        source=config.source,
+        init_checkpoint_dir=config.init_checkpoint_dir,
+        affected_layers=config.affected_layers,
+        assignment_mode=config.assignment_mode,
+        prefit_applied=config.prefit_applied,
+        manifest=manifest,
+        selection=selection,
+    )
+
+
+def _validate_selected_local_recovery_contract(
+    *,
+    source: SourceCheckpointConfig,
+    init_checkpoint_dir: str,
+    affected_layers: tuple[int, int],
+    assignment_mode: AssignmentMode,
+    prefit_applied: bool,
+    manifest: MergeCheckpointManifest,
+    selection: dict[str, Any],
+) -> None:
+    """Validate modern provenance or the one known legacy CE+KL Stage-A artifact."""
     selected_step = int(selection["step"])
     expected = {
         "recovery_step": selected_step,
@@ -1273,16 +1324,28 @@ def _validate_selected_local_recovery(
         raise ValueError(f"adapter augmentation requires the selected CE+KL local recovery: {manifest_mismatches}")
     if manifest.recovery_initialization is not RecoveryInitialization.CONVERTED_STEP_ZERO:
         raise ValueError(f"adapter augmentation requires the selected CE+KL local recovery: {manifest_mismatches}")
-    _validate_legacy_ce_kl_stage_a_artifact(config, manifest=manifest, selection=selection)
+    _validate_legacy_ce_kl_stage_a_artifact(
+        source=source,
+        init_checkpoint_dir=init_checkpoint_dir,
+        affected_layers=affected_layers,
+        assignment_mode=assignment_mode,
+        prefit_applied=prefit_applied,
+        manifest=manifest,
+        selection=selection,
+    )
 
 
 def _validate_legacy_ce_kl_stage_a_artifact(
-    config: LayerAdapterAugmentJobConfig,
     *,
+    source: SourceCheckpointConfig,
+    init_checkpoint_dir: str,
+    affected_layers: tuple[int, int],
+    assignment_mode: AssignmentMode,
+    prefit_applied: bool,
     manifest: MergeCheckpointManifest,
     selection: dict[str, Any],
 ) -> None:
-    artifact_root = str(StoragePath(config.init_checkpoint_dir).parent)
+    artifact_root = str(StoragePath(init_checkpoint_dir).parent)
     artifact_path = prefix_join(artifact_root, ".artifact.json")
     artifact = StoragePath(artifact_path)
     if not artifact.exists():
@@ -1305,9 +1368,9 @@ def _validate_legacy_ce_kl_stage_a_artifact(
         "stage": RecoveryStage.LOCAL.value,
         "initialization": RecoveryInitialization.CONVERTED_STEP_ZERO.value,
         "initial_checkpoint_selection": RecoveryCheckpointSelection.LATEST.value,
-        "affected_layers": list(config.affected_layers),
-        "assignment_mode": config.assignment_mode.value,
-        "prefit_applied": config.prefit_applied,
+        "affected_layers": list(affected_layers),
+        "assignment_mode": assignment_mode.value,
+        "prefit_applied": prefit_applied,
         "batch_size": 32,
         "training_tokens": 50_000_000,
         "cross_entropy_weight": 0.05,
@@ -1323,14 +1386,14 @@ def _validate_legacy_ce_kl_stage_a_artifact(
     if "trainable_scope" in artifact_config:
         config_mismatches["trainable_scope"] = (artifact_config["trainable_scope"], "absent in legacy schema")
 
-    expected_source_topology = config.source.model.resolved_expert_bank_for_layer
+    expected_source_topology = source.model.resolved_expert_bank_for_layer
     manifest_mismatches: dict[str, tuple[Any, Any]] = {}
     if manifest.source_topology != expected_source_topology:
         manifest_mismatches["source_topology"] = (manifest.source_topology, expected_source_topology)
     if manifest.target_topology != _LEGACY_CE_KL_TARGET_TOPOLOGY:
         manifest_mismatches["target_topology"] = (manifest.target_topology, _LEGACY_CE_KL_TARGET_TOPOLOGY)
-    if manifest.source_step != config.source.training_steps:
-        manifest_mismatches["source_step"] = (manifest.source_step, config.source.training_steps)
+    if manifest.source_step != source.training_steps:
+        manifest_mismatches["source_step"] = (manifest.source_step, source.training_steps)
     converted_checkpoint_dir = artifact_config.get("init_checkpoint_dir")
     expected_converted_checkpoint = (
         prefix_join(converted_checkpoint_dir, "step-0") if isinstance(converted_checkpoint_dir, str) else None
@@ -1341,20 +1404,20 @@ def _validate_legacy_ce_kl_stage_a_artifact(
             expected_converted_checkpoint,
         )
 
-    source = artifact_config.get("source")
+    artifact_source = artifact_config.get("source")
     expected_source = {
-        "checkpoint_dir": config.source.checkpoint_dir,
-        "source_commit": config.source.source_commit,
-        "training_steps": config.source.training_steps,
+        "checkpoint_dir": source.checkpoint_dir,
+        "source_commit": source.source_commit,
+        "training_steps": source.training_steps,
     }
-    if not isinstance(source, dict):
-        config_mismatches["source"] = (source, expected_source)
+    if not isinstance(artifact_source, dict):
+        config_mismatches["source"] = (artifact_source, expected_source)
     else:
         for name, value in expected_source.items():
-            if source.get(name) != value:
-                config_mismatches[f"source.{name}"] = (source.get(name), value)
-        source_model = source.get("model")
-        expected_topology = list(config.source.model.resolved_expert_bank_for_layer)
+            if artifact_source.get(name) != value:
+                config_mismatches[f"source.{name}"] = (artifact_source.get(name), value)
+        source_model = artifact_source.get("model")
+        expected_topology = list(source.model.resolved_expert_bank_for_layer)
         if not isinstance(source_model, dict) or source_model.get("expert_bank_for_layer") != expected_topology:
             config_mismatches["source.model.expert_bank_for_layer"] = (
                 source_model.get("expert_bank_for_layer") if isinstance(source_model, dict) else None,
@@ -1363,7 +1426,7 @@ def _validate_legacy_ce_kl_stage_a_artifact(
 
     expected_selection = {
         "step": _LEGACY_CE_KL_STAGE_A_STEP,
-        "checkpoint_path": prefix_join(config.init_checkpoint_dir, f"step-{_LEGACY_CE_KL_STAGE_A_STEP}"),
+        "checkpoint_path": prefix_join(init_checkpoint_dir, f"step-{_LEGACY_CE_KL_STAGE_A_STEP}"),
         "tokens": _LEGACY_CE_KL_STAGE_A_TOKENS,
         "requested_tokens": 50_000_000,
         "selection_metric": "eval/paloma/macro_loss",
@@ -1857,6 +1920,636 @@ def _evaluate_recovery_checkpoint(
         sync_name=f"recovery_{config.stage.value}_eval_{step}",
     )
     return student_paloma_macro_loss
+
+
+def _gradient_conflict_artifact_config(reference: GradientConflictArtifactReference) -> dict[str, Any]:
+    record = read_record(reference.root)
+    if record is None:
+        raise ValueError(f"gradient-conflict artifact record is missing at {reference.root}")
+    expected = {
+        "name": reference.name,
+        "version": reference.version,
+        "fingerprint": reference.fingerprint,
+        "output_path": reference.root,
+    }
+    mismatches = {
+        name: (getattr(record, name), value) for name, value in expected.items() if getattr(record, name) != value
+    }
+    if mismatches:
+        raise ValueError(f"gradient-conflict artifact has stale provenance at {reference.root}: {mismatches}")
+    if record.config is None:
+        raise ValueError(f"gradient-conflict artifact config is missing at {reference.root}")
+    return cast("dict[str, Any]", record.config)
+
+
+def _expected_one_pair_topology(num_layers: int, affected_layers: tuple[int, int]) -> tuple[int, ...]:
+    representative_layer, source_layer = affected_layers
+    topology = list(range(num_layers))
+    topology[source_layer] = representative_layer
+    for layer in range(source_layer + 1, num_layers):
+        topology[layer] -= 1
+    return tuple(topology)
+
+
+def _validate_gradient_checkpoint_manifest(
+    config: GradientConflictJobConfig,
+    checkpoint: GradientConflictCheckpointConfig,
+    manifest: MergeCheckpointManifest,
+    *,
+    source_checkpoint: str,
+    source_step: int,
+    selected_stage_a_checkpoint: str,
+) -> None:
+    _validate_merge_manifest(
+        manifest,
+        assignment_mode=AssignmentMode.NATIVE,
+        prefit_applied=False,
+        affected_layers=config.affected_layers,
+    )
+    expected_topology = _expected_one_pair_topology(config.source.model.num_layers, config.affected_layers)
+    expected_manifest = {
+        "source_topology": tuple(range(config.source.model.num_layers)),
+        "target_topology": expected_topology,
+        "source_step": source_step,
+        "recovery_step": checkpoint.expected_step,
+    }
+    mismatches = {
+        name: (getattr(manifest, name), value)
+        for name, value in expected_manifest.items()
+        if getattr(manifest, name) != value
+    }
+    expected_spec = {
+        "source_checkpoint": source_checkpoint,
+        "source_commit": config.source.source_commit,
+    }
+    mismatches.update(
+        {
+            f"spec.{name}": (getattr(manifest.spec, name), value)
+            for name, value in expected_spec.items()
+            if getattr(manifest.spec, name) != value
+        }
+    )
+    if mismatches:
+        raise ValueError(f"gradient checkpoint {checkpoint.label} has stale manifest provenance: {mismatches}")
+
+    if checkpoint.label == "selected_stage_a":
+        selection = _best_validation_selection(prefix_join(checkpoint.artifact.root, _CHECKPOINTS_DIRECTORY))
+        _validate_selected_local_recovery_contract(
+            source=config.source,
+            init_checkpoint_dir=prefix_join(checkpoint.artifact.root, _CHECKPOINTS_DIRECTORY),
+            affected_layers=config.affected_layers,
+            assignment_mode=AssignmentMode.NATIVE,
+            prefit_applied=False,
+            manifest=manifest,
+            selection=selection,
+        )
+        return
+
+    expected_recovery = {
+        "recovery_initialization": RecoveryInitialization.LOCAL_RECOVERY,
+        "recovery_initial_checkpoint": selected_stage_a_checkpoint,
+        "recovery_stage": RecoveryStage.PRESERVATION,
+        "recovery_trainable_scope": RecoveryTrainableScope.SHARED_BANK,
+        "recovery_cross_entropy_weight": 1.0,
+        "recovery_moe_loss_weight": 1.0,
+        "recovery_logit_kl_weight": 0.1,
+    }
+    recovery_mismatches = {
+        name: (getattr(manifest, name), value)
+        for name, value in expected_recovery.items()
+        if getattr(manifest, name) != value
+    }
+    if recovery_mismatches:
+        raise ValueError(
+            f"gradient checkpoint {checkpoint.label} has stale S-prime recovery role: {recovery_mismatches}"
+        )
+
+
+def _gradient_conflict_model_config(
+    source: SourceCheckpointConfig,
+    manifest: MergeCheckpointManifest,
+) -> GrugModelConfig:
+    if manifest.layer_adapter is not None:
+        raise ValueError("phase-1 gradient conflict accepts only adapter-free shared checkpoints")
+    if manifest.capacity_oracle is not None:
+        raise ValueError("phase-1 gradient conflict accepts only one-bank shared checkpoints")
+    return dataclasses.replace(
+        source.model,
+        expert_bank_for_layer=manifest.target_topology,
+        expert_adapter_rank_for_layer=None,
+    )
+
+
+def _load_gradient_conflict_student(
+    source: SourceCheckpointConfig,
+    checkpoint: GradientConflictCheckpointConfig,
+    manifest: MergeCheckpointManifest,
+    *,
+    key: jax.Array,
+    mesh: jax.sharding.Mesh,
+) -> Transformer:
+    model_config = _gradient_conflict_model_config(source, manifest)
+    params = Transformer.init(model_config, key=key)
+    pending_qb_betas = jnp.zeros((len(params.blocks), params.config.num_experts), dtype=jnp.float32)
+    loaded = cast(
+        "dict[str, Any]",
+        load_checkpoint(
+            {
+                "step": jnp.asarray(checkpoint.expected_step, dtype=jnp.int32),
+                "params": params,
+                "pending_qb_betas": pending_qb_betas,
+            },
+            checkpoint.checkpoint_path,
+            mesh=mesh,
+            allow_partial=False,
+        ),
+    )
+    loaded_step = int(jax.device_get(loaded["step"]))
+    if loaded_step != checkpoint.expected_step or loaded_step != manifest.recovery_step:
+        raise ValueError(
+            f"gradient checkpoint {checkpoint.label} step mismatch: "
+            f"loaded={loaded_step}, expected={checkpoint.expected_step}, manifest={manifest.recovery_step}"
+        )
+    return cast("Transformer", loaded["params"])
+
+
+def _gradient_metric_dict(
+    values: np.ndarray,
+    *,
+    affected_layers: tuple[int, int],
+) -> dict[str, float]:
+    names = list(GRADIENT_PAIR_METRIC_NAMES)
+    names[0] = f"layer_{affected_layers[0]}_norm"
+    names[1] = f"layer_{affected_layers[1]}_norm"
+    return {name: float(value) for name, value in zip(names, values, strict=True)}
+
+
+def _bootstrap_cosine_summary(
+    batch_cosines: np.ndarray,
+    *,
+    samples: int,
+    seed: int,
+) -> dict[str, Any]:
+    if batch_cosines.ndim != 1 or batch_cosines.size == 0:
+        raise ValueError("batch_cosines must be a non-empty vector")
+    if samples <= 0:
+        raise ValueError("bootstrap samples must be positive")
+    rng = np.random.default_rng(seed)
+    bootstrap_indices = rng.integers(0, batch_cosines.size, size=(samples, batch_cosines.size))
+    bootstrap_means = np.mean(batch_cosines[bootstrap_indices], axis=1)
+    lower, upper = np.percentile(bootstrap_means, (2.5, 97.5))
+    q1, median, q3 = np.percentile(batch_cosines, (25.0, 50.0, 75.0))
+    return {
+        "mean": float(np.mean(batch_cosines)),
+        "bootstrap_95_percentile_interval": [float(lower), float(upper)],
+        "median": float(median),
+        "iqr": [float(q1), float(q3)],
+        "negative_count": int(np.sum(batch_cosines < 0.0)),
+    }
+
+
+def _gradient_conflict_checkpoint_payload(
+    checkpoint: GradientConflictCheckpointConfig,
+    result: GradientConflictResult,
+    *,
+    affected_layers: tuple[int, int],
+    loader_start_step: int,
+    bootstrap_samples: int,
+    bootstrap_seed: int,
+) -> dict[str, Any]:
+    host = jax.device_get(result)
+    mean_losses = np.asarray(host.mean_layer_losses)
+    aggregate_whole = np.asarray(host.aggregate_whole_metrics)
+    aggregate_projections = np.asarray(host.aggregate_projection_metrics)
+    per_expert = np.asarray(host.per_expert_metrics)
+    batch_losses = np.asarray(host.batch_layer_losses)
+    batch_whole = np.asarray(host.batch_whole_metrics)
+    batch_projections = np.asarray(host.batch_projection_metrics)
+    traffic = np.asarray(host.routing_counts_by_layer)
+    overflow = np.asarray(host.capacity_overflow_by_layer)
+    top1_agreement = np.asarray(host.router_top1_agreement_by_layer)
+    selected_ids_exact = np.asarray(host.router_selected_ids_exact_by_layer)
+    combine_diff = np.asarray(host.combine_weight_max_abs_diff_by_layer)
+
+    numerical_arrays = (
+        mean_losses,
+        aggregate_whole,
+        aggregate_projections,
+        per_expert,
+        batch_losses,
+        batch_whole,
+        batch_projections,
+        traffic,
+        overflow,
+        top1_agreement,
+        selected_ids_exact,
+        combine_diff,
+    )
+    if not all(np.all(np.isfinite(array)) for array in numerical_arrays):
+        raise ValueError(f"gradient-conflict metrics are non-finite for checkpoint {checkpoint.label}")
+    if np.any(overflow != 0):
+        raise ValueError(f"capacity overflow is nonzero for checkpoint {checkpoint.label}: {overflow}")
+    if np.any(top1_agreement != 1.0) or np.any(selected_ids_exact != 1.0):
+        raise ValueError(
+            f"teacher routes are not exact for checkpoint {checkpoint.label}: "
+            f"top1={top1_agreement}, selected_ids_exact={selected_ids_exact}"
+        )
+    if np.any(combine_diff != 0.0):
+        raise ValueError(f"teacher combine weights differ for checkpoint {checkpoint.label}: {combine_diff}")
+    if np.any(traffic <= 0):
+        inactive = {
+            affected_layers[layer_index]: np.flatnonzero(layer_traffic <= 0).tolist()
+            for layer_index, layer_traffic in enumerate(traffic)
+            if np.any(layer_traffic <= 0)
+        }
+        raise ValueError(f"inactive routed experts for checkpoint {checkpoint.label}: {inactive}")
+
+    batch_records = []
+    for index in range(batch_whole.shape[0]):
+        batch_records.append(
+            {
+                "loader_step": loader_start_step + index,
+                "layer_errors": {
+                    f"layer_{layer}": float(batch_losses[index, layer_index])
+                    for layer_index, layer in enumerate(affected_layers)
+                },
+                "moe_nrmse_by_layer": {
+                    f"layer_{layer}": float(np.sqrt(batch_losses[index, layer_index]))
+                    for layer_index, layer in enumerate(affected_layers)
+                },
+                "whole_bank": _gradient_metric_dict(batch_whole[index], affected_layers=affected_layers),
+                "projections": {
+                    projection: _gradient_metric_dict(
+                        batch_projections[index, projection_index],
+                        affected_layers=affected_layers,
+                    )
+                    for projection_index, projection in enumerate(GRADIENT_PROJECTION_NAMES)
+                },
+            }
+        )
+
+    expert_records = []
+    for expert in range(per_expert.shape[0]):
+        record = _gradient_metric_dict(per_expert[expert], affected_layers=affected_layers)
+        record.update(
+            {
+                "expert": expert,
+                f"layer_{affected_layers[0]}_routes": float(traffic[0, expert]),
+                f"layer_{affected_layers[1]}_routes": float(traffic[1, expert]),
+            }
+        )
+        expert_records.append(record)
+
+    expert_dots = per_expert[:, GRADIENT_PAIR_METRIC_NAMES.index("dot")]
+    negative_dot_magnitude = np.sum(np.maximum(-expert_dots, 0.0))
+    absolute_dot_magnitude = np.sum(np.abs(expert_dots))
+    negative_dot_energy_share = (
+        float(negative_dot_magnitude / absolute_dot_magnitude) if absolute_dot_magnitude > 0 else 0.0
+    )
+    cosine_index = GRADIENT_PAIR_METRIC_NAMES.index("cosine")
+    batch_cosine_summary = _bootstrap_cosine_summary(
+        batch_whole[:, cosine_index],
+        samples=bootstrap_samples,
+        seed=bootstrap_seed,
+    )
+    aggregate = _gradient_metric_dict(aggregate_whole, affected_layers=affected_layers)
+    return {
+        "label": checkpoint.label,
+        "checkpoint_path": checkpoint.checkpoint_path,
+        "checkpoint_step": checkpoint.expected_step,
+        "continuation_tokens": checkpoint.continuation_tokens,
+        "mean_layer_losses": {
+            f"layer_{layer}": float(mean_losses[layer_index]) for layer_index, layer in enumerate(affected_layers)
+        },
+        "mean_moe_nrmse_by_layer": {
+            f"layer_{layer}": float(np.sqrt(mean_losses[layer_index]))
+            for layer_index, layer in enumerate(affected_layers)
+        },
+        "aggregate": {
+            "whole_bank": aggregate,
+            "projections": {
+                projection: _gradient_metric_dict(
+                    aggregate_projections[projection_index],
+                    affected_layers=affected_layers,
+                )
+                for projection_index, projection in enumerate(GRADIENT_PROJECTION_NAMES)
+            },
+            "per_expert_negative_dot_count": int(np.sum(expert_dots < 0.0)),
+            "per_expert_negative_dot_energy_share": negative_dot_energy_share,
+        },
+        "batch_cosine_summary": batch_cosine_summary,
+        "batches": batch_records,
+        "experts": expert_records,
+        "controls": {
+            "capacity_overflow_by_layer": {
+                f"layer_{layer}": float(overflow[layer_index]) for layer_index, layer in enumerate(affected_layers)
+            },
+            "minimum_router_top1_agreement_by_layer": {
+                f"layer_{layer}": float(top1_agreement[layer_index]) for layer_index, layer in enumerate(affected_layers)
+            },
+            "router_selected_ids_exact_by_layer": {
+                f"layer_{layer}": float(selected_ids_exact[layer_index])
+                for layer_index, layer in enumerate(affected_layers)
+            },
+            "combine_weight_max_abs_diff_by_layer": {
+                f"layer_{layer}": float(combine_diff[layer_index]) for layer_index, layer in enumerate(affected_layers)
+            },
+            "active_experts_by_layer": {
+                f"layer_{layer}": int(np.sum(traffic[layer_index] > 0))
+                for layer_index, layer in enumerate(affected_layers)
+            },
+        },
+    }
+
+
+def _gradient_conflict_decision(checkpoints: list[dict[str, Any]]) -> dict[str, Any]:
+    material_conflict = []
+    for checkpoint in checkpoints:
+        aggregate = checkpoint["aggregate"]["whole_bank"]
+        summary = checkpoint["batch_cosine_summary"]
+        material_conflict.append(
+            aggregate["cosine"] <= -0.10
+            and summary["bootstrap_95_percentile_interval"][1] < 0.0
+            and summary["negative_count"] >= 12
+            and aggregate["cancellation"] >= 0.10
+            and aggregate["norm_ratio"] >= 0.25
+        )
+    unsupported = all(
+        checkpoint["aggregate"]["whole_bank"]["cosine"] > -0.05
+        and checkpoint["batch_cosine_summary"]["negative_count"] <= 4
+        and checkpoint["aggregate"]["whole_bank"]["cancellation"] < 0.05
+        for checkpoint in checkpoints
+    )
+    if sum(material_conflict) >= 2:
+        outcome = "persistent_material_local_conflict_supported"
+    elif unsupported:
+        outcome = "dominant_direct_conflict_unsupported"
+    else:
+        outcome = "inconclusive"
+    return {
+        "outcome": outcome,
+        "material_conflict_checkpoint_count": int(sum(material_conflict)),
+        "material_conflict_by_checkpoint": {
+            checkpoint["label"]: passed for checkpoint, passed in zip(checkpoints, material_conflict, strict=True)
+        },
+    }
+
+
+def run_gradient_conflict_local(config: GradientConflictJobConfig) -> None:
+    """Run the preregistered read-only direct shared-bank gradient diagnostic."""
+    if config.batch_size <= 0 or config.num_batches <= 0 or config.loader_start_step < 0:
+        raise ValueError("batch size and batch count must be positive and loader start must be non-negative")
+    if config.bootstrap_samples <= 0:
+        raise ValueError("bootstrap samples must be positive")
+    expected_labels = ("selected_stage_a", "shared_control_midpoint", "shared_control_endpoint")
+    if tuple(checkpoint.label for checkpoint in config.checkpoints) != expected_labels:
+        raise ValueError(f"phase-1 gradient conflict requires checkpoint roles {expected_labels}")
+    if config.source.source_commit is None:
+        raise ValueError("phase-1 gradient conflict requires the exact non-null teacher source commit")
+    if any(checkpoint.expected_step <= 0 or checkpoint.continuation_tokens < 0 for checkpoint in config.checkpoints):
+        raise ValueError("checkpoint steps must be positive and continuation tokens must be non-negative")
+    if not _is_local(config):
+        expected_checkpoint_metadata = (
+            ("selected_stage_a", 382, 0),
+            ("shared_control_midpoint", 191, 25_034_752),
+            ("shared_control_endpoint", 382, 50_069_504),
+        )
+        checkpoint_metadata = tuple(
+            (checkpoint.label, checkpoint.expected_step, checkpoint.continuation_tokens)
+            for checkpoint in config.checkpoints
+        )
+        if checkpoint_metadata != expected_checkpoint_metadata:
+            raise ValueError(f"phase-1 gradient conflict has unexpected checkpoint metadata: {checkpoint_metadata}")
+        expected_settings = ((2, 3), 32, 16, 382, 10_000, 8_032, 0)
+        settings = (
+            config.affected_layers,
+            config.batch_size,
+            config.num_batches,
+            config.loader_start_step,
+            config.bootstrap_samples,
+            config.bootstrap_seed,
+            config.seed,
+        )
+        if settings != expected_settings:
+            raise ValueError(f"phase-1 gradient conflict has unexpected data/statistical settings: {settings}")
+        expected_references = (
+            (
+                config.teacher_artifact,
+                _GRADIENT_CONFLICT_TEACHER_NAME,
+                _LEGACY_CE_KL_STAGE_A_VERSION,
+                _GRADIENT_CONFLICT_TEACHER_ROOT,
+                _GRADIENT_CONFLICT_TEACHER_FINGERPRINT,
+            ),
+            (
+                config.checkpoints[0].artifact,
+                _LEGACY_CE_KL_STAGE_A_NAME,
+                _LEGACY_CE_KL_STAGE_A_VERSION,
+                _GRADIENT_CONFLICT_STAGE_A_ROOT,
+                _LEGACY_CE_KL_STAGE_A_FINGERPRINT,
+            ),
+            (
+                config.checkpoints[1].artifact,
+                _GRADIENT_CONFLICT_CONTROL_NAME,
+                _LEGACY_CE_KL_STAGE_A_VERSION,
+                _GRADIENT_CONFLICT_CONTROL_ROOT,
+                _GRADIENT_CONFLICT_CONTROL_FINGERPRINT,
+            ),
+            (
+                config.checkpoints[2].artifact,
+                _GRADIENT_CONFLICT_CONTROL_NAME,
+                _LEGACY_CE_KL_STAGE_A_VERSION,
+                _GRADIENT_CONFLICT_CONTROL_ROOT,
+                _GRADIENT_CONFLICT_CONTROL_FINGERPRINT,
+            ),
+        )
+        for reference, name, version, root, fingerprint in expected_references:
+            if (reference.name, reference.version, reference.root, reference.fingerprint) != (
+                name,
+                version,
+                root,
+                fingerprint,
+            ):
+                raise ValueError(f"phase-1 gradient conflict has an unexpected artifact reference: {reference}")
+        if config.source.source_commit != _GRADIENT_CONFLICT_TEACHER_COMMIT:
+            raise ValueError(
+                f"phase-1 gradient conflict teacher commit is {config.source.source_commit}, "
+                f"expected {_GRADIENT_CONFLICT_TEACHER_COMMIT}"
+            )
+    if str(StoragePath(config.source.checkpoint_dir).parent) != config.teacher_artifact.root:
+        raise ValueError("teacher checkpoint directory is not rooted in the required teacher artifact")
+    for checkpoint in config.checkpoints:
+        expected_checkpoint = prefix_join(
+            prefix_join(checkpoint.artifact.root, _CHECKPOINTS_DIRECTORY),
+            f"step-{checkpoint.expected_step}",
+        )
+        if checkpoint.checkpoint_path != expected_checkpoint:
+            raise ValueError(
+                f"gradient checkpoint {checkpoint.label} path is {checkpoint.checkpoint_path}, "
+                f"expected {expected_checkpoint}"
+            )
+
+    _validate_runtime_paths(
+        config,
+        {
+            "teacher_checkpoint": config.source.checkpoint_dir,
+            **{
+                f"student_checkpoint_{index}": checkpoint.checkpoint_path
+                for index, checkpoint in enumerate(config.checkpoints)
+            },
+            "gradient_conflict_output": config.output_path,
+        },
+    )
+    _gradient_conflict_artifact_config(config.teacher_artifact)
+    checkpoint_artifact_configs = {
+        checkpoint.artifact.root: _gradient_conflict_artifact_config(checkpoint.artifact)
+        for checkpoint in config.checkpoints
+    }
+    control_data = checkpoint_artifact_configs[config.checkpoints[1].artifact.root].get("data")
+    diagnostic_data = json.loads(canonical_json(config.data))
+    if control_data != diagnostic_data:
+        raise ValueError("gradient-conflict data config differs from the matched S-prime artifact config")
+    initialize_merge_worker()
+    mesh = compact_merge_mesh(
+        expert_axis_size=config.expert_axis_size,
+        replica_axis_size=config.replica_axis_size,
+    )
+    with set_mesh(mesh):
+        teacher_state, source_checkpoint = _source_state(
+            config.source,
+            key=jax.random.fold_in(jax.random.key(config.seed), 1),
+            mesh=mesh,
+        )
+        manifests = []
+        source_step = int(jax.device_get(teacher_state.step))
+        if source_step != config.source.training_steps:
+            raise ValueError(f"gradient-conflict teacher step is {source_step}, expected {config.source.training_steps}")
+        selected_stage_a_checkpoint = config.checkpoints[0].checkpoint_path
+        for checkpoint in config.checkpoints:
+            manifest = read_merge_checkpoint_manifest(checkpoint.checkpoint_path)
+            _validate_gradient_checkpoint_manifest(
+                config,
+                checkpoint,
+                manifest,
+                source_checkpoint=source_checkpoint,
+                source_step=source_step,
+                selected_stage_a_checkpoint=selected_stage_a_checkpoint,
+            )
+            _gradient_conflict_model_config(config.source, manifest)
+            manifests.append(manifest)
+        source_to_shared = manifests[0].spec.source_to_shared
+        if any(manifest.target_topology != manifests[0].target_topology for manifest in manifests[1:]):
+            raise ValueError("gradient-conflict checkpoints must have identical shared topology")
+        if any(manifest.spec.source_to_shared != source_to_shared for manifest in manifests[1:]):
+            raise ValueError("gradient-conflict checkpoints must have identical expert assignment")
+
+        data_key = jax.random.fold_in(jax.random.key(config.seed), 2)
+        batch_schedule = BatchSchedule(config.batch_size)
+        train_dataset = build_train_dataset(
+            config.data,
+            max_seq_len=config.source.model.max_seq_len,
+            batch_schedule=batch_schedule,
+            key=data_key,
+        )
+        train_loader = build_train_loader(train_dataset, batch_schedule=batch_schedule, mesh=mesh)
+        initialize_accumulator = jax.jit(
+            functools.partial(initial_gradient_conflict_accumulator, num_batches=config.num_batches)
+        )
+        accumulate_batch = jax.jit(
+            functools.partial(
+                accumulate_gradient_conflict_batch,
+                affected_layers=config.affected_layers,
+                source_to_shared=source_to_shared,
+            ),
+            donate_argnums=(0,),
+        )
+        finalize_accumulator = jax.jit(
+            functools.partial(finalize_gradient_conflict, num_batches=config.num_batches),
+            donate_argnums=(0,),
+        )
+
+        checkpoint_payloads = []
+        for checkpoint_index, (checkpoint, manifest) in enumerate(zip(config.checkpoints, manifests, strict=True)):
+            student = _load_gradient_conflict_student(
+                config.source,
+                checkpoint,
+                manifest,
+                key=jax.random.fold_in(jax.random.key(config.seed), 10 + checkpoint_index),
+                mesh=mesh,
+            )
+            shared_bank_index = student.blocks[config.affected_layers[0]].expert_bank_index
+            accumulator = initialize_accumulator(student.expert_banks[shared_bank_index])
+            iterator = train_loader.iter_from_step(config.loader_start_step)
+            for batch_index in range(config.num_batches):
+                batch = next(iterator)
+                accumulator = accumulate_batch(
+                    accumulator,
+                    student,
+                    teacher_state.params,
+                    batch.tokens,
+                    batch.attn_mask,
+                    jnp.asarray(batch_index, dtype=jnp.int32),
+                )
+            result = finalize_accumulator(accumulator)
+            jax.block_until_ready(result.aggregate_whole_metrics)
+            checkpoint_payloads.append(
+                _gradient_conflict_checkpoint_payload(
+                    checkpoint,
+                    result,
+                    affected_layers=config.affected_layers,
+                    loader_start_step=config.loader_start_step,
+                    bootstrap_samples=config.bootstrap_samples,
+                    bootstrap_seed=config.bootstrap_seed,
+                )
+            )
+            del accumulator, iterator, result, student
+            gc.collect()
+
+        payload = {
+            "format_version": _GRADIENT_CONFLICT_FORMAT_VERSION,
+            "run_id": config.run_id,
+            "teacher_checkpoint": source_checkpoint,
+            "input_artifacts": {
+                "teacher": dataclasses.asdict(config.teacher_artifact),
+                "selected_stage_a": dataclasses.asdict(config.checkpoints[0].artifact),
+                "shared_control": dataclasses.asdict(config.checkpoints[1].artifact),
+            },
+            "affected_layers": list(config.affected_layers),
+            "data": {
+                "seed": config.seed,
+                "loader_key": "jax.random.fold_in(jax.random.key(seed), 2)",
+                "loader_start_step": config.loader_start_step,
+                "loader_stop_step_exclusive": config.loader_start_step + config.num_batches,
+                "num_batches": config.num_batches,
+                "batch_size": config.batch_size,
+                "sequence_length": config.source.model.max_seq_len,
+                "positions_per_checkpoint": config.num_batches * config.batch_size * config.source.model.max_seq_len,
+            },
+            "objective": {
+                "name": "direct_detached_teacher_on_student_state_normalized_routed_moe_mse",
+                "includes": ["direct shared-bank gradient at each affected layer"],
+                "excludes": [
+                    "cross_entropy",
+                    "teacher_logit_kl",
+                    "indirect_layer_2_to_layer_3_state_effects",
+                    "adam_moments",
+                    "long_horizon_validation_behavior",
+                ],
+                "cancellation": "1 - ||g2 + g3|| / (||g2|| + ||g3||)",
+                "per_expert_negative_dot_energy_share": "sum(max(-dot_e, 0)) / sum(abs(dot_e))",
+            },
+            "statistics": {
+                "bootstrap_samples": config.bootstrap_samples,
+                "bootstrap_seed": config.bootstrap_seed,
+                "bootstrap_interval": "2.5th and 97.5th percentiles of resampled batch-cosine means",
+            },
+            "checkpoints": checkpoint_payloads,
+            "decision": _gradient_conflict_decision(checkpoint_payloads),
+        }
+        _write_json_process_zero(
+            prefix_join(config.output_path, _GRADIENT_CONFLICT_FILENAME),
+            payload,
+            sync_name="gradient_conflict",
+        )
 
 
 def run_recovery_local(config: RecoveryJobConfig) -> None:

@@ -9,6 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -21,6 +22,8 @@ from levanter.data.text.datasets import DirectDatasetComponent, LmDataConfig
 from levanter.data.text.examples import GrugLmExample
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.optim.config import AdamConfig
+from marin.execution.artifact import ArtifactRecord, write_record
+from marin.execution.fingerprint import canonical_json
 
 from experiments.grug.moe.expert_merge import (
     AssignmentMode,
@@ -41,6 +44,9 @@ from experiments.grug.moe.merge_checkpoint import read_merge_checkpoint_manifest
 from experiments.grug.moe.merge_jobs import (
     CapacityOracleSplitJobConfig,
     ConversionJobConfig,
+    GradientConflictArtifactReference,
+    GradientConflictCheckpointConfig,
+    GradientConflictJobConfig,
     LayerAdapterAugmentJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
@@ -58,6 +64,7 @@ from experiments.grug.moe.merge_recovery_runtime import (
     evaluate_prefit_checkpoint_local,
     run_capacity_oracle_split_local,
     run_conversion_local,
+    run_gradient_conflict_local,
     run_layer_adapter_augment_local,
     run_prefit_local,
     run_recovery_local,
@@ -1145,3 +1152,240 @@ def test_native_joint_preservation_restores_converted_step_zero_strictly_and_rec
     assert recovered_manifest.recovery_initial_checkpoint == concrete_conversion
     assert recovered_manifest.spec.assignment_mode is AssignmentMode.NATIVE
     assert not recovered_manifest.spec.prefit_applied
+
+
+def test_gradient_conflict_worker_reads_frozen_checkpoints_and_writes_only_scalar_json(tmp_path: Path) -> None:
+    inputs = _runtime_inputs(tmp_path)
+    gradient_source = dataclasses.replace(inputs.source, training_steps=7, source_commit="test-commit")
+    converted_path = tmp_path / "gradient-converted"
+    run_conversion_local(
+        ConversionJobConfig(
+            source=gradient_source,
+            calibration_path=inputs.calibration_path,
+            matching_path=inputs.matching_path,
+            prefit_path=None,
+            output_path=str(converted_path),
+            resources=ResourceConfig.with_cpu(),
+            run_id="test-gradient-conversion",
+            assignment_mode=AssignmentMode.NATIVE,
+            representative_layer=1,
+            source_layer=2,
+        )
+    )
+    converted_checkpoint = latest_checkpoint_path(str(converted_path / "checkpoints"))
+    converted_manifest = read_merge_checkpoint_manifest(converted_checkpoint)
+    converted_manifest = dataclasses.replace(
+        converted_manifest,
+        spec=dataclasses.replace(converted_manifest.spec, source_commit="test-commit"),
+    )
+    student_config = dataclasses.replace(
+        gradient_source.model,
+        expert_bank_for_layer=converted_manifest.target_topology,
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        student = Transformer.init(student_config, key=jax.random.key(9))
+        loaded = load_checkpoint(
+            {
+                "params": student,
+                "pending_qb_betas": jnp.zeros((4, 2), dtype=jnp.float32),
+            },
+            converted_checkpoint,
+            allow_partial=False,
+        )
+        recovered_params = eqx.tree_at(
+            lambda model: model.expert_banks[1].w_down,
+            loaded["params"],
+            loaded["params"].expert_banks[1].w_down * 0.8,
+        )
+    stage_a_root = tmp_path / "gradient-stage-a"
+    control_root = tmp_path / "gradient-control"
+    stage_a_checkpoint = stage_a_root / "checkpoints" / "step-1"
+    midpoint_checkpoint = control_root / "checkpoints" / "step-1"
+    endpoint_checkpoint = control_root / "checkpoints" / "step-2"
+    for step, checkpoint in ((1, stage_a_checkpoint), (1, midpoint_checkpoint), (2, endpoint_checkpoint)):
+        save_checkpoint(
+            {
+                "step": jnp.asarray(step, dtype=jnp.int32),
+                "params": recovered_params,
+                "pending_qb_betas": loaded["pending_qb_betas"],
+            },
+            step=step,
+            checkpoint_path=checkpoint,
+            is_temporary=False,
+        )
+
+    stage_a_manifest = dataclasses.replace(
+        converted_manifest,
+        recovery_step=1,
+        recovery_initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
+        recovery_initial_checkpoint=str(converted_checkpoint),
+        recovery_stage=RecoveryStage.LOCAL,
+        recovery_trainable_scope=RecoveryTrainableScope.SHARED_BANK,
+        recovery_cross_entropy_weight=0.05,
+        recovery_moe_loss_weight=1.0,
+        recovery_logit_kl_weight=0.1,
+    )
+    write_merge_checkpoint_manifest(str(stage_a_checkpoint), stage_a_manifest)
+    for step, checkpoint in ((1, midpoint_checkpoint), (2, endpoint_checkpoint)):
+        write_merge_checkpoint_manifest(
+            str(checkpoint),
+            dataclasses.replace(
+                converted_manifest,
+                recovery_step=step,
+                recovery_initialization=RecoveryInitialization.LOCAL_RECOVERY,
+                recovery_initial_checkpoint=str(stage_a_checkpoint),
+                recovery_stage=RecoveryStage.PRESERVATION,
+                recovery_trainable_scope=RecoveryTrainableScope.SHARED_BANK,
+                recovery_cross_entropy_weight=1.0,
+                recovery_moe_loss_weight=1.0,
+                recovery_logit_kl_weight=0.1,
+            ),
+        )
+
+    (stage_a_root / "checkpoints" / "selected_checkpoint.json").write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "checkpoint_path": str(stage_a_checkpoint),
+                "step": 1,
+                "tokens": 8,
+                "requested_tokens": 8,
+                "selection_metric": "eval/paloma/macro_loss",
+                "selection_value": 1.0,
+            }
+        )
+    )
+    data = _data_config()
+    teacher_root = tmp_path / "teacher"
+    teacher_artifact = GradientConflictArtifactReference(
+        name="test/teacher",
+        version="dev",
+        root=str(teacher_root),
+        fingerprint="teacher-fingerprint",
+    )
+    stage_a_artifact = GradientConflictArtifactReference(
+        name="test/stage-a",
+        version="dev",
+        root=str(stage_a_root),
+        fingerprint="stage-a-fingerprint",
+    )
+    control_artifact = GradientConflictArtifactReference(
+        name="test/control",
+        version="dev",
+        root=str(control_root),
+        fingerprint="control-fingerprint",
+    )
+    for artifact, config in (
+        (teacher_artifact, {}),
+        (stage_a_artifact, {}),
+        (control_artifact, {"data": json.loads(canonical_json(data))}),
+    ):
+        write_record(
+            ArtifactRecord(
+                name=artifact.name,
+                version=artifact.version,
+                fingerprint=artifact.fingerprint,
+                output_path=artifact.root,
+                config=config,
+            )
+        )
+
+    output_path = tmp_path / "gradient-output"
+    checkpoints = tuple(
+        GradientConflictCheckpointConfig(
+            label=label,
+            artifact=artifact,
+            checkpoint_path=str(checkpoint),
+            expected_step=step,
+            continuation_tokens=index * 8,
+        )
+        for index, (label, artifact, checkpoint, step) in enumerate(
+            (
+                ("selected_stage_a", stage_a_artifact, stage_a_checkpoint, 1),
+                ("shared_control_midpoint", control_artifact, midpoint_checkpoint, 1),
+                ("shared_control_endpoint", control_artifact, endpoint_checkpoint, 2),
+            )
+        )
+    )
+    config = GradientConflictJobConfig(
+        source=gradient_source,
+        teacher_artifact=teacher_artifact,
+        data=data,
+        checkpoints=checkpoints,
+        output_path=str(output_path),
+        resources=ResourceConfig.with_cpu(),
+        run_id="test-gradient-conflict",
+        affected_layers=(1, 2),
+        batch_size=1,
+        num_batches=1,
+        loader_start_step=1,
+        bootstrap_samples=32,
+    )
+    run_gradient_conflict_local(config)
+
+    assert [path.name for path in output_path.iterdir()] == ["gradient_conflict.json"]
+    payload = json.loads((output_path / "gradient_conflict.json").read_text())
+    assert payload["teacher_checkpoint"] == str(tmp_path / "teacher" / "checkpoints" / "step-7")
+    assert payload["data"]["loader_start_step"] == 1
+    assert payload["data"]["loader_stop_step_exclusive"] == 2
+    assert payload["data"]["positions_per_checkpoint"] == 8
+    assert [checkpoint["label"] for checkpoint in payload["checkpoints"]] == [
+        "selected_stage_a",
+        "shared_control_midpoint",
+        "shared_control_endpoint",
+    ]
+    for checkpoint in payload["checkpoints"]:
+        assert checkpoint["controls"]["capacity_overflow_by_layer"] == {"layer_1": 0.0, "layer_2": 0.0}
+        assert checkpoint["controls"]["active_experts_by_layer"] == {"layer_1": 2, "layer_2": 2}
+        assert checkpoint["controls"]["router_selected_ids_exact_by_layer"] == {"layer_1": 1.0, "layer_2": 1.0}
+        for layer in (1, 2):
+            assert checkpoint["mean_moe_nrmse_by_layer"][f"layer_{layer}"] == pytest.approx(
+                np.sqrt(checkpoint["mean_layer_losses"][f"layer_{layer}"])
+            )
+            assert checkpoint["batches"][0]["moe_nrmse_by_layer"][f"layer_{layer}"] == pytest.approx(
+                np.sqrt(checkpoint["batches"][0]["layer_errors"][f"layer_{layer}"])
+            )
+        assert len(checkpoint["batches"]) == 1
+        assert len(checkpoint["experts"]) == 2
+    assert not (output_path / "checkpoints").exists()
+
+    write_record(
+        ArtifactRecord(
+            name=control_artifact.name,
+            version=control_artifact.version,
+            fingerprint="wrong-fingerprint",
+            output_path=control_artifact.root,
+            config={"data": json.loads(canonical_json(data))},
+        )
+    )
+    with pytest.raises(ValueError, match="stale provenance"):
+        run_gradient_conflict_local(dataclasses.replace(config, output_path=str(tmp_path / "stale-fingerprint")))
+
+    write_record(
+        ArtifactRecord(
+            name=control_artifact.name,
+            version=control_artifact.version,
+            fingerprint=control_artifact.fingerprint,
+            output_path=control_artifact.root,
+            config={"data": {}},
+        )
+    )
+    with pytest.raises(ValueError, match="data config differs"):
+        run_gradient_conflict_local(dataclasses.replace(config, output_path=str(tmp_path / "stale-data")))
+
+    write_record(
+        ArtifactRecord(
+            name=control_artifact.name,
+            version=control_artifact.version,
+            fingerprint=control_artifact.fingerprint,
+            output_path=control_artifact.root,
+            config={"data": json.loads(canonical_json(data))},
+        )
+    )
+    endpoint_manifest = read_merge_checkpoint_manifest(str(endpoint_checkpoint))
+    write_merge_checkpoint_manifest(
+        str(endpoint_checkpoint),
+        dataclasses.replace(endpoint_manifest, recovery_stage=RecoveryStage.LOCAL),
+    )
+    with pytest.raises(ValueError, match="S-prime recovery role"):
+        run_gradient_conflict_local(dataclasses.replace(config, output_path=str(tmp_path / "stale-role")))

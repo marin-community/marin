@@ -40,6 +40,10 @@ class ExpertMatchingArtifact(Artifact):
     """Probe sets, cost matrices, and assignment ablations derived from calibration."""
 
 
+class GradientConflictArtifact(Artifact):
+    """Small scalar summaries from read-only shared-bank gradient diagnostics."""
+
+
 @dataclass(frozen=True)
 class CalibrationArtifactManifest:
     source_checkpoint: str
@@ -373,6 +377,7 @@ __all__ = [
     "CalibrationArtifactManifest",
     "ExpertCalibrationArtifact",
     "ExpertMatchingArtifact",
+    "GradientConflictArtifact",
     "MatchingArtifactManifest",
     "read_calibration_manifest",
     "read_cost_matrix",
