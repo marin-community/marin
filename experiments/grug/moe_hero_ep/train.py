@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import equinox as eqx
@@ -34,6 +35,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
 from levanter.optim.config import AdamConfig, OptimizerConfig
 from levanter.schedule import BatchSchedule
+from levanter.tracker.histogram import SummaryStats
 from levanter.trainer import TrainerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
@@ -49,6 +51,14 @@ from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 # `.agents/skills/change-grug/`.
 
 logger = logging.getLogger(__name__)
+
+_ROUTER_LAYER_METRICS = (
+    ("routing_entropy", "_router_metrics/routing_entropy_per_layer"),
+    ("load_balancing_loss", "_router_metrics/load_balancing_loss_per_layer"),
+    ("router_z_loss", "_router_metrics/router_z_loss_per_layer"),
+    ("routing_hist", "_router_metrics/routing_hist_per_layer"),
+    ("capacity_overflow_rate", "_router_metrics/capacity_overflow_rate_per_layer"),
+)
 
 HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
@@ -346,6 +356,25 @@ def _drop_metrics(
     }
 
 
+def _router_metrics_for_logging(
+    metrics: Mapping[str, jax.Array | SummaryStats],
+) -> dict[str, jax.Array | SummaryStats]:
+    router_metrics = {
+        key: value
+        for key, value in metrics.items()
+        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
+    }
+    stacked_metrics = jax.device_get({name: metrics[key] for name, key in _ROUTER_LAYER_METRICS})
+    num_layers = stacked_metrics["routing_entropy"].shape[0]
+    for layer_index in range(num_layers):
+        for metric_name, values in stacked_metrics.items():
+            router_metrics[f"train/router/layer_{layer_index}/{metric_name}"] = jax.tree_util.tree_map(
+                lambda value, layer_index=layer_index: value[layer_index], values
+            )
+    return router_metrics
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -599,12 +628,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     last_step_duration = duration
                     levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
                     levanter.tracker.log({"throughput/loading_time": iterator.this_load_time}, step=step)
-                    router_metrics = {
-                        key: value
-                        for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
-                        and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
-                    }
+                    router_metrics = _router_metrics_for_logging(metrics)
                     if router_metrics:
                         levanter.tracker.log(router_metrics, step=step)
                     if "train/cross_entropy_loss" in metrics:

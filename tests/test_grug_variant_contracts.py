@@ -20,6 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jmp
+import numpy as np
 import optax
 import pytest
 from fray.cluster import ResourceConfig
@@ -33,6 +34,7 @@ from levanter.distributed import DistributedConfig
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.schedule import BatchSchedule
+from levanter.tracker.histogram import SummaryStats
 from levanter.tracker.json_logger import JsonLoggerConfig
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import ArtifactRecord, write_record
@@ -266,6 +268,69 @@ def test_grug_variant_one_step_contract_lowers_with_default_ctor(variant: str):
     assert "train/loss" in out_metrics_shape
     assert out_metrics_shape["train/loss"].shape == ()
     assert out_watch_shape is None
+
+
+@pytest.mark.parametrize("variant", ["moe", "moe_hero_ep", "moe_hero_fsdp"])
+def test_grug_moe_router_metrics_keep_per_layer_logging_contract(variant: str):
+    model_module = importlib.import_module(_variant_module_name(variant, "model"))
+    train_module = importlib.import_module(_variant_module_name(variant, "train"))
+    router_metrics = {
+        "routing_entropy_per_layer": jnp.array([0.25, 0.75], dtype=jnp.float32),
+        "routing_counts_per_layer": jnp.array([[0.0, 4.0, 1.0], [5.0, 0.0, 0.0]], dtype=jnp.float32),
+        "load_balancing_loss_per_layer": jnp.array([1.25, 1.75], dtype=jnp.float32),
+        "router_z_loss_per_layer": jnp.array([2.25, 2.75], dtype=jnp.float32),
+        "capacity_overflow_per_layer": jnp.array([1, 3], dtype=jnp.int32),
+        "qb_beta_per_layer": jnp.zeros((2, 3), dtype=jnp.float32),
+    }
+
+    summarized = model_module._summarize_router_metrics(router_metrics)
+    logged = train_module._router_metrics_for_logging({"train/loss": jnp.array(1.0), **summarized})
+
+    assert set(logged) == {
+        "train/router/routing_entropy_mean",
+        "train/router/load_balancing_loss",
+        "train/router/router_z_loss",
+        "train/router/capacity_overflow_rate_mean",
+        "train/router/layer_0/routing_entropy",
+        "train/router/layer_0/load_balancing_loss",
+        "train/router/layer_0/router_z_loss",
+        "train/router/layer_0/routing_hist",
+        "train/router/layer_0/capacity_overflow_rate",
+        "train/router/layer_1/routing_entropy",
+        "train/router/layer_1/load_balancing_loss",
+        "train/router/layer_1/router_z_loss",
+        "train/router/layer_1/routing_hist",
+        "train/router/layer_1/capacity_overflow_rate",
+    }
+    np.testing.assert_allclose(logged["train/router/routing_entropy_mean"], 0.5)
+    np.testing.assert_allclose(logged["train/router/load_balancing_loss"], 1.5)
+    np.testing.assert_allclose(logged["train/router/router_z_loss"], 2.5)
+    np.testing.assert_allclose(logged["train/router/capacity_overflow_rate_mean"], 0.4)
+
+    expected_scalars = {
+        "routing_entropy": (0.25, 0.75),
+        "load_balancing_loss": (1.25, 1.75),
+        "router_z_loss": (2.25, 2.75),
+        "capacity_overflow_rate": (0.2, 0.6),
+    }
+    for metric_name, expected_values in expected_scalars.items():
+        for layer_index, expected in enumerate(expected_values):
+            np.testing.assert_allclose(logged[f"train/router/layer_{layer_index}/{metric_name}"], expected)
+
+    expected_histograms = (
+        {"min": 1.0, "max": 2.0, "num": 5.0, "nonzero_count": 2.0, "sum": 6.0, "sum_squares": 8.0},
+        {"min": 0.0, "max": 0.0, "num": 5.0, "nonzero_count": 1.0, "sum": 0.0, "sum_squares": 0.0},
+    )
+    for layer_index, expected in enumerate(expected_histograms):
+        stats = logged[f"train/router/layer_{layer_index}/routing_hist"]
+        assert isinstance(stats, SummaryStats)
+        for field_name, expected_value in expected.items():
+            np.testing.assert_allclose(getattr(stats, field_name), expected_value)
+        assert stats.histogram is not None
+        np.testing.assert_array_equal(
+            stats.histogram.bucket_counts, router_metrics["routing_counts_per_layer"][layer_index]
+        )
+        np.testing.assert_array_equal(stats.histogram.bucket_limits, np.arange(4, dtype=np.float32))
 
 
 def test_grug_moe_variant_threads_moe_implementation_to_kernel():

@@ -654,8 +654,6 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
     load_balancing_loss = router_metrics["load_balancing_loss_per_layer"]
     router_z_loss = router_metrics["router_z_loss_per_layer"]
     capacity_overflow = router_metrics["capacity_overflow_per_layer"]
-    num_layers = int(routing_entropy.shape[0])
-
     # Per-layer total assignments = sum of routing_counts over experts (= tokens * k).
     assignments_per_layer = jnp.sum(routing_counts.astype(jnp.float32), axis=-1)
     capacity_overflow_rate = capacity_overflow.astype(jnp.float32) / jnp.maximum(assignments_per_layer, 1.0)
@@ -666,36 +664,38 @@ def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str,
         "train/router/router_z_loss": jnp.mean(router_z_loss),
         "train/router/routing_counts_per_layer": routing_counts,
         "train/router/capacity_overflow_rate_mean": jnp.mean(capacity_overflow_rate),
-        "qb_beta_per_layer": router_metrics.get("qb_beta_per_layer"),
+        "qb_beta_per_layer": router_metrics["qb_beta_per_layer"],
+        "_router_metrics/routing_entropy_per_layer": routing_entropy,
+        "_router_metrics/load_balancing_loss_per_layer": load_balancing_loss,
+        "_router_metrics/router_z_loss_per_layer": router_z_loss,
+        "_router_metrics/routing_hist_per_layer": _histogram_from_expert_counts(routing_counts),
+        "_router_metrics/capacity_overflow_rate_per_layer": capacity_overflow_rate,
     }
-    for i in range(num_layers):
-        out[f"train/router/layer_{i}/routing_entropy"] = routing_entropy[i]
-        out[f"train/router/layer_{i}/load_balancing_loss"] = load_balancing_loss[i]
-        out[f"train/router/layer_{i}/router_z_loss"] = router_z_loss[i]
-        out[f"train/router/layer_{i}/routing_hist"] = _histogram_from_expert_counts(routing_counts[i])
-        out[f"train/router/layer_{i}/capacity_overflow_rate"] = capacity_overflow_rate[i]
     return out
 
 
 def _histogram_from_expert_counts(expert_counts: jax.Array) -> SummaryStats:
     counts = jnp.asarray(expert_counts, dtype=jnp.float32)
-    num_experts = counts.shape[0]
+    num_experts = counts.shape[-1]
     expert_ids = jnp.arange(num_experts, dtype=jnp.float32)
-    num = jnp.sum(counts)
-    sum_values = jnp.sum(counts * expert_ids)
-    sum_squares = jnp.sum(counts * expert_ids * expert_ids)
+    num = jnp.sum(counts, axis=-1)
+    sum_values = jnp.sum(counts * expert_ids, axis=-1)
+    sum_squares = jnp.sum(counts * expert_ids * expert_ids, axis=-1)
     nonzero = counts > 0
-    min_value = jnp.where(nonzero, expert_ids, jnp.inf).min()
-    max_value = jnp.where(nonzero, expert_ids, -jnp.inf).max()
+    min_value = jnp.where(nonzero, expert_ids, jnp.inf).min(axis=-1)
+    max_value = jnp.where(nonzero, expert_ids, -jnp.inf).max(axis=-1)
     min_value = jnp.where(num > 0, min_value, 0.0)
     max_value = jnp.where(num > 0, max_value, 0.0)
-    bucket_limits = jnp.arange(num_experts + 1, dtype=jnp.float32)
+    bucket_limits = jnp.broadcast_to(
+        jnp.arange(num_experts + 1, dtype=jnp.float32),
+        (*counts.shape[:-1], num_experts + 1),
+    )
     histogram = Histogram(bucket_limits=bucket_limits, bucket_counts=counts)
     return SummaryStats.from_reduced_values(
         min=min_value,
         max=max_value,
         num=num,
-        nonzero_count=jnp.sum(nonzero),
+        nonzero_count=jnp.sum(nonzero, axis=-1),
         sum=sum_values,
         sum_squares=sum_squares,
         histogram=histogram,
