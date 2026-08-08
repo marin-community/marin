@@ -243,12 +243,14 @@ def build_small_run(
     intermediate_dim: int | None = None,
     latent_dim: int | None = None,
     tokens_per_active_param: int = 60,
+    watch_interval: int = 0,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One expert-parallel run of the downsized hero shape ``size``.
 
     ``tokens_per_active_param`` scales the step budget. The shapes carry a 60x count; issue #8062
     specifies 750x for the EP/FSDP ladder, which is what makes these rungs comparable to the hero.
+    ``watch_interval`` controls gradient and parameter norm logs. Zero disables these logs.
     The expert overrides let a rung reproduce the hero's routing geometry: cell load is
     ``tokens_per_shard * top-k / experts``, which depends on ``num_experts`` and
     ``num_experts_per_token`` but not on the model width, so a narrow rung can carry the hero's
@@ -343,6 +345,7 @@ def build_small_run(
                     f"capacity-{capacity_factor:g}",
                     f"seq{seq_len}",
                     f"tok{tokens_per_step // 1024}k",
+                    f"watch{watch_interval}",
                     flavor,
                     target,
                     "MHEP",
@@ -351,7 +354,7 @@ def build_small_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=WatchConfig(interval=0),
+            watch=WatchConfig(interval=watch_interval),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
@@ -472,6 +475,13 @@ def build_small_run(
     default=60,
     help="Token budget per active parameter. The shapes carry 60; issue #8062 specifies 750.",
 )
+@click.option(
+    "--watch-interval",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Steps between gradient and parameter norm logs. Zero disables norm logs.",
+)
 @build_options
 def main(
     run_id: str,
@@ -486,6 +496,7 @@ def main(
     intermediate_dim: int | None,
     latent_dim: int | None,
     tokens_per_active_param: int,
+    watch_interval: int,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_small_run(
         run_id=run_id,
@@ -500,6 +511,7 @@ def main(
         intermediate_dim=intermediate_dim,
         latent_dim=latent_dim,
         tokens_per_active_param=tokens_per_active_param,
+        watch_interval=watch_interval,
     )
 
 
