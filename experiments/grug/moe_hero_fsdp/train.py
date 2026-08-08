@@ -9,15 +9,18 @@ import time
 from dataclasses import dataclass, field
 
 import equinox as eqx
+import fsspec
 import jax
 import jax.numpy as jnp
 import jmp
 import levanter.callbacks as callbacks
 import levanter.tracker
+import numpy as np
 import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
+from jax.experimental import io_callback
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -41,6 +44,7 @@ from levanter.utils.logging import LoadingTimeTrackerIterator
 
 from experiments.grug.checkpointing import restore_grug_state_from_checkpoint
 from experiments.grug.dispatch import dispatch_grug_training_run
+from experiments.grug.moe_hero_fsdp.adamh import ScaleByAdamHState
 from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, Transformer
 from experiments.grug.sharding_dump import dump_grug_state_sharding_run_artifact
 
@@ -349,6 +353,69 @@ def _drop_metrics(
     }
 
 
+# --- output_proj collapse diagnostics (issue #8073) ------------------------------------------------
+# Cheap per-step scalars plus an anomaly trigger that io_callback-dumps the output_proj incident bundle
+# to S3. DIAG_FORCE_DUMP_STEP forces the trigger at a given step (10-step wiring test). No guard: the
+# collapse is left intact so the reproducing run captures it.
+_DIAG_FORCE_DUMP_STEP = int(os.environ.get("DIAG_FORCE_DUMP_STEP", "-1"))
+
+
+def _adamh_state(opt_state) -> ScaleByAdamHState:
+    """Locate the ScaleByAdamHState (holds output_proj's Adam moments) in the nested optimizer state."""
+    for leaf in jax.tree_util.tree_leaves(opt_state, is_leaf=lambda x: isinstance(x, ScaleByAdamHState)):
+        if isinstance(leaf, ScaleByAdamHState):
+            return leaf
+    raise ValueError("no ScaleByAdamHState in opt_state")
+
+
+def _dump_output_proj_bundle(dump_base, step, p, g, update, mu, nu, count, tokens):
+    """Host-side S3 write of the output_proj incident arrays (fires only on the anomaly trigger)."""
+    anomaly_dir = dump_base.rsplit("/checkpoints", 1)[0] + "/anomaly"
+    path = f"{anomaly_dir}/step-{int(step)}/output_proj.npz"
+    with fsspec.open(path, "wb") as f:
+        np.savez(
+            f,
+            p=np.asarray(p),
+            g=np.asarray(g),
+            update=np.asarray(update),
+            mu=np.asarray(mu),
+            nu=np.asarray(nu),
+            count=np.asarray(count),
+            tokens=np.asarray(tokens),
+            step=np.int64(int(step)),
+        )
+    logger.info("[anomaly] dumped output_proj incident bundle to %s", path)
+    return np.int32(0)
+
+
+def _output_proj_diag(qb_params, grads, updates):
+    """Per-step output_proj scalars + anomaly flag (norm-preservation / step-size / non-finite)."""
+    p, g, up = qb_params.output_proj, grads.output_proj, updates.output_proj
+    p_norm = jnp.linalg.norm(p)
+    up_norm = jnp.linalg.norm(up)
+    norm_preserve = jnp.linalg.norm(p + up) / jnp.maximum(p_norm, 1e-30)
+    step_ratio = up_norm / jnp.maximum(p_norm, 1e-30)
+    nonfinite = jnp.sum(~jnp.isfinite(up)).astype(jnp.float32)
+    diag = {
+        "diag/output_proj/p_norm": p_norm,
+        "diag/output_proj/update_norm": up_norm,
+        "diag/output_proj/norm_preserve": norm_preserve,
+        "diag/output_proj/step_ratio": step_ratio,
+        "diag/output_proj/p_min": jnp.min(p),
+        "diag/output_proj/p_max": jnp.max(p),
+        "diag/output_proj/p_absmax": jnp.max(jnp.abs(p)),
+        "diag/output_proj/grad_min": jnp.min(g),
+        "diag/output_proj/grad_max": jnp.max(g),
+        "diag/output_proj/grad_absmax": jnp.max(jnp.abs(g)),
+        "diag/output_proj/update_min": jnp.min(up),
+        "diag/output_proj/update_max": jnp.max(up),
+        "diag/output_proj/update_absmax": jnp.max(jnp.abs(up)),
+        "diag/output_proj/update_nonfinite": nonfinite,
+    }
+    anomaly = (jnp.abs(norm_preserve - 1.0) > 0.05) | (step_ratio > 0.1) | (nonfinite > 0.0)
+    return diag, anomaly
+
+
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
@@ -357,6 +424,7 @@ def _make_train_step(
     ema_beta: float | None,
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
+    dump_base: str | None = None,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -396,6 +464,37 @@ def _make_train_step(
         )
         updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
         params = optax.apply_updates(qb_params, updates)
+
+        # output_proj collapse diagnostics: cheap scalars every step, and an io_callback S3 dump of the
+        # incident bundle when the norm-preservation invariant breaks (or the forced test step hits).
+        diag, anomaly = _output_proj_diag(qb_params, grads, updates)
+        metrics.update(diag)
+        if _DIAG_FORCE_DUMP_STEP >= 0:
+            anomaly = anomaly | (state.step == _DIAG_FORCE_DUMP_STEP)
+        if dump_base is not None:
+            adamh_in = _adamh_state(opt_state_in)
+            dump_ops = (
+                state.step,
+                qb_params.output_proj,
+                grads.output_proj,
+                updates.output_proj,
+                adamh_in.mu.output_proj,
+                adamh_in.nu.output_proj,
+                adamh_in.count,
+                batch.tokens,
+            )
+            # Keep the cond's result in the output tree so the ordered io_callback is never DCE'd.
+            metrics["_dump_token"] = jax.lax.cond(
+                anomaly,
+                lambda ops: io_callback(
+                    functools.partial(_dump_output_proj_bundle, dump_base),
+                    jax.ShapeDtypeStruct((), jnp.int32),
+                    *ops,
+                    ordered=True,
+                ),
+                lambda ops: jnp.int32(0),
+                dump_ops,
+            )
 
         if ema_beta is None:
             ema_params = None
@@ -459,6 +558,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         ema_beta=config.trainer.ema_beta,
         watch_config=watch_config if watch_config.is_enabled else None,
         offload_opt_state=config.trainer.offload_opt_state,
+        dump_base=trainer.checkpointer.base_path if trainer.checkpointer is not None else None,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
@@ -582,7 +682,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         # Main optimization loop.
         try:
-            while int(state.step) < trainer.num_train_steps:
+            _max_steps = min(trainer.num_train_steps, int(os.environ.get("DIAG_MAX_STEPS", trainer.num_train_steps)))
+            while int(state.step) < _max_steps:
                 with jax.profiler.TraceAnnotation("load_batch"):
                     batch = next(iterator)
                 step_start = time.perf_counter()
@@ -609,7 +710,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     router_metrics = {
                         key: value
                         for key, value in metrics.items()
-                        if (key.startswith("train/router/") or key.startswith("moe_bias/"))
+                        if (key.startswith("train/router/") or key.startswith("moe_bias/") or key.startswith("diag/"))
                         and key not in ("train/router/routing_counts_per_layer", "qb_beta_per_layer")
                     }
                     if router_metrics:
