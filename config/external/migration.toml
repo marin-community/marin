@@ -1,0 +1,80 @@
+# Fork migration descriptors.
+#
+# One section per fork Marin pins under config/external/. This file records *how* to migrate
+# each fork toward upstream; it does not hold the pins themselves. The actual SHA/version lives
+# in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml descriptor).
+#
+# The `refresh-fork` skill reads a section to drive one fork's refresh; the weekly coordinator
+# walks all sections in `depends_on` order. Keep every section consistent with its pin source
+# and EXTERNAL_PROJECTS in config/update-external.py — tests/inference/test_migration_descriptors.py
+# enforces this.
+#
+# Fields:
+#   repository       Marin fork Marin pins (must match the pin source).
+#   upstream         Repo the fork tracks. Omitted for marin-native repos with no upstream.
+#   kind             "patch_free" (track a branch, no local commits) or "overlay" (Marin carries patches).
+#   pin              Where the pinned revision lives: "isolated_project"
+#                    (config/external/<name>/uv.lock) or "descriptor:<path>#<section>".
+#   base_select      How to choose the new base: "upstream_main", "fork_main", "latest_release",
+#                    or "derived" (with `derived_from`).
+#   derived_from     For base_select="derived": "<fork>:<path>" giving the SHA the base is read from.
+#   depends_on       Forks whose refresh must land first (the coordinator's DAG edges).
+#   e2e              Marin end-to-end that validates the refreshed fork (file path, optional ::symbol).
+#   blocker_assignee GitHub user assigned the "can't migrate" issue on failure.
+#   nuances          Migration constraints a human must respect (torch pins, known-good ceilings, etc.).
+
+[tpu-inference]
+repository = "https://github.com/marin-community/tpu-inference.git"
+upstream = "https://github.com/vllm-project/tpu-inference.git"
+kind = "overlay"
+pin = "descriptor:vllm/tpu-forks.toml#tpu-inference"
+base_select = "latest_release"
+e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
+blocker_assignee = "yonromai"
+nuances = [
+    "The fork's torchvision<0.27 constraint holds torch at 2.11 inside the uvx env.",
+]
+
+[vllm]
+repository = "https://github.com/marin-community/vllm.git"
+upstream = "https://github.com/vllm-project/vllm.git"
+kind = "overlay"
+pin = "descriptor:vllm/tpu-forks.toml#vllm"
+base_select = "derived"
+derived_from = "tpu-inference:.buildkite/vllm_lkg.version"
+depends_on = ["tpu-inference"]
+e2e = "experiments/evals/served_qwen3.py::QWEN3_TPU_INFERENCE"
+blocker_assignee = "yonromai"
+nuances = [
+    "Do not advance past the vLLM known-good commit the selected tpu-inference release blessed.",
+]
+
+[evalchemy]
+repository = "https://github.com/marin-community/evalchemy.git"
+upstream = "https://github.com/mlfoundations/evalchemy.git"
+kind = "patch_free"
+pin = "isolated_project"
+base_select = "upstream_main"
+e2e = "experiments/evaluation/cli.py"
+blocker_assignee = "yonromai"
+
+[harbor]
+repository = "https://github.com/marin-community/harbor.git"
+upstream = "https://github.com/harbor-framework/harbor.git"
+kind = "patch_free"
+pin = "isolated_project"
+base_select = "upstream_main"
+e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
+blocker_assignee = "yonromai"
+
+[MarinSkyRL]
+repository = "https://github.com/marin-community/MarinSkyRL.git"
+kind = "patch_free"
+pin = "isolated_project"
+base_select = "fork_main"
+e2e = "experiments/post_training/iceball_micro.py"
+blocker_assignee = "yonromai"
+nuances = [
+    "Marin-native today: only the root marinskyrl distribution is tracked, not skyrl-train.",
+    "#7920 will promote this to a real overlay fork (FSDP/Megatron/FlashAttention/vLLM); revisit kind then.",
+]
