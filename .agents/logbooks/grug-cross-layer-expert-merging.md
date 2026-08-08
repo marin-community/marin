@@ -789,3 +789,12 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Cost estimate: the historical final store stage alone used 6,301 tasks, scaled to 3,072 workers at 2 CPU/32 GiB each, and took about 16.5 hours. Rebuilding the missing upstream graph would be substantially larger.
 - Decision: exact central1-only regeneration is NO-GO. Continue waiting for central2. Do not copy or rebuild the cache and do not substitute a central1 v5p experiment without a separate preregistration and an identical local training input.
 - Issue update: https://github.com/marin-community/marin/issues/8032#issuecomment-5226495632
+
+### 2026-08-08 09:19 - GRUG-XEM-009 canceled before TPU allocation
+
+- User decision: stop the central2 smoke and revisit the large-model capacity plan separately.
+- Action: stopped only `/dlwh/grug-xem-june67b-smoke-20260808`. Iris reports the controller and its pending baseline child as `killed`. The incumbent June run and Iris cluster were untouched.
+- Artifact audit: the baseline never acquired the 256-worker `v4-2048` group, the tied child was never created, and neither arm produced W&B data or a checkpoint. Each planned root contains only `.executor_info` and a six-byte `.executor_status` containing `FAILED`; no training payload exists.
+- Interpretation: GRUG-XEM-009 is operationally inconclusive. Cancellation does not change the d512/d768 architecture evidence or any d512 conversion result. The 3,000-update milestone remains unlaunched.
+- Issue update: https://github.com/marin-community/marin/issues/8032#issuecomment-5226971210
+- Resume condition: preregister a new data-local capacity plan. Do not copy the approximately 25 TB cache across regions or treat a rebuilt cache/hardware substitution as the same experiment.
