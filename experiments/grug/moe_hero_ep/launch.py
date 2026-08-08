@@ -142,6 +142,7 @@ def build_hero_run(
     flavor: str = "ep",
     eval_every: int = 0,
     save_checkpoints: bool = False,
+    save_xla_dumps: bool = False,
     watch_interval: int = HERO_WATCH_INTERVAL,
     profile_steps: int = 0,
     profile_start_step: int = 5,
@@ -277,6 +278,7 @@ def build_hero_run(
                 group="moe-hero-ep",
                 name=run_id,
                 replicate_path=ctx.output_path,
+                save_xla_dumps=save_xla_dumps,
             ),
             watch=_hero_watch_config(watch_interval),
             use_explicit_mesh_axes=True,
@@ -402,6 +404,15 @@ def build_hero_run(
     help="Steps between grad/param norm dumps. 0 disables them.",
 )
 @click.option(
+    "--save-xla-dumps/--no-save-xla-dumps",
+    default=False,
+    help=(
+        "Upload the XLA dumps produced by XLA_FLAGS to the tracker. Pair with "
+        "-e XLA_FLAGS '--xla_dump_to=/tmp/xla --xla_dump_hlo_pass_re=rematerialization' to see "
+        "which buffers rematerialization keeps live."
+    ),
+)
+@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -442,6 +453,7 @@ def main(
     latent_dim: int | None,
     flavor: str,
     save_checkpoints: bool,
+    save_xla_dumps: bool,
     watch_interval: int,
     eval_every: int,
     profile_steps: int,
@@ -460,6 +472,7 @@ def main(
         latent_dim=latent_dim,
         flavor=flavor,
         save_checkpoints=save_checkpoints,
+        save_xla_dumps=save_xla_dumps,
         watch_interval=watch_interval,
         eval_every=eval_every,
         profile_steps=profile_steps,
