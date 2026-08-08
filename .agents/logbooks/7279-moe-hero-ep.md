@@ -1594,3 +1594,14 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   percentage points more drops, 4.29% higher drop-adjusted throughput, and 0.119% higher loss. The
   loss difference is within the preset 0.5% short-run rule. Capacity factor 1.3 is the leading
   candidate while capacity factor 1.4 finishes.
+
+### 2026-08-08 14:28 UTC - Device-step conditional fails with the same sharding conflict
+
+- MHEP-186 failed before step 1 with the same `Unexpected XLA sharding override` assertion as
+  MHEP-185. Moving the condition from a host input to `state.step` did not change the failure.
+- The result isolates the problem to the `lax.cond` program and its merge with the pinned-host
+  optimizer state. It is not caused by the condition scalar location.
+- The coordinator was stopped immediately. It had production priority and zero retries.
+- Decision: Reject the dynamic conditional approach for this sharded, optimizer-offloaded model.
+  Revert commit `40510fccb`. Do not test another condition location without a new JAX or XLA
+  mechanism that can preserve memory kinds across both branches.

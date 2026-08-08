@@ -338,8 +338,8 @@ def test_diagnostic_watch_stats_match_direct_gradient_and_parameter_norms():
         np.testing.assert_allclose(actual[key], expected[key])
 
 
-def test_inline_watch_skips_stats_between_log_intervals_without_recompiling(monkeypatch):
-    params = _TinyWatchModel(weight=jnp.array(2.0, dtype=jnp.float32))
+def test_inline_watch_uses_one_watched_train_step_between_log_intervals(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(2.0))
     optimizer = optax.sgd(0.1)
     state = train.GrugTrainState(
         step=jnp.array(0, dtype=jnp.int32),
@@ -372,5 +372,4 @@ def test_inline_watch_skips_stats_between_log_intervals_without_recompiling(monk
     assert step_zero_stats is not None
     assert step_one_stats is not None
     np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
-    np.testing.assert_allclose(step_one_stats["grad/norm/total"], 0.0)
-    assert train_step._cache_size() == 1
+    np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)
