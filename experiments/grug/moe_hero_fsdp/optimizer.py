@@ -76,11 +76,13 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
         if not hasattr(param, "ndim"):
             return update
         if param.ndim == 2:
-            param_norm = jnp.linalg.norm(param)
-            update_norm = jnp.linalg.norm(update)
+            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
+            # match the N-D branch below and use an explicit fp32 sum-of-squares reduction.
+            param_norm = jnp.sqrt(jnp.sum(jnp.square(param.astype(jnp.float32))))
+            update_norm = jnp.sqrt(jnp.sum(jnp.square(update.astype(jnp.float32))))
             new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
-            new_param = _pin_sharding(new_param, param)  # correct the sharded norm reduction (issue #8073)
-            new_param_norm = jnp.linalg.norm(new_param)
+            new_param = _pin_sharding(new_param, param)
+            new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
         axes = tuple(range(1, param.ndim))

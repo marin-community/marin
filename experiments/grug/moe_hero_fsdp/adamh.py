@@ -63,13 +63,18 @@ def scale_by_adamh(
         )
         mu = otu.tree_cast(mu, mu_dtype)
 
+        def _norm(x):
+            # jnp.linalg.norm over a sharded matrix mis-lowers under SPMD and over-counts (issue #8073);
+            # an explicit fp32 sum-of-squares reduces correctly (as the N-D hyperball branch already does).
+            return jnp.sqrt(jnp.sum(jnp.square(x.astype(jnp.float32))))
+
         def _scale_invariant_2d(p, u):
             """Core update for a 2-D (matrix) parameter."""
-            p_norm = jnp.linalg.norm(p)
-            u_norm = jnp.linalg.norm(u)
+            p_norm = _norm(p)
+            u_norm = _norm(u)
             new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
-            new_p = _pin_sharding(new_p, p)  # correct the sharded norm reduction (issue #8073)
-            return new_p / jnp.linalg.norm(new_p) * p_norm - p
+            new_p = _pin_sharding(new_p, p)
+            return new_p / _norm(new_p) * p_norm - p
 
         def scale_invariant_update(p, u):
             if p is None:
