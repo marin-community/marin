@@ -1569,3 +1569,15 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Acceptance requires 76 finite norm fields at step 0, no norm row on steps 1 through 4, no
   sharding error, no OOM or retry, and no second training compilation. A pass permits a matched
   200-step arm. A failure requires another code revert.
+
+### 2026-08-08 14:25 UTC - MHEP-173 completes the capacity-1.6 gate
+
+- MHEP-173 completed all 200 steps. W&B received all 76 norm fields at steps 0, 10, 20, through
+  190. Every field in all 20 rows was finite. Iris reports the coordinator and training child as
+  succeeded, with no failure or retry.
+- Final metrics: 252,404 tokens/s, 1.3986% drops, and loss 3.2062.
+- Last-50 means: 250,734 tokens/s, 1.6189% drops, 246,675 drop-adjusted tokens/s, and loss 3.2388.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-173-w18-ep-e192-i5504-cf1p60-singleexec-watch10-p32771-20260808
+- Compared with capacity factor 1.5, capacity factor 1.6 has 1.82% lower raw throughput and 1.31%
+  lower drop-adjusted throughput. Its mean loss is only 0.045% lower. Capacity factor 1.5 is the
+  better of these two short-run choices.
