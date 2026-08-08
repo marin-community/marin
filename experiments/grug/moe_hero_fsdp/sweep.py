@@ -70,14 +70,38 @@ BLOCK_FUSION_FLAGS = "--xla_gpu_experimental_enable_fusion_block_level_rewriter=
 # scored window opens at step 5. `xla_gpu_experimental_autotune_cache_mode` is not settable here --
 # it takes no value form XLA_FLAGS accepts.
 EXHAUSTIVE_AUTOTUNE_FLAGS = "--xla_gpu_exhaustive_tiling_search=true --xla_gpu_autotune_level=5"
-_COMBINE_BYTES = 512 * 1024 * 1024
-COMBINE_THRESHOLD_FLAGS = (
-    " ".join(
-        f"--xla_gpu_{collective}_combine_threshold_bytes={_COMBINE_BYTES}"
-        for collective in ("all_gather", "all_reduce", "reduce_scatter")
-    )
-    + f" {_COMMAND_BUFFER_DISABLED}"
+# The components of `JAX_OPTIMIZATION_LEVEL=O1`, which measured -3.70% as a bundle. Its latency
+# hiding scheduler is separately measured at -4.22%, so the bundle's loss is accounted for and its
+# other three parts have never been read on their own.
+DOUBLE_BUFFER_FLAGS = "--xla_gpu_enable_while_loop_double_buffering=true"
+PIPELINED_COLLECTIVE_FLAGS = (
+    "--xla_gpu_enable_pipelined_all_reduce=true "
+    "--xla_gpu_enable_pipelined_all_gather=true "
+    "--xla_gpu_enable_pipelined_reduce_scatter=true"
 )
+_COMBINE_COLLECTIVES = ("all_gather", "all_reduce", "reduce_scatter")
+
+
+def _combine_threshold_flags(nbytes):
+    """Raise the size at which XLA stops merging collectives, from the 31.5 MB default.
+
+    The usual sizing rule is one transformer layer's worth, so link bandwidth is not wasted on small
+    buffers. Here one layer's FSDP shard is 231 MB, which the 512 MB setting already cleared while
+    measuring -3.37%. All 48 layers run inside a single `jax.scan`, so there is nothing to merge
+    across layers whatever the threshold; expect this to pay only alongside a flag that unrolls the
+    loop.
+    """
+    return " ".join(f"--xla_gpu_{c}_combine_threshold_bytes={nbytes}" for c in _COMBINE_COLLECTIVES)
+
+
+COMBINE_THRESHOLD_FLAGS = f"{_combine_threshold_flags(512 * 1024 * 1024)} {_COMMAND_BUFFER_DISABLED}"
+BIG_COMBINE_THRESHOLD_FLAGS = _combine_threshold_flags(8 * 1024 * 1024 * 1024)
+# `xla_gpu_enable_address_computation_fusion` was renamed; the successor defaults to false, so this
+# is untested rather than already on.
+DYNAMIC_SLICE_FUSION_FLAGS = "--xla_gpu_enable_dynamic_slice_fusion=true"
+# Both target collective-permute, which a pure-FSDP graph may not contain at all. `xla_gpu_lhs_enable
+# _gpu_async_tracker` would have belonged here but does not exist in XLA 0.11.
+P2P_FLAGS = "--xla_gpu_enable_pipelined_p2p=true --xla_gpu_collective_permute_decomposer_threshold=1024"
 LOGDIR = pathlib.Path("scratch/hero_sweep")
 PEAK_FLOPS_PER_DEVICE = 2.5e15
 NUM_DEVICES = 64
@@ -324,6 +348,84 @@ WAVES = {
             env={**COMBINED_ENV, "XLA_FLAGS": f"{EXHAUSTIVE_AUTOTUNE_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
             args=COMBINED_ARGS,
             note="autotuning turned up as far as XLA goes; compile time falls outside the scored window",
+        ),
+    ],
+    # Wave 12: decompose `JAX_OPTIMIZATION_LEVEL=O1`. Its latency hiding scheduler already measured
+    # -4.22% on its own, which accounts for the bundle's -3.70%, leaving its other components
+    # unread. `doublebuffer` matters most: the hero runs all 48 layers under one `jax.scan`, and
+    # double-buffering unrolls that loop twice, which is the cheap partial form of breaking it.
+    "w12": [
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
+        Arm(
+            "doublebuffer",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{DOUBLE_BUFFER_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="2x unroll of the 48-layer scan, against 5.09 s/step of recompute",
+        ),
+        Arm(
+            "pipelined",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{PIPELINED_COLLECTIVE_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="collective pipelining, the untested flags for the MoE all-gather candidate",
+        ),
+        Arm(
+            "o1nolhs",
+            env={
+                **COMBINED_ENV,
+                "XLA_FLAGS": (
+                    f"{DOUBLE_BUFFER_FLAGS} {PIPELINED_COLLECTIVE_FLAGS} "
+                    f"{SOL_ESTIMATOR_FLAG} {_COMMAND_BUFFER_DISABLED}"
+                ),
+            },
+            args=COMBINED_ARGS,
+            note="O1 without its latency hiding scheduler: everything in the bundle we have not ruled out",
+        ),
+    ],
+    # Wave 13: the remaining default-off flags in `/tmp/gpu-options.txt` that plausibly touch this
+    # graph. `userbuffers` gets a fourth attempt after losing three racks to iris#7650.
+    "w13": [
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
+        Arm(
+            "dsfusion",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{DYNAMIC_SLICE_FUSION_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="the renamed address-computation fusion, default off",
+        ),
+        Arm(
+            "combine8g",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{BIG_COMBINE_THRESHOLD_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="8 GB thresholds, 37x a layer shard, against the 512 MB arm's -3.37%",
+        ),
+        Arm(
+            "userbuffers",
+            env={
+                **COMBINED_ENV,
+                "XLA_FLAGS": f"--xla_gpu_enable_nccl_user_buffers=true {_COMMAND_BUFFER_DISABLED}",
+                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": "2048",
+            },
+            args=COMBINED_ARGS,
+            note="fourth attempt; the first three never reached step 0",
+        ),
+    ],
+    # Wave 14: the P2P pair, and the combine threshold given something to combine. Raising the
+    # threshold cannot merge across scan iterations, so it is paired with the unroll here.
+    "w14": [
+        Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
+        Arm(
+            "p2ppermute",
+            env={**COMBINED_ENV, "XLA_FLAGS": f"{P2P_FLAGS} {_COMMAND_BUFFER_DISABLED}"},
+            args=COMBINED_ARGS,
+            note="pipelined P2P and collective-permute decomposition; may be a no-op on pure FSDP",
+        ),
+        Arm(
+            "unrollcombine",
+            env={
+                **COMBINED_ENV,
+                "XLA_FLAGS": f"{DOUBLE_BUFFER_FLAGS} {BIG_COMBINE_THRESHOLD_FLAGS} {_COMMAND_BUFFER_DISABLED}",
+            },
+            args=COMBINED_ARGS,
+            note="unroll the scan twice, then let the two iterations' collectives merge",
         ),
     ],
 }
