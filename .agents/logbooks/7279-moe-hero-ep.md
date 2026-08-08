@@ -1290,3 +1290,33 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   `mhep-170-w16-ep-e192-i5504-cf1p60-watch10-p32768-20260808`.
 - Decision rule: Select the faster arm if its end-of-run drop fraction is no higher than 1.9467%
   and its norm and loss curves stay finite. Otherwise, select the higher capacity factor.
+
+### 2026-08-08 13:10 UTC - The E192 size search closes at width 5,632
+
+- MHEP-167 completed all five steps with 192 experts and expert width 5,632. W&B received 38
+  finite gradient norm metrics and 38 finite parameter norm metrics. The final loss was 10.5207,
+  and the run reported 229,343 tokens/s.
+- Result: 491.934 B total parameters and 23.548 B active parameters is the largest confirmed E192
+  model at capacity factor 2.0. Width 5,760 is the adjacent failed point.
+- The worker coordination warnings started after every training task had completed with exit 0.
+  They were teardown messages. The coordinator was stopped after the result was verified.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-167-w15-ep-e192-i5632-cf2p00-fullwatch-overlap1-p32765-20260808
+- MHEP-168 used 128 experts and width 7,680. It failed from NCCL CUDA out of memory before step 1.
+  W&B has no training or norm metric. Its coordinator was stopped after the deterministic failure.
+- Result: 448.429 B total parameters and 27.153 B active parameters is a failed E128 upper bound.
+
+### 2026-08-08 13:10 UTC - MHEP-171 and MHEP-172 E128 size gates ready
+
+- Common config and success criteria match the prior committed-default full-watch size gates.
+- MHEP-171 uses 128 experts and expert width 7,168. It has 419.438 B total parameters and 26.247 B
+  active parameters.
+- MHEP-172 uses 128 experts and expert width 7,424. It has 433.933 B total parameters and 26.700 B
+  active parameters.
+- Run IDs: `mhep-171-w17-ep-e128-i7168-cf2p00-fullwatch-p32769-20260808` and
+  `mhep-172-w17-ep-e128-i7424-cf2p00-fullwatch-p32770-20260808`.
+- Both arms use five steps, full watch on every step, the committed watch-aware runtime default,
+  production priority, CUDA async allocation, and zero retries.
+- Decision rule: A candidate passes only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
+  NCCL memory failure without a retry. Use the remaining 128-wide midpoint after the pair locates
+  the pass and failure boundary.
