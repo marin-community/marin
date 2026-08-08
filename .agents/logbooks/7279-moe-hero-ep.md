@@ -1459,3 +1459,20 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - The arm keeps the MHEP-175 config except for expert width. It uses five steps, full watch on every
   step, production priority, CUDA async allocation, and zero retries. A pass selects width 6,400
   next. A failure selects width 6,144 next.
+
+### 2026-08-08 13:50 UTC - MHEP-183 tests the adjacent E128 width
+
+- MHEP-181 completed all five steps with 128 experts, width 8,320, and capacity factor 1.5. W&B
+  received all 76 norm metrics at every step, and every value was finite. The final loss was
+  10.4740, and the run reported 201,002 tokens/s.
+- Result: 484.668 B total parameters and 28.285 B active parameters is the new largest confirmed
+  full-watch E128 model. It has the largest confirmed active parameter count.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-181-w23-ep-e128-i8320-cf1p50-fullwatch-p32779-20260808
+- The compiler estimated a 191.59 GiB rematerialized program. The first NCCL all-to-all and all
+  five training steps still completed.
+- MHEP-183 tests the adjacent 128-wide point at width 8,448. It has 491.915 B total parameters and
+  28.512 B active parameters.
+- Run ID: `mhep-183-w25-ep-e128-i8448-cf1p50-fullwatch-p32781-20260808`.
+- The arm keeps the MHEP-181 config except for expert width. It uses five steps, full watch on every
+  step, production priority, CUDA async allocation, and zero retries. A failure closes the search
+  at width 8,320. A pass raises the lower bound and selects width 8,576 next.
