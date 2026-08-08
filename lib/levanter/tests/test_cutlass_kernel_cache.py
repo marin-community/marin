@@ -11,17 +11,22 @@ entry point bound into ``cutlass.jax.primitive``, the in-process
 
 import dataclasses
 import hashlib
-import importlib
 import sys
-import textwrap
 import types
 from typing import Any
 
 import pytest
 
 from rigging.cache import PersistentKvCache
+from rigging.provenance import Provenance
 
+from levanter import cutlass_kernel_cache
 from levanter.cutlass_kernel_cache import cute_launcher_factory, install
+
+
+def _provenance(*, tree_hash: str) -> Provenance:
+    """Launch provenance carrying only the field the cache key reads."""
+    return Provenance(tree_hash=tree_hash, base_commit="", dirty=False, branch=None, built_by=None)
 
 
 def _kernel_store(directory) -> PersistentKvCache:
@@ -124,40 +129,14 @@ def test_configuration_and_specification_both_discriminate_stored_kernels(fake_c
     assert served.module == b"objectcode:tile256-bf16:FakeFunctionSpec(shape=(8, 16))"
 
 
-def test_editing_the_launcher_source_invalidates_its_kernels(fake_cutlass, tmp_path, monkeypatch):
-    """A launcher body is levanter source: nothing else in the key notices an edit."""
-    source = textwrap.dedent(
-        """
-        from levanter.cutlass_kernel_cache import cute_launcher_factory
+def test_a_launch_with_no_source_revision_is_compiled_but_not_stored(fake_cutlass, tmp_path, monkeypatch):
+    monkeypatch.setattr(cutlass_kernel_cache, "launch_provenance", lambda: _provenance(tree_hash=""))
+    install(_kernel_store(tmp_path))
 
-        @cute_launcher_factory
-        def build(modules, *, tile: int):
-            def launcher(stream):
-                raise AssertionError("a launcher is never called on the host")
+    fake_cutlass.compile_kernel(build_launcher(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
 
-            launcher.kernel_name = f"tile{tile}"
-            return launcher
-        """
-    )
-    module_dir = tmp_path / "src"
-    module_dir.mkdir()
-    monkeypatch.syspath_prepend(str(module_dir))
-    store = str(tmp_path / "store")
-
-    compiled_per_revision = []
-    for revision in ("original", "edited"):
-        name = f"edited_launcher_{revision}"
-        (module_dir / f"{name}.py").write_text(f"# revision: {revision}\n{source}")
-        # The import system caches each directory's listing against its mtime, so a
-        # second file written inside one mtime tick is invisible to the finder.
-        importlib.invalidate_caches()
-        module = __import__(name)
-        fake_cutlass.forget_process_state()
-        install(_kernel_store(store))
-        fake_cutlass.compile_kernel(module.build(None, tile=128), FakeFunctionSpec(shape=(8, 16)))
-        compiled_per_revision.append(list(fake_cutlass.compiled))
-
-    assert compiled_per_revision == [["tile128"], ["tile128", "tile128"]]
+    assert fake_cutlass.compiled == ["tile128-bf16"]
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_launcher_without_an_identity_is_compiled_but_not_stored(fake_cutlass, tmp_path):
