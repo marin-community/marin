@@ -90,13 +90,13 @@ file while uncovered segments use postings or source Parquet, so partial
 backfill is useful. `telemetry_v1` has one `training-status` projection for the
 three dashboard metric names.
 
-Change a projection in place rather than versioning its name. Re-registering a
-name with a different predicate or column list supersedes the registered
-definition: new segments build the new one, and existing segments stay queryable
-under the definition they were written with, because each `.fidx` section
-carries its own coverage. The backfill then rebuilds them a few per tick and
-deletes the superseded Parquet files. Registering a widened copy under a second
-name instead leaves both being built for every new segment forever.
+Change a projection in place; do not version its name. Re-registering a name
+with a different predicate or column list supersedes the registered definition:
+new segments build the new one, existing segments stay queryable under the
+definition they were written with (each `.fidx` section carries its own
+coverage), and the backfill rebuilds them a few per tick and deletes the
+superseded Parquet files. A widened copy under a second name leaves both being
+built for every new segment forever.
 
 For broad low-cardinality summaries, set `ColumnIndex.value_counts`.
 Unfiltered `SELECT col, count(*) FROM table GROUP BY col` and `count(col)` then
@@ -286,19 +286,18 @@ the old one under the same `keys[].cluster` (the hub accepts either), roll the
 hub, re-pin the sender's `signing_key` to the new version, roll the sender, then
 drop the old public key and roll the hub again.
 
-## Checking that a server is ingesting, not just listening
+## Checking that a server is ingesting
 
 `/health` answers 200 whenever the process is listening, and it is also the
 Kubernetes liveness, readiness, and startup probe, so it cannot fail on a
-condition a restart will not clear. Its **body** carries the verdict that
-matters: `ok`, or `degraded: <namespace>: registration failed: <reason>`.
+condition a restart will not clear. The body carries the verdict: `ok`, or
+`degraded: <namespace>: registration failed: <reason>`.
 
-A namespace this server registers for itself — `telemetry_v1` today — must be
-registered before it accepts a row, and that registration is re-driven from the
-catalog's persisted schema on every boot. When this binary's schema and the
-catalog disagree in a way no merge can reconcile (a column type change), every
-write to that namespace fails until one of them changes, and a restart does not
-help. That is what `degraded` reports.
+`telemetry_v1` must be registered before it accepts a row, and the registration
+is re-driven from the catalog's persisted schema on every boot. When the
+binary's schema and the catalog disagree in a way no merge can reconcile (a
+column type change), every write to that namespace fails until one of them
+changes, across restarts.
 
 ```bash
 curl -sf http://<host>:<port>/health          # ok | degraded: ...
@@ -308,8 +307,8 @@ curl -sf http://<host>:<port>/api/server | jq .ingest
 `/api/server`'s `ingest` block names each namespace, its state, the error, when
 it first failed, and how many attempts have been made since. The dashboard's
 System page shows the same under **Ingest**. `deploy up`, `deploy restart`, and
-`safe_deploy` all gate on the body, so a deploy that wedges ingest fails and
-rolls back instead of reporting success.
+`safe_deploy` gate on the body, so a deploy that wedges ingest fails and rolls
+back.
 
 ## Diagnosing Kubernetes mirror readiness
 

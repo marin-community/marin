@@ -17,10 +17,8 @@ import re
 CONTAINER_NAME = "finelog"
 CACHE_DIR = "/var/cache/finelog"
 
-# The server's health contract (`rust/src/server/ingest_health.rs`). `/health`
-# answers 200 whenever the process is listening, because it is also the
-# Kubernetes liveness probe; the body is what says whether the namespaces the
-# server registers for itself accept rows. Every deploy gate reads the body.
+# `/health` answers 200 whenever the process is listening; the body says whether
+# its namespaces accept rows (`rust/src/server/ingest_health.rs`).
 HEALTH_OK = "ok"
 
 
@@ -125,9 +123,7 @@ for i in $(seq 1 60); do
         sudo docker logs {{ container_name }} --tail 200 || true
         exit 1
     fi
-    # /health answers 200 while the server is merely listening and reports in its
-    # body whether the namespaces it ingests into are registered. A binary the
-    # catalog's schema rejects listens and accepts no rows, so gate on the body.
+    # Gate on the body: /health answers 200 while the server is only listening.
     health=$({{ health_probe }} 2>/dev/null || true)
     if [ "$health" = "{{ health_ok }}" ]; then
         echo "[finelog-init] finelog is healthy"

@@ -721,9 +721,8 @@ pub fn validate_index_policies(schema: &Schema) -> Result<(), StatsError> {
 // Schema merge: additive for the column layout, replaceable for derived state.
 // ---------------------------------------------------------------------------
 
-/// Whether `registered` accelerates every query `requested` would: the same
-/// predicate column, and both the predicate values and the included columns are
-/// supersets.
+/// Whether `registered` accelerates every query `requested` would: same
+/// predicate column, superset predicate values, superset columns.
 fn covers_projection(registered: &CoveringProjection, requested: &CoveringProjection) -> bool {
     registered.predicate_column == requested.predicate_column
         && requested
@@ -740,14 +739,10 @@ fn covers_projection(registered: &CoveringProjection, requested: &CoveringProjec
 ///
 /// - identical / requested ⊆ registered -> `registered` unchanged.
 /// - requested adds nullable columns -> the union (registered then new).
-/// - a conflicting column *type* -> `SchemaConflict`. This is the one
-///   disagreement that is about the data rather than about derived state: the
-///   registered layout cannot accept the requested rows, and keeping the
-///   registered type would only move the same rejection onto every write.
-/// - a new column declared non-nullable is *adopted as nullable*, with a warn.
-///   Every row already in the namespace is missing it, so non-nullable is not a
-///   shape the table can hold; narrowing the declaration is the only faithful
-///   reading and is strictly better than refusing to register.
+/// - a conflicting column *type* -> `SchemaConflict`. The registered layout
+///   cannot hold the requested rows, so every write would be rejected anyway.
+/// - a new non-nullable column is adopted as nullable, with a warn. Every
+///   already-stored row is missing it.
 /// - a nullability difference on an existing column is *not* a conflict: warn
 ///   and keep the registered nullability (adopt-from-disk widens compacted
 ///   columns to nullable, and re-registration with the original schema must be
@@ -760,16 +755,14 @@ fn covers_projection(registered: &CoveringProjection, requested: &CoveringProjec
 ///   scans unpruned — so a newer client can add an index to a live namespace
 ///   without a reset. An older client that does not know about the field can
 ///   never clear one, mirroring the storage-policy rule.
-/// - a named covering projection is added when its name is new and
-///   **superseded** when a registered name comes back with a different
-///   definition — never a conflict. A projection is derived acceleration state,
-///   and the registered definition only decides what future segments build:
-///   coverage is self-described per segment in its `.fidx`
-///   `CoveringProjection` section, so segments written under the old definition
-///   stay queryable and are reclaimed by the ordinary index backfill. A request
-///   whose definition the registered one already covers leaves the registered
-///   definition alone, so an older binary re-registering a narrower definition
-///   against a newer catalog does not churn the derived state of a fleet
+/// - a named covering projection is added when its name is new, and superseded
+///   when a registered name comes back with a different definition. The
+///   registered definition only decides what future segments build: each
+///   segment's `.fidx` `CoveringProjection` section describes its own coverage,
+///   so segments written under the old definition stay queryable until the
+///   index backfill reclaims them. A definition the registered one already
+///   covers is ignored, so an older binary registering a narrower definition
+///   against a newer catalog does not churn a fleet's derived state
 ///   mid-rollout.
 pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, StatsError> {
     if registered.key_column != requested.key_column {
@@ -805,7 +798,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
             Some(existing) if covers_projection(existing, requested_projection) => {
                 tracing::debug!(
                     projection = %requested_projection.name,
-                    "register: registered projection already covers the requested one — keeping registered",
+                    "register: keeping the registered projection, which covers the requested one",
                 );
             }
             Some(existing) => {
@@ -813,7 +806,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                     projection = %requested_projection.name,
                     superseded_values = ?existing.predicate_values,
                     superseded_columns = ?existing.columns,
-                    "register: superseding a registered covering projection; later segments build the requested definition and the backfill reclaims the rest",
+                    "register: superseding a registered covering projection",
                 );
                 *existing = requested_projection.clone();
                 projections_changed = true;
@@ -826,7 +819,7 @@ pub fn merge_schemas(registered: &Schema, requested: &Schema) -> Result<Schema, 
                 if !rc.nullable {
                     tracing::warn!(
                         column = %rc.name,
-                        "register: new column declared non-nullable — adopting it as nullable, since every already-stored row is missing it",
+                        "register: adopting a new non-nullable column as nullable",
                     );
                 }
                 extras.push(Column {
@@ -1465,11 +1458,9 @@ mod tests {
 
     #[test]
     fn covering_projection_redefinition_keeps_the_wider_definition() {
-        // A rolled-back binary re-registering a narrower definition against a
-        // newer catalog must leave the registered one alone: the wider one still
-        // accelerates every query the narrower would, and rebuilding the derived
-        // state each time a mixed-version fleet registers would churn every
-        // segment in the namespace.
+        // A rolled-back binary registering a narrower definition must leave the
+        // registered one alone; flipping back and forth would re-index every
+        // segment in the namespace on each registration.
         let wide = CoveringProjection::new(
             "training-status",
             "worker_id",
@@ -1482,7 +1473,7 @@ mod tests {
         ));
         assert_eq!(merge_schemas(&registered, &narrow).unwrap(), registered);
 
-        // A definition that adds a predicate value is not covered, so it wins.
+        // An added predicate value is not covered, so it supersedes.
         let wider = CoveringProjection::new(
             "training-status",
             "worker_id",

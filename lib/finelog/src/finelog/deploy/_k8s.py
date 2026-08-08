@@ -332,11 +332,9 @@ def _verify_ingest_ready(cfg: FinelogConfig) -> None:
     """Fail the deploy when the rolled-out pod is listening but not ingesting.
 
     ``kubectl rollout status`` only proves the readiness probe passed, and that
-    probe is ``/health``, which answers 200 whenever the server is listening —
-    it is the liveness probe too, so it cannot fail on a condition that survives
-    a restart. A binary whose registered schema the catalog rejects is exactly
-    that condition: it serves, and it rejects every write to the namespace. The
-    body carries that verdict, so read it from inside the new pod.
+    probe is ``/health``, which answers 200 whenever the server is listening. A
+    binary whose schema the catalog rejects serves and rejects every write to
+    the namespace, so read the body from inside the new pod.
     """
     assert cfg.deployment.k8s is not None
     result = _kubectl(

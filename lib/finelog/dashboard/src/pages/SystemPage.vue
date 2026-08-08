@@ -83,8 +83,8 @@ const store = computed<Field[]>(() => {
   ]
 })
 
-/** One row per namespace this server registers for itself. A namespace that is
- * not `registered` is rejecting every write to it. */
+/** One row per namespace this server registers for itself; anything but
+ * `registered` is rejecting every write to it. */
 const ingest = computed<Field[]>(() => {
   const namespaces = info.value?.ingest
   if (!namespaces?.length) return []

@@ -1,21 +1,9 @@
 //! Registration health for the namespaces this process ingests into itself.
 //!
-//! A namespace this server owns (today `telemetry_v1`) must be registered
-//! before it can accept a row, and that registration is re-driven on every boot
-//! from the catalog's persisted schema. When it fails, every write to that
-//! namespace fails with it — for as long as the binary and the catalog
-//! disagree, across restarts. That is invisible from `/health` alone, which
-//! answers "is this process listening", so a deploy of a wedged binary passes
-//! its health gate and the ingest outage is left for a human to notice on a
-//! stale dashboard.
-//!
-//! This is the missing signal. [`IngestHealth`] records the outcome of each
-//! owned namespace's registration; `/health` reports `degraded` in its body
-//! while any of them is unregistered, and `/api/server` carries the per-
-//! namespace detail. The status code stays 200 either way: `/health` is also
-//! the Kubernetes liveness and readiness probe, and restarting or
-//! de-endpointing a server whose disagreement survives restarts would turn a
-//! partial outage into a total one.
+//! `telemetry_v1` must be registered before it accepts a row, and the
+//! registration is re-driven from the catalog on every boot, so a schema the
+//! catalog rejects wedges ingest across restarts. `/health` reports that in its
+//! body; `/api/server` carries the per-namespace detail.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -26,7 +14,6 @@ use serde::Serialize;
 /// Body `/health` returns while every owned namespace is registered.
 pub const HEALTH_OK: &str = "ok";
 
-/// Where one owned namespace's registration stands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(
     tag = "state",
@@ -34,20 +21,18 @@ pub const HEALTH_OK: &str = "ok";
     rename_all_fields = "camelCase"
 )]
 pub enum RegistrationState {
-    /// Declared but not yet attempted, or an attempt is in flight.
+    /// Declared, no attempt has succeeded yet.
     Pending,
     Registered,
     Failed {
         error: String,
-        /// When *this process* first saw the registration fail. Read against
-        /// `process.startedAtUnix` it says whether the namespace has been
-        /// unavailable since boot or broke later.
+        /// When this process first saw the registration fail. Compare against
+        /// `process.startedAtUnix` to tell a wedge at boot from a later one.
         since_unix: i64,
         attempts: u64,
     },
 }
 
-/// One namespace's registration state, as reported by `/api/server`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NamespaceRegistration {
@@ -56,7 +41,6 @@ pub struct NamespaceRegistration {
     pub state: RegistrationState,
 }
 
-/// The registration state of every namespace this process ingests into itself.
 #[derive(Debug, Default)]
 pub struct IngestHealth {
     states: Mutex<BTreeMap<String, RegistrationState>>,
@@ -74,10 +58,9 @@ impl IngestHealth {
         Self::default()
     }
 
-    /// Declare that this process owns `namespace`, before its first
-    /// registration attempt. Reporting it as pending from the moment the
-    /// router is built closes the window where a health gate polls between the
-    /// listener binding and the registration failing, and reads `ok`.
+    /// Mark `namespace` pending, before its first registration attempt. A
+    /// health gate polling between the listener binding and the first attempt
+    /// then reads `pending`, not `ok`.
     pub fn declare_owned(&self, namespace: &str) {
         self.states
             .lock()
@@ -93,9 +76,8 @@ impl IngestHealth {
             .insert(namespace.to_string(), RegistrationState::Registered);
     }
 
-    /// Record a failed registration attempt. Repeated failures keep the
-    /// original `since_unix` and count up, so the age of the wedge survives the
-    /// retry every write drives.
+    /// Record a failed attempt, keeping the first `since_unix` and counting up.
+    /// Every write retries the registration, so attempts accumulate fast.
     pub fn record_failure(&self, namespace: &str, error: &str) {
         let mut states = self.states.lock().unwrap();
         let state = states
@@ -133,8 +115,8 @@ impl IngestHealth {
             .collect()
     }
 
-    /// The `/health` body: [`HEALTH_OK`], or a one-line summary naming every
-    /// namespace that cannot currently accept rows.
+    /// The `/health` body: [`HEALTH_OK`], or a line naming each namespace that
+    /// cannot accept rows.
     pub fn health_body(&self) -> String {
         let unavailable: Vec<String> = self
             .states
@@ -163,11 +145,7 @@ mod tests {
     #[test]
     fn health_body_reports_ok_only_once_every_owned_namespace_is_registered() {
         let health = IngestHealth::new();
-        assert_eq!(
-            health.health_body(),
-            HEALTH_OK,
-            "nothing owned, nothing to report"
-        );
+        assert_eq!(health.health_body(), HEALTH_OK);
 
         health.declare_owned("telemetry_v1");
         assert!(health.health_body().contains("registration pending"));

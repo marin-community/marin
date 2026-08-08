@@ -264,10 +264,8 @@ def _health_body(monkeypatch: pytest.MonkeyPatch, body: str) -> None:
 
 
 def test_rollout_fails_when_the_new_pod_serves_but_cannot_ingest(monkeypatch: pytest.MonkeyPatch) -> None:
-    # `kubectl rollout status` only proves /health answered 200, and /health is
-    # also the liveness probe, so it cannot fail on a schema disagreement that
-    # survives a restart. Reading the body is what turns a fleet-wide ingest
-    # outage into a failed deploy.
+    # `kubectl rollout status` only proves /health answered 200. Reading the body
+    # is what catches a pod that serves and rejects every write.
     _health_body(monkeypatch, "degraded: telemetry_v1: registration failed: column type mismatch")
 
     with pytest.raises(click.ClickException, match="serving but not ingesting"):

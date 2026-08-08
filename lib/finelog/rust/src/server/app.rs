@@ -154,11 +154,11 @@ pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
         introspection::introspection_router(Arc::clone(&store), Arc::clone(&health)).layer(
             axum::middleware::from_fn_with_state(Arc::clone(&config.auth), auth_gate),
         );
-    // `/health` answers with 200 whether or not ingest is wedged, and says which
-    // it is in the body. It is the Kubernetes liveness *and* readiness probe, and
-    // a namespace registration that disagrees with the catalog survives a
-    // restart — failing the probe would trade a one-namespace outage for a
-    // crashloop or an unrouted pod. The deploy gate reads the body instead.
+    // `/health` answers 200 whether or not ingest is wedged and puts the verdict
+    // in the body, which the deploy gates read. It is also the Kubernetes
+    // liveness, readiness, and startup probe, and a registration that disagrees
+    // with the catalog survives a restart, so failing the probe would turn a
+    // one-namespace outage into a crashloop or an unrouted pod.
     let health_route = Router::new()
         .route(
             "/health",

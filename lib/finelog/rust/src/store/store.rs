@@ -928,11 +928,9 @@ mod tests {
 
     #[test]
     fn redefined_covering_projection_supersedes_instead_of_conflicting() {
-        // The wedge this guards: a server binary whose covering projection
-        // differs from the one the catalog already holds must still register, or
-        // the namespace's whole ingest path fails for as long as that binary
-        // runs — on this boot and on every later one, since the catalog
-        // rehydrates the registered definition.
+        // A binary whose covering projection differs from the catalog's must
+        // still register: the catalog rehydrates the registered definition at
+        // boot, so a rejection wedges the namespace's ingest on every restart.
         let store = mem_store();
         let projection = |values: &[&str]| {
             CoveringProjection::new("busy-workers", "worker_id", values.to_vec(), ["worker_id"])

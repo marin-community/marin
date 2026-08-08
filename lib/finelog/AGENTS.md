@@ -138,19 +138,18 @@ seeded store on the default port. Point it at a store with real segments via
 
 ## Ingest health
 
-`/health` returns 200 whenever the server is listening — it is the Kubernetes
-liveness, readiness, and startup probe, so it must not fail on a condition that
-survives a restart — and reports the verdict in its body: `ok`, or `degraded:`
-followed by each namespace this process registers for itself that is not
-registered. `server/ingest_health.rs` holds that state; `/api/server`'s `ingest`
-block carries the per-namespace error, first-failure time, and attempt count,
-and the dashboard's System page renders it.
+`/health` returns 200 whenever the server is listening. It is the Kubernetes
+liveness, readiness, and startup probe, so it cannot fail on a condition that
+survives a restart; the verdict is in the body: `ok`, or `degraded:` followed by
+each namespace this process registers for itself that is not registered.
+`server/ingest_health.rs` holds that state. `/api/server`'s `ingest` block
+carries the per-namespace error, first-failure time, and attempt count, and the
+dashboard's System page renders it.
 
-The deploy paths gate on the body, not the status: the VM bootstrap loop,
-`_wait_health_via_ssh` (so `safe_deploy` auto-rollback fires), and `k8s_up` /
+The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
+(which is what makes `safe_deploy` auto-rollback fire), and `k8s_up` /
 `k8s_restart` via a post-rollout `kubectl exec`. A binary that cannot register
-`telemetry_v1` therefore fails its own deploy rather than serving a green
-`/health` over a fleet-wide metrics outage.
+`telemetry_v1` fails its own deploy.
 
 ## Secondary indexes
 
@@ -198,21 +197,17 @@ names and seven columns.
 
 Redefining a projection is not a conflict. `merge_schemas` supersedes the
 registered definition with the requested one, unless the registered one already
-covers it — a superset keeps its place, so an older binary re-registering a
-narrower definition against a newer catalog does not churn a whole namespace's
-derived state mid-rollout. Nothing needs to be renamed to change a definition,
-and nothing keeps building the old one. Segments written under the superseded
-definition stay queryable untouched, because a `.fidx` `CoveringProjection`
-section describes its own coverage; the backfill rebuilds them at its usual few
-per tick and unlinks the superseded Parquet files. The same reasoning covers
-every index hint: a covering projection is derived acceleration, so a
-disagreement about one degrades acceleration rather than availability.
+covers it: a superset keeps its place, so an older binary re-registering a
+narrower definition against a newer catalog does not churn a namespace's derived
+state mid-rollout. Segments written under the superseded definition stay
+queryable untouched, because each `.fidx` `CoveringProjection` section describes
+its own coverage; the backfill rebuilds them at its usual few per tick and
+unlinks the superseded Parquet files. Index hints follow the same rule.
 
-A column *type* mismatch remains a hard `SchemaConflict`. That one is about the
-data rather than about derived state — the registered layout cannot hold the
-requested rows either way — so it fails loudly at registration instead of
-turning into a per-write rejection. A new column declared non-nullable is
-adopted as nullable, since every already-stored row is missing it.
+A column *type* mismatch is still a hard `SchemaConflict`: the registered layout
+cannot hold the requested rows, so it fails at registration. A new column
+declared non-nullable is adopted as nullable, since every already-stored row is
+missing it.
 
 `value_counts` records a complete low-cardinality histogram. A DataFusion
 optimizer rule replaces a qualifying unfiltered one-column `GROUP BY` with

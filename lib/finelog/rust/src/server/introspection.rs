@@ -38,7 +38,6 @@ use crate::store::trigram::SIDECAR_SPAN_ROWS;
 use crate::store::types::{basename, SegmentRow};
 use crate::store::Store;
 
-/// What both routes read: the store's files and this process's ingest state.
 #[derive(Clone)]
 struct IntrospectionState {
     store: Arc<Store>,
@@ -154,10 +153,8 @@ struct ServerInfoResponse {
     build: BuildInfo,
     process: ProcessInfo,
     store: StoreInfo,
-    /// Whether the namespaces this process ingests into itself are registered,
-    /// and the failure holding back any that are not. A namespace stuck here
-    /// rejects every write to it until this binary and the catalog stop
-    /// disagreeing, which a restart does not fix.
+    /// Registration state of the namespaces this process ingests into itself.
+    /// A namespace stuck here rejects every write to it, across restarts.
     ingest: Vec<NamespaceRegistration>,
     metadata_cache: MetadataCacheInfo,
     index_cache: IndexCacheInfo,

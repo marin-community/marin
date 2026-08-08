@@ -40,10 +40,9 @@ def test_render_bootstrap_refuses_a_forwarding_config() -> None:
 
 
 def test_health_wait_holds_out_for_an_ingesting_server(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`safe_deploy`'s gate is what makes auto-rollback fire. `/health` answers 200
-    while the server is merely listening — it is the liveness probe too — so a
-    binary whose schema the catalog rejects would otherwise pass the gate while
-    every telemetry write it receives fails."""
+    """`/health` answers 200 while the server is only listening, so `safe_deploy`'s
+    gate reads the body. A binary whose schema the catalog rejects otherwise
+    passes the gate and auto-rollback never fires."""
     cfg = FinelogConfig(
         name="finelog-marin",
         port=10001,
@@ -64,7 +63,6 @@ def test_health_wait_holds_out_for_an_ingesting_server(monkeypatch: pytest.Monke
     answer("degraded: telemetry_v1: registration pending", HEALTH_OK)
     assert _wait_health_via_ssh(cfg, cfg.port, max_attempts=2) == HEALTH_OK
 
-    # The reason comes back to the caller so a failed deploy names the wedged
-    # namespace rather than only reporting an unhealthy server.
+    # The reason reaches the caller, so a failed deploy names the namespace.
     answer("degraded: telemetry_v1: registration failed: column type mismatch")
     assert "telemetry_v1" in _wait_health_via_ssh(cfg, cfg.port, max_attempts=1)

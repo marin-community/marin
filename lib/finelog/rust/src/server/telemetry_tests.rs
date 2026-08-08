@@ -67,7 +67,7 @@ fn http_client() -> TestHttpClient {
     HyperClient::builder(TokioExecutor::new()).build(HttpConnector::new())
 }
 
-/// GET a plain-text or JSON route, panicking on a non-200.
+/// GET a route, asserting 200 and returning the body.
 async fn get_text(client: &TestHttpClient, addr: SocketAddr, path: &str) -> String {
     let response = client
         .request(
@@ -282,13 +282,8 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
 
 #[tokio::test]
 async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info() {
-    // The failure mode this exists to make visible: telemetry ingest is wedged
-    // for as long as the binary and the catalog disagree about the table's
-    // shape, and /health answered "ok" throughout, so the deploy gate passed and
-    // the outage was left for a human to spot on a stale dashboard.
     let store = disk_store("telemetry-wedged-registration");
-    // Claim the namespace with a `name` column of the wrong type, which no
-    // additive merge can reconcile.
+    // A `name` column of the wrong type: no additive merge reconciles it.
     store
         .register_table(
             "telemetry_v1",
@@ -305,10 +300,8 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
 
     let addr = serve_with_config(Arc::clone(&store), ServerConfig::default()).await;
     let client = http_client();
-    // `get_text` asserts 200, which is half the contract: /health is the
-    // liveness and readiness probe, and this condition survives a restart, so
-    // reporting it must not turn a wedged namespace into a crashlooping or
-    // unrouted server. The body carries the verdict instead.
+    // `get_text` asserts 200: /health stays 200 while degraded so the Kubernetes
+    // probes do not crashloop or de-endpoint the pod.
     let health = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let body = get_text(&client, addr, "/health").await;
@@ -329,7 +322,6 @@ async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info()
     assert!(namespace["sinceUnix"].as_i64().unwrap() > 0);
     assert!(namespace["error"].as_str().unwrap().contains("name"));
 
-    // And the wedge is exactly what the endpoint reports to its writers.
     let posted = post(
         &client,
         addr,

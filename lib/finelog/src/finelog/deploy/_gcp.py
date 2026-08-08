@@ -77,22 +77,15 @@ def _ssh_args(cfg: FinelogConfig, command: str) -> list[str]:
 def _wait_health_via_ssh(cfg: FinelogConfig, port: int, max_attempts: int = 90) -> str:
     """Poll ``/health`` from inside the VM over SSH until it reports ``HEALTH_OK``.
 
-    Returns the last body observed — ``HEALTH_OK`` on success, the server's own
-    account of why not on failure, and ``"unreachable"`` when the probe never
-    answered. Callers report that verbatim, so a failed deploy names the wedged
-    namespace instead of only saying the server is unhealthy.
+    Returns the last body seen, which callers report verbatim: ``HEALTH_OK``,
+    the server's account of what is degraded, or ``"unreachable"`` if the probe
+    never answered. ``/health`` answers 200 whenever the server is listening, so
+    the body is the signal — a binary whose schema the catalog rejects listens
+    and accepts no rows.
 
-    Used by both ``gcp_up`` (where the first attempts may fail while
-    OS Login propagates the SSH key on the fresh VM) and ``gcp_restart``.
-    A direct probe is unambiguous: serial-console marker scraping was
-    fragile because ``gcp_restart`` re-runs the bootstrap over SSH and
-    that path never reaches the console.
-
-    The body matters, not just the status. ``/health`` answers 200 whenever the
-    server is listening — it is also the Kubernetes liveness probe — and says in
-    its body whether the namespaces it ingests into are registered. A binary
-    whose schema the catalog rejects listens perfectly well and accepts no rows,
-    which is the failure this gate exists to catch.
+    Used by ``gcp_up`` (where early attempts fail while OS Login propagates the
+    SSH key) and ``gcp_restart``, which re-runs the bootstrap over SSH and so
+    never reaches the serial console.
     """
     probe = health_probe_command(port)
     body = "unreachable"

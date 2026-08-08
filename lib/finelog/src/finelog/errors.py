@@ -15,11 +15,10 @@ class StatsError(Exception):
 class SchemaConflictError(StatsError):
     """Requested schema disagrees with the registered one about the data's shape.
 
-    Today that means a column type change. Disagreements about derived
-    acceleration state — index policies, covering projections — degrade instead:
-    the server adopts, supersedes, or keeps what it already has. A new column
-    declared non-nullable is adopted as nullable, and a differing key column is
-    a hint the server logs and ignores.
+    Today that means a column type change. Index policies and covering
+    projections never raise this: the server adopts, supersedes, or keeps what
+    it has. A new non-nullable column is adopted as nullable, and a differing
+    key column is logged and ignored.
     """
 
 
