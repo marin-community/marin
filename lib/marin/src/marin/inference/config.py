@@ -22,7 +22,7 @@ DEFAULT_CUDA_VLLM_VERSION = "0.25.1"
 
 
 class VllmLauncherType(StrEnum):
-    WORKSPACE = "workspace"
+    PREINSTALLED = "preinstalled"
     CUDA = "cuda"
     TPU = "tpu"
 
@@ -75,7 +75,7 @@ class InferenceModelConfig:
 
 @dataclass(frozen=True)
 class VllmEngineConfig:
-    launcher: VllmLauncherType = VllmLauncherType.WORKSPACE
+    launcher: VllmLauncherType = VllmLauncherType.PREINSTALLED
     source: VllmSource = VllmSource.UPSTREAM
     version: str | None = None
     compilation_cache: VllmCompilationCacheMode = VllmCompilationCacheMode.MANAGED

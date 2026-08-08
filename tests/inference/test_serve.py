@@ -65,8 +65,8 @@ from marin.inference.vllm_release import (
 from marin.inference.vllm_server import (
     IsolatedCudaVllm,
     IsolatedTpuVllm,
+    PreinstalledVllm,
     VllmType,
-    WorkspaceVllm,
 )
 from rigging.timing import Timestamp
 from starlette.applications import Starlette
@@ -282,10 +282,10 @@ def test_isolated_cuda_vllm_upstream_requires_version():
         IsolatedCudaVllm(source=VllmType.UPSTREAM)
 
 
-def test_vllm_backend_falls_back_to_workspace_without_version():
+def test_vllm_backend_falls_back_to_preinstalled_without_version():
     # No launcher (the TPU path, or a --task-image GPU path whose image ships its own vLLM) serves
     # from the vLLM already on PATH.
-    assert vllm_launcher(VllmEngineConfig()) == WorkspaceVllm()
+    assert vllm_launcher(VllmEngineConfig()) == PreinstalledVllm()
 
 
 def test_vllm_backend_returns_its_composed_launcher():
@@ -422,9 +422,9 @@ def test_gpu_plan_marin_fork_selects_fork_launcher():
     assert plan.engine.source is VllmSource.MARIN_FORK
 
 
-def test_gpu_plan_task_image_serves_workspace_vllm():
+def test_gpu_plan_task_image_serves_preinstalled_vllm():
     # A prebuilt --task-image ships its own vLLM on PATH, so no launcher is provisioned.
-    assert _plan(gpu="H100x8", task_image="img").engine.launcher is VllmLauncherType.WORKSPACE
+    assert _plan(gpu="H100x8", task_image="img").engine.launcher is VllmLauncherType.PREINSTALLED
 
 
 def test_tpu_plan_always_isolates_vllm():
