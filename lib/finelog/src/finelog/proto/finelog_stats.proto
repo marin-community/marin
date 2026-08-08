@@ -84,8 +84,13 @@ message Schema {
   // implicitly. A schema with neither is rejected at register time.
   string key_column = 2;
 
-  // Independent named projections. Adding one is monotonic on re-register;
-  // changing an existing name's definition is a schema conflict.
+  // Independent named projections. Adding one is monotonic on re-register.
+  // Re-registering a name with a different definition supersedes it, unless
+  // the registered definition already covers the requested one, in which case
+  // the registered one is kept. Projections are derived acceleration, so a
+  // redefinition never fails a registration: segments already written keep the
+  // definition they were built with and stay queryable, and only later ones
+  // build the new definition.
   repeated CoveringProjection projections = 3;
 
   // Independent grouped-extrema rollups. Adding one is monotonic on

@@ -12,7 +12,7 @@
 //! ```text
 //! [strip-forwarded-prefix middleware]  (outermost; normalizes the URI path)
 //! [legacy-path middleware]             (transport layer; rewrites the URI)
-//!   /health
+//!   /health              (200 always; body says `ok` or why ingest is degraded)
 //!   /v1/telemetry       (authenticated bounded JSON ingestion)
 //!   /api/*              (build + segment introspection)
 //!   /debug/*            (only with --debug-admin)
@@ -26,6 +26,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::State;
 use axum::routing::get;
 use axum::Router;
 use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
@@ -33,6 +34,7 @@ use connectrpc::{ConnectRpcService, Limits, Router as ConnectRouter};
 use crate::proto::finelog::logging::LogServiceExt;
 use crate::proto::finelog::stats::StatsServiceExt;
 use crate::server::auth::{auth_gate, AuthInterceptor, AuthPolicy};
+use crate::server::ingest_health::IngestHealth;
 use crate::server::interceptors::{
     ConcurrencyInterceptor, SlowRpcInterceptor, DEFAULT_SLOW_RPC_THRESHOLD_MS,
     MAX_CONCURRENT_FETCH_LOGS, MAX_CONCURRENT_QUERY,
@@ -137,22 +139,33 @@ fn build_connect_service(
 /// the route precedence. Re-exported as `server::build_app_with_config`.
 pub fn build_app(store: Arc<Store>, config: ServerConfig) -> Router {
     let connect_service = build_connect_service(Arc::clone(&store), &config);
+    let health = Arc::new(IngestHealth::new());
 
     let telemetry = telemetry::router(
         Arc::clone(&store),
         Arc::clone(&config.auth),
         config.max_concurrent_telemetry,
         config.telemetry_dedupe_capacity,
+        Arc::clone(&health),
     );
     // The introspection routes bypass the Connect interceptor chain, so they
     // carry the same default-deny auth policy the RPCs do.
-    let introspection = introspection::introspection_router(Arc::clone(&store)).layer(
-        axum::middleware::from_fn_with_state(Arc::clone(&config.auth), auth_gate),
-    );
-    let mut app = Router::new()
-        .route("/health", get(|| async { "ok" }))
-        .merge(telemetry)
-        .merge(introspection);
+    let introspection =
+        introspection::introspection_router(Arc::clone(&store), Arc::clone(&health)).layer(
+            axum::middleware::from_fn_with_state(Arc::clone(&config.auth), auth_gate),
+        );
+    // `/health` answers with 200 whether or not ingest is wedged, and says which
+    // it is in the body. It is the Kubernetes liveness *and* readiness probe, and
+    // a namespace registration that disagrees with the catalog survives a
+    // restart — failing the probe would trade a one-namespace outage for a
+    // crashloop or an unrouted pod. The deploy gate reads the body instead.
+    let health_route = Router::new()
+        .route(
+            "/health",
+            get(|State(health): State<Arc<IngestHealth>>| async move { health.health_body() }),
+        )
+        .with_state(Arc::clone(&health));
+    let mut app = health_route.merge(telemetry).merge(introspection);
     if config.debug_admin {
         // Mounted BEFORE the connect fallback so /debug/* is not shadowed. These
         // admin routes bypass the Connect interceptor chain, so they are gated by

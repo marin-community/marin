@@ -18,6 +18,7 @@ use tokio::sync::{oneshot, Semaphore};
 use crate::proto::finelog::stats::ColumnType;
 use crate::query::{make_ctx, run_query_over};
 use crate::server::auth::AuthPolicy;
+use crate::server::ingest_health::{IngestHealth, HEALTH_OK};
 use crate::server::test_support::{disk_store, serve, PUB_A};
 use crate::server::{build_app_with_config, ServerConfig};
 use crate::store::policy::StoragePolicy;
@@ -64,6 +65,21 @@ async fn cancelled_waiter_does_not_release_owned_work_or_skip_completion() {
 
 fn http_client() -> TestHttpClient {
     HyperClient::builder(TokioExecutor::new()).build(HttpConnector::new())
+}
+
+/// GET a plain-text or JSON route, panicking on a non-200.
+async fn get_text(client: &TestHttpClient, addr: SocketAddr, path: &str) -> String {
+    let response = client
+        .request(
+            Request::get(format!("http://{addr}{path}"))
+                .body(full_body(Bytes::new()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "GET {path}");
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8(bytes.to_vec()).unwrap()
 }
 
 async fn serve_with_config(store: Arc<Store>, config: ServerConfig) -> SocketAddr {
@@ -175,23 +191,27 @@ async fn query(store: &Store, sql: &str) -> Vec<arrow::array::RecordBatch> {
 #[tokio::test]
 async fn router_registers_index_policy_before_first_telemetry_request() {
     let store = disk_store("telemetry-startup-registration");
+    let health = Arc::new(IngestHealth::new());
     let _router = super::telemetry::router(
         Arc::clone(&store),
         Arc::new(AuthPolicy::allow_localhost()),
         1,
         1,
+        Arc::clone(&health),
+    );
+    assert!(
+        health.health_body().contains("registration pending"),
+        "the telemetry namespace is reported unavailable until it registers",
     );
 
-    let schema = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Ok(schema) = store.get_table_schema("telemetry_v1") {
-                break schema;
-            }
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while health.health_body() != HEALTH_OK {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("startup registration did not complete");
+    let schema = store.get_table_schema("telemetry_v1").unwrap();
 
     for name in ["service", "kind", "name"] {
         let column = schema
@@ -258,6 +278,68 @@ async fn router_registers_index_policy_before_first_telemetry_request() {
     assert_eq!(grouped.json_column, "resource_attributes_json");
     assert_eq!(grouped.json_key, "job_id");
     assert_eq!(grouped.extrema_column, "timestamp_ms");
+}
+
+#[tokio::test]
+async fn a_registration_the_catalog_rejects_shows_up_in_health_and_server_info() {
+    // The failure mode this exists to make visible: telemetry ingest is wedged
+    // for as long as the binary and the catalog disagree about the table's
+    // shape, and /health answered "ok" throughout, so the deploy gate passed and
+    // the outage was left for a human to spot on a stale dashboard.
+    let store = disk_store("telemetry-wedged-registration");
+    // Claim the namespace with a `name` column of the wrong type, which no
+    // additive merge can reconcile.
+    store
+        .register_table(
+            "telemetry_v1",
+            Schema::new(
+                vec![
+                    Column::new("timestamp_ms", ColumnType::COLUMN_TYPE_INT64, false),
+                    Column::new("name", ColumnType::COLUMN_TYPE_INT64, false),
+                ],
+                "timestamp_ms",
+            ),
+            StoragePolicy::default(),
+        )
+        .unwrap();
+
+    let addr = serve_with_config(Arc::clone(&store), ServerConfig::default()).await;
+    let client = http_client();
+    // `get_text` asserts 200, which is half the contract: /health is the
+    // liveness and readiness probe, and this condition survives a restart, so
+    // reporting it must not turn a wedged namespace into a crashlooping or
+    // unrouted server. The body carries the verdict instead.
+    let health = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let body = get_text(&client, addr, "/health").await;
+            if body.contains("registration failed") {
+                break body;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the wedged registration never reached /health");
+    assert!(health.contains("telemetry_v1"), "{health}");
+
+    let info: Value = serde_json::from_str(&get_text(&client, addr, "/api/server").await).unwrap();
+    let namespace = &info["ingest"][0];
+    assert_eq!(namespace["namespace"], "telemetry_v1");
+    assert_eq!(namespace["state"], "failed");
+    assert!(namespace["sinceUnix"].as_i64().unwrap() > 0);
+    assert!(namespace["error"].as_str().unwrap().contains("name"));
+
+    // And the wedge is exactly what the endpoint reports to its writers.
+    let posted = post(
+        &client,
+        addr,
+        batch("11111111-1111-4111-8111-111111111111"),
+        Some("11111111-1111-4111-8111-111111111111"),
+        Some("application/json"),
+        None,
+    )
+    .await;
+    assert_eq!(posted.status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]
