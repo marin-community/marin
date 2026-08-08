@@ -1476,3 +1476,16 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - The arm keeps the MHEP-181 config except for expert width. It uses five steps, full watch on every
   step, production priority, CUDA async allocation, and zero retries. A failure closes the search
   at width 8,320. A pass raises the lower bound and selects width 8,576 next.
+
+### 2026-08-08 13:52 UTC - MHEP-184 tests the final E192 midpoint
+
+- MHEP-182 used 192 experts, width 6,272, and capacity factor 1.5. The compiler estimated a
+  197.11 GiB rematerialized program. NCCL all-to-all failed from CUDA out of memory before step 1.
+  The coordinator was stopped immediately.
+- Result: Width 6,016 remains the E192 pass bound, and width 6,272 is the failure bound.
+- MHEP-184 tests their only 128-wide midpoint at width 6,144. It has 535.421 B total parameters and
+  24.454 B active parameters.
+- Run ID: `mhep-184-w26-ep-e192-i6144-cf1p50-fullwatch-p32782-20260808`.
+- The arm keeps the MHEP-175 config except for expert width. It uses five steps, full watch on every
+  step, production priority, CUDA async allocation, and zero retries. A pass makes width 6,144 the
+  E192 maximum on the tested grid. A failure keeps width 6,016 as the maximum.
