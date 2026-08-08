@@ -717,3 +717,281 @@ export interface PeerSummary {
 export interface ListPeersResponse {
   peers: PeerSummary[]
 }
+
+// -- Typed ResourceService --
+
+export interface ResourceKey {
+  clusterId: string
+  kind: string
+  resourceId: string
+}
+
+export interface ResourceSourceStatus {
+  sourceId: string
+  backendId?: string
+  state: string
+  freshness: string
+  observedAt?: ProtoTimestamp
+  errorCode?: string
+  errorMessage?: string
+}
+
+export interface ResourcePageInfo {
+  nextPageToken?: string
+  sourceStatuses?: ResourceSourceStatus[]
+}
+
+export interface ResourceJobIdentity {
+  key: ResourceKey
+  jobUid: string
+}
+
+export interface ResourceTaskIdentity {
+  key: ResourceKey
+  taskUid: string
+}
+
+export interface ResourceAttemptIdentity {
+  task: ResourceKey
+  attemptNumber: number
+  attemptUid: string
+}
+
+export interface ResourceNodeIdentity {
+  key: ResourceKey
+  backendId: string
+  nodeUid: string
+}
+
+export interface ResourceSliceIdentity {
+  key: ResourceKey
+  backendId: string
+  sliceUid: string
+}
+
+export interface ResourceJobSummary {
+  identity: ResourceJobIdentity
+  ownerId: string
+  parent?: ResourceJobIdentity
+  state: string
+  executionClusterId: string
+  backendId: string
+  numTasks: number
+  submittedAt?: ProtoTimestamp
+  startedAt?: ProtoTimestamp
+  finishedAt?: ProtoTimestamp
+  errorMessage?: string
+}
+
+export interface ResourceJobDetail {
+  summary: ResourceJobSummary
+  spec: {
+    name: string
+    resources?: ResourceSpecProto
+    entrypoint?: RuntimeEntrypoint
+    environment?: EnvironmentConfig
+    bundleId?: string
+    replicas?: number
+    priorityBand?: string
+    taskImage?: string
+  }
+}
+
+export interface ResourceTaskSummary {
+  identity: ResourceTaskIdentity
+  job: ResourceJobIdentity
+  taskIndex: number
+  state: string
+  executionClusterId: string
+  backendId: string
+  currentAttempt?: ResourceAttemptIdentity
+  currentNode?: ResourceNodeIdentity
+  failureCount: number
+  preemptionCount: number
+  submittedAt?: ProtoTimestamp
+  startedAt?: ProtoTimestamp
+  finishedAt?: ProtoTimestamp
+  statusMessage?: string
+  errorMessage?: string
+}
+
+export interface ResourceAttemptSummary {
+  identity: ResourceAttemptIdentity
+  state: string
+  executionClusterId: string
+  backendId: string
+  node?: ResourceNodeIdentity
+  createdAt?: ProtoTimestamp
+  startedAt?: ProtoTimestamp
+  finishedAt?: ProtoTimestamp
+  exitCode?: number
+  errorMessage?: string
+  terminalReason?: string
+}
+
+export interface AttemptRuntimeObject {
+  providerKind: string
+  namespace?: string
+  name?: string
+  providerUid?: string
+  providerNodeId?: string
+  providerNodeUid?: string
+  containerId?: string
+  observedAt?: ProtoTimestamp
+}
+
+export interface ResourceTaskDetail {
+  summary: ResourceTaskSummary
+  attempts?: ResourceAttemptSummary[]
+  sourceStatuses?: ResourceSourceStatus[]
+  rootCauseHighlights?: string[]
+}
+
+export interface ResourceAttemptDetail {
+  summary: ResourceAttemptSummary
+  runtime?: AttemptRuntimeObject
+  sourceStatuses?: ResourceSourceStatus[]
+}
+
+export interface ResourceListJobsResponse {
+  jobs?: ResourceJobSummary[]
+  page?: ResourcePageInfo
+}
+
+export interface ResourceDescribeJobResponse {
+  job?: ResourceJobDetail
+}
+
+export interface ResourceListTasksResponse {
+  tasks?: ResourceTaskSummary[]
+  page?: ResourcePageInfo
+}
+
+export interface ResourceDescribeTaskResponse {
+  task?: ResourceTaskDetail
+}
+
+export interface ResourceDescribeAttemptResponse {
+  attempt?: ResourceAttemptDetail
+}
+
+export interface ResourceNodeCapacity {
+  cpuMillicores?: string
+  memoryBytes?: string
+  diskBytes?: string
+  acceleratorKind?: string
+  acceleratorVariant?: string
+  acceleratorCount?: number
+}
+
+export interface ResourceNodeSummary {
+  identity: ResourceNodeIdentity
+  health: string
+  schedulable: boolean
+  capacity?: ResourceNodeCapacity
+  scalingGroupId?: string
+  slice?: ResourceSliceIdentity
+  runningTaskCount: number
+  observedAt?: ProtoTimestamp
+}
+
+export interface ResourceNodeAttribute {
+  key: string
+  stringValue?: string
+  integerValue?: string
+  floatValue?: number
+}
+
+export interface ResourceNodeDetail {
+  summary: ResourceNodeSummary
+  address?: string
+  attributes?: ResourceNodeAttribute[]
+  recentAttempts?: ResourceAttemptSummary[]
+  bootstrapLogKey?: string
+  sourceStatuses?: ResourceSourceStatus[]
+}
+
+export interface ResourceListNodesResponse {
+  nodes?: ResourceNodeSummary[]
+  page?: ResourcePageInfo
+}
+
+export interface ResourceDescribeNodeResponse {
+  node?: ResourceNodeDetail
+}
+
+export interface ResourceSliceSummary {
+  identity: ResourceSliceIdentity
+  scalingGroupId: string
+  lifecycle: string
+  membershipState: string
+  observedMemberCount: number
+  observedAt?: ProtoTimestamp
+  errorMessage?: string
+}
+
+export interface ResourceListSlicesResponse {
+  slices?: ResourceSliceSummary[]
+  page?: ResourcePageInfo
+}
+
+export interface ResourceEndpointSummary {
+  key: ResourceKey
+  endpointId: string
+  name: string
+  task?: ResourceKey
+  executionClusterId: string
+  access: string
+  leaseDeadline?: ProtoTimestamp
+}
+
+export interface ResourceEndpointDetail {
+  summary: ResourceEndpointSummary
+  address: string
+  metadata?: Record<string, string>
+}
+
+export interface ResourceListEndpointsResponse {
+  endpoints?: ResourceEndpointSummary[]
+  page?: ResourcePageInfo
+}
+
+export interface ResourceDescribeEndpointResponse {
+  endpoint?: ResourceEndpointDetail
+}
+
+export interface ResourceActivityEntry {
+  entryId: string
+  occurredAt?: ProtoTimestamp
+  source: string
+  severity: string
+  kind: string
+  message: string
+  target: ResourceKey
+  attemptUid?: string
+  correlationId?: string
+  attributes?: Record<string, string>
+}
+
+export interface ResourceListActivityResponse {
+  entries?: ResourceActivityEntry[]
+  page?: ResourcePageInfo
+}
+
+export interface ResourceActionReceipt {
+  actionId: string
+  kind: string
+  target: ResourceKey
+  expectedTargetUid: string
+  expectedAttemptUid?: string
+  state: string
+  resultCode: string
+  resultMessage?: string
+  createdAt?: ProtoTimestamp
+  updatedAt?: ProtoTimestamp
+  completedAt?: ProtoTimestamp
+}
+
+export interface ResourceActionResponse {
+  receipt?: ResourceActionReceipt
+}

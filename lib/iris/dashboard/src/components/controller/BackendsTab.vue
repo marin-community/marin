@@ -239,7 +239,7 @@ function staleCapacityTitle(p: PeerSummary): string {
         <RouterLink
           v-for="j in unroutableSample.slice(0, 3)"
           :key="j.jobId"
-          :to="'/job/' + encodeURIComponent(j.jobId)"
+          :to="{ path: '/', query: { prefix: j.jobId } }"
           class="ml-1 text-accent hover:underline font-mono text-xs"
           :title="j.reason"
         >
@@ -350,7 +350,7 @@ function staleCapacityTitle(p: PeerSummary): string {
               </td>
               <td class="px-3 py-2 text-right font-mono tabular-nums" @click.stop>
                 <RouterLink
-                  :to="`/fleet?backend=${b.backendId}`"
+                  :to="`/nodes?backend=${b.backendId}`"
                   class="text-accent hover:underline"
                 >
                   {{ b.workerCount }}
@@ -517,10 +517,10 @@ function staleCapacityTitle(p: PeerSummary): string {
           <div class="flex items-center gap-3 pt-1 text-xs">
             <RouterLink
               v-if="b.capabilities.includes('workers')"
-              :to="`/fleet?backend=${b.backendId}`"
+              :to="`/nodes?backend=${b.backendId}`"
               class="text-accent hover:underline"
             >
-              Workers →
+              Nodes →
             </RouterLink>
             <RouterLink
               v-if="b.scaleGroups.length > 0"

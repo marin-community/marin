@@ -15,8 +15,12 @@ const routes = [
     component: () => import('./components/controller/BackendsTab.vue'),
   },
   {
-    path: '/fleet',
-    component: () => import('./components/controller/FleetTab.vue'),
+    path: '/tasks',
+    component: () => import('./components/controller/TasksTab.vue'),
+  },
+  {
+    path: '/nodes',
+    component: () => import('./components/controller/NodesTab.vue'),
   },
   {
     path: '/capacity',
@@ -43,28 +47,21 @@ const routes = [
     component: () => import('./components/controller/ThreadDump.vue'),
   },
   {
-    path: '/system/worker/:workerId(.+)/threads',
-    component: () => import('./components/controller/ThreadDump.vue'),
-    props: true,
-  },
-  {
-    path: '/job/:jobId(.+)/task/:taskId(.+)/threads',
-    component: () => import('./components/controller/ThreadDump.vue'),
-    props: true,
-  },
-  {
-    path: '/job/:jobId(.+)/task/:taskId(.+)',
+    path: '/task/:clusterId/:taskId(.+)',
+    name: 'task-detail',
     component: () => import('./components/controller/TaskDetail.vue'),
     props: true,
   },
   {
-    path: '/job/:jobId(.+)',
+    path: '/job/:clusterId/:jobId(.+)',
+    name: 'job-detail',
     component: () => import('./components/controller/JobDetail.vue'),
     props: true,
   },
   {
-    path: '/worker/:workerId(.+)',
-    component: () => import('./components/controller/WorkerDetail.vue'),
+    path: '/node/:clusterId/:backendId/:nodeUid/:nodeId(.+)',
+    name: 'node-detail',
+    component: () => import('./components/controller/NodeDetail.vue'),
     props: true,
   },
 ]

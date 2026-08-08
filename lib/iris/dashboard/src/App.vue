@@ -11,7 +11,7 @@ import { useBackends } from '@/composables/useBackends'
 const route = useRoute()
 const router = useRouter()
 const { isDark, toggle: toggleDark } = useDarkMode()
-const { capabilities, backends, peers, fetchConfig, ensurePeers } = useBackends()
+const { backends, peers, fetchConfig, ensurePeers } = useBackends()
 
 // Show the scope selector once there is more than one execution target to pick
 // between — counting backends and federation peers, so a 1-backend + N-peer
@@ -33,47 +33,33 @@ const IAP_REAUTH_RELOAD_WINDOW_MS = 15_000
 // briefly route to /login before the reload navigation replaces the document.
 let reloadingForAuth = false
 
-// Tabs always shown have no `requires`; conditional tabs name the capability
-// the backend must advertise (see backend_descriptor in backend.py). The
-// always-on Backends tab subsumes the per-backend Kubernetes cluster view in its
-// detail panels, so there is no separate Cluster tab.
-const ALL_TABS = computed<(Tab & { requires?: string })[]>(() => [
+// The Backends tab subsumes provider-specific cluster views.
+const TABS: Tab[] = [
   { key: 'jobs', label: 'Jobs', to: '/' },
+  { key: 'tasks', label: 'Tasks', to: '/tasks' },
+  { key: 'nodes', label: 'Nodes', to: '/nodes' },
   { key: 'capacity', label: 'Capacity & Scheduling', to: '/capacity' },
-  { key: 'fleet', label: 'Workers', to: '/fleet', requires: 'workers' },
   { key: 'backends', label: 'Backends', to: '/backends' },
   { key: 'endpoints', label: 'Endpoints', to: '/endpoints' },
   { key: 'logs', label: 'Logs', to: '/logs' },
   { key: 'account', label: 'Account', to: '/account' },
   { key: 'status', label: 'Status', to: '/status' },
-])
+]
 
-const TABS = computed<Tab[]>(() =>
-  ALL_TABS.value.filter(t => !t.requires || capabilities.value.includes(t.requires))
-)
-
-const PATH_TO_TAB: Record<string, string> = {
-  '/': 'jobs',
-  '/capacity': 'capacity',
-  '/fleet': 'fleet',
-  '/backends': 'backends',
-  '/endpoints': 'endpoints',
-  '/logs': 'logs',
-  '/account': 'account',
-  '/status': 'status',
-}
+const PATH_TO_TAB = Object.fromEntries(TABS.map(tab => [tab.to, tab.key])) as Record<string, string>
 
 const activeTab = computed(() => {
   const path = route.path
   if (PATH_TO_TAB[path]) return PATH_TO_TAB[path]
   if (path.startsWith('/job')) return 'jobs'
-  if (path.startsWith('/worker')) return 'fleet'
+  if (path.startsWith('/task')) return 'tasks'
+  if (path.startsWith('/node')) return 'nodes'
   return 'jobs'
 })
 
 // Detail pages hide the tab nav to show breadcrumb navigation instead
 const isDetailPage = computed(() => {
-  return route.path.includes('/job/') || route.path.includes('/worker/') || route.path.startsWith('/system/')
+  return route.path.startsWith('/job/') || route.path.startsWith('/task/') || route.path.startsWith('/node/') || route.path.startsWith('/system/')
 })
 
 const isLoginPage = computed(() => route.path === '/login')
@@ -109,8 +95,7 @@ onMounted(async () => {
   window.addEventListener('iris-auth-required', onAuthRequired)
 
   try {
-    // fetchConfig fetches /auth/config once, populates capabilities + backends,
-    // and returns auth-related fields for login redirection.
+    // fetchConfig loads backend scope plus auth fields used for login redirection.
     const { authEnabled: ae, authenticated, authOptional, provider } = await fetchConfig()
     authEnabled.value = ae
     authProvider.value = provider

@@ -12,6 +12,7 @@ import { ref, type Ref } from 'vue'
 
 const CONTROLLER_SERVICE_PATH = 'iris.cluster.ControllerService'
 const ENDPOINT_SERVICE_PATH = 'iris.cluster.EndpointService'
+const RESOURCE_SERVICE_PATH = 'iris.resource.ResourceService'
 const WORKER_SERVICE_PATH = 'iris.cluster.WorkerService'
 const LOG_SERVICE_PATH = 'proxy/system.log-server/finelog.logging.LogService'
 
@@ -115,6 +116,13 @@ export function useEndpointRpc<T>(
   return useRpc<T>(ENDPOINT_SERVICE_PATH, method, body)
 }
 
+export function useResourceRpc<T>(
+  method: string,
+  body?: RpcBody,
+): RpcState<T> {
+  return useRpc<T>(RESOURCE_SERVICE_PATH, method, body)
+}
+
 /** RPC composable for WorkerService endpoints. */
 export function useWorkerRpc<T>(
   method: string,
@@ -144,6 +152,10 @@ export function controllerRpcCall<T>(method: string, body?: Record<string, unkno
 
 export function endpointRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   return rpcCall<T>(ENDPOINT_SERVICE_PATH, method, body)
+}
+
+export function resourceRpcCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
+  return rpcCall<T>(RESOURCE_SERVICE_PATH, method, body)
 }
 
 /** RPC composable for LogService endpoints. */
