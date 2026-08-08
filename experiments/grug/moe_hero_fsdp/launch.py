@@ -195,33 +195,31 @@ class _HeroRunParts:
     slim: ArtifactStep[TokenizedCache]
 
 
-def apply_hero_overrides(
-    model: GrugModelConfig,
-    *,
-    expert_chunks: int | None = None,
-    small_param_sharding: SmallParamSharding | None = None,
-    interleave_before_gather: bool | None = None,
-    remat_mode: RematMode | None = None,
-    ce_b_block_size: int | None = None,
-) -> GrugModelConfig:
-    """Override the hero performance knobs; ``None`` keeps the hero value.
+@dataclasses.dataclass(frozen=True)
+class HeroOverrides:
+    """The hero performance knobs a sweep varies; ``None`` keeps the hero value.
 
-    Iris ships the local worktree, so every rack in a parallel sweep runs one code state. Each
-    knob is therefore a launcher flag rather than an edit, and a sweep varies one per arm.
+    Iris ships the local worktree, so every rack in a parallel sweep runs one code state. Each knob
+    is therefore a launcher flag rather than an edit, and a sweep varies one per arm.
     """
-    overrides: dict[str, Any] = {
-        field: value
-        for field, value in (
-            ("expert_chunks", expert_chunks),
-            ("small_param_sharding", small_param_sharding),
-            ("interleave_before_gather", interleave_before_gather),
-            ("remat_mode", remat_mode),
-        )
-        if value is not None
+
+    expert_chunks: int | None = None
+    small_param_sharding: SmallParamSharding | None = None
+    interleave_before_gather: bool | None = None
+    remat_mode: RematMode | None = None
+    ce_b_block_size: int | None = None
+
+
+def apply_hero_overrides(model: GrugModelConfig, overrides: HeroOverrides) -> GrugModelConfig:
+    """Return ``model`` with every set knob in ``overrides`` applied."""
+    fields: dict[str, Any] = {
+        name: value
+        for name, value in dataclasses.asdict(overrides).items()
+        if value is not None and name != "ce_b_block_size"
     }
-    if ce_b_block_size is not None:
-        overrides["ce_block_sizes"] = dataclasses.replace(model.ce_block_sizes, b_block_size=ce_b_block_size)
-    return dataclasses.replace(model, **overrides) if overrides else model
+    if overrides.ce_b_block_size is not None:
+        fields["ce_block_sizes"] = dataclasses.replace(model.ce_block_sizes, b_block_size=overrides.ce_b_block_size)
+    return dataclasses.replace(model, **fields) if fields else model
 
 
 def _hero_run_parts(
@@ -232,12 +230,12 @@ def _hero_run_parts(
     save_checkpoints: bool,
     version: str | None,
     batch_size: int | None = None,
-    model_overrides: dict[str, Any] | None = None,
+    overrides: HeroOverrides = HeroOverrides(),
 ) -> _HeroRunParts:
     _validate_hero_args(run_id, dp_racks, num_steps)
     batch_size = batch_size if batch_size is not None else dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
-    model = apply_hero_overrides(model, **(model_overrides or {}))
+    model = apply_hero_overrides(model, overrides)
     name = f"grug/{run_id}"
     return _HeroRunParts(
         batch_size=batch_size,
@@ -272,11 +270,7 @@ def build_hero_run(
     watch_interval: int = HERO_WATCH_INTERVAL,
     profile_start_step: int | None = None,
     profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
-    expert_chunks: int | None = None,
-    small_param_sharding: SmallParamSharding | None = None,
-    interleave_before_gather: bool | None = None,
-    remat_mode: RematMode | None = None,
-    ce_b_block_size: int | None = None,
+    overrides: HeroOverrides = HeroOverrides(),
     batch_size: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
@@ -302,13 +296,7 @@ def build_hero_run(
         save_checkpoints=save_checkpoints,
         version=version,
         batch_size=batch_size,
-        model_overrides={
-            "expert_chunks": expert_chunks,
-            "small_param_sharding": small_param_sharding,
-            "interleave_before_gather": interleave_before_gather,
-            "remat_mode": remat_mode,
-            "ce_b_block_size": ce_b_block_size,
-        },
+        overrides=overrides,
     )
     batch_size = parts.batch_size
     model, optimizer = parts.model, parts.optimizer
@@ -507,11 +495,13 @@ def main(
         watch_interval=watch_interval,
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
-        expert_chunks=expert_chunks,
-        small_param_sharding=small_param_sharding,
-        interleave_before_gather=interleave_before_gather,
-        remat_mode=remat_mode,
-        ce_b_block_size=ce_b_block_size,
+        overrides=HeroOverrides(
+            expert_chunks=expert_chunks,
+            small_param_sharding=small_param_sharding,
+            interleave_before_gather=interleave_before_gather,
+            remat_mode=remat_mode,
+            ce_b_block_size=ce_b_block_size,
+        ),
         batch_size=batch_size,
     )
 

@@ -32,7 +32,7 @@ from jax.sharding import AxisType, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
-from experiments.grug.moe_hero_fsdp.launch import apply_hero_overrides
+from experiments.grug.moe_hero_fsdp.launch import HeroOverrides, apply_hero_overrides
 from experiments.grug.moe_hero_fsdp.sweep import WAVES
 from experiments.grug.moe_hero_fsdp.train import BATCH_AXES
 
@@ -82,8 +82,8 @@ def preflight_model(arm):
     if "ce_b_block_size" in flags:
         flags["ce_b_block_size"] = int(flags["ce_b_block_size"])
     # Arm flags first, then the portable-backend shape, so a knob the CPU path rejects is dropped
-    # rather than fought over.
-    return dataclasses.replace(apply_hero_overrides(model, **flags), **PREFLIGHT_OVERRIDES)
+    # rather than fought over. `HeroOverrides` rejects a flag name the launcher would not accept.
+    return dataclasses.replace(apply_hero_overrides(model, HeroOverrides(**flags)), **PREFLIGHT_OVERRIDES)
 
 
 def trace(cfg):
@@ -106,16 +106,12 @@ def trace(cfg):
 
 
 def check_xla_flags(arm):
-    """Reject an arm whose ``XLA_FLAGS`` this build will not accept.
+    """Raise ``ValueError`` if this XLA build will not accept the arm's ``XLA_FLAGS``.
 
     XLA aborts the process on a bad flag, so a stale name or an ill-typed value takes down a whole
-    16-node gang minutes into startup. Grepping the jaxlib binary does not catch it: a substring
-    search matches `--xla_gpu_cudnn_gemm_fusion` against the real `..._level` flag and passes a name
-    XLA then rejects. Hand the exact string to XLA's own parser instead.
-
-    The gate is the child's exit status, not its error text. An unknown name and an unparsable value
-    abort through different messages -- `xla_gpu_cudnn_gemm_fusion_level` is an int and rejects
-    ``true`` -- and both kill a rack, so match on the abort rather than on one of its wordings.
+    16-node gang minutes into startup. The arm's exact flag string goes to XLA's own parser in a CPU
+    subprocess, and the verdict is the child's exit status: unknown names and unparsable values abort
+    through different messages, and both kill a rack.
     """
     flags = arm.env.get("XLA_FLAGS")
     if not flags:

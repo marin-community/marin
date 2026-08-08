@@ -58,6 +58,10 @@ logger = logging.getLogger(__name__)
 HERO_FSDP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "1",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
+    # NVLink SHARP. Measured within the sweep's noise on its own, and carried by the combined
+    # configuration that measured +3.31% end to end.
+    "NCCL_ALGO": "NVLS,Ring",
+    "NCCL_NVLS_ENABLE": "1",
 }
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.

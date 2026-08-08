@@ -14,7 +14,7 @@ MAD 0.077).
 Every wave carries a ``control`` arm launched in the same window, so cluster drift cannot be read as
 a win. An arm counts only if it beats the control by more than the control-to-control spread.
 
-``launch`` gates on ``preflight.py``, which traces every arm on CPU first.
+``launch`` gates on ``sweep_preflight.py``, which traces every arm on CPU first.
 
 Usage
 -----
@@ -43,6 +43,12 @@ PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 
 # The configuration adopted after wave 4: FSDP-sharded small parameters, the gate/up interleave
 # moved ahead of its all-gather, and NVLink SHARP for collectives.
+#
+# These are now the hero's own defaults, so restating them is a no-op. They stay spelled out because
+# every wave below was run when they were not, and because a wave that reads its own configuration
+# is worth more than one that reads `[]`. The corollary is that the pre-adoption hero is no longer
+# expressible as an arm -- `--interleave-before-gather` is a set-only flag -- so the early waves'
+# `control` describes what was measured, not what re-running them today would produce.
 COMBINED_ENV = {"NCCL_ALGO": "NVLS,Ring", "NCCL_NVLS_ENABLE": "1"}
 COMBINED_ARGS = ["--small-param-sharding", "fsdp", "--interleave-before-gather"]
 # Wave 5 measured expert_chunks=2 at +1.63% on the unmodified hero. Wave 7 suggests it does not
@@ -67,6 +73,11 @@ SOL_ESTIMATOR_FLAG = "--xla_gpu_enable_analytical_sol_latency_estimator=true"
 CUDNN_FUSION_FLAGS = "--xla_gpu_cudnn_gemm_fusion_level=2"
 # The block-level (Triton) fusion emitter, off by default.
 BLOCK_FUSION_FLAGS = "--xla_gpu_experimental_enable_fusion_block_level_rewriter=true"
+# NCCL user buffers: registered buffers let NVLS skip a staging copy. The flag needs
+# NCCL_NVLS_ENABLE=1, which the adopted configuration already sets, and a preallocated collective
+# arena outside the client pool.
+USER_BUFFER_FLAGS = "--xla_gpu_enable_nccl_user_buffers=true"
+USER_BUFFER_POOL_MB = "2048"
 # Autotuning at its limit: exhaustive tiling search rather than the default heuristic shortlist, at
 # the highest autotune level. This buys compile time, which a 20-step run pays in full before the
 # scored window opens at step 5. `xla_gpu_experimental_autotune_cache_mode` is not settable here --
@@ -132,8 +143,10 @@ def wandb_run_exists(run_id):
     """W&B refuses to re-initialize a run id that a crashed attempt already claimed."""
     try:
         wandb.Api().run(f"{PROJECT}/{run_id}")
-    except Exception:
-        return False
+    except wandb.errors.CommError as exc:
+        if "could not find run" in str(exc).lower():
+            return False
+        raise
     return True
 
 
@@ -275,15 +288,14 @@ WAVES = {
         ),
     ],
     # Wave 9: zero-copy collectives, the B200 launch-mode workaround, and the fusion flags.
-    # `nccl_user_buffers` needs NCCL_NVLS_ENABLE=1, which the adopted configuration already sets.
     "w9": [
         Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
         Arm(
             "userbuffers",
             env={
                 **COMBINED_ENV,
-                "XLA_FLAGS": f"--xla_gpu_enable_nccl_user_buffers=true {_COMMAND_BUFFER_DISABLED}",
-                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": "2048",
+                "XLA_FLAGS": f"{USER_BUFFER_FLAGS} {_COMMAND_BUFFER_DISABLED}",
+                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": USER_BUFFER_POOL_MB,
             },
             args=COMBINED_ARGS,
             note="zero-copy collectives with a preallocated user-buffer pool",
@@ -322,8 +334,8 @@ WAVES = {
             "userbuffers",
             env={
                 **COMBINED_ENV,
-                "XLA_FLAGS": f"--xla_gpu_enable_nccl_user_buffers=true {_COMMAND_BUFFER_DISABLED}",
-                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": "2048",
+                "XLA_FLAGS": f"{USER_BUFFER_FLAGS} {_COMMAND_BUFFER_DISABLED}",
+                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": USER_BUFFER_POOL_MB,
             },
             args=COMBINED_ARGS,
             note="rerun; zero-copy collectives with a preallocated user-buffer pool",
@@ -383,8 +395,9 @@ WAVES = {
             note="O1 without its latency hiding scheduler: everything in the bundle we have not ruled out",
         ),
     ],
-    # Wave 13: the remaining default-off flags in `/tmp/gpu-options.txt` that plausibly touch this
-    # graph. `userbuffers` gets a fourth attempt after losing three racks to iris#7650.
+    # Wave 13: the remaining flags that XLA reports as default-off and that plausibly touch this
+    # graph (`--xla_gpu_dump_defaults` lists them). `userbuffers` gets a fourth attempt after losing
+    # three racks to iris#7650.
     "w13": [
         Arm("base", env=COMBINED_ENV, args=COMBINED_ARGS, note="this wave's control"),
         Arm(
@@ -403,8 +416,8 @@ WAVES = {
             "userbuffers",
             env={
                 **COMBINED_ENV,
-                "XLA_FLAGS": f"--xla_gpu_enable_nccl_user_buffers=true {_COMMAND_BUFFER_DISABLED}",
-                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": "2048",
+                "XLA_FLAGS": f"{USER_BUFFER_FLAGS} {_COMMAND_BUFFER_DISABLED}",
+                "XLA_PYTHON_CLIENT_COLLECTIVE_MEM_SIZE_MB": USER_BUFFER_POOL_MB,
             },
             args=COMBINED_ARGS,
             note="fourth attempt; the first three never reached step 0",
@@ -588,7 +601,8 @@ def launch(wave):
         print(f"submitted {rid:28s} env: {shown}")
 
 
-def step_times(run_id):
+def scored_steps(run_id):
+    """Return ``(step, duration, peak_gib)`` for every step in the scored window, ordered by step."""
     run = wandb.Api().run(f"{PROJECT}/{run_id}")
     hist = run.history(keys=["throughput/duration", "memory/peak_gib", "_step"], pandas=False, samples=1000)
     return sorted(
@@ -599,7 +613,7 @@ def step_times(run_id):
 
 
 def score_run(run_id, batch_size=HERO_BATCH_SIZE):
-    rows = step_times(run_id)
+    rows = scored_steps(run_id)
     if len(rows) < 3:
         return None
     d = [t for _, t, _ in rows]

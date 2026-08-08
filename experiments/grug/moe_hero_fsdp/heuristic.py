@@ -101,6 +101,13 @@ def build_hero_configs(*, num_train_steps: int, batch_size: int) -> tuple[GrugMo
         expert_chunks=4,
         report_capacity_overflow=True,
         rope_fused=True,
+        # Sharding the router, attn_gate, and GatedNorm factors folds their gradients into the
+        # existing reduce-scatter instead of leaving 48 layers' worth of small standalone
+        # all-reduces, which the profile priced at 0.69 s/step.
+        small_param_sharding="fsdp",
+        # The gate/up interleave commutes with the all-gather, so running it on the local shard
+        # first does 1/data-th of the elementwise work for a bitwise-identical result.
+        interleave_before_gather=True,
     )
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=num_train_steps,
