@@ -135,7 +135,7 @@ def test_wheel_entrypoint_verifies_extension_and_records_provenance(tmp_path):
     assert json.loads(marker.read_text()) == ["serve", "test/model"]
 
 
-@pytest.mark.parametrize("direct_url_hashes", [FRAGMENT_HASH, BOTH_HASHES])
+@pytest.mark.parametrize("direct_url_hashes", [NO_HASH, FRAGMENT_HASH, BOTH_HASHES])
 def test_wheel_entrypoint_accepts_supported_hash_provenance(tmp_path, direct_url_hashes):
     result, marker = _run_entrypoint(tmp_path, direct_url_hashes=direct_url_hashes)
 
@@ -150,7 +150,6 @@ def test_wheel_entrypoint_accepts_supported_hash_provenance(tmp_path, direct_url
         (VERSION, False, ARCHIVE_HASH, (9, 0)),
         (VERSION, True, DirectUrlHashes(archive_sha256="0" * 64, fragment_sha256=None), (9, 0)),
         (VERSION, True, ARCHIVE_HASH, (8, 0)),
-        (VERSION, True, NO_HASH, (9, 0)),
         (
             VERSION,
             True,
