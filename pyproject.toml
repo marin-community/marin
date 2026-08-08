@@ -158,9 +158,6 @@ marin-finestore = { workspace = true }
 nvidia-cutlass-dsl = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-base = { index = "nvidia" }
 nvidia-cutlass-dsl-libs-cu13 = { index = "nvidia" }
-# The TPU vLLM stack (vllm + tpu-inference forks) is not a workspace dependency: it runs from an
-# isolated uvx env, pinned by SHA in config/external/vllm/tpu-forks.toml and surfaced through
-# marin.external_dependencies. Refresh those pins via .agents/skills/refresh-tpu-vllm-forks/SKILL.md.
 # ### BEGIN RUST-DEV SOURCES ###
 # ### END RUST-DEV SOURCES ###
 
