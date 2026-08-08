@@ -538,6 +538,15 @@ WAVES = {
     #
     # 0.88 plans a buffer that fits -- batch 1152 ran there, at 40 s/step -- so both arms hold the
     # ceiling there and vary only the batch.
+    #
+    # It does not fit, and the reason retires the whole batch-size question on merged `main`. 0.88
+    # fails with the *same* 122.10 GiB request as 0.93, so the allocation is a fixed requirement of
+    # the un-rematerialized program rather than something sized to the ceiling. Peak against the
+    # allocator limit is what decides whether `HloRematerialization` runs at all: the hero clears
+    # 138.22 GiB post-merge and only survives because that pass is shrinking it. Any ceiling high
+    # enough to switch the pass off exposes an allocation the pool cannot serve. Batch 1152 at 0.88
+    # is the exception that shows the rule -- its 153.14 GiB peak keeps remat engaged, so it runs,
+    # at 40 s/step.
     "final4": [
         Arm(
             "control",
