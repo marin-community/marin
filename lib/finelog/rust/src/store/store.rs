@@ -55,14 +55,11 @@ const NAMESPACE_LIFECYCLE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) fn log_registered_schema() -> Schema {
     Schema::new(
         vec![
-            // Keys embed the job and task a line came from, so operators search
-            // them by substring (`key LIKE '%<job>%'`) far more often than by the
-            // full value. Sorting alone cannot serve that — min/max statistics key
-            // on whole values — so the key carries the trigram index too.
+            // The job and task sit mid-key, so `key LIKE '%<job>%'` is opaque to
+            // the sort's min/max statistics and needs a trigram index of its own.
             Column::new("key", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("source", ColumnType::COLUMN_TYPE_STRING, false),
-            // The log message body — substring-searched via contains()/LIKE, so
-            // it carries the trigram index.
+            // Substring-searched via contains()/LIKE.
             Column::new("data", ColumnType::COLUMN_TYPE_STRING, false).with_trigram_index(),
             Column::new("epoch_ms", ColumnType::COLUMN_TYPE_INT64, false),
             Column::new("level", ColumnType::COLUMN_TYPE_INT32, false),

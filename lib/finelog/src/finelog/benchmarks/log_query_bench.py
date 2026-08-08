@@ -3,25 +3,20 @@
 
 """Benchmark the operator query corpus for the `log` namespace.
 
-Runs the real ``finelog-server`` binary over a log directory, so what it
-measures is the deployed planner, segment indexes, and parquet layout rather
-than an in-process approximation.
+Runs the real ``finelog-server`` binary, so it measures the deployed planner,
+segment indexes, and parquet layout.
 
-Two sources of data:
-
-- ``generate`` builds a deterministic log-shaped corpus into a fresh work
-  directory (see :mod:`finelog.benchmarks.log_workload_corpus`), compacts it,
-  and waits for index backfill before measuring. This runs anywhere.
+- ``generate`` builds a deterministic corpus into a fresh work directory (see
+  :mod:`finelog.benchmarks.log_workload_corpus`), compacts it, and waits for
+  index backfill.
 - ``measure`` reuses a log directory that already holds segments, which is how a
   change is checked against copied production shards.
 
-Both modes use the ``log`` schema the server binary registers for itself, so
-running the same corpus under two binaries measures a schema or index-policy
-change end to end.
+Both modes use the ``log`` schema the server registers for itself, so the same
+corpus under two binaries measures a schema change.
 
-The log directory must be a disposable local copy. Starting Finelog activates
-normal maintenance, including compaction, layout rewrites, and index backfill;
-never point this tool at a production data directory.
+The log directory must be a disposable copy: starting Finelog activates
+compaction, layout rewrites, and index backfill.
 
 Run from ``lib/finelog``:
 
@@ -73,9 +68,8 @@ from finelog.benchmarks.query_measurement import (
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 
-# Maintenance ticks the harness drives before measuring. Each one compacts and
-# backfills a bounded number of segment index bundles, so a corpus needs several
-# to reach full index coverage; this bounds a stuck backfill instead of looping.
+# A tick backfills a bounded number of index bundles, so a corpus needs several
+# to reach full coverage. This bounds a stuck backfill instead of looping.
 MAX_MAINTENANCE_TICKS = 200
 
 
@@ -125,9 +119,8 @@ def _segment_facts(address: str, namespace: str) -> dict[str, object]:
 def _required_sections(client: StatsServiceClientSync, namespace: str) -> set[str]:
     """The `.fidx` section ids the registered schema's index policy implies.
 
-    A bundle built under a superseded policy still exists on disk, so "has a
-    bundle" is not the same as "is indexed for this schema". The harness waits on
-    the sections it can name from the schema instead.
+    A bundle built under a superseded policy still sits on disk, so "has a
+    bundle" is not "is indexed for this schema".
     """
     schema = client.get_table_schema(stats_pb2.GetTableSchemaRequest(namespace=namespace)).schema
     return {f"trigram:{column.name}" for column in schema.columns if column.index.trigram}
@@ -151,10 +144,9 @@ def _indexed_segments(address: str, namespace: str, required: set[str]) -> tuple
 def _drive_maintenance(address: str, client: StatsServiceClientSync) -> dict[str, object]:
     """Backfill until every segment carries the schema's index sections.
 
-    The server backfills a few bundles per tick by design, so the harness drives
-    ticks explicitly instead of waiting on the background schedule. It reports how
-    long that took, which is also the cost an index-policy change imposes on a
-    live namespace.
+    The server backfills a few bundles per tick, so the harness drives ticks
+    explicitly rather than waiting on the background schedule. The reported
+    duration is also what an index-policy change costs a live namespace.
     """
     required = _required_sections(client, LOG_NAMESPACE)
     started = time.perf_counter()
@@ -175,8 +167,8 @@ def _drive_maintenance(address: str, client: StatsServiceClientSync) -> dict[str
 def _latest_epoch_ms(client: StatsServiceClientSync) -> int:
     """The namespace's newest `epoch_ms`, which anchors the recent-window shape.
 
-    `measure` has no corpus dimensions to derive a cutoff from, and production
-    segments carry real timestamps, so both modes read it from the data.
+    `measure` has no corpus dimensions to derive a cutoff from, so both modes
+    read it from the data.
     """
     latest = query_table(client, f'SELECT max(epoch_ms) AS latest FROM "{LOG_NAMESPACE}"')
     if not latest.num_rows or latest.column("latest")[0].as_py() is None:
@@ -187,10 +179,9 @@ def _latest_epoch_ms(client: StatsServiceClientSync) -> int:
 def _load_corpus(address: str, client: StatsServiceClientSync, spec: LogDatasetSpec) -> dict[str, object]:
     """Write the corpus one key band at a time, compacting each into a segment.
 
-    Finelog seals a segment per write and merges on its own byte thresholds, so
-    loading everything and compacting once yields a single file. Compacting after
-    each band instead gives the store the segment count the spec asks for, built
-    by the real compactor.
+    Finelog merges on its own byte thresholds, so loading everything and
+    compacting once yields a single file. Compacting per band gives the store the
+    segment count the spec asks for, built by the real compactor.
     """
     started = time.perf_counter()
     written = 0

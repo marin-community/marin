@@ -109,8 +109,8 @@ def test_dataset_facts_report_achieved_corpus_shape(
 
 
 def test_parse_explain_metrics_sums_data_sources() -> None:
-    # DataFusion prints every one of these as a counter: decimal scaling with a
-    # bare ` K`/` M`/` B` suffix, `bytes_scanned` included.
+    # DataFusion prints each of these as a counter: decimal scaling with a bare
+    # ` K`/` M`/` B` suffix, `bytes_scanned` included.
     plan = """
 DataSourceExec: metrics=[files_ranges_pruned_statistics=12 total → 2 matched,
 row_groups_pruned_statistics=64 total → 3 matched, bytes_scanned=42.5 K,

@@ -44,7 +44,7 @@ from finelog.rpc.finelog_stats_connect import StatsServiceClientSync
 _DURATION_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ns|µs|us|ms|s)")
 # Every scan metric below is a DataFusion counter, printed by
 # `human_readable_count`: decimal scaling with a bare ` K`/` M`/` B`/` T`
-# suffix. `bytes_scanned` is a counter too, so it scales by 1000, not 1024.
+# suffix. `bytes_scanned` is a counter too, so it scales by 1000.
 _COUNT = r"[0-9]+(?:\.[0-9]+)?\s*[KMBT]?"
 _COUNT_PARTS_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMBT]?)")
 _FILES_RE = re.compile(rf"files_ranges_pruned_statistics=({_COUNT}) total → ({_COUNT}) matched")
@@ -156,8 +156,8 @@ class ExplainMetrics:
     """Scan metrics from an analyzed plan's `DataSourceExec` nodes.
 
     The `pushdown_*` fields count rows the parquet decoder evaluated the filter
-    against, which is where a predicate on a cheap column spends its time: a
-    scan can read a few hundred KiB and still evaluate the whole namespace.
+    against. A scan can read a few hundred KiB and still evaluate the whole
+    namespace, so read them alongside `bytes_scanned`.
     """
 
     files_total: int
@@ -213,9 +213,8 @@ def write_batch(
 def maintain(address: str, namespace: str, *, force_compact_l0: bool) -> None:
     """Run one maintenance tick on a benchmark-owned server.
 
-    A tick compacts and backfills a bounded number of index bundles.
-    `force_compact_l0` additionally pushes sealed L0 files through the real
-    compactor instead of waiting for its byte thresholds.
+    A tick backfills a bounded number of index bundles. `force_compact_l0` also
+    pushes sealed L0 files through the compactor, skipping its byte thresholds.
     """
     response = httpx.post(
         f"{address}/debug/maintain",

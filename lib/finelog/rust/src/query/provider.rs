@@ -716,10 +716,9 @@ mod tests {
     }
 
     /// Write one segment whose `column` ("key" or "data") is a full span of
-    /// `filler` followed by `span1`, with both string columns indexed as the
-    /// deployed `log` schema indexes them — so source span 0 lacks the needle
-    /// and span 1 carries it. The other string column is constant, which is what
-    /// makes a prune attributable to `column`. Returns the segment path.
+    /// `filler` followed by `span1`, so source span 0 lacks the needle and span 1
+    /// carries it. The other string column is constant, which makes any prune
+    /// attributable to `column`. Returns the segment path.
     fn write_two_span_log_segment(
         dir: &std::path::Path,
         column: &str,
@@ -759,9 +758,8 @@ mod tests {
     }
 
     /// Assert the scan injected a trigram access plan selecting exactly
-    /// `span1_rows`. A segment from `write_two_span_log_segment` fits one
-    /// byte-sized row group, so the prune expresses the skipped first span as a
-    /// row selection inside it rather than as a skipped row group.
+    /// `span1_rows`. These segments fit one byte-sized row group, so the prune
+    /// lands as a row selection inside it, not a skipped row group.
     fn assert_prunes_to_span1(
         plan: &Arc<dyn datafusion::physical_plan::ExecutionPlan>,
         span1_rows: usize,
@@ -1028,9 +1026,8 @@ mod tests {
 
     #[tokio::test]
     async fn key_substring_query_prunes_row_groups() {
-        // A job name sits in the MIDDLE of a log key, so `key LIKE '%<job>%'` is
-        // opaque to the `(key, seq)` sort and its min/max statistics. It prunes
-        // only from the key column's own trigram section.
+        // The job sits mid-key, so the `(key, seq)` sort and its min/max
+        // statistics cannot bound it. Only the key's trigram section prunes.
         let dir = tempdir("key_substring_prune");
         let filler_key = "/power/other-run-coord/other-run/0:0";
         let span1_key = "/power/hs-final2-adoptedbatch-coord/grug-train/3:0";

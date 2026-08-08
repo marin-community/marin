@@ -3,20 +3,18 @@
 
 """Deterministic `log`-shaped data and the operator query corpus it is measured with.
 
-The generator reproduces the properties of the deployed `log` namespace that
-decide query cost, measured from its production segments:
+Four properties of the deployed `log` namespace decide query cost, and the
+generator reproduces each from its production segments:
 
-- a few thousand distinct `key` values per ~10M-row segment, so the column costs
-  a few MiB on disk for a 15 GiB namespace but ~100 bytes per row once decoded
-- keys that carry the job and task *inside* the value rather than as a prefix,
-  which is why operators search them with `LIKE '%<job>%'` instead of a range
-- one job holding a ~0.01% share of the rows, so a job-scoped query is a needle
-- log bodies wide enough that a segment's row groups are sized by `data`
+- a few thousand distinct `key` values per ~10M-row segment
+- the job and task inside the key rather than as a prefix, which is why
+  operators search with `LIKE '%<job>%'` instead of a range
+- one job holding ~0.01% of the rows, so a job-scoped query is a needle
+- bodies wide enough that a segment's row groups are sized by `data`
 
-The batches carry the columns of the `log` schema but the generator never
-registers one: Finelog auto-registers `log` at boot, and a client-side
-`RegisterTable` would pin the index policy to whatever this file declares,
-hiding a server-side schema change from the measurement.
+The generator never registers a schema. Finelog auto-registers `log` at boot,
+and a client-side `RegisterTable` would pin the index policy to what this file
+declares, hiding a server-side schema change from the measurement.
 """
 
 from __future__ import annotations
@@ -30,8 +28,8 @@ import pyarrow as pa
 from finelog.client.log_client import LOG_NAMESPACE
 from finelog.schema import LOG_REGISTERED_SCHEMA, schema_to_arrow
 
-# A log row encodes to roughly 160 bytes, so this keeps a batch well under the
-# server's 16 MiB WriteRows body limit.
+# A log row encodes to roughly 160 bytes, keeping a batch under the server's
+# 16 MiB WriteRows limit.
 DEFAULT_BATCH_ROWS = 50_000
 DEFAULT_SEGMENTS = 8
 DEFAULT_WARMUP_ITERATIONS = 1
@@ -50,19 +48,16 @@ JOB_PREFIXES = (
 SOURCES = ("stdout", "stderr")
 
 # Distinct keys per generated segment. Production L3 segments hold 2.1k-3.6k
-# distinct keys across ~10M rows; matching that band keeps the per-span distinct
-# key count a trigram bloom has to encode realistic.
+# across ~10M rows, which sets how many trigrams a span's bloom must encode.
 KEYS_PER_SEGMENT = 2_560
 TASKS_PER_JOB = 16
 
-# One row in this many is given to the target job, in every segment, so a
-# job-scoped query is a needle spread across the whole namespace rather than one
-# file. Production jobs behave this way: a run outlives many compactions.
+# One row in this many goes to the target job, in every segment, so a job-scoped
+# query is a needle spread across the namespace rather than confined to one file.
 TARGET_JOB_ROW_STRIDE = 4_096
 
-# The job every job-scoped workload searches for. It is named like every other
-# generated job; the index is a multiple of both tuple lengths, which puts it
-# under the `power` user with the `grug-train` prefix.
+# The job every job-scoped workload searches for, named like every other
+# generated job.
 TARGET_JOB_INDEX = 408
 
 LEVEL_DEBUG = 10
@@ -70,19 +65,16 @@ LEVEL_INFO = 20
 LEVEL_WARNING = 30
 LEVEL_ERROR = 40
 
-# One row in this many is an error line, which is what `JOB_FIRST_ERROR` and the
-# body searches look for. One in this many of the target job's own rows is an
-# error too, so the job-scoped shapes do not depend on the two strides colliding.
+# One row in this many is an error line. The target job gets its own stride so
+# the job-scoped error shapes do not depend on the two colliding.
 ERROR_ROW_STRIDE = 3_001
 TARGET_JOB_ERROR_STRIDE = 4
 
-# How far back `JOB_RECENT_WINDOW` looks from the namespace's newest row. The
-# generator advances `epoch_ms` one millisecond per row, so on a generated corpus
-# this is also the last 3.6M rows.
+# How far back `JOB_RECENT_WINDOW` looks from the namespace's newest row.
 RECENT_WINDOW_MS = 3_600_000
 
-# Bodies are templated but carry per-row identifiers and floats, so a segment
-# compresses like real log text (~13x) instead of collapsing to a dictionary.
+# Per-row identifiers and floats keep a segment compressing like real log text
+# (~13x) instead of collapsing to a dictionary.
 _BODY_TEMPLATES = (
     "step {step} loss {loss:.5f} lr {lr:.3e} tokens {tokens} throughput {rate:.2f} tok/s",
     "iris.worker heartbeat rank={rank} host=worker-{host:05d} elapsed={elapsed:.3f}s queue={queue}",
@@ -129,9 +121,8 @@ class Workload:
     """One corpus query, and where its selectivity comes from.
 
     `scoped_by_key_substring` marks the shapes whose only selective predicate is
-    a `key` substring. They decode every row of `key` in the namespace unless a
-    segment index answers that predicate, so they are the ones an index policy on
-    `key` moves.
+    a `key` substring. Without a segment index answering it, they decode every
+    row of `key` in the namespace.
     """
 
     name: WorkloadName
@@ -155,8 +146,8 @@ def target_key(task: int = 0) -> str:
     return key_for_slot(TARGET_JOB_INDEX * TASKS_PER_JOB + task)
 
 
-# Derived through the same rules the generator uses, so the job the workloads
-# search for cannot drift from the one the corpus emits.
+# Derived through the generator's own rules, so the job the workloads search for
+# cannot drift from the one the corpus emits.
 TARGET_JOB = job_name(TARGET_JOB_INDEX)
 TARGET_USER = target_key().split("/")[1]
 
@@ -164,9 +155,9 @@ TARGET_USER = target_key().split("/")[1]
 def dataset_facts(spec: LogDatasetSpec) -> dict[str, object]:
     """The corpus dimensions a result file needs to be reproducible.
 
-    Only the requested dimensions and the generator's constants. Achieved
-    per-segment rows, distinct values, and matched rows come from the server and
-    the query results, so nothing here restates generator arithmetic.
+    Requested dimensions and generator constants only. Achieved rows, distinct
+    values, and matched rows come from the server and the query results, so
+    nothing here restates generator arithmetic.
     """
     return {
         **asdict(spec),
@@ -195,29 +186,24 @@ def generate_batch(spec: LogDatasetSpec, start: int, stop: int) -> pa.RecordBatc
         segment = min(index // max(spec.rows_per_segment, 1), spec.segments - 1)
         offset = index - segment * spec.rows_per_segment
         # Rows walk that segment's own slice of key slots, so each segment holds
-        # a distinct key band and one job's rows cluster physically once
-        # compaction sorts by `(key, seq)`.
+        # a distinct key band.
         band_start = segment * keys_per_segment
         offset_in_band = offset % keys_per_segment
         slot = band_start + offset_in_band
         if target_slot <= slot < target_slot + TASKS_PER_JOB:
-            # One segment's ordinary band covers the target job's slots. Walking
-            # past them keeps the target job a stride-injected needle everywhere
-            # instead of a dense block in that one segment.
+            # This band covers the target job's slots. Walking past them keeps
+            # the job a stride-injected needle instead of a dense block here.
             slot = band_start + (offset_in_band + TASKS_PER_JOB) % keys_per_segment
         target_ordinal = offset // TARGET_JOB_ROW_STRIDE
         is_target = offset % TARGET_JOB_ROW_STRIDE == 0
         if is_target:
             slot = target_slot + target_ordinal % TASKS_PER_JOB
-        # Whether a target row is also an error otherwise depends on the two
-        # strides landing on the same index, which they need not for a given
-        # `--rows`. Giving the target job its own error stride keeps the
-        # job-scoped first-error and body-search workloads matching real rows.
+        # Without its own stride, the target job only holds an error line when
+        # the two strides happen to land on the same index for a given `--rows`.
         is_target_error = is_target and target_ordinal % TARGET_JOB_ERROR_STRIDE == 0
         is_error = index % ERROR_ROW_STRIDE == 0 or is_target_error
         # The target job's rows all land on even indices, so `index` alone would
-        # pick the same one of the two error templates every time. Counting error
-        # rows walks both.
+        # pick the same error template every time.
         error_ordinal = target_ordinal // TARGET_JOB_ERROR_STRIDE if is_target_error else index // ERROR_ROW_STRIDE
         keys.append(key_for_slot(slot))
         sources.append(SOURCES[index % len(SOURCES)])
@@ -256,9 +242,8 @@ def generate_batch(spec: LogDatasetSpec, start: int, stop: int) -> pa.RecordBatc
 def segment_row_ranges(spec: LogDatasetSpec) -> Iterator[tuple[int, int]]:
     """Half-open row ranges, one per segment the corpus is written as.
 
-    The loader compacts after each range so the store ends up with one segment
-    per key band, the way a live namespace accumulates them. The last range
-    absorbs the remainder.
+    The loader compacts after each range, giving one segment per key band. The
+    last range absorbs the remainder.
     """
     for index in range(spec.segments):
         start = index * spec.rows_per_segment
@@ -278,13 +263,11 @@ def build_workloads(latest_ms: int) -> tuple[Workload, ...]:
     """The operator query corpus for the `log` namespace.
 
     Every shape is one operators issue against a live cluster: scoping to a job
-    by substring, tailing a task, finding the first error in a run, and searching
-    bodies. The `scoped_by_key_substring` shapes are the ones that read the whole
-    namespace when no segment index answers the `key` predicate.
+    by substring, tailing a task, finding the first error in a run, searching
+    bodies.
 
-    `latest_ms` is the namespace's newest `epoch_ms`, which anchors the recent
-    window. Reading it from the data keeps that shape a real time filter over
-    generated and production segments alike.
+    `latest_ms` is the namespace's newest `epoch_ms`. Anchoring the recent window
+    on it keeps that shape a real time filter over production segments too.
     """
     table = f'"{LOG_NAMESPACE}"'
     job = TARGET_JOB
