@@ -993,3 +993,18 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Decision rule: A model fits only if all five steps finish and W&B receives finite gradient and
   parameter norms. A compile or NCCL memory failure is an upper bound. Use a new midpoint if two
   adjacent ladder points give different results.
+
+### 2026-08-08 10:21 UTC - MHEP-154 exact top-6 target ready
+
+- Question: Can the target EP64 model send full norms with d6144, 48 layers, 192 experts, expert
+  width 4,608, latent width 3,072, top-6, and capacity factor 1.42?
+- Code snapshot: `b92b5dad5`.
+- Size: 404.96 B total and 25.81 B active parameters. The routing cell has 2,909 rows. This is 6.5%
+  more routing capacity than the top-4, capacity-2 MHEP-152 cell with 2,731 rows.
+- Run ID: `mhep-154-w8-ep-e192-i4608-k6-cf1p42-fullwatch-p32752-20260808`.
+- Config: One 64-GPU GB200 rack, batch 1,024, sequence length 4,096, five steps on the 2,000-step
+  schedule, and full gradient and parameter norms on every step. Eval, profiles, checkpoints,
+  retries, and an explicit XLA memory fraction are disabled. The CUDA async allocator stays
+  enabled.
+- Decision rule: The exact target fits only if all five steps finish and W&B receives finite
+  gradient and parameter norms.
