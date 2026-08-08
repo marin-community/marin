@@ -3,20 +3,14 @@
 
 """Copy a bounded slice of a deployed finelog's local store.
 
-What a shadow boot rehearses lives in the local store directory, not in the
-archive: ``Store::new`` opens the catalog, adopts the local Parquet, and
-rehydrates every namespace's registered schema, while the remote reconcile is
-deliberately backgrounded and never blocks the bind. So a snapshot is the
-catalog plus the newest few segments per namespace and their ``.fidx`` sidecars
-— never a pull from ``gs://``/``s3://``, which would be a cross-region read of
-someone else's bucket.
+A snapshot is the catalog plus the newest few segments per namespace and their
+``.fidx`` sidecars, read from the local store directory — never from the
+``gs://``/``s3://`` archive, which would be a cross-region read.
 
-The catalog records each segment's **absolute** path and boot adoption matches
-rows to files by exact path, which is why [`STORE_DIR`] is fixed: a snapshot is
-only a faithful rehearsal when it is mounted back where it was taken from. A
-segment left behind is not a problem — a `LOCAL` row whose file is gone is
-dropped at boot and a `BOTH` row collapses to `REMOTE`, so the store prunes
-itself down to what was actually copied.
+It mounts back at [`STORE_DIR`]: the catalog records absolute segment paths and
+boot adoption matches them exactly. Segments left out need no pruning, since a
+`LOCAL` row whose file is gone is dropped at boot and a `BOTH` row collapses to
+`REMOTE`.
 """
 
 import shlex
@@ -28,20 +22,18 @@ from pathlib import Path, PurePosixPath
 
 from finelog.deploy.bootstrap import CACHE_DIR
 
-# Where both deploy backends mount the store: the GCE bootstrap bind-mounts
-# CACHE_DIR and the k8s Deployment mounts its PVC at the same path.
+# The GCE bootstrap bind-mounts CACHE_DIR; the k8s Deployment mounts its PVC at
+# the same path.
 STORE_DIR = CACHE_DIR
 
 CATALOG_FILENAME = "_finelog_catalog.sqlite"
 
-# The catalog sqlite plus any rollback journal beside it, and the adoption
-# sentinel whose presence keeps a boot on the ordinary fast path instead of
-# re-running the rebuild-from-disk scan.
+# The catalog sqlite, any rollback journal beside it, and the sentinel that
+# keeps a boot off the rebuild-from-disk scan.
 CATALOG_PATTERNS = (f"{CATALOG_FILENAME}*", ".finelog-rust-catalog")
 
-# Bounded by default. Enough recent segments per namespace to exercise catalog
-# adoption, index-bundle reads, and projection substitution, without copying a
-# production store to a dev box.
+# Enough recent segments per namespace to exercise catalog adoption,
+# index-bundle reads, and projection substitution.
 DEFAULT_SEGMENTS_PER_NAMESPACE = 8
 DEFAULT_MAX_BYTES = 2 * 1024**3
 
@@ -78,8 +70,7 @@ class SnapshotPlan:
 def read_catalog_segments(catalog: Path) -> list[CatalogSegment]:
     """Read the local segment rows from a copied catalog.
 
-    ``REMOTE`` rows are skipped: their local Parquet has already been unlinked,
-    so there is nothing on the host to copy.
+    ``REMOTE`` rows are skipped; their local Parquet has already been unlinked.
     """
     connection = sqlite3.connect(f"file:{catalog}?mode=ro", uri=True)
     try:
@@ -108,11 +99,10 @@ def plan_snapshot(
     segments_per_namespace: int = DEFAULT_SEGMENTS_PER_NAMESPACE,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> SnapshotPlan:
-    """Choose the newest segments to copy, newest-first and round-robin.
+    """Choose the newest segments to copy, round-robin across namespaces.
 
-    Round-robin across namespaces rather than newest-first globally: a byte
-    budget spent entirely on the busiest namespace would leave the others with
-    a catalog entry and no data, which rehearses less than it appears to.
+    Round-robin rather than newest-first globally, so a byte budget is not spent
+    entirely on the busiest namespace.
     """
     by_namespace: dict[str, list[CatalogSegment]] = {}
     for segment in segments:
@@ -157,12 +147,9 @@ def plan_snapshot(
 def tar_command(store_dir: str, patterns: Sequence[str]) -> str:
     """The shell command that streams ``patterns`` under ``store_dir`` as a tar archive.
 
-    Paths are relative to ``store_dir`` so the archive unpacks under whichever
-    directory a snapshot lands in. ``find`` does the matching, not the shell:
-    each pattern reaches it quoted, so a namespace with a shell metacharacter in
-    its name cannot expand into something else, and a pattern that matches
-    nothing — a segment with no index bundle, a store with no adoption sentinel —
-    contributes nothing instead of failing the archive.
+    Paths in the archive are relative to ``store_dir``. ``find`` does the
+    matching, not the shell, so each pattern reaches it quoted and one that
+    matches nothing contributes nothing rather than failing the archive.
     """
     if not patterns:
         raise ValueError("a snapshot needs at least one path to copy")
@@ -173,9 +160,8 @@ def tar_command(store_dir: str, patterns: Sequence[str]) -> str:
 def extract_tar(archive: Path, destination: Path) -> None:
     """Unpack a store archive into ``destination``.
 
-    The ``data`` filter refuses absolute paths, escapes, and special files: this
-    archive was built on another host, so it is not trusted to name where it
-    lands.
+    The ``data`` filter refuses absolute paths, escapes, and special files: the
+    archive was built on another host and does not get to name where it lands.
     """
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive) as tar:

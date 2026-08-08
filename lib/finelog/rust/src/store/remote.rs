@@ -30,14 +30,10 @@ pub struct RemoteStore {
     prefix: String,
 }
 
-/// The URL schemes that name a bucket rather than a directory on this host.
 const GCS_SCHEME: &str = "gs://";
 const S3_SCHEME: &str = "s3://";
 
 /// Whether `remote_log_dir` names an object store rather than a local directory.
-///
-/// True exactly when [`build_remote_store`] would open a bucket for it, and
-/// false when it would fall back to a `LocalFileSystem` root.
 pub fn is_object_store(remote_log_dir: &str) -> bool {
     let dir = remote_log_dir.trim();
     dir.starts_with(GCS_SCHEME) || dir.starts_with(S3_SCHEME)

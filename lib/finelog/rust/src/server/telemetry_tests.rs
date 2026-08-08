@@ -342,7 +342,7 @@ async fn accepted_batch_is_queryable_through_normal_store_rows() {
             Some(unique_dir("telemetry-query")),
             remote_dir.to_string_lossy().into_owned(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
-            crate::store::Maintenance::Enabled,
+            crate::store::ServeMode::Live,
         )
         .unwrap(),
     );

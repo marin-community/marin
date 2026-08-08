@@ -61,11 +61,9 @@ from rigging.auth import IapLoginRequired
 
 STATE_DIR = Path.home() / ".cache" / "finelog" / "deploy-state"
 
-# Recorded registered schemas, one file per deployment. Checked in: each is the
-# last thing that deployment's catalog held, and `preflight::tests` re-decides
-# every one of them against the binary on each pull request. A stale golden only
-# over-reports — it can fail a change production would have accepted, never pass
-# one production would reject — which is the safe direction to age in.
+# Recorded registered schemas, one file per deployment: the last thing that
+# deployment's catalog held. `preflight::tests` re-decides each against the
+# binary on every pull request.
 GOLDEN_DIR = Path(__file__).resolve().parents[1] / "deploy" / "registered_schemas"
 
 # Long enough for an SSH or kubectl port-forward to a cold VM/pod to come up.
@@ -136,9 +134,8 @@ def _registered_schemas(cfg: FinelogConfig, name: str) -> dict[str, Schema] | No
         with open_log_client(cfg, name, TUNNEL_TIMEOUT) as client:
             return client.list_namespaces()
     # Three transports — IAP proxy, SSH tunnel, kubectl port-forward — fail in
-    # their own vocabularies, and all of them mean the same thing here. A bug in
-    # this script is not one of them, so `Exception` is too wide: it would read
-    # as unreachability and quietly downgrade the decision.
+    # their own vocabularies. A bug in this script is not one of them, so bare
+    # `Exception` would read as unreachability and downgrade the decision.
     except (OSError, RuntimeError, StatsError, IapLoginRequired, httpx.HTTPError) as exc:
         click.echo(f"could not read registered schemas from {cfg.name}: {exc}", err=True)
         return None
@@ -147,11 +144,9 @@ def _registered_schemas(cfg: FinelogConfig, name: str) -> dict[str, Schema] | No
 def _preflight(cfg: FinelogConfig, name: str, image: str) -> PreflightResult:
     """Decide whether ``image`` would register against ``cfg``'s catalog.
 
-    Only a document that came from that catalog decides anything. The live
-    server first; its recorded golden when the server is unreachable; and
-    ``UNKNOWN`` when neither exists, because a golden seeded from a binary
-    agrees with any binary whose schemas have not changed since — including one
-    that conflicts with what this deployment actually registered.
+    Only a document from that catalog decides anything: the live server first,
+    its recorded golden when the server is unreachable, and ``UNKNOWN`` when
+    neither is available.
     """
     live = _registered_schemas(cfg, name)
     if live is not None:
@@ -340,18 +335,15 @@ def rollout_cmd(
     if old_digest == new_digest:
         click.echo("--force: redeploying the same digest.")
 
-    # Decide the deploy before it touches the host. A schema the catalog rejects
-    # is invisible to every gate below it: the bootstrap's health poll, the
-    # post-bootstrap probe, and the rollback trigger all pass while the wedged
-    # namespace rejects every write.
+    # A schema the catalog rejects is invisible to every gate below: the
+    # bootstrap's health poll, the post-bootstrap probe, and the rollback trigger
+    # all pass while the wedged namespace rejects every write.
     click.echo("pre-flight: deciding this image against the registered schemas...")
     result = _preflight(cfg, name, new_digest)
     click.echo(summarize([result]))
     if blocks_rollout([result]):
         raise click.ClickException(f"Refusing to roll {cfg.name} onto {new_digest}: its schemas would not register.")
     if result.outcome is Outcome.UNKNOWN and not allow_undecided:
-        # An undecided rollout is the case this gate exists for: the wedge is
-        # invisible afterwards, so rolling on no evidence is rolling blind.
         raise click.ClickException(
             f"Refusing to roll {cfg.name} onto {new_digest}: nothing decided its schemas. "
             "Fix the connection, or pass --allow-undecided if this is a first deploy."

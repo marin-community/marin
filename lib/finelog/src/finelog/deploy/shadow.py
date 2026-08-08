@@ -3,16 +3,13 @@
 
 """Boot a candidate image against a snapshot of a real store and query it.
 
-The schema pre-flight decides the one thing that is a pure function of two
-schemas. This decides what only a real boot can: whether the catalog adopts,
-whether the ``.fidx`` section formats and Parquet layout revisions in a
-deployment's segments still read, and whether the planner still substitutes the
-covering projections the dashboards depend on.
+Decides what only a real boot can: whether the catalog adopts, whether the
+``.fidx`` sections and Parquet layout revisions in a deployment's segments still
+read, and whether the planner still substitutes the covering projections the
+dashboards use.
 
-The image serves in shadow mode, so it cannot reach the archive it was
-snapshotted from — see ``rust/src/main.rs``. The snapshot is mounted at
-``STORE_DIR`` because the catalog records absolute segment paths and boot
-adoption matches them exactly.
+The image serves in shadow mode, so it runs no maintenance and cannot reach the
+archive the snapshot came from.
 """
 
 import os
@@ -33,23 +30,19 @@ from finelog.deploy.bootstrap import HEALTH_OK
 from finelog.deploy.config import INTRA_CLUSTER_CIDRS, CidrAuthLayer, auth_policy_json
 from finelog.deploy.snapshot import CATALOG_FILENAME, STORE_DIR, namespaces_in_catalog
 
-# Opening a snapshot runs catalog adoption and per-namespace recovery, which is
-# the slow part of a real boot and the part worth rehearsing.
+# Opening a snapshot runs catalog adoption and per-namespace recovery.
 BOOT_TIMEOUT = 300.0
 
 # A dashboard variable the snapshot cannot supply a value for. The query still
-# parses, plans, substitutes projections, and scans — the residual filter over a
-# JSON-derived column carries no statistics, so it cannot prune the scan away —
-# it just matches no rows.
+# plans, substitutes projections, and scans; it just matches no rows.
 UNMATCHED_VALUE = "__finelog_shadow_no_match__"
 
-# `${__interval_ms}` is a panel's pixel width in Grafana; here it just has to be
-# a bucket size the snapshot's window divides into more than once.
+# `${__interval_ms}` is a panel's pixel width in Grafana; here it only has to
+# divide the snapshot's window more than once.
 DASHBOARD_INTERVAL_MS = 60_000
 
-# What a row written before the `cluster` column existed, or by a server that is
-# its own hub, reports as its origin. Rows are only unlabelled on the deployment
-# that wrote them, so this is the label for "the snapshot's own cluster".
+# The origin a row carries when its `cluster` column is unset, which happens
+# only on the deployment that wrote it.
 HOME_CLUSTER = "marin"
 
 _MISSING_TABLE = re.compile(r"table '([^']+)' not found")
@@ -230,15 +223,12 @@ def run_dashboard_corpus(
 ) -> None:
     """Run every renderable dashboard query against the shadow server.
 
-    The dashboards cover every namespace any Marin service writes, but a given
-    deployment holds only the namespaces its own clients registered. A query
-    over a namespace absent from this catalog is recorded as not run; a query
-    over a namespace that *is* in the catalog and still fails to plan is the
-    projection-substitution regression this check exists to catch.
-
-    A dashboard whose corpus will not render is recorded with the reason rather
-    than dropped: a check that quietly covers three dashboards out of eight
-    reads like one that covered all of them.
+    The dashboards read every namespace any Marin service writes, while a
+    deployment holds only what its own clients registered. A query over a
+    namespace absent from this catalog is recorded as not run; one over a
+    namespace that did rehydrate and still fails to plan is a failure. So is a
+    dashboard whose corpus will not render, rather than a silent narrowing of
+    what the check covered.
     """
     client = stats_client(address)
     rehydrated = set(report.namespaces_rehydrated)
@@ -253,8 +243,7 @@ def run_dashboard_corpus(
                 variables=dashboard_variables(dashboard, clusters),
             )
         except ValueError as exc:
-            # In full: an unresolved macro names the query it is in, and that is
-            # the thing an operator needs to widen the corpus.
+            # Recorded in full: an unresolved macro names the query it is in.
             report.dashboards_skipped[dashboard.name] = str(exc)
             continue
         green = 0

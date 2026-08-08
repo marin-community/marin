@@ -38,8 +38,7 @@ jobs:
               - '.github/workflows/rust-checks.yaml'
             finelog:
               - 'lib/finelog/rust/**'
-              # The deploy goldens are fixtures for `preflight::tests`: each is a
-              # deployment's registered schemas, re-decided against the binary here.
+              # Fixtures for `preflight::tests`.
               - 'lib/finelog/deploy/registered_schemas/**'
               - '.github/workflows/rust-checks.yaml'
             iris:

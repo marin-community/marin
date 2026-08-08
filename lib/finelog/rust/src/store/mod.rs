@@ -30,4 +30,4 @@ pub mod trigram;
 pub mod store;
 pub mod types;
 
-pub use store::{Maintenance, Store};
+pub use store::{ServeMode, Store};

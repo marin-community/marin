@@ -1,21 +1,17 @@
 //! Decide, without a store or a network, whether this image would register.
 //!
-//! A finelog image registers two namespaces for itself: the privileged `log`
-//! namespace (`Store::new`) and `telemetry_v1` (the telemetry router's startup
-//! task). Both go through `RegisterTable`, which merges the requested schema
-//! against whatever the catalog already holds and persists across restarts. A
-//! merge the catalog rejects wedges that namespace for as long as the image is
-//! deployed: the server listens, `/health` is green, and every write to the
-//! namespace fails.
+//! A finelog image registers `log` (`Store::new`) and `telemetry_v1` (the
+//! telemetry router's startup task) for itself. Both go through
+//! `RegisterTable`, which merges the requested schema against whatever the
+//! catalog holds. A merge the catalog rejects wedges that namespace for as long
+//! as the image is deployed: the server listens, `/health` is green, and every
+//! write to the namespace fails.
 //!
-//! The decision is a pure function of two schemas — the one this binary
-//! requests and the one a deployment's catalog holds — so it is decidable
-//! before the image touches a host. [`check`] takes the registered side as JSON
-//! and runs it through the same [`merge_schemas`] the server calls.
+//! [`check`] takes the registered side as JSON and runs it through the same
+//! [`merge_schemas`] the server calls.
 //!
 //! Scope: only the two server-owned namespaces. A namespace a client registers
-//! (`iris.worker`, zephyr's tables) is that client's schema, not this image's,
-//! and is reported as out of scope rather than silently passed over.
+//! (`iris.worker`, zephyr's tables) is reported as out of scope.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -29,10 +25,8 @@ use crate::store::schema::{
 };
 use crate::store::store::{log_registered_schema, LOG_NAMESPACE_NAME};
 
-/// The namespaces this image registers for itself, in store form.
-///
-/// Store form is what `RegisterTable` merges, so the pre-flight and the server
-/// share [`stored_form`] rather than each applying the implicit columns.
+/// The namespaces this image registers for itself, in the store form
+/// `RegisterTable` merges.
 pub fn server_owned_schemas() -> Vec<(&'static str, Schema)> {
     vec![
         (LOG_NAMESPACE_NAME, stored_form(log_registered_schema())),

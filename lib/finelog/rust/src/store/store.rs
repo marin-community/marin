@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use arrow::datatypes::SchemaRef;
+use clap::ValueEnum;
 
 use crate::errors::StatsError;
 use crate::proto::finelog::stats::ColumnType;
@@ -80,29 +81,27 @@ pub struct NamespaceSnapshot {
     pub index_cache: Arc<IndexCache>,
 }
 
+/// What a store may do to what it opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ServeMode {
+    /// A deployed server: runs per-namespace maintenance.
+    Live,
+    /// A rehearsal against a copy of a real store: runs no maintenance, so
+    /// nothing compacts, evicts, rewrites a segment layout, or redundancy-drops
+    /// a covered segment (which deletes its archived object).
+    Shadow,
+}
+
 /// Store backed by the Rust catalog plus per-namespace durability engines.
 ///
 /// The catalog owns the persistent registry + segments table; the `engines`
 /// map owns one `Namespace` per live namespace (built at boot from the catalog
 /// and on `register_table`). The data path (WriteRows / PushLogs) routes through
 /// these engines; the metadata RPCs stay on the catalog.
-/// Whether a store may mutate what it opened.
-///
-/// Maintenance compacts, evicts by policy, rewrites segment layouts, and — with
-/// a remote — redundancy-drops covered segments, deleting the archived objects.
-/// `Disabled` starts none of it, on the boot path and on a runtime
-/// `register_table` alike, so a rehearsal over a copied store leaves the copy as
-/// it found it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Maintenance {
-    Enabled,
-    Disabled,
-}
-
 pub struct Store {
     data_dir: Option<PathBuf>,
     remote_log_dir: String,
-    maintenance: Maintenance,
+    mode: ServeMode,
     catalog: Arc<Catalog>,
     engines: Mutex<HashMap<String, Arc<Namespace>>>,
     /// Process-wide query-visibility lock. A query / FetchLogs holds the READ
@@ -132,13 +131,12 @@ impl Store {
     /// namespace exists.
     ///
     /// `remote_log_dir` configures the per-namespace offload target (empty
-    /// disables sync). Pass it through to each `Namespace`. `maintenance` decides
-    /// once, here, whether this store is ever allowed to mutate what it opened.
+    /// disables sync). Pass it through to each `Namespace`.
     pub fn new(
         data_dir: Option<PathBuf>,
         remote_log_dir: String,
         index_cache_mb: usize,
-        maintenance: Maintenance,
+        mode: ServeMode,
     ) -> Result<Store, StatsError> {
         let startup_started = Instant::now();
         if let Some(dir) = &data_dir {
@@ -164,7 +162,7 @@ impl Store {
         let store = Store {
             data_dir,
             remote_log_dir,
-            maintenance,
+            mode,
             catalog,
             engines: Mutex::new(HashMap::new()),
             query_visibility: Arc::new(tokio::sync::RwLock::new(())),
@@ -210,8 +208,8 @@ impl Store {
     /// archived-row catalog visibility + redundancy cleanup, never correct
     /// serving of live (local) rows.
     pub fn bootstrap_maintenance(&self) {
-        if self.maintenance == Maintenance::Disabled {
-            tracing::info!("shadow store: maintenance not started");
+        if self.mode == ServeMode::Shadow {
+            tracing::info!("shadow mode: maintenance not started");
             return;
         }
         let engines: Vec<Arc<Namespace>> = self.engines.lock().unwrap().values().cloned().collect();
@@ -290,7 +288,7 @@ impl Store {
             &self.remote_log_dir,
             policy,
         )?;
-        if spawn_maint && self.maintenance == Maintenance::Enabled {
+        if spawn_maint && self.mode == ServeMode::Live {
             // Runtime register: run the boot remote reconcile SYNCHRONOUSLY (so a
             // re-register over a wiped catalog adopts the bucket's segments before
             // the caller observes the namespace), then start the maintenance
@@ -764,7 +762,7 @@ mod tests {
             None,
             String::new(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
-            Maintenance::Enabled,
+            ServeMode::Live,
         )
         .unwrap()
     }
@@ -1123,7 +1121,7 @@ mod tests {
             Some(dir.clone()),
             String::new(),
             crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
-            Maintenance::Enabled,
+            ServeMode::Live,
         )
         .unwrap();
         let schema = store.get_table_schema(LOG_NAMESPACE_NAME).unwrap();
@@ -1156,15 +1154,15 @@ mod tests {
         let live_dir = crate::test_support::unique_dir("maintenance_live");
         let shadow_dir = crate::test_support::unique_dir("maintenance_shadow");
         let mut counts = Vec::new();
-        for (dir, maintenance) in [
-            (&live_dir, Maintenance::Enabled),
-            (&shadow_dir, Maintenance::Disabled),
+        for (dir, mode) in [
+            (&live_dir, ServeMode::Live),
+            (&shadow_dir, ServeMode::Shadow),
         ] {
             let store = Store::new(
                 Some(dir.clone()),
                 String::new(),
                 crate::query::index_cache::DEFAULT_INDEX_CACHE_MB,
-                maintenance,
+                mode,
             )
             .unwrap();
             store.bootstrap_maintenance();

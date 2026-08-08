@@ -566,8 +566,8 @@ pub fn with_implicit_cluster(schema: Schema) -> Schema {
     }
 }
 
-/// Return the store-form schema a caller-supplied one registers as: the implicit
-/// `cluster` origin column appended, then the implicit `seq` counter prepended.
+/// Add the implicit columns registration gives every namespace: the `cluster`
+/// origin column appended, then the `seq` counter prepended.
 pub fn stored_form(schema: Schema) -> Schema {
     with_implicit_seq(with_implicit_cluster(schema))
 }

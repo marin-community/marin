@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use finelog::preflight::{check, render, RegisteredSchemas};
 use finelog::query::configure_query_runtime;
 use finelog::query::index_cache::DEFAULT_INDEX_CACHE_MB;
@@ -20,7 +20,7 @@ use finelog::server::{
     build_app_with_config, spawn_forwarder, AuthPolicy, Forwarder, ForwardingConfig, ServerConfig,
 };
 use finelog::store::remote::is_object_store;
-use finelog::store::{Maintenance, Store};
+use finelog::store::{ServeMode, Store};
 use tokio::sync::Notify;
 
 /// Bound process RSS. DataFusion frees its query buffers promptly (the pool
@@ -34,22 +34,6 @@ use tokio::sync::Notify;
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
-/// What this process is allowed to do to storage.
-///
-/// Resolved once from the CLI at startup (see [`resolve_serve_mode`]); nothing
-/// downstream re-derives it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum ServeMode {
-    /// The deployed server: syncs to the configured archive, runs per-namespace
-    /// maintenance, forwards to a hub when configured.
-    Live,
-    /// A rehearsal against a copy of a real store. Reads from the local
-    /// directory and touches nothing else: no maintenance task (boot
-    /// maintenance redundancy-drops covered segments, which DELETES the
-    /// archive's objects), no forwarder, and no object-store archive at all.
-    Shadow,
-}
 
 #[derive(Subcommand, Debug)]
 enum Command {
@@ -73,10 +57,8 @@ struct Args {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// What this process may touch. `shadow` serves reads from `--log-dir` and
-    /// is structurally incapable of reaching the archive or a hub: a non-local
-    /// `--remote-log-dir` or any `--forwarding` is a startup error rather than
-    /// something the process inherits and quietly acts on.
+    /// What this process may touch. `shadow` additionally refuses a non-local
+    /// `--remote-log-dir` and any `--forwarding` at startup.
     #[arg(long, env = "FINELOG_MODE", value_enum, default_value_t = ServeMode::Live)]
     mode: ServeMode,
 
@@ -156,26 +138,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // Resolve the storage mode ONCE, before anything opens a store or a socket.
-    // Everything below reads `mode`; nothing re-derives it from the flags.
     let mode = resolve_serve_mode(&args)?;
 
     configure_query_runtime(args.query_metadata_cache_mb.map(NonZeroUsize::get))
         .map_err(|e| format!("failed to configure query runtime: {e}"))?;
-    // The store carries the decision, so every later registration — including
-    // the telemetry router's, which rebuilds an engine and would otherwise start
-    // its maintenance task right there — inherits it. Maintenance is every way
-    // this process mutates durable state: compaction, eviction, layout rewrites,
-    // and the boot reconcile's redundancy drop, which deletes archived objects.
     let store = Arc::new(
         Store::new(
             args.log_dir.clone().map(PathBuf::from),
             args.remote_log_dir.clone(),
             args.index_cache_mb.get(),
-            match mode {
-                ServeMode::Live => Maintenance::Enabled,
-                ServeMode::Shadow => Maintenance::Disabled,
-            },
+            mode,
         )
         .map_err(|e| format!("failed to open store: {e}"))?,
     );
@@ -265,13 +237,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Resolve the storage mode, refusing a shadow configuration that could reach
+/// Resolve the serve mode, refusing a shadow configuration that could reach
 /// production storage.
 ///
-/// A shadow instance must be *incapable* of touching the archive, not merely
-/// configured not to. An operator who rehearses a boot with a deployment's own
-/// environment gets a startup failure naming the offending flag, rather than a
-/// rehearsal whose first maintenance tick redundancy-drops the real bucket.
+/// An operator who rehearses a boot with a deployment's own environment gets a
+/// startup error naming the offending flag, not a rehearsal that writes to the
+/// archive.
 fn resolve_serve_mode(args: &Args) -> Result<ServeMode, String> {
     if args.mode == ServeMode::Live {
         return Ok(ServeMode::Live);

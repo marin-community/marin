@@ -3,25 +3,19 @@
 
 """Decide a finelog deploy before it touches a host.
 
-A finelog image registers two namespaces for itself — the privileged ``log``
-namespace and ``telemetry_v1`` — and ``RegisterTable`` merges each against
-whatever that deployment's catalog already holds. A merge the catalog rejects
-wedges the namespace for as long as the image is deployed: the server listens,
-``/health`` stays green, and every write to the namespace fails.
+A finelog image registers ``log`` and ``telemetry_v1`` for itself, and
+``RegisterTable`` merges each against whatever that deployment's catalog holds.
+A merge the catalog rejects wedges the namespace for as long as the image is
+deployed: the server listens, ``/health`` stays green, and every write fails.
 
-The decision needs only two schemas, and both are cheap to reach: the one the
-candidate image requests, and the one the catalog holds. This module captures
-the second from a running server, hands both to the first, and turns the
-verdicts into a rollout gate.
+This module captures the registered side from a running server, runs the
+decision *inside the candidate image* (``docker run`` against the pinned
+digest), and turns the verdicts into a rollout gate. The image's built-in schema
+and the merge rules that judge it both live in the binary about to ship; nothing
+here reimplements them.
 
-The check itself runs *inside the candidate image* (``docker run`` against the
-pinned digest), because the image's built-in schema and the merge rules that
-judge it both live in the binary that is about to ship. Nothing here reimplements
-those rules.
-
-Scope is the two server-owned namespaces. Namespaces a client registers
-(``iris.worker``, zephyr's tables) belong to that client's schema, and the
-report names them as unchecked rather than passing over them silently.
+Scope is the two server-owned namespaces. A namespace a client registers
+(``iris.worker``, zephyr's tables) is reported as unchecked.
 """
 
 import json
@@ -34,19 +28,14 @@ from pathlib import Path
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.schema import Schema
 
-# The registered side is written in the catalog JSON sidecar form the server
-# already parses (`schema_from_json` in `rust/src/store/schema.rs`), not the
-# proto wire form: the reader is the server binary, so the document speaks the
-# store's own vocabulary. Column types are proto enum NAMES, which survive
-# renumbering.
-
 
 def schema_to_catalog_json(schema: Schema) -> dict[str, object]:
     """Encode ``schema`` in the catalog JSON form ``check-schema`` parses.
 
-    The grouped-extrema keys are the store's (``json_column`` / ``json_key``),
-    not the proto's (``group_json_column`` / ``group_json_key``); the wire names
-    the roles more explicitly than the struct does.
+    That is `schema_from_json` in `rust/src/store/schema.rs`, not the proto wire
+    form: column types are enum NAMES, and the grouped-extrema keys are the
+    store's (``json_column`` / ``json_key``) rather than the proto's
+    (``group_json_column`` / ``group_json_key``).
     """
     return {
         "key_column": schema.key_column,
@@ -89,10 +78,9 @@ class SchemaSource(StrEnum):
 
     # A deployment's own catalog. Only this is evidence about that deployment.
     CATALOG = "catalog"
-    # A finelog-server build's built-in schemas, seeded before any deployment had
-    # been captured. Merging an image against these decides nothing about a
-    # catalog: they agree with any binary whose schemas have not changed since,
-    # including one that conflicts with what production actually registered.
+    # A finelog-server build's own schemas. These agree with any binary whose
+    # schemas have not changed since, including one that conflicts with what a
+    # catalog holds, so merging against them decides nothing.
     BINARY = "binary"
 
 
@@ -107,8 +95,8 @@ def registered_schema_document(
     """Build the document ``check-schema`` reads and the deploy golden records.
 
     ``source`` decides whether the document is evidence about ``deployment``;
-    ``captured_from`` says the same thing in prose for the reader of a diff. The
-    server ignores everything but ``namespaces``.
+    ``captured_from`` says the same in prose. The server reads only
+    ``namespaces``.
     """
     return {
         "deployment": deployment,
@@ -135,8 +123,7 @@ class Outcome(StrEnum):
     PASS = "pass"
     FAIL = "fail"
     # Nothing this deployment's catalog holds was reachable: an unreachable
-    # server and no golden captured from it. Not a pass — a first deploy has no
-    # catalog to conflict with, but so does an unreachable one that is wedged.
+    # server and no golden captured from it.
     UNKNOWN = "unknown"
 
 
@@ -182,8 +169,7 @@ def check_image(image: str, document: Mapping[str, object], *, docker: str = "do
     print.
     """
     result = subprocess.run(
-        # `--network=none`: the subcommand touches nothing outside its stdin, and
-        # this makes that structural rather than a claim.
+        # `--network=none`: the subcommand reads stdin and nothing else.
         [docker, "run", "--rm", "-i", "--network=none", image, "finelog-server", "check-schema", "-"],
         input=render_document(document),
         capture_output=True,
