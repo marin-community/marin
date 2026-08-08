@@ -13,12 +13,15 @@ import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
+from jax.experimental.array_serialization import serialization as array_ser
 from jax.sharding import NamedSharding
 from jax.sharding import PartitionSpec as P
 from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
+from levanter import tensorstore_serialization
 from levanter.models.gpt2 import Gpt2Mlp
 from levanter.tensorstore_serialization import (
+    DtypeSource,
     _transfer_shard_to_pageable_host,
     tree_deserialize_leaves_tensorstore,
     tree_serialize_leaves_tensorstore,
@@ -80,6 +83,47 @@ def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
             tree_serialize_leaves_tensorstore(tmpdir, {"x": arr})
             restored = tree_deserialize_leaves_tensorstore(tmpdir, {"x": state_shape})
             assert jnp.allclose(restored["x"], arr)
+
+
+@pytest.mark.parametrize("checkpoint_format", ["ocdbt", "legacy"])
+def test_tensorstore_checkpoint_restores_as_exemplar_dtype_when_requested(checkpoint_format: str):
+    with use_test_mesh():
+        source = jnp.array(
+            [-1000.125, -1.0001, -0.0, 0.33333334, 1.0001, 1000.125],
+            dtype=jnp.float32,
+        )
+        expected = source.astype(jnp.bfloat16)
+        bf16_exemplar = jax.ShapeDtypeStruct(source.shape, jnp.bfloat16)
+
+        with TemporaryDirectory() as tmpdir:
+            if checkpoint_format == "ocdbt":
+                tree_serialize_leaves_tensorstore(tmpdir, {"x": source})
+            else:
+                manager = array_ser.GlobalAsyncCheckpointManager()
+                manager.serialize_with_paths([source], [f"{tmpdir}/x"])
+                manager.wait_until_finished()
+            restored_without_cast = tree_deserialize_leaves_tensorstore(tmpdir, {"x": bf16_exemplar})["x"]
+            restored = tree_deserialize_leaves_tensorstore(
+                tmpdir,
+                {"x": bf16_exemplar},
+                dtype_source=DtypeSource.EXEMPLAR,
+            )["x"]
+
+        assert restored_without_cast.dtype == source.dtype
+        np.testing.assert_array_equal(np.asarray(restored_without_cast), np.asarray(source))
+        assert restored.dtype == jnp.bfloat16
+        np.testing.assert_array_equal(np.asarray(restored), np.asarray(expected))
+
+
+def test_direct_dtype_restore_rejects_cross_region_checkpoint(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(tensorstore_serialization, "is_cross_region_url", lambda _: True)
+
+    with pytest.raises(ValueError, match="cannot account for the checkpoint's stored byte size"):
+        tree_deserialize_leaves_tensorstore(
+            "gs://remote-bucket/checkpoint",
+            {"x": jax.ShapeDtypeStruct((1,), jnp.bfloat16)},
+            dtype_source=DtypeSource.EXEMPLAR,
+        )
 
 
 def test_checkpoint_steps():
