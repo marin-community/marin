@@ -1644,3 +1644,14 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - A point passes only if all five steps finish and W&B receives all 76 finite norm fields on every
   step. Stop a compile or NCCL OOM immediately. Use the next 128-wide midpoint after these arms
   establish one pass and one failure for each expert count.
+
+### 2026-08-08 14:37 UTC - MHEP-190 sets the E128 capacity-1.3 failure bound
+
+- MHEP-190 used 128 experts, width 8,960, and capacity factor 1.3. The compiler estimated a
+  195.71 GiB rematerialized program against a 170.18 GiB target.
+- The first NCCL all-to-all failed from CUDA out of memory before step 1. W&B received the
+  520.906 B parameter count but no training or norm row.
+- The coordinator remained active after the worker failure and was stopped immediately.
+- Result: Width 8,960 is a deterministic E128 failure bound. Wait for width 8,704. If it passes,
+  test their width-8,832 midpoint. If it fails, test width 8,448 or 8,576 from the capacity-1.5
+  pass bound.
