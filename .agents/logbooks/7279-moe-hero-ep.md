@@ -1581,3 +1581,16 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - Compared with capacity factor 1.5, capacity factor 1.6 has 1.82% lower raw throughput and 1.31%
   lower drop-adjusted throughput. Its mean loss is only 0.045% lower. Capacity factor 1.5 is the
   better of these two short-run choices.
+
+### 2026-08-08 14:27 UTC - MHEP-177 makes capacity 1.3 the leading candidate
+
+- MHEP-177 completed all 200 steps. W&B received all 76 norm fields at steps 0, 10, 20, through
+  190. Every field in all 20 rows was finite. Iris reports the coordinator and training child as
+  succeeded, with no failure or retry.
+- Final metrics: 271,090 tokens/s, 3.2570% drops, and loss 3.2050.
+- Last-50 means: 271,325 tokens/s, 3.9277% drops, 260,668 drop-adjusted tokens/s, and loss 3.2441.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-177-w21-ep-e192-i5504-cf1p30-singleexec-watch10-p32775-20260808
+- Compared with capacity factor 1.5, capacity factor 1.3 has 6.24% higher raw throughput, 1.80
+  percentage points more drops, 4.29% higher drop-adjusted throughput, and 0.119% higher loss. The
+  loss difference is within the preset 0.5% short-run rule. Capacity factor 1.3 is the leading
+  candidate while capacity factor 1.4 finishes.
