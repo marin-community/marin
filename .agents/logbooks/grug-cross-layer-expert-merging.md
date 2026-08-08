@@ -643,3 +643,28 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Lowering: both `native_local_ce_kl_adapter_control` and `native_local_ce_kl_adapter_r8` preservation graphs lower successfully with version `2026.08.06`, `MARIN_PREFIX=gs://marin-us-central1`, the d512 teacher root in `us-central1`, teacher commit `884b213ff4`, and maximum concurrency 1. The A8 graph explicitly depends on the CE+KL Stage-A selector in addition to its augmentation checkpoint.
 - Resolved contract: control initialization is `best_validation` from the selected Stage-A root. A8 initialization is `latest` from its step-0 augmentation root and separately binds the selected Stage-A root, rank 8, topology `(0,1,2,2,3,4)`, CE `1.0`, KL `0.1`, MoE `1.0`, and exact milestones 12,582,912, 25,034,752, 37,617,664, and 50,069,504 tokens. Child resources resolve to v5p-8 in `us-central1`.
 - Storage preflight: recursive metadata listings for the control Stage-B root, A8 augmentation root, and A8 Stage-B root each matched no objects. No checkpoint or payload was copied. Launch two central1 CPU controllers from the pushed head, then assign one babysitter through terminal artifact and gate verification.
+
+### 2026-08-08 02:45 - GRUG-XEM-007 matched launch, control result, and A8 launch incident
+
+- Commit Hash: initial launch `70a2f6a183bf50119bc5944a9053619aee69269a`; source teacher `884b213ff4`.
+- Commands: `/dlwh/grug-xem-adapter-control-20260808` and `/dlwh/grug-xem-adapter-r8-20260808` ran `experiments.grug.moe.launch_merge_recovery` with branches `native_local_ce_kl_adapter_control` and `native_local_ce_kl_adapter_r8`, stage `preservation`, version `2026.08.06`, `MARIN_PREFIX=gs://marin-us-central1`, `GRUG_MERGE_TEACHER=gs://marin-us-central1/grug/tied_experts/d512/full/baseline/2026.08.06`, teacher commit `884b213ff4`, and maximum concurrency 1. Exact fixed resubmit commands are in `scratch/20260808-0245-adapter-{control,r8}-monitoring-state.json`; Iris injected credentials and no explicit credential was passed.
+- Control restore audit: `S'` loaded the exact selected CE+KL Stage-A checkpoint `gs://marin-us-central1/grug/expert_merge/d512/native_local_ce_kl/stage-a/2026.08.06/checkpoints/step-382`. Its token-0 validation and Paloma deltas, `+0.0488624573/+0.0444073677`, exactly match the Stage-A selector. All four subsequent milestones reproduce the earlier `S` bank-only arm:
+
+  | Stage-B tokens | Validation delta | Paloma delta |
+  |---:|---:|---:|
+  | 12,582,912 | +0.0434539318 | +0.0396811962 |
+  | 25,034,752 | +0.0420012474 | +0.0391573906 |
+  | 37,617,664 | +0.0397439003 | +0.0364453793 |
+  | 50,069,504 | +0.0382940769 | +0.0351204872 |
+
+- Control final metrics: routed-MoE loss `0.250478536`, layer-2/3 MoE NRMSE `0.295958132/0.642935336`, teacher top-1/top-4 route agreement `1.0/1.0` at both layers, zero overflow, all 256 experts active at both layers, and throughput `286,373.8` tokens/s. The controller and central1 v5p-8 child succeeded with zero failures and preemptions. All five evaluation JSON files, final training JSON, `.artifact.json`, and the permanent step-382 checkpoint with metadata and merge manifest are present.
+- A8 incident: the initial augmentation child failed before writing a checkpoint. The historical selected Stage-A checkpoint has a format-v2 merge manifest from before recovery recipe fields were added, so its `recovery_stage`, `recovery_trainable_scope`, and CE/MoE/KL fields are null. The new validator rejected those absent fields even though the Stage-A artifact config records `stage=local`, native assignment, no prefit, CE `0.05`, MoE `1.0`, KL `0.1`, best-validation selection, the expected output root, and fingerprint `62564720`. The selector independently binds step 382, `50,069,504` tokens, and Paloma `3.6390709877`. The failure is limited to provenance-schema compatibility; it occurred before model execution and had no infrastructure error.
+- Next action: validate historical recovery recipe fields against the immutable Stage-A `.artifact.json` when the old manifest lacks them, retain fail-closed source/selector/topology checks, then resubmit only A8. Keep the completed control fixed.
+
+### 2026-08-08 03:05 - GRUG-XEM-007 A8 provenance fix and resubmit
+
+- Commit Hash: `e35250729aa5e2e89535634c280f014a2d72ef21`.
+- Fix: adapter augmentation now accepts a historical format-v2 recovery manifest only when the adjacent immutable Stage-A artifact config proves the exact expected local CE+KL bank-only recipe. New manifests continue through the direct manifest-field path. Focused tests and an independent review passed before resubmission.
+- Command: `/dlwh/grug-xem-adapter-r8-fix1-20260808` reran `experiments.grug.moe.launch_merge_recovery` with branch `native_local_ce_kl_adapter_r8`, stage `preservation`, version `2026.08.06`, `MARIN_PREFIX=gs://marin-us-central1`, the central1 d512 teacher root and commit `884b213ff4`, and maximum concurrency 1. The exact fixed command is in `scratch/20260808-0245-adapter-r8-monitoring-state.json`.
+- Augmentation result: the central1 CPU child succeeded and wrote permanent step 0. Its format-v3 manifest binds source checkpoint `.../native_local_ce_kl/stage-a/2026.08.06/checkpoints/step-382`, source recovery step 382, output step 0, layer 3, rank 8, input and output topology `(0,1,2,2,3,4)`, zero-initialized input/output adapter kind, native assignment, no prefit, teacher step 10993, and source commit `884b213ff4`. It contains no capacity oracle.
+- Current status: the A8 central1 v5p-8 preservation child has started. Accept training only after its token-0 evaluation exactly matches `S'`; then apply the preregistered milestone utility and promotion gates through 50,069,504 Stage-B tokens.
