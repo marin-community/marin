@@ -40,7 +40,7 @@ from experiments.grug.moe.merge_jobs import (
     run_prefit,
     run_recovery,
 )
-from experiments.grug.moe.merge_recovery import RecoveryStage
+from experiments.grug.moe.merge_recovery import RecoveryInitialization, RecoveryStage
 from experiments.grug.moe.optimizer import TiedExpertLrScale
 
 _RESOURCES_KEY = "merge_resources"
@@ -58,6 +58,7 @@ class MergeBranchName(StrEnum):
     SPECTRAL = "spectral"
     SPECTRAL_PREFIT = "spectral_prefit"
     NATIVE_AGGREGATE_PREFIT = "native_aggregate_prefit"
+    NATIVE_JOINT = "native_joint"
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,16 @@ class MergeRecoveryBranch:
 
 
 @dataclass(frozen=True)
+class DirectPreservationBranch:
+    """A conversion followed directly by preservation recovery."""
+
+    name: MergeBranchName
+    assignment_mode: AssignmentMode
+    converted: ArtifactStep[LevanterCheckpoint]
+    stage_b: ArtifactStep[LevanterCheckpoint]
+
+
+@dataclass(frozen=True)
 class MergeRecoveryPipeline:
     teacher: ArtifactStep[LevanterCheckpoint]
     calibration: ArtifactStep[ExpertCalibrationArtifact]
@@ -78,6 +89,7 @@ class MergeRecoveryPipeline:
     prefit: ArtifactStep[LevanterCheckpoint]
     native_aggregate_prefit: ArtifactStep[LevanterCheckpoint]
     branches: tuple[MergeRecoveryBranch, ...]
+    native_joint: DirectPreservationBranch
 
 
 def _checkpoint_dir(path: str) -> str:
@@ -322,6 +334,11 @@ def build_merge_recovery_pipeline(
                     resources=ctx.runtime_arg(_RESOURCES_KEY),
                     run_id=f"grug-xem-{branch_name.value}-{stage_label}-d512-l2-l3",
                     stage=stage,
+                    initialization=(
+                        RecoveryInitialization.CONVERTED_STEP_ZERO
+                        if stage is RecoveryStage.LOCAL
+                        else RecoveryInitialization.LOCAL_RECOVERY
+                    ),
                     assignment_mode=assignment_mode,
                     prefit_applied=prefit_applied,
                     training_tokens=training_tokens,
@@ -351,6 +368,80 @@ def build_merge_recovery_pipeline(
             )
         )
 
+    native_joint_name = "grug/expert_merge/d512/native_joint/converted"
+    native_joint_version = resolve_version(native_joint_name, version)
+
+    def native_joint_conversion_config(ctx: StepContext) -> ConversionJobConfig:
+        return ConversionJobConfig(
+            source=SourceCheckpointConfig(
+                model=base_model,
+                optimizer=base_optimizer,
+                training_steps=source_steps,
+                checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                source_commit=teacher_commit,
+            ),
+            calibration_path=ctx.artifact_path(calibration),
+            matching_path=ctx.artifact_path(matching),
+            prefit_path=None,
+            output_path=ctx.output_path,
+            resources=ctx.runtime_arg(_RESOURCES_KEY),
+            run_id="grug-xem-native-joint-convert-d512-l2-l3",
+            assignment_mode=AssignmentMode.NATIVE,
+        )
+
+    native_joint_converted = ArtifactStep(
+        name=user_namespaced_name(native_joint_name, native_joint_version),
+        version=native_joint_version,
+        artifact_type=LevanterCheckpoint,
+        run=run_conversion,
+        build_config=native_joint_conversion_config,
+        deps=(teacher, calibration, matching),
+        runtime_args={_RESOURCES_KEY: resources},
+    )
+
+    native_joint_stage_b_name = "grug/expert_merge/d512/native_joint/stage-b"
+    native_joint_stage_b_version = resolve_version(native_joint_stage_b_name, version)
+
+    def native_joint_stage_b_config(ctx: StepContext) -> RecoveryJobConfig:
+        return RecoveryJobConfig(
+            source=SourceCheckpointConfig(
+                model=base_model,
+                optimizer=base_optimizer,
+                training_steps=source_steps,
+                checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                source_commit=teacher_commit,
+            ),
+            data=mixture(ctx, train, validation=validation),
+            matching_path=ctx.artifact_path(matching),
+            init_checkpoint_dir=_checkpoint_dir(ctx.artifact_path(native_joint_converted)),
+            output_path=ctx.output_path,
+            resources=ctx.runtime_arg(_RESOURCES_KEY),
+            run_id="grug-xem-native-joint-stage-b-d512-l2-l3",
+            stage=RecoveryStage.PRESERVATION,
+            initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
+            assignment_mode=AssignmentMode.NATIVE,
+            prefit_applied=False,
+            training_tokens=200_000_000,
+            moe_loss_weight=1.0,
+            logit_kl_weight=0.1,
+        )
+
+    native_joint_stage_b = ArtifactStep(
+        name=user_namespaced_name(native_joint_stage_b_name, native_joint_stage_b_version),
+        version=native_joint_stage_b_version,
+        artifact_type=LevanterCheckpoint,
+        run=run_recovery,
+        build_config=native_joint_stage_b_config,
+        deps=(teacher, matching, native_joint_converted, *data_deps),
+        runtime_args={_RESOURCES_KEY: resources},
+    )
+    native_joint = DirectPreservationBranch(
+        name=MergeBranchName.NATIVE_JOINT,
+        assignment_mode=AssignmentMode.NATIVE,
+        converted=native_joint_converted,
+        stage_b=native_joint_stage_b,
+    )
+
     return MergeRecoveryPipeline(
         teacher=teacher,
         calibration=calibration,
@@ -358,6 +449,7 @@ def build_merge_recovery_pipeline(
         prefit=prefit,
         native_aggregate_prefit=native_aggregate_prefit,
         branches=tuple(branches),
+        native_joint=native_joint,
     )
 
 
@@ -384,6 +476,8 @@ def pipeline_from_environment(*, version: str | None = None) -> MergeRecoveryPip
 @build_options
 def main(branch: str) -> ArtifactStep[LevanterCheckpoint]:
     pipeline = pipeline_from_environment()
+    if branch == MergeBranchName.NATIVE_JOINT.value:
+        return pipeline.native_joint.stage_b
     selected = next(candidate for candidate in pipeline.branches if candidate.name.value == branch)
     return selected.stage_b
 

@@ -65,7 +65,9 @@ from experiments.grug.moe.merge_jobs import (
 from experiments.grug.moe.merge_recovery import (
     MergeRecoveryConfig,
     MergeRecoveryState,
+    RecoveryInitialization,
     RecoveryLosses,
+    RecoveryStage,
     initial_recovery_state,
     make_chunked_logit_kl,
     make_recovery_train_step,
@@ -1150,6 +1152,47 @@ def _load_recovery_initial_weights(
     )
 
 
+def _recovery_manifest_for_run(
+    config: RecoveryJobConfig,
+    manifest: MergeCheckpointManifest,
+    *,
+    initialization_checkpoint: str,
+    resuming: bool,
+) -> MergeCheckpointManifest:
+    if config.stage is RecoveryStage.LOCAL and config.initialization is not RecoveryInitialization.CONVERTED_STEP_ZERO:
+        raise ValueError("local recovery must initialize from a converted step-0 checkpoint")
+
+    if resuming:
+        if manifest.recovery_initialization is not config.initialization:
+            raise ValueError(
+                "recovery checkpoint initialization is "
+                f"{manifest.recovery_initialization}, expected {config.initialization}"
+            )
+        if manifest.recovery_initial_checkpoint != initialization_checkpoint:
+            raise ValueError(
+                "recovery checkpoint initializer is "
+                f"{manifest.recovery_initial_checkpoint}, expected {initialization_checkpoint}"
+            )
+        return manifest
+
+    if config.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO:
+        if manifest.recovery_step != 0:
+            raise ValueError("converted-step-zero recovery requires recovery_step=0, " f"got {manifest.recovery_step}")
+        if manifest.recovery_initialization is not None or manifest.recovery_initial_checkpoint is not None:
+            raise ValueError("converted-step-zero recovery cannot initialize from a prior recovery checkpoint")
+    elif config.initialization is RecoveryInitialization.LOCAL_RECOVERY:
+        if config.stage is not RecoveryStage.PRESERVATION:
+            raise ValueError("a local-recovery initializer is valid only for preservation recovery")
+        if manifest.recovery_step <= 0:
+            raise ValueError("local-recovery initialization requires a checkpoint with recovery_step > 0")
+
+    return dataclasses.replace(
+        manifest,
+        recovery_initialization=config.initialization,
+        recovery_initial_checkpoint=initialization_checkpoint,
+    )
+
+
 def _recovery_metrics(
     losses: RecoveryLosses,
     affected_layers: tuple[int, int],
@@ -1293,9 +1336,9 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
             source_layer=config.affected_layers[1],
             num_experts=config.source.model.num_experts,
         )
+        initialization_checkpoint = latest_checkpoint_path(config.init_checkpoint_dir)
         own_checkpoint = discover_latest_checkpoint(checkpoint_root)
         if own_checkpoint is None:
-            initialization_checkpoint = latest_checkpoint_path(config.init_checkpoint_dir)
             manifest = read_merge_checkpoint_manifest(initialization_checkpoint)
             manifest_checkpoint = initialization_checkpoint
         else:
@@ -1308,6 +1351,12 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
             affected_layers=config.affected_layers,
         )
         _validate_assignment_provenance(manifest, matching)
+        manifest = _recovery_manifest_for_run(
+            config,
+            manifest,
+            initialization_checkpoint=initialization_checkpoint,
+            resuming=own_checkpoint is not None,
+        )
 
         state, optimizer, recovery_config = _recovery_template(
             config,

@@ -33,6 +33,13 @@ class RecoveryStage(StrEnum):
     PRESERVATION = "preservation"
 
 
+class RecoveryInitialization(StrEnum):
+    """Checkpoint lifecycle expected at the start of a recovery run."""
+
+    CONVERTED_STEP_ZERO = "converted_step_zero"
+    LOCAL_RECOVERY = "local_recovery"
+
+
 @dataclass(frozen=True)
 class MergeRecoveryConfig:
     """Configuration shared by the local and preservation recovery objectives."""
@@ -379,8 +386,7 @@ def recovery_objective(
     else:
         if loss_weight is None:
             raise ValueError("preservation recovery requires per-token loss weights")
-        final_label = jnp.zeros_like(token_ids[:, :1])
-        labels = jnp.concatenate([token_ids[:, 1:], final_label], axis=1).astype(jnp.int32)
+        labels = jnp.zeros_like(token_ids).at[:, :-1].set(token_ids[:, 1:]).astype(jnp.int32)
         if not get_abstract_mesh().empty:
             labels = jax.sharding.reshard(labels, P(("replica_dcn", "data", "expert"), None))
         cross_entropy = fused_linear_softmax_cross_entropy_loss(

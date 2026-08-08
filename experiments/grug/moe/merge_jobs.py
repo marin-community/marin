@@ -12,7 +12,7 @@ from levanter.optim.config import OptimizerConfig
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.moe.expert_merge import AssignmentMode, SpectralProbeConfig
 from experiments.grug.moe.expert_prefit import PrefitConfig, PrefitObjective
-from experiments.grug.moe.merge_recovery import RecoveryStage
+from experiments.grug.moe.merge_recovery import RecoveryInitialization, RecoveryStage
 from experiments.grug.moe.model import GrugModelConfig
 
 
@@ -101,6 +101,7 @@ class RecoveryJobConfig:
     resources: ResourceConfig
     run_id: str
     stage: RecoveryStage
+    initialization: RecoveryInitialization
     assignment_mode: AssignmentMode
     prefit_applied: bool
     training_tokens: int

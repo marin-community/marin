@@ -18,6 +18,7 @@ from rigging.filesystem import StoragePath, prefix_join
 
 from experiments.grug.moe.expert_merge import AssignmentMode, convert_one_expert_pair, permute_pending_qb_beta
 from experiments.grug.moe.expert_prefit import PrefitObjective
+from experiments.grug.moe.merge_recovery import RecoveryInitialization
 from experiments.grug.moe.model import Transformer
 from experiments.grug.moe.train import GrugTrainState
 
@@ -56,6 +57,8 @@ class MergeCheckpointManifest:
     recovery_step: int
     ema_converted: bool
     optimizer_state_reset: bool = True
+    recovery_initialization: RecoveryInitialization | None = None
+    recovery_initial_checkpoint: str | None = None
     format_version: int = _MERGE_CHECKPOINT_FORMAT_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -98,6 +101,12 @@ class MergeCheckpointManifest:
             recovery_step=int(payload["recovery_step"]),
             ema_converted=bool(payload["ema_converted"]),
             optimizer_state_reset=bool(payload["optimizer_state_reset"]),
+            recovery_initialization=(
+                RecoveryInitialization(payload["recovery_initialization"])
+                if payload.get("recovery_initialization") is not None
+                else None
+            ),
+            recovery_initial_checkpoint=payload.get("recovery_initial_checkpoint"),
             format_version=format_version,
         )
 

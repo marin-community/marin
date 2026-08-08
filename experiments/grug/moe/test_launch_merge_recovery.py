@@ -9,7 +9,7 @@ from experiments.grug.moe.expert_merge import AssignmentMode
 from experiments.grug.moe.expert_prefit import PrefitObjective
 from experiments.grug.moe.launch_merge_recovery import MergeBranchName, build_merge_recovery_pipeline
 from experiments.grug.moe.launch_tied_experts import TiedExpertPhase, tied_expert_runs
-from experiments.grug.moe.merge_recovery import RecoveryStage
+from experiments.grug.moe.merge_recovery import RecoveryInitialization, RecoveryStage
 
 _PREFIX = "gs://marin-us-central1/test"
 
@@ -27,7 +27,7 @@ def _pipeline(*, teacher_commit: str | None = None):
 def test_merge_pipeline_reuses_calibration_and_matching_across_all_ablation_branches() -> None:
     pipeline = _pipeline(teacher_commit="teacher-sha")
 
-    assert {branch.name for branch in pipeline.branches} == set(MergeBranchName)
+    assert {branch.name for branch in pipeline.branches} == set(MergeBranchName) - {MergeBranchName.NATIVE_JOINT}
     assert len({branch.converted.fingerprint() for branch in pipeline.branches}) == 5
     for branch in pipeline.branches:
         assert pipeline.calibration in branch.converted.deps
@@ -57,8 +57,10 @@ def test_stage_b_initializes_from_stage_a_permanent_checkpoint(monkeypatch) -> N
     stage_b = materialized_config(branch.stage_b, _PREFIX)
 
     assert stage_a.stage is RecoveryStage.LOCAL
+    assert stage_a.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO
     assert stage_a.init_checkpoint_dir == prefix_join(branch.converted.path(_PREFIX), "checkpoints")
     assert stage_b.stage is RecoveryStage.PRESERVATION
+    assert stage_b.initialization is RecoveryInitialization.LOCAL_RECOVERY
     assert stage_b.init_checkpoint_dir == prefix_join(branch.stage_a.path(_PREFIX), "checkpoints")
     assert stage_b.init_checkpoint_dir != stage_a.init_checkpoint_dir
 
@@ -82,6 +84,37 @@ def test_pipeline_modes_preserve_the_required_identity_native_spectral_compariso
     assert aggregate_prefit_config.resources.regions == ["us-central1"]
 
 
+def test_native_joint_runs_preservation_directly_from_native_conversion(monkeypatch) -> None:
+    monkeypatch.setattr("experiments.grug.moe.launch_merge_recovery.mixture", lambda *_args, **_kwargs: None)
+    pipeline = _pipeline(teacher_commit="teacher-sha")
+    branch = pipeline.native_joint
+    staged_native = next(candidate for candidate in pipeline.branches if candidate.name is MergeBranchName.NATIVE)
+
+    conversion = materialized_config(branch.converted, _PREFIX)
+    stage_b = materialized_config(branch.stage_b, _PREFIX)
+
+    assert branch.name is MergeBranchName.NATIVE_JOINT
+    assert branch.assignment_mode is AssignmentMode.NATIVE
+    assert conversion.assignment_mode is AssignmentMode.NATIVE
+    assert conversion.prefit_path is None
+    assert conversion.run_id == "grug-xem-native-joint-convert-d512-l2-l3"
+    assert conversion.resources.regions == ["us-central1"]
+    assert branch.converted.fingerprint() != staged_native.converted.fingerprint()
+
+    assert stage_b.stage is RecoveryStage.PRESERVATION
+    assert stage_b.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO
+    assert stage_b.init_checkpoint_dir == prefix_join(branch.converted.path(_PREFIX), "checkpoints")
+    assert stage_b.assignment_mode is AssignmentMode.NATIVE
+    assert not stage_b.prefit_applied
+    assert stage_b.training_tokens == 200_000_000
+    assert stage_b.moe_loss_weight == 1.0
+    assert stage_b.logit_kl_weight == 0.1
+    assert stage_b.run_id == "grug-xem-native-joint-stage-b-d512-l2-l3"
+    assert stage_b.resources.regions == ["us-central1"]
+    assert branch.converted in branch.stage_b.deps
+    assert all(existing.stage_a not in branch.stage_b.deps for existing in pipeline.branches)
+
+
 def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeypatch) -> None:
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("checkpoint storage was accessed during graph construction")
@@ -91,12 +124,16 @@ def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeyp
     for branch in pipeline.branches:
         branch.stage_b.fingerprint()
         branch.stage_b.lower()
+    pipeline.native_joint.stage_b.fingerprint()
+    pipeline.native_joint.stage_b.lower()
 
     monkeypatch.setattr("experiments.grug.moe.launch_merge_recovery.mixture", lambda *_args, **_kwargs: None)
     for branch in pipeline.branches:
         materialized_config(branch.converted, _PREFIX)
         materialized_config(branch.stage_a, _PREFIX)
         materialized_config(branch.stage_b, _PREFIX)
+    materialized_config(pipeline.native_joint.converted, _PREFIX)
+    materialized_config(pipeline.native_joint.stage_b, _PREFIX)
 
 
 def test_merge_source_matches_full_untied_teacher_config(monkeypatch) -> None:

@@ -44,7 +44,7 @@ from experiments.grug.moe.merge_jobs import (
     RecoveryJobConfig,
     SourceCheckpointConfig,
 )
-from experiments.grug.moe.merge_recovery import RecoveryStage
+from experiments.grug.moe.merge_recovery import RecoveryInitialization, RecoveryStage
 from experiments.grug.moe.merge_recovery_runtime import (
     PrefitRuntimeState,
     evaluate_prefit_checkpoint_local,
@@ -624,6 +624,7 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         output_path=str(stage_a_path),
         run_id="test-stage-a",
         stage=RecoveryStage.LOCAL,
+        initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
     )
     run_recovery_local(stage_a_config)
 
@@ -634,6 +635,7 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         output_path=str(stage_b_path),
         run_id="test-stage-b",
         stage=RecoveryStage.PRESERVATION,
+        initialization=RecoveryInitialization.LOCAL_RECOVERY,
         logit_kl_weight=0.1,
         logit_kl_vocab_chunk_size=8,
     )
@@ -665,3 +667,77 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         assert "train/router/layer_1/routing_entropy" in training_metrics["metrics"]
         assert "train/router/layer_1/capacity_overflow" in training_metrics["metrics"]
         assert "train/router/layer_1/routing_count/expert_0" in training_metrics["metrics"]
+
+
+def test_native_joint_preservation_restores_converted_step_zero_strictly_and_records_provenance(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inputs = _runtime_inputs(tmp_path)
+    converted_path = tmp_path / "native-joint-converted"
+    run_conversion_local(
+        ConversionJobConfig(
+            source=inputs.source,
+            calibration_path=inputs.calibration_path,
+            matching_path=inputs.matching_path,
+            prefit_path=None,
+            output_path=str(converted_path),
+            resources=ResourceConfig.with_cpu(),
+            run_id="test-native-joint-conversion",
+            assignment_mode=AssignmentMode.NATIVE,
+            representative_layer=1,
+            source_layer=2,
+        )
+    )
+    concrete_conversion = latest_checkpoint_path(str(converted_path / "checkpoints"))
+    converted_manifest = read_merge_checkpoint_manifest(concrete_conversion)
+    assert converted_manifest.recovery_step == 0
+    assert converted_manifest.recovery_initialization is None
+    assert not converted_manifest.spec.prefit_applied
+
+    strict_loads: list[str] = []
+    original_load_checkpoint = load_checkpoint
+
+    def recording_load_checkpoint(*args, **kwargs):
+        if kwargs.get("allow_partial") is False:
+            strict_loads.append(str(args[1]))
+        return original_load_checkpoint(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "experiments.grug.moe.merge_recovery_runtime.load_checkpoint",
+        recording_load_checkpoint,
+    )
+    recovery_path = tmp_path / "native-joint-stage-b"
+    run_recovery_local(
+        RecoveryJobConfig(
+            source=inputs.source,
+            data=_data_config(),
+            matching_path=inputs.matching_path,
+            init_checkpoint_dir=str(converted_path / "checkpoints"),
+            output_path=str(recovery_path),
+            resources=ResourceConfig.with_cpu(),
+            run_id="test-native-joint-stage-b",
+            stage=RecoveryStage.PRESERVATION,
+            initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
+            assignment_mode=AssignmentMode.NATIVE,
+            prefit_applied=False,
+            training_tokens=8,
+            batch_size=1,
+            learning_rate=1e-3,
+            moe_loss_weight=1.0,
+            logit_kl_weight=0.1,
+            logit_kl_vocab_chunk_size=8,
+            affected_layers=(1, 2),
+            checkpoint_every=1,
+            checkpoint_token_milestones=(8,),
+        )
+    )
+
+    assert strict_loads.count(concrete_conversion) == 1
+    recovered_checkpoint = latest_checkpoint_path(str(recovery_path / "checkpoints"))
+    recovered_manifest = read_merge_checkpoint_manifest(recovered_checkpoint)
+    assert recovered_manifest.recovery_step == 1
+    assert recovered_manifest.recovery_initialization is RecoveryInitialization.CONVERTED_STEP_ZERO
+    assert recovered_manifest.recovery_initial_checkpoint == concrete_conversion
+    assert recovered_manifest.spec.assignment_mode is AssignmentMode.NATIVE
+    assert not recovered_manifest.spec.prefit_applied
