@@ -44,6 +44,7 @@ from finelog.deploy.config import FinelogConfig, bundled_config_names, load_fine
 from finelog.deploy.connection import open_log_client
 from finelog.deploy.image import resolve_image_digest
 from finelog.deploy.preflight import (
+    SERVER_OWNED_NAMESPACES,
     Outcome,
     PreflightResult,
     SchemaSource,
@@ -190,10 +191,13 @@ def _preflight(cfg: FinelogConfig, name: str, image: str) -> PreflightResult:
 
 def _record_golden(cfg: FinelogConfig, name: str, digest: str) -> Path | None:
     """Write the schemas ``cfg``'s catalog now holds to its checked-in golden."""
-    namespaces = _registered_schemas(cfg, name)
-    if namespaces is None:
+    live = _registered_schemas(cfg, name)
+    if live is None:
         click.echo(f"could not record the deploy golden for {cfg.name}; it stays at its last value.", err=True)
         return None
+    # Only the namespaces this image decides. Recording a client's schema too
+    # would churn the golden every time iris or zephyr evolves one.
+    namespaces = {name: schema for name, schema in live.items() if name in SERVER_OWNED_NAMESPACES}
     path = _golden_path(cfg)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(

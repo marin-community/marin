@@ -5,11 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from finelog.benchmarks.grafana_dashboard_corpus import (
-    load_dashboard_corpus,
-    render_sql,
-    sqlstring_variables,
-)
+from finelog.benchmarks.grafana_dashboard_corpus import load_dashboard_corpus, render_sql
 
 
 def _write_dashboard(path: Path, sql: str) -> None:
@@ -52,7 +48,7 @@ def test_dashboard_corpus_renders_nested_sql_targets_with_fixed_inputs(tmp_path:
         start_ms=1_000,
         end_ms=5_000,
         interval_ms=250,
-        variables={"cluster": ("marin", "quoted'cluster")},
+        clusters=("marin", "quoted'cluster"),
     )
 
     assert corpus.uid == "test-dashboard"
@@ -73,7 +69,7 @@ def test_render_sql_rejects_macros_the_harness_does_not_model() -> None:
             start_ms=1,
             end_ms=2,
             interval_ms=1,
-            variables={"cluster": ("marin",)},
+            clusters=("marin",),
         )
 
 
@@ -85,7 +81,7 @@ def test_accelerators_dashboard_exposes_every_panel_query_to_the_benchmark() -> 
         start_ms=1_000,
         end_ms=5_000,
         interval_ms=250,
-        variables={"cluster": ("marin",)},
+        clusters=("marin",),
     )
 
     assert {query.name for query in corpus.queries} == {
@@ -126,50 +122,5 @@ def test_render_sql_rejects_invalid_fixed_inputs(
             start_ms=start_ms,
             end_ms=end_ms,
             interval_ms=interval_ms,
-            variables={"cluster": clusters},
+            clusters=clusters,
         )
-
-
-def test_a_dashboard_variable_the_caller_did_not_supply_is_not_silently_dropped() -> None:
-    # Resolving only the variables we know about would quietly narrow a panel's
-    # predicate; the corpus refuses instead, so the caller sees the gap.
-    with pytest.raises(ValueError, match="unresolved macro"):
-        render_sql(
-            "SELECT 1 WHERE run IN (${run:sqlstring})",
-            start_ms=1,
-            end_ms=2,
-            interval_ms=1,
-            variables={"cluster": ("marin",)},
-        )
-
-
-def test_an_untitled_panel_is_still_benchmarked(tmp_path: Path) -> None:
-    # A custom panel type draws its own header and leaves `title` empty. Its SQL
-    # is the same SQL, so it gets a positional name instead of taking the whole
-    # dashboard out of the corpus.
-    path = tmp_path / "dashboard.json"
-    path.write_text(
-        json.dumps(
-            {
-                "uid": "u",
-                "title": "t",
-                "panels": [
-                    {
-                        "title": "",
-                        "targets": [{"refId": "A", "url_options": {"params": [{"key": "sql", "value": "SELECT 1"}]}}],
-                    }
-                ],
-            }
-        )
-    )
-
-    corpus = load_dashboard_corpus(path, start_ms=1, end_ms=2, interval_ms=1, variables={})
-
-    assert [query.name for query in corpus.queries] == ["panel_0"]
-
-
-def test_sqlstring_variables_names_what_a_dashboard_needs(tmp_path: Path) -> None:
-    path = tmp_path / "dashboard.json"
-    _write_dashboard(path, "SELECT 1 FROM t WHERE run IN (${run:sqlstring}) AND c IN (${cluster:sqlstring})")
-
-    assert sqlstring_variables(path) == ("cluster", "run")

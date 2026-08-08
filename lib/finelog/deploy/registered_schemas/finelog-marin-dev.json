@@ -1,6 +1,6 @@
 {
-  "captured_at": "2026-08-08T02:58:59.068263+00:00",
-  "captured_from": "finelog-server at c9a9c989eb, not finelog-marin-dev's catalog: seeded when the pre-flight landed. The next `safe_deploy rollout marin-dev` replaces it with the live registered schemas.",
+  "captured_at": "2026-08-08T16:34:22.090851+00:00",
+  "captured_from": "the live catalog of finelog-marin-dev on ghcr.io/marin-community/finelog@sha256:c067b30b967ea29964e2ff4e4a51dc1783cf7d3902aa87e632d595f1f6969153",
   "deployment": "finelog-marin-dev",
   "namespaces": {
     "log": {
@@ -136,15 +136,29 @@
           "index": {
             "exact_values": [
               "global_step",
+              "gpu_memory_temperature_celsius",
+              "gpu_memory_total_bytes",
               "gpu_memory_used_bytes",
+              "gpu_nvlink_receive_bytes_per_second",
+              "gpu_nvlink_transmit_bytes_per_second",
+              "gpu_pcie_receive_bytes_per_second",
               "gpu_pcie_replay_errors",
+              "gpu_pcie_transmit_bytes_per_second",
               "gpu_power_watts",
               "gpu_row_remap_failures",
+              "gpu_sm_active_ratio",
               "gpu_temperature_celsius",
               "gpu_tensor_active_ratio",
               "gpu_utilization_percent",
               "gpu_xid_error_code",
               "hardware_inventory",
+              "node_cpu_utilization_percent",
+              "node_disk_total_bytes",
+              "node_disk_used_bytes",
+              "node_memory_total_bytes",
+              "node_memory_used_bytes",
+              "node_network_receive_bytes",
+              "node_network_transmit_bytes",
               "phase",
               "progress_time_seconds",
               "step"
@@ -362,9 +376,139 @@
           "predicate_values": [
             "gpu_utilization_percent"
           ]
+        },
+        {
+          "columns": [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster"
+          ],
+          "name": "accelerator-memory-v2",
+          "predicate_column": "name",
+          "predicate_values": [
+            "gpu_memory_total_bytes",
+            "gpu_memory_used_bytes"
+          ]
+        },
+        {
+          "columns": [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster"
+          ],
+          "name": "accelerator-interconnect",
+          "predicate_column": "name",
+          "predicate_values": [
+            "gpu_nvlink_receive_bytes_per_second",
+            "gpu_nvlink_transmit_bytes_per_second",
+            "gpu_pcie_receive_bytes_per_second",
+            "gpu_pcie_transmit_bytes_per_second"
+          ]
+        },
+        {
+          "columns": [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster"
+          ],
+          "name": "accelerator-sm-activity",
+          "predicate_column": "name",
+          "predicate_values": [
+            "gpu_sm_active_ratio"
+          ]
+        },
+        {
+          "columns": [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster"
+          ],
+          "name": "accelerator-temperature-v2",
+          "predicate_column": "name",
+          "predicate_values": [
+            "gpu_memory_temperature_celsius",
+            "gpu_temperature_celsius"
+          ]
+        },
+        {
+          "columns": [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster"
+          ],
+          "name": "accelerator-tensor-activity-v2",
+          "predicate_column": "name",
+          "predicate_values": [
+            "gpu_tensor_active_ratio"
+          ]
+        },
+        {
+          "columns": [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster"
+          ],
+          "name": "accelerator-utilization-v2",
+          "predicate_column": "name",
+          "predicate_values": [
+            "gpu_utilization_percent"
+          ]
+        },
+        {
+          "columns": [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster"
+          ],
+          "name": "node-host-network",
+          "predicate_column": "name",
+          "predicate_values": [
+            "node_network_receive_bytes",
+            "node_network_transmit_bytes"
+          ]
+        },
+        {
+          "columns": [
+            "timestamp_ms",
+            "service",
+            "name",
+            "value",
+            "attributes_json",
+            "cluster"
+          ],
+          "name": "node-host-utilization",
+          "predicate_column": "name",
+          "predicate_values": [
+            "node_cpu_utilization_percent",
+            "node_disk_total_bytes",
+            "node_disk_used_bytes",
+            "node_memory_total_bytes",
+            "node_memory_used_bytes"
+          ]
         }
       ]
     }
   },
-  "source": "binary"
+  "source": "catalog"
 }

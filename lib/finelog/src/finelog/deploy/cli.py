@@ -18,7 +18,6 @@ import re
 import sys
 from datetime import datetime
 from enum import StrEnum
-from pathlib import Path
 
 import click
 import duckdb
@@ -32,13 +31,8 @@ from finelog.deploy.build import DEFAULT_PLATFORM
 from finelog.deploy.build import build_image as build_finelog_image
 from finelog.deploy.config import FinelogConfig, load_finelog_config
 from finelog.deploy.connection import DEFAULT_REQUEST_TIMEOUT, open_log_client
-from finelog.deploy.shadow import check_snapshot
 
 _SEGMENT_FILENAME_RE = re.compile(r"seg_L\d+_\d+\.parquet$")
-
-# The checked-in Grafana dashboards, relative to this file in a repo checkout:
-# `lib/finelog/src/finelog/deploy/cli.py` -> `infra/grafana/dashboards`.
-_DASHBOARD_DIR = Path(__file__).resolve().parents[5] / "infra" / "grafana" / "dashboards"
 
 
 def _dispatch_up(cfg: FinelogConfig) -> None:
@@ -520,33 +514,6 @@ def gcs_query_cmd(
             f"query returned {table.num_rows} rows, exceeds --max-rows={max_rows} " f"(add a LIMIT or raise the cap)"
         )
     _PRINTERS[OutputFormat(output_format)](table)
-
-
-@deploy.command("shadow-check")
-@click.argument("snapshot", type=click.Path(exists=True, file_okay=False, path_type=Path))
-@click.option("--image", required=True, help="Image to rehearse, ideally a pinned @sha256 digest.")
-@click.option(
-    "--dashboard",
-    "dashboards",
-    multiple=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help="Dashboard JSON to run. Default: every dashboard under infra/grafana/dashboards.",
-)
-def shadow_check_cmd(snapshot: Path, image: str, dashboards: tuple[Path, ...]) -> None:
-    """Boot IMAGE against SNAPSHOT in shadow mode and run the dashboard corpus.
-
-    SNAPSHOT is a copy of a finelog store directory. Asserts the store opens,
-    every namespace in its catalog rehydrates, the server-owned namespaces
-    register, and every dashboard query the corpus can render runs green.
-    """
-    configure_logging(level=logging.INFO)
-    selected = list(dashboards) or sorted(_DASHBOARD_DIR.glob("*.json"))
-    if not selected:
-        raise click.UsageError(f"no dashboards found under {_DASHBOARD_DIR}")
-    report = check_snapshot(image, snapshot, selected)
-    click.echo(report.describe())
-    if not report.passed():
-        raise click.ClickException(f"{image} did not serve this snapshot correctly.")
 
 
 @deploy.command("logs")

@@ -3,10 +3,9 @@
 
 """Benchmark every Finelog query in a checked-in Grafana dashboard.
 
-The server runs in shadow mode, so it serves reads from ``--log-dir`` and is
-structurally incapable of mutating anything else: no maintenance task, and a
-`gs://`/`s3://` archive inherited from the environment is a startup error rather
-than a bucket this benchmark starts evicting from.
+The server runs in shadow mode: it serves reads from ``--log-dir`` and refuses a
+`gs://`/`s3://` archive at startup, so it cannot compact, evict, or drop what it
+was pointed at.
 """
 
 from __future__ import annotations
@@ -80,37 +79,19 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup", type=nonnegative_int, default=1)
     parser.add_argument("--iterations", type=positive_int, default=3)
     parser.add_argument("--query-timeout-ms", type=nonnegative_int, default=0)
-    parser.add_argument(
-        "--variable",
-        action="append",
-        default=[],
-        metavar="NAME=VALUE",
-        help="Value for a ${NAME:sqlstring} dashboard variable. Repeat to add values.",
-    )
     parser.add_argument("--explain", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
-def _variables(cluster: Sequence[str], assignments: Sequence[str]) -> dict[str, list[str]]:
-    variables: dict[str, list[str]] = {"cluster": list(cluster)}
-    for assignment in assignments:
-        name, separator, value = assignment.partition("=")
-        if not separator or not name:
-            raise SystemExit(f"--variable expects NAME=VALUE, got {assignment!r}")
-        variables.setdefault(name, []).append(value)
-    return variables
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    variables = _variables(args.cluster, args.variable)
     corpus = load_dashboard_corpus(
         args.dashboard,
         start_ms=args.start_ms,
         end_ms=args.end_ms,
         interval_ms=args.interval_ms,
-        variables=variables,
+        clusters=tuple(args.cluster),
     )
     dashboard_sha256 = hashlib.sha256(args.dashboard.read_bytes()).hexdigest()
     with local_server(
@@ -142,7 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "start_ms": args.start_ms,
                 "end_ms": args.end_ms,
                 "interval_ms": args.interval_ms,
-                "variables": variables,
+                "clusters": args.cluster,
             },
             "server_binary": str(args.server_binary),
             "query_timeout_ms": args.query_timeout_ms,

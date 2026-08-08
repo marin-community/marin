@@ -25,8 +25,14 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from finelog.client.log_client import LOG_NAMESPACE
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.schema import Schema
+
+# The namespaces a finelog image registers for itself, and so the only ones it
+# can decide. Everything else in a catalog belongs to the client that registered
+# it.
+SERVER_OWNED_NAMESPACES = (LOG_NAMESPACE, "telemetry_v1")
 
 
 def schema_to_catalog_json(schema: Schema) -> dict[str, object]:

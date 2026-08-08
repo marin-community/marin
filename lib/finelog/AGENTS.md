@@ -187,13 +187,12 @@ the thing that tells you it is not additive. Register through
 `schema::stored_form` so the pre-flight merges the schema `register_table`
 would.
 
-`--mode shadow` is how a candidate image is booted against a copy of a real
-store: it serves reads from `--log-dir` and refuses a `gs://`/`s3://` remote or
-a forwarding target at startup. It resolves once into the store's `ServeMode`,
-so no namespace starts a maintenance task — including one registered at
-runtime, which otherwise starts its own. `finelog deploy shadow-check` drives
-it; see [OPS.md](OPS.md). Use it for any local benchmark over a copied store,
-and pass the mode down rather than re-deriving it at a call site.
+`--mode shadow` is for booting a server over a copy of a real store: it serves
+reads from `--log-dir` and refuses a `gs://`/`s3://` remote or a forwarding
+target at startup. It resolves once into the store's `ServeMode`, so no
+namespace starts a maintenance task — including one registered at runtime,
+which otherwise starts its own. Use it for any local benchmark over a copied
+store, and pass the mode down rather than re-deriving it at a call site.
 
 ## Secondary indexes
 

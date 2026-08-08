@@ -357,46 +357,15 @@ accepted.
 Namespaces a client registers — `iris.worker`, zephyr's tables — are reported
 as unchecked. They are not the server image's to decide.
 
-### Shadow boot against a copy of a store
+### Serving a copy of a store
 
-The pre-flight cannot see catalog adoption, `.fidx` section format revisions,
-Parquet layout revisions, or planner regressions in projection substitution.
-Booting the candidate image against a copy of a real store directory can:
-
-```bash
-uv run finelog deploy shadow-check /tmp/marin-store --image <digest>
-```
-
-It asserts the store opens, every namespace in the catalog rehydrates, the
-server-owned namespaces register, and every checked-in Grafana dashboard query
-runs green. A query over a namespace this deployment does not have is reported
-as not run rather than counted either way.
-
-Any copy of a store directory works. To take one off a deployment, tar a
-bounded slice of `/var/cache/finelog`: the catalog plus the newest few segments
-per namespace and their `.fidx` sidecars.
-
-```bash
-mkdir -p /tmp/marin-store
-gcloud compute ssh finelog-marin --zone us-central2-b --command \
-  'cd /var/cache/finelog && sudo tar -cf - _finelog_catalog.sqlite .finelog-rust-catalog \
-     $(sudo ls -t telemetry_v1 | head -16 | sed "s|^|telemetry_v1/|")' \
-  | tar -xf - -C /tmp/marin-store
-```
-
-Copy the local store dir rather than the `gs://`/`s3://` archive. The archive
-holds compacted Parquet only — index bundles are never uploaded — and it is not
-on the startup path being rehearsed, since the remote reconcile is backgrounded
-and never blocks the bind. Leaving segments behind is safe: a `LOCAL` catalog
-row whose file is gone is dropped at boot and a `BOTH` row collapses to
-`REMOTE`.
-
-The rehearsal cannot touch what it was copied from. `--mode shadow` refuses a
+Anything that boots finelog over a copy of a real store directory — the Grafana
+dashboard benchmark, a layout experiment, reproducing a query — should pass
+`--mode shadow`. The server serves reads from `--log-dir` and refuses a
 `gs://`/`s3://` remote or a forwarding target at startup, and its store starts
-no maintenance — not at boot and not on the registrations that follow — so
-compaction, eviction, layout rewrites, and the boot reconcile's redundancy drop
-(which deletes archived objects) never run. Use the same mode for any local
-benchmark over a copied store.
+no maintenance, so compaction, eviction, layout rewrites, and the boot
+reconcile's redundancy drop (which deletes archived objects) never run against
+the copy or the bucket it came from.
 
 ## Diagnosing Kubernetes mirror readiness
 

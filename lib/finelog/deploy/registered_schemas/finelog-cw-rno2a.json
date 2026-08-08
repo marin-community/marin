@@ -1,6 +1,6 @@
 {
-  "captured_at": "2026-08-08T02:58:59.068263+00:00",
-  "captured_from": "finelog-server at c9a9c989eb, not finelog-cw-rno2a's catalog: seeded when the pre-flight landed. The next `safe_deploy rollout cw-rno2a` replaces it with the live registered schemas.",
+  "captured_at": "2026-08-08T16:34:12.112565+00:00",
+  "captured_from": "the live catalog of finelog-cw-rno2a on ghcr.io/marin-community/finelog@sha256:c067b30b967ea29964e2ff4e4a51dc1783cf7d3902aa87e632d595f1f6969153",
   "deployment": "finelog-cw-rno2a",
   "namespaces": {
     "log": {
@@ -366,5 +366,5 @@
       ]
     }
   },
-  "source": "binary"
+  "source": "catalog"
 }
