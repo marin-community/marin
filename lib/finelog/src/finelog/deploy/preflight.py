@@ -23,16 +23,9 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 
-from finelog.client.log_client import LOG_NAMESPACE
 from finelog.rpc import finelog_stats_pb2 as stats_pb2
 from finelog.schema import Schema
-
-# The namespaces a finelog image registers for itself, and so the only ones it
-# can decide. Everything else in a catalog belongs to the client that registered
-# it.
-SERVER_OWNED_NAMESPACES = (LOG_NAMESPACE, "telemetry_v1")
 
 
 def schema_to_catalog_json(schema: Schema) -> dict[str, object]:
@@ -79,47 +72,22 @@ def schema_to_catalog_json(schema: Schema) -> dict[str, object]:
     }
 
 
-class SchemaSource(StrEnum):
-    """Where a document's registered schemas came from."""
-
-    # A deployment's own catalog. Only this is evidence about that deployment.
-    CATALOG = "catalog"
-    # A finelog-server build's own schemas. These agree with any binary whose
-    # schemas have not changed since, including one that conflicts with what a
-    # catalog holds, so merging against them decides nothing.
-    BINARY = "binary"
-
-
 def registered_schema_document(
     *,
     deployment: str,
     namespaces: Mapping[str, Schema],
     captured_at: str,
-    source: SchemaSource,
-    captured_from: str,
 ) -> dict[str, object]:
-    """Build the document ``check-schema`` reads and the deploy golden records.
-
-    ``source`` decides whether the document is evidence about ``deployment``;
-    ``captured_from`` says the same in prose. The server reads only
-    ``namespaces``.
-    """
+    """Build the document ``check-schema`` reads. The server reads only ``namespaces``."""
     return {
         "deployment": deployment,
         "captured_at": captured_at,
-        "source": source.value,
-        "captured_from": captured_from,
         "namespaces": {name: schema_to_catalog_json(schema) for name, schema in sorted(namespaces.items())},
     }
 
 
-def document_source(document: Mapping[str, object]) -> SchemaSource:
-    """The provenance ``document`` records. A document with none never came from a catalog."""
-    return SchemaSource(document.get("source", SchemaSource.BINARY))
-
-
 def render_document(document: Mapping[str, object]) -> str:
-    """Serialize a document for a checked-in golden: stable order, one trailing newline."""
+    """Serialize a document for the check's stdin: stable order, one trailing newline."""
     return json.dumps(document, indent=2, sort_keys=True) + "\n"
 
 
@@ -128,18 +96,14 @@ class Outcome(StrEnum):
 
     PASS = "pass"
     FAIL = "fail"
-    # Nothing this deployment's catalog holds was reachable: an unreachable
-    # server and no golden captured from it.
-    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
 class PreflightResult:
-    """One deployment's decision, and where its registered side came from."""
+    """One deployment's decision."""
 
     deployment: str
     outcome: Outcome
-    source: str
     report: str
 
 
@@ -153,12 +117,9 @@ def summarize(results: Sequence[PreflightResult]) -> str:
     ordered = sorted(results, key=lambda result: (result.outcome is Outcome.FAIL, result.deployment))
     lines: list[str] = []
     for result in ordered:
-        lines.append(f"== {result.deployment} ({result.outcome.value}, registered schema from {result.source}) ==")
+        lines.append(f"== {result.deployment} ({result.outcome.value}) ==")
         lines.append(result.report.rstrip("\n"))
     failed = [result.deployment for result in results if result.outcome is Outcome.FAIL]
-    unknown = [result.deployment for result in results if result.outcome is Outcome.UNKNOWN]
-    if unknown:
-        lines.append(f"UNDECIDED, no catalog to decide against: {', '.join(sorted(unknown))}")
     lines.append(
         f"PREFLIGHT FAIL: {', '.join(sorted(failed))}"
         if failed
@@ -184,10 +145,3 @@ def check_image(image: str, document: Mapping[str, object], *, docker: str = "do
     )
     report = result.stdout + result.stderr
     return result.returncode == 0, report
-
-
-def load_golden(path: Path) -> dict[str, object] | None:
-    """Read a recorded deploy golden, or ``None`` when none has been recorded."""
-    if not path.is_file():
-        return None
-    return json.loads(path.read_text())

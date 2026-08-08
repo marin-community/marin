@@ -38,8 +38,6 @@ jobs:
               - '.github/workflows/rust-checks.yaml'
             finelog:
               - 'lib/finelog/rust/**'
-              # Fixtures for `preflight::tests`.
-              - 'lib/finelog/deploy/registered_schemas/**'
               - '.github/workflows/rust-checks.yaml'
             iris:
               - 'lib/iris/rust/**'

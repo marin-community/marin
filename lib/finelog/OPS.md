@@ -335,24 +335,15 @@ uv run lib/finelog/scripts/safe_deploy.py preflight --all
 uv run lib/finelog/scripts/safe_deploy.py preflight marin --image <ref-or-digest>
 ```
 
-Each deployment keeps its own catalog and they can disagree, so decide them
+Each deployment keeps its own catalog and they can disagree — marin-dev
+currently holds eight covering projections marin does not — so decide them
 together. `rollout` runs the same check before it writes a bootstrap and
 refuses on a failure.
 
-Only what a deployment's own catalog holds decides anything. A deployment the
-tunnel cannot reach falls back to its checked-in golden under
-`lib/finelog/deploy/registered_schemas/`, but only when that golden was
-recorded from the deployment (`"source": "catalog"`); the seeded ones hold a
-binary's own schemas and agree with any binary whose schemas have not changed
-since, including one that conflicts with what production registered. Anything
-else is `UNDECIDED`, and `rollout` refuses on it — pass `--allow-undecided` for
-a first deploy, where there is no catalog to conflict with.
-
-`preflight::tests` re-decides every golden on each pull request that touches
-the server or a golden, so a merge that would wedge production fails at PR
-time. A rollout refreshes the golden it just deployed, recorded from the live
-catalog; a stale catalog golden can only fail a change production would have
-accepted.
+The live catalog is the only thing that decides this: a deployment the tunnel
+cannot reach ends the command rather than falling back to a guess. An
+`EVOLVES` names what an accepted merge costs, including the covering
+projections whose Parquet the index backfill rebuilds.
 
 Namespaces a client registers — `iris.worker`, zephyr's tables — are reported
 as unchecked. They are not the server image's to decide.

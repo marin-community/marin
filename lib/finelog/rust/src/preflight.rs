@@ -289,11 +289,10 @@ pub fn render(report: &Report) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::proto::finelog::stats::ColumnType;
-    use crate::store::schema::{schema_to_json, Column, CoveringProjection};
+    use crate::store::schema::{schema_to_json, Column};
 
     /// Build a document from schemas already in store form.
     fn document(entries: &[(&str, &Schema)]) -> RegisteredSchemas {
@@ -478,59 +477,5 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("telemetry_v1"), "{error}");
-    }
-
-    fn golden_dir() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/registered_schemas")
-    }
-
-    /// Every deploy golden `safe_deploy` has recorded must still accept this
-    /// binary's schemas. This is the PR-time half of the pre-flight: a golden
-    /// ages only toward over-reporting, so a stale one can fail a change that
-    /// production would accept but can never pass one production would reject.
-    #[test]
-    fn checked_in_deploy_goldens_accept_this_binary() {
-        let dir = golden_dir();
-        let mut checked = 0;
-        for entry in std::fs::read_dir(&dir).expect("deploy golden directory") {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
-            let registered = RegisteredSchemas::parse(&text)
-                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            let report = check(&registered).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            assert!(
-                report.passes(),
-                "{} would not register:\n{}",
-                path.display(),
-                render(&report)
-            );
-            checked += 1;
-        }
-        assert!(
-            checked > 0,
-            "no deploy goldens found under {}",
-            dir.display()
-        );
-    }
-
-    #[test]
-    fn a_golden_records_the_projections_this_binary_ships() {
-        // Guards the format seam: `safe_deploy` writes these files from the RPC
-        // schemas and this test reads them back, so a conversion that dropped
-        // projections would leave the goldens silently checking less than they
-        // appear to.
-        let text = std::fs::read_to_string(golden_dir().join("finelog-marin.json")).unwrap();
-        let registered = RegisteredSchemas::parse(&text).unwrap();
-        let telemetry =
-            schema_from_json(registered.namespaces.get(TELEMETRY_NAMESPACE).unwrap()).unwrap();
-
-        assert!(telemetry
-            .projections
-            .iter()
-            .any(|projection: &CoveringProjection| projection.name == "training-status"));
-        assert!(!telemetry.grouped_extrema.is_empty());
     }
 }

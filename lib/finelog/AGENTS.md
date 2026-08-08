@@ -180,10 +180,9 @@ The deploy paths gate on the body: the VM bootstrap loop, `_wait_health_via_ssh`
 re-merges this binary's definition against the schema that deployment's catalog
 persisted. A merge that fails wedges the namespace for as long as the image is
 deployed. `rust/src/preflight.rs` decides that merge ahead of a deploy — same
-`merge_schemas`, no store, no port — and its tests re-decide the checked-in
-schemas under `deploy/registered_schemas/` on every pull request that touches
-the server or a golden. When you change either schema, expect that test to be
-the thing that tells you it is not additive. Register through
+`merge_schemas`, no store, no port — and `safe_deploy preflight --all` runs it
+against every deployment's live catalog. Run it before changing either schema;
+a change that is not additive shows up there. Register through
 `schema::stored_form` so the pre-flight merges the schema `register_table`
 would.
 
