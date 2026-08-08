@@ -863,3 +863,28 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   Width is thus the cheap way to buy active compute and top-k is the expensive way.
 - Next test: MHEP-021 runs 128 experts x i5120 at top-4. It doubles the active neurons of MHEP-011
   to 20,480 at the same 590.7 B of parameters, for 23.00 GiB of k-scaled buffers.
+
+### 2026-08-05 05:50 UTC - Four GB200 runs still outstanding; ablation moves to H100
+
+- Outstanding on `cw-us-east-08a`, with exact job ids and collection steps recorded in
+  [`7279-outstanding-b200-runs.md`](7279-outstanding-b200-runs.md):
+  `/rav/mhep-021-wide-591b-e128-i5120-k4-p32579-20260805-coord` (128 x i5120 top-4, 20,480 active
+  neurons), `/rav/mhep-022-fine-591b-e512-i1280-k4-p32580-20260805-coord` (512 x i1280 top-4, eight
+  experts per device), `/rav/mhep-023-xprof-10-p32581-20260805-coord` (XProf steps 5 and 6 on rank
+  0), and `/rav/mhep-024-nsys-10-p32582-20260805-coord` (Nsight Systems on task 0).
+- All four were still queued at the snapshot. MHEP-021 and MHEP-022 each carry one real failure, and
+  their memory estimates put them near the measured out-of-memory boundary, so read their logs for
+  `ncclAlltoAll` before treating a failure as an infrastructure fault.
+- Reason the small-scale ablation moves to H100: A08 stays contended, so the GB200 racks are not
+  available for a nine-run sweep.
+- H100 attention finding: `gpu_fa4_cute` is Blackwell-only. Its MMA op accepts sm_100, sm_103, and
+  sm_110, and rejects H100 with `expects arch to be one of [Arch.sm_100a, ...], but got sm_90a`.
+  `gpu_fa4_thd` does carry SM90 forward and backward kernels, but it requires fixed-shape THD
+  segment metadata that this model does not supply, so it raises instead. Reference attention is the
+  remaining option.
+- Correction: this session first called the reference-attention cost about 16 times, from the ratio
+  of attention span (8192 against a 512 window). That is wrong. Attention is a minority of the FLOP
+  budget at these shapes, so losing the window costs 1.39 to 1.43 times the analytic FLOPs.
+- H100 target: 8 nodes of 8 GPUs, which is 64 GPUs and an expert axis of 64. One node was rejected
+  because capacity is per (sender shard, expert) cell: EP8 gives 4,096-row cells against 512 at
+  EP64, so it would drop far less on the same routing and would not reproduce GB200 behavior.

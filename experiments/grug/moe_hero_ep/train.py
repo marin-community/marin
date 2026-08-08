@@ -84,6 +84,10 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
+    # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
+    # restores from the latest committed checkpoint, so without a writer an interrupted run
+    # restarts at step 0.
+    save_checkpoints: bool = False
 
     # Grug builds its own compact (replica_dcn, data, expert, model) mesh instead of using
     # the Trainer's logical axis mapping; `data` absorbs whatever these two leave free.
@@ -177,6 +181,7 @@ def build_tagged_evaluator(
     max_seq_len: int,
     mesh: Mesh,
     eval_cfg: GrugEvalConfig,
+    mp: jmp.Policy,
 ) -> TaggedEvaluator[LmExample | GrugLmExample, Transformer] | None:
     pos = Axis("position", max_seq_len)
     tagged_eval_sets = data_config.tagged_eval_sets(pos)
@@ -196,6 +201,11 @@ def build_tagged_evaluator(
     eval_array_sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
 
     def eval_loss_fn(model: Transformer, batch: LmExample | GrugLmExample) -> tuple[jax.Array, jax.Array, jax.Array]:
+        # Evaluate at the compute dtype, as the train step does at `mp.cast_to_compute(params)`.
+        # Parameters are stored float32, and `gpu_fa4_cute` accepts only bf16/fp16, so without this
+        # every eval raises `TypeError: ... supports only bf16/fp16, got float32` on Blackwell. The
+        # reference attention path takes float32, which hid this on H100.
+        model = mp.cast_to_compute(model)
         if isinstance(batch, LmExample):
             batch = grug_lm_example_from_named(batch)
         per_pos_loss = model.next_token_loss(
@@ -243,6 +253,17 @@ def _compute_flops(
         local_kv_heads=model_config.local_kv_heads,
         global_kv_heads=model_config.global_kv_heads,
     )
+    # `lm_flops_per_token` prices every matmul at `hidden_dim`. Under LatentMoE the routed experts
+    # live at `latent_dim` instead, and two projections are added per layer, so correct both terms
+    # or MFU is overstated by roughly the compression ratio.
+    if model_config.latent_dim is not None:
+        latent, hidden = model_config.latent_dim, model_config.hidden_dim
+        # Matches the routed term in `lm_flops_per_token`: 2 * 3 * width * intermediate * top_k.
+        routed_delta = 2 * 3 * model_config.intermediate_dim * model_config.num_experts_per_token * (latent - hidden)
+        # W_down (hidden -> latent) and W_up (latent -> hidden), once per token each.
+        projection = 2 * 2 * hidden * latent
+        flops_per_token += model_config.num_layers * (routed_delta + projection)
+
     flops_per_example = 3 * flops_per_token * model_config.max_seq_len
 
     flops_summary: dict[str, float] = {
@@ -498,6 +519,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
         state = _init_state(model_key)
 
+        checkpointer = trainer.checkpointer.create(run_id) if config.trainer.save_checkpoints else None
         state = restore_grug_state_from_checkpoint(
             state,
             checkpoint_search_paths=trainer.checkpoint_search_paths(run_id),
@@ -525,6 +547,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 max_seq_len=config.model.max_seq_len,
                 mesh=mesh,
                 eval_cfg=eval_cfg,
+                mp=trainer.mp,
             )
 
         profiler_cfg = trainer.profiler
@@ -625,12 +648,20 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if watch_stats is not None:
                         levanter.tracker.log(watch_stats, step=step)
 
+                if checkpointer is not None:
+                    checkpointer.on_step(tree=state, step=int(state.step))
+
         except BaseException:
-            logger.exception("Fatal error in grug training loop; skipping final callbacks to preserve root cause")
+            logger.exception(
+                "Fatal error in grug training loop; skipping final callbacks/checkpoint to preserve root cause"
+            )
             raise
         else:
             # Mirror classic trainer behavior: force callbacks on the last completed step.
             state_callbacks.run(state, loss=last_loss, step_duration=last_step_duration, force=True)
+            if checkpointer is not None:
+                checkpointer.on_step(tree=state, step=int(state.step), force=True)
+                checkpointer.wait_until_finished()
 
     levanter.tracker.current_tracker().finish()
 
