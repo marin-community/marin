@@ -87,7 +87,9 @@ class DefaultRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
     def to_hf_config(self) -> tuple[float, dict | None]:
         if self.factor == 1.0:
             return self.theta, None
-        return self.theta, {"factor": self.factor}
+        # factor != 1.0 is linear position-interpolation scaling; tag it so transformers doesn't
+        # normalize the untyped dict to rope_type "default" and drop the factor.
+        return self.theta, {"rope_type": "linear", "factor": self.factor}
 
 
 RotaryEmbeddingsConfig.register_subclass("default", DefaultRotaryEmbeddingsConfig)
