@@ -1,35 +1,36 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sweep single-rack hero configurations.
+"""Sweep single-rack hero configurations, one rack per arm.
 
 Measurement protocol
 --------------------
-``--racks N`` splits a wave's arms into N allocations, each running its arms back to back in a
-fresh trainer subprocess so process-start environment takes effect, each writing its own W&B run
-``hs-<wave>[-g<i>]-<tag>``. The score is the **median** ``throughput/duration`` over steps
-``WARMUP..``, because the steady-state distribution is right-skewed (run A: median 18.086 s, min
-17.936, max 18.699, MAD 0.077). Steps 0-1 are compile and the PGLE recompile; steps 2-4 absorb the
-one-time first-batch data-loader stall.
+Each arm in ``ARMS`` is one step on its own rack, running in a fresh trainer subprocess so
+process-start environment takes effect, writing the W&B run ``hs-<arm>``. The score is the
+**median** ``throughput/duration`` over steps ``WARMUP..``, because the steady-state distribution is
+right-skewed (run A: median 18.086 s, min 17.936, max 18.699, MAD 0.077). Steps 0-1 are compile and
+the PGLE recompile; steps 2-4 absorb the one-time first-batch data-loader stall.
 
-Every group carries the wave's ``control`` or ``base`` arm and an arm scores only against the
-control that ran beside it. Waves w1 through final4 ran one rack per arm, where two byte-identical
-controls differed by 0.78% -- the resolution floor on every delta below. Sharing an allocation
-trades that for drift over the hours a group takes, which nothing has measured yet.
+An arm scores against the ``baseline`` it names, and only against a baseline launched alongside it:
+placement moved two byte-identical arms 0.78% apart, which is the resolution floor here. A single
+paired reading resolves 1.57% at 95%.
 
 Usage
 -----
-    uv run python -m experiments.grug.moe_hero_fsdp.sweep_preflight <wave>   # CPU trace, first
-    uv run python -m experiments.grug.moe_hero_fsdp.sweep launch <wave> --version dev --racks 4 --run
-    uv run python -m experiments.grug.moe_hero_fsdp.sweep score <wave>
+    uv run python -m experiments.grug.moe_hero_fsdp.sweep_preflight <arm>...   # CPU trace, first
+    uv run python -m experiments.grug.moe_hero_fsdp.sweep launch <arm>... --version dev --run
+    uv run python -m experiments.grug.moe_hero_fsdp.sweep score <arm>...
+
+An ``<arm>`` is an arm name or a name prefix, and every selection pulls in the baselines it needs.
+Reruns resume: an arm already built under the given ``--version`` is skipped, so ``--version dev``
+(mutable, rebuilds everything) is for iterating and a calendar version is for spending racks.
 """
 
-import collections
 import dataclasses
 import json
 import pathlib
 import statistics
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 import click
@@ -42,11 +43,11 @@ from experiments.grug.moe_hero_fsdp.launch import HeroOverrides, HeroSweepArm, b
 from experiments.grug.moe_hero_fsdp.model import RematMode
 
 PROJECT = "marin-community/marin_moe"
+# 15 scored steps separates the multi-percent effects a screening arm looks for; the wrap-up arms
+# that produce the reported number take 40.
 STEPS = 20
+WRAPUP_STEPS = 45
 WARMUP = 5  # first scored step
-# 15 steps separates the multi-percent effects a screening wave looks for; the wrap-up waves that
-# produce the reported number take 40.
-WAVE_STEPS = {"final": 45, "final2": 45, "final3": 45, "final4": 45}
 PREFIX = "hs"  # hero sweep
 LOGDIR = pathlib.Path("scratch/hero_sweep")
 PEAK_FLOPS_PER_DEVICE = 2.5e15
@@ -56,11 +57,6 @@ DEVICES_PER_RACK = 64
 NUM_DEVICES = DP_RACKS * DEVICES_PER_RACK
 HERO_BATCH_SIZE = 1024
 HERO_SEQ_LEN = 4096
-
-# Early waves named the in-window baseline `control`; from wave 6 on it is `base`, the adopted
-# configuration. Scoring against whichever arm happens to be fastest would turn drift into a result,
-# so the reference is always one of these and scoring fails loudly if a wave has neither.
-CONTROL_TAGS = frozenset({"control", "base"})
 
 _COMMAND_BUFFER = "--xla_gpu_enable_command_buffer"
 COMMAND_BUFFERS_OFF = f"{_COMMAND_BUFFER}="
@@ -193,213 +189,230 @@ PIPELINED_COLLECTIVES = Setting(
 
 @dataclass(frozen=True)
 class Arm:
-    """One configuration under test."""
+    """One configuration under test, on its own rack, scored against ``baseline``.
 
-    tag: str
+    ``name`` is globally unique and fixes the W&B run id, so a rerun of an arm needs a new name.
+    ``baseline`` is ``None`` on the arms other arms are scored against.
+    """
+
+    name: str
     setting: Setting = Setting()
+    baseline: str | None = None
     note: str = ""
     batch_size: int = HERO_BATCH_SIZE
+    steps: int = STEPS
 
-    def run_id(self, wave: str) -> str:
-        return f"{PREFIX}-{wave}-{self.tag}"
+    @property
+    def run_id(self) -> str:
+        return f"{PREFIX}-{self.name}"
 
-    def sweep_arm(self, wave: str, steps: int) -> HeroSweepArm:
+    def sweep_arm(self) -> HeroSweepArm:
         return HeroSweepArm(
-            spec=AblationSpec(name=self.tag, env=self.setting.process_env(), num_steps=steps, notes=self.note),
+            spec=AblationSpec(name=self.name, env=self.setting.process_env(), num_steps=self.steps, notes=self.note),
+            run_id=self.run_id,
             overrides=self.setting.overrides,
             batch_size=self.batch_size,
         )
 
 
-WAVES = {
-    # Wave 1: NCCL protocol and algorithm. Nothing in the repo sets NCCL_PROTO or NCCL_ALGO.
-    "w1": [
-        Arm("control", note="unchanged baseline"),
-        Arm("simple", NCCL_SIMPLE, note="drop LL's 8-byte-flag-per-8-byte overhead"),
-        Arm("ll128", NCCL_LL128, note="128-byte LL variant"),
-        Arm("nvls", NVLS, note="NVLink SHARP"),
-    ],
-    # Wave 2: the two cheap code wins plus the activation-memory probe. `save_moe` already exists
+def _catalog(*arms: Arm) -> dict[str, Arm]:
+    by_name: dict[str, Arm] = {}
+    for arm in arms:
+        if arm.name in by_name:
+            raise ValueError(f"duplicate arm name {arm.name!r}; a rerun needs its own name")
+        if arm.baseline is not None and arm.baseline not in by_name:
+            raise ValueError(f"{arm.name!r} is scored against {arm.baseline!r}, which is not defined above it")
+        by_name[arm.name] = arm
+    return by_name
+
+
+# Names group by the round that launched them. That prefix is a naming convention and a selector,
+# not a structure: what an arm is scored against is `baseline`, and nothing else pairs arms.
+ARMS = _catalog(
+    # Round 1: NCCL protocol and algorithm. Nothing in the repo sets NCCL_PROTO or NCCL_ALGO.
+    Arm("w1-control", note="unchanged baseline"),
+    Arm("w1-simple", NCCL_SIMPLE, "w1-control", "drop LL's 8-byte-flag-per-8-byte overhead"),
+    Arm("w1-ll128", NCCL_LL128, "w1-control", "128-byte LL variant"),
+    Arm("w1-nvls", NVLS, "w1-control", "NVLink SHARP"),
+    # Round 2: the two cheap code wins plus the activation-memory probe. `save_moe` already exists
     # as a remat mode; the hero does not use it.
-    "w2": [
-        Arm("control"),
-        Arm("shardsmall", SHARD_SMALL, note="kill the per-layer all-reduce"),
-        Arm("savemoe", remat("save_moe"), note="probe the HBM ceiling; may OOM"),
-    ],
-    # Wave 3: confirm the wave-2 winners stack, and attack the two biggest remaining blocks of
-    # compute-stream work reachable by a config knob. Keyed `w3b` because two earlier attempts died
+    Arm("w2-control"),
+    Arm("w2-shardsmall", SHARD_SMALL, "w2-control", "kill the per-layer all-reduce"),
+    Arm("w2-savemoe", remat("save_moe"), "w2-control", "probe the HBM ceiling; may OOM"),
+    # Round 3: confirm the round-2 winners stack, and attack the two biggest remaining blocks of
+    # compute-stream work reachable by a config knob. Named `w3b` because two earlier attempts died
     # in startup and burned the `w3` run ids.
-    "w3b": [
-        Arm("control"),
-        Arm("combo", SHARD_SMALL, note="both wave-2 winners together"),
-        Arm("cebig", ce_block(8192), note="8x fewer CE launches, larger GEMMs"),
-        Arm("offloadmoe", remat("offload_moe"), note="park dispatch output on the host"),
-    ],
-    # Wave 4: the stacked winner measured end to end against its own control, plus the two
+    Arm("w3b-control"),
+    Arm("w3b-combo", SHARD_SMALL, "w3b-control", "both round-2 winners together"),
+    Arm("w3b-cebig", ce_block(8192), "w3b-control", "8x fewer CE launches, larger GEMMs"),
+    Arm("w3b-offloadmoe", remat("offload_moe"), "w3b-control", "park dispatch output on the host"),
+    # Round 4: the stacked winner measured end to end against its own control, plus the two
     # remaining single knobs.
-    "w4": [
-        Arm("control"),
-        Arm("combined", ADOPTED, note="every winner from waves 1-3, measured end to end"),
-        Arm("chunks8", expert_chunks(8), note="shorter gather prologue, smaller GEMMs"),
-        Arm("chunks2", expert_chunks(2), note="fewer, larger expert GEMMs"),
-    ],
-    # Wave 5: bracket the expert-chunk count below the hero's 4, and replicate the headline
+    Arm("w4-control"),
+    Arm("w4-combined", ADOPTED, "w4-control", "every winner from rounds 1-3, measured end to end"),
+    Arm("w4-chunks8", expert_chunks(8), "w4-control", "shorter gather prologue, smaller GEMMs"),
+    Arm("w4-chunks2", expert_chunks(2), "w4-control", "fewer, larger expert GEMMs"),
+    # Round 5: bracket the expert-chunk count below the hero's 4, and replicate the headline
     # `combined` number against a fresh control.
-    "w5": [
-        Arm("control"),
-        Arm("combined", ADOPTED, note="replication of the wave-4 result"),
-        Arm("chunks2", expert_chunks(2), note="rerun; wave 4 lost a node mid-run"),
-        Arm("chunks1", expert_chunks(1), note="no chunking, one gather of the full bank"),
-    ],
-    # Wave 6: stop capping HBM. XLA reports it cannot get peak below 160.30 GiB without recomputing.
+    Arm("w5-control"),
+    Arm("w5-combined", ADOPTED, "w5-control", "replication of the round-4 result"),
+    Arm("w5-chunks2", expert_chunks(2), "w5-control", "rerun; round 4 lost a node mid-run"),
+    Arm("w5-chunks1", expert_chunks(1), "w5-control", "no chunking, one gather of the full bank"),
+    # Round 6: stop capping HBM. XLA reports it cannot get peak below 160.30 GiB without recomputing.
     # `memory/limit_gib` is logged per step, so an arm that silently ignores the knob is visible.
-    "w6": [
-        Arm("base", ADOPTED, note="adopted configuration; this wave's control"),
-        Arm("memfrac88", ADOPTED | mem_fraction("0.88"), note="162.2 GiB, just above the remat floor"),
-        Arm("memfrac93", ADOPTED | mem_fraction("0.93"), note="171.4 GiB; NCCL and cuBLAS live outside the pool"),
-        Arm("ceautotune", ADOPTED | CE_AUTOTUNE, note="tune CE block sizes for this shape"),
-    ],
-    # Wave 7: XLA and NCCL flags on the adopted configuration plus `expert_chunks=2`. 128 experts
+    Arm("w6-base", ADOPTED, note="adopted configuration"),
+    Arm("w6-memfrac88", ADOPTED | mem_fraction("0.88"), "w6-base", "162.2 GiB, just above the remat floor"),
+    Arm("w6-memfrac93", ADOPTED | mem_fraction("0.93"), "w6-base", "171.4 GiB; NCCL and cuBLAS live outside the pool"),
+    Arm("w6-ceautotune", ADOPTED | CE_AUTOTUNE, "w6-base", "tune CE block sizes for this shape"),
+    # Round 7: XLA and NCCL flags on the adopted configuration plus `expert_chunks=2`. 128 experts
     # only divide into powers of two, so 2 is the single step below the hero's 4.
-    "w7": [
-        Arm("base", CHUNKED, note="this wave's control"),
-        Arm("cudagraphs", CHUNKED | COMMAND_BUFFERS, note="CE alone dispatches 43.7k kernels/step at 17.5 us"),
-        Arm(
-            "combinethresh",
-            CHUNKED | combine_threshold(512 * 1024 * 1024),
-            note="the profile shows 1,009 uncombined collective launches at 52 GB/s",
-        ),
-        Arm("epflags", CHUNKED | EP_SCHEDULER, note="the two scheduler flags the EP hero runs in production"),
-    ],
-    # Wave 8: NVIDIA's JAX-Toolbox Blackwell guidance, none of which this repo sets. `O1` bundles the
+    Arm("w7-base", CHUNKED),
+    Arm("w7-cudagraphs", CHUNKED | COMMAND_BUFFERS, "w7-base", "CE alone dispatches 43.7k kernels/step at 17.5 us"),
+    Arm(
+        "w7-combinethresh",
+        CHUNKED | combine_threshold(512 * 1024 * 1024),
+        "w7-base",
+        "the profile shows 1,009 uncombined collective launches at 52 GB/s",
+    ),
+    Arm("w7-epflags", CHUNKED | EP_SCHEDULER, "w7-base", "the two scheduler flags the EP hero runs in production"),
+    # Round 8: NVIDIA's JAX-Toolbox Blackwell guidance, none of which this repo sets. `O1` bundles the
     # latency-hiding scheduler, pipelined collectives, double buffering, and the SOL estimator. That
     # estimator substitutes for PGLE, which has never produced a non-empty trace on this cluster, so
     # the scheduler has been working from static cost estimates throughout.
-    "w8": [
-        Arm("base", ADOPTED, note="adopted configuration; this wave's control"),
-        Arm("chunkstack", CHUNKED, note="expert_chunks=2 on top of the adopted configuration"),
-        Arm("o1", ADOPTED | O1, note="the O1 bundle, including the analytical SOL latency estimator"),
-        Arm("solonly", ADOPTED | SOL_ESTIMATOR, note="the SOL estimator alone"),
-    ],
-    # Wave 9: zero-copy collectives, the B200 launch-mode workaround, and the fusion flags.
-    "w9": [
-        Arm("base", ADOPTED, note="this wave's control"),
-        Arm("userbuffers", ADOPTED | USER_BUFFERS, note="zero-copy collectives with a preallocated pool"),
-        Arm("solonly", ADOPTED | SOL_ESTIMATOR, note="rerun; wave 8's attempt hit a node fault"),
-    ],
-    # Wave 10: confirm the one candidate win, retry the arm iris#7650 killed, and try the fusion
-    # flags under their real names. `solonly` measured +1.10% in wave 9, close enough to drift that
+    Arm("w8-base", ADOPTED, note="adopted configuration"),
+    Arm("w8-chunkstack", CHUNKED, "w8-base", "expert_chunks=2 on top of the adopted configuration"),
+    Arm("w8-o1", ADOPTED | O1, "w8-base", "the O1 bundle, including the analytical SOL latency estimator"),
+    Arm("w8-solonly", ADOPTED | SOL_ESTIMATOR, "w8-base", "the SOL estimator alone"),
+    # Round 9: zero-copy collectives, the B200 launch-mode workaround, and the fusion flags.
+    Arm("w9-base", ADOPTED),
+    Arm("w9-userbuffers", ADOPTED | USER_BUFFERS, "w9-base", "zero-copy collectives with a preallocated pool"),
+    Arm("w9-solonly", ADOPTED | SOL_ESTIMATOR, "w9-base", "rerun; round 8's attempt hit a node fault"),
+    # Round 10: confirm the one candidate win, retry the arm iris#7650 killed, and try the fusion
+    # flags under their real names. `solonly` measured +1.10% in round 9, close enough to drift that
     # a second reading decides it.
-    "w10": [
-        Arm("base", ADOPTED, note="this wave's control"),
-        Arm("solonly", ADOPTED | SOL_ESTIMATOR, note="confirmation of wave 9's +1.10%"),
-        Arm("cudnnfusion", ADOPTED | CUDNN_FUSION, note="cuDNN epilogues, against 5.00 s/step of fusions"),
-        Arm("userbuffers", ADOPTED | USER_BUFFERS, note="rerun; zero-copy collectives"),
-    ],
-    # Wave 11: the cross-entropy kernel's own tiling, the block-level fusion emitter, and autotuning
+    Arm("w10-base", ADOPTED),
+    Arm("w10-solonly", ADOPTED | SOL_ESTIMATOR, "w10-base", "confirmation of round 9's +1.10%"),
+    Arm("w10-cudnnfusion", ADOPTED | CUDNN_FUSION, "w10-base", "cuDNN epilogues, against 5.00 s/step of fusions"),
+    Arm("w10-userbuffers", ADOPTED | USER_BUFFERS, "w10-base", "rerun; zero-copy collectives"),
+    # Round 11: the cross-entropy kernel's own tiling, the block-level fusion emitter, and autotuning
     # at its limit.
-    "w11": [
-        Arm("base", ADOPTED, note="this wave's control"),
-        Arm("ceautotune", ADOPTED | CE_AUTOTUNE, note="rerun; autotune CE tiling instead of the cached miss"),
-        Arm("blockfusion", ADOPTED | BLOCK_FUSION, note="the block-level Triton fusion emitter"),
-        Arm("exhaustive", ADOPTED | EXHAUSTIVE_AUTOTUNE, note="compile time falls outside the scored window"),
-    ],
-    # Wave 12: decompose O1. `doublebuffer` matters most: the hero runs all 48 layers under one
+    Arm("w11-base", ADOPTED),
+    Arm("w11-ceautotune", ADOPTED | CE_AUTOTUNE, "w11-base", "rerun; autotune CE tiling instead of the cached miss"),
+    Arm("w11-blockfusion", ADOPTED | BLOCK_FUSION, "w11-base", "the block-level Triton fusion emitter"),
+    Arm("w11-exhaustive", ADOPTED | EXHAUSTIVE_AUTOTUNE, "w11-base", "compile time falls outside the scored window"),
+    # Round 12: decompose O1. `doublebuffer` matters most: the hero runs all 48 layers under one
     # `jax.scan`, and double-buffering unrolls that loop twice, the cheap partial form of breaking it.
-    "w12": [
-        Arm("base", ADOPTED, note="this wave's control"),
-        Arm("doublebuffer", ADOPTED | DOUBLE_BUFFER, note="2x unroll, against 5.09 s/step of recompute"),
-        Arm("pipelined", ADOPTED | PIPELINED_COLLECTIVES, note="the untested MoE all-gather flags"),
-        Arm(
-            "o1nolhs",
-            ADOPTED | DOUBLE_BUFFER | PIPELINED_COLLECTIVES | SOL_ESTIMATOR,
-            note="O1 without its latency hiding scheduler",
-        ),
-    ],
-    # Wave 13: the remaining flags XLA reports as default-off that plausibly touch this graph
+    Arm("w12-base", ADOPTED),
+    Arm("w12-doublebuffer", ADOPTED | DOUBLE_BUFFER, "w12-base", "2x unroll, against 5.09 s/step of recompute"),
+    Arm("w12-pipelined", ADOPTED | PIPELINED_COLLECTIVES, "w12-base", "the untested MoE all-gather flags"),
+    Arm(
+        "w12-o1nolhs",
+        ADOPTED | DOUBLE_BUFFER | PIPELINED_COLLECTIVES | SOL_ESTIMATOR,
+        "w12-base",
+        "O1 without its latency hiding scheduler",
+    ),
+    # Round 13: the remaining flags XLA reports as default-off that plausibly touch this graph
     # (`--xla_gpu_dump_defaults` lists them).
-    "w13": [
-        Arm("base", ADOPTED, note="this wave's control"),
-        Arm("dsfusion", ADOPTED | DYNAMIC_SLICE_FUSION, note="the renamed address-computation fusion"),
-        Arm(
-            "combine8g",
-            ADOPTED | combine_threshold(8 * 1024 * 1024 * 1024),
-            note="8 GB thresholds, 37x a layer shard, against the 512 MB arm's -3.37%",
-        ),
-        Arm("userbuffers", ADOPTED | USER_BUFFERS, note="fourth attempt; the first three never reached step 0"),
-    ],
-    # Wave 14: every remaining latency-hiding and collective flag is dropped. Six independent
+    Arm("w13-base", ADOPTED),
+    Arm("w13-dsfusion", ADOPTED | DYNAMIC_SLICE_FUSION, "w13-base", "the renamed address-computation fusion"),
+    Arm(
+        "w13-combine8g",
+        ADOPTED | combine_threshold(8 * 1024 * 1024 * 1024),
+        "w13-base",
+        "8 GB thresholds, 37x a layer shard, against the 512 MB arm's -3.37%",
+    ),
+    Arm("w13-userbuffers", ADOPTED | USER_BUFFERS, "w13-base", "fourth attempt; the first three never reached step 0"),
+    # Round 14: every remaining latency-hiding and collective flag is dropped. Six independent
     # measurements agree that a 90.3% compute-busy step has nothing for that family to recover.
     #
     # The batch arms spend HBM headroom on tokens: activations scale with the batch while weights and
     # optimizer state do not. They do more work per step, so scoring switches to tokens/s.
-    "w14": [
-        Arm("base", ADOPTED, note="this wave's control, batch 1024"),
-        Arm("doublebuffer", ADOPTED | DOUBLE_BUFFER, note="rerun; 2x unroll of the 48-layer scan"),
-        Arm("batch1152", ADOPTED | mem_fraction("0.88"), note="+12.5% sequences, 18 per device", batch_size=1152),
-        Arm("batch1280", ADOPTED | mem_fraction("0.93"), note="+25% sequences, 20 per device", batch_size=1280),
-    ],
+    Arm("w14-base", ADOPTED, note="batch 1024"),
+    Arm("w14-doublebuffer", ADOPTED | DOUBLE_BUFFER, "w14-base", "rerun; 2x unroll of the 48-layer scan"),
+    Arm("w14-batch1152", ADOPTED | mem_fraction("0.88"), "w14-base", "+12.5% sequences, 18 per device", 1152),
+    Arm("w14-batch1280", ADOPTED | mem_fraction("0.93"), "w14-base", "+25% sequences, 20 per device", 1280),
     # The wrap-up: everything adopted, measured end to end over 40 scored steps on merged main.
     # `control2` is byte-identical to `control` and measures the spread between two arms that differ
     # in nothing.
-    "final": [
-        Arm("control", note="the hero as it was before this sweep"),
-        Arm("control2", note="byte-identical to control"),
-        Arm("adopted", ADOPTED, note="FSDP-sharded small parameters, local-shard interleave, NVLink SHARP"),
-        Arm("adoptedbatch", ADOPTED | mem_fraction("0.88"), note="batch 1152 under a 0.88 ceiling", batch_size=1152),
-    ],
+    Arm("final-control", note="the hero as it was before this sweep", steps=WRAPUP_STEPS),
+    Arm("final-control2", baseline="final-control", note="byte-identical to control", steps=WRAPUP_STEPS),
+    Arm(
+        "final-adopted",
+        ADOPTED,
+        "final-control",
+        "FSDP-sharded small parameters, local-shard interleave, NVLink SHARP",
+        steps=WRAPUP_STEPS,
+    ),
+    Arm(
+        "final-adoptedbatch",
+        ADOPTED | mem_fraction("0.88"),
+        "final-control",
+        "batch 1152 under a 0.88 ceiling",
+        1152,
+        WRAPUP_STEPS,
+    ),
     # Second attempt: `control` and `adoptedbatch` both lost their windows above, and `adoptedbatch`
     # ran at 40 s/step against its siblings' 17. Merged main raised the baseline peak from 137.2 to
     # 141.2 GiB, so batch 1152 sits close enough to the 0.88 limit for rematerialization to engage.
-    "final2": [
-        Arm("control", note="the hero as it was before this sweep"),
-        Arm("control2", note="byte-identical to control"),
-        Arm("adopted", ADOPTED, note="replicate of the wrap-up result"),
-        Arm("adoptedbatch", ADOPTED | mem_fraction("0.93"), note="rerun at 0.93 for the slack", batch_size=1152),
-    ],
+    Arm("final2-control", note="the hero as it was before this sweep", steps=WRAPUP_STEPS),
+    Arm("final2-control2", baseline="final2-control", note="byte-identical to control", steps=WRAPUP_STEPS),
+    Arm("final2-adopted", ADOPTED, "final2-control", "replicate of the wrap-up result", steps=WRAPUP_STEPS),
+    Arm(
+        "final2-adoptedbatch",
+        ADOPTED | mem_fraction("0.93"),
+        "final2-control",
+        "rerun at 0.93 for the slack",
+        1152,
+        WRAPUP_STEPS,
+    ),
     # Batch 1152 at 0.93 dies at step 4 inside `jit_train_step`. Batch 1088 is the remaining step.
-    "final3": [
-        Arm("control", ADOPTED | mem_fraction("0.93"), note="the adopted config at batch 1024"),
-        Arm("adoptedbatch", ADOPTED | mem_fraction("0.93"), note="+6.25% tokens", batch_size=1088),
-    ],
+    Arm("final3-control", ADOPTED | mem_fraction("0.93"), note="the adopted config at batch 1024", steps=WRAPUP_STEPS),
+    Arm(
+        "final3-adoptedbatch",
+        ADOPTED | mem_fraction("0.93"),
+        "final3-control",
+        "+6.25% tokens",
+        1088,
+        WRAPUP_STEPS,
+    ),
     # Dead end. 0.88 and 0.93 both fail at batch 1024 with the same 122.10 GiB `jit_train_step`
     # request, so the allocation is a fixed requirement of the un-rematerialized program rather than
     # something sized to the ceiling. Peak against the allocator limit decides whether
     # `HloRematerialization` runs; post-merge the hero clears 138.22 GiB and survives only because
     # that pass shrinks it. Batch 1152 runs at 0.88 only because its 153.14 GiB peak keeps remat
     # engaged, at 40 s/step.
-    "final4": [
-        Arm("control", ADOPTED | mem_fraction("0.88"), note="batch 1024 at the same ceiling as its arm"),
-        Arm("adoptedbatch", ADOPTED | mem_fraction("0.88"), note="+6.25% tokens", batch_size=1088),
-    ],
-}
+    Arm(
+        "final4-control",
+        ADOPTED | mem_fraction("0.88"),
+        note="batch 1024 at the same ceiling as its arm",
+        steps=WRAPUP_STEPS,
+    ),
+    Arm(
+        "final4-adoptedbatch",
+        ADOPTED | mem_fraction("0.88"),
+        "final4-control",
+        "+6.25% tokens",
+        1088,
+        WRAPUP_STEPS,
+    ),
+)
 
 
-def wave_steps(wave: str) -> int:
-    return WAVE_STEPS.get(wave, STEPS)
+def select(tokens: Sequence[str]) -> dict[str, Arm]:
+    """Arms named by ``tokens``: an exact name, or every arm under a ``<token>-`` prefix.
 
-
-def split_arms(arms: list[Arm], racks: int) -> list[list[Arm]]:
-    """Split ``arms`` across ``racks`` allocations, replicating the control into each.
-
-    An arm is only comparable against a control that ran beside it, so a group without one could
-    not be scored. ``racks == len(arms) - 1`` reproduces the one-rack-per-arm fan-out.
+    Each selected arm pulls in its baseline, since an arm that runs without one cannot be scored.
     """
-    if racks == 1:
-        return [list(arms)]
-    control = next(arm for arm in arms if arm.tag in CONTROL_TAGS)
-    rest = [arm for arm in arms if arm is not control]
-    if racks > len(rest):
-        raise click.BadParameter(f"{racks} racks for {len(rest)} arms besides the control")
-    groups: list[list[Arm]] = [[control] for _ in range(racks)]
-    for i, arm in enumerate(rest):
-        groups[i % racks].append(arm)
-    return groups
-
-
-def group_prefix(wave: str, index: int, racks: int) -> str:
-    """W&B run-id prefix for one group. A wave on a single allocation keeps the bare wave id."""
-    return f"{PREFIX}-{wave}" if racks == 1 else f"{PREFIX}-{wave}-g{index}"
+    chosen: dict[str, Arm] = {}
+    for token in tokens:
+        matched = [ARMS[token]] if token in ARMS else [a for n, a in ARMS.items() if n.startswith(f"{token}-")]
+        if not matched:
+            raise click.BadParameter(f"no arm named or prefixed {token!r}")
+        for arm in matched:
+            chosen[arm.name] = arm
+            if arm.baseline is not None:
+                chosen[arm.baseline] = ARMS[arm.baseline]
+    return chosen
 
 
 def scored_steps(run):
@@ -417,101 +430,79 @@ def scored_steps(run):
 COUNTED_FLOPS = 0.194145 * 18.0223 * PEAK_FLOPS_PER_DEVICE * NUM_DEVICES
 
 
-def score_run(run, batch_size=HERO_BATCH_SIZE):
-    rows = scored_steps(run)
+def score_arm(arm: Arm):
+    """One arm's steady-state summary, or ``None`` when its run has too few scored steps."""
+    rows = scored_steps(wandb.Api().run(f"{PROJECT}/{arm.run_id}"))
     if len(rows) < 3:
         return None
     d = [t for _, t, _ in rows]
     hbm = [m for _, _, m in rows if m is not None]
     med = statistics.median(d)
     return {
-        "run_id": run.id,
+        "name": arm.name,
+        "baseline": arm.baseline,
+        "note": arm.note,
         "n": len(d),
         "median": med,
         "mad": statistics.median([abs(x - med) for x in d]),
         "min": min(d),
         "max": max(d),
         "peak_gib": max(hbm) if hbm else None,
-        "batch_size": batch_size,
+        "batch_size": arm.batch_size,
         # At a fixed shape MFU is a pure restatement of step time. An arm that changes the batch does
         # more work per step, so its FLOPs scale with the batch and step time stops being
         # comparable; tokens/s is the metric that survives both cases.
-        "mfu": 100 * COUNTED_FLOPS * batch_size / HERO_BATCH_SIZE / med / PEAK_FLOPS_PER_DEVICE / NUM_DEVICES,
-        "tokens_per_s": batch_size * HERO_SEQ_LEN / med,
+        "mfu": 100 * COUNTED_FLOPS * arm.batch_size / HERO_BATCH_SIZE / med / PEAK_FLOPS_PER_DEVICE / NUM_DEVICES,
+        "tokens_per_s": arm.batch_size * HERO_SEQ_LEN / med,
     }
 
 
-def discover_runs(wave):
-    """Every W&B run for ``wave``, keyed by allocation prefix then arm tag.
-
-    How a wave was split across allocations is a launch-time choice that nothing records, so the
-    grouping is read back off the run ids rather than reconstructed.
-    """
-    groups = collections.defaultdict(dict)
-    for run in wandb.Api().runs(PROJECT, filters={"name": {"$regex": f"^{PREFIX}-{wave}-"}}):
-        prefix, _, tag = run.id.rpartition("-")
-        groups[prefix][tag] = run
-    return groups
-
-
-def score_group(prefix, runs, by_tag):
-    """Score one allocation's arms against the control that ran beside them."""
-    results = []
-    for tag, run in runs.items():
-        arm = by_tag.get(tag)
-        if arm is None:
-            print(f"{tag:12s} not an arm of this wave; skipped")
-            continue
-        try:
-            s = score_run(run, batch_size=arm.batch_size)
-        except Exception as exc:
-            print(f"{tag:12s} unavailable: {type(exc).__name__}: {exc}")
-            continue
-        if s is None:
-            print(f"{tag:12s} too few scored steps yet")
-            continue
-        results.append({**s, "group": prefix, "tag": tag, "note": arm.note})
-
-    if not results:
-        return []
-    control = next((r for r in results if r["tag"] in CONTROL_TAGS), None)
-    if control is None:
-        scored = ", ".join(r["tag"] for r in results)
-        print(f"{prefix}: no control arm has scored steps yet (scored so far: {scored})")
-        return results
-
-    varies_batch = len({r["batch_size"] for r in results}) > 1
+def _print_against(baseline_name, rows):
+    """Print ``rows`` as deltas against the row for ``baseline_name``."""
+    baseline = next((r for r in rows if r["name"] == baseline_name), None)
+    if baseline is None:
+        print(f"\n{baseline_name} has no scored steps; {', '.join(r['name'] for r in rows)} cannot be read")
+        return
+    varies_batch = len({r["batch_size"] for r in rows}) > 1
     if varies_batch:
-        print(f"scoring on tokens/s: arms differ in batch size (control = {control['batch_size']})")
+        print(f"scoring on tokens/s: arms differ in batch size (baseline = {baseline['batch_size']})")
     print(
-        f"\n{prefix:12s} {'n':>3s} {'batch':>6s} {'median':>9s} {'MAD':>7s} "
-        f"{'Mtok/s':>7s} {'MFU':>7s} {'peak HBM':>9s} {'vs control':>11s}"
+        f"\n{baseline_name:22s} {'n':>3s} {'batch':>6s} {'median':>9s} {'MAD':>7s} "
+        f"{'Mtok/s':>7s} {'MFU':>7s} {'peak HBM':>9s} {'vs base':>9s}"
     )
-    for r in sorted(results, key=lambda r: -r["tokens_per_s"]):
+    for r in sorted(rows, key=lambda r: -r["tokens_per_s"]):
         if varies_batch:
-            r["delta_pct"] = 100 * (r["tokens_per_s"] / control["tokens_per_s"] - 1)
+            r["delta_pct"] = 100 * (r["tokens_per_s"] / baseline["tokens_per_s"] - 1)
         else:
-            r["delta_pct"] = 100 * (control["median"] - r["median"]) / control["median"]
+            r["delta_pct"] = 100 * (baseline["median"] - r["median"]) / baseline["median"]
         peak = f"{r['peak_gib']:.1f} GiB" if r["peak_gib"] else "--"
         print(
-            f"{r['tag']:12s} {r['n']:3d} {r['batch_size']:6d} {r['median']:8.3f}s {r['mad']:6.3f}s "
-            f"{r['tokens_per_s'] / 1e6:7.3f} {r['mfu']:6.2f}% {peak:>9s} {r['delta_pct']:+10.2f}%"
+            f"{r['name']:22s} {r['n']:3d} {r['batch_size']:6d} {r['median']:8.3f}s {r['mad']:6.3f}s "
+            f"{r['tokens_per_s'] / 1e6:7.3f} {r['mfu']:6.2f}% {peak:>9s} {r['delta_pct']:+8.2f}%"
         )
-    return results
 
 
-def score(wave):
+def score(tokens):
+    arms = select(tokens)
+    rows = []
+    for name, arm in arms.items():
+        try:
+            row = score_arm(arm)
+        except Exception as exc:
+            print(f"{name:22s} unavailable: {type(exc).__name__}: {exc}")
+            continue
+        if row is None:
+            print(f"{name:22s} too few scored steps yet")
+            continue
+        rows.append(row)
+    if not rows:
+        return
+    for baseline_name in dict.fromkeys(r["baseline"] or r["name"] for r in rows):
+        group = [r for r in rows if r["name"] == baseline_name or r["baseline"] == baseline_name]
+        _print_against(baseline_name, group)
     LOGDIR.mkdir(parents=True, exist_ok=True)
-    by_tag = {arm.tag: arm for arm in WAVES[wave]}
-    groups = discover_runs(wave)
-    if not groups:
-        print(f"no W&B runs for {wave}")
-        return
-    results = [r for prefix in sorted(groups) for r in score_group(prefix, groups[prefix], by_tag)]
-    if not results:
-        return
-    out = LOGDIR / f"{wave}.json"
-    out.write_text(json.dumps(results, indent=2))
+    out = LOGDIR / f"{'-'.join(tokens)}.json"
+    out.write_text(json.dumps(rows, indent=2))
     print(f"\nwrote {out}")
 
 
@@ -521,10 +512,7 @@ def cli():
 
 
 @cli.command("launch")
-@click.argument("wave", type=click.Choice(sorted(WAVES)))
-@click.option(
-    "--racks", type=click.IntRange(min=1), default=1, show_default=True, help="Allocations to spread the wave over."
-)
+@click.argument("arms", nargs=-1, required=True)
 @click.option(
     "--priority",
     type=click.Choice(PRIORITY_BAND_NAMES),
@@ -533,33 +521,31 @@ def cli():
     help="Iris band for the training gangs. 'production' is admin-only and never preempted.",
 )
 @build_options
-def launch_cmd(wave, racks, priority):
-    """Build the wave. Add --run to submit it.
+def launch_cmd(arms, priority):
+    """Build the named ARMS, one rack each. Add --run to submit them.
 
-    Each group of arms is one allocation and one step, so ``--racks`` trades wall clock for racks
-    and ``--max-concurrent`` bounds how many run at once. Every group carries the wave's control,
-    since an arm is scored only against a control that ran beside it.
+    An ARM is an arm name or a prefix: `w7` takes every `w7-` arm. Each is its own step, so
+    `--max-concurrent` bounds how many racks are live and a rerun under the same `--version` skips
+    the arms that already finished.
     """
-    steps = wave_steps(wave)
     band = priority_band_value(priority)
-    groups = split_arms(WAVES[wave], racks)
     return [
         build_hero_sweep_run(
-            run_id=group_prefix(wave, i, racks),
+            run_id=arm.run_id,
             dp_racks=DP_RACKS,
-            steps_per_arm=steps,
-            arms=[arm.sweep_arm(wave, steps) for arm in group],
+            steps_per_arm=arm.steps,
+            arms=[arm.sweep_arm()],
             priority=band,
         )
-        for i, group in enumerate(groups)
+        for arm in select(arms).values()
     ]
 
 
 @cli.command("score")
-@click.argument("wave", type=click.Choice(sorted(WAVES)))
-def score_cmd(wave):
-    """Score a wave from its W&B runs."""
-    score(wave)
+@click.argument("arms", nargs=-1, required=True)
+def score_cmd(arms):
+    """Score the named ARMS against their baselines."""
+    score(arms)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Trace every arm of a sweep wave on CPU before it reaches a rack.
+"""Trace sweep arms on CPU before they reach a rack.
 
-A wave's arms share one allocation and one code state, so a single wiring mistake kills them all,
-control included. This traces ``next_token_loss`` under each arm's overrides at a small shape, on
-CPU, through :func:`apply_hero_overrides` -- the same path the launcher uses.
+Arms launched together share one code state, so a single wiring mistake kills them all, baseline
+included. This traces ``next_token_loss`` under each arm's overrides at a small shape, on CPU,
+through :func:`apply_hero_overrides` -- the same path the launcher uses.
 
 ``jax.eval_shape`` never allocates and never launches a kernel, so it cannot catch a numerical or
 kernel-level fault. It covers the Python -- attribute names, config plumbing, remat policies,
@@ -13,7 +13,7 @@ partition specs -- which is where every failure so far has been.
 
 Usage
 -----
-    uv run python -m experiments.grug.moe_hero_fsdp.sweep_preflight <wave>
+    uv run python -m experiments.grug.moe_hero_fsdp.sweep_preflight <arm>...
 """
 
 import dataclasses
@@ -33,7 +33,7 @@ from jax.sharding import PartitionSpec as P
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
 from experiments.grug.moe_hero_fsdp.launch import apply_hero_overrides
-from experiments.grug.moe_hero_fsdp.sweep import WAVES
+from experiments.grug.moe_hero_fsdp.sweep import select
 from experiments.grug.moe_hero_fsdp.train import BATCH_AXES
 
 # Small enough to trace in about a second, large enough to keep every structural knob meaningful:
@@ -114,21 +114,21 @@ def check_xla_flags(arm):
         raise ValueError(f"XLA rejected the flags: {probe.stderr.strip().splitlines()[-1]}")
 
 
-def main(wave):
+def main(tokens):
     missing = set(BATCH_AXES) - set(MESH_AXIS_SIZES)
     assert not missing, f"mesh axes drifted from the trainer: {missing}"
     failures = 0
-    for arm in WAVES[wave]:
+    for name, arm in select(tokens).items():
         try:
             check_xla_flags(arm)
             trace(preflight_model(arm))
         except Exception as exc:
             failures += 1
-            print(f"{arm.tag:12s} FAIL {type(exc).__name__}: {str(exc).splitlines()[0]}")
+            print(f"{name:22s} FAIL {type(exc).__name__}: {str(exc).splitlines()[0]}")
             continue
-        print(f"{arm.tag:12s} ok")
+        print(f"{name:22s} ok")
     return 1 if failures else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1]))
+    sys.exit(main(sys.argv[1:]))

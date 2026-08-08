@@ -49,7 +49,7 @@ def main(run_id: str, dp_racks: int, steps_per_arm: int, ablation_names: tuple[s
         run_id=run_id,
         dp_racks=dp_racks,
         steps_per_arm=steps_per_arm,
-        arms=[HeroSweepArm(spec=spec) for spec in specs],
+        arms=[HeroSweepArm(spec=spec, run_id=f"{run_id}-{spec.name}") for spec in specs],
         priority=priority_band_value(priority),
     )
 

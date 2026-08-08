@@ -336,9 +336,13 @@ class HeroSweepArm:
     ``AblationSpec`` carries only process-start environment, which covers NCCL, XLA_FLAGS, and the
     allocator fraction. ``overrides`` and ``batch_size`` reach the knobs that live in the model
     config instead, so one sweep can vary both.
+
+    ``run_id`` names the arm's trainer and W&B run. It is the arm's, not the sweep's, so a sweep of
+    one arm can own the whole name.
     """
 
     spec: AblationSpec
+    run_id: str
     overrides: HeroOverrides = HeroOverrides()
     batch_size: int | None = None
 
@@ -355,8 +359,8 @@ def build_hero_sweep_run(
     """Build one allocation that runs ``arms`` back to back.
 
     Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its own
-    W&B run named ``<run_id>-<arm>``. One arm's fault does not end the sweep. A sweep is a
-    diagnostic, so it never checkpoints.
+    W&B run. One arm's fault does not end the sweep. A sweep is a diagnostic, so it never
+    checkpoints.
 
     ``priority`` is the Iris band for the training gang. It rides as a runtime arg, so rescheduling
     the same arms at a different band reuses the cached result rather than rebuilding.
@@ -383,7 +387,7 @@ def build_hero_sweep_run(
         runs = tuple(
             _hero_run_config(
                 ctx=ctx,
-                run_id=f"{run_id}-{arm.spec.name}",
+                run_id=arm.run_id,
                 batch_size=batch_size,
                 num_steps=steps,
                 model=model,
