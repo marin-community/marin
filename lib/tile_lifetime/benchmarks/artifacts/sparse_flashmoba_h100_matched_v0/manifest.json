@@ -1,0 +1,42 @@
+{
+  "artifact": "sparse_flashmoba_h100_matched_v0",
+  "status": "exact_semantic_primary_oracle_with_loose_physical_interface",
+  "configuration": {
+    "batch": 1,
+    "sequence": 16384,
+    "query_block": 128,
+    "kv_block": 128,
+    "selected_blocks": 8,
+    "query_heads": 32,
+    "kv_heads": 8,
+    "head_dimension": 128,
+    "dtype": "bf16",
+    "causal": true,
+    "flash_moba_physical_query_group": 1024
+  },
+  "revisions": {
+    "flash_moba": "39d9ac043b271d046a2181a9991e99a26b67bca1",
+    "cutlass": "a2439551c765c5393aebe557ee75d3a0412d2211"
+  },
+  "pooled_medians_ms": {
+    "shuttle_full": 0.6171999871730804,
+    "flash_moba_full": 5.264559984207153,
+    "flash_moba_payload": 4.894560098648071,
+    "router_only": 0.04408000037074089,
+    "relation_reorientation_only": 0.21166399866342545
+  },
+  "ratios": {
+    "shuttle_to_flash_moba_full": 0.1172367660401976,
+    "shuttle_to_flash_moba_payload": 0.12609917433510676
+  },
+  "correctness": {
+    "maximum_absolute_difference_from_flash_moba": 0.00390625,
+    "mean_absolute_difference_from_flash_moba": 0.00006517238216474652,
+    "deterministic": true,
+    "query_blocks_omitting_current_block": 95
+  },
+  "primary_captures": [
+    "raw/flashmoba-primary-run1.json",
+    "raw/flashmoba-primary-run2.json"
+  ]
+}

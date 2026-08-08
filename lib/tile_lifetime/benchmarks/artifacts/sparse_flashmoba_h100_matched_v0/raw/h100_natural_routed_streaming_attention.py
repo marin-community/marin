@@ -368,7 +368,7 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=30)
     parser.add_argument("--include-block-sparse-oracle", action="store_true")
     parser.add_argument("--include-flash-moba-oracle", action="store_true")
-    parser.add_argument("--flash-moba-query-group", type=int, default=1024)
+    parser.add_argument("--flash-moba-query-group", type=int, default=768)
     parser.add_argument("--include-kv-major", action="store_true")
     parser.add_argument("--kv-query-capacity", type=int, default=2)
     parser.add_argument("--include-kv-capacity-mutation", action="store_true")

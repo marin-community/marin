@@ -1,0 +1,23 @@
+diff --git a/setup.py b/setup.py
+index 9ba3fcd..2e6ba4a 100644
+--- a/setup.py
++++ b/setup.py
+@@ -172,12 +172,12 @@ if not SKIP_CUDA_BUILD:
+     # "--ptxas-options=-v",
+     # "--ptxas-options=-O2",
+     # "-lineinfo",
+-    # "-DFLASHMOBA_DISABLE_BACKWARD",
+-    # "-DFLASHMOBA_DISABLE_DROPOUT",
+-    # "-DFLASHMOBA_DISABLE_ALIBI",
+-    # "-DFLASHMOBA_DISABLE_SOFTCAP",
+-    # "-DFLASHMOBA_DISABLE_UNEVEN_K",
+-    # "-DFLASHMOBA_DISABLE_LOCAL",
++    "-DFLASHMOBA_DISABLE_BACKWARD",
++    "-DFLASHMOBA_DISABLE_DROPOUT",
++    "-DFLASHMOBA_DISABLE_ALIBI",
++    "-DFLASHMOBA_DISABLE_SOFTCAP",
++    "-DFLASHMOBA_DISABLE_UNEVEN_K",
++    "-DFLASHMOBA_DISABLE_LOCAL",
+     ]
+ 
+     compiler_c17_flag=["-O3", "-std=c++17"]

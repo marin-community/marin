@@ -1,0 +1,487 @@
+{
+  "benchmark": "shuttle_natural_routed_streaming_attention_sm90",
+  "source": "ordinary JAX -> StableHLO -> Relation/Contract/Map/DomainRestriction/Fold",
+  "configuration": {
+    "sequence": 16384,
+    "block": 128,
+    "slots": 8,
+    "router_dimension": 64,
+    "seed": 1701,
+    "warmups": 10,
+    "repeats": 30,
+    "include_block_sparse_oracle": false,
+    "include_flash_moba_oracle": true,
+    "flash_moba_query_group": 1024,
+    "include_kv_major": false,
+    "kv_query_capacity": 2,
+    "include_kv_capacity_mutation": false,
+    "json_output": "/tmp/flashmoba-primary-run2.json"
+  },
+  "hardware": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00 W, 1830 MHz, 2619 MHz",
+  "torch": "2.13.0+cu130",
+  "compile_seconds": 3.102877573110163,
+  "kv_major_compile_seconds": null,
+  "samples_ms": [
+    0.7182400226593018,
+    0.6864960193634033,
+    0.6061760187149048,
+    0.6268479824066162,
+    0.5879679918289185,
+    0.631488025188446,
+    0.5911359786987305,
+    0.6251839995384216,
+    0.5861759781837463,
+    0.6188799738883972,
+    0.5825279951095581,
+    0.6254400014877319,
+    0.5878080129623413,
+    0.6289920210838318,
+    0.5884799957275391,
+    0.6176959872245789,
+    0.5845119953155518,
+    0.6282879710197449,
+    0.590175986289978,
+    0.6242560148239136,
+    0.5888320207595825,
+    0.6191040277481079,
+    0.5898560285568237,
+    0.6256960034370422,
+    0.5875840187072754,
+    0.616703987121582,
+    0.5896000266075134,
+    0.6164799928665161,
+    0.5865280032157898,
+    0.6229119896888733
+  ],
+  "median_ms": 0.6165919899940491,
+  "minimum_ms": 0.5825279951095581,
+  "maximum_ms": 0.7182400226593018,
+  "mean_ms": 0.6126688023408254,
+  "measurement_protocol": {
+    "name": "alternating_counterbalanced_pairs",
+    "variants": [
+      "generated",
+      "matched_expert_oracle"
+    ],
+    "warmup_launch_orders": [
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ]
+    ],
+    "sample_launch_orders": [
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ]
+    ],
+    "sample_pairing": "samples at the same index form one generated/oracle pair",
+    "timing": "separate CUDA events per launch; each end event is synchronized before the next launch"
+  },
+  "kv_major": null,
+  "max_absolute_error": 0.007902860641479492,
+  "mean_absolute_error": 0.00017903203843161464,
+  "deterministic": true,
+  "output_sha256": "e9399766068941b3b60329760c04b576c79cec38fd036c8cbdfe43cdf8da3a83",
+  "relation_sha256": "0a2a06781755f5f577237a2e48c810cb160fd88db3295835458350f47ad61cbb",
+  "semantic_erasure": {
+    "source_semantics": [
+      "top_k",
+      "selected_exact_attention",
+      "normalized_exponential",
+      "causal_predicate"
+    ],
+    "lowering_steps": [
+      {
+        "source_semantic": "top_k",
+        "generic_primitives": [
+          "Contract",
+          "DomainRestriction",
+          "Relation"
+        ]
+      },
+      {
+        "source_semantic": "selected_exact_attention",
+        "generic_primitives": [
+          "RelationPlan",
+          "Contract",
+          "Map",
+          "Fold",
+          "DomainRestriction"
+        ]
+      },
+      {
+        "source_semantic": "normalized_exponential",
+        "generic_primitives": [
+          "Map",
+          "Fold"
+        ]
+      },
+      {
+        "source_semantic": "causal_predicate",
+        "generic_primitives": [
+          "DomainRestriction"
+        ]
+      }
+    ],
+    "scheduling_keys": [
+      "relation_selection:left_rank=2:right_rank=2:selected=8:accumulate=fp32",
+      "domain_restriction:binary_affine_index_predicate",
+      "relation_plan:runtime_binary_edges:dual_orientation",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:select(less_equal(input,input),multiply(input,constant),constant)",
+      "fold:maximum:reduction_rank=1:accumulate=fp32",
+      "map:subtract(input,input)",
+      "map:exp(input)",
+      "fold:sum:reduction_rank=1:accumulate=fp32",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:divide(input,input)"
+    ],
+    "validation_errors": []
+  },
+  "launch_manifest": {
+    "generated_path": [
+      "generic router Contract",
+      "generic top-k Relation index generation",
+      "generated SM90 QK/online-Fold/PV streaming skeleton"
+    ],
+    "expert_oracle_semantic_kernels": []
+  },
+  "benchmark_boundary": {
+    "included": [
+      "router Contract",
+      "top-k/index plane",
+      "selected exact attention"
+    ],
+    "excluded": [
+      "QKV projection",
+      "output projection"
+    ],
+    "oracle_requirement": "must include the identical router Contract and top-k/index plane",
+    "legacy_seer_2_388208_ms_is_matched": false
+  },
+  "matched_expert_oracle": {
+    "implementation": "pinned FlashMoBA precomputed-relation expert oracle",
+    "revision": "39d9ac043b271d046a2181a9991e99a26b67bca1",
+    "samples_ms": [
+      5.397823810577393,
+      5.457759857177734,
+      5.29747200012207,
+      5.328671932220459,
+      5.253727912902832,
+      5.3145599365234375,
+      5.253759860992432,
+      5.213344097137451,
+      5.267583847045898,
+      5.260064125061035,
+      5.234687805175781,
+      5.2506561279296875,
+      5.247200012207031,
+      5.2387518882751465,
+      5.222527980804443,
+      5.28931188583374,
+      5.224127769470215,
+      5.307519912719727,
+      5.2500481605529785,
+      5.250016212463379,
+      5.227615833282471,
+      5.218815803527832,
+      5.252831935882568,
+      5.264351844787598,
+      5.257823944091797,
+      5.2421441078186035,
+      5.251904010772705,
+      5.281792163848877,
+      5.254208087921143,
+      5.250463962554932
+    ],
+    "median_ms": 5.2532799243927,
+    "maximum_absolute_difference_from_generated": 0.00390625,
+    "mean_absolute_difference_from_generated": 6.517238216474652e-05,
+    "deterministic": true,
+    "output_sha256": "d4991478a94211c0a48b442259004f660efaa8f56c34c549b3f832f73067ee21",
+    "generated_to_oracle_ratio": 0.11737276499030833,
+    "matched_boundary": true,
+    "attention_only": {
+      "samples_ms": [
+        4.903456211090088,
+        4.890624046325684,
+        4.894752025604248,
+        4.94649600982666,
+        4.899807929992676,
+        4.8941121101379395,
+        4.932735919952393,
+        4.886655807495117,
+        4.8853440284729,
+        4.89734411239624,
+        4.9088640213012695,
+        4.872640132904053,
+        4.9252800941467285,
+        4.912960052490234,
+        4.894015789031982,
+        4.89577579498291,
+        4.878431797027588,
+        4.9264960289001465,
+        4.91977596282959,
+        4.894303798675537,
+        4.885119915008545,
+        4.879680156707764,
+        4.90067195892334,
+        4.879487991333008,
+        4.901951789855957,
+        4.864255905151367,
+        4.90831995010376,
+        4.886784076690674,
+        4.907616138458252,
+        4.879744052886963
+      ],
+      "median_ms": 4.895263910293579,
+      "router_only_samples_ms": [
+        0.04972799867391586,
+        0.04572800174355507,
+        0.044576000422239304,
+        0.044319998472929,
+        0.046112000942230225,
+        0.04508800059556961,
+        0.04531199857592583,
+        0.04412800073623657,
+        0.04403200000524521,
+        0.04396799951791763,
+        0.04412800073623657,
+        0.04355200007557869,
+        0.0469760000705719,
+        0.04396799951791763,
+        0.050175998359918594,
+        0.04387199878692627,
+        0.04419200122356415,
+        0.04419200122356415,
+        0.04368000105023384,
+        0.043168000876903534,
+        0.043487999588251114,
+        0.0435199998319149,
+        0.04364800080657005,
+        0.043807998299598694,
+        0.04368000105023384,
+        0.043616000562906265,
+        0.04335999861359596,
+        0.04335999861359596,
+        0.04428799822926521,
+        0.04438399896025658
+      ],
+      "router_only_median_ms": 0.04408000037074089,
+      "relation_reorientation_only_samples_ms": [
+        0.2197439968585968,
+        0.21238400042057037,
+        0.2099200040102005,
+        0.21411199867725372,
+        0.2149759978055954,
+        0.21302400529384613,
+        0.21321600675582886,
+        0.21481600403785706,
+        0.21059200167655945,
+        0.20899200439453125,
+        0.20774400234222412,
+        0.2069759964942932,
+        0.20745599269866943,
+        0.2030079960823059,
+        0.20217600464820862,
+        0.20678399503231049,
+        0.20531199872493744,
+        0.20265600085258484,
+        0.20179200172424316,
+        0.20083199441432953,
+        0.2027519941329956,
+        0.20294399559497833,
+        0.2024960070848465,
+        0.2022079974412918,
+        0.20255999267101288,
+        0.2046079933643341,
+        0.2024639993906021,
+        0.20179200172424316,
+        0.20342400670051575,
+        0.20390400290489197
+      ],
+      "relation_reorientation_only_median_ms": 0.20495999604463577,
+      "excluded": [
+        "router Contract",
+        "top-k",
+        "relation reorientation"
+      ],
+      "acceptance_denominator": false
+    },
+    "relation_adapter": {
+      "source_relation": "query block -> selected KV block, shared across query heads",
+      "physical_relation": "destination KV block -> sorted query-token rows, repeated across query heads",
+      "col_offsets_shape": [
+        1,
+        32,
+        128
+      ],
+      "col_nnz_shape": [
+        1,
+        32,
+        128
+      ],
+      "row_indices_shape": [
+        4079616
+      ],
+      "physical_query_group_size": 1024,
+      "slot_order_policy": "erased to a selected set before exact normalized-exponential Fold",
+      "routing_cost_in_full_boundary": true,
+      "query_blocks_omitting_current_block": 95,
+      "sampled_omitted_current_block": 127
+    }
+  }
+}

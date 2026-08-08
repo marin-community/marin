@@ -1,0 +1,8 @@
+cuda-cccl-13-2	13.2.86-1
+cuda-cudart-dev-13-2	13.2.86-1
+cuda-nvcc-13-2	13.2.86-1
+g++-13	13.3.0-16
+gcc-13	13.3.0-16
+libcublas-dev-13-2	13.4.1.3-1
+libcusolver-dev-13-2	12.2.0.11-1
+libcusparse-dev-13-2	12.7.10.12-1

@@ -1,0 +1,10 @@
+/app/.venv/lib/python3.12/site-packages/jaxlib/plugin_support.py:91: RuntimeWarning: JAX plugin jax_cuda13_plugin version 0.11.0 is installed, but it is not compatible with the installed jaxlib version 0.10.1, so it will not be used.
+  warnings.warn(
+I0808 03:32:54.581254   14795 pjrt_api.cc:118] GetPjrtApi was found for cuda at /app/.venv/lib/python3.12/site-packages/jax_plugins/xla_cuda13/xla_cuda_plugin.so
+I0808 03:32:54.581447   14795 pjrt_api.cc:95] PJRT_Api is set for device type cuda
+I0808 03:32:54.598900   14795 pjrt_client.cc:574] PjRt-IFRT device count: total=1, addressable=1
+I0808 03:32:54.598948   14795 pjrt_client.cc:578] Addressable PjRt-IFRT device: CpuDevice(id=0)
+I0808 03:32:54.606875   14795 pjrt_api.cc:167] The PJRT plugin has PJRT API version 0.114. The framework PJRT API version is 0.108.
+I0808 03:32:54.688464   14795 pjrt_c_api_client.cc:199] PjRtCApiClient created.
+I0808 03:32:54.688521   14795 pjrt_client.cc:574] PjRt-IFRT device count: total=1, addressable=1
+I0808 03:32:54.688527   14795 pjrt_client.cc:578] Addressable PjRt-IFRT device: CudaDevice(id=0)

@@ -18,9 +18,11 @@ The natural routed-attention path now includes metadata contraction, causal
 restriction, GPU top-k/index forwarding, selected exact attention, and BF16
 output on both Shuttle and oracle paths. At S=16,384, block 128, top-8,
 Hq/Hkv=32/8, and D=128, two counterbalanced 30-sample captures pool to
-0.617584 ms for generated Shuttle and 1.423632 ms for pinned
-Block-Sparse-Attention, or 0.433809 times. Generated and oracle outputs are
-deterministic, with maximum/mean differences 0.00390625/0.0000652.
+0.617200 ms for generated Shuttle and 5.264560 ms for pinned FlashMoBA on the
+same full boundary. FlashMoBA's cached-relation payload is 4.894560 ms; the
+common router and generic relation reorientation are 0.044080 and 0.211664 ms.
+Generated and oracle outputs are deterministic, with maximum/mean differences
+0.00390625/0.0000652.
 
 The same generic `RelationPlan`, score Map, `DomainRestriction`, and
 normalized-exponential Fold also generate an executable KV-major slot-wave
@@ -29,12 +31,14 @@ a bounded query group. The primary non-monotone relation covers 996 edges with
 671 tasks, uses no per-edge partial-state buffer or semantic atomics, and
 repeats bitwise. Its CUDA-core body is intentionally structural and measures
 107.879105 ms, so query-major remains selected. Sparse-attention structural
-synthesis is complete, but performance acceptance is provisional because the
-comparison kernel is SM80-oriented. The next oracle pass must first establish
-an exact semantic match to FlashMoBA, then try the current Hopper-enabled MIT
-Block-Sparse-Attention implementation if needed. Evidence for the historical
-control is under
-`benchmarks/artifacts/natural_routed_sparse_attention_h100_matched_v0`.
+synthesis and the exact-expert 1.20-times gate are complete. The FlashMoBA
+denominator is physically loose: it preserves per-token/per-head row-list
+generality and uses SM80-style MMA plus `cp.async`, while Shuttle is specialized
+to the shared block relation and is Hopper-native. The already-measured current
+MIT Block-Sparse-Attention result of 1.423632 ms remains a tighter secondary
+local H100 control, but it is also SM80-style. Evidence for the new primary
+comparison is under
+`benchmarks/artifacts/sparse_flashmoba_h100_matched_v0`.
 
 The dense path has also completed the revised statistical protocol. Two
 independent 30-sample captures reverse generated/oracle process order and use a

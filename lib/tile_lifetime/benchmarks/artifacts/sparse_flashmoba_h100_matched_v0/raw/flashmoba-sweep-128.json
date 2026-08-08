@@ -1,0 +1,225 @@
+{
+  "benchmark": "shuttle_natural_routed_streaming_attention_sm90",
+  "source": "ordinary JAX -> StableHLO -> Relation/Contract/Map/DomainRestriction/Fold",
+  "configuration": {
+    "sequence": 16384,
+    "block": 128,
+    "slots": 8,
+    "router_dimension": 64,
+    "seed": 1701,
+    "warmups": 3,
+    "repeats": 4,
+    "include_block_sparse_oracle": false,
+    "include_flash_moba_oracle": true,
+    "flash_moba_query_group": 128,
+    "include_kv_major": false,
+    "kv_query_capacity": 2,
+    "include_kv_capacity_mutation": false,
+    "json_output": "/tmp/flashmoba-sweep-128.json"
+  },
+  "hardware": "NVIDIA H100 80GB HBM3, 595.71.05, 700.00 W, 1830 MHz, 2619 MHz",
+  "torch": "2.13.0+cu130",
+  "compile_seconds": 3.1119991913437843,
+  "kv_major_compile_seconds": null,
+  "samples_ms": [
+    0.6396160125732422,
+    0.6294080018997192,
+    0.5866879820823669,
+    0.627776026725769
+  ],
+  "median_ms": 0.6285920143127441,
+  "minimum_ms": 0.5866879820823669,
+  "maximum_ms": 0.6396160125732422,
+  "mean_ms": 0.6208720058202744,
+  "measurement_protocol": {
+    "name": "alternating_counterbalanced_pairs",
+    "variants": [
+      "generated",
+      "matched_expert_oracle"
+    ],
+    "warmup_launch_orders": [
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ]
+    ],
+    "sample_launch_orders": [
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ],
+      [
+        "generated",
+        "matched_expert_oracle"
+      ],
+      [
+        "matched_expert_oracle",
+        "generated"
+      ]
+    ],
+    "sample_pairing": "samples at the same index form one generated/oracle pair",
+    "timing": "separate CUDA events per launch; each end event is synchronized before the next launch"
+  },
+  "kv_major": null,
+  "max_absolute_error": 0.007902860641479492,
+  "mean_absolute_error": 0.00017903203843161464,
+  "deterministic": true,
+  "output_sha256": "e9399766068941b3b60329760c04b576c79cec38fd036c8cbdfe43cdf8da3a83",
+  "relation_sha256": "0a2a06781755f5f577237a2e48c810cb160fd88db3295835458350f47ad61cbb",
+  "semantic_erasure": {
+    "source_semantics": [
+      "top_k",
+      "selected_exact_attention",
+      "normalized_exponential",
+      "causal_predicate"
+    ],
+    "lowering_steps": [
+      {
+        "source_semantic": "top_k",
+        "generic_primitives": [
+          "Contract",
+          "DomainRestriction",
+          "Relation"
+        ]
+      },
+      {
+        "source_semantic": "selected_exact_attention",
+        "generic_primitives": [
+          "RelationPlan",
+          "Contract",
+          "Map",
+          "Fold",
+          "DomainRestriction"
+        ]
+      },
+      {
+        "source_semantic": "normalized_exponential",
+        "generic_primitives": [
+          "Map",
+          "Fold"
+        ]
+      },
+      {
+        "source_semantic": "causal_predicate",
+        "generic_primitives": [
+          "DomainRestriction"
+        ]
+      }
+    ],
+    "scheduling_keys": [
+      "relation_selection:left_rank=2:right_rank=2:selected=8:accumulate=fp32",
+      "domain_restriction:binary_affine_index_predicate",
+      "relation_plan:runtime_binary_edges:dual_orientation",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:select(less_equal(input,input),multiply(input,constant),constant)",
+      "fold:maximum:reduction_rank=1:accumulate=fp32",
+      "map:subtract(input,input)",
+      "map:exp(input)",
+      "fold:sum:reduction_rank=1:accumulate=fp32",
+      "contract:inputs=2:output_rank=4:reduction_rank=1:accumulate=fp32",
+      "map:divide(input,input)"
+    ],
+    "validation_errors": []
+  },
+  "launch_manifest": {
+    "generated_path": [
+      "generic router Contract",
+      "generic top-k Relation index generation",
+      "generated SM90 QK/online-Fold/PV streaming skeleton"
+    ],
+    "expert_oracle_semantic_kernels": []
+  },
+  "benchmark_boundary": {
+    "included": [
+      "router Contract",
+      "top-k/index plane",
+      "selected exact attention"
+    ],
+    "excluded": [
+      "QKV projection",
+      "output projection"
+    ],
+    "oracle_requirement": "must include the identical router Contract and top-k/index plane",
+    "legacy_seer_2_388208_ms_is_matched": false
+  },
+  "matched_expert_oracle": {
+    "implementation": "pinned FlashMoBA precomputed-relation expert oracle",
+    "revision": "39d9ac043b271d046a2181a9991e99a26b67bca1",
+    "samples_ms": [
+      6.068704128265381,
+      6.075712203979492,
+      6.058080196380615,
+      6.054624080657959
+    ],
+    "median_ms": 6.063392162322998,
+    "maximum_absolute_difference_from_generated": 0.00390625,
+    "mean_absolute_difference_from_generated": 6.517238216474652e-05,
+    "deterministic": true,
+    "output_sha256": "d4991478a94211c0a48b442259004f660efaa8f56c34c549b3f832f73067ee21",
+    "generated_to_oracle_ratio": 0.1036700245480937,
+    "matched_boundary": true,
+    "attention_only": {
+      "samples_ms": [
+        5.69049596786499,
+        5.6975998878479,
+        5.699808120727539,
+        5.695295810699463
+      ],
+      "median_ms": 5.696447849273682,
+      "router_only_samples_ms": [
+        0.047807998955249786,
+        0.04566400125622749,
+        0.04464000090956688,
+        0.044415999203920364
+      ],
+      "router_only_median_ms": 0.045152001082897186,
+      "relation_reorientation_only_samples_ms": [
+        0.22150400280952454,
+        0.21660800278186798,
+        0.21052800118923187,
+        0.20796799659729004
+      ],
+      "relation_reorientation_only_median_ms": 0.21356800198554993,
+      "excluded": [
+        "router Contract",
+        "top-k",
+        "relation reorientation"
+      ],
+      "acceptance_denominator": false
+    },
+    "relation_adapter": {
+      "source_relation": "query block -> selected KV block, shared across query heads",
+      "physical_relation": "destination KV block -> sorted query-token rows, repeated across query heads",
+      "col_offsets_shape": [
+        1,
+        32,
+        128
+      ],
+      "col_nnz_shape": [
+        1,
+        32,
+        128
+      ],
+      "row_indices_shape": [
+        4079616
+      ],
+      "physical_query_group_size": 128,
+      "slot_order_policy": "erased to a selected set before exact normalized-exponential Fold",
+      "routing_cost_in_full_boundary": true,
+      "query_blocks_omitting_current_block": 95,
+      "sampled_omitted_current_block": 127
+    }
+  }
+}

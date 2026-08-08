@@ -1126,3 +1126,139 @@ author: dlwh
   matched-boundary, and 1.20-times gates.
 - Released the last H100 holder at 18:22 PDT and removed its temporary Iris
   worktree.
+
+### 2026-08-07 19:10 PDT - TLTC-061 sparse Hopper-oracle audit
+
+#### Background research brief
+
+- Effort: medium. Stop rule: inspect the current pinned repositories, public
+  interfaces, semantic references, tests, benchmark boundaries, active kernel
+  traits, and relevant negative evidence until the oracle ordering is
+  decisive. FlashMoBA, MIT Block-Sparse-Attention, FlashMLA sparse prefill, and
+  FSA/NSA all converged without requiring a broader literature sweep.
+- Question: which current expert implementation can provide an exactly matched
+  H100 acceptance denominator for Shuttle's natural BF16 causal GQA workload
+  at S=16,384, block 128, top-8, Hq/Hkv=32/8, and D=128?
+- Current Shuttle boundary: FP32 block-metadata Contract, causal block-domain
+  restriction, sorted top-k shared by every token and head in one query block,
+  exact selected attention, and BF16 output. QKV and output projections are
+  outside both paths.
+
+#### Evidence map
+
+- FlashMoBA at
+  [`39d9ac043b271d046a2181a9991e99a26b67bca1`](https://github.com/mit-han-lab/flash-moba/tree/39d9ac043b271d046a2181a9991e99a26b67bca1)
+  is the primary payload oracle. Its precomputed-relation interface exactly
+  supports BF16, D=128, native 32:8 GQA, causal token masking, block 128, top-8,
+  scale, and packed BF16 output. The interface is documented in the
+  [pinned implementation](https://github.com/mit-han-lab/flash-moba/blob/39d9ac043b271d046a2181a9991e99a26b67bca1/flash_moba/flash_moba_interface.py#L578-L685).
+  Shuttle can reorient each `query block -> KV block` edge into FlashMoBA's
+  per-head, KV-column-major sorted query-row lists without changing the
+  selected set.
+- FlashMoBA's complete wrapper is not an exact natural-program oracle. It
+  scores every query token/head against mean-pooled actual K blocks, always
+  includes the current causal block, and can select a different relation per
+  head. Shuttle scores explicit block metadata once per query block, shares the
+  relation across heads, and does not force the current block after the first
+  top-k-saturated blocks. The per-head behavior is confirmed in
+  [FlashMoBA issue 8](https://github.com/mit-han-lab/flash-moba/issues/8).
+  Therefore the fair full boundary is the common Shuttle router plus a generic
+  relation reorientation plus `flash_moba_attn_varlen_func`; the native
+  FlashMoBA top-k is diagnostic only.
+- FlashMoBA's published H100 plot is not a reusable number. The published
+  workload is batch 2, FP16 MHA with 16 heads, and its own token/head router;
+  Shuttle needs a local BF16 GQA run. The physical kernel is current and
+  H100-measured but remains FA2/SM80-style MMA plus `cp.async`, not a
+  WGMMA/TMA Hopper-native body.
+- MIT Block-Sparse-Attention current HEAD/tag v0.0.2 is exactly
+  [`49d6c39e4dc0303442cda3bb758b3925d4399c49`](https://github.com/mit-han-lab/Block-Sparse-Attention/tree/49d6c39e4dc0303442cda3bb758b3925d4399c49),
+  with CUTLASS `a75b4ac483166189a45290783cb0a18af5ff0ea5`. This is already the
+  revision used for Shuttle's local 1.423632-ms H100 measurement. The December
+  update added SM90/SM100 build compatibility, but the active traits still use
+  [SM80 MMA and cp.async](https://github.com/mit-han-lab/Block-Sparse-Attention/blob/49d6c39e4dc0303442cda3bb758b3925d4399c49/csrc/block_sparse_attn/src/kernel_traits.h#L15-L34).
+  It remains an exact semantic and local-H100 secondary reference, not the
+  strong Hopper performance gate. Published figures remain A100-only.
+- FlashMLA sparse prefill at
+  [`15f13e5030374295491c5ce31b02d7e63a7772c6`](https://github.com/deepseek-ai/FlashMLA/tree/15f13e5030374295491c5ce31b02d7e63a7772c6)
+  is rejected for this row. Its sparse SM90 path requires MLA/MQA semantics
+  with Hkv=1, Dqk=512/576, Dv=512, and shared latent K/V, not ordinary 32:8
+  GQA D=128. It may become a separate DSA/MLA control.
+- Full FSA at
+  [`7ff144fd7ff485dc4220d439f31cc1708b64fef3`](https://github.com/Relaxed-System-Lab/Flash-Sparse-Attention/tree/7ff144fd7ff485dc4220d439f31cc1708b64fef3)
+  is NSA semantics: compressed routing, selected attention, an independent
+  sliding-window branch, learned gated merge, and projections. It must be a
+  separate workload. Its selected-attention subkernel is structurally
+  adaptable but was already measured at 12.539 ms for 16K and should remain a
+  secondary control.
+
+#### Ranked experiments
+
+1. Build the pinned FlashMoBA SM90 target and validate a relation that omits
+   the current KV block against the same exact sampled semantic reference.
+2. Measure payload-only `flash_moba_attn_varlen_func` with a cached identical
+   relation. Sweep physical query grouping `{128,256,512,768,1024}` while
+   keeping logical block size 128.
+3. Measure the matched whole boundary: identical natural router, top-k,
+   generic relation reorientation, and attention. Record relation conversion
+   separately and counterbalance two independent 30-sample captures.
+4. Keep the existing current-revision MIT result as a secondary control. Do
+   not rerun it as though a newer Hopper-native implementation existed.
+5. Do not spend H100 time on FlashMLA or whole FSA for this semantic row.
+
+#### Falsifiers and handoff
+
+- FlashMoBA is disqualified from the current semantic row if a precomputed
+  relation that omits the current block produces incorrect output, or if its
+  causal/GQA precision boundary differs from the natural reference.
+- Payload-only speed cannot alone close Shuttle's natural-program gate. The
+  matched router/index boundary must also be reported; if generic relation
+  reorientation dominates, that is a Shuttle index-plane optimization target,
+  not permission to substitute FlashMoBA's different router.
+- The prior TLTC-060 release statement was operationally stale: the
+  `dlwh-shuttle-affine-scan` one-H100 batch reservation remained alive. It is
+  being reused for this audit and will be explicitly released after the run.
+
+### 2026-08-07 20:40 PDT - TLTC-062 matched FlashMoBA H100 oracle
+
+- Built pinned FlashMoBA
+  `39d9ac043b271d046a2181a9991e99a26b67bca1` with CUTLASS
+  `a2439551c765c5393aebe557ee75d3a0412d2211` on one H100. The build-only
+  specialization disables backward and unused forward variants; it does not
+  change the forward algorithm.
+- Closed the semantic boundary before timing. The exact payload interface
+  supports BF16, D=128, block 128, top-8, causal masking, and native 32:8 GQA.
+  FlashMoBA's native per-token/per-head K-derived router is not matched, so the
+  full comparison uses the identical natural Shuttle metadata router plus a
+  generic RelationPlan reorientation into FlashMoBA's destination-major row
+  lists. The primary fixture has 95 query blocks that omit the current block.
+- Swept FlashMoBA physical query grouping `{128,256,512,768,1024}` while
+  retaining Shuttle's logical block size 128. Group 1024 gave the best
+  FlashMoBA full-boundary median and was frozen before confirmation.
+- Two independent counterbalanced captures contain 30 samples per
+  implementation. Pooled medians are 0.617200 ms for generated Shuttle,
+  5.264560 ms for the matched FlashMoBA full boundary, and 4.894560 ms for
+  FlashMoBA cached-relation payload. The common router and relation
+  reorientation separately measure 0.044080 and 0.211664 ms. Shuttle/full is
+  0.117237 times.
+- Generated and FlashMoBA outputs differ by at most 0.00390625 with mean
+  absolute difference 0.0000651724. Both repeat bitwise across both captures;
+  relation and output hashes are stable.
+- Interpretation: the exact-expert 1.20-times gate is closed, but FlashMoBA is
+  a loose physical denominator for block-shared semantics. It retains a more
+  general per-token/per-head row-list interface and uses SM80-style MMA plus
+  `cp.async`; Shuttle is specialized to the shared relation and Hopper-native.
+  The current MIT 1.423632-ms measurement is a tighter secondary local H100
+  control, though it is also SM80-style. Do not claim an 8.5-times advantage
+  over the best possible expert implementation.
+- FlashMLA remains excluded because its sparse prefill uses MLA/MQA dimensions
+  rather than ordinary 32:8 GQA D=128. Whole FSA remains an NSA-semantics
+  workload, not an interchangeable MoBA oracle.
+- Artifact:
+  `lib/tile_lifetime/benchmarks/artifacts/sparse_flashmoba_h100_matched_v0`.
+  It freezes raw distributions, the candidate sweep, semantic and deterministic
+  hashes, source/toolchain pins, build logs, hardware telemetry, exact benchmark
+  source, and checksums.
+- Next action: release the reused H100 and push the checkpoint. If sparse
+  attention is revisited, build a tight block-shared WGMMA/TMA oracle or change
+  the natural workload to match FlashMoBA's native router; do not spend the next
+  iteration on more tile-size tuning against this loose denominator.

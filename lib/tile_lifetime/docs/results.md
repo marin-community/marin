@@ -457,13 +457,48 @@ At S=16,384, block 128, top-8, Hq/Hkv=32/8, and D=128, two counterbalanced
 | Generated Shuttle query-major | 0.617584 ms |
 | Matched expert oracle | 1.423632 ms |
 
-The ratio is 0.433809 times. This is not an acceptance ratio because the
-comparison kernel is SM80-oriented. Generated versus oracle maximum/mean differences are
-0.00390625/0.0000652, and both outputs repeat bitwise. The oracle is an
+The ratio is 0.433809 times. Generated versus oracle maximum/mean differences
+are 0.00390625/0.0000652, and both outputs repeat bitwise. The oracle is an
 SM80-style implementation compiled for SM90, so the result establishes a
-matched buildable control. Performance acceptance requires an exactly matched
-FlashMoBA H100 comparison or, if that interface cannot match, a local benchmark
-of the current Hopper-enabled MIT Block-Sparse-Attention implementation.
+matched buildable secondary control rather than the primary acceptance
+denominator.
+
+### Matched FlashMoBA primary oracle
+
+Pinned FlashMoBA `39d9ac043b271d046a2181a9991e99a26b67bca1` exactly
+matches the BF16 D=128, 32:8 GQA, causal, block-128, top-8 attention payload
+through its precomputed-relation interface. Its native router does not match:
+it scores every query token/head against mean-pooled K blocks and forces the
+current block, whereas Shuttle routes explicit block metadata once per query
+block and shares the relation across heads. The full comparison therefore uses
+the common Shuttle router and a generic relation reorientation into
+FlashMoBA's KV-column-major sorted query-row lists.
+
+The bounded FlashMoBA physical query-group sweep selected 1024. Two independent
+counterbalanced 30-sample captures pool to:
+
+| Measurement | Pooled median |
+|---|---:|
+| Generated Shuttle full boundary | 0.617200 ms |
+| Matched FlashMoBA full boundary | 5.264560 ms |
+| FlashMoBA cached-relation payload | 4.894560 ms |
+| Common router only | 0.044080 ms |
+| Relation reorientation only | 0.211664 ms |
+
+The generated/full ratio is 0.117237 times and closes the exact-expert
+1.20-times gate. A semantic fixture with 95 query blocks omitting the current
+block passes; generated and FlashMoBA outputs differ by at most 0.00390625 with
+mean difference 0.0000651724, and both repeat bitwise.
+
+The denominator is not tight. FlashMoBA retains a general per-token/per-head
+row-list interface and its active forward path uses SM80-style MMA plus
+`cp.async`, not WGMMA/TMA. Shuttle's generated path is specialized to the
+block-shared relation and is Hopper-native. The result should be read as a
+successful exact-semantic expert comparison, not as an 8.5-times superiority
+claim. The MIT 1.423632-ms result is the tighter secondary H100 control, though
+it too is SM80-style. A tight future oracle requires a block-shared WGMMA/TMA
+body or a natural workload matching FlashMoBA's native router. Raw evidence is
+under `benchmarks/artifacts/sparse_flashmoba_h100_matched_v0`.
 
 The earlier fixed-order captures freeze the 1.424720-ms oracle target and remain
 in the artifact. The counterbalanced captures confirm the result without
