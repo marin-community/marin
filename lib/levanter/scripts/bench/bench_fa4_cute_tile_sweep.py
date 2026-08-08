@@ -3,16 +3,21 @@
 
 """Sweep segmented FA4/CuTe tile configurations at Grug hero attention shapes.
 
-``_segmented_kernel_config`` pins compute capability 10.x at head dimension 128 to a 64x64
-forward tile, a choice measured on d5120 shapes. The FSDP hero is d2048 and spends 15 of 18
-layers on a 512-token sliding window, where each query tile covers only nine key tiles and
-per-tile overhead stops amortizing. This sweep times both windows against the reference
-configuration and checks that every candidate reproduces its outputs and gradients.
+Times a sliding-window and a full-causal mask against a 64x64 reference configuration, and
+gates every candidate on reproducing ``reference_attention`` in float32. The forward tile is
+the only free dimension on compute capability 10.x and 12.x: ``_segmented_backward_arches``
+requires a 64x64 backward at 128 threads there, so other backward tiles raise
+``NotImplementedError`` and are reported as such rather than skipped.
+
+Larger query tiles matter most under a short sliding window, where each query tile covers few
+key tiles and the fixed per-tile cost -- pipeline fill and drain, the Q load, the softmax
+epilogue -- has little inner loop to amortize against.
 """
 
 import argparse
 import dataclasses
 import time
+from dataclasses import dataclass
 from unittest.mock import patch
 
 import jax
@@ -42,17 +47,25 @@ def _loss(q, k, v, mask):
     return jnp.sum(fa4_cute.gpu_fa4_cute_attention(q, k, v, mask).astype(jnp.float32) ** 2)
 
 
-def _bench(config: Flash4CuteKernelConfig, q, k, v, mask, steps: int, warmup: int):
+@dataclass(frozen=True)
+class BenchResult:
+    """One timed configuration. ``backward`` is the grad-of-loss time net of the forward it re-runs."""
+
+    out: jax.Array
+    grads: tuple[jax.Array, ...]
+    forward: float
+    backward: float
+
+
+def _bench(config: Flash4CuteKernelConfig, q, k, v, mask, steps: int, warmup: int) -> BenchResult:
     with patch.object(fa4_cute, "_segmented_kernel_config", lambda head_dim: config):
         forward = jax.jit(lambda q, k, v: fa4_cute.gpu_fa4_cute_attention(q, k, v, mask))
         grad = jax.jit(jax.grad(_loss, argnums=(0, 1, 2)))
 
-        start = time.perf_counter()
         out = forward(q, k, v)
         out.block_until_ready()
         grads = grad(q, k, v, mask)
         jax.block_until_ready(grads)
-        compile_time = time.perf_counter() - start
 
         for _ in range(warmup):
             forward(q, k, v).block_until_ready()
@@ -68,26 +81,34 @@ def _bench(config: Flash4CuteKernelConfig, q, k, v, mask, steps: int, warmup: in
             jax.block_until_ready(grad(q, k, v, mask))
         grad_time = (time.perf_counter() - start) / steps
 
-    return out, grads, forward_time, grad_time - forward_time, compile_time
+    return BenchResult(out=out, grads=grads, forward=forward_time, backward=grad_time - forward_time)
 
 
 def _max_diff(a, b) -> float:
     return float(jnp.max(jnp.abs(a.astype(jnp.float32) - b.astype(jnp.float32))))
 
 
-def _check_against_float32_reference(config: Flash4CuteKernelConfig, window: int | None, seq_len: int) -> str:
+def _check_against_float32_reference(
+    config: Flash4CuteKernelConfig,
+    window: int | None,
+    args: argparse.Namespace,
+) -> str:
     """Compare a candidate against the float32 reference at the tolerances the GPU tests use.
 
     Timing runs at hero shapes, where bf16 gradients are large enough that an absolute
     difference between two tile configurations says nothing about correctness. This is the
-    check that decides whether a configuration is usable.
+    check that decides whether a configuration is usable. It reuses the swept head counts and
+    document density but shrinks batch and sequence length, because the reference materializes
+    the full score matrix and is quadratic in sequence length.
     """
+    seq_len = args.check_seq_len
     key = jax.random.key(11)
-    q = jax.random.normal(key, (1, seq_len, 8, 128), dtype=jnp.bfloat16)
-    k = jax.random.normal(jax.random.fold_in(key, 1), (1, seq_len, 2, 128), dtype=jnp.bfloat16)
-    v = jax.random.normal(jax.random.fold_in(key, 2), (1, seq_len, 2, 128), dtype=jnp.bfloat16)
+    q = jax.random.normal(key, (1, seq_len, args.q_heads, args.head_dim), dtype=jnp.bfloat16)
+    kv_shape = (1, seq_len, args.kv_heads, args.head_dim)
+    k = jax.random.normal(jax.random.fold_in(key, 1), kv_shape, dtype=jnp.bfloat16)
+    v = jax.random.normal(jax.random.fold_in(key, 2), kv_shape, dtype=jnp.bfloat16)
     cotangent = jax.random.normal(jax.random.fold_in(key, 3), q.shape, dtype=jnp.bfloat16)
-    segment_ids = _segment_ids(1, seq_len, 3)
+    segment_ids = _segment_ids(1, seq_len, args.documents)
     mask = AttentionMask.causal(sliding_window=window).with_segment_ids(segment_ids)
 
     def fa4_loss(q_arg, k_arg, v_arg):
@@ -172,15 +193,15 @@ def main() -> None:
         reference = dataclasses.replace(
             base, forward_tile=REFERENCE_TILE, backward_tile=REFERENCE_TILE, num_threads=128
         )
-        ref_out, ref_grads, ref_fwd, ref_bwd, _ = _bench(reference, q, k, v, mask, args.steps, args.warmup)
+        ref = _bench(reference, q, k, v, mask, args.steps, args.warmup)
         print(f"\n=== {window_name} (window={window}) ===")
         print(
             f"{'forward_tile':>14} {'backward_tile':>14} {'thr':>4} {'fwd ms':>8} {'bwd ms':>8} "
             f"{'total ms':>9} {'vs ref':>8} {'max|d|':>9}"
         )
         print(
-            f"{str(REFERENCE_TILE):>14} {str(REFERENCE_TILE):>14} {128:>4} {ref_fwd * 1e3:8.3f} "
-            f"{ref_bwd * 1e3:8.3f} {(ref_fwd + ref_bwd) * 1e3:9.3f} {'1.00x':>8} {'ref':>9}"
+            f"{str(REFERENCE_TILE):>14} {str(REFERENCE_TILE):>14} {128:>4} {ref.forward * 1e3:8.3f} "
+            f"{ref.backward * 1e3:8.3f} {(ref.forward + ref.backward) * 1e3:9.3f} {'1.00x':>8} {'ref':>9}"
         )
 
         for config in candidates:
@@ -191,20 +212,24 @@ def main() -> None:
             ):
                 continue
             try:
-                out, grads, fwd, bwd, _ = _bench(config, q, k, v, mask, args.steps, args.warmup)
-            except Exception as exc:  # unsupported tile/thread/smem combination
+                got = _bench(config, q, k, v, mask, args.steps, args.warmup)
+            except Exception as exc:
+                # A rejected tile/thread/shared-memory combination is an expected outcome here, but
+                # print the message so a genuine failure is not mistaken for an unsupported config.
+                reason = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
                 print(
                     f"{str(config.forward_tile):>14} {str(config.backward_tile):>14} "
-                    f"{config.num_threads:>4} {'-':>8} {'-':>8} {'-':>9} {'-':>8}  {type(exc).__name__}"
+                    f"{config.num_threads:>4} {'-':>8} {'-':>8} {'-':>9} {'-':>8}  "
+                    f"{type(exc).__name__}: {reason[:80]}"
                 )
                 continue
-            diff = max([_max_diff(out, ref_out)] + [_max_diff(g, r) for g, r in zip(grads, ref_grads)])
-            speedup = (ref_fwd + ref_bwd) / (fwd + bwd)
-            verdict = _check_against_float32_reference(config, window, args.check_seq_len)
+            diff = max([_max_diff(got.out, ref.out)] + [_max_diff(g, r) for g, r in zip(got.grads, ref.grads)])
+            speedup = (ref.forward + ref.backward) / (got.forward + got.backward)
+            verdict = _check_against_float32_reference(config, window, args)
             print(
                 f"{str(config.forward_tile):>14} {str(config.backward_tile):>14} {config.num_threads:>4} "
-                f"{fwd * 1e3:8.3f} {bwd * 1e3:8.3f} {(fwd + bwd) * 1e3:9.3f} {speedup:7.2f}x "
-                f"{diff:9.2e} {verdict}"
+                f"{got.forward * 1e3:8.3f} {got.backward * 1e3:8.3f} "
+                f"{(got.forward + got.backward) * 1e3:9.3f} {speedup:7.2f}x {diff:9.2e} {verdict}"
             )
 
 

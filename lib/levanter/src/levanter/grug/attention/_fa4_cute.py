@@ -294,13 +294,7 @@ def _gpu_compute_arch() -> int:
 
 
 def _segmented_kernel_config(head_dim: int):
-    """Tile configuration for the segmented forward and backward kernels.
-
-    This Grug port is not the native SM100 FA4 kernel; it carries dynamic lower-bound metadata
-    through the SM80/SM120 segmented fork. ``_segmented_backward_arches`` pins the backward on
-    compute capability 10.x/12.x to 64x64 at 128 threads, so the forward tile is the only free
-    dimension. ``scripts/bench/bench_fa4_cute_tile_sweep.py`` measures it.
-    """
+    """Tile configuration for the segmented kernels at the detected compute capability."""
     return flash4_cute_kernel_config(head_dim, arch=_gpu_compute_arch())
 
 

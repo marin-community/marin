@@ -18,6 +18,7 @@ from rigging.filesystem import marin_temp_bucket, prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import MoeHeuristic
 from experiments.grug.moe_hero_fsdp.launch import (
+    DEFAULT_WANDB_ENTITY,
     DEFAULT_WANDB_PROJECT,
     HERO_GPUS_PER_TASK,
     HeroThroughputResult,
@@ -28,7 +29,6 @@ from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
 from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import GrugRunConfig, GrugRunMode, GrugTrainerConfig, run_grug
 
-ACTIVE_PARAMETER_COUNT = 869_793_792
 BENCHMARK_BATCH_SIZE = 512
 BENCHMARK_NODES = 4
 BENCHMARK_STEPS = 20
@@ -149,7 +149,7 @@ def build_fa4_benchmark_run(
         )
         tracker = (
             WandbConfig(
-                entity="marin-community",
+                entity=DEFAULT_WANDB_ENTITY,
                 project=DEFAULT_WANDB_PROJECT,
                 tags=["grug", "moe", "fsdp", "gb200", "fa4-sm100", "1b-active"],
                 group=WANDB_GROUP,

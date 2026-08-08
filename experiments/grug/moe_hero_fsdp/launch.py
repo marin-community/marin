@@ -43,6 +43,7 @@ from experiments.grug.recovery.ablation_catalog import environment_ablations, se
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
+DEFAULT_WANDB_ENTITY = "marin-community"
 DEFAULT_WANDB_PROJECT = "marin_moe"
 HERO_FSDP_BATCH_SIZE = 1024
 HERO_NODES_PER_RACK = 16
@@ -119,7 +120,7 @@ def _hero_run_config(
         mp=jmp.get_policy(HERO_MIXED_PRECISION),
         tracker=(
             WandbConfig(
-                entity="marin-community",
+                entity=DEFAULT_WANDB_ENTITY,
                 project=wandb_project,
                 tags=["grug", "moe", "hero", "fsdp", "gb200"],
                 group="moe-hero-fsdp",

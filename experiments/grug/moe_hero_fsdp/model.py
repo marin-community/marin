@@ -64,6 +64,7 @@ _CE_BLOCK_SIZES = BlockSizes(v_block_size=4096)
 # is replicated across racks and FSDP-sharded within each rack.
 _EMBED_PARTITION_SPEC = P(None, None)
 _LM_HEAD_PARTITION_SPEC = P("data", "model")
+_GPU_FA4_THD_ATTENTION: GrugAttentionImplementation = "gpu_fa4_thd"
 GRUG_MOE_MODEL_TYPE = "grug_moe"
 GRUG_MOE_ARCHITECTURE = "GrugMoeForCausalLM"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
@@ -562,14 +563,14 @@ class CausalSelfAttention(eqx.Module):
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
-        if self.cfg.attention_implementation == "gpu_fa4_thd":
+        if self.cfg.attention_implementation == _GPU_FA4_THD_ATTENTION:
             if not isinstance(mask, AttentionMask):
                 raise NotImplementedError("gpu_fa4_thd requires a structured AttentionMask.")
             short_mask, long_mask = _layer_attention_masks(mask, sliding_window=self.cfg.sliding_window)
             attn_out = jax.lax.cond(
                 jnp.asarray(is_global, dtype=jnp.bool_),
-                lambda qkv: attention(qkv[0], qkv[1], qkv[2], long_mask, implementation="gpu_fa4_thd"),
-                lambda qkv: attention(qkv[0], qkv[1], qkv[2], short_mask, implementation="gpu_fa4_thd"),
+                lambda qkv: attention(qkv[0], qkv[1], qkv[2], long_mask, implementation=_GPU_FA4_THD_ATTENTION),
+                lambda qkv: attention(qkv[0], qkv[1], qkv[2], short_mask, implementation=_GPU_FA4_THD_ATTENTION),
                 (q, k, v),
             )
         else:
@@ -1015,7 +1016,7 @@ class Transformer(eqx.Module):
             q_segment_ids = _batch_reshard(q_segment_ids)
             segment_ids = (q_segment_ids, q_segment_ids)
         thd_segment_metadata = mask.thd_segment_metadata if isinstance(mask, AttentionMask) else None
-        if cfg.attention_implementation == "gpu_fa4_thd":
+        if cfg.attention_implementation == _GPU_FA4_THD_ATTENTION:
             # Derived once per step, outside the layer scan.
             base_mask = _thd_base_mask(segment_ids, thd_segment_metadata, max_segments=cfg.thd_max_segments)
         else:
@@ -1034,7 +1035,7 @@ class Transformer(eqx.Module):
         # Homogeneous scan: one compiled Block body over the stacked layers. The per-layer
         # short/long choice rides in as a Bool[num_layers] scan input.
         mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every)
-        if cfg.attention_implementation == "gpu_fa4_thd":
+        if cfg.attention_implementation == _GPU_FA4_THD_ATTENTION:
             long_lower_bounds = short_lower_bounds = valid = None
         else:
             # The sliding window is a static AttentionMask field the scan body cannot vary, so the
@@ -1056,7 +1057,7 @@ class Transformer(eqx.Module):
         ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
             layer, layer_use_long_mask = scan_inputs
             use_long = jnp.asarray(layer_use_long_mask, dtype=jnp.bool_)
-            if cfg.attention_implementation == "gpu_fa4_thd":
+            if cfg.attention_implementation == _GPU_FA4_THD_ATTENTION:
                 layer_mask = long_mask
             else:
                 assert long_lower_bounds is not None and short_lower_bounds is not None and valid is not None
