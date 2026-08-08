@@ -47,7 +47,7 @@ HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
 
-def _hero_watch_config(interval: int, full: bool = False) -> WatchConfig:
+def _hero_watch_config(interval: int) -> WatchConfig:
     """Global gradient norm only, which is what a stability check needs.
 
     `WatchConfig`'s defaults watch grads *and* params, take a norm per parameter tensor, and set
@@ -57,8 +57,6 @@ def _hero_watch_config(interval: int, full: bool = False) -> WatchConfig:
     """
     if interval <= 0:
         return WatchConfig(watch_targets=[])
-    if full:
-        return WatchConfig(interval=interval)
     return WatchConfig(
         watch_targets=["grads"],
         include_per_parameter_norms=False,
@@ -145,8 +143,6 @@ def build_hero_run(
     eval_every: int = 0,
     save_checkpoints: bool = False,
     watch_interval: int = HERO_WATCH_INTERVAL,
-    watch_on_host: bool = True,
-    full_watch: bool = False,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -225,7 +221,6 @@ def build_hero_run(
         ema_beta=None,
         z_loss_weight=1e-4,
         offload_opt_state=HERO_OFFLOAD_OPT_STATE,
-        watch_on_host=watch_on_host,
         # A 25-step throughput gate does not need checkpoints, and writing the offloaded optimizer
         # state costs more than the gate itself. A multi-thousand-step run on a contended rack does:
         # without this, every preemption restarts from step 0, so a run longer than the mean time
@@ -283,7 +278,7 @@ def build_hero_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=_hero_watch_config(watch_interval, full_watch),
+            watch=_hero_watch_config(watch_interval),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
@@ -407,19 +402,6 @@ def build_hero_run(
     help="Steps between grad/param norm dumps. 0 disables them.",
 )
 @click.option(
-    "--watch-on-host/--watch-on-device",
-    default=True,
-    help=(
-        "Take grad norms on the host from a per-leaf copy. The device reduction needs the whole "
-        "tree live at once, which blocks rematerialization and starves the all-to-all collective."
-    ),
-)
-@click.option(
-    "--full-watch/--lean-watch",
-    default=False,
-    help="Watch grads and params with per-parameter norms, rather than one global gradient norm.",
-)
-@click.option(
     "--eval-every",
     type=click.IntRange(min=0),
     default=0,
@@ -461,8 +443,6 @@ def main(
     flavor: str,
     save_checkpoints: bool,
     watch_interval: int,
-    watch_on_host: bool,
-    full_watch: bool,
     eval_every: int,
     profile_steps: int,
     profile_start_step: int,
@@ -481,8 +461,6 @@ def main(
         flavor=flavor,
         save_checkpoints=save_checkpoints,
         watch_interval=watch_interval,
-        watch_on_host=watch_on_host,
-        full_watch=full_watch,
         eval_every=eval_every,
         profile_steps=profile_steps,
         profile_start_step=profile_start_step,
