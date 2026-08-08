@@ -390,8 +390,8 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
-    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+    @functools.partial(jax.jit, donate_argnums=(0,))
+    def train_step(state: GrugTrainState, batch):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
@@ -418,7 +418,7 @@ def _make_train_step(
         # watch until after `optimizer.update` keeps the entire gradient tree resident across the
         # update -- about 28 GiB per device at the hero shape -- which OOMs runs that fit without it.
         watch_stats: dict | None = None
-        if watch_config is not None and compute_watch:
+        if watch_config is not None and watch_config.is_enabled:
             early = tuple(t for t in watch_targets if t in ("grads", "params"))
             if early:
                 watch_stats = compute_watch_stats(
@@ -449,7 +449,7 @@ def _make_train_step(
                 params,
             )
 
-        if watch_config is not None and compute_watch:
+        if watch_config is not None and watch_config.is_enabled:
             late = tuple(t for t in watch_targets if t in ("updates", "opt_state"))
             if late:
                 watch_stats = {
@@ -632,11 +632,12 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
-                # grad_watch runs only on its configured interval.
-                compute_watch = (
-                    watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
-                )
-                state, metrics, watch_stats = train_step(state, batch, compute_watch=compute_watch)
+                # `compute_watch` used to be a static argument, which compiled a second
+                # executable and made the run alternate between two temp arenas -- enough to OOM a
+                # shape that fits without the watch. The reduction itself measures free, so compute
+                # it every step and let `watch_config.interval` govern logging only.
+                log_watch = watch_config.interval > 0 and current_step % watch_config.interval == 0
+                state, metrics, watch_stats = train_step(state, batch)
                 step = int(state.step) - 1
 
                 jax.block_until_ready(metrics["train/loss"])
@@ -674,7 +675,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         )
                         levanter.tracker.log(drop_metrics, step=step)
 
-                    if watch_stats is not None:
+                    if watch_stats is not None and log_watch:
                         levanter.tracker.log(watch_stats, step=step)
 
                 if checkpointer is not None:

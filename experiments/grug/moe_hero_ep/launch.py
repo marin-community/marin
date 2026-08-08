@@ -47,7 +47,7 @@ HERO_WATCH_INTERVAL = 0
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
 
 
-def _hero_watch_config(interval: int) -> WatchConfig:
+def _hero_watch_config(interval: int, full: bool = False) -> WatchConfig:
     """Global gradient norm only, which is what a stability check needs.
 
     `WatchConfig`'s defaults watch grads *and* params, take a norm per parameter tensor, and set
@@ -57,6 +57,8 @@ def _hero_watch_config(interval: int) -> WatchConfig:
     """
     if interval <= 0:
         return WatchConfig(watch_targets=[])
+    if full:
+        return WatchConfig(interval=interval)
     return WatchConfig(
         watch_targets=["grads"],
         include_per_parameter_norms=False,
@@ -143,6 +145,7 @@ def build_hero_run(
     eval_every: int = 0,
     save_checkpoints: bool = False,
     watch_interval: int = HERO_WATCH_INTERVAL,
+    full_watch: bool = False,
     profile_steps: int = 0,
     profile_start_step: int = 5,
     version: str | None = None,
@@ -278,7 +281,7 @@ def build_hero_run(
                 name=run_id,
                 replicate_path=ctx.output_path,
             ),
-            watch=_hero_watch_config(watch_interval),
+            watch=_hero_watch_config(watch_interval, full_watch),
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
@@ -400,6 +403,14 @@ def build_hero_run(
     default=HERO_WATCH_INTERVAL,
     show_default=True,
     help="Steps between grad/param norm dumps. 0 disables them.",
+)
+@click.option(
+    "--full-watch/--lean-watch",
+    default=False,
+    help=(
+        "Use WatchConfig's upstream defaults (grads and params, per-parameter norms, split scan "
+        "layers) instead of a single global gradient norm."
+    ),
 )
 @click.option(
     "--eval-every",
