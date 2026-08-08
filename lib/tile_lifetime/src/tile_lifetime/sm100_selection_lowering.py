@@ -68,6 +68,7 @@ class SM100ProjectedSelectionLowering:
                     f"relation_indices={self.relation_index_bytes}"
                 ),
                 f"  local block forced: {str(self.program.force_local_block).lower()}",
+                f"  selection policy: {self.program.selection_semantics.scheduling_key}",
                 "  external semantics: none",
             )
         )

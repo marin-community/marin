@@ -30,9 +30,24 @@ from typing import Any
 
 import numpy as np
 
+from tile_lifetime.ir import DType
 from tile_lifetime.sm100_routed_lowering import (
     SM100RelationOrientation,
     SM100RoutedStreamingLowering,
+)
+from tile_lifetime.tensor_program import ScalarExpression, ScalarExpressionKind, TensorAxis
+from tile_lifetime.tiled_fold_finalize import (
+    FoldDenominatorPolicy,
+    FoldFeatureLayout,
+    FoldPartialAddressing,
+    FoldPhysicalAxis,
+    FoldReassociationPolicy,
+    FoldScalarReduction,
+    TiledFoldAxes,
+    TiledFoldFinalizeProgram,
+    TiledFoldFinalizeSchedule,
+    TiledFoldInputLayout,
+    normalized_exponential_fold_program,
 )
 
 MINIMAX_MSA_COMMIT = "80434d7f67877c6570ca19cac444b84bc9855dac"
@@ -98,6 +113,7 @@ class PartialMergeScheduleKind(StrEnum):
 
     ROW_BLOCK = "row_block"
     WARP_ROWS = "warp_rows"
+    TILED_PIPELINED = "tiled_pipelined"
 
 
 def real_col_to_stg128_half_col(real_col: int) -> int:
@@ -177,6 +193,11 @@ class PartialStateMergeProgram:
     rows_per_block: int = 1
     accumulator_dtype: str = "fp32"
     source_ordered: bool = True
+    partial_extent: int = 16
+    feature_tile: int = 64
+    pipeline_stages: int = 4
+    vector_bytes: int = 16
+    generic_program: TiledFoldFinalizeProgram | None = None
 
     def merge_numpy(self, scalar_state: np.ndarray, value_state: np.ndarray) -> np.ndarray:
         """Merge partial states in ascending partial-slot order."""
@@ -198,6 +219,31 @@ class PartialStateMergeProgram:
             merged = np.sum(weight[..., None] * value_state.astype(np.float32), axis=0)
             return (merged / denominator[:, None] * np.float32(self.output_scale)).astype(np.float32)
         raise ValueError(f"reference merge does not support {self.representation!r}")
+
+
+def tiled_fold_merge_program(
+    generic_program: TiledFoldFinalizeProgram,
+    *,
+    output_scale: float = 1.0,
+) -> PartialStateMergeProgram:
+    """Bind generic Fold semantics to the shared-staged SM100 finalizer."""
+    if generic_program.semantics.partial_value_dtype is not DType.BF16:
+        raise ValueError("the first SM100 tiled Fold binding requires BF16 value partials")
+    schedule = generic_program.schedule
+    return PartialStateMergeProgram(
+        representation="generic_tiled_fold",
+        output_scale=output_scale,
+        value_dtype=PartialValueDType.BF16,
+        threads=schedule.threads,
+        schedule_kind=PartialMergeScheduleKind.TILED_PIPELINED,
+        rows_per_block=schedule.row_tile,
+        source_ordered=(generic_program.semantics.reassociation is FoldReassociationPolicy.SOURCE_ORDERED),
+        partial_extent=schedule.axes.partial.extent,
+        feature_tile=schedule.feature_tile,
+        pipeline_stages=schedule.shared_stages,
+        vector_bytes=schedule.vector_bytes,
+        generic_program=generic_program,
+    )
 
 
 @dataclass(frozen=True)
@@ -293,18 +339,56 @@ def emitter_plan_from_lowering(
         state_fields=("row_max", "row_sum_exp", "weighted_value_accumulator"),
         exponential_base=2,
     )
-    merge = PartialStateMergeProgram(
-        representation=lowering.schedule.partial_state_representation,
-        output_scale=lowering.output_scale,
-        value_dtype=partial_value_dtype,
-        threads=lowering.schedule.partial_merge_threads,
-        schedule_kind=partial_merge_schedule,
-        rows_per_block=(
-            lowering.schedule.partial_merge_tile_rows
-            if partial_merge_schedule is PartialMergeScheduleKind.WARP_ROWS
-            else 1
-        ),
-    )
+    generic_program = None
+    if partial_merge_schedule is PartialMergeScheduleKind.TILED_PIPELINED:
+        axes = TiledFoldAxes(
+            partial=TensorAxis(0, lowering.selected_count, "partial"),
+            row=TensorAxis(
+                1,
+                lowering.query_length * lowering.key_value_heads * lowering.head_group_size,
+                "row",
+            ),
+            feature=TensorAxis(2, 128, "feature"),
+        )
+        generic_program = normalized_exponential_fold_program(
+            TiledFoldFinalizeSchedule(
+                axes=axes,
+                partial_addressing=FoldPartialAddressing.DENSE,
+                row_tile=lowering.schedule.partial_merge_tile_rows,
+                feature_tile=64,
+                vector_bytes=16,
+                shared_stages=4,
+                threads=lowering.schedule.partial_merge_threads,
+                partial_lanes=32,
+                input_layout=TiledFoldInputLayout(
+                    addressing=FoldPartialAddressing.DENSE,
+                    value_axis_order=(
+                        FoldPhysicalAxis.PARTIAL,
+                        FoldPhysicalAxis.ROW,
+                        FoldPhysicalAxis.FEATURE,
+                    ),
+                    scalar_axis_order=(FoldPhysicalAxis.PARTIAL, FoldPhysicalAxis.ROW),
+                    feature_layout=FoldFeatureLayout.STG128_LANE_PERMUTED,
+                ),
+            ),
+            partial_value_dtype=DType.BF16,
+            output_dtype=DType.BF16,
+        )
+    if generic_program is not None:
+        merge = tiled_fold_merge_program(generic_program, output_scale=lowering.output_scale)
+    else:
+        merge = PartialStateMergeProgram(
+            representation=lowering.schedule.partial_state_representation,
+            output_scale=lowering.output_scale,
+            value_dtype=partial_value_dtype,
+            threads=lowering.schedule.partial_merge_threads,
+            schedule_kind=partial_merge_schedule,
+            rows_per_block=(
+                lowering.schedule.partial_merge_tile_rows
+                if partial_merge_schedule is PartialMergeScheduleKind.WARP_ROWS
+                else 1
+            ),
+        )
     relation_encoding = SM100RelationEncoding(
         source_domain="query_token",
         destination_domain="key_value_block",
@@ -590,8 +674,414 @@ def _require_clean_physical_source(source: str) -> SourceAudit:
     return audit
 
 
+def _render_cuda_scalar_expression(
+    expression: ScalarExpression,
+    inputs: dict[str, str],
+    *,
+    ordered_fp: bool = False,
+) -> str:
+    """Render one backend-neutral scalar AST inside the tiled Fold skeleton."""
+    if expression.kind is ScalarExpressionKind.INPUT:
+        assert expression.input_name is not None
+        return inputs[expression.input_name]
+    if expression.kind is ScalarExpressionKind.CONSTANT:
+        assert expression.constant is not None
+        if isinstance(expression.constant, bool):
+            return "true" if expression.constant else "false"
+        return f"{float(expression.constant):.17e}f"
+    operands = tuple(
+        _render_cuda_scalar_expression(operand, inputs, ordered_fp=ordered_fp) for operand in expression.operands
+    )
+    infix = {
+        ScalarExpressionKind.ADD: "+",
+        ScalarExpressionKind.SUBTRACT: "-",
+        ScalarExpressionKind.MULTIPLY: "*",
+        ScalarExpressionKind.DIVIDE: "/",
+        ScalarExpressionKind.LESS_EQUAL: "<=",
+    }
+    if ordered_fp and expression.kind is ScalarExpressionKind.ADD:
+        return f"__fadd_rn({operands[0]}, {operands[1]})"
+    if ordered_fp and expression.kind is ScalarExpressionKind.MULTIPLY:
+        return f"__fmul_rn({operands[0]}, {operands[1]})"
+    if expression.kind in infix:
+        return f"({operands[0]} {infix[expression.kind]} {operands[1]})"
+    if expression.kind is ScalarExpressionKind.EXP:
+        return f"expf({operands[0]})"
+    if expression.kind is ScalarExpressionKind.RSQRT:
+        return f"rsqrtf({operands[0]})"
+    if expression.kind is ScalarExpressionKind.TANH:
+        return f"tanhf({operands[0]})"
+    if expression.kind is ScalarExpressionKind.SELECT:
+        return f"({operands[0]} ? {operands[1]} : {operands[2]})"
+    raise ValueError(f"unsupported tiled Fold scalar expression {expression.kind.value}")
+
+
+def _render_tiled_pipelined_merge_cuda(program: PartialStateMergeProgram) -> str:
+    """Generate the first tiled, shared-staged Fold finalization skeleton."""
+    generic = program.generic_program
+    if generic is None:
+        raise ValueError("the tiled physical schedule requires generic Fold finalization semantics")
+    schedule = generic.schedule
+    semantics = generic.semantics
+    ordered_fp = semantics.reassociation is FoldReassociationPolicy.SOURCE_ORDERED
+    if schedule.axes.partial.extent != program.partial_extent:
+        raise ValueError("generic Fold partial extent does not match the physical schedule")
+    if schedule.row_tile != program.rows_per_block:
+        raise ValueError("generic Fold row tile does not match the physical schedule")
+    if schedule.feature_tile != program.feature_tile:
+        raise ValueError("generic Fold feature tile does not match the physical schedule")
+    if schedule.shared_stages != program.pipeline_stages:
+        raise ValueError("generic Fold shared stages do not match the physical schedule")
+    if schedule.vector_bytes != program.vector_bytes:
+        raise ValueError("generic Fold vector width does not match the physical schedule")
+    if program.value_dtype is not PartialValueDType.BF16:
+        raise ValueError("the first tiled Fold finalizer supports BF16 value partials")
+    if program.partial_extent > 32:
+        raise ValueError("the first tiled Fold finalizer supports at most one warp of partials")
+    if program.rows_per_block != program.threads // 32:
+        raise ValueError("the tiled Fold finalizer assigns one logical row to each warp")
+    if program.feature_tile != 64:
+        raise ValueError("the first tiled Fold finalizer requires a 64-feature tile")
+    if program.pipeline_stages != 4:
+        raise ValueError("the first tiled Fold finalizer requires four shared-memory stages")
+    if program.vector_bytes != 16:
+        raise ValueError("the first tiled Fold finalizer requires 128-bit global-to-shared copies")
+    input_layout = schedule.input_layout
+    assert input_layout is not None
+    if input_layout.feature_layout is FoldFeatureLayout.STG128_LANE_PERMUTED:
+        shared_feature0 = "real_col_to_stg128_half_col(real_feature0) - feature_base"
+    elif input_layout.feature_layout is FoldFeatureLayout.CONTIGUOUS:
+        shared_feature0 = "real_feature0 - feature_base"
+    else:
+        raise ValueError(f"unsupported Fold feature layout {input_layout.feature_layout.value}")
+    if input_layout.addressing is FoldPartialAddressing.DENSE:
+        row_mapping = """
+  const int query = row / query_heads;
+  const int query_head = row - query * query_heads;
+  const int key_value_head = query_head / query_heads_per_key_value_head;
+  const int scheduled_partials =
+      partial_metadata[query * (query_heads / query_heads_per_key_value_head) + key_value_head];
+  const int valid_partials = min(scheduled_partials, kPartialExtent);
+""".rstrip()
+        lane_validity = "lane < valid_partials"
+        scalar_index = "lane * row_count + row"
+        stage_validity = "partial < valid_partials"
+        source_row = "static_cast<int64_t>(partial) * row_count + row"
+        wrapper_checks = """
+  TORCH_CHECK(partial_scalar.dim() == 3, "scalar state must be [P,Q,H]");
+  TORCH_CHECK(partial_value.dim() == 4, "value state must be [P,Q,H,D]");
+  TORCH_CHECK(partial_metadata.dim() == 2, "valid partial counts must be [Q,G]");
+  TORCH_CHECK(partial_scalar.size(0) == kPartialExtent,
+              "scalar state partial extent does not match generated schedule");
+  TORCH_CHECK(partial_value.size(0) == kPartialExtent,
+              "value state partial extent does not match generated schedule");
+  TORCH_CHECK(partial_scalar.size(1) == partial_value.size(1), "row counts must match");
+  TORCH_CHECK(partial_scalar.size(2) == partial_value.size(2), "row groups must match");
+  TORCH_CHECK(partial_metadata.size(0) == partial_value.size(1),
+              "valid-count outer domain must match");
+  TORCH_CHECK(query_heads_per_key_value_head > 0, "group width must be positive");
+  TORCH_CHECK(partial_value.size(2) % query_heads_per_key_value_head == 0,
+              "row groups must divide by the count-group width");
+  TORCH_CHECK(partial_metadata.size(1) ==
+                  partial_value.size(2) / query_heads_per_key_value_head,
+              "valid-count group domain must match");
+""".rstrip()
+        wrapper_shape = """
+  const int64_t query_count = partial_value.size(1);
+  const int64_t query_heads = partial_value.size(2);
+  const int64_t value_width = partial_value.size(3);
+  auto output = torch::empty(
+      {query_count, query_heads, value_width},
+      partial_value.options().dtype(torch::kBFloat16));
+  const int64_t row_count = query_count * query_heads;
+""".rstrip()
+    elif input_layout.addressing is FoldPartialAddressing.INDEXED:
+        row_mapping = ""
+        lane_validity = "lane < kPartialExtent && partial_metadata[row * kPartialExtent + lane] >= 0"
+        scalar_index = "row * kPartialExtent + lane"
+        stage_validity = "partial < kPartialExtent && partial_metadata[row * kPartialExtent + partial] >= 0"
+        source_row = "partial_metadata[row * kPartialExtent + partial]"
+        wrapper_checks = """
+  TORCH_CHECK(partial_scalar.dim() == 2, "indexed scalar state must be [R,P]");
+  TORCH_CHECK(partial_value.dim() == 2, "indexed source values must be [S,D]");
+  TORCH_CHECK(partial_metadata.dim() == 2, "source-row indices must be [R,P]");
+  TORCH_CHECK(partial_scalar.size(0) == partial_metadata.size(0), "row counts must match");
+  TORCH_CHECK(partial_scalar.size(1) == kPartialExtent,
+              "scalar state partial extent does not match generated schedule");
+  TORCH_CHECK(partial_metadata.size(1) == kPartialExtent,
+              "source-index partial extent does not match generated schedule");
+  TORCH_CHECK(query_heads_per_key_value_head == 1,
+              "indexed Fold binding does not use grouped count metadata");
+""".rstrip()
+        wrapper_shape = """
+  const int64_t query_count = partial_scalar.size(0);
+  const int64_t query_heads = 1;
+  const int64_t value_width = partial_value.size(1);
+  auto output = torch::empty(
+      {query_count, value_width},
+      partial_value.options().dtype(torch::kBFloat16));
+  const int64_t row_count = query_count;
+""".rstrip()
+    else:
+        raise ValueError(f"unsupported Fold partial addressing {input_layout.addressing.value}")
+    weight_expression = _render_cuda_scalar_expression(
+        semantics.weight_expression,
+        {
+            "partial_scalar": "scalar",
+            "reduced_scalar": "common",
+            "valid": "semantic_valid",
+        },
+        ordered_fp=ordered_fp,
+    )
+    contribution0 = _render_cuda_scalar_expression(
+        semantics.contribution_expression,
+        {"partial_value": "partial_value0", "weight": "weight"},
+        ordered_fp=ordered_fp,
+    )
+    contribution1 = _render_cuda_scalar_expression(
+        semantics.contribution_expression,
+        {"partial_value": "partial_value1", "weight": "weight"},
+        ordered_fp=ordered_fp,
+    )
+    update0 = _render_cuda_scalar_expression(
+        semantics.update_expression,
+        {"state": "numerator0", "contribution": "contribution0"},
+        ordered_fp=ordered_fp,
+    )
+    update1 = _render_cuda_scalar_expression(
+        semantics.update_expression,
+        {"state": "numerator1", "contribution": "contribution1"},
+        ordered_fp=ordered_fp,
+    )
+    finalize0 = _render_cuda_scalar_expression(
+        semantics.finalize_expression,
+        {"state": "numerator0", "denominator": "denominator"},
+        ordered_fp=ordered_fp,
+    )
+    finalize1 = _render_cuda_scalar_expression(
+        semantics.finalize_expression,
+        {"state": "numerator1", "denominator": "denominator"},
+        ordered_fp=ordered_fp,
+    )
+    if semantics.scalar_reduction is FoldScalarReduction.MAXIMUM:
+        scalar_reduction = f"""
+  float scalar = 0.0f;
+  bool semantic_valid = {lane_validity};
+  if (semantic_valid) {{
+    scalar = partial_scalar[{scalar_index}];
+    semantic_valid = isfinite(scalar);
+  }}
+  const float common = fixed_warp_max(semantic_valid ? scalar : -CUDART_INF_F);
+""".rstrip()
+    elif semantics.scalar_reduction is FoldScalarReduction.NONE:
+        scalar_reduction = f"""
+  const bool semantic_valid = {lane_validity};
+  const float scalar = semantic_valid ? partial_scalar[{scalar_index}] : 0.0f;
+  const float common = 0.0f;
+""".rstrip()
+    else:
+        raise ValueError(f"unsupported scalar reduction {semantics.scalar_reduction.value}")
+    if semantics.denominator is FoldDenominatorPolicy.SUM_WEIGHTS:
+        denominator_reduction = "const float denominator = fixed_warp_sum(local_weight);"
+        empty_guard = "denominator > 0.0f"
+    elif semantics.denominator is FoldDenominatorPolicy.NONE:
+        denominator_reduction = "const float denominator = 1.0f;"
+        empty_guard = "true"
+    else:
+        raise ValueError(f"unsupported denominator policy {semantics.denominator.value}")
+    return f"""
+// Copyright The Marin Authors
+// SPDX-License-Identifier: Apache-2.0
+// Generated from generic Shuttle partial-state Fold semantics. The physical
+// skeleton uses fixed-tree scalar-state reduction and ascending partial-slot
+// vector accumulation. No MSA combine source or callable is used.
+#include <torch/extension.h>
+
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAException.h>
+#include <cuda_bf16.h>
+#include <math_constants.h>
+#include <cuda_runtime.h>
+
+namespace {{
+
+constexpr int kPartialExtent = {program.partial_extent};
+constexpr int kRowsPerBlock = {program.rows_per_block};
+constexpr int kFeatureTile = {program.feature_tile};
+constexpr int kPipelineStages = {program.pipeline_stages};
+
+__device__ __forceinline__ int real_col_to_stg128_half_col(int real_col) {{
+  const int tile = real_col / 32;
+  const int col32 = real_col - tile * 32;
+  const int lane = (col32 % 8) / 2;
+  const int group = col32 / 8;
+  const int element = col32 % 2;
+  return tile * 32 + lane * 8 + group * 2 + element;
+}}
+
+__device__ __forceinline__ void copy_global_to_shared_16(void* destination, const void* source) {{
+  const unsigned shared_address = static_cast<unsigned>(__cvta_generic_to_shared(destination));
+  asm volatile("cp.async.cg.shared.global [%0], [%1], 16;" :: "r"(shared_address), "l"(source));
+}}
+
+__device__ __forceinline__ void commit_async_group() {{
+  asm volatile("cp.async.commit_group;");
+}}
+
+__device__ __forceinline__ void wait_for_all_async_groups() {{
+  asm volatile("cp.async.wait_group 0;");
+}}
+
+__device__ __forceinline__ float fixed_warp_max(float value) {{
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {{
+    value = fmaxf(value, __shfl_down_sync(0xffffffffu, value, offset));
+  }}
+  return __shfl_sync(0xffffffffu, value, 0);
+}}
+
+__device__ __forceinline__ float fixed_warp_sum(float value) {{
+#pragma unroll
+  for (int offset = 16; offset > 0; offset /= 2) {{
+    value += __shfl_down_sync(0xffffffffu, value, offset);
+  }}
+  return __shfl_sync(0xffffffffu, value, 0);
+}}
+
+__global__ __launch_bounds__({program.threads}) void shuttle_tiled_finalize_fold_partials(
+    const float* partial_scalar,
+    const __nv_bfloat16* partial_value,
+    const int* partial_metadata,
+    __nv_bfloat16* output,
+    int query_count,
+    int query_heads,
+    int query_heads_per_key_value_head,
+    int value_width) {{
+  __shared__ __align__(16) __nv_bfloat16
+      staged_value[kRowsPerBlock][kPipelineStages][kFeatureTile];
+
+  const int warp = threadIdx.x / 32;
+  const int lane = threadIdx.x % 32;
+  const int row_count = query_count * query_heads;
+  const int row = blockIdx.x * kRowsPerBlock + warp;
+  const int feature_base = blockIdx.y * kFeatureTile;
+  if (row >= row_count || feature_base >= value_width) return;
+
+{row_mapping}
+
+{scalar_reduction}
+  const float local_weight = {weight_expression};
+  {denominator_reduction}
+
+  float numerator0 = 0.0f;
+  float numerator1 = 0.0f;
+  const int real_feature0 = feature_base + lane * 2;
+  const int shared_feature0 = {shared_feature0};
+
+#pragma unroll
+  for (int partial_base = 0; partial_base < kPartialExtent;
+       partial_base += kPipelineStages) {{
+#pragma unroll
+    for (int stage = 0; stage < kPipelineStages; ++stage) {{
+      const int partial = partial_base + stage;
+      if ({stage_validity} && lane < 8) {{
+        const int fake_feature = feature_base + lane * 8;
+        const int64_t source_index =
+            (static_cast<int64_t>({source_row})) * value_width + fake_feature;
+        copy_global_to_shared_16(
+            &staged_value[warp][stage][lane * 8],
+            &partial_value[source_index]);
+      }}
+      commit_async_group();
+    }}
+    wait_for_all_async_groups();
+    __syncwarp();
+
+#pragma unroll
+    for (int stage = 0; stage < kPipelineStages; ++stage) {{
+      const int partial = partial_base + stage;
+      const float weight = partial < kPartialExtent
+          ? __shfl_sync(0xffffffffu, local_weight, partial)
+          : 0.0f;
+      if (partial < kPartialExtent && weight != 0.0f) {{
+        const __nv_bfloat162 pair = *reinterpret_cast<const __nv_bfloat162*>(
+            &staged_value[warp][stage][shared_feature0]);
+        const float partial_value0 = __bfloat162float(pair.x);
+        const float partial_value1 = __bfloat162float(pair.y);
+        const float contribution0 = {contribution0};
+        const float contribution1 = {contribution1};
+        numerator0 = {update0};
+        numerator1 = {update1};
+      }}
+    }}
+    __syncwarp();
+  }}
+
+  const float finalized0 = {empty_guard} ? ({finalize0}) : 0.0f;
+  const float finalized1 = {empty_guard} ? ({finalize1}) : 0.0f;
+  const __nv_bfloat162 result = __floats2bfloat162_rn(
+      finalized0 * {program.output_scale:.17e}f,
+      finalized1 * {program.output_scale:.17e}f);
+  const int64_t output_pair =
+      (static_cast<int64_t>(row) * value_width + real_feature0) / 2;
+  reinterpret_cast<__nv_bfloat162*>(output)[output_pair] = result;
+}}
+
+}}  // namespace
+
+torch::Tensor shuttle_tiled_finalize_fold_partials_cuda(
+    torch::Tensor partial_scalar,
+    torch::Tensor partial_value,
+    torch::Tensor partial_metadata,
+    int64_t query_heads_per_key_value_head) {{
+  TORCH_CHECK(partial_scalar.is_cuda(), "scalar partial state must be CUDA");
+  TORCH_CHECK(partial_value.is_cuda(), "value partial state must be CUDA");
+  TORCH_CHECK(partial_metadata.is_cuda(), "partial metadata must be CUDA");
+  TORCH_CHECK(partial_scalar.scalar_type() == torch::kFloat32,
+              "scalar partial state must be FP32");
+  TORCH_CHECK(partial_value.scalar_type() == torch::kBFloat16,
+              "value partial state must be BF16");
+  TORCH_CHECK(partial_metadata.scalar_type() == torch::kInt32,
+              "partial metadata must be int32");
+  TORCH_CHECK(partial_scalar.is_contiguous(), "scalar state must be contiguous");
+  TORCH_CHECK(partial_value.is_contiguous(), "value state must be contiguous");
+  TORCH_CHECK(partial_metadata.is_contiguous(), "partial metadata must be contiguous");
+{wrapper_checks}
+  const int64_t feature_extent = partial_value.size(partial_value.dim() - 1);
+  TORCH_CHECK(feature_extent % kFeatureTile == 0,
+              "feature width must be a multiple of the generated feature tile");
+
+  const c10::cuda::CUDAGuard device_guard(partial_value.device());
+{wrapper_shape}
+  const dim3 blocks(
+      static_cast<unsigned>((row_count + kRowsPerBlock - 1) / kRowsPerBlock),
+      static_cast<unsigned>(value_width / kFeatureTile),
+      1);
+  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  shuttle_tiled_finalize_fold_partials<<<blocks, {program.threads}, 0, stream>>>(
+      partial_scalar.data_ptr<float>(),
+      reinterpret_cast<const __nv_bfloat16*>(partial_value.data_ptr<at::BFloat16>()),
+      partial_metadata.data_ptr<int>(),
+      reinterpret_cast<__nv_bfloat16*>(output.data_ptr<at::BFloat16>()),
+      static_cast<int>(query_count),
+      static_cast<int>(query_heads),
+      static_cast<int>(query_heads_per_key_value_head),
+      static_cast<int>(value_width));
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return output;
+}}
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {{
+  module.def("merge", &shuttle_tiled_finalize_fold_partials_cuda);
+}}
+""".strip()
+
+
 def render_partial_merge_cuda(program: PartialStateMergeProgram) -> str:
     """Generate a deterministic standalone merge for normalized Fold partials."""
+    if program.schedule_kind is PartialMergeScheduleKind.TILED_PIPELINED:
+        return _render_tiled_pipelined_merge_cuda(program)
     if program.representation != "log_normalizer_normalized_value":
         raise ValueError("the initial SM100 source generator supports normalized-value partials")
     if not math.isfinite(program.output_scale):

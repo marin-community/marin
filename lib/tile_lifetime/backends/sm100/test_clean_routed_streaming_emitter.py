@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -36,7 +37,17 @@ from clean_routed_streaming_emitter import (  # noqa: E402
     render_relation_scheduler_source,
 )
 
+from tile_lifetime.ir import DType  # noqa: E402
 from tile_lifetime.sm100_routed_lowering import SM100RelationOrientation  # noqa: E402
+from tile_lifetime.tensor_program import TensorAxis  # noqa: E402
+from tile_lifetime.tiled_fold_finalize import (  # noqa: E402
+    FoldFeatureLayout,
+    FoldPartialAddressing,
+    FoldPhysicalAxis,
+    TiledFoldAxes,
+    TiledFoldInputLayout,
+    deterministic_weighted_sum_fold_program,
+)
 
 
 def _lowering(*, causal: bool, score_scale: float = 128**-0.5, output_scale: float = 1.0) -> SimpleNamespace:
@@ -52,6 +63,7 @@ def _lowering(*, causal: bool, score_scale: float = 128**-0.5, output_scale: flo
         score_map=SimpleNamespace(causal=causal, scale=score_scale, softcap=None),
         head_group_size=4,
         key_value_heads=2,
+        query_length=8,
         selected_count=4,
         output_scale=output_scale,
     )
@@ -245,6 +257,95 @@ def test_warp_rows_merge_is_a_schedule_candidate_for_the_same_physical_family() 
     assert warp_source.count("expf(") == 1
     assert "row_count + 8 - 1" in warp_source
     assert row_source != warp_source
+
+
+def test_tiled_fold_finalizer_exposes_generic_vector_staging_and_fixed_tree_order() -> None:
+    lowering = _lowering(causal=False)
+    lowering.selected_count = 16
+    plan = emitter_plan_from_lowering(
+        lowering,
+        paged_key_value=False,
+        partial_merge_schedule=PartialMergeScheduleKind.TILED_PIPELINED,
+    )
+
+    source = render_partial_merge_cuda(plan.partial_merge)
+
+    assert plan.partial_merge.partial_extent == lowering.selected_count
+    assert plan.partial_merge.rows_per_block == 8
+    assert plan.partial_merge.feature_tile == 64
+    assert plan.partial_merge.pipeline_stages == 4
+    assert plan.partial_merge.vector_bytes == 16
+    assert "copy_global_to_shared_16" in source
+    assert "cp.async.cg.shared.global" in source
+    assert "fixed_warp_max" in source
+    assert "fixed_warp_sum" in source
+    assert "staged_value[kRowsPerBlock][kPipelineStages][kFeatureTile]" in source
+    assert "for (int partial_base = 0; partial_base < kPartialExtent;" in source
+    assert "__shfl_sync(0xffffffffu, local_weight, partial)" in source
+    assert "__floats2bfloat162_rn" in source
+    assert "SparseAttentionForwardCombine" not in source
+    assert "atomic" not in source.lower()
+
+
+def test_tiled_fold_finalizer_generates_attention_and_non_attention_semantics_from_one_skeleton() -> None:
+    lowering = _lowering(causal=False)
+    lowering.selected_count = 16
+    attention = emitter_plan_from_lowering(
+        lowering,
+        paged_key_value=False,
+        partial_merge_schedule=PartialMergeScheduleKind.TILED_PIPELINED,
+    ).partial_merge
+    assert attention.generic_program is not None
+    indexed_axes = TiledFoldAxes(
+        partial=TensorAxis(0, 6, "route_slot"),
+        row=attention.generic_program.schedule.axes.row,
+        feature=attention.generic_program.schedule.axes.feature,
+    )
+    indexed_layout = TiledFoldInputLayout(
+        addressing=FoldPartialAddressing.INDEXED,
+        value_axis_order=(FoldPhysicalAxis.SOURCE, FoldPhysicalAxis.FEATURE),
+        scalar_axis_order=(FoldPhysicalAxis.ROW, FoldPhysicalAxis.PARTIAL),
+        index_axis_order=(FoldPhysicalAxis.ROW, FoldPhysicalAxis.PARTIAL),
+        feature_layout=FoldFeatureLayout.CONTIGUOUS,
+    )
+    weighted_semantics = deterministic_weighted_sum_fold_program(
+        replace(
+            attention.generic_program.schedule,
+            axes=indexed_axes,
+            partial_addressing=FoldPartialAddressing.INDEXED,
+            partial_lanes=1,
+            input_layout=indexed_layout,
+        ),
+        partial_value_dtype=DType.BF16,
+        output_dtype=DType.BF16,
+    )
+    weighted = replace(
+        attention,
+        representation="weighted_vector_sum",
+        partial_extent=6,
+        generic_program=weighted_semantics,
+    )
+
+    attention_source = render_partial_merge_cuda(attention)
+    weighted_source = render_partial_merge_cuda(weighted)
+
+    for mechanism in (
+        "copy_global_to_shared_16",
+        "cp.async.cg.shared.global",
+        "staged_value[kRowsPerBlock][kPipelineStages][kFeatureTile]",
+        "for (int partial_base = 0; partial_base < kPartialExtent;",
+        "__floats2bfloat162_rn",
+    ):
+        assert mechanism in attention_source
+        assert mechanism in weighted_source
+    assert "const float common = fixed_warp_max" in attention_source
+    assert "const float denominator = fixed_warp_sum(local_weight);" in attention_source
+    assert "const float common = 0.0f;" in weighted_source
+    assert "const float denominator = 1.0f;" in weighted_source
+    assert "partial_metadata[row * kPartialExtent + partial]" in weighted_source
+    assert "__fmul_rn" in weighted_source
+    assert "__fadd_rn" in weighted_source
+    assert attention_source != weighted_source
 
 
 def test_extracted_modules_are_registered_before_dataclass_execution(tmp_path: Path) -> None:

@@ -228,9 +228,31 @@ def recover_projected_routed_attention_program(
     )
     _require_negative_infinity(graph, token_selects[0].inputs[2], "selection")
 
+    selected_shape = graph.value(selected_id).shape
+    selection_validity_compares = tuple(
+        operation
+        for operation in graph.operations
+        if operation.kind == "compare"
+        and isinstance(operation.attributes, CompareAttributes)
+        and operation.attributes.direction == "LE"
+        and graph.value(operation.outputs[0]).shape == selected_shape
+        and selected_id in _ancestors(graph, operation.inputs[0])
+    )
+    if len(selection_validity_compares) != 1:
+        raise ProjectedRoutedAttentionRecoveryError(
+            "selection",
+            "underfilled top-k slots must have one explicit Boolean validity value",
+        )
+    selection_validity = selection_validity_compares[0].outputs[0]
+
     gathers = tuple(operation for operation in graph.operations if operation.kind == "gather")
     if len(gathers) != 2 or any(selected_id not in _ancestors(graph, gather.inputs[1]) for gather in gathers):
         raise ProjectedRoutedAttentionRecoveryError("relation", "selected K/V gathers do not originate at top-k")
+    if any(selection_validity not in _ancestors(graph, gather.inputs[1]) for gather in gathers):
+        raise ProjectedRoutedAttentionRecoveryError(
+            "relation",
+            "selected K/V gathers do not replace invalid top-k slots before indexing",
+        )
 
     query_projection = projections["query_weight"]
     key_projection = projections["key_weight"]
@@ -354,7 +376,7 @@ def recover_projected_routed_attention_program(
         "map:scale",
         "domain_restriction:binary_affine_index_predicate",
         f"fold:maximum:block={right_block_size}:accumulate=fp32",
-        f"selection:stable_top_k:k={selected_count}:force_local=1:canonical_right_order=1",
+        (f"selection:stable_top_k:k={selected_count}:force_local=1:" f"{selection.selection_semantics.scheduling_key}"),
         "relation_plan:runtime_binary_edges:grouped_left:dual_orientation",
         *tensor_program_scheduling_keys(tensor_program),
     )
@@ -402,18 +424,18 @@ def compile_natural_projected_routed_attention(
     errors = semantic_erasure_errors(recovered.semantic_erasure_report)
     if errors:
         raise ProjectedRoutedAttentionRecoveryError("name_erasure", "; ".join(errors))
-    selected, edge_valid = execute_projected_block_selection(recovered.relation_selection, runtime_inputs)
+    selection = execute_projected_block_selection(recovered.relation_selection, runtime_inputs)
     relation = build_grouped_routed_attention_relation(
-        selected,
-        edge_valid=edge_valid,
+        selection.indices,
+        edge_valid=selection.valid,
         padding_quantum=padding_quantum,
     )
     streaming = derive_streaming_attention(recovered.tensor_program, schedule=schedule)
     scheduled = compile_routed_streaming_attention_candidates(streaming, relation, config)
     return NaturalProjectedRoutedAttentionCompilation(
         recovered=recovered,
-        selected_right_blocks=selected,
-        edge_valid=edge_valid,
+        selected_right_blocks=selection.indices,
+        edge_valid=selection.valid,
         relation=relation,
         streaming_program=streaming,
         scheduled=scheduled,

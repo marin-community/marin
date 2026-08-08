@@ -4,6 +4,7 @@
 """Exact computation over a selected binary relation and normalized Fold state."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import numpy as np
 
@@ -29,6 +30,73 @@ class IndexDomainRestriction:
             raise ValueError(f"unsupported index-domain predicate {self.predicate!r}")
 
 
+class SelectionTieBreak(StrEnum):
+    """Deterministic ordering among equal valid selection scores."""
+
+    RIGHT_INDEX_ASCENDING = "right_index_ascending"
+
+
+class SelectionOutputOrder(StrEnum):
+    """Observable order of valid slots emitted by a Selection."""
+
+    SCORE_DESCENDING = "score_descending"
+    RIGHT_INDEX_ASCENDING = "right_index_ascending"
+
+
+class UnderfilledSelectionPolicy(StrEnum):
+    """Representation used when fewer than ``selected_count`` items are legal."""
+
+    EXPLICIT_INVALID_SLOTS = "explicit_invalid_slots"
+
+
+@dataclass(frozen=True)
+class SelectionSemantics:
+    """Source-visible ordering and underfilled-row contract for top-k Selection."""
+
+    tie_break: SelectionTieBreak = SelectionTieBreak.RIGHT_INDEX_ASCENDING
+    output_order: SelectionOutputOrder = SelectionOutputOrder.SCORE_DESCENDING
+    underfilled_policy: UnderfilledSelectionPolicy = UnderfilledSelectionPolicy.EXPLICIT_INVALID_SLOTS
+    invalid_index: int = -1
+
+    def __post_init__(self) -> None:
+        if self.invalid_index >= 0:
+            raise ValueError("the explicit invalid Selection index must be negative")
+
+    @property
+    def scheduling_key(self) -> str:
+        """Stable policy fragment used by diagnostics and physical legalization."""
+        return (
+            f"tie={self.tie_break.value}:output={self.output_order.value}:"
+            f"underfilled={self.underfilled_policy.value}:invalid={self.invalid_index}"
+        )
+
+
+@dataclass(frozen=True)
+class SelectionResult:
+    """Rectangular Selection output with validity separate from index identity."""
+
+    indices: np.ndarray
+    valid: np.ndarray
+    semantics: SelectionSemantics
+
+    def __post_init__(self) -> None:
+        if self.indices.shape != self.valid.shape:
+            raise ValueError("Selection indices and validity must have identical shapes")
+        if self.indices.dtype != np.int32:
+            raise ValueError("Selection indices must be INT32")
+        if self.valid.dtype != np.bool_:
+            raise ValueError("Selection validity must be Boolean")
+        if np.any(self.indices[self.valid] < 0):
+            raise ValueError("valid Selection slots must contain nonnegative right indices")
+        if np.any(self.indices[~self.valid] != self.semantics.invalid_index):
+            raise ValueError("invalid Selection slots must contain the declared invalid index")
+
+    @property
+    def invalid(self) -> np.ndarray:
+        """Boolean mask naming padded/invalid rectangular slots explicitly."""
+        return ~self.valid
+
+
 @dataclass(frozen=True)
 class RelationSelectionProgram:
     """Generic Contract, domain restriction, and top-k relation construction."""
@@ -40,6 +108,7 @@ class RelationSelectionProgram:
     feature_count: int
     selected_count: int
     restriction: IndexDomainRestriction
+    selection_semantics: SelectionSemantics = SelectionSemantics()
     accumulation_dtype: str = "fp32"
 
     def __post_init__(self) -> None:
@@ -73,6 +142,7 @@ class ProjectedBlockSelectionProgram:
     score_scale: float
     token_restriction: IndexDomainRestriction
     force_local_block: bool
+    selection_semantics: SelectionSemantics = SelectionSemantics()
     accumulation_dtype: str = "fp32"
     projection_output_dtype: str = "bf16"
     right_source_input: str | None = None
@@ -135,7 +205,7 @@ class ProjectedBlockSelectionProgram:
 def execute_relation_selection(
     program: RelationSelectionProgram,
     inputs: dict[str, np.ndarray],
-) -> tuple[np.ndarray, np.ndarray]:
+) -> SelectionResult:
     """Execute generic relation selection with deterministic descending top-k."""
     try:
         left = np.asarray(inputs[program.left_input], dtype=np.float32)
@@ -155,21 +225,18 @@ def execute_relation_selection(
     validity = np.ones(score.shape, dtype=np.bool_)
     if program.restriction.predicate == "left_greater_equal_right":
         validity &= np.arange(program.right_count)[None, :] <= np.arange(program.left_count)[:, None]
-    score = np.where(validity, score, -np.inf)
-    # Stable descending sort makes tie behavior deterministic without atomics.
-    selected = np.argsort(-score, axis=1, kind="stable")[:, : program.selected_count].astype(np.int32)
-    selected_valid = np.take_along_axis(validity, selected, axis=1)
-    if np.any(~selected_valid):
-        # Early rows in a causal relation can contain fewer legal right items.
-        # Invalid slots are explicit Relation edges rather than padded duplicates.
-        selected = np.where(selected_valid, selected, -1)
-    return selected, selected_valid
+    return _execute_top_k_selection(
+        score,
+        validity,
+        selected_count=program.selected_count,
+        semantics=program.selection_semantics,
+    )
 
 
 def execute_projected_block_selection(
     program: ProjectedBlockSelectionProgram,
     inputs: dict[str, np.ndarray],
-) -> tuple[np.ndarray, np.ndarray]:
+) -> SelectionResult:
     """Execute projected token scores, causal block max, and stable top-k."""
     try:
         source = np.asarray(inputs[program.source_input], dtype=np.float32)
@@ -226,19 +293,47 @@ def execute_projected_block_selection(
         local_block = (query_position - program.right_position_offset) // program.right_block_size
         block_scores[np.arange(program.source_count), :, local_block] = np.inf
 
-    # Stable descending rank fixes ties by the original right-block identity.
-    selected = np.argsort(-block_scores, axis=-1, kind="stable")[..., : program.selected_count]
-    selected_valid = np.take_along_axis(
+    return _execute_top_k_selection(
+        block_scores,
         np.broadcast_to(block_valid[:, None, :], block_scores.shape),
-        selected,
-        axis=-1,
+        selected_count=program.selected_count,
+        semantics=program.selection_semantics,
     )
-    # Selection denotes a set. Canonical right-index order gives deterministic
-    # Fold order and the compact q2k convention expected by right-oriented plans.
-    selected = np.sort(np.where(selected_valid, selected, program.right_block_count), axis=-1)
-    selected_valid = selected < program.right_block_count
-    selected = np.where(selected_valid, selected, -1).astype(np.int32)
-    return selected, selected_valid
+
+
+def _execute_top_k_selection(
+    score: np.ndarray,
+    validity: np.ndarray,
+    *,
+    selected_count: int,
+    semantics: SelectionSemantics,
+) -> SelectionResult:
+    """Apply the generic deterministic and underfilled Selection contract."""
+    if score.shape != validity.shape:
+        raise ValueError("Selection score and validity domains must have identical shapes")
+    if semantics.tie_break is not SelectionTieBreak.RIGHT_INDEX_ASCENDING:
+        raise ValueError(f"unsupported Selection tie break {semantics.tie_break.value}")
+    if semantics.underfilled_policy is not UnderfilledSelectionPolicy.EXPLICIT_INVALID_SLOTS:
+        raise ValueError(f"unsupported underfilled Selection policy {semantics.underfilled_policy.value}")
+
+    masked_score = np.where(validity, score, -np.inf)
+    # A stable descending sort visits the original right-index domain in
+    # ascending order on ties, matching source chlo.top_k behavior.
+    selected = np.argsort(-masked_score, axis=-1, kind="stable")[..., :selected_count]
+    selected_valid = np.take_along_axis(validity, selected, axis=-1)
+    selected = np.where(selected_valid, selected, semantics.invalid_index)
+    if semantics.output_order is SelectionOutputOrder.RIGHT_INDEX_ASCENDING:
+        sentinel = score.shape[-1]
+        selected = np.sort(np.where(selected_valid, selected, sentinel), axis=-1)
+        selected_valid = selected < sentinel
+        selected = np.where(selected_valid, selected, semantics.invalid_index)
+    elif semantics.output_order is not SelectionOutputOrder.SCORE_DESCENDING:
+        raise ValueError(f"unsupported Selection output order {semantics.output_order.value}")
+    return SelectionResult(
+        indices=selected.astype(np.int32, copy=False),
+        valid=selected_valid.astype(np.bool_, copy=False),
+        semantics=semantics,
+    )
 
 
 def make_causal_block_relation(

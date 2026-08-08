@@ -118,6 +118,7 @@ class PreparedFusedProjectedSelection:
     group_index: Any
     query_index: Any
     local_block: Any
+    valid_block_count: Any
     physical_source_classification: str
     generated_sources: DirectProjectedSelectionSources | None
 
@@ -199,6 +200,14 @@ class PreparedFusedProjectedSelection:
             0,
             0,
             current_stream,
+        )
+        # Keep the rectangular top-k result but make underfilled causal rows
+        # explicit. This is a generic DomainRestriction-to-Selection
+        # legalization: indices outside the row's legal right-domain prefix
+        # become the declared invalid sentinel rather than duplicate edges.
+        self.output_indices.masked_fill_(
+            self.output_indices >= self.valid_block_count,
+            program.selection_semantics.invalid_index,
         )
         return self.output_indices
 
@@ -328,6 +337,11 @@ def _prepare_projected_selection(
     group_index = torch.arange(program.group_count, dtype=torch.int64, device=device)[:, None]
     query_index = torch.arange(program.source_count, dtype=torch.int64, device=device)[None, :]
     local_block = torch.tensor(adapter_plan.local_block_by_query, dtype=torch.int64, device=device)[None, :]
+    valid_block_count = torch.tensor(
+        np.asarray(adapter_plan.local_block_by_query, dtype=np.int32) + 1,
+        dtype=torch.int32,
+        device=device,
+    )[:, None, None]
     return PreparedFusedProjectedSelection(
         adapter_plan=adapter_plan,
         torch=torch,
@@ -341,6 +355,7 @@ def _prepare_projected_selection(
         group_index=group_index,
         query_index=query_index,
         local_block=local_block,
+        valid_block_count=valid_block_count,
         physical_source_classification=physical_source_classification,
         generated_sources=generated_sources,
     )

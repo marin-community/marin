@@ -16,7 +16,15 @@ from tile_lifetime.pipeline import (
     compile_stablehlo_projected_routed_attention_program,
     recover_stablehlo_projected_routed_attention_program,
 )
-from tile_lifetime.routed_attention import build_grouped_routed_attention_relation, execute_projected_block_selection
+from tile_lifetime.routed_attention import (
+    IndexDomainRestriction,
+    ProjectedBlockSelectionProgram,
+    SelectionOutputOrder,
+    SelectionTieBreak,
+    UnderfilledSelectionPolicy,
+    build_grouped_routed_attention_relation,
+    execute_projected_block_selection,
+)
 from tile_lifetime.routed_attention_plan import (
     RoutedAttentionOrientation,
     RoutedAttentionPlanConfig,
@@ -198,6 +206,69 @@ def test_projected_relation_names_erase_before_schedule_synthesis() -> None:
     assert recovered.relation_selection.left_position_offset == 8
     assert recovered.relation_selection.projection_output_dtype == "bf16"
     assert recovered.relation_selection.right_block_size == 4
+    semantics = recovered.relation_selection.selection_semantics
+    assert semantics.tie_break is SelectionTieBreak.RIGHT_INDEX_ASCENDING
+    assert semantics.output_order is SelectionOutputOrder.SCORE_DESCENDING
+    assert semantics.underfilled_policy is UnderfilledSelectionPolicy.EXPLICIT_INVALID_SLOTS
+    assert semantics.invalid_index == -1
+    assert any("underfilled=explicit_invalid_slots" in key for key in recovered.semantic_erasure_report.scheduling_keys)
+
+
+def test_projected_selection_preserves_source_order_ties_and_explicit_invalid_slots() -> None:
+    program = ProjectedBlockSelectionProgram(
+        source_input="left",
+        left_weight_input="left_weight",
+        right_weight_input="right_weight",
+        source_count=4,
+        source_feature_count=1,
+        group_count=1,
+        relation_feature_count=1,
+        right_block_size=1,
+        selected_count=3,
+        score_scale=1.0,
+        token_restriction=IndexDomainRestriction(
+            left_axis="query_position",
+            right_axis="key_position",
+            predicate="left_greater_equal_right",
+        ),
+        force_local_block=True,
+        projection_output_dtype="fp32",
+        right_source_input="right",
+        right_source_feature_count=1,
+        right_count=4,
+    )
+    selection = execute_projected_block_selection(
+        program,
+        {
+            "left": np.ones((4, 1), dtype=np.float32),
+            "right": np.ones((4, 1), dtype=np.float32),
+            "left_weight": np.ones((1, 1), dtype=np.float32),
+            "right_weight": np.ones((1, 1), dtype=np.float32),
+        },
+    )
+
+    # The forced local block remains first, then equal scores select lower
+    # right identities. Rows with too few causal blocks retain rectangular
+    # slots, but those slots have no destination identity.
+    np.testing.assert_array_equal(
+        selection.indices[:, 0],
+        np.array(
+            [
+                [0, -1, -1],
+                [1, 0, -1],
+                [2, 0, 1],
+                [3, 0, 1],
+            ],
+            dtype=np.int32,
+        ),
+    )
+    np.testing.assert_array_equal(selection.valid, selection.indices >= 0)
+    np.testing.assert_array_equal(selection.invalid, selection.indices == -1)
+
+    relation = build_grouped_routed_attention_relation(selection.indices, edge_valid=selection.valid)
+    assert relation.route_count == 9
+    np.testing.assert_array_equal(relation.edge_valid.reshape(selection.valid.shape), selection.valid)
+    assert np.all(relation.route_to_destination_row[~selection.valid.reshape(-1)] == -1)
 
 
 def test_natural_projected_relation_matches_independent_selected_attention() -> None:
@@ -209,7 +280,7 @@ def test_natural_projected_relation_matches_independent_selected_attention() -> 
     )
     query_hidden_bf16 = np.asarray(jnp.asarray(query_hidden, dtype=jnp.bfloat16), dtype=np.float32)
     key_value_hidden_bf16 = np.asarray(jnp.asarray(key_value_hidden, dtype=jnp.bfloat16), dtype=np.float32)
-    selected, valid = execute_projected_block_selection(
+    selection = execute_projected_block_selection(
         recovered.relation_selection,
         {
             "query_hidden": query_hidden_bf16,
@@ -218,6 +289,8 @@ def test_natural_projected_relation_matches_independent_selected_attention() -> 
             "right_index_weight": right_weight,
         },
     )
+    selected = selection.indices
+    valid = selection.valid
 
     natural = np.asarray(
         msa_region(config)(
@@ -273,8 +346,18 @@ def test_projected_runtime_selection_builds_grouped_dual_orientation_relation() 
     assert compilation.relation.route_slots == config.key_value_heads * config.selected_blocks
     assert compilation.relation.destination_count == config.block_count
     assert compilation.relation.route_count == int(np.count_nonzero(compilation.edge_valid))
-    canonical = np.where(compilation.edge_valid, compilation.selected_right_blocks, config.block_count)
-    assert np.all(canonical[..., 1:] >= canonical[..., :-1])
+    local_block = (np.arange(config.query_length, dtype=np.int32) + config.query_position_offset) // config.block_size
+    np.testing.assert_array_equal(
+        compilation.selected_right_blocks[..., 0],
+        np.broadcast_to(local_block[:, None], (config.query_length, config.key_value_heads)),
+    )
+    assert np.all(compilation.selected_right_blocks[~compilation.edge_valid] == -1)
+    for row, valid in zip(
+        compilation.selected_right_blocks.reshape(-1, config.selected_blocks),
+        compilation.edge_valid.reshape(-1, config.selected_blocks),
+        strict=True,
+    ):
+        assert np.unique(row[valid]).size == np.count_nonzero(valid)
     assert [candidate.orientation for candidate in compilation.scheduled.candidates] == [
         RoutedAttentionOrientation.QUERY_MAJOR,
         RoutedAttentionOrientation.KV_MAJOR,
@@ -291,7 +374,7 @@ def test_symmetric_projected_relation_is_a_semantic_shape_mutation() -> None:
     recovered = recover_stablehlo_projected_routed_attention_program(artifact, input_names=MSA_INPUT_NAMES)
     query_hidden_bf16 = np.asarray(jnp.asarray(query_hidden, dtype=jnp.bfloat16), dtype=np.float32)
     key_value_hidden_bf16 = np.asarray(jnp.asarray(key_value_hidden, dtype=jnp.bfloat16), dtype=np.float32)
-    selected, valid = execute_projected_block_selection(
+    selection = execute_projected_block_selection(
         recovered.relation_selection,
         {
             "query_hidden": query_hidden_bf16,
@@ -300,6 +383,8 @@ def test_symmetric_projected_relation_is_a_semantic_shape_mutation() -> None:
             "right_index_weight": right_weight,
         },
     )
+    selected = selection.indices
+    valid = selection.valid
     natural = np.asarray(
         msa_region(config)(
             jnp.asarray(query_hidden, dtype=jnp.bfloat16),

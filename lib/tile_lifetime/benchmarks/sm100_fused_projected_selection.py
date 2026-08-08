@@ -451,7 +451,12 @@ def main() -> None:
     selection_core_boundary = {
         "warmups": args.warmups,
         "repeats": args.repeats,
-        "included": ("score Contract", "block maximum Fold", "top-k Selection"),
+        "included": (
+            "score Contract",
+            "block maximum Fold",
+            "top-k Selection",
+            "underfilled-slot validity (generated explicit Map; oracle native contract)",
+        ),
         "excluded": ("index Q Contract", "index K Contract", "sparse payload"),
     }
     natural_selection_boundary = {
@@ -464,6 +469,7 @@ def main() -> None:
             "score Contract",
             "block maximum Fold",
             "top-k Selection",
+            "underfilled-slot validity (generated explicit Map; oracle native contract)",
         ),
         "excluded": ("main QKV projection", "sparse payload", "output projection"),
     }
@@ -507,7 +513,7 @@ def main() -> None:
             args.msa_root,
             payload_lowering,
             partial_value_dtype=payload_backend.PartialValueDType.BF16,
-            partial_merge_schedule=payload_backend.PartialMergeScheduleKind.WARP_ROWS,
+            partial_merge_schedule=payload_backend.PartialMergeScheduleKind.TILED_PIPELINED,
             build_directory=args.build_directory,
         )
         payload_sources = generated_payload.generated_sources

@@ -46,6 +46,8 @@ def test_sm100_selection_candidates_make_score_materialization_explicit() -> Non
     assert fused.block_score_materialization_bytes == 512 * 4 * 4 * 4
     assert materialized.relation_index_bytes == fused.relation_index_bytes == 512 * 4 * 4 * 4
     assert "Fold -> top-k Selection -> Relation" in fused.dump()
+    assert "output=score_descending" in fused.dump()
+    assert "underfilled=explicit_invalid_slots:invalid=-1" in fused.dump()
     assert "external semantics: none" in fused.dump()
 
 

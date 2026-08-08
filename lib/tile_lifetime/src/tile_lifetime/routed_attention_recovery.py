@@ -237,7 +237,10 @@ def recover_routed_attention_program(
     source_ids = tuple(sorted(_ancestors_operations(graph, graph.outputs[0])))
     source_semantics = ("top_k", "selected_exact_attention", "normalized_exponential", "causal_predicate")
     scheduling_keys = (
-        f"relation_selection:left_rank=2:right_rank=2:selected={selected_count}:accumulate=fp32",
+        (
+            f"relation_selection:left_rank=2:right_rank=2:selected={selected_count}:accumulate=fp32:"
+            f"{selection.selection_semantics.scheduling_key}"
+        ),
         "domain_restriction:binary_affine_index_predicate",
         "relation_plan:runtime_binary_edges:dual_orientation",
         *tensor_program_scheduling_keys(tensor_program),
@@ -286,10 +289,10 @@ def compile_natural_routed_attention(
     erasure_errors = semantic_erasure_errors(recovered.semantic_erasure_report)
     if erasure_errors:
         raise RoutedAttentionRecoveryError("name_erasure", "; ".join(erasure_errors))
-    selected, edge_valid = execute_relation_selection(recovered.relation_selection, runtime_inputs)
+    selection = execute_relation_selection(recovered.relation_selection, runtime_inputs)
     relation = build_routed_attention_relation(
-        selected,
-        edge_valid=edge_valid,
+        selection.indices,
+        edge_valid=selection.valid,
         kv_rank_by_block=np.zeros(recovered.relation_selection.right_count, dtype=np.int32),
         kv_local_block_by_block=np.arange(recovered.relation_selection.right_count, dtype=np.int32),
         padding_quantum=padding_quantum,

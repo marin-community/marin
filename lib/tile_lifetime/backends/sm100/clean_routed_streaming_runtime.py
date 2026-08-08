@@ -33,9 +33,11 @@ from clean_routed_streaming_emitter import (
     MINIMAX_MSA_CUTE_ROOT,
     ExtractedSM100Sources,
     PartialMergeScheduleKind,
+    PartialStateMergeProgram,
     PartialValueDType,
     extract_clean_sm100_sources,
     import_extracted_python_sources,
+    render_partial_merge_cuda,
 )
 
 from tile_lifetime.sm100_routed_lowering import SM100RoutedStreamingLowering
@@ -117,6 +119,15 @@ def _load_merge_extension(source: str, build_directory: Path | None) -> ModuleTy
     )
     _MERGE_EXTENSION_CACHE[source_hash] = module
     return module
+
+
+def compile_tiled_fold_finalize(
+    program: PartialStateMergeProgram,
+    *,
+    build_directory: Path | None = None,
+) -> ModuleType:
+    """Compile one generated tiled Fold-finalization program."""
+    return _load_merge_extension(render_partial_merge_cuda(program), build_directory)
 
 
 class SM100RoutedStreamingCallable:

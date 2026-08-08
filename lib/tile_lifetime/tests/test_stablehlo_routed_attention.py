@@ -173,7 +173,7 @@ def test_natural_jax_output_matches_relation_driven_online_fold() -> None:
         _fixture_artifact(),
         input_names=ROUTED_ATTENTION_INPUT_NAMES,
     )
-    selected, valid = execute_relation_selection(
+    selection = execute_relation_selection(
         recovered.relation_selection,
         {
             "query_metadata": query_metadata,
@@ -195,8 +195,8 @@ def test_natural_jax_output_matches_relation_driven_online_fold() -> None:
         query.reshape(config.block_count, config.block_size, config.query_heads, config.head_dimension),
         key.reshape(config.block_count, config.block_size, config.key_value_heads, config.head_dimension),
         value.reshape(config.block_count, config.block_size, config.key_value_heads, config.head_dimension),
-        selected,
-        edge_valid=valid,
+        selection.indices,
+        edge_valid=selection.valid,
         scale=config.scale,
         causal=True,
     ).reshape(natural.shape)
