@@ -1748,3 +1748,24 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - A pass requires all 25 steps, all 76 finite norm fields at steps 0, 10, and 20, a confirmed PGLE
   recompile, and no OOM or retry. Compare its post-recompile steps with MHEP-193. Revert the code
   candidate if PGLE fails or does not give a useful gain.
+
+### 2026-08-08 15:15 UTC - Automatic PGLE passes its gate
+
+- MHEP-195 completed all 25 steps. Iris reports that the coordinator and training child
+  succeeded, with no failure or retry. W&B received all 76 norm fields at steps 0, 10, and 20.
+  Every value was finite.
+- The first five steps collected latency data and changed the executable. XLA then used the
+  measured latency data in its profile-guided estimator. The post-change steps had a mean of
+  270,087 tokens/s and a median of 270,443 tokens/s.
+- The current matched MHEP-193 baseline mean after its XProf window is 255,330 tokens/s. The PGLE
+  gate is 5.78% faster. The comparison is provisional until both 200-step runs finish.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-195-w32-ep-e192-i6272-cf1p30-pgle3-watch10-p32793-20260808
+- MHEP-196 is the matched 200-step PGLE arm. It uses the selected E192 width-6,272 model,
+  capacity factor 1.3, latent dimension 3,072, top-k 4, d6144, 48 layers, EP64, overlap limit 1,
+  full norms every 10 steps, and the 2,000-step schedule. It sets `JAX_ENABLE_PGLE=true` and
+  `JAX_PGLE_PROFILING_RUNS=3`. XProf stays off because it also uses CUPTI.
+- MHEP-196 uses production priority, zero retries, and `IRIS_PORT_JAX=32794`. Its run ID is
+  `mhep-196-w33-ep-e192-i6272-cf1p30-pgle3-watch10-p32794-20260808`.
+- A pass requires all 200 steps, all 76 finite norm fields at steps 0, 10, through 190, a
+  confirmed profile-guided recompile, and no OOM or retry. Use the last 50 steps for the final
+  throughput comparison with MHEP-193. Stop the job at the first OOM or retry.
