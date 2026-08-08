@@ -2,19 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 
 from experiments.grug.moe.expert_merge import AssignmentMode
 from experiments.grug.moe.merge_checkpoint import (
     CapacityOracleKind,
+    LayerAdapterKind,
     MergeCheckpointManifest,
     OnePairMergeCheckpointSpec,
     convert_grug_state_for_capacity_oracle_split,
+    convert_grug_state_for_layer_adapter,
     convert_grug_state_for_one_pair_merge,
     read_merge_checkpoint_manifest,
     write_merge_checkpoint_manifest,
@@ -89,7 +93,8 @@ def test_state_conversion_resets_recovery_state_and_preserves_qb_semantics():
     assert converted.state.ema_params.config.resolved_expert_bank_for_layer == (0, 1, 2, 2, 3, 4)
     assert int(converted.state.step) == 0
     assert set(converted.state.opt_state) == {"recovery_bank_count"}
-    assert int(converted.state.opt_state["recovery_bank_count"]) == 5
+    optimizer_state = cast("dict[str, Any]", converted.state.opt_state)
+    assert int(optimizer_state["recovery_bank_count"]) == 5
 
     permutation = np.asarray(_spec().source_to_shared)
     source_layer = _spec().source_layer
@@ -257,7 +262,8 @@ def test_capacity_oracle_split_is_functionally_identical_and_unties_source_bank(
     np.testing.assert_array_equal(oracle.state.pending_qb_betas, recovered.pending_qb_betas)
     assert int(oracle.state.step) == 0
     assert set(oracle.state.opt_state) == {"recovery_bank_count"}
-    assert int(oracle.state.opt_state["recovery_bank_count"]) == 6
+    optimizer_state = cast("dict[str, Any]", oracle.state.opt_state)
+    assert int(optimizer_state["recovery_bank_count"]) == 6
 
 
 def test_capacity_oracle_split_records_diagnostic_provenance_and_converts_ema():
@@ -298,3 +304,107 @@ def test_capacity_oracle_split_records_diagnostic_provenance_and_converts_ema():
     ):
         assert representative_leaf is not duplicated_leaf
         np.testing.assert_array_equal(duplicated_leaf, representative_leaf)
+
+
+def test_layer_adapter_conversion_preserves_function_routes_and_qb_state():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        recovered, manifest = _recovered_one_pair_state_and_manifest()
+        recovered = dataclasses.replace(recovered, step=jnp.array(382, dtype=jnp.int32))
+        manifest = dataclasses.replace(manifest, recovery_step=382)
+        tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
+        mlp_input = jnp.linspace(-1.0, 1.0, 32, dtype=jnp.float32).reshape(1, 4, 8)
+        source_block = recovered.params.blocks[3]
+        source_bank = recovered.params.expert_banks[source_block.expert_bank_index]
+        source_trace = source_block.mlp.forward_with_trace(mlp_input, source_bank)
+        source_logits = recovered.params.logits(tokens)
+        converted = convert_grug_state_for_layer_adapter(
+            recovered,
+            source_manifest=manifest,
+            source_checkpoint="stage-a/checkpoints/step-382",
+            layer_index=3,
+            rank=8,
+            key=jax.random.key(13),
+            init_optimizer_state=_fresh_optimizer_state,
+        )
+        converted_block = converted.state.params.blocks[3]
+        converted_bank = converted.state.params.expert_banks[converted_block.expert_bank_index]
+        converted_trace = converted_block.mlp.forward_with_trace(
+            mlp_input,
+            converted_bank,
+            converted_block.routed_expert_adapter,
+        )
+        converted_logits = converted.state.params.logits(tokens)
+
+    assert converted.state.params.config.resolved_expert_bank_for_layer == (0, 1, 2, 2, 3, 4)
+    assert converted.state.params.config.resolved_expert_adapter_rank_for_layer == (0, 0, 0, 8, 0, 0)
+    assert [
+        index for index, block in enumerate(converted.state.params.blocks) if block.routed_expert_adapter is not None
+    ] == [3]
+    assert tuple(block.expert_bank_index for block in converted.state.params.blocks) == (0, 1, 2, 2, 3, 4)
+    np.testing.assert_array_equal(converted_logits, source_logits)
+    np.testing.assert_array_equal(converted_trace.routed_output, source_trace.routed_output)
+    np.testing.assert_array_equal(
+        converted_trace.routing.selected_experts,
+        source_trace.routing.selected_experts,
+    )
+    np.testing.assert_array_equal(converted_trace.routing.combine_weights, source_trace.routing.combine_weights)
+    np.testing.assert_array_equal(converted_trace.router_stats["qb_beta"], source_trace.router_stats["qb_beta"])
+    np.testing.assert_array_equal(converted.state.pending_qb_betas, recovered.pending_qb_betas)
+    np.testing.assert_array_equal(
+        converted.state.params.blocks[3].mlp.router,
+        recovered.params.blocks[3].mlp.router,
+    )
+    np.testing.assert_array_equal(
+        converted.state.params.blocks[3].mlp.router_bias,
+        recovered.params.blocks[3].mlp.router_bias,
+    )
+    assert int(converted.state.step) == 0
+    optimizer_state = cast("dict[str, Any]", converted.state.opt_state)
+    assert int(optimizer_state["recovery_bank_count"]) == 5
+
+    provenance = converted.manifest.layer_adapter
+    assert provenance is not None
+    assert provenance.kind is LayerAdapterKind.ZERO_INITIALIZED_INPUT_OUTPUT
+    assert provenance.source_checkpoint == "stage-a/checkpoints/step-382"
+    assert provenance.layer_index == 3
+    assert provenance.rank == 8
+    assert provenance.input_topology == (0, 1, 2, 2, 3, 4)
+    assert provenance.source_recovery_step == 382
+    assert provenance.output_step == 0
+
+    assert converted.state.ema_params is not None
+    assert converted.state.ema_params.config.resolved_expert_adapter_rank_for_layer == (0, 0, 0, 8, 0, 0)
+    ema_adapter = converted.state.ema_params.blocks[3].routed_expert_adapter
+    assert ema_adapter is not None
+    params_adapter = converted.state.params.blocks[3].routed_expert_adapter
+    assert params_adapter is not None
+    for ema_leaf, params_leaf in zip(jax.tree.leaves(ema_adapter), jax.tree.leaves(params_adapter), strict=True):
+        np.testing.assert_array_equal(ema_leaf, params_leaf)
+
+
+def test_layer_adapter_manifest_round_trip_and_legacy_manifest_compatibility():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        recovered, manifest = _recovered_one_pair_state_and_manifest()
+        converted = convert_grug_state_for_layer_adapter(
+            recovered,
+            source_manifest=manifest,
+            source_checkpoint="stage-a/checkpoints/step-382",
+            layer_index=3,
+            rank=8,
+            key=jax.random.key(14),
+            init_optimizer_state=_fresh_optimizer_state,
+        )
+
+    assert MergeCheckpointManifest.from_dict(converted.manifest.to_dict()) == converted.manifest
+
+    legacy_payload = manifest.to_dict()
+    legacy_payload["format_version"] = 2
+    legacy_payload.pop("layer_adapter")
+    restored_legacy = MergeCheckpointManifest.from_dict(legacy_payload)
+    assert restored_legacy.layer_adapter is None
+    assert restored_legacy.format_version == 2
+
+    invalid_legacy_payload = converted.manifest.to_dict()
+    invalid_legacy_payload["format_version"] = 2
+    with pytest.raises(ValueError, match="requires merge checkpoint format version 3"):
+        MergeCheckpointManifest.from_dict(invalid_legacy_payload)

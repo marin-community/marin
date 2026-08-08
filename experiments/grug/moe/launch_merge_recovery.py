@@ -31,6 +31,7 @@ from experiments.grug.moe.merge_jobs import (
     CalibrationJobConfig,
     CapacityOracleSplitJobConfig,
     ConversionJobConfig,
+    LayerAdapterAugmentJobConfig,
     MatchingJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
@@ -38,6 +39,7 @@ from experiments.grug.moe.merge_jobs import (
     run_calibration,
     run_capacity_oracle_split,
     run_conversion,
+    run_layer_adapter_augment,
     run_matching,
     run_prefit,
     run_recovery,
@@ -72,6 +74,8 @@ class MergeBranchName(StrEnum):
     NATIVE_LOCAL_CE_KL_BANK_ONLY = "native_local_ce_kl_bank_only"
     NATIVE_LOCAL_CE_KL_MLP_NORMS = "native_local_ce_kl_mlp_norms"
     NATIVE_LOCAL_CE_KL_CAPACITY_ORACLE = "native_local_ce_kl_capacity_oracle"
+    NATIVE_LOCAL_CE_KL_ADAPTER_CONTROL = "native_local_ce_kl_adapter_control"
+    NATIVE_LOCAL_CE_KL_ADAPTER_R8 = "native_local_ce_kl_adapter_r8"
     NATIVE_JOINT = "native_joint"
 
 
@@ -115,6 +119,8 @@ class MergeRecoveryPipeline:
     native_joint: DirectPreservationBranch
     capacity_oracle_split: ArtifactStep[LevanterCheckpoint]
     unlock_diagnostics: tuple[RecoveryUnlockBranch, ...]
+    layer_adapter_augment: ArtifactStep[LevanterCheckpoint]
+    layer_adapter_diagnostics: tuple[RecoveryUnlockBranch, ...]
 
 
 def _checkpoint_dir(path: str) -> str:
@@ -544,6 +550,120 @@ def build_merge_recovery_pipeline(
     )
 
     selected_stage_a = next(branch.stage_a for branch in branches if branch.name is MergeBranchName.NATIVE_LOCAL_CE_KL)
+
+    layer_adapter_augment_name = "grug/expert_merge/d512/native_local_ce_kl_adapter_r8/augment"
+    layer_adapter_augment_version = resolve_version(layer_adapter_augment_name, version)
+
+    def layer_adapter_augment_config(ctx: StepContext) -> LayerAdapterAugmentJobConfig:
+        return LayerAdapterAugmentJobConfig(
+            source=SourceCheckpointConfig(
+                model=base_model,
+                optimizer=base_optimizer,
+                training_steps=source_steps,
+                checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                source_commit=teacher_commit,
+            ),
+            init_checkpoint_dir=_checkpoint_dir(ctx.artifact_path(selected_stage_a)),
+            output_path=ctx.output_path,
+            resources=ctx.runtime_arg(_RESOURCES_KEY),
+            run_id="grug-xem-native-local-ce-kl-adapter-r8-augment-d512-l2-l3",
+            assignment_mode=AssignmentMode.NATIVE,
+            prefit_applied=False,
+            adapter_rank=8,
+        )
+
+    layer_adapter_augment = ArtifactStep(
+        name=user_namespaced_name(layer_adapter_augment_name, layer_adapter_augment_version),
+        version=layer_adapter_augment_version,
+        artifact_type=LevanterCheckpoint,
+        run=run_layer_adapter_augment,
+        build_config=layer_adapter_augment_config,
+        deps=(teacher, selected_stage_a),
+        runtime_args={_RESOURCES_KEY: resources},
+    )
+
+    layer_adapter_diagnostics = []
+    adapter_training_tokens = 50_069_504
+    adapter_milestones = (12_582_912, 25_034_752, 37_617_664, adapter_training_tokens)
+    for branch_name, trainable_scope, init_from, initialization, checkpoint_selection in (
+        (
+            MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_CONTROL,
+            RecoveryTrainableScope.SHARED_BANK,
+            selected_stage_a,
+            RecoveryInitialization.LOCAL_RECOVERY,
+            RecoveryCheckpointSelection.BEST_VALIDATION,
+        ),
+        (
+            MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_R8,
+            RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS,
+            layer_adapter_augment,
+            RecoveryInitialization.LAYER_ADAPTER_AUGMENTED,
+            RecoveryCheckpointSelection.LATEST,
+        ),
+    ):
+        diagnostic_name = f"grug/expert_merge/d512/{branch_name.value}/stage-b"
+        diagnostic_version = resolve_version(diagnostic_name, version)
+
+        def adapter_diagnostic_config(
+            ctx: StepContext,
+            *,
+            branch_name=branch_name,
+            trainable_scope=trainable_scope,
+            init_from=init_from,
+            initialization=initialization,
+            checkpoint_selection=checkpoint_selection,
+        ) -> RecoveryJobConfig:
+            return RecoveryJobConfig(
+                source=SourceCheckpointConfig(
+                    model=base_model,
+                    optimizer=base_optimizer,
+                    training_steps=source_steps,
+                    checkpoint_dir=_checkpoint_dir(ctx.artifact_path(teacher)),
+                    source_commit=teacher_commit,
+                ),
+                data=mixture(ctx, train, validation=validation),
+                matching_path=ctx.artifact_path(matching),
+                init_checkpoint_dir=_checkpoint_dir(ctx.artifact_path(init_from)),
+                output_path=ctx.output_path,
+                resources=ctx.runtime_arg(_RESOURCES_KEY),
+                run_id=f"grug-xem-{branch_name.value}-stage-b-d512-l2-l3",
+                stage=RecoveryStage.PRESERVATION,
+                trainable_scope=trainable_scope,
+                initialization=initialization,
+                assignment_mode=AssignmentMode.NATIVE,
+                prefit_applied=False,
+                training_tokens=adapter_training_tokens,
+                cross_entropy_weight=1.0,
+                moe_loss_weight=1.0,
+                logit_kl_weight=0.1,
+                checkpoint_token_milestones=adapter_milestones,
+                initial_checkpoint_selection=checkpoint_selection,
+                layer_adapter_rank=8 if initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED else None,
+                layer_adapter_source_checkpoint_dir=(
+                    _checkpoint_dir(ctx.artifact_path(selected_stage_a))
+                    if initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED
+                    else None
+                ),
+            )
+
+        adapter_source_deps = () if init_from is selected_stage_a else (selected_stage_a,)
+        recovery = ArtifactStep(
+            name=user_namespaced_name(diagnostic_name, diagnostic_version),
+            version=diagnostic_version,
+            artifact_type=LevanterCheckpoint,
+            run=run_recovery,
+            build_config=adapter_diagnostic_config,
+            deps=(teacher, matching, init_from, *adapter_source_deps, *data_deps),
+            runtime_args={_RESOURCES_KEY: resources},
+        )
+        layer_adapter_diagnostics.append(
+            RecoveryUnlockBranch(
+                name=branch_name,
+                trainable_scope=trainable_scope,
+                recovery=recovery,
+            )
+        )
+
     capacity_oracle_split_name = "grug/expert_merge/d512/native_local_ce_kl_capacity_oracle/split"
     capacity_oracle_split_version = resolve_version(capacity_oracle_split_name, version)
 
@@ -663,6 +783,8 @@ def build_merge_recovery_pipeline(
         native_joint=native_joint,
         capacity_oracle_split=capacity_oracle_split,
         unlock_diagnostics=tuple(unlock_diagnostics),
+        layer_adapter_augment=layer_adapter_augment,
+        layer_adapter_diagnostics=tuple(layer_adapter_diagnostics),
     )
 
 
@@ -695,6 +817,11 @@ def main(branch: str, stage: str) -> ArtifactStep[LevanterCheckpoint]:
             raise click.BadParameter("native_joint has no local-recovery stage", param_hint="--stage")
         return pipeline.native_joint.stage_b
     diagnostic = next((candidate for candidate in pipeline.unlock_diagnostics if candidate.name.value == branch), None)
+    if diagnostic is None:
+        diagnostic = next(
+            (candidate for candidate in pipeline.layer_adapter_diagnostics if candidate.name.value == branch),
+            None,
+        )
     if diagnostic is not None:
         if stage != RecoveryStage.PRESERVATION.value:
             raise click.BadParameter("unlock diagnostics use the preservation objective", param_hint="--stage")

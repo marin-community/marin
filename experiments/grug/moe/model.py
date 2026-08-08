@@ -70,6 +70,7 @@ class _BlockInitKeys:
     shared: PRNGKeyArray
     attention_gated_norm: PRNGKeyArray
     mlp_gated_norm: PRNGKeyArray
+    expert_adapter: PRNGKeyArray
 
 
 def _block_init_keys(key: PRNGKeyArray) -> _BlockInitKeys:
@@ -82,6 +83,9 @@ def _block_init_keys(key: PRNGKeyArray) -> _BlockInitKeys:
         shared=shared,
         attention_gated_norm=attention_gated_norm,
         mlp_gated_norm=mlp_gated_norm,
+        # Keep the existing split unchanged so enabling adapters cannot perturb
+        # any pre-existing parameter initialization.
+        expert_adapter=random.fold_in(key, 0xADAF7),
     )
 
 
@@ -145,6 +149,8 @@ class GrugModelConfig:
     num_layers: int = 6
     expert_bank_for_layer: tuple[int, ...] | None = None
     """Routed-expert bank ID used by each layer. ``None`` gives one bank per layer."""
+    expert_adapter_rank_for_layer: tuple[int, ...] | None = None
+    """Rank of the routed-expert input/output adapter at each layer. ``None`` disables adapters."""
     num_heads: int = 4
     num_kv_heads: int = 1
     head_dim: int | None = None
@@ -195,6 +201,7 @@ class GrugModelConfig:
             raise ValueError(
                 "expert_bank_for_layer must use contiguous bank IDs starting at zero; " f"got {bank_for_layer}"
             )
+        _ = self.resolved_expert_adapter_rank_for_layer
         resolve_moe_implementation(self.moe_implementation)
 
     @property
@@ -214,6 +221,19 @@ class GrugModelConfig:
     def expert_bank_group_sizes(self) -> tuple[int, ...]:
         bank_for_layer = self.resolved_expert_bank_for_layer
         return tuple(bank_for_layer.count(bank_id) for bank_id in range(max(bank_for_layer) + 1))
+
+    @property
+    def resolved_expert_adapter_rank_for_layer(self) -> tuple[int, ...]:
+        if self.expert_adapter_rank_for_layer is None:
+            return (0,) * self.num_layers
+        if len(self.expert_adapter_rank_for_layer) != self.num_layers:
+            raise ValueError(
+                "expert_adapter_rank_for_layer must contain one rank per layer; "
+                f"got {len(self.expert_adapter_rank_for_layer)} entries for {self.num_layers} layers"
+            )
+        if any(rank < 0 for rank in self.expert_adapter_rank_for_layer):
+            raise ValueError("expert_adapter_rank_for_layer ranks must be non-negative")
+        return self.expert_adapter_rank_for_layer
 
     @property
     def Embed(self) -> Axis:
@@ -252,6 +272,7 @@ class GrugModelConfig:
     def from_hf_config(cls, hf_config: HfConfig) -> "GrugModelConfig":
         rope = RotaryConfig(theta=float(_hf_config_attr(hf_config, ("rope_theta",), 10000.0)))
         expert_bank_for_layer = _hf_config_attr(hf_config, ("expert_bank_for_layer",))
+        expert_adapter_rank_for_layer = _hf_config_attr(hf_config, ("expert_adapter_rank_for_layer",))
         return cls(
             vocab_size=int(_hf_config_attr(hf_config, ("vocab_size",))),
             hidden_dim=int(_hf_config_attr(hf_config, ("hidden_dim", "hidden_size"), 2048)),
@@ -270,6 +291,11 @@ class GrugModelConfig:
             num_layers=int(_hf_config_attr(hf_config, ("num_layers", "num_hidden_layers"), 24)),
             expert_bank_for_layer=(
                 tuple(int(bank_id) for bank_id in expert_bank_for_layer) if expert_bank_for_layer is not None else None
+            ),
+            expert_adapter_rank_for_layer=(
+                tuple(int(rank) for rank in expert_adapter_rank_for_layer)
+                if expert_adapter_rank_for_layer is not None
+                else None
             ),
             num_heads=int(_hf_config_attr(hf_config, ("num_heads", "num_attention_heads"), 16)),
             num_kv_heads=int(_hf_config_attr(hf_config, ("num_kv_heads", "num_key_value_heads"), 16)),
@@ -307,6 +333,7 @@ class GrugModelConfig:
             "moe_intermediate_size": self.intermediate_dim,
             "shared_expert_intermediate_size": self.shared_expert_intermediate_dim,
             "expert_bank_for_layer": list(self.resolved_expert_bank_for_layer),
+            "expert_adapter_rank_for_layer": list(self.resolved_expert_adapter_rank_for_layer),
             # grug-specific (no public equivalent)
             "qk_mult": self.qk_mult,
             "grugmoe_attention_mode": "production",
@@ -712,17 +739,23 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         expert_bank: MoEExpertMlp,
+        expert_adapter: "RoutedExpertAdapter | None" = None,
     ) -> "MoEForwardTrace":
         b, s, _ = x.shape
         routing = self.route(x)
+        expert_input = routing.x_flat
+        if expert_adapter is not None:
+            expert_input = expert_adapter.adapt_input(expert_input)
 
         routed_flat, dropped_assignments = expert_bank(
-            routing.x_flat,
+            expert_input,
             routing.selected_experts.astype(jnp.int32),
             routing.combine_weights,
             mesh=get_abstract_mesh(),
             report_capacity_overflow=True,
         )
+        if expert_adapter is not None:
+            routed_flat = expert_adapter.adapt_output(routed_flat)
         router_stats = routing.router_stats
         router_stats["capacity_overflow"] = dropped_assignments.astype(jnp.float32)
 
@@ -735,8 +768,9 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         expert_bank: MoEExpertMlp,
+        expert_adapter: "RoutedExpertAdapter | None" = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        trace = self.forward_with_trace(x, expert_bank)
+        trace = self.forward_with_trace(x, expert_bank, expert_adapter)
         return trace.routed_output, trace.router_stats
 
 
@@ -766,6 +800,38 @@ def _init_expert_bank(cfg: GrugModelConfig, *, block_key: PRNGKeyArray) -> MoEEx
     )
 
 
+class RoutedExpertAdapter(eqx.Module):
+    """Layer-specific low-rank residual maps around a routed shared expert bank."""
+
+    input_a: jax.Array
+    input_b: jax.Array
+    output_a: jax.Array
+    output_b: jax.Array
+
+    @staticmethod
+    def init(hidden_dim: int, rank: int, *, key: PRNGKeyArray) -> "RoutedExpertAdapter":
+        if rank <= 0:
+            raise ValueError(f"adapter rank must be positive, got {rank}")
+        input_key, output_key = random.split(key)
+        a_std = hidden_dim**-0.5
+        return RoutedExpertAdapter(
+            input_a=reshard(_init_weight(input_key, (hidden_dim, rank), a_std), P(None, None)),
+            input_b=reshard(jnp.zeros((rank, hidden_dim)), P(None, None)),
+            output_a=reshard(_init_weight(output_key, (hidden_dim, rank), a_std), P(None, None)),
+            output_b=reshard(jnp.zeros((rank, hidden_dim)), P(None, None)),
+        )
+
+    def adapt_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        hidden = jnp.einsum("...d,dr->...r", x, self.input_a)
+        correction = jnp.einsum("...r,rd->...d", hidden, self.input_b)
+        return x + correction.astype(x.dtype)
+
+    def adapt_output(self, y: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        hidden = jnp.einsum("...d,dr->...r", y, self.output_a)
+        correction = jnp.einsum("...r,rd->...d", hidden, self.output_b)
+        return y + correction.astype(y.dtype)
+
+
 class Block(eqx.Module):
     rms_attn: RMSNorm
     attn_gated_norm: GatedNorm
@@ -774,16 +840,28 @@ class Block(eqx.Module):
     mlp_gated_norm: GatedNorm
     mlp: MoEMLP
     shared: DenseMLP | None
+    routed_expert_adapter: RoutedExpertAdapter | None
     expert_bank_index: int = eqx.field(static=True)
 
     @staticmethod
-    def init(cfg: GrugModelConfig, *, expert_bank_index: int, key: PRNGKeyArray) -> "Block":
+    def init(
+        cfg: GrugModelConfig,
+        *,
+        expert_bank_index: int,
+        expert_adapter_rank: int,
+        key: PRNGKeyArray,
+    ) -> "Block":
         keys = _block_init_keys(key)
         shared = None
         if cfg.shared_expert_intermediate_dim > 0:
             shared = DenseMLP.init(
                 cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=keys.shared
             )
+        routed_expert_adapter = (
+            RoutedExpertAdapter.init(cfg.hidden_dim, expert_adapter_rank, key=keys.expert_adapter)
+            if expert_adapter_rank > 0
+            else None
+        )
         return Block(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=keys.attention_gated_norm),
@@ -792,6 +870,7 @@ class Block(eqx.Module):
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=keys.mlp_gated_norm),
             mlp=MoEMLP.init(cfg, key=keys.router),
             shared=shared,
+            routed_expert_adapter=routed_expert_adapter,
             expert_bank_index=expert_bank_index,
         )
 
@@ -811,7 +890,7 @@ class Block(eqx.Module):
             disable_rope=options.disable_rope,
         )
         mlp_input = self.mlp_gated_norm(self.rms_mlp(x))
-        moe_trace = self.mlp.forward_with_trace(mlp_input, expert_bank)
+        moe_trace = self.mlp.forward_with_trace(mlp_input, expert_bank, self.routed_expert_adapter)
         mlp_output = moe_trace.routed_output
         if self.shared is not None:
             mlp_output = mlp_output + self.shared(mlp_input, activation=ActivationFunctionEnum.silu)
@@ -887,8 +966,15 @@ class Transformer(eqx.Module):
         )
         output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Plm_head)
         bank_for_layer = cfg.resolved_expert_bank_for_layer
+        adapter_rank_for_layer = cfg.resolved_expert_adapter_rank_for_layer
         blocks = tuple(
-            Block.init(cfg, expert_bank_index=bank_for_layer[i], key=block_keys[i]) for i in range(cfg.num_layers)
+            Block.init(
+                cfg,
+                expert_bank_index=bank_for_layer[i],
+                expert_adapter_rank=adapter_rank_for_layer[i],
+                key=block_keys[i],
+            )
+            for i in range(cfg.num_layers)
         )
         first_layer_for_bank = tuple(bank_for_layer.index(bank_id) for bank_id in range(max(bank_for_layer) + 1))
         expert_banks = tuple(
@@ -1112,6 +1198,16 @@ def grugmoe_inference_state_dict(model: Transformer, prefix: str | None = None) 
                     f"{layer_prefix}.shared_expert.down_proj.weight": _linear_inference_tensor(block.shared.w_down),
                 }
             )
+        if block.routed_expert_adapter is not None:
+            adapter = block.routed_expert_adapter
+            tensors.update(
+                {
+                    f"{layer_prefix}.mlp.expert_adapter.input_a.weight": _linear_inference_tensor(adapter.input_a),
+                    f"{layer_prefix}.mlp.expert_adapter.input_b.weight": _linear_inference_tensor(adapter.input_b),
+                    f"{layer_prefix}.mlp.expert_adapter.output_a.weight": _linear_inference_tensor(adapter.output_a),
+                    f"{layer_prefix}.mlp.expert_adapter.output_b.weight": _linear_inference_tensor(adapter.output_b),
+                }
+            )
 
     return {_with_state_dict_prefix(prefix, name): value for name, value in tensors.items()}
 
@@ -1130,6 +1226,7 @@ __all__ = [
     "MoEMLP",
     "MoeActivation",
     "RMSNorm",
+    "RoutedExpertAdapter",
     "Transformer",
     "debug_mesh_and_token_pspec",
     "grugmoe_inference_state_dict",

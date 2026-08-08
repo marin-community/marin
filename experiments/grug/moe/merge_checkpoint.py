@@ -24,11 +24,12 @@ from experiments.grug.moe.merge_recovery import (
     RecoveryStage,
     RecoveryTrainableScope,
 )
-from experiments.grug.moe.model import Transformer
+from experiments.grug.moe.model import RoutedExpertAdapter, Transformer
 from experiments.grug.moe.train import GrugTrainState
 
 MERGE_CHECKPOINT_MANIFEST_FILENAME = "merge_manifest.json"
-_MERGE_CHECKPOINT_FORMAT_VERSION = 2
+_LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION = 2
+_MERGE_CHECKPOINT_FORMAT_VERSION = 3
 
 type OptimizerStateInitializer = Callable[[Transformer], optax.OptState]
 
@@ -72,6 +73,25 @@ class CapacityOracleProvenance:
     output_step: int
 
 
+class LayerAdapterKind(StrEnum):
+    """Machine-readable form of a function-preserving layer adapter."""
+
+    ZERO_INITIALIZED_INPUT_OUTPUT = "zero_initialized_input_output"
+
+
+@dataclass(frozen=True)
+class LayerAdapterProvenance:
+    """Provenance for adding one zero-initialized routed-expert adapter."""
+
+    kind: LayerAdapterKind
+    source_checkpoint: str
+    layer_index: int
+    rank: int
+    input_topology: tuple[int, ...]
+    source_recovery_step: int
+    output_step: int
+
+
 @dataclass(frozen=True)
 class MergeCheckpointManifest:
     """Metadata required to reconstruct a converted checkpoint's static topology."""
@@ -91,6 +111,7 @@ class MergeCheckpointManifest:
     recovery_moe_loss_weight: float | None = None
     recovery_logit_kl_weight: float | None = None
     capacity_oracle: CapacityOracleProvenance | None = None
+    layer_adapter: LayerAdapterProvenance | None = None
     format_version: int = _MERGE_CHECKPOINT_FORMAT_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -99,10 +120,10 @@ class MergeCheckpointManifest:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "MergeCheckpointManifest":
         format_version = int(payload["format_version"])
-        if format_version != _MERGE_CHECKPOINT_FORMAT_VERSION:
+        if format_version not in {_LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION, _MERGE_CHECKPOINT_FORMAT_VERSION}:
             raise ValueError(
                 f"unsupported merge checkpoint format version {format_version}; "
-                f"expected {_MERGE_CHECKPOINT_FORMAT_VERSION}"
+                f"expected one of {_LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION}, {_MERGE_CHECKPOINT_FORMAT_VERSION}"
             )
         spec_payload = payload["spec"]
         if not isinstance(spec_payload, Mapping):
@@ -143,6 +164,24 @@ class MergeCheckpointManifest:
             if capacity_oracle_payload is not None
             else None
         )
+        layer_adapter_payload = payload.get("layer_adapter")
+        if layer_adapter_payload is not None and not isinstance(layer_adapter_payload, Mapping):
+            raise ValueError("layer_adapter must be an object")
+        if format_version == _LEGACY_MERGE_CHECKPOINT_FORMAT_VERSION and layer_adapter_payload is not None:
+            raise ValueError("layer_adapter provenance requires merge checkpoint format version 3")
+        layer_adapter = (
+            LayerAdapterProvenance(
+                kind=LayerAdapterKind(layer_adapter_payload["kind"]),
+                source_checkpoint=str(layer_adapter_payload["source_checkpoint"]),
+                layer_index=int(layer_adapter_payload["layer_index"]),
+                rank=int(layer_adapter_payload["rank"]),
+                input_topology=tuple(int(index) for index in layer_adapter_payload["input_topology"]),
+                source_recovery_step=int(layer_adapter_payload["source_recovery_step"]),
+                output_step=int(layer_adapter_payload["output_step"]),
+            )
+            if layer_adapter_payload is not None
+            else None
+        )
         return cls(
             spec=spec,
             source_topology=tuple(int(index) for index in payload["source_topology"]),
@@ -181,6 +220,7 @@ class MergeCheckpointManifest:
                 else None
             ),
             capacity_oracle=capacity_oracle,
+            layer_adapter=layer_adapter,
             format_version=format_version,
         )
 
@@ -263,6 +303,111 @@ def convert_grug_state_for_one_pair_merge(
 
 def _copy_expert_bank(bank: MoEExpertMlp) -> MoEExpertMlp:
     return jax.tree.map(lambda value: jnp.array(value, copy=True), bank)
+
+
+def _add_layer_adapter(
+    model: Transformer,
+    *,
+    layer_index: int,
+    rank: int,
+    key: jax.Array,
+) -> Transformer:
+    if not 0 <= layer_index < len(model.blocks):
+        raise IndexError(f"layer_index must be in [0, {len(model.blocks)}), got {layer_index}")
+    if rank <= 0:
+        raise ValueError(f"adapter rank must be positive, got {rank}")
+    input_ranks = model.config.resolved_expert_adapter_rank_for_layer
+    if any(input_ranks):
+        raise ValueError(f"layer-adapter conversion requires an adapter-free model, got ranks {input_ranks}")
+
+    output_ranks = tuple(rank if index == layer_index else 0 for index in range(len(model.blocks)))
+    converted_config = dataclasses.replace(model.config, expert_adapter_rank_for_layer=output_ranks)
+    adapter = RoutedExpertAdapter.init(model.config.hidden_dim, rank, key=key)
+    converted_blocks = tuple(
+        dataclasses.replace(
+            block,
+            attn=dataclasses.replace(block.attn, cfg=converted_config),
+            mlp=dataclasses.replace(block.mlp, cfg=converted_config),
+            routed_expert_adapter=adapter if index == layer_index else None,
+        )
+        for index, block in enumerate(model.blocks)
+    )
+    return dataclasses.replace(model, blocks=converted_blocks, config=converted_config)
+
+
+def convert_grug_state_for_layer_adapter(
+    state: GrugTrainState,
+    *,
+    source_manifest: MergeCheckpointManifest,
+    source_checkpoint: str,
+    layer_index: int,
+    rank: int,
+    key: jax.Array,
+    init_optimizer_state: OptimizerStateInitializer,
+    adapter_step: int = 0,
+) -> ConvertedMergeCheckpoint:
+    """Add one zero-initialized layer adapter without changing the checkpoint function."""
+    if adapter_step < 0:
+        raise ValueError(f"adapter_step must be non-negative, got {adapter_step}")
+    if not source_checkpoint:
+        raise ValueError("source_checkpoint must identify the recovered tied checkpoint")
+    if source_manifest.layer_adapter is not None:
+        raise ValueError("layer-adapter conversion cannot augment a checkpoint that already has an adapter")
+
+    input_topology = state.params.config.resolved_expert_bank_for_layer
+    if input_topology != source_manifest.target_topology:
+        raise ValueError(
+            f"checkpoint topology {input_topology} does not match merge manifest target "
+            f"{source_manifest.target_topology}"
+        )
+    if layer_index != source_manifest.spec.source_layer:
+        raise ValueError(
+            f"layer adapter must be installed on merged source layer {source_manifest.spec.source_layer}, "
+            f"got {layer_index}"
+        )
+    representative_layer = source_manifest.spec.representative_layer
+    shared_bank_index = state.params.blocks[representative_layer].expert_bank_index
+    if state.params.blocks[layer_index].expert_bank_index != shared_bank_index:
+        raise ValueError("layer-adapter conversion requires the representative and source layers to share a bank")
+
+    converted_params = _add_layer_adapter(state.params, layer_index=layer_index, rank=rank, key=key)
+    converted_ema_params = (
+        None
+        if state.ema_params is None
+        else _add_layer_adapter(state.ema_params, layer_index=layer_index, rank=rank, key=key)
+    )
+    converted_state = dataclasses.replace(
+        state,
+        step=_scalar_like(adapter_step, state.step),
+        params=converted_params,
+        opt_state=init_optimizer_state(converted_params),
+        ema_params=converted_ema_params,
+    )
+    provenance = LayerAdapterProvenance(
+        kind=LayerAdapterKind.ZERO_INITIALIZED_INPUT_OUTPUT,
+        source_checkpoint=source_checkpoint,
+        layer_index=layer_index,
+        rank=rank,
+        input_topology=input_topology,
+        source_recovery_step=int(jax.device_get(state.step)),
+        output_step=adapter_step,
+    )
+    manifest = dataclasses.replace(
+        source_manifest,
+        recovery_step=adapter_step,
+        ema_converted=converted_ema_params is not None,
+        optimizer_state_reset=True,
+        recovery_initialization=None,
+        recovery_initial_checkpoint=None,
+        recovery_stage=None,
+        recovery_trainable_scope=None,
+        recovery_cross_entropy_weight=None,
+        recovery_moe_loss_weight=None,
+        recovery_logit_kl_weight=None,
+        layer_adapter=provenance,
+        format_version=_MERGE_CHECKPOINT_FORMAT_VERSION,
+    )
+    return ConvertedMergeCheckpoint(state=converted_state, manifest=manifest)
 
 
 def _split_recovered_shared_bank(

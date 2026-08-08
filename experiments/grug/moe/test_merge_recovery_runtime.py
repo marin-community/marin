@@ -37,10 +37,11 @@ from experiments.grug.moe.merge_artifacts import (
     write_calibration_artifact,
     write_matching_artifact,
 )
-from experiments.grug.moe.merge_checkpoint import read_merge_checkpoint_manifest
+from experiments.grug.moe.merge_checkpoint import read_merge_checkpoint_manifest, write_merge_checkpoint_manifest
 from experiments.grug.moe.merge_jobs import (
     CapacityOracleSplitJobConfig,
     ConversionJobConfig,
+    LayerAdapterAugmentJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
     SourceCheckpointConfig,
@@ -56,6 +57,7 @@ from experiments.grug.moe.merge_recovery_runtime import (
     evaluate_prefit_checkpoint_local,
     run_capacity_oracle_split_local,
     run_conversion_local,
+    run_layer_adapter_augment_local,
     run_prefit_local,
     run_recovery_local,
 )
@@ -769,6 +771,161 @@ def test_recovery_workers_reset_each_phase_and_persist_bounded_evaluations(tmp_p
         assert "train/router/layer_1/routing_entropy" in training_metrics["metrics"]
         assert "train/router/layer_1/capacity_overflow" in training_metrics["metrics"]
         assert "train/router/layer_1/routing_count/expert_0" in training_metrics["metrics"]
+
+
+def test_layer_adapter_augment_and_recovery_are_strict_and_resumable(tmp_path: Path) -> None:
+    inputs = _runtime_inputs(tmp_path)
+    converted_path = tmp_path / "adapter-converted"
+    run_conversion_local(
+        ConversionJobConfig(
+            source=inputs.source,
+            calibration_path=inputs.calibration_path,
+            matching_path=inputs.matching_path,
+            prefit_path=None,
+            output_path=str(converted_path),
+            resources=ResourceConfig.with_cpu(),
+            run_id="test-adapter-conversion",
+            assignment_mode=AssignmentMode.NATIVE,
+            representative_layer=1,
+            source_layer=2,
+        )
+    )
+    common = {
+        "source": inputs.source,
+        "data": _data_config(),
+        "matching_path": inputs.matching_path,
+        "resources": ResourceConfig.with_cpu(),
+        "assignment_mode": AssignmentMode.NATIVE,
+        "prefit_applied": False,
+        "batch_size": 1,
+        "learning_rate": 1e-3,
+        "affected_layers": (1, 2),
+        "checkpoint_every": 1,
+    }
+    stage_a_path = tmp_path / "adapter-stage-a"
+    run_recovery_local(
+        RecoveryJobConfig(
+            **common,
+            init_checkpoint_dir=str(converted_path / "checkpoints"),
+            output_path=str(stage_a_path),
+            run_id="test-adapter-stage-a",
+            stage=RecoveryStage.LOCAL,
+            trainable_scope=RecoveryTrainableScope.SHARED_BANK,
+            initialization=RecoveryInitialization.CONVERTED_STEP_ZERO,
+            training_tokens=8,
+            cross_entropy_weight=0.05,
+            moe_loss_weight=1.0,
+            logit_kl_weight=0.1,
+            logit_kl_vocab_chunk_size=8,
+            checkpoint_token_milestones=(8,),
+            select_best_validation_checkpoint=True,
+        )
+    )
+
+    augment_path = tmp_path / "adapter-augment"
+    augment_config = LayerAdapterAugmentJobConfig(
+        source=inputs.source,
+        init_checkpoint_dir=str(stage_a_path / "checkpoints"),
+        output_path=str(augment_path),
+        resources=ResourceConfig.with_cpu(),
+        run_id="test-adapter-augment",
+        assignment_mode=AssignmentMode.NATIVE,
+        prefit_applied=False,
+        adapter_rank=2,
+        affected_layers=(1, 2),
+    )
+    run_layer_adapter_augment_local(augment_config)
+    run_layer_adapter_augment_local(augment_config)
+    augmented_checkpoint = latest_checkpoint_path(str(augment_path / "checkpoints"))
+    augmented_manifest = read_merge_checkpoint_manifest(augmented_checkpoint)
+    assert augmented_manifest.layer_adapter is not None
+    assert augmented_manifest.layer_adapter.layer_index == 2
+    assert augmented_manifest.layer_adapter.rank == 2
+    assert augmented_manifest.layer_adapter.input_topology == (0, 1, 1, 2)
+    assert augmented_manifest.recovery_step == 0
+
+    with pytest.raises(ValueError, match="stale provenance"):
+        run_layer_adapter_augment_local(dataclasses.replace(augment_config, adapter_rank=3))
+    with pytest.raises(ValueError, match="merged layers"):
+        run_layer_adapter_augment_local(dataclasses.replace(augment_config, affected_layers=(2, 1)))
+
+    assert augmented_manifest.layer_adapter is not None
+    stale_manifest = dataclasses.replace(
+        augmented_manifest,
+        layer_adapter=dataclasses.replace(
+            augmented_manifest.layer_adapter,
+            source_checkpoint="different-source",
+            input_topology=(0, 0, 1, 2),
+        ),
+    )
+    write_merge_checkpoint_manifest(augmented_checkpoint, stale_manifest)
+    with pytest.raises(ValueError, match="stale provenance"):
+        run_layer_adapter_augment_local(augment_config)
+    write_merge_checkpoint_manifest(augmented_checkpoint, augmented_manifest)
+
+    recovery_path = tmp_path / "adapter-stage-b"
+    recovery_config = RecoveryJobConfig(
+        **common,
+        init_checkpoint_dir=str(augment_path / "checkpoints"),
+        output_path=str(recovery_path),
+        run_id="test-adapter-stage-b",
+        stage=RecoveryStage.PRESERVATION,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS,
+        initialization=RecoveryInitialization.LAYER_ADAPTER_AUGMENTED,
+        training_tokens=8,
+        cross_entropy_weight=1.0,
+        moe_loss_weight=1.0,
+        logit_kl_weight=0.1,
+        logit_kl_vocab_chunk_size=8,
+        checkpoint_token_milestones=(8,),
+        layer_adapter_rank=2,
+        layer_adapter_source_checkpoint_dir=str(stage_a_path / "checkpoints"),
+    )
+    run_recovery_local(recovery_config)
+    run_recovery_local(recovery_config)
+    recovered_manifest = read_merge_checkpoint_manifest(latest_checkpoint_path(str(recovery_path / "checkpoints")))
+    assert recovered_manifest.layer_adapter == augmented_manifest.layer_adapter
+    assert recovered_manifest.recovery_initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED
+    assert recovered_manifest.recovery_trainable_scope is RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS
+
+    wrong_scope = dataclasses.replace(
+        recovery_config,
+        output_path=str(tmp_path / "adapter-wrong-scope"),
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK,
+    )
+    with pytest.raises(ValueError, match="must train exactly"):
+        run_recovery_local(wrong_scope)
+
+    wrong_rank = dataclasses.replace(
+        recovery_config,
+        output_path=str(tmp_path / "adapter-wrong-rank"),
+        layer_adapter_rank=3,
+    )
+    with pytest.raises(ValueError, match="stale provenance"):
+        run_recovery_local(wrong_rank)
+
+    for suffix, stale_adapter in (
+        (
+            "source",
+            dataclasses.replace(augmented_manifest.layer_adapter, source_checkpoint="different-source"),
+        ),
+        (
+            "step",
+            dataclasses.replace(augmented_manifest.layer_adapter, source_recovery_step=999),
+        ),
+    ):
+        write_merge_checkpoint_manifest(
+            augmented_checkpoint,
+            dataclasses.replace(augmented_manifest, layer_adapter=stale_adapter),
+        )
+        with pytest.raises(ValueError, match="stale provenance"):
+            run_recovery_local(
+                dataclasses.replace(
+                    recovery_config,
+                    output_path=str(tmp_path / f"adapter-wrong-{suffix}"),
+                )
+            )
+    write_merge_checkpoint_manifest(augmented_checkpoint, augmented_manifest)
 
 
 def test_native_joint_preservation_restores_converted_step_zero_strictly_and_records_provenance(

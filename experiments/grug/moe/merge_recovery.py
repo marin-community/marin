@@ -39,6 +39,7 @@ class RecoveryTrainableScope(StrEnum):
     SHARED_BANK = "shared_bank"
     SHARED_BANK_AND_ROUTERS = "shared_bank_and_routers"
     SHARED_BANK_ROUTERS_AND_MLP_NORMS = "shared_bank_routers_and_mlp_norms"
+    SHARED_BANK_AND_LAYER_ADAPTERS = "shared_bank_and_layer_adapters"
     AFFECTED_EXPERT_BANKS = "affected_expert_banks"
 
 
@@ -48,6 +49,7 @@ class RecoveryInitialization(StrEnum):
     CONVERTED_STEP_ZERO = "converted_step_zero"
     LOCAL_RECOVERY = "local_recovery"
     CAPACITY_ORACLE_SPLIT = "capacity_oracle_split"
+    LAYER_ADAPTER_AUGMENTED = "layer_adapter_augmented"
 
 
 class RecoveryCheckpointSelection(StrEnum):
@@ -255,9 +257,10 @@ def _validate_teacher(student: Transformer, teacher: Transformer, affected_layer
     student_with_teacher_topology = dataclasses.replace(
         student.config,
         expert_bank_for_layer=teacher.config.expert_bank_for_layer,
+        expert_adapter_rank_for_layer=teacher.config.expert_adapter_rank_for_layer,
     )
     if student_with_teacher_topology != teacher.config:
-        raise ValueError("student and teacher configs may differ only in expert-bank topology")
+        raise ValueError("student and teacher configs may differ only in expert-bank topology and adapter ranks")
     teacher_banks = tuple(teacher.blocks[layer].expert_bank_index for layer in affected_layers)
     if len(set(teacher_banks)) != len(affected_layers):
         raise ValueError("the recovery teacher must retain distinct expert banks at the affected layers")
@@ -273,6 +276,22 @@ def recovery_trainable_filter(model: Transformer, config: MergeRecoveryConfig) -
             lambda current, bank=bank: current.expert_banks[bank],
             filter_spec,
             bank_filter,
+        )
+    if config.trainable_scope is RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS:
+        adapter_layers = tuple(
+            layer for layer in config.affected_layers if model.blocks[layer].routed_expert_adapter is not None
+        )
+        if adapter_layers != (config.affected_layers[1],):
+            raise ValueError(
+                "layer-adapter recovery requires exactly one adapter on the source layer; "
+                f"got adapters on affected layers {adapter_layers}"
+            )
+        layer = adapter_layers[0]
+        adapter_filter = jax.tree.map(eqx.is_inexact_array, model.blocks[layer].routed_expert_adapter)
+        filter_spec = eqx.tree_at(
+            lambda current: current.blocks[layer].routed_expert_adapter,
+            filter_spec,
+            adapter_filter,
         )
     if config.trainable_scope in {
         RecoveryTrainableScope.SHARED_BANK_AND_ROUTERS,
@@ -553,6 +572,7 @@ def make_recovery_train_step(
 
         if config.trainable_scope in {
             RecoveryTrainableScope.SHARED_BANK,
+            RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS,
             RecoveryTrainableScope.AFFECTED_EXPERT_BANKS,
         }:
             pending_qb_betas = state.pending_qb_betas

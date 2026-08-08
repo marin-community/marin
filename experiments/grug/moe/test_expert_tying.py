@@ -12,11 +12,22 @@ from levanter.checkpoint import load_checkpoint, save_checkpoint
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.utils.jax_utils import leaf_key_paths
 
-from experiments.grug.moe.model import GrugModelConfig, GrugMoeHfConfig, Transformer, _cross_loop_agreement
+from experiments.grug.moe.model import (
+    GrugModelConfig,
+    GrugMoeHfConfig,
+    Transformer,
+    _cross_loop_agreement,
+    grugmoe_inference_state_dict,
+)
 from experiments.grug.moe.train import apply_qb_betas
 
 
-def _tiny_config(*, mapping: tuple[int, ...], shared_intermediate_dim: int = 16) -> GrugModelConfig:
+def _tiny_config(
+    *,
+    mapping: tuple[int, ...],
+    shared_intermediate_dim: int = 16,
+    adapter_ranks: tuple[int, ...] | None = None,
+) -> GrugModelConfig:
     return GrugModelConfig(
         vocab_size=32,
         hidden_dim=16,
@@ -26,6 +37,7 @@ def _tiny_config(*, mapping: tuple[int, ...], shared_intermediate_dim: int = 16)
         num_experts_per_token=2,
         num_layers=len(mapping),
         expert_bank_for_layer=mapping,
+        expert_adapter_rank_for_layer=adapter_ranks,
         num_heads=2,
         num_kv_heads=1,
         max_seq_len=8,
@@ -36,6 +48,10 @@ def _tiny_config(*, mapping: tuple[int, ...], shared_intermediate_dim: int = 16)
 
 def _array_leaves(tree) -> list[jax.Array]:
     return jax.tree_util.tree_leaves(eqx.filter(tree, eqx.is_array))
+
+
+def _parameter_count(tree) -> int:
+    return sum(leaf.size for leaf in _array_leaves(tree))
 
 
 def test_untied_default_matches_explicit_untied_topology():
@@ -54,6 +70,127 @@ def test_untied_default_matches_explicit_untied_topology():
     for implicit_leaf, explicit_leaf in zip(_array_leaves(implicit), _array_leaves(explicit), strict=True):
         np.testing.assert_array_equal(implicit_leaf, explicit_leaf)
     np.testing.assert_array_equal(implicit_logits, explicit_logits)
+
+
+def test_explicit_rank_zero_adapters_match_disabled_adapters():
+    disabled_config = _tiny_config(mapping=(0, 0), adapter_ranks=None)
+    rank_zero_config = _tiny_config(mapping=(0, 0), adapter_ranks=(0, 0))
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        disabled = Transformer.init(disabled_config, key=jax.random.key(10))
+        rank_zero = Transformer.init(rank_zero_config, key=jax.random.key(10))
+        tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
+        disabled_logits = disabled.logits(tokens)
+        rank_zero_logits = rank_zero.logits(tokens)
+
+    assert all(block.routed_expert_adapter is None for block in disabled.blocks)
+    assert all(block.routed_expert_adapter is None for block in rank_zero.blocks)
+    for disabled_leaf, rank_zero_leaf in zip(_array_leaves(disabled), _array_leaves(rank_zero), strict=True):
+        np.testing.assert_array_equal(disabled_leaf, rank_zero_leaf)
+    np.testing.assert_array_equal(disabled_logits, rank_zero_logits)
+
+
+def test_zero_initialized_adapter_preserves_function_and_has_live_b_gradients():
+    disabled_config = _tiny_config(mapping=(0, 0))
+    adapter_config = _tiny_config(mapping=(0, 0), adapter_ranks=(0, 4))
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        disabled = Transformer.init(disabled_config, key=jax.random.key(11))
+        adapted = Transformer.init(adapter_config, key=jax.random.key(11))
+        adapter = adapted.blocks[1].routed_expert_adapter
+        assert adapter is not None
+        tokens = jnp.arange(8, dtype=jnp.int32).reshape(1, 8)
+
+        def adapter_loss(current_adapter):
+            current = eqx.tree_at(
+                lambda model: model.blocks[1].routed_expert_adapter,
+                adapted,
+                current_adapter,
+            )
+            return jnp.sum(jnp.square(current.logits(tokens)))
+
+        adapter_grad = jax.grad(adapter_loss)(adapter)
+        disabled_logits = disabled.logits(tokens)
+        adapted_logits = adapted.logits(tokens)
+
+    np.testing.assert_array_equal(adapted_logits, disabled_logits)
+    assert float(jnp.linalg.norm(adapter.input_a)) > 0
+    assert float(jnp.linalg.norm(adapter.output_a)) > 0
+    np.testing.assert_array_equal(adapter.input_b, jnp.zeros_like(adapter.input_b))
+    np.testing.assert_array_equal(adapter.output_b, jnp.zeros_like(adapter.output_b))
+    assert float(jnp.linalg.norm(adapter_grad.input_b)) > 0
+    assert float(jnp.linalg.norm(adapter_grad.output_b)) > 0
+
+    bf16_input = jnp.linspace(-1.0, 1.0, 32, dtype=jnp.bfloat16).reshape(2, 16)
+    adapted_input = adapter.adapt_input(bf16_input)
+    adapted_output = adapter.adapt_output(bf16_input)
+    assert adapted_input.dtype == jnp.bfloat16
+    assert adapted_output.dtype == jnp.bfloat16
+    np.testing.assert_array_equal(adapted_input, bf16_input)
+    np.testing.assert_array_equal(adapted_output, bf16_input)
+
+
+def test_nonzero_adapter_cannot_change_routes_or_qb_statistics():
+    adapter_config = _tiny_config(mapping=(0, 0), adapter_ranks=(0, 4))
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = Transformer.init(adapter_config, key=jax.random.key(15))
+        block = model.blocks[1]
+        adapter = block.routed_expert_adapter
+        assert adapter is not None
+        nonzero_adapter = dataclasses.replace(
+            adapter,
+            input_b=jnp.ones_like(adapter.input_b) * 0.1,
+            output_b=jnp.ones_like(adapter.output_b) * 0.1,
+        )
+        x = jnp.linspace(-1.0, 1.0, 64, dtype=jnp.float32).reshape(1, 4, 16)
+        bank = model.expert_banks[block.expert_bank_index]
+        without_adapter = block.mlp.forward_with_trace(x, bank)
+        with_adapter = block.mlp.forward_with_trace(x, bank, nonzero_adapter)
+
+    np.testing.assert_array_equal(with_adapter.routing.selected_experts, without_adapter.routing.selected_experts)
+    np.testing.assert_array_equal(with_adapter.routing.combine_weights, without_adapter.routing.combine_weights)
+    np.testing.assert_array_equal(with_adapter.router_stats["qb_beta"], without_adapter.router_stats["qb_beta"])
+    assert not np.array_equal(with_adapter.routed_output, without_adapter.routed_output)
+
+
+def test_inference_state_dict_carries_layer_adapter_tensors():
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = Transformer.init(
+            _tiny_config(mapping=(0, 0), adapter_ranks=(0, 4)),
+            key=jax.random.key(16),
+        )
+        state_dict = grugmoe_inference_state_dict(model)
+
+    adapter_prefix = "model.layers.1.mlp.expert_adapter"
+    assert state_dict[f"{adapter_prefix}.input_a.weight"].shape == (4, 16)
+    assert state_dict[f"{adapter_prefix}.input_b.weight"].shape == (16, 4)
+    assert state_dict[f"{adapter_prefix}.output_a.weight"].shape == (4, 16)
+    assert state_dict[f"{adapter_prefix}.output_b.weight"].shape == (16, 4)
+
+
+def test_layer_adapter_rank_and_parameter_saving_are_explicit():
+    rank = 4
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        untied = Transformer.init(_tiny_config(mapping=(0, 1)), key=jax.random.key(12))
+        adapted_tied = Transformer.init(
+            _tiny_config(mapping=(0, 0), adapter_ranks=(0, rank)),
+            key=jax.random.key(12),
+        )
+
+    adapter = adapted_tied.blocks[1].routed_expert_adapter
+    assert adapter is not None
+    assert adapted_tied.config.resolved_expert_adapter_rank_for_layer == (0, rank)
+    assert sum(block.routed_expert_adapter is not None for block in adapted_tied.blocks) == 1
+    assert adapter.input_a.shape == (adapted_tied.config.hidden_dim, rank)
+    assert adapter.input_b.shape == (rank, adapted_tied.config.hidden_dim)
+    assert adapter.output_a.shape == (adapted_tied.config.hidden_dim, rank)
+    assert adapter.output_b.shape == (rank, adapted_tied.config.hidden_dim)
+
+    bank_parameters = (
+        3 * adapted_tied.config.num_experts * adapted_tied.config.hidden_dim * adapted_tied.config.intermediate_dim
+    )
+    adapter_parameters = 4 * adapted_tied.config.hidden_dim * rank
+    assert _parameter_count(untied) - _parameter_count(adapted_tied) == bank_parameters - adapter_parameters
 
 
 def test_expert_bank_mapping_stores_each_bank_once():

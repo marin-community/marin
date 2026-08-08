@@ -51,9 +51,11 @@ from experiments.grug.moe.merge_artifacts import (
 )
 from experiments.grug.moe.merge_checkpoint import (
     CapacityOracleKind,
+    LayerAdapterKind,
     MergeCheckpointManifest,
     OnePairMergeCheckpointSpec,
     convert_grug_state_for_capacity_oracle_split,
+    convert_grug_state_for_layer_adapter,
     convert_grug_state_for_one_pair_merge,
     read_merge_checkpoint_manifest,
     write_merge_checkpoint_manifest,
@@ -61,6 +63,7 @@ from experiments.grug.moe.merge_checkpoint import (
 from experiments.grug.moe.merge_jobs import (
     CapacityOracleSplitJobConfig,
     ConversionJobConfig,
+    LayerAdapterAugmentJobConfig,
     PrefitJobConfig,
     RecoveryJobConfig,
     SourceCheckpointConfig,
@@ -107,13 +110,25 @@ class PrefitRuntimeState:
 
 
 def _is_local(
-    config: PrefitJobConfig | ConversionJobConfig | CapacityOracleSplitJobConfig | RecoveryJobConfig,
+    config: (
+        PrefitJobConfig
+        | ConversionJobConfig
+        | CapacityOracleSplitJobConfig
+        | LayerAdapterAugmentJobConfig
+        | RecoveryJobConfig
+    ),
 ) -> bool:
     return isinstance(config.resources.device, CpuConfig)
 
 
 def _validate_runtime_paths(
-    config: PrefitJobConfig | ConversionJobConfig | CapacityOracleSplitJobConfig | RecoveryJobConfig,
+    config: (
+        PrefitJobConfig
+        | ConversionJobConfig
+        | CapacityOracleSplitJobConfig
+        | LayerAdapterAugmentJobConfig
+        | RecoveryJobConfig
+    ),
     paths: dict[str, str | None],
 ) -> None:
     """Validate material stage paths before initializing JAX devices."""
@@ -1212,13 +1227,157 @@ def run_capacity_oracle_split_local(config: CapacityOracleSplitJobConfig) -> Non
         )
 
 
+def _validate_selected_local_recovery(manifest: MergeCheckpointManifest, *, selected_step: int) -> None:
+    """Require the validation-selected CE+KL local-recovery checkpoint used by XEM-007."""
+    expected = {
+        "recovery_step": selected_step,
+        "recovery_initialization": RecoveryInitialization.CONVERTED_STEP_ZERO,
+        "recovery_stage": RecoveryStage.LOCAL,
+        "recovery_trainable_scope": RecoveryTrainableScope.SHARED_BANK,
+        "recovery_cross_entropy_weight": 0.05,
+        "recovery_moe_loss_weight": 1.0,
+        "recovery_logit_kl_weight": 0.1,
+    }
+    mismatches = {
+        name: (getattr(manifest, name), value) for name, value in expected.items() if getattr(manifest, name) != value
+    }
+    if mismatches:
+        raise ValueError(f"adapter augmentation requires the selected CE+KL local recovery: {mismatches}")
+    if manifest.capacity_oracle is not None or manifest.layer_adapter is not None:
+        raise ValueError("adapter augmentation requires an ordinary adapter-free tied recovery checkpoint")
+
+
+def run_layer_adapter_augment_local(config: LayerAdapterAugmentJobConfig) -> None:
+    """Add the function-identical layer-3 rank adapter to selected Stage A weights."""
+    if config.adapter_rank <= 0:
+        raise ValueError(f"adapter_rank must be positive, got {config.adapter_rank}")
+    checkpoint_root = _checkpoint_root(config.output_path)
+    _validate_runtime_paths(
+        config,
+        {
+            "teacher_checkpoint": config.source.checkpoint_dir,
+            "selected_recovery_checkpoint": config.init_checkpoint_dir,
+            "layer_adapter_output": checkpoint_root,
+        },
+    )
+    initialize_merge_worker()
+    mesh = compact_merge_mesh(
+        expert_axis_size=config.expert_axis_size,
+        replica_axis_size=config.replica_axis_size,
+    )
+    with set_mesh(mesh):
+        selection = _best_validation_selection(config.init_checkpoint_dir)
+        source_checkpoint = str(selection["checkpoint_path"])
+        selected_step = int(selection["step"])
+        _validate_runtime_paths(config, {"resolved_recovery_checkpoint": source_checkpoint})
+
+        source_manifest = read_merge_checkpoint_manifest(source_checkpoint)
+        _validate_merge_manifest(
+            source_manifest,
+            assignment_mode=config.assignment_mode,
+            prefit_applied=config.prefit_applied,
+            affected_layers=config.affected_layers,
+        )
+        _validate_selected_local_recovery(source_manifest, selected_step=selected_step)
+        teacher_checkpoint = latest_checkpoint_path(config.source.checkpoint_dir)
+        if source_manifest.spec.source_checkpoint != teacher_checkpoint:
+            raise ValueError(
+                f"merge checkpoint refers to teacher {source_manifest.spec.source_checkpoint}, not {teacher_checkpoint}"
+            )
+
+        own_checkpoint = discover_latest_checkpoint(checkpoint_root)
+        if own_checkpoint is not None:
+            manifest = read_merge_checkpoint_manifest(own_checkpoint)
+            _validate_merge_manifest(
+                manifest,
+                assignment_mode=config.assignment_mode,
+                prefit_applied=config.prefit_applied,
+                affected_layers=config.affected_layers,
+            )
+            adapter = manifest.layer_adapter
+            expected_layer = config.affected_layers[1]
+            if (
+                adapter is None
+                or adapter.kind is not LayerAdapterKind.ZERO_INITIALIZED_INPUT_OUTPUT
+                or adapter.source_checkpoint != source_checkpoint
+                or adapter.layer_index != expected_layer
+                or adapter.rank != config.adapter_rank
+                or adapter.input_topology != source_manifest.target_topology
+                or adapter.source_recovery_step != selected_step
+                or adapter.output_step != 0
+                or manifest.target_topology != source_manifest.target_topology
+                or manifest.recovery_step != 0
+                or manifest.capacity_oracle is not None
+            ):
+                raise ValueError("existing layer-adapter checkpoint has stale provenance")
+            logger.info("Layer-adapter checkpoint already exists at %s", own_checkpoint)
+            return
+
+        model_config = dataclasses.replace(
+            config.source.model,
+            expert_bank_for_layer=source_manifest.target_topology,
+            expert_adapter_rank_for_layer=None,
+        )
+        params = Transformer.init(model_config, key=jax.random.key(config.seed))
+        pending_qb_betas = jnp.zeros((len(params.blocks), params.config.num_experts), dtype=jnp.float32)
+        loaded = cast(
+            "dict[str, Any]",
+            load_checkpoint(
+                {
+                    "step": jnp.asarray(selected_step, dtype=jnp.int32),
+                    "params": params,
+                    "pending_qb_betas": pending_qb_betas,
+                },
+                source_checkpoint,
+                mesh=mesh,
+                allow_partial=False,
+            ),
+        )
+        loaded_step = int(jax.device_get(loaded["step"]))
+        if loaded_step != selected_step or loaded_step != source_manifest.recovery_step:
+            raise ValueError(
+                "selected recovery checkpoint step disagrees with selector or manifest: "
+                f"checkpoint={loaded_step}, selector={selected_step}, manifest={source_manifest.recovery_step}"
+            )
+        recovered = GrugTrainState(
+            step=loaded["step"],
+            params=loaded["params"],
+            opt_state=optax.EmptyState(),
+            ema_params=None,
+            pending_qb_betas=loaded["pending_qb_betas"],
+        )
+        augmented = convert_grug_state_for_layer_adapter(
+            recovered,
+            source_manifest=source_manifest,
+            source_checkpoint=source_checkpoint,
+            layer_index=config.affected_layers[1],
+            rank=config.adapter_rank,
+            key=jax.random.fold_in(jax.random.key(config.seed), 1),
+            init_optimizer_state=lambda _: optax.EmptyState(),
+        )
+        _save_permanent_checkpoint(
+            augmented.state,
+            checkpoint_root=checkpoint_root,
+            step=0,
+            sync_name="layer_adapter_augment_0",
+            merge_manifest=augmented.manifest,
+        )
+
+
 def _recovery_template(
     config: RecoveryJobConfig,
     manifest: MergeCheckpointManifest,
     *,
     key: jax.Array,
 ) -> tuple[MergeRecoveryState, optax.GradientTransformation, MergeRecoveryConfig]:
-    model_config = dataclasses.replace(config.source.model, expert_bank_for_layer=manifest.target_topology)
+    adapter_ranks = [0] * config.source.model.num_layers
+    if manifest.layer_adapter is not None:
+        adapter_ranks[manifest.layer_adapter.layer_index] = manifest.layer_adapter.rank
+    model_config = dataclasses.replace(
+        config.source.model,
+        expert_bank_for_layer=manifest.target_topology,
+        expert_adapter_rank_for_layer=tuple(adapter_ranks),
+    )
     params = Transformer.init(model_config, key=key)
     optimizer = optax.adamw(config.learning_rate, weight_decay=config.weight_decay)
     recovery_config = MergeRecoveryConfig(
@@ -1326,10 +1485,17 @@ def _recovery_manifest_for_run(
     manifest: MergeCheckpointManifest,
     *,
     initialization_checkpoint: str,
+    expected_adapter_source_checkpoint: str | None,
+    expected_adapter_source_step: int | None,
     resuming: bool,
 ) -> MergeCheckpointManifest:
     if config.stage is RecoveryStage.LOCAL and config.initialization is not RecoveryInitialization.CONVERTED_STEP_ZERO:
         raise ValueError("local recovery must initialize from a converted step-0 checkpoint")
+    if (
+        config.initialization is not RecoveryInitialization.LAYER_ADAPTER_AUGMENTED
+        and manifest.layer_adapter is not None
+    ):
+        raise ValueError("an adapter checkpoint requires layer-adapter recovery initialization")
 
     if resuming:
         if manifest.recovery_initialization is not config.initialization:
@@ -1356,6 +1522,13 @@ def _recovery_manifest_for_run(
         }
         if mismatches:
             raise ValueError(f"recovery checkpoint objective or trainable scope changed: {mismatches}")
+        if config.initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED:
+            _validate_layer_adapter_recovery(
+                config,
+                manifest,
+                expected_source_checkpoint=expected_adapter_source_checkpoint,
+                expected_source_step=expected_adapter_source_step,
+            )
         return manifest
 
     if config.initialization is RecoveryInitialization.CONVERTED_STEP_ZERO:
@@ -1375,6 +1548,17 @@ def _recovery_manifest_for_run(
             raise ValueError("a capacity-oracle initializer must train the two affected expert banks")
         if manifest.recovery_step != 0 or manifest.capacity_oracle is None:
             raise ValueError("capacity-oracle recovery requires an explicit step-0 split checkpoint")
+    elif config.initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED:
+        if manifest.recovery_initialization is not None or manifest.recovery_step != 0:
+            raise ValueError("layer-adapter recovery must initialize from the augmented step-0 checkpoint")
+        _validate_layer_adapter_recovery(
+            config,
+            manifest,
+            expected_source_checkpoint=expected_adapter_source_checkpoint,
+            expected_source_step=expected_adapter_source_step,
+        )
+    else:
+        raise ValueError(f"unknown recovery initialization {config.initialization}")
 
     return dataclasses.replace(
         manifest,
@@ -1386,6 +1570,35 @@ def _recovery_manifest_for_run(
         recovery_moe_loss_weight=config.moe_loss_weight,
         recovery_logit_kl_weight=config.logit_kl_weight,
     )
+
+
+def _validate_layer_adapter_recovery(
+    config: RecoveryJobConfig,
+    manifest: MergeCheckpointManifest,
+    *,
+    expected_source_checkpoint: str | None,
+    expected_source_step: int | None,
+) -> None:
+    if config.stage is not RecoveryStage.PRESERVATION:
+        raise ValueError("layer-adapter initialization is valid only for preservation recovery")
+    if config.trainable_scope is not RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS:
+        raise ValueError("layer-adapter initialization must train exactly the shared bank and layer adapters")
+    adapter = manifest.layer_adapter
+    if adapter is None:
+        raise ValueError("layer-adapter recovery requires explicit adapter provenance")
+    if config.layer_adapter_rank is None or expected_source_checkpoint is None or expected_source_step is None:
+        raise ValueError("layer-adapter recovery requires an expected source checkpoint, step, and rank")
+    if (
+        adapter.kind is not LayerAdapterKind.ZERO_INITIALIZED_INPUT_OUTPUT
+        or adapter.layer_index != config.affected_layers[1]
+        or adapter.rank != config.layer_adapter_rank
+        or adapter.source_checkpoint != expected_source_checkpoint
+        or adapter.source_recovery_step != expected_source_step
+        or adapter.input_topology != manifest.target_topology
+        or adapter.output_step != 0
+        or manifest.capacity_oracle is not None
+    ):
+        raise ValueError("layer-adapter recovery checkpoint has stale provenance")
 
 
 def _recovery_metrics(
@@ -1526,6 +1739,14 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
         raise ValueError("checkpoint token milestones must be positive")
     if config.select_best_validation_checkpoint and config.stage is not RecoveryStage.LOCAL:
         raise ValueError("best-validation checkpoint selection is only valid for local recovery")
+    uses_layer_adapter = config.initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED
+    if uses_layer_adapter:
+        if config.layer_adapter_rank is None or config.layer_adapter_rank <= 0:
+            raise ValueError("layer-adapter recovery requires a positive expected adapter rank")
+        if config.layer_adapter_source_checkpoint_dir is None:
+            raise ValueError("layer-adapter recovery requires the selected source checkpoint directory")
+    elif config.layer_adapter_rank is not None or config.layer_adapter_source_checkpoint_dir is not None:
+        raise ValueError("layer-adapter expectations are valid only for layer-adapter recovery")
     checkpoint_root = _checkpoint_root(config.output_path)
     _validate_runtime_paths(
         config,
@@ -1533,6 +1754,7 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
             "teacher_checkpoint": config.source.checkpoint_dir,
             "matching": config.matching_path,
             "initial_checkpoint": config.init_checkpoint_dir,
+            "layer_adapter_source_checkpoint": config.layer_adapter_source_checkpoint_dir,
             "recovery_output": checkpoint_root,
         },
     )
@@ -1542,6 +1764,17 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
         replica_axis_size=config.replica_axis_size,
     )
     with set_mesh(mesh):
+        expected_adapter_source_checkpoint = None
+        expected_adapter_source_step = None
+        if uses_layer_adapter:
+            assert config.layer_adapter_source_checkpoint_dir is not None
+            selection = _best_validation_selection(config.layer_adapter_source_checkpoint_dir)
+            expected_adapter_source_checkpoint = str(selection["checkpoint_path"])
+            expected_adapter_source_step = int(selection["step"])
+            _validate_runtime_paths(
+                config,
+                {"resolved_layer_adapter_source_checkpoint": expected_adapter_source_checkpoint},
+            )
         matching = _matching_manifest(
             config.matching_path,
             representative_layer=config.affected_layers[0],
@@ -1568,6 +1801,8 @@ def run_recovery_local(config: RecoveryJobConfig) -> None:
             config,
             manifest,
             initialization_checkpoint=initialization_checkpoint,
+            expected_adapter_source_checkpoint=expected_adapter_source_checkpoint,
+            expected_adapter_source_step=expected_adapter_source_step,
             resuming=own_checkpoint is not None,
         )
 

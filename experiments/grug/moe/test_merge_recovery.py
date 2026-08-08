@@ -1,6 +1,8 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -301,6 +303,55 @@ def test_bank_only_preservation_keeps_routers_and_qb_frozen():
         _assert_tree_equal(before_block.mlp.router, after_block.mlp.router)
         np.testing.assert_array_equal(before_block.mlp.router_bias, after_block.mlp.router_bias)
     np.testing.assert_array_equal(updated.pending_qb_betas, pending_qb_betas)
+
+
+def test_layer_adapter_recovery_trains_only_shared_bank_and_source_layer_adapter():
+    optimizer = optax.sgd(1e-3)
+    config = MergeRecoveryConfig(
+        affected_layers=_AFFECTED_LAYERS,
+        stage=RecoveryStage.PRESERVATION,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS,
+        cross_entropy_weight=1.0,
+        logit_kl_weight=0.1,
+    )
+    model_config = _tiny_config()
+    student_config = dataclasses.replace(
+        model_config,
+        expert_bank_for_layer=(0, 1, 1, 2),
+        expert_adapter_rank_for_layer=(0, 0, 2, 0),
+    )
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        teacher = Transformer.init(model_config, key=jax.random.key(41))
+        student = Transformer.init(student_config, key=jax.random.key(41))
+        adapter = student.blocks[_AFFECTED_LAYERS[1]].routed_expert_adapter
+        assert adapter is not None
+        trainable, _ = eqx.partition(student, recovery_trainable_filter(student, config))
+        state = initial_recovery_state(
+            student,
+            optimizer=optimizer,
+            pending_qb_betas=jnp.zeros((4, 4), dtype=jnp.float32),
+            config=config,
+        )
+        updated, _ = make_recovery_train_step(optimizer, config, logit_kl_loss=make_chunked_logit_kl(8))(
+            state,
+            teacher,
+            jnp.arange(8, dtype=jnp.int32).reshape(1, 8),
+            jnp.ones((1, 8), dtype=jnp.float32),
+        )
+
+    assert trainable.blocks[_AFFECTED_LAYERS[0]].routed_expert_adapter is None
+    assert trainable.blocks[_AFFECTED_LAYERS[1]].routed_expert_adapter is not None
+    assert _tree_changed(student.expert_banks[1], updated.params.expert_banks[1])
+    updated_adapter = updated.params.blocks[_AFFECTED_LAYERS[1]].routed_expert_adapter
+    assert updated_adapter is not None
+    np.testing.assert_array_equal(updated_adapter.input_a, adapter.input_a)
+    np.testing.assert_array_equal(updated_adapter.output_a, adapter.output_a)
+    assert not np.array_equal(updated_adapter.input_b, adapter.input_b)
+    assert not np.array_equal(updated_adapter.output_b, adapter.output_b)
+    for before_block, after_block in zip(student.blocks, updated.params.blocks, strict=True):
+        _assert_tree_equal(before_block.mlp.router, after_block.mlp.router)
+        np.testing.assert_array_equal(before_block.mlp.router_bias, after_block.mlp.router_bias)
+    np.testing.assert_array_equal(updated.pending_qb_betas, state.pending_qb_betas)
 
 
 def test_norm_adaptation_trains_only_affected_mlp_input_norms_beyond_bank_and_routers():

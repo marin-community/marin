@@ -111,6 +111,24 @@ class CapacityOracleSplitJobConfig:
 
 
 @dataclass(frozen=True)
+class LayerAdapterAugmentJobConfig:
+    """Add a zero-output layer-conditioned adapter to a selected tied checkpoint."""
+
+    source: SourceCheckpointConfig
+    init_checkpoint_dir: str
+    output_path: str
+    resources: ResourceConfig
+    run_id: str
+    assignment_mode: AssignmentMode
+    prefit_applied: bool
+    adapter_rank: int
+    affected_layers: tuple[int, int] = (2, 3)
+    seed: int = 0
+    expert_axis_size: int = 1
+    replica_axis_size: int | None = None
+
+
+@dataclass(frozen=True)
 class RecoveryJobConfig:
     source: SourceCheckpointConfig
     data: LmDataConfig
@@ -139,6 +157,8 @@ class RecoveryJobConfig:
     recovery_loss_threshold_delta: float = 0.02
     select_best_validation_checkpoint: bool = False
     initial_checkpoint_selection: RecoveryCheckpointSelection = RecoveryCheckpointSelection.LATEST
+    layer_adapter_rank: int | None = None
+    layer_adapter_source_checkpoint_dir: str | None = None
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
 
@@ -178,6 +198,13 @@ def _run_capacity_oracle_split_local(config: CapacityOracleSplitJobConfig) -> No
     run_capacity_oracle_split_local(config)
 
 
+def _run_layer_adapter_augment_local(config: LayerAdapterAugmentJobConfig) -> None:
+    # Break the config/runtime import cycle at the dispatched worker boundary.
+    from experiments.grug.moe.merge_recovery_runtime import run_layer_adapter_augment_local  # noqa: PLC0415
+
+    run_layer_adapter_augment_local(config)
+
+
 def _run_recovery_local(config: RecoveryJobConfig) -> None:
     # Break the config/runtime import cycle at the dispatched worker boundary.
     from experiments.grug.moe.merge_recovery_runtime import run_recovery_local  # noqa: PLC0415
@@ -212,6 +239,10 @@ def run_conversion(config: ConversionJobConfig) -> None:
 
 def run_capacity_oracle_split(config: CapacityOracleSplitJobConfig) -> None:
     _dispatch(config.run_id, config, _run_capacity_oracle_split_local, config.resources)
+
+
+def run_layer_adapter_augment(config: LayerAdapterAugmentJobConfig) -> None:
+    _dispatch(config.run_id, config, _run_layer_adapter_augment_local, config.resources)
 
 
 def run_recovery(config: RecoveryJobConfig) -> None:

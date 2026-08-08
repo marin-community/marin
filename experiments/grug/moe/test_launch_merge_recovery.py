@@ -37,6 +37,8 @@ def test_merge_pipeline_reuses_calibration_and_matching_across_all_ablation_bran
         MergeBranchName.NATIVE_LOCAL_CE_KL_BANK_ONLY,
         MergeBranchName.NATIVE_LOCAL_CE_KL_MLP_NORMS,
         MergeBranchName.NATIVE_LOCAL_CE_KL_CAPACITY_ORACLE,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_CONTROL,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_R8,
     }
     assert len({branch.converted.fingerprint() for branch in pipeline.branches}) == 5
     for branch in pipeline.branches:
@@ -225,6 +227,69 @@ def test_unlock_diagnostics_share_selected_stage_a_and_vary_one_trainable_surfac
     assert selected_stage_a in pipeline.capacity_oracle_split.deps
 
 
+def test_layer_adapter_matrix_uses_exact_selected_stage_a_and_matched_settings(monkeypatch) -> None:
+    monkeypatch.setattr("experiments.grug.moe.launch_merge_recovery.mixture", lambda *_args, **_kwargs: None)
+    pipeline = _pipeline(teacher_commit="teacher-sha")
+    selected_stage_a = next(
+        branch.stage_a for branch in pipeline.branches if branch.name is MergeBranchName.NATIVE_LOCAL_CE_KL
+    )
+    augment = materialized_config(pipeline.layer_adapter_augment, _PREFIX)
+    assert augment.init_checkpoint_dir == prefix_join(selected_stage_a.path(_PREFIX), "checkpoints")
+    assert augment.adapter_rank == 8
+    assert augment.affected_layers == (2, 3)
+    assert augment.assignment_mode is AssignmentMode.NATIVE
+    assert not augment.prefit_applied
+    assert augment.resources.regions == ["us-central1"]
+    assert selected_stage_a in pipeline.layer_adapter_augment.deps
+
+    diagnostics = {branch.name: branch for branch in pipeline.layer_adapter_diagnostics}
+    assert set(diagnostics) == {
+        MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_CONTROL,
+        MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_R8,
+    }
+    expected = {
+        MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_CONTROL: (
+            RecoveryTrainableScope.SHARED_BANK,
+            RecoveryInitialization.LOCAL_RECOVERY,
+            RecoveryCheckpointSelection.BEST_VALIDATION,
+            selected_stage_a,
+        ),
+        MergeBranchName.NATIVE_LOCAL_CE_KL_ADAPTER_R8: (
+            RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS,
+            RecoveryInitialization.LAYER_ADAPTER_AUGMENTED,
+            RecoveryCheckpointSelection.LATEST,
+            pipeline.layer_adapter_augment,
+        ),
+    }
+    for name, (scope, initialization, selection, initializer) in expected.items():
+        branch = diagnostics[name]
+        config = materialized_config(branch.recovery, _PREFIX)
+        assert branch.trainable_scope is scope
+        assert config.stage is RecoveryStage.PRESERVATION
+        assert config.trainable_scope is scope
+        assert config.initialization is initialization
+        assert config.initial_checkpoint_selection is selection
+        assert config.init_checkpoint_dir == prefix_join(initializer.path(_PREFIX), "checkpoints")
+        assert config.training_tokens == 50_069_504
+        assert config.checkpoint_token_milestones == (12_582_912, 25_034_752, 37_617_664, 50_069_504)
+        assert config.cross_entropy_weight == 1.0
+        assert config.moe_loss_weight == 1.0
+        assert config.logit_kl_weight == 0.1
+        assert config.assignment_mode is AssignmentMode.NATIVE
+        assert not config.prefit_applied
+        assert config.resources.regions == ["us-central1"]
+        assert initializer in branch.recovery.deps
+        if initialization is RecoveryInitialization.LAYER_ADAPTER_AUGMENTED:
+            assert config.layer_adapter_rank == 8
+            assert config.layer_adapter_source_checkpoint_dir == prefix_join(
+                selected_stage_a.path(_PREFIX),
+                "checkpoints",
+            )
+        else:
+            assert config.layer_adapter_rank is None
+            assert config.layer_adapter_source_checkpoint_dir is None
+
+
 def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeypatch) -> None:
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("checkpoint storage was accessed during graph construction")
@@ -238,7 +303,12 @@ def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeyp
     pipeline.native_joint.stage_b.lower()
     pipeline.capacity_oracle_split.fingerprint()
     pipeline.capacity_oracle_split.lower()
+    pipeline.layer_adapter_augment.fingerprint()
+    pipeline.layer_adapter_augment.lower()
     for diagnostic in pipeline.unlock_diagnostics:
+        diagnostic.recovery.fingerprint()
+        diagnostic.recovery.lower()
+    for diagnostic in pipeline.layer_adapter_diagnostics:
         diagnostic.recovery.fingerprint()
         diagnostic.recovery.lower()
 
@@ -250,7 +320,10 @@ def test_no_launch_graph_construction_does_not_resolve_remote_checkpoint(monkeyp
     materialized_config(pipeline.native_joint.converted, _PREFIX)
     materialized_config(pipeline.native_joint.stage_b, _PREFIX)
     materialized_config(pipeline.capacity_oracle_split, _PREFIX)
+    materialized_config(pipeline.layer_adapter_augment, _PREFIX)
     for diagnostic in pipeline.unlock_diagnostics:
+        materialized_config(diagnostic.recovery, _PREFIX)
+    for diagnostic in pipeline.layer_adapter_diagnostics:
         materialized_config(diagnostic.recovery, _PREFIX)
 
 

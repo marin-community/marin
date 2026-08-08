@@ -40,6 +40,14 @@ from marin.execution.lazy import materialized_config
 from marin.processing.tokenize.tokenize import TokenizedCache
 
 from experiments.ferries import canary_ferry
+from experiments.grug.moe.merge_recovery import (
+    MergeRecoveryConfig,
+    RecoveryStage,
+    RecoveryTrainableScope,
+    initial_recovery_state,
+    make_chunked_logit_kl,
+    make_recovery_train_step,
+)
 from experiments.llama import llama3_tokenizer
 
 _TOKENIZED_CACHE = f"{TokenizedCache.__module__}.{TokenizedCache.__qualname__}"
@@ -302,6 +310,56 @@ def test_grug_moe_variant_threads_moe_implementation_to_kernel():
         closed_jaxpr, _, _ = eqx.filter_make_jaxpr(one_step)()
 
     assert "ragged_all_to_all" in str(closed_jaxpr)
+
+
+def test_grug_moe_layer_adapter_recovery_lowers_on_multi_axis_mesh():
+    model_module = importlib.import_module("experiments.grug.moe.model")
+    teacher_config = _small_model_config(model_module.GrugModelConfig, vocab_size=128, seq_len=4)
+    teacher_config = dataclasses.replace(
+        teacher_config,
+        num_layers=4,
+        expert_bank_for_layer=(0, 1, 2, 3),
+        moe_implementation="ring",
+    )
+    student_config = dataclasses.replace(
+        teacher_config,
+        expert_bank_for_layer=(0, 1, 1, 2),
+        expert_adapter_rank_for_layer=(0, 0, 2, 0),
+    )
+    recovery_config = MergeRecoveryConfig(
+        affected_layers=(1, 2),
+        stage=RecoveryStage.PRESERVATION,
+        trainable_scope=RecoveryTrainableScope.SHARED_BANK_AND_LAYER_ADAPTERS,
+        cross_entropy_weight=1.0,
+        logit_kl_weight=0.1,
+    )
+    optimizer = optax.adamw(1e-4, weight_decay=0.0)
+    train_step = make_recovery_train_step(
+        optimizer,
+        recovery_config,
+        logit_kl_loss=make_chunked_logit_kl(32),
+    )
+    mesh, token_pspec = model_module.debug_mesh_and_token_pspec(num_devices=4)
+
+    def one_step():
+        teacher = model_module.Transformer.init(teacher_config, key=jax.random.PRNGKey(30))
+        student = model_module.Transformer.init(student_config, key=jax.random.PRNGKey(30))
+        state = initial_recovery_state(
+            student,
+            optimizer=optimizer,
+            pending_qb_betas=jnp.zeros((4, 4), dtype=jnp.float32),
+            config=recovery_config,
+        )
+        tokens = jax.sharding.reshard(jnp.zeros((8, 4), dtype=jnp.int32), token_pspec)
+        loss_weight = jax.sharding.reshard(jnp.ones((8, 4), dtype=jnp.float32), token_pspec)
+        return train_step(state, teacher, tokens, loss_weight)
+
+    with _reset_abstract_mesh(), use_abstract_mesh(mesh):
+        state_shape, losses_shape = eqx.filter_eval_shape(one_step)
+
+    assert state_shape.step.shape == ()
+    assert state_shape.params.blocks[2].routed_expert_adapter is not None
+    assert losses_shape.total.shape == ()
 
 
 def test_grug_moe_data_loaders_build_against_single_expert_mesh():
