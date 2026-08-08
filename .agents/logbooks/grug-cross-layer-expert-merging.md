@@ -23,6 +23,7 @@ author: dlwh
 - `GRUG-XEM-005` found that CE+KL supervision materially improves frozen-router Stage A, but its sole Stage-B continuation still failed the strict surgery gate: +0.03835 validation/+0.03535 Paloma at 100.14M total tokens and +0.02769/+0.02583 at 250.09M. Routing stayed healthy, so no larger surgery launched.
 - `GRUG-XEM-006` completed the causal recovery-unlock matrix. Bank-only recovery matched the router-unlocked control, MLP-input-norm recovery regressed to +0.13190 validation/+0.13161 Paloma, and the untied capacity oracle improved bank-only by +0.00490/+0.00461. The capacity result missed the preregistered 0.005 signal and dominant-capacity thresholds. No shared arm passed the strict 100.14M-total-token promotion gate.
 - `GRUG-XEM-007` found that a layer-3 rank-8 routed-function adapter is not a useful unlock. It improved the matched bank-only control by only 0.000028 validation and 0.000026 Paloma at 50.07M continuation tokens, capturing 0.57% of the untied-oracle advantage while missing both utility and promotion gates.
+- `GRUG-XEM-008` found material direct shared-bank gradient conflict only at the 25.03M-token midpoint, not at the Stage-A start or 50.07M endpoint. The preregistered persistent-conflict gate required two of three checkpoints and returned inconclusive. No optimizer intervention or larger surgery is justified by this diagnostic.
 - The pushed research branch is `research/grug-matcher-jit` in `/tmp/marin-grug-xem-jit`. No PR exists.
 
 ## Baseline
@@ -36,7 +37,6 @@ author: dlwh
 ### Active
 
 - `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best shared result: +0.02769 validation/+0.02583 Paloma after 250.09M online tokens, above the required +0.02 validation gate. Resume only with a new preregistered d512 shared-bank hypothesis.
-- `GRUG-XEM-H11`: Layers 2 and 3 request persistently opposing direct routed-MoE updates from their shared bank. Next test: compare detached teacher-on-student-state bank gradients at the Stage-B start, 25M, and 50M checkpoints on 16 identical unseen continuation batches.
 
 ### Blocked
 
@@ -47,6 +47,7 @@ author: dlwh
 - `GRUG-XEM-H5`: Spectral matching missed its gate. Relative to native-only matching it improved the common assignment objective by 0.5%, Stage-A MoE loss by 1.1%, and the final combined spectral-plus-prefit recovery gap by 6-7%; none reaches the required 15%/20% margin. Keep spectral probes as diagnostics, not the production initializer.
 - `GRUG-XEM-H9`: The `S/R/N/U` matrix did not identify a promotable one-factor unlock. Frozen routing was neutral, norm unlocking was harmful, and independent bank capacity improved validation/Paloma by 0.00490/0.00461, just below the fixed 0.005 signal. No tested factor explains the remaining shared-model gap by itself.
 - `GRUG-XEM-H10`: The rank-8 layer-3 routed-function adapter captured only 0.57% of the untied oracle's 50M validation and Paloma advantage. It passed local-fit, routing, and throughput checks but failed its 25M and 50M utility bounds and the original promotion gate.
+- `GRUG-XEM-H11`: Persistent material direct shared-bank gradient conflict was not supported. Only the 25.03M midpoint passed all five conflict criteria; the Stage-A start and 50.07M endpoint failed the aggregate-cosine and norm-balance criteria. The preregistered outcome is inconclusive, so do not launch PCGrad or an optimizer counterfactual from this result.
 
 ### Promoted
 
@@ -713,3 +714,23 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Validation: nine focused mathematical, runtime, launch, provenance, and four-axis lowering tests pass. The only warning is unused donation in the tiny CPU runtime test. Changed-file pre-commit, Pyrefly, and `git diff --check` pass. Independent scientific and operational reviews both returned PASS after adding exact ordered-ID checks, NRMSE output, artifact/data/role binding, and negative regressions.
 - Lowering: the production graph lowers at fingerprint `73ebb9b1` with version `2026.08.08`, one v5p-8 worker in `us-central1`, the exact three frozen checkpoint dependencies, loader indices 382 through 397, bootstrap seed 8032, and scalar-only output root `gs://marin-us-central1/grug/expert_merge/d512/shared_bank_gradient_conflict/diagnostic/2026.08.08`. The root matched no objects immediately before submission.
 - Next action: push this prelaunch snapshot, launch one central1 CPU controller with maximum concurrency 1, and assign a dedicated babysitter through terminal artifact and gate verification. Do not launch any training or larger surgery.
+
+### 2026-08-08 04:55 - GRUG-XEM-008 direct shared-bank gradient-conflict result
+
+- Hypothesis: layers 2 and 3 request persistently opposing direct routed-MoE updates from the shared bank during frozen-router recovery.
+- Commit Hash: implementation `38f1dcf79f16b10b339b09c0c13a7b6f157cb1a1`; launch provenance `cc029e85546bf8523f89a7811ea8fe4fd26ccb18`.
+- Command: controller `/dlwh/grug-xem-gradient-conflict-20260808` ran `python -m experiments.grug.moe.launch_gradient_conflict --version 2026.08.08 --run --max-concurrent 1` with a central1 CPU controller and one central1 v5p-8 child. `MARIN_PREFIX` and the teacher root both resolved under `gs://marin-us-central1`; teacher commit was `884b213ff4`. The exact fixed resubmit command and restart count are in `scratch/20260808-0442_monitoring_state.json`.
+- Inputs: artifact fingerprint `73ebb9b1` binds teacher `38d1fe9b`, selected Stage A `62564720`, and matched `S'` `59969d51`. The checkpoint roles and paths are the selected Stage-A step 382, `S'` midpoint step 191, and `S'` endpoint step 382. Every checkpoint used loader indices 382 through 397, batch 32, sequence length 4096, seed 0, `fold_in(..., 2)`, 10,000 bootstrap resamples, and seed 8032.
+- Result:
+
+  | Checkpoint | Aggregate cosine | Cancellation | Norm ratio | Batch mean cosine (95% bootstrap interval) | Negative batches | Material-conflict gate |
+  |---|---:|---:|---:|---:|---:|---|
+  | Stage-A start, 0 continuation tokens | -0.045448 | 0.146092 | 0.180523 | -0.151560 [-0.185357, -0.112829] | 14/16 | Fail |
+  | `S'` midpoint, 25,034,752 tokens | -0.104190 | 0.329587 | 0.899402 | -0.064347 [-0.076626, -0.050098] | 16/16 | Pass |
+  | `S'` endpoint, 50,069,504 tokens | -0.017830 | 0.161887 | 0.216225 | -0.066230 [-0.079956, -0.050099] | 14/16 | Fail |
+
+- Projection and expert detail: Stage-A down/gate/up cosines are `-0.074415/-0.040544/-0.038550`, with norm ratios `0.321547/0.148713/0.149368`; 254 of 256 expert dots are negative and their negative-dot energy share is `0.894903`. The midpoint values are `-0.147733/-0.087410/-0.079980`, ratios `0.738705/0.993027/0.979890`, 234 negative expert dots, and `0.922178` negative energy. The endpoint values are `-0.043601/-0.013726/-0.009698`, ratios `0.409318/0.172733/0.182272`, 235 negative expert dots, and `0.810439` negative energy. Experts are descriptive components, not statistical replicates.
+- Local fit and controls: mean layer-2/layer-3 MoE NRMSE is `0.250003/0.648712` at the start, `0.270446/0.646441` at the midpoint, and `0.278323/0.639970` at the endpoint. Selected expert IDs and top-1 routes match the mapped teacher exactly at both affected layers, combine-weight maximum absolute difference is zero, overflow is zero, all 256 experts are active in both layers, and all reported scalars are finite.
+- Operations: the controller and child both succeeded with exit 0, zero failures, zero preemptions, and zero restarts. The output root is `gs://marin-us-central1/grug/expert_merge/d512/shared_bank_gradient_conflict/diagnostic/2026.08.08`. It contains the standard artifact/executor metadata and only one scientific payload, `gradient_conflict.json`; no checkpoint, gradient tensor, model tensor, or W&B artifact was written.
+- Interpretation: only the midpoint passes all five preregistered material-conflict criteria. The start and endpoint have negative per-batch means but fail the primary mean-gradient-tree cosine and gradient-norm-balance criteria. One of three checkpoints is insufficient for the persistent-conflict gate, while the strict no-conflict gate also does not pass. The registered outcome is inconclusive, and persistent dominant direct conflict is not supported.
+- Next action: stop this line before any PCGrad, full-objective gradient decomposition, optimizer counterfactual, rank increase, bank-width increase, d768 surgery, two-pair surgery, or 67B launch. Resume H4 only with a separately preregistered shared-functional-capacity or conditioning hypothesis.
