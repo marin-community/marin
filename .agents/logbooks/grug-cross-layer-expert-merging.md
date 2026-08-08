@@ -21,7 +21,7 @@ author: dlwh
 - `GRUG-XEM-003` ports explicit expert banks and legacy-checkpoint migration into the array-stacked June 67B-A2B implementation. The selected no-copy teacher, data caches, eval caches, output bucket, and TPU resources are all in `us-central2`; no checkpoint payload has been read outside that region.
 - `GRUG-XEM-004` passed the d768 architecture screen. Middle-four unscaled tying was +0.02855 Paloma above the matched untied control, down from +0.03817 at d512, with zero overflow and 37.5% fewer unique routed-expert parameters. Effective speed was 0.849x, so the architecture is a conversion target rather than a compute-efficiency result.
 - `GRUG-XEM-005` found that CE+KL supervision materially improves frozen-router Stage A, but its sole Stage-B continuation still failed the strict surgery gate: +0.03835 validation/+0.03535 Paloma at 100.14M total tokens and +0.02769/+0.02583 at 250.09M. Routing stayed healthy, so no larger surgery launched.
-- `GRUG-XEM-006` is a causal unlock matrix from the exact selected CE+KL Stage-A checkpoint. It compares bank-only recovery, the completed bank-plus-router arm, bank-plus-router-plus-MLP-input-norm recovery, and a function-identical untied capacity oracle. All new jobs and artifacts remain in `us-central1`.
+- `GRUG-XEM-006` completed the causal recovery-unlock matrix. Bank-only recovery matched the router-unlocked control, MLP-input-norm recovery regressed to +0.13190 validation/+0.13161 Paloma, and the untied capacity oracle improved bank-only by +0.00490/+0.00461. The capacity result missed the preregistered 0.005 signal and dominant-capacity thresholds. No shared arm passed the strict 100.14M-total-token promotion gate.
 - The pushed research branch is `research/grug-matcher-jit` in `/tmp/marin-grug-xem-jit`. No PR exists.
 
 ## Baseline
@@ -34,8 +34,7 @@ author: dlwh
 
 ### Active
 
-- `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best shared result: +0.02769 validation/+0.02583 Paloma after 250.09M online tokens, above the required +0.02 validation gate. Next test: `GRUG-XEM-H9`.
-- `GRUG-XEM-H9`: The remaining rollout gap is caused primarily by one of router freedom, frozen MLP-input conditioning, or shared-bank capacity/gradient interference. Next test: compare the `S/R/N/U` one-factor unlock matrix at the same 100.14M total recovery horizon.
+- `GRUG-XEM-H4`: One adjacent middle-layer pair can recover to the tied architecture's quality target after checkpoint surgery. Current best shared result: +0.02769 validation/+0.02583 Paloma after 250.09M online tokens, above the required +0.02 validation gate. Resume only with a new preregistered d512 shared-bank hypothesis.
 
 ### Blocked
 
@@ -44,6 +43,7 @@ author: dlwh
 ### Falsified / Dead End
 
 - `GRUG-XEM-H5`: Spectral matching missed its gate. Relative to native-only matching it improved the common assignment objective by 0.5%, Stage-A MoE loss by 1.1%, and the final combined spectral-plus-prefit recovery gap by 6-7%; none reaches the required 15%/20% margin. Keep spectral probes as diagnostics, not the production initializer.
+- `GRUG-XEM-H9`: The `S/R/N/U` matrix did not identify a promotable one-factor unlock. Frozen routing was neutral, norm unlocking was harmful, and independent bank capacity improved validation/Paloma by 0.00490/0.00461, just below the fixed 0.005 signal. No tested factor explains the remaining shared-model gap by itself.
 
 ### Promoted
 
@@ -590,3 +590,26 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Gate clarification: compare exact arm-token checkpoints 25,034,752 and 50,069,504. At 25M, `N` signals a norm limitation only at validation/Paloma `<= +0.037008/+0.034278`, while `S` signals useful router freedom only at `>= +0.047008/+0.044278`. At 50M, the corresponding thresholds are `N <= +0.03335249/+0.03035414` and `S >= +0.04335249/+0.04035414`. At both checkpoints, capacity requires `U <= S - 0.005` on both metrics, and dominant capacity additionally requires `U <= R - 0.005` on both. The run-validity gates must also hold at both checkpoints.
 - Promotion: `S`, `R`, and `N` are eligible independently of the attribution labels; `U` never is. An eligible arm reopens scale-up only if its exact 100,139,008-total-token result is validation `<= +0.020`, Paloma `<= +0.030`, and run-valid. The current 50M arms alone cannot establish that terminal promotion result.
 - Operations: issue #8032 passed a fresh zero-context readability review after the exact gates and regional invariant were added. The accepted launch links and regional audit are recorded in issue comment `5225105921`. A dedicated monitor owns all three controllers through terminal artifacts and gate application.
+
+### 2026-08-08 01:29 - GRUG-XEM-006 causal recovery-unlock result
+
+- Hypothesis: Router freedom, frozen MLP-input conditioning, or shared-bank capacity/gradient interference accounts for at least 0.005 of the remaining one-pair recovery gap.
+- Commit Hash: launch `98334f2c76561f2690f2adf1488b85c38d0cc120`; implementation `cc0f33717f5f06c2233f11289b83bc7eeb296737`; source teacher `884b213ff4`.
+- Commands: controllers `/dlwh/dlwh-grug-xem-unlock-{s,n,u}-20260808` ran `experiments.grug.moe.launch_merge_recovery` with stage `preservation`, version `2026.08.06`, and branches `native_local_ce_kl_bank_only`, `native_local_ce_kl_mlp_norms`, and `native_local_ce_kl_capacity_oracle`. Read-only Iris jobs `/dlwh/dlwh-grug-xem-unlock-validate{,2,3}-20260808` inspected the canonical GCS JSON and manifests from `us-central1`.
+- Restore audit: `S` and `N` loaded the exact selected CE+KL Stage-A checkpoint `step-382`. `U` duplicated that checkpoint's recovered bank into an independent layer-3 bank at split `step-0`; its manifest records source recovery step 382, identical-start oracle kind, and untied topology `(0,1,2,3,4,5)`. Every recovery manifest records CE `1.0`, KL `0.1`, MoE `1.0`, the intended trainable scope, and recovery step 382.
+- Result:
+
+  | Arm | 25M validation | 25M Paloma | 50M validation | 50M Paloma | 50M MoE loss | 50M NRMSE L2/L3 |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `S` bank-only | +0.042001 | +0.039157 | +0.038294 | +0.035120 | 0.250479 | 0.295958 / 0.642935 |
+  | `R` router unlock | +0.042008 | +0.039278 | +0.038352 | +0.035354 | 0.255401 | 0.310988 / 0.643498 |
+  | `N` norm unlock | +0.142956 | +0.143200 | +0.131897 | +0.131611 | 0.079827 | 0.389206 / 0.090405 |
+  | `U` untied capacity oracle | +0.038885 | +0.036324 | +0.033396 | +0.030512 | 0.218323 | 0.233883 / 0.618017 |
+
+  The 25M and 50M entries are exact Stage-B processed-token counts 25,034,752 and 50,069,504. The 50M checkpoint is 100,139,008 total recovery tokens after adding Stage A.
+- Gate application: router freedom fails its signal gate because `S` is marginally better than `R`, rather than at least 0.005 worse. Norm unlocking fails both quality thresholds by more than 0.10. `U` improves `S` by 0.004898 validation and 0.004608 Paloma at 50M, short of 0.005 on both; it also misses the dominant-capacity bounds by 0.000043 validation and 0.000158 Paloma. The same improvement sign holds at 25M, but the effect is only 0.003117/0.002834 there. No attribution gate passes.
+- Routing and validity: `S` and `U` retain exact teacher top-1/top-4 agreement. All four arms have finite metrics, zero capacity overflow, entropy near 5.53, and all 256 experts active in both affected layers. `S`, `R`, and `U` satisfy the MoE and per-layer NRMSE health bounds. `N` fails the layer-2 NRMSE bound and its layer-3 teacher route agreement falls to 0.0128 top-1 and 0.0193 top-4 despite full expert activity and high entropy.
+- Promotion: no shared arm meets validation `<= +0.020` and Paloma `<= +0.030` at the exact 100,139,008-total-token checkpoint. `U` is untied and cannot promote by construction. Do not launch d768 surgery, two-pair surgery, or the central2 67B experiment from this matrix.
+- Operations: the three controllers, three recovery children, capacity split child, and three read-only validation jobs succeeded without resubmission. Each recovery root has five scheduled evaluation JSON files, final training JSON, `.artifact.json`, and checkpoints through step 382 with `metadata.json`, `manifest.ocdbt`, and `merge_manifest.json`. The split root has a complete step-0 checkpoint. All inputs, compute, outputs, and validation reads remained in `us-central1`; no payload was copied across regions.
+- Interpretation: fixed routers are not the obstruction. Unfreezing MLP-input norms under the current `1e-4` objective creates severe rollout loss and layer-3 route drift. Independent bank capacity produces a consistent but sub-threshold benefit, so sharing interference is measurable but does not explain the full remaining gap. The current surgery remains below promotion quality.
+- Next action: keep scale-up blocked. A new d512 hypothesis should change shared-bank expressivity or the preservation objective and preregister a fresh gate; longer runs or larger models under the current recipe are not supported by this result.
