@@ -779,3 +779,13 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Central1 capacity audit: no central1 zone exposes the registered `v4-2048` accelerator type, and Iris has no central1 `v4-2048` scaling group or worker. Central1 `v5p-2048` would be a different hardware experiment.
 - Decision: leave the controller queued in central2. Do not copy caches across regions, regenerate an unvalidated substitute cache, or change hardware. Continue monitoring for an additional central2 slice or release of the active one.
 - Issue update: https://github.com/marin-community/marin/issues/8032#issuecomment-5226403715
+
+### 2026-08-08 07:17 - GRUG-XEM-009 exact-cache regeneration audit
+
+- Question: can the exact `datakit/store_8ac06c74` training cache be regenerated entirely within central1, avoiding both the long central2 queue and cross-region transfer?
+- Provenance: the 200 cache leaves are produced by a 116-source Datakit DAG with 465 direct logical dependencies: per-source tokenize, decontaminate, cluster-assignment, and quality outputs plus one global dedup artifact. The final store contains 10,372,343,704,053 tokens. Central2 object metadata implies about 25 TB compressed; the logical int32 token payload is 41.49 TB.
+- Missing central1 inputs: the exact May centroid model, combined eval bloom, global dedup artifact, Sonnet-4.6 quality model, and production intermediate trees are absent. Central1 has nearby normalized/raw sources for much of the mixture, but not the immutable intermediate bytes needed for exact replay.
+- Fingerprint limitation: StepSpec hash `8ac06c74` covers dependency names and settings, not implementation code or output bytes. Recomputing embeddings, K-means assignments, quality inference, fuzzy deduplication, and the store under current code could reuse the suffix without proving the registered data content or order.
+- Cost estimate: the historical final store stage alone used 6,301 tasks, scaled to 3,072 workers at 2 CPU/32 GiB each, and took about 16.5 hours. Rebuilding the missing upstream graph would be substantially larger.
+- Decision: exact central1-only regeneration is NO-GO. Continue waiting for central2. Do not copy or rebuild the cache and do not substitute a central1 v5p experiment without a separate preregistration and an identical local training input.
+- Issue update: https://github.com/marin-community/marin/issues/8032#issuecomment-5226495632
