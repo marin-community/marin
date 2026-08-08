@@ -5,8 +5,10 @@
 
 import dataclasses
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any, get_args
 
 import click
 import jmp
@@ -16,6 +18,7 @@ from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text.datasets import BlockShuffleConfig
+from levanter.recovery.types import AblationSpec
 from levanter.tracker.telemetry import TelemetryConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -29,7 +32,7 @@ from marin.processing.tokenize.tokenize import TokenizedCache
 from rigging.filesystem import prefix_join
 
 from experiments.grug.moe_hero_fsdp.heuristic import build_hero_configs
-from experiments.grug.moe_hero_fsdp.model import GrugModelConfig
+from experiments.grug.moe_hero_fsdp.model import GrugModelConfig, RematMode, SmallParamSharding
 from experiments.grug.moe_hero_fsdp.optimizer import GrugMoeMuonHConfig
 from experiments.grug.moe_hero_fsdp.train import (
     GrugAblationSweepConfig,
@@ -39,7 +42,6 @@ from experiments.grug.moe_hero_fsdp.train import (
     run_grug,
     run_grug_ablation_sweep,
 )
-from experiments.grug.recovery.ablation_catalog import environment_ablations, selected_ablations
 from experiments.llama import llama3_tokenizer
 
 DEFAULT_HERO_STEPS = 25
@@ -194,12 +196,42 @@ class _HeroRunParts:
     slim: ArtifactStep[TokenizedCache]
 
 
+@dataclasses.dataclass(frozen=True)
+class HeroOverrides:
+    """The hero performance knobs a sweep varies; ``None`` keeps the hero value."""
+
+    expert_chunks: int | None = None
+    small_param_sharding: SmallParamSharding | None = None
+    remat_mode: RematMode | None = None
+    ce_b_block_size: int | None = None
+
+
+def apply_hero_overrides(model: GrugModelConfig, overrides: HeroOverrides) -> GrugModelConfig:
+    """Return ``model`` with every set knob in ``overrides`` applied."""
+    fields: dict[str, Any] = {
+        name: value
+        for name, value in dataclasses.asdict(overrides).items()
+        if value is not None and name != "ce_b_block_size"
+    }
+    if overrides.ce_b_block_size is not None:
+        fields["ce_block_sizes"] = dataclasses.replace(model.ce_block_sizes, b_block_size=overrides.ce_b_block_size)
+    return dataclasses.replace(model, **fields) if fields else model
+
+
 def _hero_run_parts(
-    *, run_id: str, dp_racks: int, num_steps: int, save_checkpoints: bool, version: str | None
+    *,
+    run_id: str,
+    dp_racks: int,
+    num_steps: int,
+    save_checkpoints: bool,
+    version: str | None,
+    batch_size: int | None = None,
+    overrides: HeroOverrides = HeroOverrides(),
 ) -> _HeroRunParts:
     _validate_hero_args(run_id, dp_racks, num_steps)
-    batch_size = dp_racks * HERO_FSDP_BATCH_SIZE
+    batch_size = batch_size if batch_size is not None else dp_racks * HERO_FSDP_BATCH_SIZE
     model, optimizer = build_hero_configs(num_train_steps=num_steps, batch_size=batch_size)
+    model = apply_hero_overrides(model, overrides)
     name = f"grug/{run_id}"
     return _HeroRunParts(
         batch_size=batch_size,
@@ -234,6 +266,8 @@ def build_hero_run(
     watch_interval: int = HERO_WATCH_INTERVAL,
     profile_start_step: int | None = None,
     profile_num_steps: int = HERO_PROFILE_NUM_STEPS,
+    overrides: HeroOverrides = HeroOverrides(),
+    batch_size: int | None = None,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """Build the rack-local FSDP hero throughput run.
@@ -252,7 +286,13 @@ def build_hero_run(
         raise ValueError(f"profile_start_step must fall inside (0, {num_steps}), got {profile_start_step}")
 
     parts = _hero_run_parts(
-        run_id=run_id, dp_racks=dp_racks, num_steps=num_steps, save_checkpoints=save_checkpoints, version=version
+        run_id=run_id,
+        dp_racks=dp_racks,
+        num_steps=num_steps,
+        save_checkpoints=save_checkpoints,
+        version=version,
+        batch_size=batch_size,
+        overrides=overrides,
     )
     batch_size = parts.batch_size
     model, optimizer = parts.model, parts.optimizer
@@ -289,37 +329,67 @@ def build_hero_run(
     )
 
 
-def build_ablation_sweep_hero_run(
+@dataclass(frozen=True)
+class HeroSweepArm:
+    """One sweep arm: an ``AblationSpec`` for the process env, plus the model-side deltas.
+
+    ``AblationSpec`` carries only process-start environment, which covers NCCL, XLA_FLAGS, and the
+    allocator fraction. ``overrides`` and ``batch_size`` reach the knobs that live in the model
+    config instead, so one sweep can vary both.
+
+    ``run_id`` names the arm's trainer and W&B run. It is the arm's, not the sweep's, so a sweep of
+    one arm can own the whole name.
+    """
+
+    spec: AblationSpec
+    run_id: str
+    overrides: HeroOverrides = HeroOverrides()
+    batch_size: int | None = None
+
+
+def build_hero_sweep_run(
     *,
     run_id: str,
     dp_racks: int,
     steps_per_arm: int,
-    ablation_names: tuple[str, ...],
+    arms: Sequence[HeroSweepArm],
+    priority: int,
     version: str | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
-    """Build one allocation that runs the named environment arms back to back.
+    """Build one allocation that runs ``arms`` back to back.
 
-    Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its
-    own W&B run named ``<run_id>-<arm>``. A sweep is a diagnostic, so it never checkpoints.
+    Each arm gets a fresh trainer subprocess (so process-start env vars take effect) and its own
+    W&B run. One arm's fault does not end the sweep. A sweep is a diagnostic, so it never
+    checkpoints.
+
+    ``priority`` is the Iris band for the training gang. It rides as a runtime arg, so rescheduling
+    the same arms at a different band reuses the cached result rather than rebuilding.
     """
-    arms = tuple(selected_ablations(environment_ablations(num_steps=steps_per_arm), ablation_names))
+    if not arms:
+        raise ValueError("a sweep needs at least one arm")
     parts = _hero_run_parts(
         run_id=run_id, dp_racks=dp_racks, num_steps=steps_per_arm, save_checkpoints=False, version=version
     )
-    batch_size = parts.batch_size
-    model, optimizer = parts.model, parts.optimizer
     wandb_project = parts.wandb_project
     grug_trainer = parts.grug_trainer
     train_resources = parts.train_resources
     name, version, slim = parts.name, parts.version, parts.slim
+    # The optimizer's LR schedule is derived from the batch, so an arm that changes the batch needs
+    # its own pair rather than the allocation's.
+    configs = []
+    for arm in arms:
+        batch_size = arm.batch_size if arm.batch_size is not None else parts.batch_size
+        steps = arm.spec.num_steps or steps_per_arm
+        model, optimizer = build_hero_configs(num_train_steps=steps, batch_size=batch_size)
+        configs.append((arm, batch_size, steps, apply_hero_overrides(model, arm.overrides), optimizer))
 
     def build_config(ctx: StepContext) -> GrugAblationSweepConfig:
         runs = tuple(
             _hero_run_config(
                 ctx=ctx,
-                run_id=f"{run_id}-{arm.name}",
+                run_id=arm.run_id,
                 batch_size=batch_size,
-                num_steps=arm.num_steps or steps_per_arm,
+                num_steps=steps,
                 model=model,
                 optimizer=optimizer,
                 grug_trainer=grug_trainer,
@@ -327,14 +397,15 @@ def build_ablation_sweep_hero_run(
                 slim=slim,
                 run_mode=GrugRunMode.SUPERVISED,
             )
-            for arm in arms
+            for arm, batch_size, steps, model, optimizer in configs
         )
         return GrugAblationSweepConfig(
             run_id=run_id,
-            arms=arms,
+            arms=tuple(arm.spec for arm in arms),
             runs=runs,
             resources=ctx.runtime_arg("train_resources"),
             processes_per_task=HERO_PROCESSES_PER_TASK,
+            priority=ctx.runtime_arg("priority"),
         )
 
     return ArtifactStep(
@@ -344,7 +415,7 @@ def build_ablation_sweep_hero_run(
         run=run_grug_ablation_sweep,
         build_config=build_config,
         deps=(slim,),
-        runtime_args={"train_resources": train_resources},
+        runtime_args={"train_resources": train_resources, "priority": priority},
     )
 
 
@@ -390,6 +461,36 @@ def build_ablation_sweep_hero_run(
     show_default=True,
     help="Steps to capture once --profile-start-step is reached.",
 )
+@click.option(
+    "--expert-chunks",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Expert-weight gather chunks for the sonic_cute MoE. Unset keeps the hero value.",
+)
+@click.option(
+    "--small-param-sharding",
+    type=click.Choice(get_args(SmallParamSharding)),
+    default=None,
+    help="Shard or replicate the router, attention gate, and GatedNorm factors.",
+)
+@click.option(
+    "--remat-mode",
+    type=click.Choice(get_args(RematMode)),
+    default=None,
+    help="Rematerialization policy for the transformer block.",
+)
+@click.option(
+    "--ce-b-block-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Token-axis tile for the fused cross-entropy. Unset keeps the hero value.",
+)
+@click.option(
+    "--batch-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Global batch in sequences. Unset derives it as dp_racks x 1024. Must divide the device count.",
+)
 @build_options
 def main(
     run_id: str,
@@ -400,6 +501,11 @@ def main(
     watch_interval: int,
     profile_start_step: int | None,
     profile_num_steps: int,
+    expert_chunks: int | None,
+    small_param_sharding: SmallParamSharding | None,
+    remat_mode: RematMode | None,
+    ce_b_block_size: int | None,
+    batch_size: int | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_hero_run(
         run_id=run_id,
@@ -410,6 +516,13 @@ def main(
         watch_interval=watch_interval,
         profile_start_step=profile_start_step,
         profile_num_steps=profile_num_steps,
+        overrides=HeroOverrides(
+            expert_chunks=expert_chunks,
+            small_param_sharding=small_param_sharding,
+            remat_mode=remat_mode,
+            ce_b_block_size=ce_b_block_size,
+        ),
+        batch_size=batch_size,
     )
 
 
