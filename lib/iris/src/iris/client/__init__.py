@@ -24,26 +24,7 @@ from iris.client.client import (
 )
 from iris.client.resolver import ClusterResolver
 from iris.cluster.client.resource_client import ResourceClient
-from iris.cluster.setup_scripts import default_setup_script, iris_runtime_setup_script
-
-__all__ = [
-    "ClusterResolver",
-    "EndpointRegistry",
-    "FixedResolver",
-    "IrisClient",
-    "IrisContext",
-    "Job",
-    "JobAlreadyExists",
-    "JobFailedError",
-    "LocalClientConfig",
-    "ResolveResult",
-    "ResolvedEndpoint",
-    "Resolver",
-    "ResourceClient",
-    "Task",
-    "default_setup_script",
-    "get_iris_ctx",
-    "iris_ctx",
-    "iris_ctx_scope",
-    "iris_runtime_setup_script",
-]
+from iris.cluster.setup_scripts import (
+    default_setup_script,
+    iris_runtime_setup_script,
+)

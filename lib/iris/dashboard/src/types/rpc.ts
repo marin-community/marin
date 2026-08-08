@@ -117,8 +117,7 @@ export interface TaskStatus {
   startedAt?: ProtoTimestamp
   finishedAt?: ProtoTimestamp
   ports?: Record<string, number>
-  // Worker-resident in-memory snapshot (Worker.GetTaskStatus only). The
-  // controller-served TaskStatus carries no resourceUsage; query the
+  // Worker-resident in-memory snapshot (Worker.GetTaskStatus only). Query the
   // iris.task stats namespace via useLogServerStatsRpc for time series.
   resourceUsage?: ResourceUsage
   buildMetrics?: BuildMetrics
@@ -141,70 +140,6 @@ export interface TaskStatus {
   submittedAt?: ProtoTimestamp
 }
 
-// -- Jobs --
-
-export interface JobStatus {
-  jobId: string
-  state: string
-  exitCode?: number
-  error?: string
-  startedAt?: ProtoTimestamp
-  finishedAt?: ProtoTimestamp
-  ports?: Record<string, number>
-  statusMessage?: string
-  buildMetrics?: BuildMetrics
-  failureCount?: number
-  preemptionCount?: number
-  tasks?: TaskStatus[]
-  name: string
-  submittedAt?: ProtoTimestamp
-  resources?: ResourceSpecProto
-  taskStateCounts?: Record<string, number>
-  taskCount?: number
-  completedCount?: number
-  pendingReason?: string
-  hasChildren?: boolean
-  parentJobId?: string
-  backendId?: string
-  // Cluster coordinate: always set — `'local'` for a locally-owned job, a peer
-  // id when handed off to that peer cluster.
-  cluster?: string
-  // Handoff lifecycle for a federated job (gate on `cluster` first — a local job
-  // and an old message both read as PEER_STATUS_NONE). One of PEER_STATUS_NONE |
-  // PEER_STATUS_PENDING_SCHEDULING | PEER_STATUS_ASSIGNED | PEER_STATUS_SYNCED |
-  // PEER_STATUS_REJECTED. This is the job's handoff state, not peer health.
-  peerStatus?: string
-}
-
-export interface JobQuery {
-  scope?: string
-  parentJobId?: string
-  nameFilter?: string
-  stateFilter?: string
-  sortField?: string
-  sortDirection?: string
-  offset?: number
-  limit?: number
-  // Anchored prefix match against the full wire job_id (e.g. "/alice/").
-  jobIdPrefix?: string
-  backendId?: string
-  // Filter to jobs in one cluster (`'local'` or a peer id). Unset = all clusters.
-  cluster?: string
-}
-
-// -- Controller RPC Responses --
-
-export interface ListJobsResponse {
-  jobs: JobStatus[]
-  totalCount: number
-  hasMore: boolean
-}
-
-export interface GetJobStatusResponse {
-  job: JobStatus
-  request?: LaunchJobRequest
-}
-
 export interface CommandEntrypoint {
   argv?: string[]
 }
@@ -222,35 +157,6 @@ export interface EnvironmentConfig {
   extras?: string[]
   pythonVersion?: string
   dockerfile?: string
-}
-
-export interface LaunchJobRequest {
-  name: string
-  entrypoint?: RuntimeEntrypoint
-  environment?: EnvironmentConfig
-  resources?: ResourceSpecProto
-  constraints?: Constraint[]
-  ports?: string[]
-  bundleId?: string
-  replicas?: number
-  priorityBand?: string
-  submitArgv?: string[]
-  // Job aborts once more than this many tasks fail terminally (default 0).
-  maxTaskFailures?: number
-  // Per-task retry budget on failure (default 0) and on preemption.
-  maxRetriesFailure?: number
-  maxRetriesPreemption?: number
-}
-
-export interface GetTaskStatusResponse {
-  task: TaskStatus
-  jobResources?: ResourceSpecProto
-  /** Likely root-cause log lines distilled from a failed task's logs. */
-  rootCauseHighlights?: string[]
-}
-
-export interface ListTasksResponse {
-  tasks: TaskStatus[]
 }
 
 // -- Workers --

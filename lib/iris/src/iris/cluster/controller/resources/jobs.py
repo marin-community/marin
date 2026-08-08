@@ -7,6 +7,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
+from enum import Enum, auto
 from typing import Protocol
 
 from connectrpc.code import Code
@@ -70,6 +71,12 @@ class FederationSubmission:
     owner_principal: str
     submitting_user: str
     handoff_nonce: str
+
+
+class _SubmissionPreparation(Enum):
+    READY = auto()
+    REUSE_EXISTING = auto()
+    WAIT_FOR_DRAIN = auto()
 
 
 class JobRuntime(Protocol):
@@ -137,8 +144,10 @@ class JobResources:
         submitting_user = _submitting_user(identity, federation)
         spec = self._validate_submission(spec, job_id, federation)
         record_tombstone = federation is None
-        needs_drain = self._prepare_replacement(job_id, spec, federation, record_tombstone)
-        if needs_drain:
+        preparation = self._prepare_replacement(job_id, spec, federation, record_tombstone)
+        if preparation is _SubmissionPreparation.REUSE_EXISTING:
+            return job_id
+        if preparation is _SubmissionPreparation.WAIT_FOR_DRAIN:
             self._runtime.wake()
             if not self._wait_until_drained(job_id):
                 logger.warning("Job %s did not drain before replacement; force-reaping", job_id)
@@ -274,39 +283,41 @@ class JobResources:
         spec: JobSpec,
         federation: FederationSubmission | None,
         record_tombstone: bool,
-    ) -> bool:
-        needs_drain = False
+    ) -> _SubmissionPreparation:
         with self._db.transaction() as tx:
             state = reads.get_job_state(tx, job_id)
             if state is None:
-                return False
+                return _SubmissionPreparation.READY
             if federation is not None and self._federated_replay(tx, job_id, federation):
-                return False
+                return _SubmissionPreparation.REUSE_EXISTING
             policy = spec.existing_job_policy
             if policy == job_pb2.EXISTING_JOB_POLICY_ERROR:
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists")
             if policy == job_pb2.EXISTING_JOB_POLICY_KEEP:
                 if not is_job_finished(state):
-                    return False
-                needs_drain = self._replace_finished(tx, job_id, record_tombstone)
+                    return _SubmissionPreparation.REUSE_EXISTING
+                return self._replace_finished(tx, job_id, record_tombstone)
             elif policy == job_pb2.EXISTING_JOB_POLICY_RECREATE:
                 if is_job_finished(state):
-                    needs_drain = self._replace_finished(tx, job_id, record_tombstone)
+                    return self._replace_finished(tx, job_id, record_tombstone)
                 else:
                     ops.job.cancel(tx, job_id=job_id, reason="Replaced by new submission")
-                    needs_drain = True
+                    return _SubmissionPreparation.WAIT_FOR_DRAIN
             elif is_job_finished(state):
-                needs_drain = self._replace_finished(tx, job_id, record_tombstone)
+                return self._replace_finished(tx, job_id, record_tombstone)
             else:
                 raise ConnectError(Code.ALREADY_EXISTS, f"Job {job_id} already exists and is still running")
-        return needs_drain
 
     @staticmethod
-    def _replace_finished(tx: Tx, job_id: JobName, record_tombstone: bool) -> bool:
+    def _replace_finished(
+        tx: Tx,
+        job_id: JobName,
+        record_tombstone: bool,
+    ) -> _SubmissionPreparation:
         if reads.has_unfinished_worker_attempts(tx, job_id):
-            return True
+            return _SubmissionPreparation.WAIT_FOR_DRAIN
         ops.job.remove_finished(tx, job_id, record_tombstone=record_tombstone)
-        return False
+        return _SubmissionPreparation.READY
 
     def _wait_until_drained(self, job_id: JobName) -> bool:
         def drained() -> bool:

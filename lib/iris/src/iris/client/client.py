@@ -239,12 +239,12 @@ class Job:
         return self.describe().summary
 
     def state_only(self) -> job_pb2.JobState:
-        """Lightweight state query that avoids loading tasks/attempts/workers."""
+        """Return the current state of this exact Job incarnation."""
         return self.status().state
 
     @property
     def state(self) -> job_pb2.JobState:
-        """Get current job state via the lightweight state-only RPC."""
+        """Return the current state of this exact Job incarnation."""
         return self.state_only()
 
     def tasks(self) -> list[Task]:

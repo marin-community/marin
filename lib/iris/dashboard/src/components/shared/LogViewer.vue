@@ -455,7 +455,7 @@ watch(
   },
 )
 watch(() => props.workerId, applyDefaults)
-// The owning row's cluster arrives async (after GetJob/TaskStatus resolves) and
+// The owning resource row's cluster arrives asynchronously and
 // only changes the FetchLogs filter, not the source key — re-query in place.
 watch(() => props.cluster, resetAndFetch)
 

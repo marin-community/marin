@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Federation record codecs for the retired ControllerService wire."""
+"""Translate federation sync records at the legacy ControllerService boundary."""
 
 from rigging.timing import Timestamp
 
@@ -20,7 +20,7 @@ from iris.time_proto import duration_from_proto, duration_to_proto, timestamp_fr
 
 
 def federation_batch_from_legacy(response: controller_pb2.Controller.FederationSyncResponse) -> FederationSyncBatch:
-    """Decode a federation response immediately after it crosses the network."""
+    """Decode the peer's legacy response into canonical federation records."""
 
     def maybe_timestamp(message, field: str) -> Timestamp | None:
         return timestamp_from_proto(getattr(message, field)) if message.HasField(field) else None
@@ -110,7 +110,7 @@ def federation_batch_from_legacy(response: controller_pb2.Controller.FederationS
 
 
 def federation_batch_to_legacy(batch: FederationSyncBatch) -> controller_pb2.Controller.FederationSyncResponse:
-    """Encode a federation batch immediately before it crosses the network."""
+    """Encode canonical federation records for a legacy peer response."""
     deltas = []
     for delta in batch.deltas:
         wire_delta = controller_pb2.Controller.FederationJobDelta(

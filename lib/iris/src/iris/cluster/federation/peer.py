@@ -1,15 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""One connection per federation peer, plus its capability-heartbeat state.
-
-:class:`FederationPeer` holds one connection per peer (keyed by peer id) and caches
-the backends that peer last advertised. The connection speaks the generated controller
-stub directly (not the end-user ``RemoteClusterClient``): federation drives a peer only
-with the raw RPCs — ``LaunchJob`` (handoff), ``TerminateJob`` (routed cancel),
-``FederationSync``, and ``ListBackends`` (heartbeat). It presents the credentials
-resolved from the peer's cluster manifest via ``credentials_for``.
-"""
+"""Authenticated peer operations and last-observed federation availability."""
 
 import logging
 import threading
@@ -27,9 +19,7 @@ from rigging.timing import Timestamp
 from iris.cluster.backends.rpc.backend import EXEC_IN_CONTAINER_MAX_TIMEOUT
 from iris.cluster.config import PeerConfig
 from iris.cluster.federation.legacy_rpc import federation_batch_from_legacy
-from iris.cluster.federation.store import (
-    FederationSyncBatch,
-)
+from iris.cluster.federation.store import FederationSyncBatch
 from iris.cluster.resources.endpoint import ExecRequest, ExecResult, ProfileRequest, ProfileResult
 from iris.cluster.resources.job import JobSpec
 from iris.cluster.types import JobName
@@ -69,13 +59,7 @@ class HandoffDelivery:
 
 
 class PeerConnection(Protocol):
-    """The peer-controller surface federation drives.
-
-    ``list_backends`` is the capability heartbeat; ``launch_job`` delivers a handoff;
-    ``terminate_job`` routes a cancel; ``federation_sync`` runs one delta-sync round;
-    ``profile_task``/``exec_in_container``/``get_process_status`` proxy an on-demand RPC
-    against a handed-off task, which the peer resolves to its own worker or pod.
-    """
+    """Remote operations available to the federation coordinator."""
 
     def list_backends(self) -> list[controller_pb2.Controller.BackendSummary]: ...
 
@@ -124,7 +108,7 @@ def _peer_credentials(peer: PeerConfig, federation_token_provider: TokenProvider
 
 
 def legacy_handoff_request(delivery: HandoffDelivery) -> controller_pb2.Controller.LaunchJobRequest:
-    """Encode a typed handoff only where the retired peer RPC crosses the wire."""
+    """Encode a canonical handoff for a legacy controller peer."""
     spec = delivery.spec
     request = controller_pb2.Controller.LaunchJobRequest(
         name=spec.name,
@@ -240,11 +224,7 @@ def connect_to_peer(peer: PeerConfig, federation_token_provider: TokenProvider |
 
 
 class FederationPeer:
-    """One federation peer: a connection plus its latest heartbeat state.
-
-    Thread-safe: the heartbeat loop writes via :meth:`probe`; RPC handlers read
-    via :meth:`heartbeat`.
-    """
+    """Coordinate remote operations and thread-safe capability observations for one peer."""
 
     def __init__(self, peer_id: str, config: PeerConfig, connection: PeerConnection):
         self.peer_id = peer_id
@@ -280,11 +260,11 @@ class FederationPeer:
             return self._heartbeat
 
     def launch_job(self, delivery: HandoffDelivery) -> None:
-        """Deliver a typed Job through the peer's legacy RPC adapter."""
+        """Submit a handed-off Job to its remote execution authority."""
         self._connection.launch_job(delivery)
 
     def terminate_job(self, job_id: JobName) -> None:
-        """Route a cancel to the peer (reuses its ``TerminateJob``).
+        """Cancel a handed-off Job on its execution peer.
 
         The ``job_id`` is the cluster-invariant local id: the peer runs and
         reports the same id the parent submitted, so there is nothing to rebase.
@@ -296,15 +276,15 @@ class FederationPeer:
         return self._connection.federation_sync(requester_id, cursor)
 
     def profile_task(self, request: ProfileRequest) -> ProfileResult:
-        """Proxy a profile RPC for a handed-off task to the peer (reuses its ``ProfileTask``)."""
+        """Profile an Attempt running on the peer."""
         return self._connection.profile_task(request)
 
     def exec_in_container(self, request: ExecRequest) -> ExecResult:
-        """Proxy an exec RPC for a handed-off task to the peer (reuses its ``ExecInContainer``)."""
+        """Execute a command in an Attempt running on the peer."""
         return self._connection.exec_in_container(request)
 
     def get_process_status(self, request: job_pb2.GetProcessStatusRequest) -> job_pb2.GetProcessStatusResponse:
-        """Proxy a process-status RPC for a handed-off task to the peer (reuses its ``GetProcessStatus``)."""
+        """Read process status for an Attempt running on the peer."""
         return self._connection.get_process_status(request)
 
     def close(self) -> None:

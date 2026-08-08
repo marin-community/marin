@@ -214,7 +214,6 @@ def resource_client_for_ctx(
     *,
     timeout_ms: int = DEFAULT_CONTROLLER_TIMEOUT_MS,
 ) -> ResourceClient:
-    """Build the typed public resource client for an active CLI context."""
     obj = ctx.obj or {}
     credentials = obj.get("credentials")
     interceptors = credentials.interceptors() if credentials is not None else ()

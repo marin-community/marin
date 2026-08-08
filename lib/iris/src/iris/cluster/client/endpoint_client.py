@@ -82,7 +82,7 @@ class EndpointStub(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class EndpointInstance:
-    """One live private-registry endpoint decoded from the lease RPC."""
+    """Address and metadata for one live endpoint registration."""
 
     endpoint_id: str
     name: str

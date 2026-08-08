@@ -102,6 +102,9 @@ _MEMBERSHIP_STATE_TO_PROTO = {
     MembershipState.UNKNOWN: resource_pb2.MEMBERSHIP_STATE_UNKNOWN,
     MembershipState.OBSERVED: resource_pb2.MEMBERSHIP_STATE_OBSERVED,
 }
+_DEFAULT_JOB_PAGE_SIZE = 50
+_DEFAULT_RESOURCE_PAGE_SIZE = 100
+_DEFAULT_ACTIVITY_PAGE_SIZE = 200
 
 
 def _resource_key_from_proto(value: resource_pb2.ResourceKey) -> ResourceKey:
@@ -456,7 +459,7 @@ def _job_spec_to_proto(value: JobSpec) -> resource_pb2.JobSpec:
 
 
 class ResourceServiceImpl:
-    """Serve public resource reads through the typed controller boundary."""
+    """Expose the public ResourceService RPC contract."""
 
     def __init__(self, resources: ResourceController) -> None:
         self._resources = resources
@@ -480,7 +483,7 @@ class ResourceServiceImpl:
                     states=frozenset(query.states),
                     backend_id=query.backend_id or None,
                     execution_cluster_id=query.execution_cluster_id or None,
-                    page_size=query.page.page_size or 50,
+                    page_size=query.page.page_size or _DEFAULT_JOB_PAGE_SIZE,
                     page_token=query.page.page_token or None,
                 )
             )
@@ -532,7 +535,7 @@ class ResourceServiceImpl:
                     backend_id=query.backend_id or None,
                     authority_cluster_id=query.authority_cluster_id or None,
                     execution_cluster_id=query.execution_cluster_id or None,
-                    page_size=query.page.page_size or 100,
+                    page_size=query.page.page_size or _DEFAULT_RESOURCE_PAGE_SIZE,
                     page_token=query.page.page_token or None,
                 )
             )
@@ -607,7 +610,7 @@ class ResourceServiceImpl:
                     backend_id=query.backend_id or None,
                     contains=query.contains or None,
                     health=health,
-                    page_size=query.page.page_size or 100,
+                    page_size=query.page.page_size or _DEFAULT_RESOURCE_PAGE_SIZE,
                     page_token=query.page.page_token or None,
                 )
             )
@@ -654,7 +657,7 @@ class ResourceServiceImpl:
                 SliceQuery(
                     backend_id=query.backend_id or None,
                     scaling_group_id=query.scaling_group_id or None,
-                    page_size=query.page.page_size or 100,
+                    page_size=query.page.page_size or _DEFAULT_RESOURCE_PAGE_SIZE,
                     page_token=query.page.page_token or None,
                 )
             )
@@ -699,7 +702,7 @@ class ResourceServiceImpl:
                 EndpointQuery(
                     name_prefix=query.name_prefix or None,
                     task=_resource_key_from_proto(query.task) if query.HasField("task") else None,
-                    page_size=query.page.page_size or 100,
+                    page_size=query.page.page_size or _DEFAULT_RESOURCE_PAGE_SIZE,
                     page_token=query.page.page_token or None,
                 )
             )
@@ -756,7 +759,7 @@ class ResourceServiceImpl:
                     target=target,
                     attempt_uid=request.query.attempt_uid or None,
                     after=timestamp_from_proto(request.query.after) if request.query.HasField("after") else None,
-                    page_size=request.query.page.page_size or 200,
+                    page_size=request.query.page.page_size or _DEFAULT_ACTIVITY_PAGE_SIZE,
                     page_token=request.query.page.page_token or None,
                 )
             )

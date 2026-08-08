@@ -79,6 +79,7 @@ from iris.time_proto import duration_to_proto
 
 _ACTION_POLL_INITIAL = 0.1
 _ACTION_POLL_MAXIMUM = 2.0
+_LONG_RUNNING_RPC_MARGIN_MS = 60_000
 
 
 class ResourceClient:
@@ -289,7 +290,11 @@ class ResourceClient:
             command=command,
             timeout=duration_to_proto(timeout),
         )
-        response = call_with_retry("exec_attempt", lambda: self._client.exec_attempt(request))
+        rpc_timeout_ms = timeout.to_ms() + _LONG_RUNNING_RPC_MARGIN_MS
+        response = call_with_retry(
+            "exec_attempt",
+            lambda: self._client.exec_attempt(request, timeout_ms=rpc_timeout_ms),
+        )
         return exec_result_from_proto(response)
 
     def profile_attempt(
@@ -304,5 +309,9 @@ class ResourceClient:
             profile=profile,
             duration=duration_to_proto(duration),
         )
-        response = call_with_retry("profile_attempt", lambda: self._client.profile_attempt(request))
+        rpc_timeout_ms = duration.to_ms() + _LONG_RUNNING_RPC_MARGIN_MS
+        response = call_with_retry(
+            "profile_attempt",
+            lambda: self._client.profile_attempt(request, timeout_ms=rpc_timeout_ms),
+        )
         return profile_result_from_proto(response)

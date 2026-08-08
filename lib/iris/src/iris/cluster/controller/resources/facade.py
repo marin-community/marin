@@ -1,11 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed resource facade shared by RPC, clients, and deterministic journeys."""
+"""Canonical resource operations over controller state and backend observations."""
 
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import uuid
 from collections.abc import Mapping
@@ -127,7 +128,7 @@ from iris.cluster.resources.source import (
 )
 from iris.cluster.resources.task import TaskDetail, TaskQuery, TaskSummary
 from iris.cluster.stats.tables import TASK_EVENT_NAMESPACE
-from iris.cluster.types import LOCAL_CLUSTER, JobName, UserBudgetDefaults, WorkerId
+from iris.cluster.types import LOCAL_ADMIN_SUBMITTER, LOCAL_CLUSTER, JobName, UserBudgetDefaults, WorkerId
 from iris.rpc import controller_pb2, iris_logging_pb2, job_pb2
 from iris.rpc.auth import authorize_resource_owner
 from iris.time_proto import timestamp_from_proto
@@ -136,6 +137,45 @@ _RESOURCE_UID_NAMESPACE = uuid.UUID("2c72b7f4-a156-5d27-8b58-7de28d5ec4cc")
 _RESOURCE_UID_PREFIX = "iris-resource-v2"
 _MAX_JOB_PAGE = 500
 _MAX_TASK_PAGE = 500
+_BACKEND_UNAVAILABLE = "backend_unavailable"
+_FINELOG_UNAVAILABLE = "finelog_unavailable"
+_SOURCE_UNSUPPORTED = "unsupported"
+_FINELOG_NOT_CONFIGURED = "finelog is not configured"
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerAccelerator:
+    kind: str
+    variant: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _NodeDetails:
+    address: str | None
+    attributes: tuple[NodeAttribute, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _NodeSnapshot:
+    nodes: tuple[NodeSummary, ...]
+    details: Mapping[tuple[str, str], _NodeDetails]
+    source_statuses: tuple[ResourceSourceStatus, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SliceSnapshot:
+    slices: tuple[SliceSummary, ...]
+    members: Mapping[tuple[str, str], tuple[SliceMember, ...]]
+    source_statuses: tuple[ResourceSourceStatus, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _FailureHighlights:
+    entries: tuple[str, ...]
+    source_status: ResourceSourceStatus | None
 
 
 class ResourceRuntime(Protocol):
@@ -254,7 +294,7 @@ def _unavailable_backend_source(backend_id: str, error: Exception) -> ResourceSo
         state=SourceState.UNAVAILABLE,
         freshness=Freshness.UNKNOWN,
         observed_at=None,
-        error_code="backend_unavailable",
+        error_code=_BACKEND_UNAVAILABLE,
         error_message=str(error)[:MAX_SOURCE_ERROR_MESSAGE],
     )
 
@@ -266,19 +306,19 @@ def _unavailable_finelog_source(cluster_id: str, error: Exception) -> ResourceSo
         state=SourceState.UNAVAILABLE,
         freshness=Freshness.UNKNOWN,
         observed_at=None,
-        error_code="finelog_unavailable",
+        error_code=_FINELOG_UNAVAILABLE,
         error_message=str(error)[:MAX_SOURCE_ERROR_MESSAGE],
     )
 
 
-def _unsupported_source(source_id: str) -> ResourceSourceStatus:
+def _unsupported_source(source_id: str, *, backend_id: str = "") -> ResourceSourceStatus:
     return ResourceSourceStatus(
         source_id=source_id,
-        backend_id="",
+        backend_id=backend_id,
         state=SourceState.UNSUPPORTED,
         freshness=Freshness.UNKNOWN,
         observed_at=None,
-        error_code="unsupported",
+        error_code=_SOURCE_UNSUPPORTED,
         error_message="",
     )
 
@@ -306,13 +346,13 @@ def _worker_attributes(metadata: job_pb2.WorkerMetadata) -> tuple[NodeAttribute,
     return tuple(attributes)
 
 
-def _worker_accelerator(metadata: job_pb2.WorkerMetadata) -> tuple[str, str, int]:
+def _worker_accelerator(metadata: job_pb2.WorkerMetadata) -> _WorkerAccelerator:
     kind = metadata.device.WhichOneof("device")
     if kind == "gpu":
-        return "gpu", metadata.device.gpu.variant, metadata.device.gpu.count
+        return _WorkerAccelerator("gpu", metadata.device.gpu.variant, metadata.device.gpu.count)
     if kind == "tpu":
-        return "tpu", metadata.device.tpu.variant, metadata.device.tpu.count
-    return "", "", 0
+        return _WorkerAccelerator("tpu", metadata.device.tpu.variant, metadata.device.tpu.count)
+    return _WorkerAccelerator("", "", 0)
 
 
 def _slice_lifecycle(value: str) -> SliceLifecycle:
@@ -571,24 +611,35 @@ class ResourceController:
         summary = self._task_summary(row, current, counts, job)
         if summary.identity.key.cluster_id != key.cluster_id:
             raise ResourceNotFound(key.resource_id)
+        failure_highlights = self._failure_highlights(task_id, summary.state)
+        source_statuses = self._source_statuses()
+        if failure_highlights.source_status is not None:
+            source_statuses += (failure_highlights.source_status,)
         return TaskDetail(
             summary=summary,
             attempts=tuple(self._attempt_summary(row, candidate, job) for candidate in attempt_rows),
-            source_statuses=self._source_statuses(),
-            root_cause_highlights=self._root_cause_highlights(task_id, summary.state),
+            source_statuses=source_statuses,
+            root_cause_highlights=failure_highlights.entries,
         )
 
-    def _root_cause_highlights(self, task_id: JobName, state: int) -> tuple[str, ...]:
-        if state not in (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED) or self._log_client is None:
-            return ()
+    def _failure_highlights(self, task_id: JobName, state: int) -> _FailureHighlights:
+        if state not in (job_pb2.TASK_STATE_FAILED, job_pb2.TASK_STATE_WORKER_FAILED):
+            return _FailureHighlights((), None)
+        if self._log_client is None:
+            status = _unavailable_finelog_source(self._cluster_id, RuntimeError(_FINELOG_NOT_CONFIGURED))
+            return _FailureHighlights((), status)
         source, match_scope = build_log_source(task_id)
         try:
             response = self._log_client.fetch_logs(
                 logging_pb2.FetchLogsRequest(source=source, match_scope=match_scope, max_lines=200, tail=True)
             )
-        except Exception:
-            return ()
-        return tuple(extract_failure_highlights([entry.data for entry in response.entries]))
+        except (ConnectError, ConnectionError, OSError, RuntimeError) as exc:
+            logger.warning("Finelog unavailable while reading failure highlights for %s: %s", task_id, exc)
+            return _FailureHighlights((), _unavailable_finelog_source(self._cluster_id, exc))
+        return _FailureHighlights(
+            tuple(extract_failure_highlights([entry.data for entry in response.entries])),
+            _available_source(f"finelog:{self._cluster_id}"),
+        )
 
     def describe_attempt(self, locator: AttemptLocator) -> AttemptDetail:
         detail = self.describe_task(locator.task)
@@ -621,7 +672,7 @@ class ResourceController:
         identity: JobIdentity,
         *,
         idempotency_key: str,
-        principal_id: str = "local_admin",
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
         payload_hash = _action_payload_hash(ActionKind.CANCEL_JOB, identity.job_uid, None)
         federated = False
@@ -678,7 +729,7 @@ class ResourceController:
         *,
         expected_attempt_uid: str,
         idempotency_key: str,
-        principal_id: str = "local_admin",
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
         return self._terminal_action(
             identity,
@@ -695,7 +746,7 @@ class ResourceController:
         identity: AttemptIdentity,
         *,
         idempotency_key: str,
-        principal_id: str = "local_admin",
+        principal_id: str = LOCAL_ADMIN_SUBMITTER,
     ) -> ActionReceipt:
         task = self.describe_task(identity.task).summary.identity
         if identity.attempt_number < 0:
@@ -800,9 +851,7 @@ class ResourceController:
             return LogPage(
                 entries=(),
                 next_cursor=query.cursor,
-                source_statuses=(
-                    _unavailable_finelog_source(self._cluster_id, RuntimeError("finelog is not configured")),
-                ),
+                source_statuses=(_unavailable_finelog_source(self._cluster_id, RuntimeError(_FINELOG_NOT_CONFIGURED)),),
             )
         source, match_scope = build_log_source(job_name, attempt_number)
         minimum_level = ""
@@ -908,7 +957,7 @@ class ResourceController:
         limit: int,
     ) -> tuple[tuple[ActivityEntry, ...], ResourceSourceStatus]:
         if self._log_client is None:
-            error = RuntimeError("finelog is not configured")
+            error = RuntimeError(_FINELOG_NOT_CONFIGURED)
             return (), _unavailable_finelog_source(self._cluster_id, error)
         task_id = target.resource_id.rpartition(":")[0] if target.kind is ResourceKind.ATTEMPT else target.resource_id
         task_literal = task_id.replace("'", "''")
@@ -1085,10 +1134,10 @@ class ResourceController:
             },
         )
         position = _decode_page_token(query.page_token, fingerprint)
-        nodes, _details, statuses = self._node_snapshot()
+        snapshot = self._node_snapshot()
         filtered = [
             node
-            for node in nodes
+            for node in snapshot.nodes
             if (query.backend_id is None or node.identity.backend_id == query.backend_id)
             and (query.contains is None or query.contains.casefold() in node.identity.key.resource_id.casefold())
             and (not query.health or node.health in query.health)
@@ -1123,13 +1172,13 @@ class ResourceController:
                     "node_uid": last.identity.node_uid,
                 },
             )
-        return Page(items=items, next_page_token=next_token, source_statuses=statuses)
+        return Page(items=items, next_page_token=next_token, source_statuses=snapshot.source_statuses)
 
     def describe_node(self, locator: NodeLocator) -> NodeDetail:
-        nodes, details, statuses = self._node_snapshot()
+        snapshot = self._node_snapshot()
         matches = [
             node
-            for node in nodes
+            for node in snapshot.nodes
             if node.identity.key == locator.key
             and node.identity.backend_id == locator.backend_id
             and (locator.node_uid is None or node.identity.node_uid == locator.node_uid)
@@ -1139,14 +1188,14 @@ class ResourceController:
         if len(matches) != 1:
             raise ActionPolicyRejected(f"Node locator {locator.key.resource_id!r} is ambiguous")
         node = matches[0]
-        address, attributes = details[(node.identity.backend_id, node.identity.node_uid)]
+        details = snapshot.details[(node.identity.backend_id, node.identity.node_uid)]
         return NodeDetail(
             summary=node,
-            address=address,
-            attributes=attributes,
+            address=details.address,
+            attributes=details.attributes,
             recent_attempts=(),
             bootstrap_log_key=None,
-            source_statuses=statuses,
+            source_statuses=snapshot.source_statuses,
         )
 
     def list_slices(self, query: SliceQuery = SliceQuery()) -> Page[SliceSummary]:
@@ -1160,10 +1209,10 @@ class ResourceController:
             },
         )
         position = _decode_page_token(query.page_token, fingerprint)
-        slices, _members, statuses = self._slice_snapshot()
+        snapshot = self._slice_snapshot()
         filtered = [
             item
-            for item in slices
+            for item in snapshot.slices
             if (query.backend_id is None or item.identity.backend_id == query.backend_id)
             and (query.scaling_group_id is None or item.scaling_group_id == query.scaling_group_id)
         ]
@@ -1197,13 +1246,13 @@ class ResourceController:
                     "slice_uid": last.identity.slice_uid,
                 },
             )
-        return Page(items=items, next_page_token=next_token, source_statuses=statuses)
+        return Page(items=items, next_page_token=next_token, source_statuses=snapshot.source_statuses)
 
     def describe_slice(self, locator: SliceLocator) -> SliceDetail:
-        slices, members, statuses = self._slice_snapshot()
+        snapshot = self._slice_snapshot()
         matches = [
             item
-            for item in slices
+            for item in snapshot.slices
             if item.identity.key == locator.key
             and item.identity.backend_id == locator.backend_id
             and (locator.slice_uid is None or item.identity.slice_uid == locator.slice_uid)
@@ -1215,17 +1264,11 @@ class ResourceController:
         item = matches[0]
         return SliceDetail(
             summary=item,
-            members=members.get((item.identity.backend_id, item.identity.slice_uid), ()),
-            source_statuses=statuses,
+            members=snapshot.members.get((item.identity.backend_id, item.identity.slice_uid), ()),
+            source_statuses=snapshot.source_statuses,
         )
 
-    def _node_snapshot(
-        self,
-    ) -> tuple[
-        tuple[NodeSummary, ...],
-        dict[tuple[str, str], tuple[str | None, tuple[NodeAttribute, ...]]],
-        tuple[ResourceSourceStatus, ...],
-    ]:
+    def _node_snapshot(self) -> _NodeSnapshot:
         workers_by_backend: dict[str, list[tuple[object, Mapping[str, object]]]] = {}
         for worker, attributes in _worker_roster(self._db):
             backend_id = self._runtime.backend_id_for_scale_group(str(worker.scale_group or ""))
@@ -1237,7 +1280,7 @@ class ResourceController:
                 {worker.worker_id for entries in workers_by_backend.values() for worker, _attributes in entries},
             )
         nodes: list[NodeSummary] = []
-        details: dict[tuple[str, str], tuple[str | None, tuple[NodeAttribute, ...]]] = {}
+        details: dict[tuple[str, str], _NodeDetails] = {}
         statuses: list[ResourceSourceStatus] = []
         for backend_id, backend in sorted(self._backends.items()):
             try:
@@ -1287,7 +1330,7 @@ class ResourceController:
                             )
                             if attribute is not None
                         )
-                        details[(backend_id, identity.node_uid)] = (None, attributes)
+                        details[(backend_id, identity.node_uid)] = _NodeDetails(None, attributes)
                 statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
             if BackendCapability.WORKER_DAEMON not in backend.capabilities:
                 continue
@@ -1299,7 +1342,7 @@ class ResourceController:
                     backend_id,
                     worker.worker_id,
                 )
-                accelerator_kind, accelerator_variant, accelerator_count = _worker_accelerator(metadata)
+                accelerator = _worker_accelerator(metadata)
                 slice_identity = None
                 slice_id = str(metadata.tpu_name or "")
                 if slice_id:
@@ -1317,9 +1360,9 @@ class ResourceController:
                             cpu_millicores=metadata.cpu_count * 1_000,
                             memory_bytes=metadata.memory_bytes,
                             disk_bytes=metadata.disk_bytes,
-                            accelerator_kind=accelerator_kind,
-                            accelerator_variant=accelerator_variant,
-                            accelerator_count=accelerator_count,
+                            accelerator_kind=accelerator.kind,
+                            accelerator_variant=accelerator.variant,
+                            accelerator_count=accelerator.count,
                         ),
                         scaling_group_id=str(worker.scale_group or "") or None,
                         slice=slice_identity,
@@ -1327,35 +1370,19 @@ class ResourceController:
                         observed_at=Timestamp.from_ms(liveness.last_heartbeat_ms),
                     )
                 )
-                details[(backend_id, identity.node_uid)] = (
+                details[(backend_id, identity.node_uid)] = _NodeDetails(
                     str(worker.address or "") or None,
                     _worker_attributes(metadata),
                 )
-        return tuple(nodes), details, tuple(statuses)
+        return _NodeSnapshot(tuple(nodes), details, tuple(statuses))
 
-    def _slice_snapshot(
-        self,
-    ) -> tuple[
-        tuple[SliceSummary, ...],
-        dict[tuple[str, str], tuple[SliceMember, ...]],
-        tuple[ResourceSourceStatus, ...],
-    ]:
+    def _slice_snapshot(self) -> _SliceSnapshot:
         slices: list[SliceSummary] = []
         members: dict[tuple[str, str], tuple[SliceMember, ...]] = {}
         statuses: list[ResourceSourceStatus] = []
         for backend_id, backend in sorted(self._backends.items()):
             if BackendCapability.IRIS_AUTOSCALER not in backend.capabilities:
-                statuses.append(
-                    ResourceSourceStatus(
-                        source_id=f"backend:{backend_id}",
-                        backend_id=backend_id,
-                        state=SourceState.UNSUPPORTED,
-                        freshness=Freshness.UNKNOWN,
-                        observed_at=None,
-                        error_code="unsupported",
-                        error_message="",
-                    )
-                )
+                statuses.append(_unsupported_source(f"backend:{backend_id}", backend_id=backend_id))
                 continue
             try:
                 status = backend.autoscaler_status()
@@ -1421,7 +1448,7 @@ class ResourceController:
                         )
                         for vm in item.vms
                     )
-        return tuple(slices), members, tuple(statuses)
+        return _SliceSnapshot(tuple(slices), members, tuple(statuses))
 
     def _terminal_action(
         self,
@@ -1758,17 +1785,7 @@ class ResourceController:
             try:
                 backend.status()
             except (ConnectionError, ProviderError) as exc:
-                statuses.append(
-                    ResourceSourceStatus(
-                        source_id=f"backend:{backend_id}",
-                        backend_id=backend_id,
-                        state=SourceState.UNAVAILABLE,
-                        freshness=Freshness.UNKNOWN,
-                        observed_at=None,
-                        error_code="backend_unavailable",
-                        error_message=str(exc),
-                    )
-                )
+                statuses.append(_unavailable_backend_source(backend_id, exc))
             else:
                 statuses.append(_available_source(f"backend:{backend_id}", backend_id=backend_id))
         return tuple(statuses)

@@ -130,6 +130,7 @@ _LEGACY_JOB_STATE_SORT_ORDER = {
     job_pb2.JOB_STATE_WORKER_FAILED: 6,
     job_pb2.JOB_STATE_UNSCHEDULABLE: 7,
 }
+_LEGACY_RESOURCE_PAGE_SIZE = 500
 
 # Return type of a proxied on-demand RPC (a unary controller response).
 _T = TypeVar("_T")
@@ -814,14 +815,7 @@ class ControllerProtocol(Protocol):
 
 
 class ControllerServiceImpl:
-    """Adapter for the retired controller wire plus operational RPCs.
-
-    Args:
-        controller: Runtime for scheduling, worker management, and federation.
-        bundle_store: Bundle store for zip storage.
-        log_client: LogClient for reading task logs through LogService.FetchLogs.
-        db: Underlying database connection.
-    """
+    """Serve the retired ControllerService and operational RPC contract."""
 
     def __init__(
         self,
@@ -929,7 +923,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.LaunchJobRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.LaunchJobResponse:
-        """Adapt the legacy LaunchJob RPC onto resource-native Job admission."""
+        """Submit a Job and return its authority-selected ID."""
         spec = job_spec_from_legacy_request(request)
         if request.HasField("federation"):
             handoff = request.federation
@@ -956,7 +950,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetJobStatusRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.GetJobStatusResponse:
-        """Adapt the legacy Job detail RPC onto resource reads."""
+        """Return current Job detail and its submitted request."""
         del ctx
         try:
             key = self._resource_job_summary(request.job_id).identity.key
@@ -983,7 +977,9 @@ class ControllerServiceImpl:
         items = []
         page_token = None
         while True:
-            page = self._resources.list_tasks(TaskQuery(job=key, page_size=500, page_token=page_token))
+            page = self._resources.list_tasks(
+                TaskQuery(job=key, page_size=_LEGACY_RESOURCE_PAGE_SIZE, page_token=page_token)
+            )
             items.extend(page.items)
             page_token = page.next_page_token
             if page_token is None:
@@ -992,7 +988,9 @@ class ControllerServiceImpl:
     def _resource_job_summary(self, wire_id: str) -> JobSummary:
         page_token = None
         while True:
-            page = self._resources.list_jobs(JobQuery(job_id_prefix=wire_id, page_size=500, page_token=page_token))
+            page = self._resources.list_jobs(
+                JobQuery(job_id_prefix=wire_id, page_size=_LEGACY_RESOURCE_PAGE_SIZE, page_token=page_token)
+            )
             for summary in page.items:
                 if summary.identity.key.resource_id == wire_id:
                     return summary
@@ -1005,7 +1003,11 @@ class ControllerServiceImpl:
         page_token = None
         while True:
             page = self._resources.list_tasks(
-                TaskQuery(job_id_prefix=job_id.to_wire(), page_size=500, page_token=page_token)
+                TaskQuery(
+                    job_id_prefix=job_id.to_wire(),
+                    page_size=_LEGACY_RESOURCE_PAGE_SIZE,
+                    page_token=page_token,
+                )
             )
             for summary in page.items:
                 if summary.identity.key.resource_id == wire_id:
@@ -1041,7 +1043,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetJobStateRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.GetJobStateResponse:
-        """Adapt the legacy batch-state RPC onto Job resource reads."""
+        """Return states for the requested Jobs that still exist."""
         del ctx
         states = {}
         for wire_id in request.job_ids:
@@ -1056,7 +1058,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.TerminateJobRequest,
         ctx: Any,
     ) -> job_pb2.Empty:
-        """Adapt legacy termination onto the Job cancel resource action."""
+        """Cancel the current incarnation of the requested Job."""
         del ctx
         try:
             identity = self._resource_job_summary(request.job_id).identity
@@ -1075,7 +1077,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListJobsRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListJobsResponse:
-        """Adapt the legacy Job listing RPC onto resource reads."""
+        """Return an offset-paged Job list matching the request filters."""
         del ctx
         query = _query_from_list_jobs_request(request)
         state_ids = _resolve_state_filter(query.state_filter)
@@ -1099,7 +1101,7 @@ class ControllerServiceImpl:
                     states=frozenset(state_ids),
                     backend_id=query.backend_id or None,
                     execution_cluster_id=execution_cluster_id,
-                    page_size=500,
+                    page_size=_LEGACY_RESOURCE_PAGE_SIZE,
                     page_token=page_token,
                 )
             )
@@ -1156,7 +1158,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.GetTaskStatusRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.GetTaskStatusResponse:
-        """Adapt the legacy Task detail RPC onto resource reads."""
+        """Return Task detail and its owning Job's resource request."""
         del ctx
         try:
             key = self._resource_task_summary(request.task_id).identity.key
@@ -1175,7 +1177,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListTasksRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListTasksResponse:
-        """Adapt the legacy per-Job Task list onto the global Task resource."""
+        """Return every current Task for the requested Job."""
         del ctx
         if not request.job_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "job_id is required")
@@ -1351,7 +1353,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ListWorkersRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ListWorkersResponse:
-        """Adapt the legacy Worker roster RPC onto resource Nodes."""
+        """List worker-daemon Nodes matching the Worker query."""
         del ctx
         query = request.query if request.HasField("query") else controller_pb2.Controller.WorkerQuery()
         nodes = []
@@ -1612,7 +1614,7 @@ class ControllerServiceImpl:
         request: job_pb2.ProfileTaskRequest,
         ctx: RequestContext,
     ) -> job_pb2.ProfileTaskResponse:
-        """Adapt legacy profiling targets onto process or Attempt operations."""
+        """Profile the controller, a Worker, or the current Task Attempt."""
         del ctx
         if not request.HasField("profile_type"):
             raise ConnectError(Code.INVALID_ARGUMENT, "profile_type is required")
@@ -1851,7 +1853,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.MintEndpointTokenRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.MintEndpointTokenResponse:
-        """Adapt legacy endpoint token minting onto the Endpoint resource."""
+        """Mint a capability token for the named Endpoint."""
         del ctx
         matches = self._resources.list_endpoints(EndpointQuery(name_prefix=request.endpoint_name, page_size=100))
         endpoint = next((item for item in matches.items if item.name == request.endpoint_name), None)
@@ -1885,7 +1887,7 @@ class ControllerServiceImpl:
         request: controller_pb2.Controller.ExecInContainerRequest,
         ctx: Any,
     ) -> controller_pb2.Controller.ExecInContainerResponse:
-        """Adapt legacy task exec onto the exact Attempt resource."""
+        """Run a command in the current Attempt for the requested Task."""
         del ctx
         try:
             task_id = JobName.from_wire(request.task_id)
@@ -2283,7 +2285,6 @@ class ControllerServiceImpl:
         return controller_pb2.Controller.ListPeersResponse(peers=self._controller.federation.peer_summaries())
 
     def _federated_job_summary(self, job) -> SyncedJob:
-        """Build the typed federation summary for a handed-off Job."""
         return SyncedJob(
             job_id=job.job_id,
             state=job.state,
@@ -2389,7 +2390,7 @@ class ControllerServiceImpl:
         return tuple(endpoints)
 
     def _federation_batch(self, requester_id: str, cursor: str) -> FederationSyncBatch:
-        """Read one typed federation batch without exposing the legacy wire internally."""
+        """Return one snapshot-consistent federation delta batch."""
         cursor_seq = int(cursor) if cursor else 0
         deltas: list[FederationJobDelta] = []
         with self._db.read_snapshot() as q:

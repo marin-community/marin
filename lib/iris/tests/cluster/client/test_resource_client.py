@@ -6,6 +6,7 @@ from iris.cluster.resources.action import ActionResult, ActionState
 from iris.cluster.resources.identity import AttemptLocator, JobIdentity, ResourceKey, ResourceKind
 from iris.cluster.resources.task import TaskQuery
 from iris.rpc import job_pb2, resource_pb2, time_pb2
+from rigging.timing import Duration
 
 
 def _key(kind: int, resource_id: str) -> resource_pb2.ResourceKey:
@@ -15,6 +16,7 @@ def _key(kind: int, resource_id: str) -> resource_pb2.ResourceKey:
 class _ResourceRpc:
     def __init__(self, *_args, **_kwargs) -> None:
         self.requests = []
+        self.rpc_timeouts: list[tuple[str, int | None]] = []
 
     def close(self) -> None:
         pass
@@ -93,6 +95,26 @@ class _ResourceRpc:
             )
         )
 
+    def exec_attempt(
+        self,
+        request: resource_pb2.ExecAttemptRequest,
+        *,
+        timeout_ms: int | None = None,
+    ) -> resource_pb2.ExecAttemptResponse:
+        self.requests.append(request)
+        self.rpc_timeouts.append(("exec", timeout_ms))
+        return resource_pb2.ExecAttemptResponse(exit_code=0, stdout="done")
+
+    def profile_attempt(
+        self,
+        request: resource_pb2.ProfileAttemptRequest,
+        *,
+        timeout_ms: int | None = None,
+    ) -> resource_pb2.ProfileAttemptResponse:
+        self.requests.append(request)
+        self.rpc_timeouts.append(("profile", timeout_ms))
+        return resource_pb2.ProfileAttemptResponse(profile_data=b"profile")
+
 
 def _client(monkeypatch) -> tuple[ResourceClient, _ResourceRpc]:
     rpc = _ResourceRpc()
@@ -140,3 +162,35 @@ def test_cancel_job_preserves_exact_identity_and_decodes_terminal_receipt(monkey
     request = rpc.requests[0]
     assert request.job.job_uid == "job-uid"
     assert request.idempotency_key == "operator-request-9"
+
+
+def test_exec_attempt_rpc_deadline_outlasts_requested_command_timeout(monkeypatch) -> None:
+    client, rpc = _client(monkeypatch)
+    task = ResourceKey("prod", ResourceKind.TASK, "/alice/train/7")
+    requested_timeout = Duration.from_minutes(20)
+
+    result = client.exec_attempt(AttemptLocator(task, 2), command=("sleep", "600"), timeout=requested_timeout)
+
+    assert result.stdout == "done"
+    assert rpc.requests[-1].timeout.milliseconds == requested_timeout.to_ms()
+    operation, rpc_timeout_ms = rpc.rpc_timeouts[-1]
+    assert operation == "exec"
+    assert rpc_timeout_ms is not None and rpc_timeout_ms > requested_timeout.to_ms()
+
+
+def test_profile_attempt_rpc_deadline_outlasts_requested_capture_duration(monkeypatch) -> None:
+    client, rpc = _client(monkeypatch)
+    task = ResourceKey("prod", ResourceKind.TASK, "/alice/train/7")
+    requested_duration = Duration.from_minutes(20)
+
+    result = client.profile_attempt(
+        AttemptLocator(task, 2),
+        profile=job_pb2.ProfileType(threads=job_pb2.ThreadsProfile()),
+        duration=requested_duration,
+    )
+
+    assert result.profile_data == b"profile"
+    assert rpc.requests[-1].duration.milliseconds == requested_duration.to_ms()
+    operation, rpc_timeout_ms = rpc.rpc_timeouts[-1]
+    assert operation == "profile"
+    assert rpc_timeout_ms is not None and rpc_timeout_ms > requested_duration.to_ms()

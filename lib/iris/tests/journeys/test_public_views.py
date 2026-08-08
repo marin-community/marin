@@ -3,6 +3,8 @@
 
 """Public list and diagnostic views over completed journeys."""
 
+import logging
+
 from iris.rpc import job_pb2
 
 
@@ -53,6 +55,30 @@ def test_succeeded_task_status_omits_failure_highlights_even_with_error_like_log
 
     assert detail.summary.state == job_pb2.TASK_STATE_SUCCEEDED
     assert detail.root_cause_highlights == ()
+
+
+def test_failed_task_status_survives_unavailable_log_transport(journey, monkeypatch, caplog):
+    job = journey.submit("unavailable-root-cause")
+    journey.settle()
+    journey.fail(job[0], error="application failed")
+    journey.settle()
+
+    def unavailable(_request):
+        raise ConnectionError("finelog unavailable")
+
+    monkeypatch.setattr(journey.log_stack.client, "fetch_logs", unavailable)
+    with caplog.at_level(logging.WARNING, logger="iris.cluster.controller.resources.facade"):
+        detail = journey.task(job[0])
+
+    assert detail.root_cause_highlights == ()
+    finelog_statuses = [status for status in detail.source_statuses if status.source_id.startswith("finelog:")]
+    assert len(finelog_statuses) == 1
+    assert finelog_statuses[0].error_code == "finelog_unavailable"
+    assert finelog_statuses[0].error_message == "finelog unavailable"
+    assert any(
+        record.name == "iris.cluster.controller.resources.facade" and record.levelno == logging.WARNING
+        for record in caplog.records
+    )
 
 
 def test_list_tasks_reports_current_timing_and_detail_keeps_attempt_history(journey):
