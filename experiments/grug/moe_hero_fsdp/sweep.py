@@ -37,7 +37,7 @@ STEPS = 20
 WARMUP = 5  # first scored step
 # A screening wave scores 15 steps, enough to separate the multi-percent effects it is looking for.
 # The wrap-up wave is measuring the result that gets reported, so it takes 40.
-WAVE_STEPS = {"final": 45}
+WAVE_STEPS = {"final": 45, "final2": 45}
 PREFIX = "hs"  # hero sweep
 PREFLIGHT_MODULE = "experiments.grug.moe_hero_fsdp.sweep_preflight"
 
@@ -468,6 +468,29 @@ WAVES = {
             env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.88"},
             args=COMBINED_ARGS,
             note="the adopted configuration plus the batch the freed HBM pays for",
+            batch_size=1152,
+        ),
+    ],
+    # The wrap-up, second attempt. `control` and `adoptedbatch` both lost their windows above.
+    #
+    # `adoptedbatch` settled at 40 s/step against its siblings' 17, with peak at 155.8 GiB under a
+    # 162.2 GiB ceiling. Main's one-process-per-GPU topology raised the baseline peak from 137.2 to
+    # 141.2 GiB, so batch 1152 now runs close enough to the 0.88 limit for XLA's rematerialization
+    # to start buying memory with recompute. 0.93 restores the slack and is already proven safe.
+    "final2": [
+        Arm("control", note="the hero as it was before this sweep"),
+        Arm("control2", note="byte-identical to control; measures placement variance in-window"),
+        Arm(
+            "adopted",
+            env=COMBINED_ENV,
+            args=COMBINED_ARGS,
+            note="replicate of the wrap-up result",
+        ),
+        Arm(
+            "adoptedbatch",
+            env={**COMBINED_ENV, "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.93"},
+            args=COMBINED_ARGS,
+            note="rerun at 0.93; 0.88 left only 6 GiB of slack under the merged topology",
             batch_size=1152,
         ),
     ],
