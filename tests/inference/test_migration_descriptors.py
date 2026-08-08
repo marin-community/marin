@@ -15,8 +15,7 @@ from pathlib import Path
 import pytest
 from rigging.config_discovery import find_project_root
 
-_VALID_KINDS = {"track", "overlay"}
-_VALID_BASE_SELECT = {"fork_main", "latest_release", "derived"}
+_VALID_BASE_SELECT = {"upstream_main", "latest_release", "derived", "fork_main"}
 
 
 def _root() -> Path:
@@ -69,14 +68,15 @@ def test_fields_are_well_formed():
     root = _root()
     descriptors = _descriptors(root)
     for name, section in descriptors.items():
-        assert section["kind"] in _VALID_KINDS, f"{name}: bad kind"
         assert section["base_select"] in _VALID_BASE_SELECT, f"{name}: bad base_select"
         if section["base_select"] == "derived":
             fork, _, path = section["derived_from"].partition(":")
             assert fork in descriptors and path, f"{name}: derived_from must name a fork and path"
-        # An overlay is rebased onto its upstream, so it must name one; a track fork may be marin-native.
-        if section["kind"] == "overlay":
-            assert section.get("upstream"), f"{name}: overlay needs an upstream"
+        # We rebase every fork onto its upstream; only a marin-native fork (fork_main) omits one.
+        if section["base_select"] == "fork_main":
+            assert not section.get("upstream"), f"{name}: fork_main is marin-native, must not name an upstream"
+        else:
+            assert section.get("upstream"), f"{name}: rebasing onto upstream requires an upstream"
 
 
 def test_derived_forks_share_a_group():

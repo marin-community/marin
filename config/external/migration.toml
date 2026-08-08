@@ -1,36 +1,31 @@
 # Fork migration descriptors.
 #
-# One section per fork Marin pins under config/external/. This file records *how* to migrate
-# each fork toward upstream; it does not hold the pins themselves. The actual SHA/version lives
-# in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml descriptor).
+# One section per fork Marin pins under config/external/. Every fork is a marin-community fork: our
+# commits on top of an upstream project. This file records *how* to migrate each — the base to rebase
+# onto, the e2e that validates it, and the constraints to respect. It holds no pins; the actual
+# SHA/version lives in the source named by `pin` (an isolated project's uv.lock, or a vllm/*.toml
+# descriptor).
+#
+# Migrating a fork means rebasing our commits onto a newer upstream base, validating, and re-pinning.
+# MarinSkyRL is marin-native (no upstream), so its refresh only advances to its own latest main.
 #
 # The `refresh-fork` skill reads a section to drive one fork's refresh. A weekly coordinator that
 # walks all sections in `depends_on` order is planned but not yet built. Keep every section consistent
 # with its pin source and EXTERNAL_PROJECTS in config/update-external.py —
 # tests/inference/test_migration_descriptors.py enforces this.
 #
-# Two kinds, by how Marin consumes the fork:
-#   track    Marin pins an isolated uv project to a fork branch. A refresh advances the pin to the
-#            branch tip via `update-external.py`, including any commits the fork carries on top of
-#            upstream — Marin does not maintain those patches. Keeping the fork branch itself close to
-#            upstream (evalchemy carries dozens of local commits; harbor's main trails upstream by
-#            hundreds) is a fork-side rebase, out of scope for a pin refresh. `upstream` records that
-#            rebase target for reference only.
-#   overlay  Marin maintains local patches it replays onto a chosen upstream base and pins by SHA in a
-#            vllm/*.toml descriptor. A refresh selects a new base, replays the overlay, and re-pins.
-#
 # A section's name is the fork; its pin source holds the fork's repository URL and pinned revision.
 # Fields:
-#   upstream         Repo the fork tracks. Omitted for marin-native repos with no upstream.
-#   kind             "track" or "overlay" (see above).
-#   group            Sections sharing a group refresh and land in one atomic Marin PR. The
-#                    vllm/tpu-inference pair must move together: the TPU launcher installs both pins
-#                    at once and vllm's base derives from the tpu-inference release, so a split refresh
-#                    could pin a mixed, unblessed stack. Omitted for forks that refresh alone.
-#   pin              Where the pinned revision lives: "isolated_project"
-#                    (config/external/<name>/uv.lock) or "descriptor:<path>#<section>".
-#   base_select      How to choose the new base: "fork_main" (advance to the fork branch tip),
-#                    "latest_release", or "derived" (with `derived_from`).
+#   upstream         Repo we rebase onto. Omitted for marin-native forks with no upstream.
+#   group            Sections sharing a group rebase onto the same base and land in one atomic Marin
+#                    PR. The vllm/tpu-inference pair must move together: the TPU launcher installs both
+#                    pins at once and vllm's base derives from the tpu-inference release, so a split
+#                    refresh could pin a mixed, unblessed stack. Omitted for forks that refresh alone.
+#   pin              Where the resolved pin is recorded: "isolated_project" (config/external/<name>/
+#                    uv.lock, follows the fork's main branch) or "descriptor:<path>#<section>" (a SHA).
+#   base_select      Which upstream base to rebase onto: "upstream_main" (upstream default branch),
+#                    "latest_release", "derived" (with `derived_from`), or "fork_main" (marin-native:
+#                    no upstream, advance our own main).
 #   derived_from     For base_select="derived": "<fork>:<path>" giving the SHA the base is read from.
 #   depends_on       Forks whose refresh must land first (the coordinator's DAG edges).
 #   e2e              Marin end-to-end that validates the refreshed fork (file path, optional ::symbol);
@@ -40,7 +35,6 @@
 
 [tpu-inference]
 upstream = "https://github.com/vllm-project/tpu-inference.git"
-kind = "overlay"
 group = "tpu-vllm"
 pin = "descriptor:vllm/tpu-forks.toml#tpu-inference"
 base_select = "latest_release"
@@ -52,7 +46,6 @@ nuances = [
 
 [vllm]
 upstream = "https://github.com/vllm-project/vllm.git"
-kind = "overlay"
 group = "tpu-vllm"
 pin = "descriptor:vllm/tpu-forks.toml#vllm"
 base_select = "derived"
@@ -66,30 +59,27 @@ nuances = [
 
 [evalchemy]
 upstream = "https://github.com/mlfoundations/evalchemy.git"
-kind = "track"
 pin = "isolated_project"
-base_select = "fork_main"
+base_select = "upstream_main"
 e2e = "experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml"
 blocker_assignee = "yonromai"
 
 [harbor]
 upstream = "https://github.com/harbor-framework/harbor.git"
-kind = "track"
 pin = "isolated_project"
-base_select = "fork_main"
+base_select = "upstream_main"
 e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
 blocker_assignee = "yonromai"
 nuances = [
-    "Fork main has diverged far from upstream (hundreds of commits behind); reconciling it is a fork-side rebase, not a pin refresh.",
+    "Fork main is hundreds of commits behind upstream, so the first rebase onto upstream will be large and conflict-heavy.",
 ]
 
 [MarinSkyRL]
-kind = "track"
 pin = "isolated_project"
 base_select = "fork_main"
 e2e = "experiments/post_training/iceball_micro.py"
 blocker_assignee = "yonromai"
 nuances = [
     "Marin-native today: only the root marinskyrl distribution is tracked, not skyrl-train.",
-    "#7920 will promote this to a real overlay fork (FSDP/Megatron/FlashAttention/vLLM); revisit kind then.",
+    "#7920 will give it an upstream (FSDP/Megatron/FlashAttention/vLLM); add upstream and switch base_select off fork_main then.",
 ]
