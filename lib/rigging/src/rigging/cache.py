@@ -222,7 +222,7 @@ class SyncedDirectory:
                 self._known.add(relative)
 
     def close(self) -> None:
-        """Stop the mirror thread and flush a final time; for explicit or test use."""
+        """Stop the mirror thread and flush a final time."""
         self._stop.set()
         self._thread.join()
         self.flush()

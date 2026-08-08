@@ -99,8 +99,8 @@ class AutotuneBlockSizeCache:
     """Tuned block sizes keyed by an opaque string, encoded to one object per key.
 
     The tiering and the per-process memo live in :class:`PersistentKvCache`; this
-    wrapper only translates a block-size entry to and from its JSON object. A
-    memory-only cache keeps the results off shared storage, which the tests use.
+    wrapper only translates a block-size entry to and from its JSON object. Backed
+    by a memory-only cache, the results stay off shared storage.
     """
 
     def __init__(self, cache: PersistentKvCache) -> None:

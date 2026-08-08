@@ -842,14 +842,6 @@ def _initialize_global_tracker(config, run_id):
     levanter.tracker.set_global_tracker(tracker)
 
 
-def _install_cutlass_kernel_cache() -> None:
-    """Route CuTeDSL kernel compiles through the standard persistent cache.
-
-    A no-op when ``cutlass.jax`` will not import (a CPU task on the GPU image).
-    """
-    install_cutlass_kernel_cache(cutlass_kernel_cache())
-
-
 @dataclass
 class TrainerConfig:
     seed: int = 0  # random seed
@@ -1080,7 +1072,9 @@ class TrainerConfig:
         if self.jax_compilation_cache_dir is not None:
             jax.config.update("jax_compilation_cache_dir", self.jax_compilation_cache_dir)
 
-        _install_cutlass_kernel_cache()
+        # Route CuTeDSL kernel compiles through the standard persistent cache; a
+        # no-op when cutlass.jax will not import (a CPU task on the GPU image).
+        install_cutlass_kernel_cache(cutlass_kernel_cache())
 
     def _maybe_set_id(self):
         # always do this so we don't get weird hangs if the id isn't set right
