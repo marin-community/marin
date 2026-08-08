@@ -45,7 +45,6 @@ from experiments.grug.moe_hero_ep.launch import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MIXED_PRECISION,
-    HERO_PROCESSES_PER_TASK,
     HeroThroughputResult,
 )
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
@@ -398,7 +397,7 @@ def build_small_run(
                 eval_current=True,
                 eval_ema=False,
             ),
-            processes_per_task=HERO_PROCESSES_PER_TASK,
+            processes_per_task=fleet.gpus_per_node,
         )
 
     return ArtifactStep(

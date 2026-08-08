@@ -273,3 +273,28 @@ The selected latent-E192 EP hero cannot reach its first ragged step with either 
 - DRI and monitoring: DRI `rjpower`; Codex owns monitoring. Stop on allocator or CUDA failure, another low-power no-progress interval after communicator initialization, exhausted retries, or failure to complete step 25. If it completes, score exactly steps 5 through 24.
 - Source bundle and Iris job: pending submission.
 - Next action: Commit and push this milestone, publish `RA2A-003` to #8077, then submit this one-variable treatment once.
+
+### 2026-08-08 23:48 UTC - RA2A-004 grouped launch does not break the spin
+
+- Hypothesis: `NCCL_LAUNCH_MODE=GROUP` prevents the multi-device-process synchronization hang and produces the first measurable NCCL send/recv baseline.
+- Commit Hash: `4b50a95a18`; the submitted source bundle retained one process per four-GPU worker.
+- Jobs: coordinator `/power/ra2a-004-nccl-group-20260808-coord`; child `/power/ra2a-004-nccl-group-20260808-coord/grug-train-ra2a-004-nccl-group-20260808`; all 16 workers remained running with no retry, preemption, or logged exception.
+- Result: Failed before step 0 by the same loss-of-progress signature as `RA2A-003`. Every rank entered the training executable at 23:41:14 UTC, but none completed a first step. At 23:47 UTC, all four GPUs on task 0 reported 100% utilization, 185,173-185,195 MiB allocated, and only 203-223 W against a 1,200 W limit.
+- Thread evidence: three task-1 dumps at 23:46:49, 23:46:56, and 23:47:23 UTC held the Python main thread at `pxla.py:420` below `_pjit_call_impl_python`. In the exact JAX 0.11.0 source, line 420 is `self.xla_executable.execute_sharded(input_bufs)`, so the process had completed lowering/compilation and crossed into executable dispatch. The Python-only dump cannot identify the native CUDA/NCCL frame, but it rules against the initial interpretation that the process was merely still compiling.
+- Metrics: W&B produced no step duration, MFU, throughput, or routing-drop observation. No rank logged a CUDA error, NCCL warning, allocation failure, or traceback.
+- Terminal state: the coordinator was stopped at 23:47:34 UTC under the launch contract's no-progress condition.
+- Interpretation: grouped NCCL launch did not produce a step in the four-device JAX process. The NVIDIA guide's stronger topology workaround is one process per device, and this topology is already known internally to reduce these stalls. All subsequent EP arms will use that mode; no further rack time will be spent adjudicating the obsolete topology.
+- Profiling command: `uv run iris --cluster=marin process profile threads --target <task-id>` captures the on-demand dumps used above.
+- Queue correction: remove `--xla_gpu_use_memcpy_local_p2p=true` from the ranked queue because each JAX process will own only one local device. `NCCL_LAUNCH_MODE=GROUP` also leaves the performance queue; it was a reachability control for the discarded topology.
+- Next action: Change the EP launchers to set `processes_per_task` equal to the task's GPU count, validate and snapshot the source, then run `RA2A-005` with one-shot off and the 1 MiB FIFO but without `NCCL_LAUNCH_MODE`.
+
+### 2026-08-08 23:48 UTC - RA2A-005 process-per-GPU launch contract
+
+- Hypothesis: one JAX process per GB200 GPU avoids the synchronized first-step stall seen when one process drives four devices, producing the first measurable ragged NCCL send/recv baseline.
+- Source change: `experiments/grug/moe_hero_ep/launch.py` now uses four processes per four-GPU task. The small-scale EP launcher derives its process count from the selected target so eight-GPU H100 tasks continue to satisfy the same one-process-per-GPU invariant.
+- Controlled change: relative to `RA2A-003`, change only the process topology from one process per task to four. Retain one-shot-off and `NCCL_BUFFSIZE=1048576`; do not set `NCCL_LAUNCH_MODE`. Model, routing, batch, rack, runtime defaults, and metric schedule remain fixed.
+- Validation: `uv run pytest tests/test_moe_hero_ep.py -q` passed all 22 tests. The required changed-file pre-commit pass completed successfully after downloading its pinned tools outside the restricted network sandbox.
+- Hardware and topology: 16 workers with four GB200 GPUs and four JAX processes each on `cw-us-east-08a`; EP64; one data-parallel rack; interactive priority.
+- Initialization and stop boundary: initialize from scratch and stop after step 25. Checkpoints, eval, watch metrics, and profiling remain disabled. Score exactly steps 5 through 24 if the run completes.
+- DRI and monitoring: DRI `rjpower`; Codex owns monitoring. Stop on non-finite training, allocator or NCCL failure, exhausted retries, or a repeated low-power no-progress interval after communicator initialization.
+- Source commit, command, output root, W&B identity, and Iris job: pending snapshot and submission.
