@@ -537,3 +537,25 @@ Which parts of the proposal are directly supported by prior tied-expert work, an
 - Interpretation: model-preservation supervision during frozen-router Stage A materially improves rollout quality without sacrificing local shared-bank fit. CE+KL is the quality winner and passes the promotion gate. KL alone retains most of the gain at higher throughput, but TPU time is not a veto for this experiment. The result supports shared-bank distillation as the operative conversion step; it does not revive expert-level spectral matching.
 - Operations: all four controllers and children succeeded. The KL child recovered automatically from one ordinary TPU preemption. Every final checkpoint, selector, evaluation/training JSON, and `.artifact.json` is present. No HBM/OOM signature appeared, no W&B run was configured, and GCS JSON is the canonical metric source. All inputs, outputs, compute, and provenance paths remain in `us-central1`; no explicit credential appears in provenance.
 - Next action: launch only the CE+KL Stage-B preservation branch from its selected step-382 checkpoint. Evaluate requested 50M Stage-B tokens for the 100M-total gate, then 100M and 200M Stage-B tokens only if recovery remains stable. Do not launch any other Stage-B arm.
+
+### 2026-08-07 23:31 - GRUG-XEM-005 CE+KL Stage-B result
+
+- Hypothesis: The CE+KL-selected Stage-A checkpoint reaches the strict one-pair surgery target by 100M total online recovery tokens and improves the eventual recovery plateau.
+- Commit Hash: launch `adadc1fefe`; implementation `2f440eee114d35771b0b529d342140dae254164f`; source teacher `884b213ff4`.
+- Commands: `/dlwh/grug-xem-stageb-ce-kl-20260807` ran branch `native_local_ce_kl`, stage `preservation`, version `2026.08.06`, with a central1 CPU controller and central1 v5p-8 child. Monitoring state is `scratch/20260807-2243-stageb-ce-kl-monitoring-state.json`.
+- Restore audit: Stage B loaded `gs://marin-us-central1/grug/expert_merge/d512/native_local_ce_kl/stage-a/2026.08.06/checkpoints/step-382`, the exact selected Stage-A path. Its token-0 micro-validation and Paloma deltas, +0.048862 and +0.044407, exactly match the selector evaluation. The final step-1526 merge manifest records that initializer, native assignment, and target topology `(0,1,2,2,3,4)`.
+- Result:
+
+  | Stage-B tokens | Exact total recovery tokens | Micro validation delta | Paloma delta | Paloma macro |
+  |---:|---:|---:|---:|---:|
+  | 0 | 50,069,504 | +0.048862 | +0.044407 | 3.639071 |
+  | 25,034,752 | 75,104,256 | +0.042008 | +0.039278 | 3.633942 |
+  | 50,069,504 | 100,139,008 | +0.038352 | +0.035354 | 3.630018 |
+  | 100,007,936 | 150,077,440 | +0.033351 | +0.030642 | 3.625306 |
+  | 200,015,872 | 250,085,376 | +0.027693 | +0.025834 | 3.620498 |
+
+  The requested 100M-total point misses both fixed limits. At the terminal horizon, Paloma is inside +0.03 but validation remains above +0.02 and `merge/recovery_tokens_to_threshold` is `-1`. The complete staged run recovers 43.3% of its selected Stage-A validation gap and 41.8% of its Paloma gap.
+- Routing and fit: final layer-2/layer-3 MoE NRMSE is 0.332001/0.606683, block NRMSE is 0.086273/0.221950, top-1 teacher agreement is 0.935524/0.902855, top-4 agreement is 0.928247/0.909456, entropy is 5.5314/5.5319, and overflow is zero. Routers adapted and the affected-layer QB update path remained enabled. Final throughput is 284,250 tokens/s. Losses are finite and no HBM/OOM signature appeared.
+- Interpretation: adding CE+KL to frozen-router Stage A improves the initialization and the final staged result, but does not make the one-pair surgery pass its validation gate. The result strengthens the view that shared-bank distillation is the useful conversion operation and spectral correspondence is unnecessary; it does not establish that an untied checkpoint can reach the tied manifold within modest recovery. The still-decreasing terminal trajectory suggests more tokens could close part of the gap, but the fixed budget already failed and no extension is authorized.
+- Operations: the controller and child succeeded with zero failures and preemptions. `.artifact.json`, every requested evaluation, periodic training metrics, and the permanent step-1526 checkpoint are present. GCS JSON is the canonical metric source. Every dependency, output, resource, and provenance path is in `us-central1`; no explicit credential appears in provenance.
+- Next action: mark the strict d512 one-pair surgery gate failed. Do not launch two middle pairs, d768 surgery, or the central2 67B-A2B experiment. A future experiment would need an explicitly revised recovery hypothesis and gate rather than additional scale under the current procedure.
