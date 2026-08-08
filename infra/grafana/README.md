@@ -42,7 +42,8 @@ GET /overview/provisioning                         latest fleet and resource-poo
 GET /k8s/control_plane | crashloops | pending     CW control-plane state, all clusters
 GET /k8s/termination_candidates | kueue | events | health
                                                     ... one response, `cluster` column
-GET /k8s/nodes                                    node readiness, cordons, deadlocks, reboot state
+GET /k8s/nodes                                    node inventory, topology, readiness, lifecycle state
+GET /k8s/node_pools                               NodePool capacity, autoscaling policy, conditions
 GET /k8s/finelog | finelog_events                 mirror pods/PVCs and matching warnings
 GET /k8s/overview                                 explicit pending/crashloop counts
 GET /k8s/gpu_racks                                GPU nodes grouped by physical rack: trays total/ready
@@ -118,10 +119,22 @@ while the namespaces we operate hold about a hundred. These are current-state re
 the bridge stores no history; trends come from the finelog-backed rows.
 
 `nodes` reports Kubernetes readiness and schedulability together with CoreWeave's
-`node.coreweave.cloud/cordonReason`, `KernelDeadlock`, and `PendingPhaseState`
-signals. `CoreWeaveNodeKernelDeadlock` pages when `KernelDeadlock=True` persists
-for five minutes. The alert labels carry the node and structured condition reason;
-the dashboard retains the condition message and pending lifecycle phase for diagnosis.
+node-pool, GPU, rack/slot, InfiniBand, driver, and lifecycle labels. It retains
+`node.coreweave.cloud/cordonReason`, `KernelDeadlock`, and `PendingPhaseState`.
+`CoreWeaveNodeKernelDeadlock` pages when `KernelDeadlock=True` persists for five
+minutes. The alert labels carry the node and structured condition reason; the
+dashboard retains the condition message and pending lifecycle phase for diagnosis.
+The route accepts comma-separated `cluster` and `node` filters after reading its
+cached fleet snapshot.
+
+`node_pools` reads the cluster-scoped `compute.coreweave.com/v1alpha1` NodePool
+objects. Each row includes current/target/min/max nodes, in-progress/queued/prefill
+work, autoscaling and scale-down policy, and the `Validated`, `AtTarget`, `Capacity`,
+`Quota`, and `NodeReconfigurationRequired` conditions. `missing_nodes` is the
+positive target-current gap; `problems` includes failed validation/capacity/quota
+conditions and pending node reconfiguration. Normal scaling leaves `problems`
+empty even while `AtTarget=False`. This is current API state; the bridge retains no
+NodePool history.
 
 `gpu_racks` lists every GB200 NVL72 node (`nvidia.com/gpu` capacity present and
 `node.kubernetes.io/instance-type` containing `gb200`), grouped by its CoreWeave
@@ -183,6 +196,8 @@ Each dashboard answers one question, and they link to each other in a fixed nav 
 |---|---|---|
 | `home.json` | Is anything wrong right now? | none (fleet-wide) |
 | `accelerators.json` | Where is the fleet's power going, and is it doing work? | cluster |
+| `nodes.json` | What is happening on one physical GPU node? | cluster, node |
+| `node_pools.json` | Is CoreWeave capacity at target? | cluster |
 | `jobs.json` | What is running, queued, and stuck — and why? | cluster, job |
 | `runs.json` | How is each Levanter training run doing? | cluster, run |
 | `clusters.json` | Is the infrastructure under the jobs healthy? | cluster |
@@ -200,15 +215,31 @@ fleet pulse charts, and the control-plane and GB200 rack inventories — the
 stats and inventories are shared `panelRef` fragments, so none of it drifts
 independently of the dashboards those fragments also serve.
 
-`accelerators.json` is the GPU view: total watts per cluster, the same watts
+`accelerators.json` is the GPU fleet view: total watts per cluster, the same watts
 attributed to the training run occupying each node, utilization against
 tensor-core activity, HBM, temperature, and the hardware-fault counters
-(XID, row remap, PCIe replay). It reads the `iris-node-agent` telemetry stream,
+(XID, row remap, PCIe replay). SM-utilization and temperature heatmaps retain the
+fleet distribution, so one node or device can separate from the band without first
+changing the fleet maximum. It reads the `iris-node-agent` telemetry stream,
 which each CoreWeave node's agent fills from that cluster's `dcgm-exporter`.
 TPU hosts report no power, so this dashboard covers the GPU clusters only.
 Power is attributed to a run by joining the node agent's `node_name` to the
 `node_name` on Levanter's resource attributes, per time bucket — the residue is
 `(idle / unattributed)`, which is the number worth driving down.
+
+`nodes.json` is the selected-node view. Its live row reads `/k8s/nodes`; bounded
+Finelog panels retain per-GPU utilization, SM/tensor activity, HBM, core/HBM
+temperatures, board power, NVLink/PCIe throughput, inventory, and faults beside
+host CPU, memory, disk, and network history. The node selector comes from recent
+GPU `hardware_inventory` rows, so a node that stops reporting stays selectable
+until it falls outside the dashboard window. The profiling panels depend on the
+matching DCGM fields being enabled by the cluster's exporter; a missing field leaves
+only that series empty.
+
+`node_pools.json` is the live CoreWeave capacity view. Its stat strip sums current,
+target, missing, and off-target counts across the selected clusters. The table keeps
+each pool's scaling work, bounds, policy, conditions, and problem reasons visible.
+GCE clusters have no CoreWeave NodePool objects and return no rows.
 
 `jobs.json` reads the `iris.task_state` finelog namespace on the marin hub — one
 row per active root job every 30s per cluster-view (CoreWeave) controller,
@@ -359,11 +390,11 @@ unauthenticated and the build panel shows no data.
 
 `CW_READ_TOKEN` is an org-wide CoreWeave API token minted with only the `read` role
 (CKS binds it to the built-in `view` ClusterRole): read-only kubectl across every
-cluster in the org, no Secrets, no writes. The built-in role omits Nodes, so the
-CoreWeave Pulumi stacks bind each exact Managed Auth username to the nodes-only
-`marin-grafana-node-reader` role. The usernames live under
-`provisioning.coreweave.grafana_observer_rbac` in each Grafana cluster config so
-both tokens can retain access during a rotation.
+cluster in the org, no Secrets, no writes. The built-in role omits Nodes and the
+NodePool CRD, so the CoreWeave Pulumi stacks bind each exact Managed Auth username
+to the read-only `marin-grafana-node-reader` role for those resources. The usernames
+live under `provisioning.coreweave.grafana_observer_rbac` in each Grafana cluster
+config so both tokens can retain access during a rotation.
 
 Rotation is overlap-safe:
 
@@ -374,8 +405,8 @@ Rotation is overlap-safe:
    `cw-us-east-02a.yaml`, `cw-us-east-08a.yaml`, and `cw-rno2a.yaml`, retaining
    the old username during the handoff.
 3. Preview and update the three CoreWeave Pulumi stacks. Verify both tokens can
-   `list nodes`, while pod creation, Secret reads, and impersonation remain
-   denied.
+   list Nodes and NodePools, while pod creation, Secret reads, and impersonation
+   remain denied.
 4. Add the new token as a `marin-grafana-cw-read-token` version, deploy a fresh
    Grafana revision, and verify every k8s bridge route.
 5. Remove the old username from the three configs and update the stacks again.
