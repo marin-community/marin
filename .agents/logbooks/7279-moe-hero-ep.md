@@ -1220,3 +1220,18 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   `mhep-165-w13-ep-e128-i8448-cf2p00-fullwatch-overlap1-p32763-20260808`.
 - Both arms set `--xla_gpu_experimental_parallel_collective_overlap_limit=1`, use full watch on
   every step, use production priority, and permit zero retries.
+
+### 2026-08-08 12:52 UTC - MHEP-166 watch-aware runtime default ready
+
+- Change: Inline watch sets the GPU parallel-collective overlap limit to one. No-watch and
+  diagnostic runs keep the prior limit of four. An explicit `XLA_FLAGS` value still takes
+  precedence.
+- Reason: MHEP-159 captured all full norms at overlap limit one. The prior default of four failed
+  for the same MHEP-131 model.
+- Local checks: Four runtime-default cases pass. They cover explicit override, inline watch,
+  diagnostic watch, and disabled watch. The changed-file pre-commit checks pass.
+- Run ID: `mhep-166-w14-ep-e192-i5504-cf2p00-fullwatch-default-p32764-20260808`.
+- Gate config: Exact MHEP-131 model, five steps, full watch on every step, CUDA async allocator,
+  and no explicit XLA memory or scheduler flag.
+- Decision rule: The code default passes only if all five steps finish and W&B receives 38 finite
+  gradient norm metrics and 38 finite parameter norm metrics.

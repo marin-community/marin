@@ -55,10 +55,10 @@ HERO_EP_RUNTIME_ENV = {
     "JAX_ENABLE_PGLE": "false",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
-_XLA_FLAG_DEFAULTS = (
-    "--xla_gpu_experimental_parallel_collective_overlap_limit=4",
-    "--xla_gpu_enable_latency_hiding_scheduler=true",
-)
+_XLA_FLAG_DEFAULTS = ("--xla_gpu_enable_latency_hiding_scheduler=true",)
+XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
+DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
+INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # TODO(https://github.com/marin-community/marin/issues/5675): Re-enable XLA GPU
 # command buffers after the CUDA graph failure is fixed.
 XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG = "--xla_gpu_enable_command_buffer="
@@ -71,10 +71,15 @@ class WatchMode(StrEnum):
     DIAGNOSTIC = "diagnostic"
 
 
-def _apply_hero_ep_runtime_defaults() -> None:
+def _apply_hero_ep_runtime_defaults(*, inline_watch_enabled: bool) -> None:
     os.environ.update(HERO_EP_RUNTIME_ENV)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    flag_defaults = (*_XLA_FLAG_DEFAULTS, XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG)
+    overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT if inline_watch_enabled else DEFAULT_COLLECTIVE_OVERLAP_LIMIT
+    flag_defaults = (
+        f"{XLA_COLLECTIVE_OVERLAP_FLAG}={overlap_limit}",
+        *_XLA_FLAG_DEFAULTS,
+        XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG,
+    )
     explicit_names = {flag.partition("=")[0] for flag in xla_flags}
     xla_flags.extend(flag for flag in flag_defaults if flag.partition("=")[0] not in explicit_names)
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
@@ -750,7 +755,8 @@ def run_grug(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
     # Dispatch snapshots os.environ for the child task, so apply the hero defaults first.
-    _apply_hero_ep_runtime_defaults()
+    inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
+    _apply_hero_ep_runtime_defaults(inline_watch_enabled=inline_watch_enabled)
     dispatch_grug_training_run(
         run_id=trainer.id,
         config=config,

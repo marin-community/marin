@@ -43,7 +43,10 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     for name in train.HERO_EP_RUNTIME_ENV:
         monkeypatch.delenv(name, raising=False)
     config = SimpleNamespace(
-        trainer=SimpleNamespace(trainer=SimpleNamespace(id="test-run")),
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=1)),
+            watch_mode=train.WatchMode.INLINE,
+        ),
         resources=object(),
         processes_per_task=1,
     )
@@ -58,6 +61,34 @@ def test_run_grug_applies_ep_xla_defaults_and_keeps_explicit_values(monkeypatch)
     assert train.XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG in flags
     for name, value in train.HERO_EP_RUNTIME_ENV.items():
         assert os.environ[name] == value
+
+
+@pytest.mark.parametrize(
+    ("watch_mode", "watch_interval", "expected_overlap_limit"),
+    [
+        (train.WatchMode.INLINE, 1, train.INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT),
+        (train.WatchMode.DIAGNOSTIC, 1, train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT),
+        (train.WatchMode.INLINE, 0, train.DEFAULT_COLLECTIVE_OVERLAP_LIMIT),
+    ],
+)
+def test_run_grug_reduces_collective_overlap_only_for_inline_watch(
+    monkeypatch, watch_mode, watch_interval, expected_overlap_limit
+):
+    monkeypatch.delenv("XLA_FLAGS", raising=False)
+    config = SimpleNamespace(
+        trainer=SimpleNamespace(
+            trainer=SimpleNamespace(id="test-run", watch=WatchConfig(interval=watch_interval)),
+            watch_mode=watch_mode,
+        ),
+        resources=object(),
+        processes_per_task=1,
+    )
+
+    with patch.object(train, "dispatch_grug_training_run"):
+        train.run_grug(config)
+
+    flags = os.environ["XLA_FLAGS"].split()
+    assert f"{train.XLA_COLLECTIVE_OVERLAP_FLAG}={expected_overlap_limit}" in flags
 
 
 def test_ep_newton_schulz_returns_to_expert_sharding():
