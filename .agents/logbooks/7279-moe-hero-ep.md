@@ -1769,3 +1769,18 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - A pass requires all 200 steps, all 76 finite norm fields at steps 0, 10, through 190, a
   confirmed profile-guided recompile, and no OOM or retry. Use the last 50 steps for the final
   throughput comparison with MHEP-193. Stop the job at the first OOM or retry.
+
+### 2026-08-08 15:47 UTC - The selected-model baseline completes
+
+- MHEP-193 completed all 200 steps. Iris reports that the coordinator and training child
+  succeeded with zero failures and zero preemptions.
+- W&B has 200 history rows. It received all 76 norm fields at steps 0, 10, through 190. Every
+  value in all 20 norm rows was finite.
+- Last-50 means were 254,038 tokens/s, 3.9721% drops, 243,948 drop-adjusted tokens/s, and loss
+  3.2411. The final step reported 256,857 tokens/s, 3.7368% drops, and loss 3.2028.
+- W&B: https://wandb.ai/marin-community/rav_moe/runs/mhep-193-w31-ep-e192-i6272-cf1p30-overlap1-watch10-p32791-20260808
+- XProf captured steps 20 through 25 and uploaded the profile to
+  `s3://marin-us-east-02a/tmp/ttl=30d/xprof/mhep-193-w31-ep-e192-i6272-cf1p30-overlap1-watch10-p32791-20260808/plugins/profile/steps-20-to-25`.
+  The local summary tool could not resolve the nested W&B `trainer.trainer.log_dir` value, and
+  this machine does not have the required S3 or IAP credential. No local profile summary was
+  available. The W&B step data remains the primary comparison record.
