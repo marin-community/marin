@@ -888,3 +888,35 @@ cost for capacity 1.0625, thus a cost is expected here as well.
 - H100 target: 8 nodes of 8 GPUs, which is 64 GPUs and an expert axis of 64. One node was rejected
   because capacity is per (sender shard, expert) cell: EP8 gives 4,096-row cells against 512 at
   EP64, so it would drop far less on the same routing and would not reproduce GB200 behavior.
+
+### 2026-08-08 09:26 UTC - MHEP-146 to MHEP-148 allocator watch gate ready
+
+- Hypothesis: An explicit XLA pool limit can leave enough HBM for NCCL while the capacity-2 EP
+  arm logs full gradient and parameter norms. Prior full-watch compilation reported a 197.42 GiB
+  rematerialization floor on a 184.30 GiB GPU, so failure on the first watch step is expected.
+- Code snapshot: `078813ee6`. The launcher accepts `--watch-interval`, with zero as the default.
+  Interval 1 selects the existing `WatchConfig` defaults: gradient and parameter targets, global
+  and per-parameter norms, scan-layer splitting, and no histograms.
+- Common config: 481.1 B total and 23.3 B active parameters; d6144; 48 layers; 192 experts;
+  latent dimension 3072 with RMSNorm; expert width 5504; top-4; capacity factor 2.0; cell capacity
+  2,731; batch 1,024; sequence length 4,096; EP64 `fixed_all_to_all`; one 64-GPU GB200 rack;
+  pinned-host optimizer state; five steps on the 2,000-step schedule; no eval, profile, checkpoint,
+  or retry.
+- Arms: MHEP-146 sets `XLA_PYTHON_CLIENT_MEM_FRACTION=0.80` for a 147.44 GiB XLA limit and
+  36.86 GiB outside the pool. MHEP-147 sets 0.95 for 175.09 GiB and 9.22 GiB. MHEP-148 sets 0.65
+  for 119.80 GiB and 64.51 GiB. All arms keep `XLA_PYTHON_CLIENT_ALLOCATOR=cuda_async`.
+- Run IDs: `mhep-146-w7-ep-cf2p00-fullwatch-memfrac80-p32744-20260808`,
+  `mhep-147-w7-ep-cf2p00-fullwatch-memfrac95-p32745-20260808`, and
+  `mhep-148-w7-ep-cf2p00-fullwatch-memfrac65-p32746-20260808`.
+- Command template: `uv run iris --config lib/iris/config/marin.yaml job run --no-wait
+  --enable-extra-resources --target-cluster cw-us-east-08a --priority production --cpu 2
+  --memory 8GB --disk 32GB --timeout 28800 --max-retries 0 --job-name <run>-coord
+  -e WANDB_API_KEY <secret> -e WANDB_PROJECT rav_moe -e WANDB_ENTITY marin-community
+  -e IRIS_PORT_JAX <port> -e XLA_PYTHON_CLIENT_ALLOCATOR cuda_async
+  -e XLA_PYTHON_CLIENT_MEM_FRACTION <fraction> -- python -m
+  experiments.grug.moe_hero_ep.launch --run-id <run> --num-steps 5 --schedule-steps 2000
+  --watch-interval 1 --version 2026.08.08 --run --num-experts 192 --intermediate-dim 5504
+  --num-experts-per-token 4 --latent-dim 3072 --capacity-factor 2.0 --batch-size 1024`.
+- Stop criteria: Keep each first failure and its complete logs. Stop on a terminal state, a
+  non-finite loss, or completion of step 5. Do not resubmit an allocator or compilation OOM.
+- Next action: Commit this launch contract, submit the three arms, and monitor after 120 seconds.
