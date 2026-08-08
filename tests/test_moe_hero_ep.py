@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
+import optax
 import pytest
 from jax.sharding import AbstractMesh, AxisType, Mesh, NamedSharding, set_mesh, use_abstract_mesh
 from jax.sharding import PartitionSpec as P
@@ -335,3 +336,40 @@ def test_diagnostic_watch_stats_match_direct_gradient_and_parameter_norms():
     assert actual.keys() == expected.keys()
     for key in actual:
         np.testing.assert_allclose(actual[key], expected[key])
+
+
+def test_inline_watch_uses_one_watched_train_step_between_log_intervals(monkeypatch):
+    params = _TinyWatchModel(weight=jnp.array(2.0))
+    optimizer = optax.sgd(0.1)
+    state = train.GrugTrainState(
+        step=jnp.array(0, dtype=jnp.int32),
+        params=params,
+        opt_state=optimizer.init(params),
+        ema_params=None,
+        pending_qb_betas=jnp.zeros((1, 1)),
+    )
+
+    def loss_and_grads(current_params, batch, mp, z_loss):
+        del batch, mp, z_loss
+        loss = current_params.weight**2
+        grads = _TinyWatchModel(weight=2 * current_params.weight)
+        metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
+        return (loss, metrics), grads
+
+    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
+    train_step = train._make_train_step(
+        optimizer,
+        jmp.get_policy("params=float32,compute=float32,output=float32"),
+        z_loss_weight=0,
+        ema_beta=None,
+        watch_config=WatchConfig(interval=10),
+    )
+
+    state, _, step_zero_stats = train_step(state, jnp.array(0))
+    state, _, step_one_stats = train_step(state, jnp.array(0))
+
+    assert step_zero_stats is not None
+    assert step_one_stats is not None
+    np.testing.assert_allclose(step_zero_stats["grad/norm/total"], 4.0)
+    np.testing.assert_allclose(step_one_stats["grad/norm/total"], 3.2)

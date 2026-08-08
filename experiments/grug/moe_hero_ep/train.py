@@ -97,8 +97,9 @@ class GrugTrainerConfig:
     # Keep disabled except on model sizes where Grace-Blackwell host offload has been measured.
     # The d6144 EP64 runs used it; d5120 required a 135 GiB pinned-host arena and regressed.
     offload_opt_state: bool = False
-    # A diagnostic watch repeats forward and backward in a separate executable. It costs compute,
-    # but it does not keep the gradient tree live through the optimizer update.
+    # Inline watch computes statistics on every step and uses the watch interval only for logging.
+    # This keeps one training executable resident. A diagnostic watch repeats forward and backward
+    # in a separate executable, which costs compute but shortens gradient liveness.
     watch_mode: WatchMode = WatchMode.INLINE
     # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
     # restores from the latest committed checkpoint, so without a writer an interrupted run
@@ -455,8 +456,8 @@ def _make_train_step(
     else:
         watch_targets = ()
 
-    @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=("compute_watch",))
-    def train_step(state: GrugTrainState, batch, *, compute_watch: bool = False):
+    @functools.partial(jax.jit, donate_argnums=(0,))
+    def train_step(state: GrugTrainState, batch):
         # Apply pending QB betas to router biases inside JIT (avoids eager
         # host-side TPU kernel launches that can cause SPMD sync issues).
         qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
@@ -485,7 +486,7 @@ def _make_train_step(
             )
 
         watch_stats = None
-        if watch_config is not None and compute_watch:
+        if watch_config is not None:
             watch_stats = compute_watch_stats(
                 watch_targets=watch_targets,
                 include_norms=watch_config.include_norms,
@@ -674,21 +675,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     batch = next(iterator)
                 step_start = time.perf_counter()
                 current_step = int(state.step)
-                # grad_watch runs only on its configured interval.
-                compute_watch = (
+                watch_due = (
                     watch_config.is_enabled and watch_config.interval > 0 and current_step % watch_config.interval == 0
                 )
-                if compute_watch and diagnostic_watch_step is not None:
+                if watch_due and diagnostic_watch_step is not None:
                     watch_stats = diagnostic_watch_step(state.params, batch, state.pending_qb_betas)
                     jax.block_until_ready(watch_stats)
                 else:
                     watch_stats = None
-                state, metrics, inline_watch_stats = train_step(
-                    state,
-                    batch,
-                    compute_watch=compute_watch and diagnostic_watch_step is None,
-                )
-                if inline_watch_stats is not None:
+                state, metrics, inline_watch_stats = train_step(state, batch)
+                if inline_watch_stats is not None and watch_due:
                     watch_stats = inline_watch_stats
                 step = int(state.step) - 1
 

@@ -1320,3 +1320,27 @@ cost for capacity 1.0625, thus a cost is expected here as well.
   gradient norm metrics and 38 finite parameter norm metrics. Stop a deterministic compile or
   NCCL memory failure without a retry. Use the remaining 128-wide midpoint after the pair locates
   the pass and failure boundary.
+
+### 2026-08-08 13:16 UTC - MHEP-173 single-executable sparse watch gate ready
+
+- MHEP-170 used capacity factor 1.6 and full watch every 10 steps. It completed step 0, then
+  several GPUs failed 135,864,938,200-byte CUDA async allocations before step 1. Iris began a gang
+  retry. The coordinator was stopped during that retry. The child recorded three failures and 16
+  preemptions, and W&B contains only step 0.
+- Cause: `compute_watch` was a static JIT argument. A sparse inline watch compiled one watched and
+  one unwatched training executable. The second executable started while the first executable was
+  resident. Capacity 1.6 crossed the resulting memory limit.
+- Change: Inline watch now computes statistics in every training step and uses `WatchConfig.interval`
+  only to select which statistics it sends to W&B. The train step has no static watch argument, so
+  the process keeps one training executable. Diagnostic watch still runs only on its interval.
+- Cost: The inline path now performs the scalar norm reductions on every step. The prior MHEP-166
+  five-step gate measured the always-watched path at 0.28% below the no-watch MHEP-131 baseline.
+  The capacity gate will provide a longer throughput result.
+- Local checks: Six focused tests pass. They cover watched statistics on and between log intervals,
+  diagnostic statistics, and the watch-aware XLA defaults.
+- MHEP-173 repeats the exact MHEP-170 capacity-1.6 model for 200 steps. It logs full gradient and
+  parameter norms every 10 steps, uses production priority and CUDA async allocation, and permits
+  zero retries. Run ID: `mhep-173-w18-ep-e192-i5504-cf1p60-singleexec-watch10-p32771-20260808`.
+- Decision rule: Keep the change only if the arm completes 200 steps with finite loss and norms.
+  Compare its throughput and final drop fraction with MHEP-169. Revert the change if the same
+  memory failure occurs.
